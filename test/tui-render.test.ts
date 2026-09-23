@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { Editor, TuiMainScreen } from "@earendil-works/pi-tui";
+import { Editor, TuiMainScreen, visibleWidth } from "@earendil-works/pi-tui";
 import { FakeTerminal } from "./support/fake-terminal.ts";
 import { BorderedEditor, FooterView, SpinnerView, TranscriptView } from "../src/tui/app.ts";
 import { PermissionPromptView } from "../src/tui/permission-prompt.ts";
@@ -83,6 +83,17 @@ function harness(columns = 100, rows = 30): Harness {
 }
 
 describe("full-frame rendering", () => {
+	it("shows the placeholder while the box is empty and hides it while typing", async () => {
+		const h = harness(100, 30);
+		await h.render();
+		assert.ok(h.term.text().includes("Try \"fix typecheck errors\""), "placeholder missing on empty input");
+		h.term.clearCaptured();
+		h.term.send("hi");
+		await h.render();
+		assert.ok(!h.term.text().includes("fix typecheck errors"), "placeholder still visible while typing");
+		h.stop();
+	});
+
 	it("renders a frame without pi-tui rejecting it", async () => {
 		const h = harness();
 		h.transcript.append(["> hello"]);
@@ -162,26 +173,31 @@ describe("full-frame rendering", () => {
 		h.stop();
 	});
 
-	it("puts the spinner above the input and the footer below it", async () => {
+	it("puts the spinner above the input, the footer below it, and the interrupt hint on the footer", async () => {
 		// Split into two components precisely because they sit on opposite sides
 		// of the editor; a single status component put the footer in the wrong
 		// place.
 		const h = harness(100, 30);
 		h.spinner.start(1);
+		h.footer.setBusy(true);
 		h.footer.update({ modelLabel: "FOOTER-MARKER" });
 		await h.render();
 
 		const lines = h.term.lines();
-		const spinnerAt = lines.findIndex((l) => /esc to interrupt/.test(l));
+		const spinnerAt = lines.findIndex((l) => /working \(0s\)/.test(l));
 		const footerAt = lines.findIndex((l) => l.includes("FOOTER-MARKER"));
-		// The input area is a single rule now, not a box.
-		const boxAt = lines.findIndex((l) => /^─+$/.test(l));
+		// The prompt marker marks the input row: two full-width rules with `❯`
+		// between them, matching Claude Code's border-less input box.
+		const promptAt = lines.findIndex((l) => l.includes("❯"));
+		const ruleCount = lines.filter((l) => /^─+$/.test(l)).length;
 
 		assert.ok(spinnerAt >= 0, "no spinner rendered");
 		assert.ok(footerAt >= 0, "no footer rendered");
-		assert.ok(boxAt >= 0, "no input box rendered");
-		assert.ok(spinnerAt < boxAt, "spinner rendered below the input box");
-		assert.ok(footerAt > boxAt, "footer rendered above the input box");
+		assert.ok(promptAt >= 0, "no input prompt rendered");
+		assert.ok(spinnerAt < promptAt, "spinner rendered below the input box");
+		assert.ok(footerAt > promptAt, "footer rendered above the input box");
+		assert.equal(ruleCount, 2, "expected a top and a bottom rule around the input");
+		assert.ok(lines[footerAt]!.includes("esc to interrupt"), "interrupt hint not on the footer");
 		h.stop();
 	});
 
@@ -334,4 +350,53 @@ describe("consumed keys still redraw", () => {
 		);
 		h.stop();
 	});
+})
+
+describe("input line width", () => {
+	/**
+	 * The `❯` marker is prefixed to every content line, so the editor must be
+	 * rendered one column narrow. Rendering it at the full width and prefixing
+	 * gave `width + 1`:
+	 *
+	 *     Error: Rendered line 3 exceeds terminal width (118 > 117)
+	 *
+	 * It survived earlier tests because the empty-input path pads the
+	 * placeholder separately and stayed inside the limit — the overflow only
+	 * appeared once something was typed.
+	 */
+	const theme = {
+		borderColor: (t: string) => t,
+		selectList: {
+			selectedPrefix: (t: string) => t,
+			selectedText: (t: string) => t,
+			description: (t: string) => t,
+			scrollInfo: (t: string) => t,
+			noMatch: (t: string) => t,
+		},
+	};
+
+	const widths = [20, 40, 80, 117, 118, 144];
+	const contents = ["", "hi", "fix typecheck errors", "x".repeat(400)];
+
+	for (const width of widths) {
+		it(`holds ${width} columns with an empty and a filled input`, async () => {
+			for (const text of contents) {
+				const term = new FakeTerminal(width, 30);
+				const tui = new TuiMainScreen(term);
+				const editor = new BorderedEditor(new Editor(tui as never, theme, { paddingX: 1 }), (t) => t);
+				tui.addChild(editor as never);
+				tui.setFocus(editor as never);
+				tui.start();
+				if (text) term.send(text);
+
+				for (const line of editor.render(width)) {
+					assert.ok(
+						visibleWidth(line) <= width,
+						`width ${width}, ${text.length} chars typed: line of ${visibleWidth(line)}`,
+					);
+				}
+				tui.stop();
+			}
+		});
+	}
 })

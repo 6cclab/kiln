@@ -15,9 +15,9 @@ item without looking at it first.
 
 | Behavior | Conf | Notes |
 |---|---|---|
-| Rounded-border box around the input, full terminal width | `[obs]` | |
-| `>` prompt glyph at the left inside the box | `[obs]` | |
-| Placeholder hint when empty | `[chk]` | exact wording |
+| Two full-width rules around the input (top and bottom), no sides | `[obs]` | matches CC's `borderLeft/right: false` box |
+| `❯` prompt glyph at the left inside the box | `[obs]` | `figures.pointer` |
+| Placeholder hint when empty | done | `Try "fix typecheck errors"`; hidden once text exists |
 | Multiline: newline inserts, Enter submits | `[obs]` | `Editor` handles |
 | `\` + Enter, and Option/Shift+Enter, insert a newline | `[chk]` | which combos are bound |
 | Up/Down recalls history at the first/last line | `[obs]` | `navigateHistory` exists |
@@ -42,7 +42,7 @@ All four are token-boundary triggers, matching `AutocompleteProvider.triggerChar
 | Typing `/` opens a popup **above** the input | `[obs]` |
 | Filters as you type, fuzzy not just prefix | `[obs]` |
 | Each row shows `name` + dimmed `description` | `[obs]` |
-| Selected row highlighted; Up/Down moves; Tab/Enter accepts; Esc dismisses | `[obs]` |
+| Selected row hinted with the `suggestion` colour; Up/Down moves; Tab/Enter accepts; Esc dismisses | `[obs]` |
 | Commands taking arguments show an `argument-hint` after the name | `[obs]` |
 | Argument values can themselves complete (e.g. a model name) | `[obs]` |
 | User commands from `.claude/commands/*.md` appear beside built-ins | `[obs]` |
@@ -156,28 +156,35 @@ shown distinctly from both.
 Input box:
 
 ```
-╭─────────────────────────────────────────────╮
-│ >                                           │
-╰─────────────────────────────────────────────╯
+──────────────────────────────────────────────
+❯ Try "fix typecheck errors"
+──────────────────────────────────────────────
 ```
 
-Rounded corners, full width, `>` then a space before the cursor.
+Two full-width rules (top and bottom), no sides — Claude Code's
+`borderStyle="round"` with `borderLeft`/`borderRight` off. `❯` then a space
+before the cursor; a dim example command fills the empty box and disappears
+once you type.
 
-Working indicator — an animated glyph, a varying gerund, elapsed time, live
-token count, and the interrupt hint on one line:
+A user message reads the same way, `❯` then the text, with no fill band.
+
+Working indicator — a spinning glyph of Claude Code's own frame set, a
+lowercase gerund, elapsed time and the live token count on one line:
 
 ```
-✳ Pondering… (12s · 3.4k tokens · esc to interrupt)
+✳ working (12s · ↓ 3.4k tokens)
 ```
 
-The gerund varies per turn; it is flavor, and the harness should have its own
-vocabulary rather than copying a word list.
+The `esc to interrupt` hint moved to the footer: it rides the status line's
+first row while a turn is loading, exactly where Claude Code puts it rather
+than inside the still spinner. The gerund varies per turn; it is flavor, and
+the harness should have its own vocabulary rather than copying a word list.
 
 ## 4. Transcript rendering
 
 | Element | Behavior | Conf |
 |---|---|---|
-| User message | plain, no border, distinct from assistant | `[obs]` |
+| User message | plain `❯` pointer then the text at the left margin, no fill — its own voice without a background band | `[obs]` |
 | Assistant text | markdown rendered; code blocks syntax-highlighted | `[obs]` done |
 | Tool call | one collapsed line: bullet, tool name, key argument | `[obs]` |
 | Tool result | indented under the call with a `⎿` continuation glyph | `[obs]` |
@@ -191,10 +198,10 @@ vocabulary rather than copying a word list.
 
 | Behavior | Conf |
 |---|---|
-| Animated glyph plus a varying gerund label | `[obs]` |
+| Animated glyph (Claude Code's frame set) plus a varying lowercase gerund | `[obs]` |
 | Elapsed seconds counter | `[obs]` |
-| Token count, updating live during streaming | `[obs]` |
-| "esc to interrupt" hint | `[obs]` |
+| Token count `↓ N`, updating live during streaming | `[obs]` |
+| "esc to interrupt" hint on the footer, only while loading | `[obs]` |
 | Replaced in-place by the result, leaving no spinner residue | `[obs]` |
 
 ## 6. Keybindings
@@ -228,6 +235,12 @@ dropping one produces a key that works until it doesn't.
 | Active model name | `[obs]` |
 | Permission mode when not default | `[obs]` |
 | Context-remaining indicator | `[obs]` |
+| "esc to interrupt" while a turn is loading | done |
+
+Claude Code shows `? for shortcuts` when idle and `esc to interrupt` while
+loading. The harness's status line replaces the idle hint (a status line always
+present is the documented divergence), so only the loading hint is threaded
+through — it rides the first status row while a turn runs.
 
 **Harness addition, deliberately not in Claude Code:** live budget consumption
 against the active tier. On a 32k local model this is the difference between a

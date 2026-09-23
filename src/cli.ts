@@ -678,7 +678,20 @@ async function chat(): Promise<void> {
 		payload: { session_id: sessionId, transcript_path: session.transcriptPath, cwd, reason: "exit" },
 	});
 
+	// MCP servers are child processes holding open pipes. Only the print path
+	// closed them, so the interactive session hung on exit forever — the work
+	// was finished and the process simply would not leave.
+	await hub.close();
+
 	if (exiting) process.exitCode = 0;
+
+	// Last resort. Everything above is a clean shutdown, but a stdio MCP server
+	// that ignores being closed, or any handle a dependency forgot to unref,
+	// would stand between the user and their shell with nothing left to do.
+	// Two seconds is long enough for a real flush and short enough not to feel
+	// like the hang this replaces.
+	const forceExit = setTimeout(() => process.exit(process.exitCode ?? 0), 2_000);
+	forceExit.unref();
 }
 
 // --help and --version answer before anything else is constructed: they must

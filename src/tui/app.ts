@@ -25,7 +25,7 @@ import type { PermissionMode } from "../claude/settings.ts";
 import type { TodoStore } from "../agent/todo.ts";
 import type { PlanDecision } from "../agent/plan-mode.ts";
 import { usableTokens } from "../budget/tier.ts";
-import { dim, gray, green, bold, cyan, yellow, italic, strike, g, setPlainMode } from "./theme.ts";
+import { dim, gray, green, bold, cyan, yellow, italic, strike, g, setPlainMode, suggestion } from "./theme.ts";
 import { highlightCode } from "./highlight.ts";
 import { createKeyRouter } from "./keys.ts";
 import { renderStatus, type StatusState } from "./status.ts";
@@ -84,8 +84,10 @@ export const markdownTheme: MarkdownTheme = {
 const editorTheme: EditorTheme = {
 	borderColor: (s) => gray(s),
 	selectList: {
-		selectedPrefix: (s) => green(s),
-		selectedText: (s) => bold(s),
+		// Claude Code paints the selected autocomplete row with its `suggestion`
+		// colour (a light blue-purple), not a bold or green highlight.
+		selectedPrefix: (s) => suggestion(s),
+		selectedText: (s) => suggestion(s),
 		description: (s) => dim(s),
 		scrollInfo: (s) => dim(s),
 		noMatch: (s) => dim(s),
@@ -93,27 +95,36 @@ const editorTheme: EditorTheme = {
 };
 
 /**
- * Rounded border around the editor.
+ * The two horizontal rules around the editor.
  *
  * pi-tui's `Editor` draws plain horizontal rules above and below itself, and
- * `Box` provides padding but no border, so neither gives Claude Code's
- * `╭─╮ │ ╰─╯` input box. This wraps the editor's own output.
+ * `Box` provides padding but no border. Claude Code's input box is exactly
+ * those two full-width rules with no sides — a `borderStyle="round"` with
+ * `borderLeft`/`borderRight` off — so the editor's own output is kept whole,
+ * top rule and bottom rule included, and only a prompt marker is added to the
+ * content lines.
  *
- * Two details this must not break:
+ * Three details this must not break:
  *   - `CURSOR_MARKER`. The TUI locates the hardware cursor by finding that
  *     marker in the rendered line. Prefixing each line shifts the marker's
  *     index along with the text, so the cursor stays correct — but the marker
  *     must be passed through untouched, never trimmed or re-measured.
  *   - Width. Lines are padded using `visibleWidth`, which ignores ANSI escapes;
- *     `String.length` would count them and misalign the right edge.
+ *     `String.length` would count them and misalign the right edge. The editor
+ *     is asked for the full width so the rules span the terminal.
+ *   - The placeholder must render *after* the cursor block (the highlighted
+ *     cell), exactly where Claude Code's dim example text sits, and must never
+ *     push a line past the terminal width that pi-tui rejects.
  */
 export class BorderedEditor implements Component, Focusable {
 	private editor: Editor;
 	private color: (s: string) => string;
+	private placeholder: string;
 
-	constructor(editor: Editor, color: (s: string) => string) {
+	constructor(editor: Editor, color: (s: string) => string, placeholder = 'Try "fix typecheck errors"') {
 		this.editor = editor;
 		this.color = color;
+		this.placeholder = placeholder;
 	}
 
 	/**
@@ -141,28 +152,63 @@ export class BorderedEditor implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		// The editor ALWAYS renders its own horizontal rule as the first and last
-		// line, and it draws scroll indicators into them ("─── ↑ 3 more ───")
-		// when the content overflows. Those rules are kept and the rest of the
-		// box is not.
+		// The editor is rendered ONE COLUMN NARROW, because the `❯` marker is
+		// prefixed to every content line below and that column has to come from
+		// somewhere. Rendering at the full width and then prefixing produced a
+		// line of `width + 1`, which pi-tui rejects:
 		//
-		// A full ╭─╮ │ ╰─╯ box costs two rows of chrome and boxes in text that is
-		// already the only editable thing on screen. One rule above, a prompt
-		// marker, and the status line below is lighter and gives a row back — on
-		// a short terminal that row is a line of transcript.
-		const body = this.editor.render(Math.max(1, width - 2));
+		//     Error: Rendered line 3 exceeds terminal width (118 > 117)
+		//
+		// It only showed up once text was typed: the empty-input path pads the
+		// placeholder to `inner` and happened to stay inside the limit.
+		const inner = Math.max(1, width - 1);
+		const body = this.editor.render(inner);
 		if (body.length < 2) return body;
 
 		const marker = this.color(g().userMark);
+		const isEmpty = this.editor.getText().length === 0;
+
 		return [
-			this.color(body[0]),
-			// The prompt marker replaces the left border; the CURSOR_MARKER inside
-			// the line shifts with it, which is what keeps the hardware cursor in
-			// the right column.
-			// No space after the marker: the editor's own paddingX already supplies
-			// one, and adding another puts a two-column gap before the cursor.
-			...body.slice(1, -1).map((line) => `${marker}${line}`),
+			this.color(this.fullWidthRule(body[0], width)),
+			// The marker replaces the left border. CURSOR_MARKER inside the line
+			// shifts along with it, which is what keeps the hardware cursor in the
+			// right column.
+			//
+			// No space after the marker: the editor's own paddingX already
+			// supplies one, and a second puts a two-column gap before the cursor.
+			...body.slice(1, -1).map((line) => `${marker}${isEmpty ? this.placeholderLine(line, inner) : line}`),
+			this.color(this.fullWidthRule(body[body.length - 1], width)),
 		];
+	}
+
+	/**
+	 * Extend a rule back to the full terminal width.
+	 *
+	 * The editor is rendered a column narrow so the `❯` marker has somewhere to
+	 * go, but the rules take no marker and should still span the terminal — they
+	 * are the whole border now that the sides are gone. One column is added
+	 * back, which also leaves the editor's own scroll indicators
+	 * ("─── ↑ 3 more ───") intact, since they are drawn into the middle.
+	 */
+	private fullWidthRule(rule: string, width: number): string {
+		const missing = width - visibleWidth(rule);
+		return missing > 0 ? rule + "─".repeat(missing) : rule;
+	}
+
+	/**
+	 * Splice the dim placeholder into an empty input's content line.
+	 *
+	 * The editor's line for an empty input is `padding + [cursor block] +
+	 * padding`. Trailing padding is dropped, the placeholder appended after the
+	 * cursor block, and the line re-padded to exactly `inner` so the marker plus
+	 * this is the full width and no more.
+	 */
+	private placeholderLine(line: string, inner: number): string {
+		const trimmed = line.replace(/ +$/, "");
+		const room = Math.max(0, inner - visibleWidth(trimmed));
+		const withPlaceholder = `${trimmed}${dim(this.placeholder.slice(0, room))}`;
+		const pad = " ".repeat(Math.max(0, inner - visibleWidth(withPlaceholder)));
+		return withPlaceholder + pad;
 	}
 }
 
@@ -362,6 +408,8 @@ export class FooterView implements Component {
 	private state: StatusState;
 	/** A transient note appended to the first row, e.g. "expanded". */
 	private note = "";
+	/** Set while a turn is loading; appends Claude Code's interrupt hint. */
+	private busy = false;
 
 	constructor(state: StatusState) {
 		this.state = state;
@@ -376,11 +424,20 @@ export class FooterView implements Component {
 		this.note = note;
 	}
 
+	/** Loading state: appends the `esc to interrupt` hint to the first row. */
+	setBusy(busy: boolean): void {
+		this.busy = busy;
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
 		const [status, mode] = renderStatus(this.state);
-		const first = this.note ? `${status}${dim(`  ·  ${this.note}`)}` : status;
+		const bits = [];
+		if (this.busy) bits.push("esc to interrupt");
+		if (this.note) bits.push(this.note);
+		const suffix = bits.length > 0 ? `${dim("  ·  ")}${bits.map((b) => dim(b)).join(dim(" · "))}` : "";
+		const first = suffix ? `${status}${suffix}` : status;
 		// Truncated, not wrapped: the status line is two rows by definition, and
 		// a third row would push the input box around as the numbers change.
 		return [fitStatus(first, width), fitStatus(mode, width)];
@@ -747,6 +804,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 		turnStartedAt = Date.now();
 		turnToolCalls = 0;
 		spinner.start(turn++);
+		footer.setBusy(true);
 		spinnerTimer = setInterval(() => {
 			spinner.tick();
 			tui.requestRender();
@@ -757,6 +815,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 		if (spinnerTimer) clearInterval(spinnerTimer);
 		spinnerTimer = undefined;
 		spinner.stop();
+		footer.setBusy(false);
 		pending.clear();
 		tui.requestRender();
 	};
@@ -964,6 +1023,11 @@ export async function runApp(opts: AppOptions): Promise<void> {
 
 	await new Promise<void>((resolve) => {
 		process.on("SIGINT", () => {
+			// The spinner ticks on an interval. An uncleared one keeps the event
+			// loop alive by itself, so the process would sit there after the TUI
+			// had already given the terminal back.
+			if (spinnerTimer) clearInterval(spinnerTimer);
+			spinnerTimer = undefined;
 			tui.stop();
 			resolve();
 		});

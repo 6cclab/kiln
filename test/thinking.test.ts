@@ -14,11 +14,13 @@ import { renderThinking } from "../src/tui/transcript.ts";
 describe("renderThinking", () => {
 	const text = "one\ntwo\nthree";
 
-	it("collapses to a single line by default", () => {
+	it("collapses to a single line with the expand hint", () => {
 		const lines = renderThinking({ text, expanded: false });
 		assert.equal(lines.length, 1);
-		assert.ok(lines[0].includes("3 lines"));
+		assert.ok(lines[0].includes("∴"));
 		assert.ok(lines[0].includes("ctrl+r"));
+		// The line count is not shown, matching Claude Code's `∴ Thinking`.
+		assert.ok(!lines[0].includes(" lines"));
 	});
 
 	it("shows every line when expanded", () => {
@@ -30,14 +32,15 @@ describe("renderThinking", () => {
 		}
 	});
 
-	it("reads as present tense while streaming and past tense after", () => {
-		assert.ok(renderThinking({ text, active: true }).join("").includes("Thinking"));
-		assert.ok(renderThinking({ text, active: false }).join("").includes("Thought"));
-	});
-
-	it("omits the expand hint while still streaming", () => {
-		// There is nothing stable to expand yet.
-		assert.ok(!renderThinking({ text, active: true }).join("").includes("ctrl+r"));
+	it("keeps the Thinking label stable and adds the hint once finished", () => {
+		// Claude Code's label is present tense in both states; only the expand
+		// hint changes, and only once there is something stable to expand.
+		const finished = renderThinking({ text, active: false }).join("");
+		const live = renderThinking({ text, active: true }).join("");
+		assert.ok(finished.includes("∴ Thinking"), finished);
+		assert.ok(live.includes("∴ Thinking"), live);
+		assert.ok(finished.includes("ctrl+r"), "hint missing once finished");
+		assert.ok(!live.includes("ctrl+r"), "hint shown while streaming");
 	});
 
 	it("renders nothing for an empty block", () => {

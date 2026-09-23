@@ -136,15 +136,22 @@ describe("other components hold the width", () => {
 	});
 });
 
-describe("user message block", () => {
-	it("pads to the full width so the fill reads as a band", () => {
-		// A ragged highlight that ends wherever the text stopped does not read as
-		// structure when scrolling back.
+describe("user message", () => {
+	it("marks the first line with a pointer and no fill", () => {
+		// Claude Code's user message is a subtle `❯` then the text — no full-width
+		// band. The pointer marks the line; the assistant's prose shares the left
+		// margin, so the two voices differ without filling rows.
 		const view = new TranscriptView();
 		view.appendUser("short question");
-		// Exactly the viewport width: full-bleed, and still inside pi-tui's limit.
+		assert.deepEqual(view.render(WIDTH), ["❯ short question"]);
+	});
+
+	it("marks only the first wrapped line", () => {
+		const view = new TranscriptView();
+		view.appendUser(`short ${"very long segment ".repeat(6)}tail`);
 		const lines = view.render(WIDTH);
-		for (const line of lines) assert.equal(visibleWidth(line), WIDTH);
+		assert.equal(lines.filter((l) => l.includes("❯")).length, 1, "pointer repeated past the first line");
+		for (const line of lines) assert.ok(visibleWidth(line) <= WIDTH, `overflowed at ${visibleWidth(line)}`);
 	});
 
 	it("wraps a long message instead of overflowing", () => {

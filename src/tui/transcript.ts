@@ -1,5 +1,5 @@
-import { dim, g, gray, green, red, strike, bold, italic, userBlock } from "./theme.ts";
-import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { dim, g, gray, green, italic, red, strike, bold } from "./theme.ts";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 /**
  * Transcript rendering — the layout defined in docs/claude-code-parity.md §4a.
@@ -135,11 +135,15 @@ export function renderDiff(patch: string, startLine = 1): string[] {
 }
 
 /**
- * Working indicator: `⠋ Pondering… (12s · 3.4k tokens · esc to interrupt)`
+ * Working indicator: `✢ working (3s · ↓ 4.2k tokens)`
  *
  * On a local model a turn runs past two minutes, so this is load-bearing rather
  * than decorative — a still screen reads as a hang. The token count must come
  * from the live stream, not from the final usage record.
+ *
+ * Claude Code's shape: glyph, lowercase gerund, then a dim parenthetical of
+ * elapsed and tokens. Their `esc to interrupt` hint lives in the footer while
+ * the turn is loading, not here.
  */
 export function renderSpinner(args: {
 	frame: number;
@@ -150,9 +154,8 @@ export function renderSpinner(args: {
 	const glyphs = g();
 	const spin = glyphs.spinner[args.frame % glyphs.spinner.length];
 	const parts = [`${args.elapsedSeconds}s`];
-	if (args.tokens !== undefined) parts.push(`${formatTokens(args.tokens)} tokens`);
-	parts.push("esc to interrupt");
-	return `${green(spin)} ${args.label} ${dim(`(${parts.join(" · ")})`)}`;
+	if (args.tokens !== undefined) parts.push(`↓ ${formatTokens(args.tokens)} tokens`);
+	return `${green(spin)} ${args.label.toLowerCase()} ${dim(`(${parts.join(" · ")})`)}`;
 }
 
 export function formatTokens(n: number): string {
@@ -200,13 +203,17 @@ export interface ThinkingView {
  * Render a reasoning block.
  *
  * ```
- * ✻ Thinking… (14 lines, ctrl+r to expand)
+ * ∴ Thinking (ctrl+r to expand)
  * ```
  *
  * Collapsed by default, per the parity spec. That is not only a visual
  * preference here: the models this harness targets are reasoning models, and
  * qwen3.8 emits a block of reasoning before most answers. Shown in full it
  * buries the answer under its own working, every turn.
+ *
+ * The label stays present tense ("Thinking") in both states, matching Claude
+ * Code's `∴ Thinking` / `∴ Thinking…`; the expand hint appears only once the
+ * block is stable, when there is something to expand.
  *
  * Dimmed italic when expanded, so it never competes with the assistant's actual
  * prose — the reader should be able to skip it without deciding to.
@@ -217,14 +224,13 @@ export function renderThinking(view: ThinkingView): string[] {
 	if (!body) return [];
 
 	const lines = body.split("\n");
-	// Present tense while streaming: "Thinking…" reads as something happening,
-	// "Thought" as something finished.
-	const label = view.active ? "Thinking…" : "Thought";
+	// Present tense either way, like Claude Code: "Thinking…" while streaming
+	// (nothing stable to expand yet), "Thinking" once it has finished.
+	const label = view.active ? "Thinking…" : "Thinking";
 
 	if (!view.expanded) {
-		const count = `${lines.length} line${lines.length === 1 ? "" : "s"}`;
-		const hint = view.active ? count : `${count}, ctrl+r to expand`;
-		return [`${dim(glyphs.thinking)} ${dim(label)} ${dim(`(${hint})`)}`];
+		const hint = view.active ? "" : ` ${dim("(ctrl+r to expand)")}`;
+		return [`${dim(glyphs.thinking)} ${dim(label)}${hint}`];
 	}
 
 	return [
@@ -236,23 +242,26 @@ export function renderThinking(view: ThinkingView): string[] {
 /**
  * The user's own message.
  *
- * Rendered as a filled block spanning the width rather than a `> ` prefix.
- * Scrolling back through a long session, the question you asked is the landmark
- * you navigate by — a two-character prefix does not survive that at a glance,
- * and a coloured one competes with the tool markers and diffs that already use
- * colour to mean something.
+ * Rendered Claude Code's way: a subtle `❯` pointer, then the text, plain. No
+ * fill band — the pointer is what marks the line, and the assistant's prose
+ * already sits flush at the left margin so the two read as different voices
+ * without fighting.
  *
- * Padded to the full width so the fill reads as a band rather than a ragged
- * highlight that ends wherever the text happened to stop.
+ * The pointer appears on the first visual line only; wrapped continuation
+ * lines carry the text alone.
  */
 export function renderUserMessage(text: string, width: number): string[] {
 	const glyphs = g();
 	const inner = Math.max(1, width - 2);
-	const wrapped = text.split("\n").flatMap((line) => wrapTextWithAnsi(line, inner));
-	return wrapped.map((line) => {
-		const pad = " ".repeat(Math.max(0, inner - visibleWidth(line)));
-		return userBlock(`${dim(glyphs.userMark)} ${line}${pad}`);
+	const out: string[] = [];
+	text.split("\n").forEach((line, i) => {
+		const wrapped = wrapTextWithAnsi(line, inner);
+		wrapped.forEach((wl, j) => {
+			if (i === 0 && j === 0) out.push(`${dim(glyphs.userMark)} ${wl}`);
+			else out.push(wl);
+		});
 	});
+	return out;
 }
 
 export interface TurnSummary {

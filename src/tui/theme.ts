@@ -48,14 +48,12 @@ export const cyan = style("36", "39");
 export const gray = style("90", "39");
 
 /**
- * Subtle background, for the user's own messages.
+ * The light blue-purple Claude Code uses for the selected autocomplete row.
  *
- * A background rather than a colour because the point is to make the message
- * findable when scrolling back through a long transcript: colour competes with
- * the tool markers and diff output that already use it, while a filled row
- * reads as structure at a glance and disappears when you are not looking for it.
+ * Their palette calls it `suggestion` (rgb(177,185,249)); 256-color index 147
+ * (rgb(175,175,255)) is the closest ANSI approximation available.
  */
-export const userBlock = style("48;5;236", "49");
+export const suggestion = style("38;5;147", "39");
 
 /**
  * Glyphs.
@@ -69,9 +67,9 @@ export interface Glyphs {
 	call: string;
 	/** Result continuation, indented under the call. */
 	result: string;
-	/** Marks a reasoning block. */
+	/** Marks a reasoning block: Claude Code's `∴`. */
 	thinking: string;
-	/** Prefix on the user's own message block. */
+	/** Prefix on the user's own messages and the input prompt: `❯`. */
 	userMark: string;
 	/** Marks the line that closes a turn. */
 	summary: string;
@@ -84,14 +82,15 @@ export interface Glyphs {
 export const UNICODE_GLYPHS: Glyphs = {
 	call: "⏺",
 	result: "⎿",
-	thinking: "✻",
-	userMark: "›",
+	thinking: "∴",
+	userMark: "❯",
 	summary: "✳",
 	todoDone: "☒",
 	todoPending: "☐",
 	todoActive: "◐",
-	// Braille cycle: smooth at 80ms and renders in nearly every modern font.
-	spinner: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+	// Claude Code's own frame set (darwin); subtle dots and asterisks rather
+	// than the more visible braille cycle, which is what makes it theirs.
+	spinner: ["·", "✢", "✳", "✶", "✻", "✽"],
 };
 
 export const ASCII_GLYPHS: Glyphs = {
