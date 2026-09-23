@@ -12,6 +12,7 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { fitLines, fitStatus } from "./width.ts";
+import { recordingTerminal } from "./record.ts";
 import { describeMentions, resolveMentions } from "./mentions.ts";
 import type { SubagentEvent } from "../agent/dispatch.ts";
 import { BACKGROUND_CONTEXT, estimateTokens } from "@earendil-works/pi-agent-core";
@@ -557,7 +558,11 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	const { session, commands } = opts;
 	if (opts.plain) setPlainMode(true);
 
-	const tui: TUI = new TuiMainScreen(new ProcessTerminal());
+	// HARNESS_RECORD_TTY records the exact bytes the terminal receives, so a
+	// rendering bug seen once can be replayed offline. See src/tui/record.ts.
+	const recordTo = process.env.HARNESS_RECORD_TTY;
+	const terminal = recordTo ? recordingTerminal(new ProcessTerminal(), recordTo) : new ProcessTerminal();
+	const tui: TUI = new TuiMainScreen(terminal);
 
 	// Reclaim rows when the frame gets shorter.
 	//

@@ -17,13 +17,16 @@
 		"harness": "node --experimental-strip-types src/cli.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
-		"check": "npm run typecheck && npm test"
+		"check": "npm run typecheck && npm test",
+		"replay": "node --experimental-strip-types --no-warnings tools/replay.ts"
 	},
 	"bin": {
 		"harness": "./src/cli.ts"
 	},
 	"devDependencies": {
 		"@types/node": "^26.6.2",
+		"@xterm/headless": "^6.0.0",
+		"node-pty": "^1.1.0",
 		"typescript": "^7.0.2"
 	}
 }
