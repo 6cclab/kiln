@@ -1,0 +1,16 @@
+WAIT ❯
+SCREEN
+KEY p
+WAIT committed line 1
+KEY shift+tab
+WAIT key: shift+tab
+KEY ctrl+r
+WAIT key: ctrl+r
+KEY escape
+WAIT key: esc
+SCREEN --json
+RESIZE 50 15
+SLEEP 50ms
+SCREEN
+KEY q
+EXIT

@@ -76,3 +76,87 @@ its log directory.
 - Assert at the layer where the user perceives the bug. A layout complaint is a
   screen assertion, not a byte assertion.
 - `npm run check` is typecheck plus the full suite.
+
+## Go port
+
+The Go port (`github.com/andrepato/harness`, this repo's `go-port` branch)
+follows the same "cheapest layer that can observe the bug" principle, split
+across four layers. `make check` runs the fast layers; `make e2e` and
+`make e2e-live` run the slow ones. See the `Makefile` for the exact
+commands each layer maps to.
+
+### 1. Unit — `go test ./...`
+
+Ordinary Go unit tests next to the code they cover. Fast, no subprocess, no
+PTY. Use for parsing, formatting, session-store logic, hook decision logic,
+tool-call plumbing — anything that doesn't need a real terminal or a real
+model.
+
+### 2. Faux — a scripted model server
+
+`internal/testkit/faux` (owned separately from this document) runs a small
+HTTP server that speaks the Anthropic and OpenAI-compatible wire formats
+against a scripted transcript, so tests can drive harness against a fake
+model without hitting the network or a real API key. Tests that want it
+set:
+
+- `HARNESS_FAUX_ADDR` — the faux server's listen address, so harness's
+  model client points at it instead of a real provider endpoint.
+- `HARNESS_FAUX_SCRIPT` — path to the script file describing the
+  turn-by-turn responses (and any tool calls) the faux server should play
+  back for that test.
+- `HARNESS_MODEL=faux/faux-1` — selects the faux provider/model pair so
+  harness's normal model-selection path is exercised unchanged, rather than
+  special-cased for tests.
+
+Use for anything that needs a real request/response round trip (streaming,
+tool-call turns, retries, token accounting) without needing a real model or
+real PTY.
+
+### 3. Screen — PTY driver + `harness-drive`
+
+`internal/testkit/screen` (owned separately) drives a real PTY running the
+compiled `harness` binary and gives tests a real terminal emulator's view of
+it — the Go equivalent of the TypeScript `FakeTerminal` → `@xterm/headless`
+pipeline described above, but against the actual binary rather than an
+in-process render loop. `cmd/harness-drive` is the CLI front end for that
+driver: it launches `harness` inside a PTY and accepts a line-oriented
+protocol on its own stdin to control the session and inspect the screen:
+
+- `SEND <text>` — write text to the PTY as if typed, without a trailing key.
+- `KEY <name>` — send a named key (`enter`, `esc`, `ctrl+c`, arrow keys,
+  etc.) as its terminal escape sequence.
+- `WAIT <pattern>` — block until the screen matches a pattern (or a
+  timeout elapses), for tests that need to wait on async model/tool output
+  before asserting.
+- `SCREEN` — print the current screen contents (rows, cursor position) to
+  the driver's own stdout, for the test to assert on.
+- `RESIZE <cols> <rows>` — resize the PTY, for layout-over-time tests
+  (overlays, frames that grow/shrink, scroll).
+- `EXIT` — end the session and terminate the driven process.
+
+Use for anything that must exercise process startup, real PTY resize
+semantics, or real terminal escape-sequence handling — the things the
+in-process TypeScript layers explicitly cannot see.
+
+### 4. Live e2e — `test/e2e`, gated on `HARNESS_E2E_LIVE=1`
+
+`test/e2e` (build-tagged `e2e`, so `go build ./...`/`go test ./...`/
+`make check` never pull it in) holds tests that drive the real, compiled
+binaries end to end. Most of it runs against the faux server or a
+scripted MCP fixture (`internal/testkit/mcpfixture`) so it's still
+hermetic; `make e2e` runs that subset. Tests that actually need a real
+model, real network access, or real API keys are named so they match
+`-run Live` and additionally check `HARNESS_E2E_LIVE=1` before doing
+anything network-bound, so a plain `make e2e` (and CI) never talks to the
+network; only `make e2e-live` does.
+
+### Record/replay via `harness-drive --record`
+
+Like the TypeScript layer's `HARNESS_RECORD_TTY`/`npm run replay`,
+`harness-drive` supports `--record <path>`: it captures the exact byte
+stream the PTY produced (plus input markers for injected `SEND`/`KEY`
+commands) to `<path>`, so a bug seen once on a real run can be replayed
+deterministically afterward — including at a different terminal size,
+which is often when layout bugs actually reproduce — without needing the
+original model conversation again.

@@ -1,0 +1,26 @@
+name: Go
+
+on:
+  push:
+    branches: [go-port]
+  pull_request:
+    branches: [go-port]
+
+jobs:
+  check:
+    # ubuntu-latest has /dev/ptmx, so it's tty-capable: the PTY screen
+    # driver (internal/testkit/screen, cmd/harness-drive) and its race
+    # tests work fine here without a self-hosted runner.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: make check
+        run: make check
+
+      - name: make race
+        run: make race

@@ -1,0 +1,77 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "testdata/hooks/rewrite-updated-input.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "testdata/hooks/block-exit2.sh"
+          },
+          {
+            "type": "command",
+            "command": "testdata/hooks/deny-json.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "testdata/hooks/stderr-notice.sh"
+          },
+          {
+            "type": "command",
+            "command": "testdata/hooks/record-payload.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "testdata/hooks/context-plaintext.sh"
+          },
+          {
+            "type": "command",
+            "command": "testdata/hooks/context-json.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "testdata/hooks/context-plaintext.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "testdata/hooks/record-payload.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
