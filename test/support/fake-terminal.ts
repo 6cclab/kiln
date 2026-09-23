@@ -87,6 +87,11 @@ export class FakeTerminal implements Terminal {
 		this.onResize?.();
 	}
 
+	/** Everything written, escape sequences intact. */
+	raw(): string {
+		return this.chunks.join("");
+	}
+
 	/** Everything written, with ANSI removed. */
 	text(): string {
 		// `stripTerminalSequences` leaves private-mode sequences such as the

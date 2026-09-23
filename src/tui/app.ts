@@ -558,6 +558,18 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	if (opts.plain) setPlainMode(true);
 
 	const tui: TUI = new TuiMainScreen(new ProcessTerminal());
+
+	// Reclaim rows when the frame gets shorter.
+	//
+	// TuiMainScreen renders inline and, by default, only repaints the lines that
+	// changed — so a frame that shrinks leaves the taller frame's rows on screen.
+	// Closing a panel left its thirty rows of blank space sitting under the
+	// status line until something else happened to be taller.
+	//
+	// pi-tui guards this internally with `!hasOverlayEntries`, so the full
+	// repaint lands on the frame AFTER the overlay is gone rather than fighting
+	// it while it is up.
+	tui.setClearOnShrink(true);
 	const transcript = new TranscriptView();
 	const spinner = new SpinnerView();
 	const footer = new FooterView({

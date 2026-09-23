@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { Editor, TuiMainScreen, visibleWidth } from "@earendil-works/pi-tui";
+import { Editor, TuiMainScreen, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { FakeTerminal } from "./support/fake-terminal.ts";
 import { BorderedEditor, FooterView, SpinnerView, TranscriptView } from "../src/tui/app.ts";
 import { PermissionPromptView } from "../src/tui/permission-prompt.ts";
@@ -400,3 +400,75 @@ describe("input line width", () => {
 		});
 	}
 })
+
+/**
+ * Closing a panel has to give the rows back.
+ *
+ * `TuiMainScreen` renders inline and, by default, repaints only the lines that
+ * changed. When the model picker closed, pi-tui erased its rows with `ESC[2K`
+ * but left the cursor block the same height — so the frame kept occupying the
+ * panel's height and the session sat under thirty rows of blank space.
+ *
+ * `setClearOnShrink(true)` makes pi-tui redraw the whole frame when the content
+ * shrinks below the high-water mark, which is what actually reclaims the rows.
+ *
+ * This asserts on the escape sequences rather than the visible text, because
+ * the difference IS the escape sequences: both settings produce the same
+ * characters, and only one of them resizes the block. A test reading
+ * `term.lines()` passes either way, which is how this shipped broken once.
+ */
+describe("clear on shrink", () => {
+	class Fixed implements Component {
+		lines: string[];
+		constructor(lines: string[]) {
+			this.lines = lines;
+		}
+		render(): string[] {
+			return this.lines;
+		}
+		invalidate(): void {}
+	}
+
+	/** Returns what was written for the frame in which a tall overlay goes away. */
+	async function frameAfterClose(clearOnShrink: boolean): Promise<string> {
+		const term = new FakeTerminal(100, 40);
+		const tui = new TuiMainScreen(term);
+		tui.setClearOnShrink(clearOnShrink);
+		tui.addChild(new Fixed(["base-1", "base-2", "base-3"]));
+		tui.start();
+		await settle();
+
+		// Roughly the height of the model picker.
+		const handle = tui.showOverlay(new Fixed(Array.from({ length: 22 }, (_, i) => `PANEL-${i}`)), {
+			width: "80%",
+			maxHeight: "80%",
+			anchor: "center",
+		});
+		tui.requestRender();
+		await settle();
+
+		// Only the shrinking frame: that is the one the branch guards.
+		term.clearCaptured();
+		handle.hide();
+		tui.requestRender();
+		await settle();
+		const raw = term.raw();
+		tui.stop();
+		return raw;
+	}
+
+	it("redraws the frame so the panel's rows are reclaimed", async () => {
+		const raw = await frameAfterClose(true);
+		assert.ok(raw.includes("\x1b[2J"), "expected a screen clear");
+		assert.ok(raw.includes("base-1"), "expected the shrunken frame to be redrawn");
+	});
+
+	it("without it, the rows are only blanked and the block stays tall", async () => {
+		// The bug, pinned: erase-line per row and no redraw, so the block keeps
+		// the panel's height. If pi-tui ever makes this the default, this fails
+		// and the setting in app.ts can go.
+		const raw = await frameAfterClose(false);
+		assert.ok(!raw.includes("\x1b[2J"), "expected no screen clear");
+		assert.ok(raw.split("\x1b[2K").length - 1 > 20, "expected the rows to be blanked in place");
+	});
+});
