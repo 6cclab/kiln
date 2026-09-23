@@ -128,25 +128,59 @@ export function builtinCommands(deps: BuiltinDeps): CommandSource {
 					});
 			},
 			run: async ({ args }) => {
-				if (!args) {
-					const current = await session.lane.getModel(BACKGROUND_CONTEXT);
-					const available = await registry.available();
-					return {
-						output: [
-							`current: ${current?.provider}/${current?.id}`,
-							"",
-							...available.map((m) => `  ${m.provider}/${m.id}`),
-						].join("\n"),
-					};
-				}
-				const [provider, ...rest] = args.split("/");
-				const modelId = rest.join("/");
-				if (!provider || !modelId) return { output: "Usage: /model <provider>/<model>" };
+				const apply = async (target: string) => {
+					const [provider, ...rest] = target.split("/");
+					const modelId = rest.join("/");
+					if (!provider || !modelId) throw new Error(`"${target}" is not provider/model`);
+					const resolved = await registry.resolve(provider, modelId);
+					await session.lane.setModel({ provider, modelId }, BACKGROUND_CONTEXT);
+					return `now on ${provider}/${modelId} — ${resolved.tier.name} tier, ${formatTokens(usableTokens(resolved.tier))} usable`;
+				};
 
-				const resolved = await registry.resolve(provider, modelId);
-				await session.lane.setModel({ provider, modelId }, BACKGROUND_CONTEXT);
+				// An explicit argument skips the picker: `/model ollama/x` should
+				// just switch, the way it does from the command line.
+				if (args) return { output: await apply(args.trim()) };
+
+				const current = await session.lane.getModel(BACKGROUND_CONTEXT);
+				const currentId = current ? `${current.provider}/${current.id}` : undefined;
+
+				// No argument opens the picker. Printing the list into the
+				// transcript looked like a picker and was not one: there was
+				// nothing to move a cursor through and nothing to press enter on.
 				return {
-					output: `Model set to ${provider}/${modelId} (${resolved.tier.name} tier, ${formatTokens(usableTokens(resolved.tier))} budget).`,
+					modal: {
+						title: "Model",
+						selectLabel: "use this model",
+						header: () => [`current    ${currentId ?? "unknown"}`],
+						empty: "No models available. Configure a provider first: harness providers",
+						items: async () => {
+							const models = await cachedModels();
+							return models.map((m) => {
+								const id = `${m.provider}/${m.id}`;
+								const tier = tierFor(m);
+								return {
+									value: id,
+									// The current model is marked rather than reordered:
+									// a list that reshuffles when you open it is one you
+									// have to re-read every time.
+									label: id === currentId ? `${id}  ←` : id,
+									description: `${formatTokens(m.contextWindow)} · ${tier.name} · ${formatTokens(usableTokens(tier))} usable`,
+								};
+							});
+						},
+						onSelect: async (item: { value: string }) => {
+							await apply(item.value);
+							// Closes: the panel exists to make one choice, and
+							// leaving it open after the choice is made is a second
+							// keystroke for nothing.
+							return { close: true as const };
+						},
+					},
+					output: [
+						`current: ${currentId ?? "unknown"}`,
+						"",
+						...(await cachedModels()).map((m) => `  ${m.provider}/${m.id}`),
+					].join("\n"),
 				};
 			},
 		},

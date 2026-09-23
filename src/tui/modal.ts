@@ -32,10 +32,20 @@ export interface ModalSpec {
 	/** Rows to navigate. Rebuilt by `refresh` after an action changes something. */
 	items: () => Promise<SelectItem[]> | SelectItem[];
 	actions?: ModalAction[];
+	/**
+	 * Enter on a row.
+	 *
+	 * `SelectList` fires this natively and nothing was wired to it, so Enter did
+	 * nothing in every panel — a list you can move around but not choose from.
+	 * Return a status line, or close the panel by returning `{ close: true }`.
+	 */
+	onSelect?: (item: SelectItem) => Promise<string | { close: true } | undefined> | string | { close: true } | undefined;
 	/** Shown above the list, for state that is not a row. */
 	header?: () => string[];
 	/** Shown when there are no rows. */
 	empty?: string;
+	/** Verb for Enter in the footer, e.g. "use this model". */
+	selectLabel?: string;
 }
 
 const listTheme = {
@@ -64,13 +74,37 @@ export class ModalView implements Component {
 		this.spec = spec;
 		this.onClose = onClose;
 		this.list = new SelectList(items, 12, listTheme);
+		this.bind();
+	}
+
+	/** Every list this view builds needs the same handlers; built in one place. */
+	private bind(): void {
 		this.list.onCancel = () => this.onClose();
+		this.list.onSelect = (item) => void this.select(item);
+	}
+
+	private async select(item: SelectItem): Promise<void> {
+		if (!this.spec.onSelect || this.busy) return;
+		this.busy = true;
+		try {
+			const result = await this.spec.onSelect(item);
+			if (result && typeof result === "object" && result.close) {
+				this.onClose();
+				return;
+			}
+			this.status = typeof result === "string" ? result : "";
+			this.setItems(await this.spec.items());
+		} catch (err) {
+			this.status = red(`failed: ${(err as Error).message}`);
+		} finally {
+			this.busy = false;
+		}
 	}
 
 	setItems(items: SelectItem[]): void {
 		const previous = this.list.getSelectedItem()?.value;
 		this.list = new SelectList(items, 12, listTheme);
-		this.list.onCancel = () => this.onClose();
+		this.bind();
 		// Keep the cursor on the same row across a refresh: deleting the third
 		// rule and landing back at the top makes deleting three rules a chore.
 		if (previous) {
@@ -148,7 +182,9 @@ export class ModalView implements Component {
 		// The footer is not decoration: a modal that takes the keyboard has to
 		// say what the keys now do, or the only discoverable action is Esc.
 		const keys = [
+			...(this.spec.onSelect ? [`${bold("enter")} ${this.spec.selectLabel ?? "select"}`] : []),
 			...(this.spec.actions ?? []).map((a) => `${bold(a.key)} ${a.label}`),
+			`${bold("↑↓")} move`,
 			`${bold("esc")} close`,
 		];
 		lines.push(dim(keys.join("   ")));

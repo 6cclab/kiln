@@ -176,3 +176,61 @@ describe("modal behaviour", () => {
 		}
 	});
 });
+
+describe("Enter selects a row", () => {
+	/**
+	 * `SelectList` fires `onSelect` on Enter natively, and nothing was wired to
+	 * it. Every panel was a list you could move a cursor through but not choose
+	 * from — which, from the keyboard, is a list that does nothing.
+	 */
+	it("fires onSelect and can close the panel", async () => {
+		const chosen: string[] = [];
+		let closed = false;
+		const view = new ModalView(
+			{
+				title: "T",
+				items: () => [
+					{ value: "a", label: "A" },
+					{ value: "b", label: "B" },
+				],
+				onSelect: (item) => {
+					chosen.push(item.value);
+					return { close: true as const };
+				},
+			},
+			[
+				{ value: "a", label: "A" },
+				{ value: "b", label: "B" },
+			],
+			() => {
+				closed = true;
+			},
+		);
+
+		view.handleInput("\x1b[B");
+		view.handleInput("\r");
+		await new Promise((r) => setTimeout(r, 30));
+
+		assert.deepEqual(chosen, ["b"], "Enter did not select the row under the cursor");
+		assert.ok(closed, "returning { close: true } did not close the panel");
+	});
+
+	it("advertises Enter and the arrow keys in the footer", async () => {
+		// A panel that responds to keys it never names is a panel you have to
+		// guess at.
+		const view = new ModalView(
+			{ title: "T", items: () => [{ value: "a", label: "A" }], selectLabel: "use it", onSelect: () => undefined },
+			[{ value: "a", label: "A" }],
+			() => {},
+		);
+		const footer = view.render(70).at(-1) ?? "";
+		assert.ok(footer.includes("enter"), footer);
+		assert.ok(footer.includes("use it"), footer);
+		assert.ok(footer.includes("move"), footer);
+	});
+
+	it("omits the Enter hint when a row does nothing", async () => {
+		const view = new ModalView({ title: "T", items: () => [{ value: "a", label: "A" }] }, [{ value: "a", label: "A" }], () => {});
+		assert.ok(!(view.render(70).at(-1) ?? "").includes("enter"));
+	});
+})
