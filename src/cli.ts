@@ -376,6 +376,7 @@ async function chat(): Promise<void> {
 	// model must not learn that its command was rewritten, or it starts
 	// second-guessing the tool it just called.
 	let onHookNotice: ((message: string) => void) | undefined;
+	let onModelChanged: ((info: { label: string; tier: import("./budget/tier.ts").Tier }) => void) | undefined;
 
 	const commands = new CommandRegistry();
 	let exiting = false;
@@ -383,6 +384,7 @@ async function chat(): Promise<void> {
 		session,
 		registry: reg,
 		agents,
+		onModelChanged: (info) => onModelChanged?.(info),
 		onClear: () => {},
 		onExit: () => {
 			exiting = true;
@@ -680,6 +682,26 @@ async function chat(): Promise<void> {
 		},
 		onHookNotices: (fn) => {
 			onHookNotice = fn;
+		},
+		onModelChanges: (fn) => {
+			// Two things happen on a model change: the TUI updates itself, and the
+			// tool catalog is re-gated here. The strategy is a function of the
+			// window, so moving from a 200k model to a 32k one without re-gating
+			// leaves full schemas loaded that no longer fit — the exact failure
+			// the tier system exists to prevent.
+			onModelChanged = (info) => {
+				fn(info);
+				void session.lane.setActiveTools(
+					activeToolNames({
+						tools: mcpTools,
+						posture: activePosture,
+						strategy: info.tier.toolStrategy,
+						state: gate,
+						residentTools: RESIDENT,
+					}),
+					BACKGROUND_CONTEXT,
+				);
+			};
 		},
 		startupContext: sessionStart.context,
 		runPromptHooks: async (prompt) => {

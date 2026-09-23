@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
 import type { StartedSession } from "../agent/session.ts";
 import type { Registry } from "../provider/registry.ts";
 import type { Model } from "@earendil-works/pi-ai";
-import { TOOL_STRATEGY_COST, tierFor, usableTokens } from "../budget/tier.ts";
+import { TOOL_STRATEGY_COST, tierFor, usableTokens, type Tier } from "../budget/tier.ts";
 import { formatTokens } from "../tui/transcript.ts";
 import { staticSource, type Command, type CommandSource } from "./registry.ts";
 
@@ -25,6 +25,13 @@ export interface BuiltinDeps {
 	onExit: () => void;
 	/** Subagent roster, for `/agents`. */
 	agents?: readonly import("../claude/agents.ts").AgentDefinition[];
+	/**
+	 * Told when the model changes, so the UI can follow.
+	 *
+	 * Switching models is not just a lane setting: the tier, and everything
+	 * derived from the context window, has to move with it.
+	 */
+	onModelChanged?: (info: { label: string; tier: Tier }) => void;
 }
 
 export function builtinCommands(deps: BuiltinDeps): CommandSource {
@@ -132,9 +139,20 @@ export function builtinCommands(deps: BuiltinDeps): CommandSource {
 					const [provider, ...rest] = target.split("/");
 					const modelId = rest.join("/");
 					if (!provider || !modelId) throw new Error(`"${target}" is not provider/model`);
+
 					const resolved = await registry.resolve(provider, modelId);
 					await session.lane.setModel({ provider, modelId }, BACKGROUND_CONTEXT);
-					return `now on ${provider}/${modelId} — ${resolved.tier.name} tier, ${formatTokens(usableTokens(resolved.tier))} usable`;
+
+					// The tier is the single place model choice becomes behavior, so
+					// changing the model without moving it leaves the session running
+					// a 1M model on a 49k budget - or worse, a 32k model still
+					// holding the tool catalog a 200k window could afford.
+					session.tier = resolved.tier;
+					await session.harness.setCompactionSettings(resolved.tier.compaction, BACKGROUND_CONTEXT);
+
+					const label = `${provider}/${modelId}`;
+					deps.onModelChanged?.({ label, tier: resolved.tier });
+					return `now on ${label} — ${resolved.tier.name} tier, ${formatTokens(usableTokens(resolved.tier))} usable`;
 				};
 
 				// An explicit argument skips the picker: `/model ollama/x` should

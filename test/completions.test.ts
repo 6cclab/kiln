@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { builtinCommands } from "../src/commands/builtins.ts";
 import { formatTokens } from "../src/tui/transcript.ts";
+import { tierForWindow } from "../src/budget/tier.ts";
 
 /**
  * Argument completions.
@@ -91,3 +92,94 @@ describe("formatTokens", () => {
 		assert.equal(formatTokens(999), "999");
 	});
 });
+
+describe("/model switching moves the whole posture", () => {
+	/**
+	 * `setModel` changes one lane setting. The tier is the single place model
+	 * choice becomes behavior — compaction, tool strategy, per-result budgets —
+	 * and none of it moved, so selecting a 1M model left the session running on a
+	 * 49k budget, and the reverse left a tool catalog loaded that no longer fit.
+	 *
+	 * Selecting a model and seeing nothing change is also indistinguishable from
+	 * it not working, which is how this was reported.
+	 */
+	function stub() {
+		let model = { provider: "ollama", id: "qwen3.8:latest" };
+		let compaction: unknown = null;
+		const changes: Array<{ label: string; tier: { name: string } }> = [];
+		const session = {
+			tier: tierForWindow(49_152),
+			harness: {
+				setCompactionSettings: async (c: unknown) => {
+					compaction = c;
+				},
+			},
+			lane: {
+				getModel: async () => model,
+				setModel: async (x: { provider: string; modelId: string }) => {
+					model = { provider: x.provider, id: x.modelId };
+				},
+			},
+			sessionsDir: "",
+		};
+		const registry = {
+			available: async () => [
+				{ provider: "ollama", id: "qwen3.8:latest", contextWindow: 49_152 },
+				{ provider: "anthropic", id: "claude-opus-5", contextWindow: 1_000_000 },
+			],
+			resolve: async (_p: string, m: string) => ({ tier: tierForWindow(m.includes("opus") ? 1_000_000 : 49_152) }),
+			models: {},
+		};
+		return { session, registry, changes, getModel: () => model, getCompaction: () => compaction };
+	}
+
+	const modelCmd = async (s: ReturnType<typeof stub>) =>
+		(
+			await builtinCommands({
+				session: s.session as never,
+				registry: s.registry as never,
+				onClear: () => {},
+				onExit: () => {},
+				onModelChanged: (i) => s.changes.push(i as never),
+			}).load()
+		).find((c) => c.name === "model")!;
+
+	it("moves the tier with the model", async () => {
+		const s = stub();
+		assert.equal(s.session.tier.name, "medium");
+		await (await modelCmd(s)).run({ args: "anthropic/claude-opus-5" });
+		assert.equal(s.session.tier.name, "large", "tier did not follow the model");
+		assert.equal(s.session.tier.contextWindow, 1_000_000);
+	});
+
+	it("re-applies compaction settings for the new window", async () => {
+		// pi's defaults overflow a small window; a stale setting from a 1M model
+		// would do the same in reverse.
+		const s = stub();
+		await (await modelCmd(s)).run({ args: "anthropic/claude-opus-5" });
+		assert.ok(s.getCompaction(), "compaction was not re-applied");
+	});
+
+	it("tells the UI, so the change is visible", async () => {
+		const s = stub();
+		await (await modelCmd(s)).run({ args: "anthropic/claude-opus-5" });
+		assert.equal(s.changes.length, 1);
+		assert.equal(s.changes[0].label, "anthropic/claude-opus-5");
+	});
+
+	it("does the same when chosen from the picker, not just from an argument", async () => {
+		const s = stub();
+		const spec = (await (await modelCmd(s)).run({ args: "" })).modal as {
+			onSelect: (i: { value: string }) => Promise<unknown>;
+		};
+		await spec.onSelect({ value: "anthropic/claude-opus-5" });
+		assert.equal(s.getModel().id, "claude-opus-5");
+		assert.equal(s.session.tier.name, "large", "the picker path skipped the tier update");
+	});
+
+	it("rejects a target that is not provider/model", async () => {
+		const s = stub();
+		const command = await modelCmd(s);
+		await assert.rejects(async () => command.run({ args: "nonsense" }));
+	});
+})

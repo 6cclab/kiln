@@ -540,6 +540,8 @@ export interface AppOptions {
 	onSubagentEvents?: (fn: (e: SubagentEvent) => void) => void;
 	/** Receives the hook-notice sink once this view exists. */
 	onHookNotices?: (fn: (message: string) => void) => void;
+	/** Receives the model-change sink once this view exists. */
+	onModelChanges?: (fn: (info: { label: string; tier: import("../budget/tier.ts").Tier }) => void) => void;
 	/**
 	 * UserPromptSubmit hooks. Returns text to prepend to the turn, or a reason
 	 * the turn was refused. Run per prompt, so it cannot be hoisted out.
@@ -609,6 +611,17 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	// hang. Its tool calls are NOT echoed - that would undo the context
 	// isolation visually even though it is real underneath - but the dispatch,
 	// the model it landed on, and the result size are.
+	// A model switch moves the whole operating posture, so the status line and
+	// the transcript both have to say so - selecting from the picker and seeing
+	// nothing change is indistinguishable from it not working.
+	opts.onModelChanges?.((info) => {
+		footer.update({ modelLabel: info.label, contextWindow: info.tier.contextWindow, contextUsed: undefined });
+		transcript.append([
+			`${dim(g().call)} ${bold("model")} ${dim("→")} ${info.label} ${dim(`(${info.tier.name} tier, ${formatTokens(usableTokens(info.tier))} usable)`)}`,
+		]);
+		tui.requestRender();
+	});
+
 	// Hook activity goes to the transcript as a dim aside. The user needs to know
 	// their command was rewritten; the model does not.
 	opts.onHookNotices?.((message) => {
