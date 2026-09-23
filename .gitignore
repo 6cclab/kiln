@@ -11,3 +11,6 @@ phase0/out/
 transcript-*.md
 
 .DS_Store
+
+# Go build output
+bin/
