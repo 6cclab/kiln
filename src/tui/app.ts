@@ -813,60 +813,62 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	// Permission mode cycling, matching Claude Code's Shift+Tab.
 	const MODES: PermissionMode[] = ["manual", "acceptEdits", "auto", "plan"];
 
-	tui.addInputListener(
-		createKeyRouter({
-			permissionKey: (data) => permission.isActive() && permission.handleKey(data),
-			isBusy: () => spinner.isBusy(),
-			hasInput: () => editor.getText().trim().length > 0,
+	// Wrapped rather than registered directly, and a render is requested HERE.
+	// pi-tui stops dispatching the moment a listener returns `{consume: true}`,
+	// so a second listener that re-renders never runs for exactly the keys that
+	// changed something. Every consumed key mutated state and then left the
+	// screen untouched, which is indistinguishable from the key being dead.
+	const routeKey = createKeyRouter({
+		permissionKey: (data) => permission.isActive() && permission.handleKey(data),
+		isBusy: () => spinner.isBusy(),
+		hasInput: () => editor.getText().trim().length > 0,
 
-			interrupt: () => void session.lane.abort(BACKGROUND_CONTEXT),
+		interrupt: () => void session.lane.abort(BACKGROUND_CONTEXT),
 
-			toggleExpanded: () => {
-				// Say so when there is nothing to expand, rather than flipping a
-				// flag that changes nothing on screen and reads as a broken key.
-				if (!transcript.hasCollapsed() && !transcript.isExpanded()) {
-					footer.setText(`${tierLine()}  ·  nothing truncated`);
-				} else {
-					const now = transcript.toggleExpanded();
-					footer.setText(now ? `${tierLine()}  ·  expanded` : tierLine());
-				}
-			},
+		toggleExpanded: () => {
+			// Say so when there is nothing to expand, rather than flipping a
+			// flag that changes nothing on screen and reads as a broken key.
+			if (!transcript.hasCollapsed() && !transcript.isExpanded()) {
+				footer.setText(`${tierLine()}  ·  nothing truncated`);
+			} else {
+				const now = transcript.toggleExpanded();
+				footer.setText(now ? `${tierLine()}  ·  expanded` : tierLine());
+			}
+		},
 
-			cyclePermissionMode: () => {
-				if (!opts.gate) return;
-				const next = MODES[(MODES.indexOf(opts.gate.mode) + 1) % MODES.length];
-				opts.gate.setMode(next);
-				footer.setText(tierLine());
-			},
+		cyclePermissionMode: () => {
+			if (!opts.gate) return;
+			const next = MODES[(MODES.indexOf(opts.gate.mode) + 1) % MODES.length];
+			opts.gate.setMode(next);
+			footer.setText(tierLine());
+		},
 
-			clearInput: () => editor.setText(""),
+		clearInput: () => editor.setText(""),
 
-			clearScreen: () => {
-				// Clears the rendered transcript, not the conversation: /clear is
-				// the command that forgets things, and conflating the two would
-				// make a display shortcut destroy context.
-				transcript.clear();
-				footer.setText(tierLine());
-			},
+		clearScreen: () => {
+			// Clears the rendered transcript, not the conversation: /clear is
+			// the command that forgets things, and conflating the two would
+			// make a display shortcut destroy context.
+			transcript.clear();
+			footer.setText(tierLine());
+		},
 
-			rewind: () => {
-				transcript.append([dim("  rewind: use /rewind <entry-id>; /resume lists past sessions")]);
-			},
+		rewind: () => {
+			transcript.append([dim("  rewind: use /rewind <entry-id>; /resume lists past sessions")]);
+		},
 
-			exit: () => {
-				tui.stop();
-				process.kill(process.pid, "SIGINT");
-			},
+		exit: () => {
+			tui.stop();
+			process.kill(process.pid, "SIGINT");
+		},
 
-			hint: (message) => footer.setText(`${tierLine()}  ·  ${message}`),
-		}),
-	);
+		hint: (message) => footer.setText(`${tierLine()}  ·  ${message}`),
+	});
 
-	// Every action above requests a render; doing it once here keeps that out of
-	// each one.
-	tui.addInputListener(() => {
-		tui.requestRender();
-		return undefined;
+	tui.addInputListener((data) => {
+		const result = routeKey(data);
+		if (result?.consume) tui.requestRender();
+		return result;
 	});
 
 	transcript.append([

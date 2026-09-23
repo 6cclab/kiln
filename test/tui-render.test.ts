@@ -275,3 +275,62 @@ describe("keyboard input through the real TUI", () => {
 		h.stop();
 	});
 });
+
+describe("consumed keys still redraw", () => {
+	/**
+	 * pi-tui stops dispatching as soon as a listener returns `{consume: true}`:
+	 *
+	 *     const result = listener(current);
+	 *     if (result?.consume) { return; }
+	 *
+	 * So a design that consumes keys in one listener and re-renders in a second
+	 * never redraws for exactly the keys that changed something. Every consumed
+	 * key mutated state and left the screen untouched, which is
+	 * indistinguishable from the key being dead — reported as "esc does nothing,
+	 * ctrl c does nothing".
+	 */
+
+	it("stops dispatch at the first consuming listener", async () => {
+		// The upstream behaviour this depends on. If pi-tui ever changes it, this
+		// fails and says why rather than leaving the reason to be rediscovered.
+		const h = harness();
+		const reached: string[] = [];
+		h.tui.addInputListener(() => {
+			reached.push("first");
+			return { consume: true };
+		});
+		h.tui.addInputListener(() => {
+			reached.push("second");
+			return undefined;
+		});
+		h.term.send("x");
+		await h.render();
+		assert.deepEqual(reached, ["first"], "dispatch continued past a consuming listener");
+		h.stop();
+	});
+
+	it("redraws when a consuming listener changes what is on screen", async () => {
+		const h = harness();
+		// Let the first frame settle before measuring a diff against it: the
+		// differential renderer has nothing to diff until one frame exists.
+		await h.render();
+
+		// The shape runApp uses: consume and request the render in one place.
+		h.tui.addInputListener((data) => {
+			if (data !== "\x0c") return undefined;
+			h.transcript.append(["CLEARED-AND-REDRAWN"]);
+			h.tui.requestRender();
+			return { consume: true };
+		});
+
+		h.term.clearCaptured();
+		h.term.send("\x0c");
+		await new Promise((r) => setTimeout(r, 80));
+
+		assert.ok(
+			h.term.lines().some((l) => l.includes("CLEARED-AND-REDRAWN")),
+			"a consumed key changed state without redrawing",
+		);
+		h.stop();
+	});
+})
