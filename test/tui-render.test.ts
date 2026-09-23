@@ -174,7 +174,8 @@ describe("full-frame rendering", () => {
 		const lines = h.term.lines();
 		const spinnerAt = lines.findIndex((l) => /esc to interrupt/.test(l));
 		const footerAt = lines.findIndex((l) => l.includes("FOOTER-MARKER"));
-		const boxAt = lines.findIndex((l) => l.includes("╭") || l.includes("╰"));
+		// The input area is a single rule now, not a box.
+		const boxAt = lines.findIndex((l) => /^─+$/.test(l));
 
 		assert.ok(spinnerAt >= 0, "no spinner rendered");
 		assert.ok(footerAt >= 0, "no footer rendered");

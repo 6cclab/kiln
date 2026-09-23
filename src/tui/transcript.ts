@@ -1,4 +1,5 @@
-import { dim, g, gray, green, red, strike, bold, italic } from "./theme.ts";
+import { dim, g, gray, green, red, strike, bold, italic, userBlock } from "./theme.ts";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 /**
  * Transcript rendering — the layout defined in docs/claude-code-parity.md §4a.
@@ -230,4 +231,48 @@ export function renderThinking(view: ThinkingView): string[] {
 		`${dim(glyphs.thinking)} ${dim(label)}`,
 		...lines.map((line) => `${RESULT_INDENT}${dim(italic(line))}`),
 	];
+}
+
+/**
+ * The user's own message.
+ *
+ * Rendered as a filled block spanning the width rather than a `> ` prefix.
+ * Scrolling back through a long session, the question you asked is the landmark
+ * you navigate by — a two-character prefix does not survive that at a glance,
+ * and a coloured one competes with the tool markers and diffs that already use
+ * colour to mean something.
+ *
+ * Padded to the full width so the fill reads as a band rather than a ragged
+ * highlight that ends wherever the text happened to stop.
+ */
+export function renderUserMessage(text: string, width: number): string[] {
+	const glyphs = g();
+	const inner = Math.max(1, width - 2);
+	const wrapped = text.split("\n").flatMap((line) => wrapTextWithAnsi(line, inner));
+	return wrapped.map((line) => {
+		const pad = " ".repeat(Math.max(0, inner - visibleWidth(line)));
+		return userBlock(`${dim(glyphs.userMark)} ${line}${pad}`);
+	});
+}
+
+export interface TurnSummary {
+	seconds: number;
+	tokens?: number;
+	toolCalls?: number;
+}
+
+/**
+ * The line that closes a turn.
+ *
+ * Without it a finished turn just stops, and the transcript gives no sense of
+ * what a request cost — which on a local model at ~20 tok/s is the number you
+ * are actually budgeting against. Elapsed time is the honest headline there;
+ * tokens and tool calls explain it.
+ */
+export function renderTurnSummary(summary: TurnSummary): string[] {
+	const glyphs = g();
+	const parts = [`${summary.seconds}s`];
+	if (summary.toolCalls) parts.push(`${summary.toolCalls} tool call${summary.toolCalls === 1 ? "" : "s"}`);
+	if (summary.tokens) parts.push(`${formatTokens(summary.tokens)} tokens`);
+	return [dim(`${glyphs.summary} Worked for ${parts.join(" · ")}`)];
 }

@@ -135,3 +135,59 @@ describe("other components hold the width", () => {
 		assert.ok(max <= WIDTH, `overflowed at ${max}`);
 	});
 });
+
+describe("user message block", () => {
+	it("pads to the full width so the fill reads as a band", () => {
+		// A ragged highlight that ends wherever the text stopped does not read as
+		// structure when scrolling back.
+		const view = new TranscriptView();
+		view.appendUser("short question");
+		// Exactly the viewport width: full-bleed, and still inside pi-tui's limit.
+		const lines = view.render(WIDTH);
+		for (const line of lines) assert.equal(visibleWidth(line), WIDTH);
+	});
+
+	it("wraps a long message instead of overflowing", () => {
+		const view = new TranscriptView();
+		view.appendUser(LONG);
+		const lines = view.render(WIDTH);
+		assert.ok(lines.length > 1);
+		for (const line of lines) assert.ok(visibleWidth(line) <= WIDTH, `overflowed at ${visibleWidth(line)}`);
+	});
+
+	it("keeps the text findable, which is the whole point", () => {
+		const view = new TranscriptView();
+		view.appendUser("find me later");
+		assert.ok(view.render(WIDTH).join("").includes("find me later"));
+	});
+
+	it("re-wraps when the terminal resizes", () => {
+		// Held as text rather than pre-wrapped lines for exactly this.
+		const view = new TranscriptView();
+		view.appendUser("a ".repeat(60));
+		assert.notEqual(view.render(40).length, view.render(100).length);
+	});
+});
+
+describe("turn summary", () => {
+	it("leads with elapsed time, the number being budgeted against", async () => {
+		const { renderTurnSummary } = await import("../src/tui/transcript.ts");
+		const line = renderTurnSummary({ seconds: 32, tokens: 4200, toolCalls: 1 }).join("");
+		assert.ok(line.includes("32s"));
+		assert.ok(line.indexOf("32s") < line.indexOf("4.2k"), "tokens led instead of time");
+	});
+
+	it("omits parts it has nothing to say about", async () => {
+		const { renderTurnSummary } = await import("../src/tui/transcript.ts");
+		const line = renderTurnSummary({ seconds: 5 }).join("");
+		assert.ok(!line.includes("tool call"));
+		assert.ok(!line.includes("tokens"));
+	});
+
+	it("gets the plural right", async () => {
+		const { renderTurnSummary } = await import("../src/tui/transcript.ts");
+		assert.ok(renderTurnSummary({ seconds: 1, toolCalls: 1 }).join("").includes("1 tool call ·") === false);
+		assert.ok(renderTurnSummary({ seconds: 1, toolCalls: 1 }).join("").includes("1 tool call"));
+		assert.ok(renderTurnSummary({ seconds: 1, toolCalls: 3 }).join("").includes("3 tool calls"));
+	});
+});

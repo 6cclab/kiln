@@ -39,6 +39,8 @@ import {
 	renderToolCall,
 	renderTodos,
 	renderThinking,
+	renderUserMessage,
+	renderTurnSummary,
 	type ThinkingView,
 	type ToolCallView,
 } from "./transcript.ts";
@@ -140,30 +142,27 @@ export class BorderedEditor implements Component, Focusable {
 
 	render(width: number): string[] {
 		// The editor ALWAYS renders its own horizontal rule as the first and last
-		// line. Adding a box around that produced a visible double border. So
-		// those two lines are reused as the top and bottom edges, with corners
-		// substituted — which also preserves the scroll indicators
-		// ("─── ↑ 3 more ───") the editor draws into them when content overflows.
-		const innerWidth = Math.max(1, width - 2);
-		const body = this.editor.render(innerWidth);
+		// line, and it draws scroll indicators into them ("─── ↑ 3 more ───")
+		// when the content overflows. Those rules are kept and the rest of the
+		// box is not.
+		//
+		// A full ╭─╮ │ ╰─╯ box costs two rows of chrome and boxes in text that is
+		// already the only editable thing on screen. One rule above, a prompt
+		// marker, and the status line below is lighter and gives a row back — on
+		// a short terminal that row is a line of transcript.
+		const body = this.editor.render(Math.max(1, width - 2));
 		if (body.length < 2) return body;
 
-		const bar = this.color("│");
-		const top = `${this.color("╭")}${body[0]}${this.color("╮")}`;
-		const bottom = `${this.color("╰")}${body[body.length - 1]}${this.color("╯")}`;
-
-		const middle = body.slice(1, -1).map((line) => {
-			// Pad with visibleWidth, not String.length: ANSI escapes are zero-width
-			// on screen but not in the string, and counting them misaligns the edge.
-			// Truncate as well as pad: the editor wraps its own content, but a
-			// single over-wide line here would push the right edge off screen and
-			// take the whole frame down with it.
-			const fitted = fitStatus(line, innerWidth);
-			const pad = Math.max(0, innerWidth - visibleWidth(fitted));
-			return `${bar}${fitted}${" ".repeat(pad)}${bar}`;
-		});
-
-		return [top, ...middle, bottom];
+		const marker = this.color(g().userMark);
+		return [
+			this.color(body[0]),
+			// The prompt marker replaces the left border; the CURSOR_MARKER inside
+			// the line shifts with it, which is what keeps the hardware cursor in
+			// the right column.
+			// No space after the marker: the editor's own paddingX already supplies
+			// one, and adding another puts a two-column gap before the cursor.
+			...body.slice(1, -1).map((line) => `${marker}${line}`),
+		];
 	}
 }
 
@@ -180,7 +179,9 @@ type Block =
 	/** A tool call keeping its FULL output, so Ctrl+R can reveal it later. */
 	| { kind: "tool"; view: ToolCallView; full: string[] }
 	/** A reasoning block. Collapsed by default; Ctrl+R expands it with the rest. */
-	| { kind: "thinking"; view: ThinkingView };
+	| { kind: "thinking"; view: ThinkingView }
+	/** The user's own message. Re-wraps on resize, so it keeps its own kind. */
+	| { kind: "user"; text: string };
 
 export class TranscriptView implements Component {
 	// Blocks, not a flat line list, for two reasons: markdown must re-wrap when
@@ -191,6 +192,11 @@ export class TranscriptView implements Component {
 
 	append(lines: string[]): void {
 		this.blocks.push({ kind: "lines", lines });
+	}
+
+	/** The user's own message, rendered as a filled block. */
+	appendUser(text: string): void {
+		this.blocks.push({ kind: "user", text });
 	}
 
 	appendMarkdown(text: string): void {
@@ -247,6 +253,7 @@ export class TranscriptView implements Component {
 	render(width: number): string[] {
 		return this.blocks.flatMap((block) => {
 			if (block.kind === "lines") return fitLines(block.lines, width);
+			if (block.kind === "user") return renderUserMessage(block.text, width);
 			if (block.kind === "thinking") {
 				return fitLines(renderThinking({ ...block.view, expanded: this.expanded }), width, "    ");
 			}
@@ -311,6 +318,10 @@ export class SpinnerView implements Component {
 	/** Totals are cumulative for the run, so this replaces rather than adds. */
 	setTokens(n: number): void {
 		this.tokens = n;
+	}
+
+	getTokens(): number {
+		return this.tokens;
 	}
 
 	isBusy(): boolean {
@@ -672,6 +683,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	});
 
 	session.harness.events.on("tool_start", (event) => {
+		turnToolCalls++;
 		const e = event as { toolCallId: string; toolName: string; args: unknown };
 		pending.set(e.toolCallId, {
 			name: titleCase(e.toolName),
@@ -727,8 +739,13 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	let spinnerTimer: NodeJS.Timeout | undefined;
 	let turn = 0;
 
+	let turnStartedAt = 0;
+	let turnToolCalls = 0;
+
 	const beginTurn = () => {
 		streamed = "";
+		turnStartedAt = Date.now();
+		turnToolCalls = 0;
 		spinner.start(turn++);
 		spinnerTimer = setInterval(() => {
 			spinner.tick();
@@ -754,7 +771,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 		// Echo the user's line, as Claude Code does: without it the transcript
 		// reads as a monologue once you scroll back.
 		transcript.appendBlank();
-		transcript.append([`${dim(">")} ${line}`]);
+		transcript.appendUser(line);
 		transcript.appendBlank();
 		tui.requestRender();
 
@@ -849,6 +866,15 @@ export async function runApp(opts: AppOptions): Promise<void> {
 				if (!result.ok) {
 					transcript.append(renderError(JSON.stringify((result as { error?: unknown }).error)));
 				}
+				// Closes the turn with what it cost. On a local model at ~20 tok/s
+				// the elapsed time is the number actually being budgeted against.
+				transcript.append(
+					renderTurnSummary({
+						seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
+						tokens: spinner.getTokens(),
+						toolCalls: turnToolCalls,
+					}),
+				);
 				transcript.appendBlank();
 				refreshStatus();
 				// A turn is what usually dirties the tree, so this is the moment

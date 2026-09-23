@@ -48,6 +48,16 @@ export const cyan = style("36", "39");
 export const gray = style("90", "39");
 
 /**
+ * Subtle background, for the user's own messages.
+ *
+ * A background rather than a colour because the point is to make the message
+ * findable when scrolling back through a long transcript: colour competes with
+ * the tool markers and diff output that already use it, while a filled row
+ * reads as structure at a glance and disappears when you are not looking for it.
+ */
+export const userBlock = style("48;5;236", "49");
+
+/**
  * Glyphs.
  *
  * Highest-risk detail in the whole UI: a wrong glyph is the most immediately
@@ -61,6 +71,10 @@ export interface Glyphs {
 	result: string;
 	/** Marks a reasoning block. */
 	thinking: string;
+	/** Prefix on the user's own message block. */
+	userMark: string;
+	/** Marks the line that closes a turn. */
+	summary: string;
 	todoDone: string;
 	todoPending: string;
 	todoActive: string;
@@ -71,6 +85,8 @@ export const UNICODE_GLYPHS: Glyphs = {
 	call: "⏺",
 	result: "⎿",
 	thinking: "✻",
+	userMark: "›",
+	summary: "✳",
 	todoDone: "☒",
 	todoPending: "☐",
 	todoActive: "◐",
@@ -82,6 +98,8 @@ export const ASCII_GLYPHS: Glyphs = {
 	call: "*",
 	result: "\\",
 	thinking: "*",
+	userMark: ">",
+	summary: "*",
 	todoDone: "[x]",
 	todoPending: "[ ]",
 	todoActive: "[~]",
