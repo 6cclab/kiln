@@ -1,7 +1,8 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/pi-agent-core";
 import type { StartedSession } from "../agent/session.ts";
 import type { Registry } from "../provider/registry.ts";
-import { TOOL_STRATEGY_COST, usableTokens } from "../budget/tier.ts";
+import type { Model } from "@earendil-works/pi-ai";
+import { TOOL_STRATEGY_COST, tierFor, usableTokens } from "../budget/tier.ts";
 import { formatTokens } from "../tui/transcript.ts";
 import { staticSource, type Command, type CommandSource } from "./registry.ts";
 
@@ -28,6 +29,17 @@ export interface BuiltinDeps {
 
 export function builtinCommands(deps: BuiltinDeps): CommandSource {
 	const { session, registry } = deps;
+
+	// Argument completions run on every keystroke, and `available()` can reach
+	// the network. Cached for a few seconds: long enough that typing is free,
+	// short enough that a model pulled mid-session shows up.
+	let modelCache: { at: number; models: readonly Model<never>[] } | undefined;
+	const cachedModels = async (): Promise<readonly Model<never>[]> => {
+		if (modelCache && Date.now() - modelCache.at < 5_000) return modelCache.models;
+		const models = await registry.available();
+		modelCache = { at: Date.now(), models };
+		return models;
+	};
 
 	const commands: Omit<Command, "origin">[] = [
 		{
@@ -87,6 +99,34 @@ export function builtinCommands(deps: BuiltinDeps): CommandSource {
 			name: "model",
 			description: "Show or change the active model",
 			argumentHint: "<provider/model>",
+			/**
+			 * The picker. Typing `/model ` lists every model you can reach, with
+			 * its window and tier, and selecting one fills it in.
+			 *
+			 * Without this the command required knowing and typing an exact
+			 * `provider/model` id — which for a local Ollama host means
+			 * remembering tag strings like `qwen3:30b-a3b`. The list is the
+			 * feature; the command was only half of it.
+			 *
+			 * Results are cached: this runs on every keystroke after `/model `,
+			 * and `available()` can touch the network.
+			 */
+			getArgumentCompletions: async (prefix: string) => {
+				const models = await cachedModels();
+				const wanted = prefix.trim().toLowerCase();
+				return models
+					.filter((m) => !wanted || `${m.provider}/${m.id}`.toLowerCase().includes(wanted))
+					.map((m) => {
+						const tier = tierFor(m);
+						return {
+							value: `${m.provider}/${m.id}`,
+							label: `${m.provider}/${m.id}`,
+							// What actually differs between them, and what decides
+							// whether a task will fit.
+							description: `${formatTokens(m.contextWindow)} · ${tier.name} · ${formatTokens(usableTokens(tier))} usable`,
+						};
+					});
+			},
 			run: async ({ args }) => {
 				if (!args) {
 					const current = await session.lane.getModel(BACKGROUND_CONTEXT);

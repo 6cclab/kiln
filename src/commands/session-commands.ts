@@ -58,6 +58,31 @@ export function sessionCommands(deps: SessionCommandDeps): CommandSource {
 			name: "resume",
 			description: "List past sessions in this directory",
 			argumentHint: "[session-id]",
+			/**
+			 * The session picker.
+			 *
+			 * A session id is a uuid. Requiring one to be typed, or copied out of a
+			 * list printed in the transcript, is not a picker — the point is to
+			 * recognise the conversation, so each row leads with when it was and
+			 * what was asked.
+			 */
+			getArgumentCompletions: async (prefix: string) => {
+				const repo = new JsonlSessionRepo({
+					fileSystem: new NodeExecutionEnv({ cwd }),
+					sessionsRoot: sessionsDir,
+				});
+				const found = await repo.list({ cwd }, BACKGROUND_CONTEXT);
+				const wanted = prefix.trim().toLowerCase();
+				return found
+					.sort((a, b) => b.modifiedAt - a.modifiedAt)
+					.slice(0, 30)
+					.filter((m) => !wanted || m.id.toLowerCase().includes(wanted))
+					.map((m) => ({
+						value: m.id,
+						label: `${ago(m.modifiedAt)}  ${m.id.slice(0, 8)}`,
+						description: m.id,
+					}));
+			},
 			run: async ({ args }) => {
 				if (args) {
 					return {
@@ -86,6 +111,26 @@ export function sessionCommands(deps: SessionCommandDeps): CommandSource {
 			name: "rewind",
 			description: "Go back to an earlier point in this conversation",
 			argumentHint: "[entry-id]",
+			// Only user turns are offered: they are the points a person actually
+			// recognises, unlike the intermediate tool results between them.
+			getArgumentCompletions: async (prefix: string) => {
+				const entries = await session.lane.findEntries(undefined, BACKGROUND_CONTEXT);
+				const wanted = prefix.trim().toLowerCase();
+				return entries
+					.map((entry) => ({ entry, parsed: entryText(entry) }))
+					.filter((e) => e.parsed?.role === "user")
+					.slice(-20)
+					.reverse()
+					.map(({ entry, parsed }) => {
+						const id = (entry as { id?: string }).id ?? "?";
+						return {
+							value: id,
+							label: (parsed?.text ?? "").replace(/\s+/g, " ").slice(0, 60),
+							description: id,
+						};
+					})
+					.filter((i) => !wanted || `${i.label} ${i.value}`.toLowerCase().includes(wanted));
+			},
 			run: async ({ args }) => {
 				const entries = await session.lane.findEntries(undefined, BACKGROUND_CONTEXT);
 
@@ -135,6 +180,14 @@ export function sessionCommands(deps: SessionCommandDeps): CommandSource {
 			name: "memory",
 			description: "Open CLAUDE.md in your editor",
 			argumentHint: "[user|project]",
+			getArgumentCompletions: (prefix: string) =>
+				(["user", "project"] as const)
+					.filter((scope) => scope.startsWith(prefix.trim()))
+					.map((scope) => ({
+						value: scope,
+						label: scope,
+						description: scope === "user" ? "~/.claude/CLAUDE.md" : `${cwd}/CLAUDE.md`,
+					})),
 			run: ({ args }) => {
 				const scope = args.trim() || "project";
 				const path =
@@ -156,6 +209,27 @@ export function sessionCommands(deps: SessionCommandDeps): CommandSource {
 			name: "add-dir",
 			description: "Allow tools to work in another directory",
 			argumentHint: "<path>",
+			// Directories only: the flag widens a workspace boundary, and offering
+			// files would suggest it takes one.
+			getArgumentCompletions: async (prefix: string) => {
+				const { readdir } = await import("node:fs/promises");
+				const { isAbsolute, join, dirname, basename } = await import("node:path");
+				const typed = prefix.trim();
+				const base = typed.endsWith("/") ? typed : dirname(typed);
+				const leaf = typed.endsWith("/") ? "" : basename(typed);
+				const root = !typed ? cwd : isAbsolute(base) ? base : join(cwd, base);
+				try {
+					const entries = await readdir(root, { withFileTypes: true });
+					return entries
+						.filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name.startsWith(leaf))
+						.slice(0, 50)
+						.map((e) => ({ value: join(root, e.name), label: e.name, description: root }));
+				} catch {
+					// A half-typed path is the normal state while completing, not an
+					// error worth surfacing.
+					return [];
+				}
+			},
 			run: ({ args }) => {
 				if (!deps.gate) return { output: "Workspace roots are not enforced in this session." };
 				if (!args) {

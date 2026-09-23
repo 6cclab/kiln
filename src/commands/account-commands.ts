@@ -45,6 +45,15 @@ export function accountCommands(deps: AccountDeps): CommandSource {
 				name: "login",
 				description: "Show auth status, or how to log in to a provider",
 				argumentHint: "[provider]",
+				getArgumentCompletions: (prefix: string) =>
+					deps.registry.models
+						.getProviders()
+						.filter((p) => p.auth && p.id.startsWith(prefix.trim()))
+						.map((p) => ({
+							value: p.id,
+							label: p.id,
+							description: p.auth?.oauth?.isSubscription ? "subscription" : "api key",
+						})),
 				run: async (ctx) => {
 					const wanted = ctx.args.trim();
 					if (wanted) {
@@ -75,6 +84,17 @@ export function accountCommands(deps: AccountDeps): CommandSource {
 				name: "logout",
 				description: "How to log out of a provider",
 				argumentHint: "<provider>",
+				// Only providers actually logged in: offering the other forty is a
+				// list to scroll past, not a choice.
+				getArgumentCompletions: async (prefix: string) => {
+					const out: Array<{ value: string; label: string; description: string }> = [];
+					for (const p of deps.registry.models.getProviders()) {
+						if (!p.id.startsWith(prefix.trim())) continue;
+						const check = await deps.registry.models.checkAuth(p.id);
+						if (check) out.push({ value: p.id, label: p.id, description: check.type });
+					}
+					return out;
+				},
 				run: async (ctx) => {
 					const wanted = ctx.args.trim();
 					if (!wanted) return { output: "usage: /logout <provider>" };

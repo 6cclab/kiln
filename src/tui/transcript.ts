@@ -159,8 +159,10 @@ export function renderSpinner(args: {
 }
 
 export function formatTokens(n: number): string {
-	if (n < 1000) return String(n);
-	return `${(n / 1000).toFixed(1)}k`;
+	if (n < 1_000) return String(n);
+	// Million-token windows are ordinary now, and "1000.0k" reads as a mistake.
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
+	return `${(n / 1_000).toFixed(1)}k`;
 }
 
 /**

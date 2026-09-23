@@ -401,6 +401,12 @@ async function chat(): Promise<void> {
 				name: "posture",
 				description: "Show or change which MCP servers are searchable",
 				argumentHint: "[coding|ops|all]",
+				getArgumentCompletions: (prefix: string) =>
+					POSTURES.filter((p) => String(p).startsWith(prefix.trim())).map((p) => ({
+						value: String(p),
+						label: String(p),
+						description: `${mcpTools.filter((t) => inPosture(t, p)).length} tools`,
+					})),
 				run: async ({ args }) => {
 					if (!args) {
 						const lines = POSTURES.map((p) => {
