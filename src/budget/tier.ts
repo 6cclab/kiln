@@ -64,45 +64,71 @@ export function strategyForWindow(contextWindow: number): ToolStrategy {
 	return affordable ?? "posture-index";
 }
 
+function clamp(value: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+/**
+ * Share of the window each budget may take.
+ *
+ * Fractions, not constants. An earlier version used absolute token counts per
+ * tier, which produced a real and invisible fault: a 49,152-token window fell
+ * into `medium`, inherited budgets sized for 128k, and ended up with **less
+ * usable context (21,075) than a 32,768-token window (25,338)**. A bigger model
+ * was worse to use than a smaller one, and nothing surfaced it.
+ *
+ * Deriving from the window makes the budgets monotonic by construction: more
+ * window is always more room.
+ */
+const SHARE = {
+	/** System prompt, including CLAUDE.md. */
+	systemPrompt: 0.1,
+	/** Headroom kept free so a reply always has somewhere to land. */
+	reserve: 0.1,
+	/** What compaction keeps verbatim. */
+	keepRecent: 0.25,
+	/** Ceiling for ONE tool result. */
+	toolOutput: 0.12,
+} as const;
+
 /**
  * Resolve the operating posture for a context window.
  *
- * Boundaries are driven by measurement rather than chosen for roundness: full
- * schemas are 97% of a 32k window but only ~16% of a 200k one, so the strategy
- * that is reckless on a local Qwen is unremarkable on Claude.
+ * The tier NAME is a step function because the thing it selects genuinely is
+ * one: the tool catalog has a fixed cost, so "can I afford full schemas" flips
+ * at a threshold. The budgets are not — they scale with the window.
  */
 export function tierForWindow(contextWindow: number): Tier {
 	const toolStrategy = strategyForWindow(contextWindow);
+	const name = contextWindow <= 32_768 ? "small" : contextWindow <= 131_072 ? "medium" : "large";
 
-	if (contextWindow <= 32_768) {
-		return {
-			name: "small",
-			contextWindow,
-			// pi's defaults (reserve 16384 + keepRecent 20000) sum to 36k and
-			// overflow a 32k window before a single message is added.
-			compaction: { enabled: true, reserveTokens: 4_096, keepRecentTokens: 8_192 },
-			toolStrategy,
-			systemPromptTokens: 2_048,
-			toolOutputTokens: 4_096,
-		};
-	}
-	if (contextWindow <= 131_072) {
-		return {
-			name: "medium",
-			contextWindow,
-			compaction: { enabled: true, reserveTokens: 12_288, keepRecentTokens: 24_576 },
-			toolStrategy,
-			systemPromptTokens: 8_192,
-			toolOutputTokens: 16_384,
-		};
-	}
+	/**
+	 * Floors keep a tiny window from budgeting a few hundred tokens for a system
+	 * prompt; ceilings keep a 1M window from reserving 100k it will never need.
+	 *
+	 * The floor is itself capped at the share it protects. Without that, a floor
+	 * meant to be generous becomes the dominant cost on a small window — at
+	 * 8,192 tokens, three 2,048 floors claimed 75% of the window before a single
+	 * message existed.
+	 */
+	const budget = (share: number, floor: number, ceiling: number): number =>
+		clamp(contextWindow * share, Math.min(floor, Math.floor(contextWindow * share * 1.25)), ceiling);
+
+	const systemPromptTokens = budget(SHARE.systemPrompt, 2_048, 32_768);
+	const reserveTokens = budget(SHARE.reserve, 2_048, 32_768);
+	const keepRecentTokens = budget(SHARE.keepRecent, 4_096, 100_000);
+	const toolOutputTokens = budget(SHARE.toolOutput, 2_048, 49_152);
+
 	return {
-		name: "large",
+		name,
 		contextWindow,
-		compaction: { ...DEFAULT_COMPACTION_SETTINGS },
+		// pi's defaults (reserve 16384 + keepRecent 20000) sum to 36k and would
+		// overflow a 32k window before a single message is added, which is why
+		// these are derived rather than inherited.
+		compaction: { enabled: true, reserveTokens, keepRecentTokens },
 		toolStrategy,
-		systemPromptTokens: 24_576,
-		toolOutputTokens: 49_152,
+		systemPromptTokens,
+		toolOutputTokens,
 	};
 }
 
@@ -132,10 +158,21 @@ export class ContextTooSmallError extends Error {
  * Use this at startup. A negative budget otherwise shows up as a mysteriously
  * truncated first turn, which is a much worse way to learn the same fact.
  */
+/**
+ * The least usable room a session can do anything with.
+ *
+ * `usable > 0` was the old bar, and it stopped meaning anything once budgets
+ * became proportional: every window leaves *something*, so a 4,096-token model
+ * passed with 1,786 tokens of room — enough for a system prompt and nothing
+ * else. The bar has to be "can one real turn happen", not "is the arithmetic
+ * positive": a question, one file read, and a reply.
+ */
+export const MIN_USABLE_TOKENS = 4_096;
+
 export function requireTierForWindow(contextWindow: number): Tier {
 	const tier = tierForWindow(contextWindow);
 	const usable = usableTokens(tier);
-	if (usable <= 0) throw new ContextTooSmallError(tier, -usable);
+	if (usable < MIN_USABLE_TOKENS) throw new ContextTooSmallError(tier, MIN_USABLE_TOKENS - usable);
 	return tier;
 }
 
