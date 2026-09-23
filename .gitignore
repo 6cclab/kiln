@@ -1,0 +1,13 @@
+node_modules/
+
+# Phase 0/5 measurement output. The conclusions live in the plan and in
+# docs/; the raw dumps are reproducible by re-running the scripts.
+phase0/out/
+
+# Session transcripts and the search index are machine-local state.
+*.db
+*.db-wal
+*.db-shm
+transcript-*.md
+
+.DS_Store
