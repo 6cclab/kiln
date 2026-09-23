@@ -28,6 +28,8 @@ import { usableTokens } from "../budget/tier.ts";
 import { dim, gray, green, bold, cyan, yellow, italic, strike, g, setPlainMode } from "./theme.ts";
 import { highlightCode } from "./highlight.ts";
 import { createKeyRouter } from "./keys.ts";
+import { renderStatus, type StatusState } from "./status.ts";
+import { readGitStatus } from "./git.ts";
 import { addMemory, classifyInput, runBang } from "./input-modes.ts";
 import {
 	formatTokens,
@@ -336,17 +338,41 @@ export class SpinnerView implements Component {
 }
 
 /** The status line, rendered BELOW the input box. */
+/**
+ * The status line, below the input box.
+ *
+ * Holds live state rather than a pre-rendered string: context use, spend and
+ * git status all change while you work, and a `setText` interface meant every
+ * caller had to remember to re-render the whole line whenever any one of them
+ * moved. Several did not, which is how it ended up showing facts that never
+ * changed all session.
+ */
 export class FooterView implements Component {
-	private text = "";
+	private state: StatusState;
+	/** A transient note appended to the first row, e.g. "expanded". */
+	private note = "";
 
-	setText(text: string): void {
-		this.text = text;
+	constructor(state: StatusState) {
+		this.state = state;
+	}
+
+	update(patch: Partial<StatusState>): void {
+		this.state = { ...this.state, ...patch };
+	}
+
+	/** Shown until the next update clears it. */
+	setNote(note: string): void {
+		this.note = note;
 	}
 
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		return this.text ? [fitStatus(dim(this.text), width)] : [];
+		const [status, mode] = renderStatus(this.state);
+		const first = this.note ? `${status}${dim(`  ·  ${this.note}`)}` : status;
+		// Truncated, not wrapped: the status line is two rows by definition, and
+		// a third row would push the input box around as the numbers change.
+		return [fitStatus(first, width), fitStatus(mode, width)];
 	}
 }
 
@@ -462,7 +488,12 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	const tui: TUI = new TuiMainScreen(new ProcessTerminal());
 	const transcript = new TranscriptView();
 	const spinner = new SpinnerView();
-	const footer = new FooterView();
+	const footer = new FooterView({
+		modelLabel: opts.modelLabel,
+		contextWindow: session.tier.contextWindow,
+		mode: opts.gate?.mode ?? "manual",
+		startedAt: Date.now(),
+	});
 	const permission = new PermissionPromptView();
 	// paddingX pads content lines only, not the editor's border rules, so the
 	// box edges stay flush while the text gets breathing room.
@@ -479,15 +510,21 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	// Mutable: consumed by the first turn, then emptied.
 	let startupContext = [...(opts.startupContext ?? [])];
 
-	const tierLine = () => {
-		const t = session.tier;
-		const parts = [opts.cwd, opts.modelLabel, `${t.name} tier`, `${formatTokens(usableTokens(t))} budget`];
-		// Surface the permission mode whenever it is not the safe default, so an
-		// unusually permissive session is never invisible.
-		if (opts.gate && opts.gate.mode !== "manual") parts.push(opts.gate.mode);
-		return parts.join("  ·  ");
+	/** Clears any transient note and re-reads the mode, which Shift+Tab moves. */
+	const refreshStatus = (note = "") => {
+		footer.setNote(note);
+		footer.update({ mode: opts.gate?.mode ?? "manual" });
 	};
-	footer.setText(tierLine());
+
+	// Git state is read once at startup and after each turn rather than on every
+	// render: the status line redraws on every keystroke, and spawning `git` at
+	// that rate would make typing feel heavy for a fact that changes rarely.
+	void readGitStatus(opts.cwd).then((git) => {
+		if (git) {
+			footer.update({ git });
+			tui.requestRender();
+		}
+	});
 
 	// A subagent runs for minutes producing nothing on screen, which reads as a
 	// hang. Its tool calls are NOT echoed - that would undo the context
@@ -538,7 +575,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 		const decision = await permission.askPlan(plan);
 		// Reflect an approved mode change immediately; the footer is how the user
 		// sees that plan mode actually ended.
-		if (decision.kind === "approve") footer.setText(tierLine());
+		if (decision.kind === "approve") refreshStatus();
 		tui.requestRender();
 		return decision;
 	});
@@ -578,6 +615,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 			transcript.appendBlank();
 			transcript.appendThinking(thinkingView);
 			spinner.setLabel("Thinking");
+			footer.update({ thinking: true });
 			tui.requestRender();
 			return;
 		}
@@ -596,6 +634,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 			if (thinkingView) thinkingView.active = false;
 			thinkingView = undefined;
 			spinner.resetLabel();
+			footer.update({ thinking: false });
 			tui.requestRender();
 			return;
 		}
@@ -664,8 +703,19 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	session.harness.events.on("usage", (event) => {
 		// The payload is { row, totals }, not { usage } - reading `.usage` gave
 		// undefined, which is why the spinner showed no token count.
-		const totals = (event as { totals?: { input?: number; output?: number } }).totals;
-		if (totals) spinner.setTokens((totals.input ?? 0) + (totals.output ?? 0));
+		const e = event as {
+			totals?: { input?: number; output?: number; cost?: { total?: number } };
+			row?: { usage?: { input?: number; output?: number } };
+		};
+		if (e.totals) spinner.setTokens((e.totals.input ?? 0) + (e.totals.output ?? 0));
+
+		// Context used is the LAST request's input, not the cumulative total:
+		// `totals` grows forever across a session, so using it would show the
+		// window filling up when compaction had just emptied it.
+		const row = e.row?.usage;
+		if (row) footer.update({ contextUsed: (row.input ?? 0) + (row.output ?? 0) });
+		if (e.totals?.cost?.total !== undefined) footer.update({ cost: e.totals.cost.total });
+
 		tui.requestRender();
 	});
 
@@ -800,7 +850,15 @@ export async function runApp(opts: AppOptions): Promise<void> {
 					transcript.append(renderError(JSON.stringify((result as { error?: unknown }).error)));
 				}
 				transcript.appendBlank();
-				footer.setText(tierLine());
+				refreshStatus();
+				// A turn is what usually dirties the tree, so this is the moment
+				// the branch state is worth re-reading.
+				void readGitStatus(opts.cwd).then((git) => {
+					if (git) {
+						footer.update({ git });
+						tui.requestRender();
+					}
+				});
 			} catch (err) {
 				endTurn();
 				transcript.append(renderError((err as Error).message));
@@ -829,10 +887,10 @@ export async function runApp(opts: AppOptions): Promise<void> {
 			// Say so when there is nothing to expand, rather than flipping a
 			// flag that changes nothing on screen and reads as a broken key.
 			if (!transcript.hasCollapsed() && !transcript.isExpanded()) {
-				footer.setText(`${tierLine()}  ·  nothing truncated`);
+				refreshStatus("nothing truncated");
 			} else {
 				const now = transcript.toggleExpanded();
-				footer.setText(now ? `${tierLine()}  ·  expanded` : tierLine());
+				refreshStatus(now ? "expanded" : "");
 			}
 		},
 
@@ -840,7 +898,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 			if (!opts.gate) return;
 			const next = MODES[(MODES.indexOf(opts.gate.mode) + 1) % MODES.length];
 			opts.gate.setMode(next);
-			footer.setText(tierLine());
+			refreshStatus();
 		},
 
 		clearInput: () => editor.setText(""),
@@ -850,7 +908,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 			// the command that forgets things, and conflating the two would
 			// make a display shortcut destroy context.
 			transcript.clear();
-			footer.setText(tierLine());
+			refreshStatus();
 		},
 
 		rewind: () => {
@@ -862,7 +920,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 			process.kill(process.pid, "SIGINT");
 		},
 
-		hint: (message) => footer.setText(`${tierLine()}  ·  ${message}`),
+		hint: (message) => refreshStatus(message),
 	});
 
 	tui.addInputListener((data) => {

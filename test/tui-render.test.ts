@@ -41,7 +41,7 @@ function harness(columns = 100, rows = 30): Harness {
 	const transcript = new TranscriptView();
 	const spinner = new SpinnerView();
 	const permission = new PermissionPromptView();
-	const footer = new FooterView();
+	const footer = new FooterView({ modelLabel: "ollama/qwen3.8", contextWindow: 49152, mode: "auto", startedAt: 0, now: 0 });
 	const theme = {
 		borderColor: (t: string) => t,
 		selectList: {
@@ -86,7 +86,7 @@ describe("full-frame rendering", () => {
 	it("renders a frame without pi-tui rejecting it", async () => {
 		const h = harness();
 		h.transcript.append(["> hello"]);
-		h.footer.setText("~/projects/harness  ·  ollama/qwen3.8  ·  medium tier");
+		h.footer.update({ contextUsed: 12_000, git: { branch: "main", dirty: false } });
 		await h.render();
 		assert.ok(h.term.lines().some((l) => l.includes("hello")));
 		h.stop();
@@ -138,7 +138,7 @@ describe("full-frame rendering", () => {
 		);
 		h.transcript.appendThinking({ text: wide, active: false });
 		h.spinner.start(1);
-		h.footer.setText(wide);
+		h.footer.update({ modelLabel: wide });
 		await h.render();
 		for (const line of h.term.lines()) assert.ok(line.length <= 72, `overflow: ${line.length}`);
 		h.stop();
@@ -168,7 +168,7 @@ describe("full-frame rendering", () => {
 		// place.
 		const h = harness(100, 30);
 		h.spinner.start(1);
-		h.footer.setText("FOOTER-MARKER");
+		h.footer.update({ modelLabel: "FOOTER-MARKER" });
 		await h.render();
 
 		const lines = h.term.lines();

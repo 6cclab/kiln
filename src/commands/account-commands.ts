@@ -7,7 +7,7 @@ import { usableTokens } from "../budget/tier.ts";
 
 /**
  * The remaining parity commands: `/login`, `/logout`, `/usage`, `/todos`,
- * `/terminal-setup`, `/plugin`, `/vim`, `/statusline`.
+ * `/terminal-setup`.
  *
  * Two of these are adaptations rather than copies, and the difference is worth
  * stating because copying them literally would produce something misleading:
@@ -21,10 +21,10 @@ import { usableTokens } from "../budget/tier.ts";
  *     running an OAuth flow inline — the flow needs to open a browser and bind
  *     a local port, which is not something to start from inside a turn.
  *
- * `/vim`, `/statusline` and `/plugin` are honest no-ops: they say what is not
- * implemented, and what to use instead, rather than appearing to work. A
- * command that silently does nothing is worse than one that explains itself —
- * and worse than one that is absent, since absence at least produces an error.
+ * `/vim`, `/statusline` and `/plugin` are deliberately ABSENT rather than
+ * present-and-apologetic. A command that exists only to say "not implemented"
+ * is noise in `/help` on every session, and pretends the checklist matters more
+ * than the tool working. An unknown command already produces a clear error.
  */
 
 export interface AccountDeps {
@@ -141,44 +141,6 @@ export function accountCommands(deps: AccountDeps): CommandSource {
 					lines.push("", problems.length === 0 ? "Terminal looks fine." : problems.map((p) => `- ${p}`).join("\n"));
 					return { output: lines.join("\n") };
 				},
-			},
-			{
-				origin: "builtin" as const,
-				name: "plugin",
-				description: "Plugin marketplaces (not supported)",
-				run: async () => ({
-					output: [
-						"Plugin marketplaces are not supported.",
-						"",
-						"What this harness extends with instead, all read from .claude/:",
-						"  skills    ~/.claude/skills, .claude/skills      (/help lists the invocable ones)",
-						"  agents    .claude/agents/*.md                  (/agents)",
-						"  commands  .claude/commands/*.md                (appear in /help)",
-						"  mcp       ~/.claude.json                       (/mcp)",
-						"  hooks     .claude/settings.json                (/hooks)",
-					].join("\n"),
-				}),
-			},
-			{
-				origin: "builtin" as const,
-				name: "vim",
-				description: "Vim keybindings (not implemented)",
-				run: async () => ({
-					output:
-						"Vim keybindings are not implemented.\n\n" +
-						"The editor comes from pi-tui, which has its own keybinding manager; " +
-						"a vim mode would be built there rather than here.",
-				}),
-			},
-			{
-				origin: "builtin" as const,
-				name: "statusline",
-				description: "Status line configuration (not implemented)",
-				run: async () => ({
-					output:
-						"A configurable status line is not implemented.\n\n" +
-						"The footer shows cwd, model, tier and budget; see /usage for the numbers behind it.",
-				}),
 			},
 		],
 	};

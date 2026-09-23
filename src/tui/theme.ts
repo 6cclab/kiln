@@ -106,7 +106,15 @@ export function g(): Glyphs {
  * terminal, which is why it is one switch rather than an accessibility
  * afterthought bolted on later.
  */
+let plain = false;
+
 export function setPlainMode(on: boolean): void {
+	plain = on;
 	setColorEnabled(on ? false : colorEnabled());
 	setGlyphs(on ? ASCII_GLYPHS : UNICODE_GLYPHS);
+}
+
+/** Whether decorative glyphs should be avoided. */
+export function isPlain(): boolean {
+	return plain;
 }

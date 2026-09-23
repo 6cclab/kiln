@@ -101,12 +101,20 @@ describe("other components hold the width", () => {
 		assert.ok(visibleWidth(lines[0]) <= WIDTH, `overflowed at ${visibleWidth(lines[0])}`);
 	});
 
-	it("truncates the footer", () => {
-		const footer = new FooterView();
-		footer.setText(LONG);
+	it("truncates the status line to two rows", () => {
+		// Two rows by definition: status, then mode. A third would push the input
+		// box around as the numbers change.
+		const footer = new FooterView({
+			modelLabel: "ollama/qwen3.8",
+			contextWindow: 49_152,
+			mode: "auto",
+			startedAt: 0,
+			now: 0,
+		});
+		footer.update({ modelLabel: LONG, contextUsed: 20_000, git: { branch: LONG, dirty: true } });
 		const lines = footer.render(WIDTH);
-		assert.equal(lines.length, 1);
-		assert.ok(visibleWidth(lines[0]) <= WIDTH, `overflowed at ${visibleWidth(lines[0])}`);
+		assert.equal(lines.length, 2);
+		for (const line of lines) assert.ok(visibleWidth(line) <= WIDTH, `overflowed at ${visibleWidth(line)}`);
 	});
 
 	it("wraps a permission prompt for a long command", () => {
