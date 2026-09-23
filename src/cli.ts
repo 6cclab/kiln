@@ -472,6 +472,8 @@ async function chat(): Promise<void> {
 		}),
 	);
 
+	// /doctor and /hooks stay as reports: they answer a question and there is
+	// nothing to act on. The four that manage something get panels.
 	const { inspectCommands } = await import("./commands/inspect-commands.ts");
 	commands.addSource(
 		inspectCommands({
@@ -484,6 +486,30 @@ async function chat(): Promise<void> {
 			modelLabel: `${provider}/${modelId}`,
 			activeTools: () => session.lane.getActiveTools(BACKGROUND_CONTEXT),
 			settingsLoadedFrom: settings.loadedFrom,
+		}),
+	);
+
+	const { manageCommands } = await import("./commands/manage-commands.ts");
+	const { addRule, removeRule } = await import("./claude/write-settings.ts");
+	commands.addSource(
+		manageCommands({
+			gate: permissionGate,
+			hub,
+			hooks: hookConfig,
+			agents,
+			settings,
+			cwd,
+			modelLabel: `${provider}/${modelId}`,
+			// Applied in memory AND written to disk: in memory so the next tool
+			// call obeys it, on disk so it survives a restart.
+			saveRule: async (list, rule) => {
+				permissionGate.addRule(list, rule);
+				await addRule(cwd, list, rule);
+			},
+			removeRule: async (list, rule) => {
+				permissionGate.removeRule(list, rule);
+				await removeRule(cwd, list, rule);
+			},
 		}),
 	);
 

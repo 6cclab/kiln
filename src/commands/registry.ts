@@ -29,6 +29,18 @@ export interface CommandResult {
 	output?: string;
 	/** Text to send to the model as a prompt, if the command expands to one. */
 	prompt?: string;
+	/**
+	 * A panel to open instead of printing.
+	 *
+	 * Commands that MANAGE things rather than report them need somewhere to
+	 * navigate and act; a listing in the transcript answers "what is
+	 * configured" and leaves you to go and edit a file for the rest.
+	 *
+	 * Typed as unknown here on purpose: the registry has no business importing
+	 * the TUI, and a command that returns one in print mode should degrade to
+	 * its text output rather than fail.
+	 */
+	modal?: unknown;
 }
 
 export interface Command extends SlashCommand {

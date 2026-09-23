@@ -29,6 +29,7 @@ import { dim, gray, green, bold, cyan, yellow, italic, strike, g, setPlainMode, 
 import { highlightCode } from "./highlight.ts";
 import { createKeyRouter } from "./keys.ts";
 import { renderStatus, type StatusState } from "./status.ts";
+import { createModalHost, type ModalSpec } from "./modal.ts";
 import { readGitStatus } from "./git.ts";
 import { addMemory, classifyInput, runBang } from "./input-modes.ts";
 import {
@@ -575,6 +576,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	// "/model" completed to "//model".
 	editor.setAutocompleteProvider(new CombinedAutocompleteProvider(await commands.list(), opts.cwd));
 
+	const modals = createModalHost(tui);
+
 	// Mutable: consumed by the first turn, then emptied.
 	let startupContext = [...(opts.startupContext ?? [])];
 
@@ -853,6 +856,13 @@ export async function runApp(opts: AppOptions): Promise<void> {
 
 				const handled = await commands.execute(line);
 				if (handled) {
+					// A panel supersedes the text: printing the summary as well
+					// would leave a stale copy in the transcript behind the thing
+					// that lets you change it.
+					if (handled.modal) {
+						await modals.open(handled.modal as ModalSpec);
+						return;
+					}
 					if (handled.output) transcript.append(handled.output.split("\n"));
 					// A command may expand into a prompt (`.claude/commands` do).
 					if (!handled.prompt) {

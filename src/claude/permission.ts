@@ -126,6 +126,22 @@ export class PermissionGate {
 	}
 
 	/**
+	 * Add a rule for the rest of this session.
+	 *
+	 * Separate from persisting it. The in-memory set is what the next tool call
+	 * is judged against, and a rule that only reached disk would not apply until
+	 * a restart — which, for someone editing rules mid-task to unblock
+	 * themselves, is the same as it not working.
+	 */
+	addRule(list: "allow" | "deny" | "ask", rule: string): void {
+		if (!this.permissions[list].includes(rule)) this.permissions[list].push(rule);
+	}
+
+	removeRule(list: "allow" | "deny" | "ask", rule: string): void {
+		this.permissions[list] = this.permissions[list].filter((r) => r !== rule);
+	}
+
+	/**
 	 * Grants made by "yes, don't ask again" this session.
 	 *
 	 * Surfaced because they are invisible otherwise: they are not in any file,
