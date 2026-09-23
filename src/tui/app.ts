@@ -32,6 +32,7 @@ import { renderStatus, type StatusState } from "./status.ts";
 import { createModalHost, type ModalSpec } from "./modal.ts";
 import { readGitStatus } from "./git.ts";
 import { addMemory, classifyInput, runBang } from "./input-modes.ts";
+import { appendHistory, loadHistory } from "./history.ts";
 import {
 	formatTokens,
 	pickLabel,
@@ -578,6 +579,13 @@ export async function runApp(opts: AppOptions): Promise<void> {
 
 	const modals = createModalHost(tui);
 
+	// Seed the editor's history so the arrow keys have something to walk. The
+	// editor navigates history natively; nothing was ever calling addToHistory,
+	// so up-arrow moved through an empty list and read as a dead key.
+	void loadHistory().then((entries) => {
+		for (const entry of entries) editor.addToHistory?.(entry);
+	});
+
 	// Mutable: consumed by the first turn, then emptied.
 	let startupContext = [...(opts.startupContext ?? [])];
 
@@ -829,6 +837,11 @@ export async function runApp(opts: AppOptions): Promise<void> {
 		const line = text.trim();
 		if (!line) return;
 		editor.setText("");
+
+		// Recorded before anything can fail: a prompt that errors is exactly the
+		// one worth recalling and editing.
+		editor.addToHistory?.(line);
+		void appendHistory(line);
 
 		// Echo the user's line, as Claude Code does: without it the transcript
 		// reads as a monologue once you scroll back.
