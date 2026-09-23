@@ -62,6 +62,45 @@ describe("PermissionGate workspace boundary", () => {
 		assert.equal(asked, 1, "asked twice for a remembered grant");
 	});
 
+	it("does not prompt for a write inside the workspace in auto mode", async () => {
+		// `auto` is a blanket allow: prompting for a write in the project you are
+		// working in defeats the point of choosing the mode.
+		const g = new PermissionGate({ permissions: { allow: [], deny: [], ask: [] }, mode: "auto", roots: [WORK] });
+		let asked = 0;
+		g.setPrompter(async () => {
+			asked++;
+			return { kind: "allow" };
+		});
+		const file = join(WORK, "src", "a.ts");
+		assert.equal(await g.check({ toolName: "write", primaryArg: file, args: { path: file } }), undefined);
+		assert.equal(asked, 0, "auto mode prompted for a write inside the workspace");
+	});
+
+	it("still prompts in auto mode for a path outside the workspace", async () => {
+		// The one guard blanket mode keeps. "I trust this session here" is not
+		// "anywhere on this machine"; bypassPermissions is the mode that drops it.
+		const g = new PermissionGate({ permissions: { allow: [], deny: [], ask: [] }, mode: "auto", roots: [WORK] });
+		let asked = 0;
+		g.setPrompter(async () => {
+			asked++;
+			return { kind: "deny" };
+		});
+		const outside = join(homedir(), ".ssh", "authorized_keys");
+		assert.ok(await g.check({ toolName: "write", primaryArg: outside, args: { path: outside } }));
+		assert.equal(asked, 1, "auto mode wrote outside the workspace without asking");
+	});
+
+	it("honours a deny rule in auto mode", async () => {
+		// Blanket means "stop asking", not "ignore the rules I wrote down".
+		const g = new PermissionGate({
+			permissions: { allow: [], deny: ["Write"], ask: [] },
+			mode: "auto",
+			roots: [WORK],
+		});
+		const file = join(WORK, "a.ts");
+		assert.ok(await g.check({ toolName: "write", primaryArg: file, args: { path: file } }));
+	});
+
 	it("turns a denial into feedback for the model, not an error", async () => {
 		const g = new PermissionGate({ permissions: { allow: [], deny: [], ask: [] }, mode: "manual", roots: [WORK] });
 		g.setPrompter(async () => ({ kind: "deny", feedback: "use the staging bucket" }));

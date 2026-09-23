@@ -86,30 +86,22 @@ describe("decide", () => {
 describe("auto mode", () => {
 	const none = { allow: [], deny: [], ask: [] };
 
-	it("allows read-only tools without asking", () => {
-		// It previously fell through to `manual` and did nothing, so cycling into
-		// it with Shift+Tab appeared to change the mode while behaving identically.
-		assert.equal(decide(none, "read", undefined, "auto"), "allow");
-		assert.equal(decide(none, "grep", undefined, "auto"), "allow");
-	});
-
-	it("still asks for anything that can change something", () => {
-		for (const tool of ["write", "edit", "bash"]) {
-			assert.equal(decide(none, tool, undefined, "auto"), "ask", `${tool} was auto-allowed`);
+	it("allows everything, including writes", () => {
+		// `auto` is the mode you pick once you have decided to stop supervising
+		// this session. Prompting for a write in the project you are working in
+		// defeats the point of picking it.
+		for (const tool of ["read", "grep", "write", "edit", "bash"]) {
+			assert.equal(decide(none, tool, undefined, "auto"), "allow", `${tool} still asked`);
 		}
 	});
 
-	it("does not auto-allow bash, whose safety is in its argument", () => {
-		// `bash(ls)` is read-only and `bash(rm -rf /)` is not, and the difference
-		// is not something the tool name can tell you.
-		assert.equal(decide(none, "bash", "ls", "auto"), "ask");
-	});
-
 	it("is still overridden by an explicit deny", () => {
-		assert.equal(decide({ ...none, deny: ["Read"] }, "read", undefined, "auto"), "deny");
+		// Blanket means "stop asking", not "ignore the rules I wrote down".
+		assert.equal(decide({ ...none, deny: ["Write"] }, "write", undefined, "auto"), "deny");
+		assert.equal(decide({ ...none, deny: ["Bash(rm:*)"] }, "bash", "rm -rf /", "auto"), "deny");
 	});
 
 	it("differs from manual, which is the point", () => {
-		assert.notEqual(decide(none, "read", undefined, "auto"), decide(none, "read", undefined, "manual"));
+		assert.notEqual(decide(none, "write", undefined, "auto"), decide(none, "write", undefined, "manual"));
 	});
 });

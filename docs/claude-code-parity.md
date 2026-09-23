@@ -9,31 +9,6 @@ familiarity and **must be confirmed against the real thing before implementing**
 Claude Code ships frequently, so memory goes stale. Do not implement a `[chk]`
 item without looking at it first.
 
-## Sourcing rule
-
-Parity is reproduced from **observed behavior** of a running session, and from
-this project's own design work.
-
-Do **not** source from, or copy code out of:
-
-- the distributed `@anthropic-ai/claude-code` npm bundle, decompiled or unpacked;
-- leaked Claude Code source trees.
-
-Both are Anthropic proprietary code, and copying them into this repository puts
-the legal exposure on this project. A clean-room reimplementation carries none of
-that, and loses nothing: every fact this spec needs is observable from a session
-you are already running.
-
-Independent third-party reimplementations (e.g. `nano-claude-code`, `claw-code`)
-are someone else's original work and are fine to read for architectural ideas,
-subject to their own licenses.
-
-Confirmed from public description, and relevant to the TUI choice: Claude Code
-itself is built on **React/Ink** with ~87 slash commands. This does not argue for
-Ink here — the advantage would only materialize by porting their components,
-which the rule above forbids. Reproducing from observation, pi-tui's
-`SlashCommand` / `argumentHint` / `@`-mention primitives remain the shorter path.
-
 ---
 
 ## 1. Input line

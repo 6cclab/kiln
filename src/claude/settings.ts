@@ -176,16 +176,19 @@ export function decide(
 		case "dontAsk":
 			return "allow";
 		case "auto":
-			// Claude Code describes `auto` as "a classifier decides what needs
-			// asking". There is no classifier here, and inventing one would make
-			// the decision unpredictable. What `auto` does instead is the part of
-			// that judgement which is not a judgement call: a tool that cannot
-			// change anything does not need confirming.
+			// Blanket allow. `auto` is the mode you pick once you have decided to
+			// stop supervising this session, so prompting for a write in the
+			// project you are working in defeats the point of picking it.
 			//
-			// Previously this fell through to `manual` and did nothing at all,
-			// so cycling into it with Shift+Tab appeared to change the mode while
-			// behaving identically.
-			return READ_ONLY.has(toolName) ? "allow" : "ask";
+			// Not unguarded, and the two remaining guards are the ones worth
+			// keeping:
+			//   - `deny` rules are checked above and still win.
+			//   - The workspace boundary is enforced separately by the gate, so a
+			//     path outside the project still asks. `auto` means "I trust this
+			//     session here", not "anywhere on this machine".
+			//
+			// `bypassPermissions` is the mode that drops the boundary as well.
+			return "allow";
 		case "manual":
 			return "ask";
 	}
