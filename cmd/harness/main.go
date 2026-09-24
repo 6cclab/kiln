@@ -1,34 +1,95 @@
 // Command harness is the Go port of the harness coding agent.
 //
-// This scaffold implements exactly one subcommand, "session inspect
-// <path>", used to validate the phase-1 session JSONL store. Every other
-// invocation keeps the prior stub behaviour: print a message to stderr and
-// exit 2.
+// --version/--help answer before anything else, matching cli.ts: they must
+// work even when a project's configuration is broken. An unknown flag is
+// reported and refused rather than silently ignored — cli.ts's own
+// parseArgs collects rather than drops mistyped flags for the same reason.
+// Everything else dispatches to internal/cli: the management subcommands
+// (providers, models, login, logout, doctor, mcp), `session inspect`
+// (unchanged from the phase-1 scaffold), and chat (`-p`/interactive) as the
+// default.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/andrepato/harness/internal/cli"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/session/jsonl"
 )
 
 func main() {
-	if len(os.Args) >= 3 && os.Args[1] == "session" && os.Args[2] == "inspect" {
-		if len(os.Args) != 4 {
-			fmt.Fprintln(os.Stderr, "usage: harness session inspect <path>")
-			os.Exit(2)
-		}
-		if err := sessionInspect(os.Args[3]); err != nil {
-			fmt.Fprintln(os.Stderr, "harness session inspect:", err)
-			os.Exit(1)
-		}
-		return
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(argv []string) int {
+	args := cli.Parse(argv)
+
+	// These two answer before anything else, deliberately ahead of the
+	// unknown-flag check: `harness --help --bogus` should still print help.
+	if args.Version {
+		return cli.Version(os.Stdout)
 	}
-	fmt.Fprintln(os.Stderr, "harness: go port scaffold; not yet implemented")
-	os.Exit(2)
+	if args.Help {
+		fmt.Fprintln(os.Stdout, cli.Help)
+		return 0
+	}
+	if len(args.Unknown) > 0 {
+		fmt.Fprintf(os.Stderr, "unknown flag(s): %s\n", strings.Join(args.Unknown, ", "))
+		return 1
+	}
+
+	ctx := context.Background()
+
+	switch args.Command {
+	case "providers":
+		return cli.Providers(ctx, os.Stdout, os.Stderr)
+	case "models":
+		providerID := ""
+		if len(args.Positional) > 0 {
+			providerID = args.Positional[0]
+		}
+		return cli.Models(ctx, os.Stdout, os.Stderr, providerID)
+	case "login":
+		if len(args.Positional) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: harness login <provider>")
+			return 1
+		}
+		return cli.LoginCmd(ctx, args.Positional[0], os.Stdin, os.Stdout, os.Stderr)
+	case "logout":
+		if len(args.Positional) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: harness logout <provider>")
+			return 1
+		}
+		return cli.LogoutCmd(ctx, args.Positional[0], os.Stdout, os.Stderr)
+	case "doctor":
+		return cli.Doctor(ctx, args, os.Stdout, os.Stderr)
+	case "mcp":
+		return cli.MCP(ctx, args.MCPConfig, os.Stdout, os.Stderr)
+	case "session":
+		return sessionCommand(args.Positional)
+	default:
+		return cli.Run(ctx, args, os.Stdout, os.Stderr, os.Stdin)
+	}
+}
+
+// sessionCommand implements `harness session inspect <path>`, kept
+// verbatim from the phase-1 scaffold: it validates the session JSONL store
+// directly, independent of the provider/agent stack this phase adds.
+func sessionCommand(positional []string) int {
+	if len(positional) != 2 || positional[0] != "inspect" {
+		fmt.Fprintln(os.Stderr, "usage: harness session inspect <path>")
+		return 2
+	}
+	if err := sessionInspect(positional[1]); err != nil {
+		fmt.Fprintln(os.Stderr, "harness session inspect:", err)
+		return 1
+	}
+	return 0
 }
 
 // inspectReport is the JSON shape "harness session inspect" prints.
