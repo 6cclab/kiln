@@ -19,27 +19,30 @@ This harness keeps the same interface and slash commands, and spends context
 deliberately: tools are indexed rather than resident, skills load their bodies
 only on invocation, and memory is budgeted against the model's actual window.
 
-Measured result on the same catalog: **1,514 tokens, 5% of the window** — a 26x
+Measured result on the same catalog: **1,514 tokens, 5% of the window**, a 26x
 reduction, leaving the window for the conversation.
 
 ## What it is built on
 
-[`@earendil-works/pi`](https://github.com/earendil-works/pi) (MIT) provides the
-agent loop, ~45 model providers, compaction, and the TUI primitives. This
-project adds the context budgeting, the `.claude/` compatibility layer, MCP tool
-gating, and session search.
+A single Go binary. The agent loop, session format, compaction and provider
+catalog are ports of [`@earendil-works/pi`](https://github.com/earendil-works/pi)
+(MIT): sessions are pi's JSONL v4 and open in either implementation, and the
+41 providers over 10 API shapes are pi-ai's catalog, vendored under
+`internal/provider/catalog`. The terminal UI is
+[Bubble Tea v2](https://github.com/charmbracelet/bubbletea); finished output is
+committed to the terminal's own scrollback, only the live region repaints.
 
-Model-agnostic by construction: local Ollama, an API key, or a Claude Pro/Max
-or ChatGPT Plus/Pro subscription. No code path branches on provider — only the
-budget tier differs.
+Model-agnostic by construction: local Ollama, an API key, or a Claude Pro/Max,
+ChatGPT Plus/Pro, GitHub Copilot, Kimi or xAI subscription. No code path branches
+on provider; only the budget tier differs.
 
 ## Install
 
-Requires Node 24 (for native TypeScript and `node:sqlite`).
+Requires Go 1.26.
 
 ```bash
-npm install
-npm link          # puts `harness` on PATH
+make build                    # bin/harness
+go install ./cmd/harness      # or: puts `harness` on $GOBIN / ~/go/bin
 ```
 
 ## Use
@@ -48,14 +51,18 @@ npm link          # puts `harness` on PATH
 harness                      # interactive session
 harness -c                   # continue the most recent session here
 harness --resume <id>        # resume a specific session
+harness -p "fix the bug"     # one prompt, then exit (see --output-format)
 harness providers            # who you can talk to, and auth status
-harness models               # models, their tiers, and usable budget
+harness models [provider]    # models, their tiers, and usable budget
 harness login anthropic      # log in with a Claude Pro/Max plan
+harness doctor               # model, tier, tools, MCP, hooks, agents, problems
+harness mcp                  # MCP servers and their state
 ```
 
 Inside a session: `/` for commands, `@` to reference a file, `!` to run a shell
-command directly, `#` to add a memory. `Ctrl+R` expands truncated tool output
-and reasoning blocks, `Shift+Tab` cycles permission mode, `Esc` interrupts.
+command directly, `#` to add a memory. `Ctrl+R` opens the full transcript with
+tool output and reasoning expanded (`Esc` returns), `Shift+Tab` cycles permission
+mode, `Esc` interrupts, `Ctrl+C` twice exits.
 
 `@path` inlines the file so the model has it without spending a turn on a read,
 capped at the tier's per-result budget. `@screenshot.png` attaches the image
@@ -65,12 +72,15 @@ instead.
 model, tier, tool strategy, MCP status, hooks and agents on one screen, with
 problems last.
 
+Credentials live in `~/.harness/credentials.json`, sessions in
+`~/.harness/sessions`, prompt history in `~/.harness/history`. A stored
+credential wins over an environment variable for the same provider.
+
 ## How context is kept small
 
-- **Tiers.** `tierFor(model.contextWindow)` is the single place model choice
-  becomes behavior. Everything downstream reads a tier and never asks which
-  provider it is on, so the same code relaxes on a 200k model instead of
-  branching.
+- **Tiers.** The model's context window is the single place model choice becomes
+  behavior. Everything downstream reads a tier and never asks which provider it
+  is on, so the same code relaxes on a 200k model instead of branching.
 - **Tool gating.** MCP tools are registered but inactive. The model sees a
   one-line index and calls `tool_search` to load the schemas it needs.
   Registration is free; activation is what costs tokens.
@@ -80,6 +90,8 @@ problems last.
 - **Skills.** Only `name` + `description` stay resident; bodies load on
   invocation. Measured on a real `~/.claude/skills`: 841 tokens resident versus
   8,316 if bodies were loaded.
+- **Subagents.** A `task` runs in its own session and window; the parent pays
+  for one paragraph.
 
 ## `.claude/` compatibility
 
@@ -93,33 +105,38 @@ Reads your existing configuration; writes nothing into it.
 | `.claude/settings.json` | permissions, merged `user` → `project` → `local` |
 | `~/.claude.json` | MCP servers |
 | `.claude/agents/*.md` | subagents, dispatched with the `task` tool |
-| `.claude/settings.json` `hooks` | `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `SessionEnd` |
-
-Subagents get their own context window: a search that reads thirty files spends
-those tokens in the subagent's window, and the parent pays for one paragraph.
-On a small model that is the difference between a task completing and not.
+| `~/.claude/keybindings.json` | editor key overrides; conflicts reported at startup |
+| `.claude/settings.json` `hooks` | `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `SubagentStop`, `Notification`, `PreCompact` |
 
 A `PreToolUse` hook may rewrite a command before it runs. Hooks are applied
 **before** the permission gate, so the gate judges what will actually execute
-rather than what the model proposed.
+rather than what the model proposed. A blocking `Stop` hook is reported to you;
+this harness does not re-prompt the model on it.
 
 ## Safety
 
 Tool calls pass through a permission gate before running. Beyond the rules in
 `settings.json`, any path **outside the workspace** requires confirmation even
-when a rule would allow the tool — `allow: [Read]` means "reading is fine here",
-not "read anything on this machine". Widen the workspace with `/add-dir`.
+when a rule would allow the tool: `allow: [Read]` means "reading is fine here",
+not "read anything on this machine". Widen the workspace with `/add-dir`. In
+print mode there is nobody to ask, so `ask` is a refusal.
 
 ## Development
 
 ```bash
-npm run check     # typecheck + tests
-npm test
+make check        # vet, staticcheck, gofmt, go test ./...
+make e2e          # the real binary through a PTY and a scripted model (faux)
+make e2e-live     # the same against a real model; HARNESS_E2E_LIVE=1, HARNESS_LIVE_MODEL=...
 ```
 
-Measurement scripts in `scripts/` are the reproducible record behind the numbers
-above — `gating-check.ts` re-measures the catalog, `check-thinking.ts` re-tests
-reasoning suppression after an Ollama upgrade.
+Every screen assertion runs against an emulated terminal, never against the
+bytes written, because that is where every rendering bug in this project has
+lived. `docs/testing.md` explains the driver, the faux model server and
+`harness-drive`, which turns a bug report into a replayable script.
+
+Two upstream libraries are vendored under `third_party/` with one patch each,
+described in their `HARNESS-PATCH.md`: ultraviolet (inline renderer shrink) and
+bubbletea (`Println` scrolling by a stale frame height).
 
 `docs/claude-code-parity.md` is the interface checklist. Items are marked
 `[obs]` (directly observed) or `[chk]` (from familiarity, verify before
