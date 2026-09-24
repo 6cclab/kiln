@@ -1,0 +1,10 @@
+data: {"id":"cmpl-mistral-4","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"cmpl-mistral-4","choices":[{"index":0,"delta":{"content":"Partial answer"}}],"usage":{"prompt_tokens":200,"completion_tokens":10,"total_tokens":210,"prompt_tokens_details":{"cached_tokens":50}}}
+
+data: {"id":"cmpl-mistral-4","choices":[{"index":0,"delta":{"content":" continues."}}]}
+
+data: {"id":"cmpl-mistral-4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":200,"completion_tokens":25,"total_tokens":225,"prompt_tokens_details":{"cached_tokens":50}}}
+
+data: [DONE]
+

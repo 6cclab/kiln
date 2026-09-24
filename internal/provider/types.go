@@ -108,8 +108,24 @@ type OpenAICompletionsCompat struct {
 	// ("max_completion_tokens" | "max_tokens"). Default: auto-detected.
 	MaxTokensField string `json:"maxTokensField,omitempty"`
 	// ThinkingFormat: format for the reasoning/thinking parameter. Default:
-	// "openai".
+	// "openai". See openai-completions.js:600-720 for the per-format request
+	// shape; ported in openai_completions.go's reasoning block.
 	ThinkingFormat string `json:"thinkingFormat,omitempty"`
+	// ChatTemplateKwargs: kwargs to send as `chat_template_kwargs` when
+	// ThinkingFormat is "chat-template". A value may be an object shaped
+	// like pi's `ChatTemplateKwargValue`, e.g. `{"$var": "thinking.enabled"}`
+	// or `{"$var": "thinking.budget"}` (decoded here as
+	// `map[string]any{"$var": "thinking.enabled"}`), which the client
+	// substitutes with a pi-controlled thinking value at request time
+	// (resolveChatTemplateKwargValue); any other value passes through
+	// unchanged.
+	ChatTemplateKwargs map[string]any `json:"chatTemplateKwargs,omitempty"`
+	// ChatTemplateArgs: same as ChatTemplateKwargs but for `chat_template_args`
+	// when ThinkingFormat is "baseten".
+	ChatTemplateArgs map[string]any `json:"chatTemplateArgs,omitempty"`
+	// ZaiToolStream: whether z.ai supports top-level `tool_stream: true` for
+	// streaming tool call deltas. Default: false.
+	ZaiToolStream *bool `json:"zaiToolStream,omitempty"`
 }
 
 // AnthropicMessagesCompat is the subset of pi-ai's AnthropicMessagesCompat
@@ -136,6 +152,68 @@ type AnthropicMessagesCompat struct {
 	// AllowEmptySignature: replay empty thinking signatures as
 	// `signature: ""` instead of converting thinking to text. Default: false.
 	AllowEmptySignature *bool `json:"allowEmptySignature,omitempty"`
+}
+
+// OpenAIResponsesCompat is the subset of pi-ai's OpenAIResponsesCompat
+// (types.d.ts) the harness reads. It is shared by openai-responses,
+// openai-codex-responses and azure-openai-responses (types.d.ts:829 maps all
+// three Apis to this one compat type). Fields beyond this subset still
+// round-trip through Model.Compat unmodified.
+type OpenAIResponsesCompat struct {
+	// SupportsDeveloperRole: whether the provider supports the `developer`
+	// role (vs `system`) for instructions. Default: true.
+	SupportsDeveloperRole *bool `json:"supportsDeveloperRole,omitempty"`
+	// SupportsMidConvoSystemMessages: whether the exact model accepts
+	// developer/system messages after the conversation has started. When
+	// false, later system messages are folded into the leading system
+	// message. Default: false.
+	SupportsMidConvoSystemMessages *bool `json:"supportsMidConvoSystemMessages,omitempty"`
+	// SupportsLongCacheRetention: whether the provider supports long prompt
+	// cache retention (prompt_cache_retention: "24h" on models without
+	// SupportsExplicitPromptCacheMode). Default: true.
+	SupportsLongCacheRetention *bool `json:"supportsLongCacheRetention,omitempty"`
+	// SupportsStrictMode: whether the provider supports strict JSON-schema
+	// function tools. Default: false.
+	SupportsStrictMode *bool `json:"supportsStrictMode,omitempty"`
+	// SupportsExplicitPromptCacheMode: whether the model accepts
+	// `prompt_cache_options` (OpenAI GPT-5.6+ prompt caching). Default: false.
+	SupportsExplicitPromptCacheMode *bool `json:"supportsExplicitPromptCacheMode,omitempty"`
+	// SupportsMaxOutputTokens: whether the provider accepts the
+	// `max_output_tokens` parameter. Default: true.
+	SupportsMaxOutputTokens *bool `json:"supportsMaxOutputTokens,omitempty"`
+}
+
+// MistralConversationsCompat is the subset of pi-ai's
+// MistralConversationsCompat the harness reads.
+type MistralConversationsCompat struct {
+	// SupportsMidConvoSystemMessages: whether the exact model accepts system
+	// messages after the conversation has started. Default: false.
+	SupportsMidConvoSystemMessages *bool `json:"supportsMidConvoSystemMessages,omitempty"`
+}
+
+// OpenAIResponsesCompat decodes Model.Compat as an OpenAIResponsesCompat.
+// Returns the zero value (all defaults) if Compat is empty or does not
+// decode. Shared by openai-responses, openai-codex-responses and
+// azure-openai-responses.
+func (m Model) OpenAIResponsesCompat() OpenAIResponsesCompat {
+	var c OpenAIResponsesCompat
+	if len(m.Compat) == 0 {
+		return c
+	}
+	_ = json.Unmarshal(m.Compat, &c)
+	return c
+}
+
+// MistralConversationsCompat decodes Model.Compat as a
+// MistralConversationsCompat. Returns the zero value if Compat is empty or
+// does not decode.
+func (m Model) MistralConversationsCompat() MistralConversationsCompat {
+	var c MistralConversationsCompat
+	if len(m.Compat) == 0 {
+		return c
+	}
+	_ = json.Unmarshal(m.Compat, &c)
+	return c
 }
 
 // boolOr returns *b if b is non-nil, else def.
@@ -172,14 +250,30 @@ func (m Model) SupportsUsageInStreaming() bool {
 	return boolOr(c.SupportsUsageInStreaming, true)
 }
 
-// SupportsStrictMode reports Compat.SupportsStrictMode, default false. Valid
-// for both OpenAI-completions and Anthropic-messages models; whichever compat
-// applies to m.Api is consulted.
+// SupportsStrictMode reports the strict-tool-schema compat flag for m.Api,
+// with pi's per-API default (whichever compat applies to m.Api is
+// consulted):
+//   - anthropic-messages: AnthropicMessagesCompat.SupportsStrictTools, default false.
+//   - openai-codex-responses (`model.compat?.supportsStrictMode ?? true`,
+//     openai-codex-responses.js:374) and azure-openai-responses
+//     (`model.compat?.supportsStrictMode ?? true`, azure-openai-responses.js
+//     buildParams): OpenAIResponsesCompat.SupportsStrictMode, default true.
+//   - openai-responses (`model.compat?.supportsStrictMode ?? false`,
+//     openai-responses.js getCompat): OpenAIResponsesCompat.SupportsStrictMode,
+//     default false.
+//   - everything else (openai-completions, mistral-conversations, ...):
+//     OpenAICompletionsCompat.SupportsStrictMode, default false.
 func (m Model) SupportsStrictMode() bool {
 	switch m.Api {
 	case ApiAnthropicMessages:
 		c := m.AnthropicMessagesCompat()
 		return boolOr(c.SupportsStrictTools, false)
+	case ApiOpenAICodexResponses, ApiAzureOpenAIResponses:
+		c := m.OpenAIResponsesCompat()
+		return boolOr(c.SupportsStrictMode, true)
+	case ApiOpenAIResponses:
+		c := m.OpenAIResponsesCompat()
+		return boolOr(c.SupportsStrictMode, false)
 	default:
 		c := m.OpenAICompletionsCompat()
 		return boolOr(c.SupportsStrictMode, false)

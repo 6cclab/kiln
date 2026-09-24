@@ -1,0 +1,27 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_reasoning_text"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","status":"in_progress"}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"Thinking a"}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"bout it."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","status":"completed","summary":[{"type":"summary_text","text":"Thinking about it."}]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_2","status":"in_progress"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","output_index":1,"delta":"Here's the answer."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_2","status":"completed","content":[{"type":"output_text","text":"Here's the answer."}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_reasoning_text","status":"completed","usage":{"input_tokens":100,"output_tokens":60,"total_tokens":160}}}
+

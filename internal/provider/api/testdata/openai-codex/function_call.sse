@@ -1,0 +1,21 @@
+event: response.created
+data: {"response":{"id":"resp_3"}}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"search","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"output_index":0,"delta":"{\"query\":\"weat"}
+
+event: response.function_call_arguments.delta
+data: {"output_index":0,"delta":"her\"}"}
+
+event: response.function_call_arguments.done
+data: {"output_index":0,"arguments":"{\"query\":\"weather\"}"}
+
+event: response.output_item.done
+data: {"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"search","arguments":"{\"query\":\"weather\"}"}}
+
+event: response.completed
+data: {"response":{"id":"resp_3","status":"completed"}}
+

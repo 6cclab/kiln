@@ -1,0 +1,14 @@
+data: {"id":"cmpl-mistral-2","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"cmpl-mistral-2","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"Let me think about this "}]}]}}]}
+
+data: {"id":"cmpl-mistral-2","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"carefully."}]}]}}]}
+
+data: {"id":"cmpl-mistral-2","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"The answer "}]}}]}
+
+data: {"id":"cmpl-mistral-2","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"is 4."}]}}]}
+
+data: {"id":"cmpl-mistral-2","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":90,"completion_tokens":30,"total_tokens":120}}
+
+data: [DONE]
+

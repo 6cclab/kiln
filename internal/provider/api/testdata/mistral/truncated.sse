@@ -1,0 +1,3 @@
+data: {"id":"cmpl-mistral-5","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"cmpl-mistral-5","choices":[{"index":0,"delta":{"content":"Hello, this stream cuts off"

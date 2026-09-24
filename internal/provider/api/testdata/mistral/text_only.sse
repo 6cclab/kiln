@@ -1,0 +1,10 @@
+data: {"id":"cmpl-mistral-1","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"cmpl-mistral-1","choices":[{"index":0,"delta":{"content":"Hello fr"}}]}
+
+data: {"id":"cmpl-mistral-1","choices":[{"index":0,"delta":{"content":"om Mistral."}}]}
+
+data: {"id":"cmpl-mistral-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":120,"completion_tokens":40,"total_tokens":160}}
+
+data: [DONE]
+

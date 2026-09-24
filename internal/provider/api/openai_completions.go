@@ -98,6 +98,30 @@ type openAIRequest struct {
 	MaxCompletionTokens int                      `json:"max_completion_tokens,omitempty"`
 	Temperature         *float64                 `json:"temperature,omitempty"`
 	ReasoningEffort     string                   `json:"reasoning_effort,omitempty"`
+
+	// Thinking carries the wire shape for thinkingFormat "zai"
+	// ({"type":"enabled"|"disabled", ...}), "deepseek" ({"type":"enabled"|"disabled"})
+	// or "string-thinking" (a bare string level, e.g. "high"). The shape
+	// differs per format, so this is built as raw JSON rather than a typed
+	// field; see openai-completions.js:619-712.
+	Thinking json.RawMessage `json:"thinking,omitempty"`
+	// EnableThinking is thinkingFormat "qwen"'s top-level boolean
+	// (openai-completions.js:630-638).
+	EnableThinking *bool `json:"enable_thinking,omitempty"`
+	// ChatTemplateKwargs is thinkingFormat "chat-template" and
+	// "qwen-chat-template"'s `chat_template_kwargs` object
+	// (openai-completions.js:639-650).
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
+	// ChatTemplateArgs is thinkingFormat "baseten"'s `chat_template_args`
+	// object (openai-completions.js:651-665).
+	ChatTemplateArgs map[string]any `json:"chat_template_args,omitempty"`
+	// Reasoning carries thinkingFormat "ant-ling"'s `{"effort": ...}` or
+	// "together"'s `{"enabled": bool}` shape (openai-completions.js:678-703);
+	// raw JSON since the two formats disagree on the object's fields.
+	Reasoning json.RawMessage `json:"reasoning,omitempty"`
+	// ToolStream is z.ai's top-level `tool_stream: true` for streaming tool
+	// call deltas, gated on compat.ZaiToolStream (openai-completions.js:600-603).
+	ToolStream *bool `json:"tool_stream,omitempty"`
 }
 
 func buildOpenAIRequest(model provider.Model, transcript []msg.Message, opts provider.StreamOptions) openAIRequest {
@@ -189,24 +213,237 @@ func buildOpenAIRequest(model provider.Model, transcript []msg.Message, opts pro
 				Strict:      model.SupportsStrictMode(),
 			},
 		})
+		if compat.ZaiToolStream != nil && *compat.ZaiToolStream {
+			req.ToolStream = boolPtr(true)
+		}
 	}
 
 	if opts.Temperature != nil {
 		req.Temperature = opts.Temperature
 	}
 
-	if model.Reasoning && opts.ThinkingLevel != "" && opts.ThinkingLevel != provider.ThinkingOff && model.SupportsReasoningEffort() {
-		effort := string(opts.ThinkingLevel)
-		if model.ThinkingLevelMap != nil {
-			if mapped, ok := model.ThinkingLevelMap[opts.ThinkingLevel]; ok && mapped != nil {
-				effort = *mapped
-			}
-		}
-		req.ReasoningEffort = effort
-	}
+	applyThinkingFormat(model, opts, compat, &req)
 
 	return req
 }
+
+// wantReasoning reports pi's `options?.reasoningEffort` truthiness check:
+// a thinking level was explicitly requested and isn't "off".
+func wantReasoning(opts provider.StreamOptions) bool {
+	return opts.ThinkingLevel != "" && opts.ThinkingLevel != provider.ThinkingOff
+}
+
+// mappedThinkingLevel resolves opts.ThinkingLevel (or, when off/unset, the
+// model's mapped "off" value) through model.ThinkingLevelMap, matching pi's
+// `model.thinkingLevelMap?.[level] ?? level` idiom used throughout
+// openai-completions.js's reasoning block. ok is false when the map has an
+// explicit null entry for the level (pi's `!== null` guards), meaning the
+// field should be omitted entirely.
+func mappedThinkingLevel(model provider.Model, level provider.ThinkingLevel) (value string, ok bool) {
+	if model.ThinkingLevelMap != nil {
+		if mapped, present := model.ThinkingLevelMap[level]; present {
+			if mapped == nil {
+				return "", false
+			}
+			return *mapped, true
+		}
+	}
+	return string(level), true
+}
+
+// applyThinkingFormat ports openai-completions.js:600-712's thinkingFormat
+// switch, faithfully implementing the "deepseek", "together", "baseten",
+// "zai", "qwen", "qwen-chat-template", "chat-template", "string-thinking"
+// and "ant-ling" variants (plus the default "openai" reasoning_effort path,
+// already handled by the caller before this switch runs -- see below). Out
+// of scope: "openrouter" thinkingFormat and the top-level thinking-token-
+// budget cap (openai-completions.js:730-747's resolveClampedThinkingBudget
+// depends on options.thinkingBudgets, which this harness's StreamOptions
+// does not carry) -- noted as a deviation in the phase report.
+func applyThinkingFormat(model provider.Model, opts provider.StreamOptions, compat provider.OpenAICompletionsCompat, req *openAIRequest) {
+	if !model.Reasoning {
+		return
+	}
+	reasoning := wantReasoning(opts)
+	supportsEffort := model.SupportsReasoningEffort()
+
+	switch compat.ThinkingFormat {
+	case "zai":
+		// openai-completions.js:619-629:
+		//   zaiParams.thinking = options?.reasoningEffort ? { type: "enabled", clear_thinking: false } : { type: "disabled" };
+		//   if (options?.reasoningEffort && compat.supportsReasoningEffort) { ... zaiParams.reasoning_effort = effort; }
+		if reasoning {
+			req.Thinking, _ = json.Marshal(map[string]any{"type": "enabled", "clear_thinking": false})
+		} else {
+			req.Thinking, _ = json.Marshal(map[string]any{"type": "disabled"})
+		}
+		if reasoning && supportsEffort {
+			if effort, ok := mappedThinkingLevel(model, opts.ThinkingLevel); ok {
+				req.ReasoningEffort = effort
+			}
+		}
+	case "qwen":
+		// openai-completions.js:630-638:
+		//   params.enable_thinking = !!options?.reasoningEffort;
+		//   if (options?.reasoningEffort && compat.supportsReasoningEffort) { ... params.reasoning_effort = effort; }
+		req.EnableThinking = boolPtr(reasoning)
+		if reasoning && supportsEffort {
+			if effort, ok := mappedThinkingLevel(model, opts.ThinkingLevel); ok {
+				req.ReasoningEffort = effort
+			}
+		}
+	case "qwen-chat-template":
+		// openai-completions.js:639-644:
+		//   params.chat_template_kwargs = { enable_thinking: !!options?.reasoningEffort, preserve_thinking: true };
+		req.ChatTemplateKwargs = map[string]any{"enable_thinking": reasoning, "preserve_thinking": true}
+	case "chat-template":
+		// openai-completions.js:645-650: params.chat_template_kwargs = buildChatTemplateValues(model, options, compat.chatTemplateKwargs, thinkingBudget)
+		if kwargs := resolveChatTemplateValues(model, opts, compat.ChatTemplateKwargs); kwargs != nil {
+			req.ChatTemplateKwargs = kwargs
+		}
+	case "baseten":
+		// openai-completions.js:651-665:
+		//   basetenParams.chat_template_args = buildChatTemplateValues(model, options, compat.chatTemplateArgs, thinkingBudget)
+		//   if (compat.supportsReasoningEffort) { ... basetenParams.reasoning_effort = effort; } -- note: baseten's
+		//   effort mapping falls back to model.thinkingLevelMap?.off (not the raw level) when reasoningEffort is unset.
+		if args := resolveChatTemplateValues(model, opts, compat.ChatTemplateArgs); args != nil {
+			req.ChatTemplateArgs = args
+		}
+		if supportsEffort {
+			level := opts.ThinkingLevel
+			if !reasoning {
+				level = provider.ThinkingOff
+			}
+			if effort, ok := mappedThinkingLevel(model, level); ok && (reasoning || effort != "") {
+				req.ReasoningEffort = effort
+			}
+		}
+	case "deepseek":
+		// openai-completions.js:666-677:
+		//   if (options?.reasoningEffort) params.thinking = { type: "enabled" };
+		//   else if (model.thinkingLevelMap?.off !== null) params.thinking = { type: "disabled" };
+		//   if (options?.reasoningEffort && compat.supportsReasoningEffort) params.reasoning_effort = mapped ?? level;
+		if reasoning {
+			req.Thinking, _ = json.Marshal(map[string]any{"type": "enabled"})
+		} else if _, ok := mappedThinkingLevel(model, provider.ThinkingOff); ok {
+			req.Thinking, _ = json.Marshal(map[string]any{"type": "disabled"})
+		}
+		if reasoning && supportsEffort {
+			if effort, ok := mappedThinkingLevel(model, opts.ThinkingLevel); ok {
+				req.ReasoningEffort = effort
+			}
+		}
+	case "ant-ling":
+		// openai-completions.js:690-695: only sent when reasoningEffort is set AND the mapped effort is non-null.
+		if reasoning {
+			if model.ThinkingLevelMap != nil {
+				if mapped, present := model.ThinkingLevelMap[opts.ThinkingLevel]; present && mapped != nil {
+					req.Reasoning, _ = json.Marshal(map[string]any{"effort": *mapped})
+				}
+			}
+		}
+	case "together":
+		// openai-completions.js:696-703:
+		//   togetherParams.reasoning = { enabled: !!options?.reasoningEffort };
+		//   if (options?.reasoningEffort && compat.supportsReasoningEffort) togetherParams.reasoning_effort = mapped ?? level;
+		req.Reasoning, _ = json.Marshal(map[string]any{"enabled": reasoning})
+		if reasoning && supportsEffort {
+			if effort, ok := mappedThinkingLevel(model, opts.ThinkingLevel); ok {
+				req.ReasoningEffort = effort
+			}
+		}
+	case "string-thinking":
+		// openai-completions.js:704-711:
+		//   if (options?.reasoningEffort) stringThinkingParams.thinking = mapped ?? level;
+		//   else if (model.thinkingLevelMap?.off !== null) stringThinkingParams.thinking = model.thinkingLevelMap?.off ?? "none";
+		if reasoning {
+			if effort, ok := mappedThinkingLevel(model, opts.ThinkingLevel); ok {
+				req.Thinking, _ = json.Marshal(effort)
+			}
+		} else if off, ok := mappedThinkingLevel(model, provider.ThinkingOff); ok {
+			if off == "" {
+				off = "none"
+			}
+			req.Thinking, _ = json.Marshal(off)
+		}
+	default:
+		// openai-completions.js:712-717 (the plain "openai" format, also the
+		// fallback for any unrecognized thinkingFormat string):
+		//   else if (options?.reasoningEffort && ...) params.reasoning_effort = mapped ?? level;
+		//   else if (!options?.reasoningEffort && ...) { if (typeof offValue === "string") params.reasoning_effort = offValue; }
+		if !supportsEffort {
+			return
+		}
+		if reasoning {
+			if effort, ok := mappedThinkingLevel(model, opts.ThinkingLevel); ok {
+				req.ReasoningEffort = effort
+			}
+			return
+		}
+		if model.ThinkingLevelMap != nil {
+			if off, present := model.ThinkingLevelMap[provider.ThinkingOff]; present && off != nil {
+				req.ReasoningEffort = *off
+			}
+		}
+	}
+}
+
+// resolveChatTemplateValues ports resolveChatTemplateKwargValue
+// (openai-completions.js:765-788) over a whole kwargs/args map: each
+// {"$var": "thinking.enabled"} resolves to a bool, {"$var": "thinking.budget"}
+// resolves to the thinking-token budget for the request (this harness has no
+// options.thinkingBudgets, so it reuses budgetForThinkingLevel from
+// anthropic_messages.go as its best-effort budget source -- a deviation from
+// pi's clampThinkingBudgetToAnswerRoom, noted in the phase report), any other
+// object value falls back to the mapped thinking level (pi's
+// `model.thinkingLevelMap?.[level] ?? level`, omitted if unmapped-to-null),
+// and non-object values pass through unchanged. A value with `omitWhenOff:
+// true` is dropped entirely when reasoning is not requested. Returns nil if
+// the resolved map ends up empty (matches pi returning undefined).
+func resolveChatTemplateValues(model provider.Model, opts provider.StreamOptions, values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	reasoning := wantReasoning(opts)
+	out := map[string]any{}
+	for key, raw := range values {
+		obj, isObj := raw.(map[string]any)
+		if !isObj {
+			out[key] = raw
+			continue
+		}
+		if omit, _ := obj["omitWhenOff"].(bool); omit && !reasoning {
+			continue
+		}
+		switch obj["$var"] {
+		case "thinking.enabled":
+			out[key] = reasoning
+			continue
+		case "thinking.budget":
+			budget := 0
+			if reasoning {
+				budget = budgetForThinkingLevel(opts.ThinkingLevel)
+			}
+			if budget > 0 {
+				out[key] = budget
+			}
+			continue
+		}
+		level := opts.ThinkingLevel
+		if !reasoning {
+			level = provider.ThinkingOff
+		}
+		if effort, ok := mappedThinkingLevel(model, level); ok && effort != "" {
+			out[key] = effort
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 func convertBlocksToOpenAI(blocks msg.Blocks) interface{} {
 	hasImage := false
@@ -257,6 +494,7 @@ type openAIChunk struct {
 			Content          string               `json:"content"`
 			ReasoningContent string               `json:"reasoning_content"`
 			Reasoning        string               `json:"reasoning"`
+			ReasoningText    string               `json:"reasoning_text"`
 			ToolCalls        []openAIWireToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
@@ -384,9 +622,17 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 			events <- msg.StreamEvent{Type: msg.EventTextDelta, ContentIndex: textIndex, Delta: delta.Content, Partial: partial}
 		}
 
+		// Some endpoints return reasoning in reasoning_content (llama.cpp), or
+		// reasoning (other openai-compatible endpoints), or reasoning_text.
+		// Use the first non-empty field per chunk to avoid duplication (e.g.
+		// chutes.ai returns both reasoning_content and reasoning with the
+		// same content) -- openai-completions.js:395-420.
 		reasoning := delta.ReasoningContent
 		if reasoning == "" {
 			reasoning = delta.Reasoning
+		}
+		if reasoning == "" {
+			reasoning = delta.ReasoningText
 		}
 		if reasoning != "" {
 			if thinkingIndex == -1 {

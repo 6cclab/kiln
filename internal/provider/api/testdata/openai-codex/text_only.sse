@@ -1,0 +1,21 @@
+event: response.created
+data: {"response":{"id":"resp_1"}}
+
+event: response.output_item.added
+data: {"output_index":0,"item":{"type":"message","id":"msg_1"}}
+
+event: response.output_text.delta
+data: {"output_index":0,"delta":"Hello fr"}
+
+event: response.output_text.delta
+data: {"output_index":0,"delta":"om the m"}
+
+event: response.output_text.delta
+data: {"output_index":0,"delta":"odel."}
+
+event: response.output_item.done
+data: {"output_index":0,"item":{"type":"message","id":"msg_1","content":[{"type":"output_text","text":"Hello from the model."}]}}
+
+event: response.completed
+data: {"response":{"id":"resp_1","status":"completed","usage":{"input_tokens":120,"output_tokens":40,"total_tokens":160,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}
+
