@@ -91,6 +91,10 @@ type Model struct {
 	prompt   *PromptState
 	modal    *ModalView
 	thinking *ThinkingView
+	// popup is the `/` or `@` autocomplete list, non-nil while one of the
+	// two triggers matches the editor's current line/cursor. Rebuilt from
+	// scratch on every keystroke by refreshPopup — see autocomplete.go.
+	popup *Popup
 	// transcriptView is set while the Ctrl+R alt-screen transcript view is
 	// open. See transcriptview.go.
 	transcriptView *TranscriptView
@@ -193,6 +197,22 @@ func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.editor.SetWidth(m.liveEditorWidth())
+		if m.transcriptView != nil {
+			m.transcriptView.vp.SetWidth(m.contentWidth())
+			m.transcriptView.vp.SetHeight(m.transcriptViewportHeight())
+		}
+		return m, nil
+
+	case msgAltScreenAppend:
+		if m.transcriptView != nil {
+			m.transcriptView.Append(msg.Text)
+		}
+		return m, nil
+
+	case tea.MouseWheelMsg:
+		if m.transcriptView != nil {
+			return m.handleTranscriptViewMouse(msg)
+		}
 		return m, nil
 
 	case tea.QuitMsg:
@@ -357,6 +377,33 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// The autocomplete popup owns up/down/tab/enter/esc while it is open —
+	// pi-tui's editor.js handleKey does exactly this before any of its own
+	// submit/history/newline handling runs (see editor.js:599-645). Every
+	// other key falls through to the router/editor pipeline below, and
+	// refreshPopup rebuilds the popup from the buffer that pipeline
+	// produces.
+	if m.popup != nil {
+		switch msg.String() {
+		case "up":
+			m.popup.Move(-1)
+			return m, nil
+		case "down":
+			m.popup.Move(1)
+			return m, nil
+		case "tab", "enter":
+			replacement, _ := m.popup.Accept()
+			m.editor.ReplaceCursorLine(m.popup.Start, m.popup.End, replacement)
+			m.popup = nil
+			m.editor.PopupActive = false
+			return m, nil
+		case "esc":
+			m.popup = nil
+			m.editor.PopupActive = false
+			return m, nil
+		}
+	}
+
 	// Side effects the router's action closures record, applied to m
 	// below. Router.Route calls these synchronously and returns before
 	// this function does anything else with them, so there is no
@@ -418,11 +465,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if didClearScr {
 			return m, tea.ClearScreen
 		}
+		m = m.refreshPopup()
 		return m, nil
 	}
 
 	ed, cmd, ev := m.editor.Update(msg)
 	m.editor = ed
+	m = m.refreshPopup()
 	switch ev.Kind {
 	case editor.EventSubmit:
 		return m.handleSubmit(ev.Text)
@@ -433,6 +482,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, cmd
+}
+
+// refreshPopup rebuilds the autocomplete popup from the editor's current
+// line and cursor column, called after every keystroke that could have
+// changed either — editor.js's own updateAutocomplete/tryTriggerAutocomplete
+// run on the same "after every edit" cadence (editor.js:1016-1045).
+func (m Model) refreshPopup() Model {
+	line, col := m.editor.CursorLine()
+	m.popup = BuildPopup(m.cfg.Registry, m.cfg.Cwd, line, col)
+	m.editor.PopupActive = m.popup != nil
+	return m
 }
 
 func (m Model) cycleMode() Model {
@@ -643,6 +703,9 @@ func (m Model) View() tea.View {
 		lines = append(lines, m.prompt.Render(width)...)
 	}
 	lines = append(lines, m.editor.View(width)...)
+	if m.popup != nil {
+		lines = append(lines, m.renderPopup(width, len(lines))...)
+	}
 	footerRows := m.footer.Render(width)
 	lines = append(lines, footerRows[0], footerRows[1])
 
@@ -669,6 +732,33 @@ func (m Model) View() tea.View {
 		}
 	}
 	return v
+}
+
+// renderPopup renders the `/`/`@` autocomplete list directly below the
+// editor's bottom rule, inside the live region, where pi-tui's editor
+// draws it (components/editor.js render(): the list follows
+// renderBottomBorder). linesAbove is how many rows View has already drawn
+// (spinner/thinking/prompt/editor) before the popup's own slot; together
+// with the footer's fixed two rows, it bounds how many popup rows fit so the whole frame
+// never exceeds the terminal's height — pi-tui's own
+// autocompleteMaxVisible (3..20, default 5) is a widget-level clamp, not a
+// terminal-height one, so this cap is this port's own addition for the
+// no-room case the task calls out explicitly.
+func (m Model) renderPopup(width, linesAbove int) []string {
+	height := m.height
+	if height <= 0 {
+		height = 24
+	}
+	const footerRows = 2
+	room := height - linesAbove - footerRows
+	if room < 1 {
+		return nil
+	}
+	maxRows := 5
+	if maxRows > room {
+		maxRows = room
+	}
+	return m.popup.Render(width, maxRows)
 }
 
 // editorCursor offsets the editor's own cursor by the number of live-

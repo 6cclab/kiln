@@ -338,6 +338,54 @@ func (m *Model) syncHeight() {
 	}
 }
 
+// CursorLine returns the text of the line the cursor is on and the
+// cursor's column within it (both rune-based), for callers that need to
+// decide whether to trigger a `/` or `@` autocomplete popup without
+// reaching into the wrapped textarea directly.
+func (m Model) CursorLine() (line string, col int) {
+	runes, _, c := m.currentLineRunes()
+	return string(runes), c
+}
+
+// ReplaceCursorLine rewrites the cursor's line in place, replacing the
+// [start,end) rune range with replacement and leaving the cursor
+// immediately after the inserted text — the mechanism an accepted
+// autocomplete item uses to splice its value into the buffer.
+func (m *Model) ReplaceCursorLine(start, end int, replacement string) {
+	lines := strings.Split(m.ta.Value(), "\n")
+	row := m.ta.Line()
+	if row < 0 {
+		row = 0
+	}
+	if row >= len(lines) {
+		row = len(lines) - 1
+	}
+	line := []rune(lines[row])
+	if start < 0 {
+		start = 0
+	}
+	if end > len(line) {
+		end = len(line)
+	}
+	if start > end {
+		start = end
+	}
+	newLine := string(line[:start]) + replacement + string(line[end:])
+	lines[row] = newLine
+	m.ta.SetValue(strings.Join(lines, "\n"))
+	// SetValue leaves the cursor at the very end of the buffer (its Reset
+	// + InsertString implementation); walk it back up onto this line, then
+	// set the column directly, rather than reaching for unexported
+	// row/col fields the textarea doesn't expose a public setter for.
+	targetCol := start + len([]rune(replacement))
+	for m.ta.Line() > row {
+		m.ta.CursorUp()
+	}
+	m.ta.SetCursorColumn(targetCol)
+	m.historyIdx = -1
+	m.syncHeight()
+}
+
 // currentLineRunes returns the cursor's line as runes and a column clamped
 // to it, used by the kill-ring operations below to capture the text a
 // forwarded textarea key is about to delete.

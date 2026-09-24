@@ -109,6 +109,13 @@ func (b *Bridge) run() {
 				// anything committed while the Ctrl+R transcript view is
 				// open is held here and flushed in order once it closes.
 				held = append(held, item.text)
+				// Also mirror it straight into the open transcript view
+				// (see transcriptview.go's msgAltScreenAppend doc comment)
+				// so Ctrl+R does not go stale for however long it stays
+				// open.
+				if p := b.prog(); p != nil {
+					p.Send(msgAltScreenAppend{Text: item.text})
+				}
 				continue
 			}
 			b.printNow(item.text)

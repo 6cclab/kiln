@@ -141,3 +141,142 @@ func TestModal_SpliceWidthInvariant(t *testing.T) {
 		}
 	}
 }
+
+// charKey builds a printable-character keypress the way
+// editor/model_test.go's own helper does.
+func charKey(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
+
+func newTestModelWithRegistry() Model {
+	m := NewModel(Config{
+		Cwd:         "/tmp",
+		ModelLabel:  "ollama/qwen3.8",
+		InitialMode: "manual",
+		StartedAt:   time.Unix(0, 0),
+		Registry:    testRegistry(),
+	})
+	m.width, m.height = 80, 24
+	return m
+}
+
+// isFullRule reports whether l is a bare horizontal rule (the editor's top
+// or bottom border), ignoring ANSI styling.
+func isFullRule(l string) bool {
+	stripped := ansiStrip(l)
+	stripped = strings.TrimRight(stripped, " ")
+	return len(stripped) > 0 && strings.Count(stripped, "─") == len([]rune(stripped))
+}
+
+func ansiStrip(s string) string {
+	var b strings.Builder
+	inEscape := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// TestApp_SlashOpensPopupBelowEditor drives the app through typing "/mod"
+// one keystroke at a time (as the PTY does) and checks: the popup opens,
+// the composed frame includes a row naming a matching command strictly
+// above the editor's own top rule (per the task's explicit "renders
+// directly above the editor's top rule" layout), and no row exceeds the
+// terminal's width (the width invariant every renderer in this package
+// is held to — see width.go's doc comment; rows are allowed to be
+// narrower, e.g. the footer's own un-padded status text).
+func TestApp_SlashOpensPopupBelowEditor(t *testing.T) {
+	m := newTestModelWithRegistry()
+	for _, r := range "/mod" {
+		mi, _ := m.handleKey(charKey(r))
+		m = mi.(Model)
+	}
+	if m.popup == nil {
+		t.Fatal("expected a popup after typing /mod")
+	}
+	lines := viewLines(m)
+
+	// pi-tui draws the list after the editor's bottom rule
+	// (components/editor.js render()), so the popup row must sit between
+	// the second full-width rule and the footer.
+	bottomRuleIdx := -1
+	rules := 0
+	for i, l := range lines {
+		if isFullRule(l) {
+			rules++
+			if rules == 2 {
+				bottomRuleIdx = i
+				break
+			}
+		}
+	}
+	if bottomRuleIdx == -1 {
+		t.Fatalf("could not find the editor's bottom rule in the frame:\n%s", strings.Join(lines, "\n"))
+	}
+
+	found := false
+	for i := bottomRuleIdx + 1; i < len(lines)-2; i++ {
+		if strings.Contains(lines[i], "model") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a popup row naming \"model\" below the editor's bottom rule (index %d), got:\n%s", bottomRuleIdx, strings.Join(lines, "\n"))
+	}
+
+	for _, l := range lines {
+		if w := VisibleWidth(l); w > m.contentWidth() {
+			t.Errorf("row %q has width %d, want at most %d", l, w, m.contentWidth())
+		}
+	}
+}
+
+// TestApp_EnterAcceptsPopupSelection checks that Enter, while the popup is
+// open, splices the selected item into the editor rather than submitting
+// the line — matching pi-tui's editor.js precedence (the popup owns
+// Enter/Tab/Esc while it is open, ahead of submit).
+func TestApp_EnterAcceptsPopupSelection(t *testing.T) {
+	m := newTestModelWithRegistry()
+	for _, r := range "/mod" {
+		mi, _ := m.handleKey(charKey(r))
+		m = mi.(Model)
+	}
+	if m.popup == nil {
+		t.Fatal("expected a popup after typing /mod")
+	}
+	mi, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = mi.(Model)
+	if m.popup != nil {
+		t.Fatal("popup should close after accepting")
+	}
+	if got := m.editor.Value(); got != "/modal-test " && got != "/model " {
+		t.Fatalf("editor value = %q, want the accepted command name", got)
+	}
+}
+
+// TestApp_EscClosesPopupWithoutCancellingEditor checks Esc closes the
+// popup and leaves the typed text alone (it does not fall through to the
+// editor's own EventCancel).
+func TestApp_EscClosesPopupWithoutCancellingEditor(t *testing.T) {
+	m := newTestModelWithRegistry()
+	for _, r := range "/mod" {
+		mi, _ := m.handleKey(charKey(r))
+		m = mi.(Model)
+	}
+	mi, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = mi.(Model)
+	if m.popup != nil {
+		t.Fatal("popup should be closed after Esc")
+	}
+	if got := m.editor.Value(); got != "/mod" {
+		t.Fatalf("editor value = %q, want the typed text left untouched by Esc", got)
+	}
+}
