@@ -1,0 +1,154 @@
+package editor
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/x/ansi"
+)
+
+// markerColumns is the number of columns View reserves for the marker
+// glyph plus the one space after it (`Marker + " "`, no second space —
+// see innerWidth's doc comment for why the TS source's own accounting
+// differs from this by that one space).
+func (m Model) markerColumns() int {
+	return ansi.StringWidth(m.styles.Marker) + 1
+}
+
+// innerWidth is the width handed to the wrapped textarea: the frame width
+// minus the marker-and-space prefix every content line gets in View.
+//
+// app.ts's BorderedEditor renders the textarea only one column narrower
+// than the frame, not two, because pi-tui's Editor already reserves a
+// leading space of its own (`paddingX: 1`) that Claude Code's marker sits
+// in front of — see app.ts:157-168's comment on why there is "no space
+// after the marker" there. bubbles/v2's textarea has no such paddingX, so
+// this package reserves the marker's own space explicitly instead of
+// relying on one the wrapped widget doesn't supply. The frame is
+// identical either way; only which side owns the gap differs.
+func (m Model) innerWidth(width int) int {
+	inner := width - m.markerColumns()
+	if inner < 1 {
+		inner = 1
+	}
+	return inner
+}
+
+// View renders the BorderedEditor frame: a full-width top rule, the
+// textarea's content lines each prefixed with the marker, and a full-width
+// bottom rule — ported from BorderedEditor.render (app.ts:157-179). Every
+// returned line is exactly width columns wide by ansi.StringWidth.
+func (m Model) View(width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	inner := m.innerWidth(width)
+
+	ta := m.ta // value type: SetWidth here does not mutate the receiver
+	ta.SetWidth(inner)
+
+	above, below := m.scrollHints(&ta)
+	body := strings.Split(ta.View(), "\n")
+
+	prefix := m.styles.Rule.Render(m.styles.Marker) + " "
+	empty := ta.Value() == ""
+
+	out := make([]string, 0, len(body)+2)
+	out = append(out, m.rule(width, above))
+	for i, line := range body {
+		if empty && i == 0 {
+			line = m.splicePlaceholder(line, inner)
+		} else {
+			line = fitWidth(line, inner)
+		}
+		out = append(out, prefix+line)
+	}
+	out = append(out, m.rule(width, below))
+	return out
+}
+
+// rule draws one full-width horizontal rule, with an optional centred
+// scroll hint spliced in — pi-tui's "─── ↑ 3 more ───" (app.ts's comment on
+// fullWidthRule), ported here as the same shape rather than the identical
+// string, since pi-tui's own glyph choice is not specified beyond that
+// comment.
+func (m Model) rule(width int, hint string) string {
+	if hint == "" {
+		return m.styles.Rule.Render(strings.Repeat("─", width))
+	}
+	label := " " + hint + " "
+	remaining := width - ansi.StringWidth(label)
+	if remaining < 0 {
+		return m.styles.Rule.Render(strings.Repeat("─", width))
+	}
+	left := remaining / 2
+	right := remaining - left
+	return m.styles.Rule.Render(strings.Repeat("─", left) + label + strings.Repeat("─", right))
+}
+
+// scrollHints reports how many lines are scrolled out of view above and
+// below the textarea's current viewport, for rule() to draw. LineCount
+// counts logical (newline-delimited) lines rather than wrapped visual
+// rows, so this under-counts a single very long wrapped line the same way
+// pi-tui's own indicator does — both are an approximation of "how much
+// more is there", not an exact row count.
+func (m Model) scrollHints(ta interface {
+	LineCount() int
+	Height() int
+	ScrollYOffset() int
+},
+) (above, below string) {
+	total := ta.LineCount()
+	height := ta.Height()
+	offset := ta.ScrollYOffset()
+	if total <= height {
+		return "", ""
+	}
+	if offset > 0 {
+		above = fmt.Sprintf("↑ %d more", offset)
+	}
+	if remaining := total - height - offset; remaining > 0 {
+		below = fmt.Sprintf("↓ %d more", remaining)
+	}
+	return above, below
+}
+
+// splicePlaceholder splices the dim placeholder into an empty input's sole
+// content line, after the (hardware, invisible-in-the-string) cursor —
+// ported from BorderedEditor.placeholderLine (app.ts:208-214). Because this
+// package uses the hardware cursor rather than pi-tui's inline cursor
+// block, there is no cell to splice after; the placeholder simply starts
+// at column 0, which is where that inline block would otherwise have sat.
+func (m Model) splicePlaceholder(line string, inner int) string {
+	trimmed := strings.TrimRight(line, " ")
+	room := inner - ansi.StringWidth(trimmed)
+	if room < 0 {
+		room = 0
+	}
+	text := []rune(DefaultPlaceholder)
+	if room < len(text) {
+		text = text[:room]
+	}
+	withPlaceholder := trimmed + m.styles.Placeholder.Render(string(text))
+	pad := inner - ansi.StringWidth(withPlaceholder)
+	if pad < 0 {
+		pad = 0
+	}
+	return withPlaceholder + strings.Repeat(" ", pad)
+}
+
+// fitWidth defensively normalizes a rendered content line to exactly want
+// columns. In practice bubbles/v2's textarea already pads/truncates every
+// line to its configured width (verified against v2.2.1's source), so this
+// is a belt-and-suspenders check for the width invariant the render tests
+// assert on, not a routine code path.
+func fitWidth(line string, want int) string {
+	w := ansi.StringWidth(line)
+	if w == want {
+		return line
+	}
+	if w > want {
+		return ansi.Truncate(line, want, "")
+	}
+	return line + strings.Repeat(" ", want-w)
+}
