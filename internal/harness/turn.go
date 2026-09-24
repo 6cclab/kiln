@@ -202,7 +202,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 			}
 			return l.finishFailed(operationID, tip, err)
 		}
-		l.h.events.Emit(Event{Type: EventMessageEnd, Lane: l.name, OperationID: operationID, EntryID: responseEntryID})
+		l.h.events.Emit(Event{Type: EventMessageEnd, Lane: l.name, OperationID: operationID, EntryID: responseEntryID, Message: final})
 		l.invokeAfterResponse(ctx, final)
 
 		toolCalls := msg.ToolCallsOf(final.Content)

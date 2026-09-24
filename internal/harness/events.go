@@ -88,6 +88,8 @@ type Event struct {
 
 	// message_update
 	StreamEvent *msg.StreamEvent
+	// message_end: the completed assistant message, as pi's message_end carries.
+	Message *msg.AssistantMessage
 
 	// tool_start/tool_update/tool_end
 	ToolCallID string
