@@ -324,8 +324,14 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		if ev.ToolResult != nil && ev.ToolResult.IsError {
 			view.Status = CallError
 		}
-		lines := append([]string{""}, RenderToolCall(view)...)
-		b.Commit(lines)
+		// Rendered on the Update goroutine (like markdown) so result lines
+		// are fitted to the live width, and so tool calls and assistant
+		// text commit in the order they were sent.
+		b.Send(msgCommitToolCall{View: view})
+		if ev.ToolName == "exit_plan_mode" {
+			// Approving a plan moves the gate's mode; the footer re-reads it.
+			b.Send(MsgRefreshMode{})
+		}
 
 	case harness.EventUsage:
 		var contextUsed *int
@@ -357,6 +363,15 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 // (not here) because it needs the live terminal width, which only app.go
 // tracks.
 type msgCommitMarkdown struct{ Text string }
+
+// msgCommitToolCall asks the app to render a finished tool call at the
+// current width and commit it.
+type msgCommitToolCall struct{ View ToolCallView }
+
+// MsgRefreshMode asks the app to re-read the gate's permission mode into
+// the footer, after something other than Shift+Tab changed it (a plan
+// approval). Mirrors app.ts's refreshStatus() on approve.
+type MsgRefreshMode struct{}
 
 func (b *Bridge) handleStreamEvent(se *msg.StreamEvent, ts *turnState) {
 	if se == nil {

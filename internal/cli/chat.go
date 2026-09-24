@@ -399,6 +399,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// resolvePermissionMode already folded in above).
 	planController := agent.NewPlanController()
 	planController.SetActive(permissionMode == claudesettings.ModePlan)
+	// Approving a plan leaves plan mode into the chosen mode, on the gate
+	// itself (src/cli.ts:215-217: onApprove -> permissionGate.setMode).
+	// Without this the gate stayed read-only after approval while the tool
+	// result claimed otherwise.
+	planController.OnApprove = func(mode string) {
+		gate.SetMode(claudesettings.PermissionMode(mode))
+	}
 	// Bound to the TUI once it starts, exactly as cli.ts reassigns
 	// approvePlan from runApp's onPlanApprover callback (src/cli.ts:675-677).
 	// Until then, and for the whole of print mode, every plan is reported

@@ -240,6 +240,16 @@ func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case msgCommitToolCall:
+		if m.cfg.Bridge != nil {
+			lines := FitLines(RenderToolCall(msg.View), m.contentWidth(), "     ")
+			m.cfg.Bridge.Commit(append([]string{""}, lines...))
+		}
+		return m, nil
+
+	case MsgRefreshMode:
+		return m.refreshMode(), nil
+
 	case MsgThinking:
 		return m.handleThinking(msg), nil
 
@@ -356,6 +366,17 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 		m.cfg.Bridge.Commit(lines)
 	}
 	m.footer.SetNote("")
+	return m.refreshMode()
+}
+
+// refreshMode re-reads the gate's permission mode into the footer, as
+// app.ts's refreshStatus does after a plan approval and at turn end.
+func (m Model) refreshMode() Model {
+	if m.cfg.Gate == nil {
+		return m
+	}
+	mode := string(m.cfg.Gate.Mode())
+	m.footer.Apply(StatusPatch{Mode: &mode})
 	return m
 }
 
