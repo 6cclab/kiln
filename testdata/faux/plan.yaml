@@ -1,0 +1,8 @@
+model: faux-1
+steps:
+  - text: "Here is my plan."
+  - tool_call: {name: exit_plan_mode, args: {plan: "1. Read math.js\n2. Fix add()"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Plan handled."
+        usage: {input: 200, output: 20}

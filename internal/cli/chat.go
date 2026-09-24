@@ -30,6 +30,7 @@ import (
 	"github.com/andrepato/harness/internal/budget"
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
+	claudekeybindings "github.com/andrepato/harness/internal/claude/keybindings"
 	claudememory "github.com/andrepato/harness/internal/claude/memory"
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/permission"
@@ -57,16 +58,15 @@ const defaultModel = "ollama/qwen3.8:latest"
 // defaultSystemPrompt is cli.ts's fallback when --system-prompt is absent.
 const defaultSystemPrompt = "You are a coding assistant operating in a terminal."
 
-// buildRegistry constructs the provider registry chat.go and suslashcommands.go
-// both need: the two built-in API clients (Anthropic, OpenAI), Ollama
+// buildRegistry constructs the provider registry chat.go and subcommands.go
+// both need: every provider in the vendored pi-ai catalog, Ollama
 // (discovering against OLLAMA_HOST/OLLAMA_BASE_URL), and the faux test
 // provider when HARNESS_FAUX_ADDR is set. Shared with cmd/harness-providers's
 // former buildRegistry, now folded in here.
 func buildRegistry() *provider.Registry {
 	store := auth.NewFileCredentialStore("")
 	reg := provider.NewRegistry(store)
-	reg.Register(builtin.NewAnthropicProvider(store))
-	reg.Register(builtin.NewOpenAIProvider(store))
+	builtin.RegisterAll(reg, store)
 	reg.Register(ollama.New(ollamaOptionsFromEnv()))
 	if fp, ok := fauxprovider.New(); ok {
 		reg.Register(fp)
@@ -399,16 +399,19 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// resolvePermissionMode already folded in above).
 	planController := agent.NewPlanController()
 	planController.SetActive(permissionMode == claudesettings.ModePlan)
-	// Bound to the TUI in cli.ts (approvePlan is reassigned once runApp
-	// starts); this port has no interactive TUI yet (phase 7), so there is
-	// nobody to ask, and every plan is reported back exactly as cli.ts's
-	// own fallback does: "No interactive approval available. Describe the
-	// plan in your reply instead." (src/cli.ts:221-222).
-	approvePlan := func(ctx context.Context, plan string) (tools.PlanDecision, error) {
+	// Bound to the TUI once it starts, exactly as cli.ts reassigns
+	// approvePlan from runApp's onPlanApprover callback (src/cli.ts:675-677).
+	// Until then, and for the whole of print mode, every plan is reported
+	// back with cli.ts's own fallback: "No interactive approval available.
+	// Describe the plan in your reply instead." (src/cli.ts:221-222).
+	planApprover := &rebindable[tools.PlanApprover]{fn: func(ctx context.Context, plan string) (tools.PlanDecision, error) {
 		return tools.PlanDecision{
 			Kind:     tools.PlanDecisionRevise,
 			Feedback: "No interactive approval available. Describe the plan in your reply instead.",
 		}, nil
+	}}
+	approvePlan := func(ctx context.Context, plan string) (tools.PlanDecision, error) {
+		return planApprover.get()(ctx, plan)
 	}
 	exitPlanModeTool := tools.ExitPlanModeTool(planController, approvePlan)
 
@@ -470,7 +473,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 
 	sessionID := started.SessionID
 	transcriptPath := started.TranscriptPath
-	notice := hookNoticeSink(stderr)
+	// Rebound to the TUI's transcript once it starts (cli.ts's
+	// onHookNotices callback, src/cli.ts:681-683); stderr until then.
+	hookNotice := &rebindable[func(string)]{fn: hookNoticeSink(stderr)}
+	notice := func(message string) { hookNotice.get()(message) }
 
 	// ContextUsed (for /usage) tracks the last usage event's total token
 	// count; nil until the first one arrives.
@@ -629,19 +635,31 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			_ = started.Harness.Close()
 			return 2
 		}
+		// User keybindings, as Claude Code reads them, reported before the
+		// TUI is built (src/cli.ts:664-669).
+		keys := claudekeybindings.Load(claudekeybindings.Path())
+		if keys.Error != "" {
+			fmt.Fprintf(stderr, "keybindings: %s\n", keys.Error)
+		}
+		for _, conflict := range keys.Conflicts {
+			fmt.Fprintf(stderr, "keybindings: %s\n", conflict)
+		}
 		exitCode := RunInteractive(ctx, InteractiveDeps{
-			Cwd:            cwd,
-			ModelLabel:     providerID + "/" + modelID,
-			Resolved:       resolved,
-			Started:        started,
-			Gate:           gate,
-			PlanController: planController,
-			Registry:       registry,
-			Env:            env,
-			Dispatcher:     dispatcher,
-			HookConfig:     hookConfig,
-			SessionStart:   sessionStart,
-			ScreenReader:   args.ScreenReader,
+			Cwd:             cwd,
+			Keybindings:     keys.Bindings,
+			SetPlanApprover: func(fn tools.PlanApprover) { planApprover.set(fn) },
+			SetHookNotice:   func(fn func(string)) { hookNotice.set(fn) },
+			ModelLabel:      providerID + "/" + modelID,
+			Resolved:        resolved,
+			Started:         started,
+			Gate:            gate,
+			PlanController:  planController,
+			Registry:        registry,
+			Env:             env,
+			Dispatcher:      dispatcher,
+			HookConfig:      hookConfig,
+			SessionStart:    sessionStart,
+			ScreenReader:    args.ScreenReader,
 		}, stdout, stderr, stdin)
 
 		shells.KillAll()
@@ -820,4 +838,25 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 		return 0
 	}
 	return 1
+}
+
+// rebindable is a function slot the TUI rebinds after the pieces that
+// call it (the exit_plan_mode tool, the tool-guard hooks) were already
+// constructed with a value that reads through it. It stands in for
+// cli.ts's plain `let approvePlan = ...` that runApp's callbacks reassign.
+type rebindable[T any] struct {
+	mu sync.Mutex
+	fn T
+}
+
+func (r *rebindable[T]) get() T {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fn
+}
+
+func (r *rebindable[T]) set(fn T) {
+	r.mu.Lock()
+	r.fn = fn
+	r.mu.Unlock()
 }

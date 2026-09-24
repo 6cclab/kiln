@@ -28,6 +28,7 @@ import (
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/tools"
 	"github.com/andrepato/harness/internal/tui"
 	"github.com/andrepato/harness/internal/tui/editor"
 )
@@ -49,6 +50,14 @@ type InteractiveDeps struct {
 	HookConfig     claudehooks.Config
 	SessionStart   claudehooks.Outcome
 	ScreenReader   bool
+	// Keybindings is the raw action->key map from ~/.claude/keybindings.json
+	// (nil when absent). Applied to the editor once it supports overrides.
+	Keybindings map[string]string
+	// SetPlanApprover and SetHookNotice rebind chat.go's exit_plan_mode
+	// approver and tool-guard hook notice sink to the TUI, the way cli.ts's
+	// onPlanApprover/onHookNotices callbacks do. Either may be nil.
+	SetPlanApprover func(tools.PlanApprover)
+	SetHookNotice   func(func(string))
 }
 
 // RunInteractive drives the Bubbletea v2 program and blocks until the
@@ -66,6 +75,16 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	defer unwire()
 
 	deps.Gate.SetPrompter(bridge.Prompter(deps.Cwd))
+	if deps.SetPlanApprover != nil {
+		approve := bridge.PlanApprover()
+		deps.SetPlanApprover(func(ctx context.Context, plan string) (tools.PlanDecision, error) {
+			d, err := approve(ctx, plan)
+			return tools.PlanDecision{Kind: tools.PlanDecisionKind(d.Kind), Mode: d.Mode, Feedback: d.Feedback}, err
+		})
+	}
+	if deps.SetHookNotice != nil {
+		deps.SetHookNotice(bridge.HookNotice)
+	}
 	if deps.Dispatcher != nil {
 		deps.Dispatcher.OnEvent = bridge.SubagentSink()
 	}
