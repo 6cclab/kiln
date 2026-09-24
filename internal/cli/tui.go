@@ -26,6 +26,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/permission"
 	slashcommands "github.com/andrepato/harness/internal/commands"
 	"github.com/andrepato/harness/internal/execenv"
+	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/tools"
@@ -50,6 +51,9 @@ type InteractiveDeps struct {
 	HookConfig     claudehooks.Config
 	SessionStart   claudehooks.Outcome
 	ScreenReader   bool
+	// MCPStatuses is every configured server's connect outcome; failures
+	// become one dim transcript line after the banner.
+	MCPStatuses []mcpgate.ServerStatus
 	// Keybindings is the raw action->key map from ~/.claude/keybindings.json
 	// (nil when absent). Applied to the editor once it supports overrides.
 	Keybindings map[string]string
@@ -182,6 +186,9 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		tui.Green(tui.G().Call) + " " + tui.Bold("harness") + " " + tui.Dim("— "+deps.ModelLabel),
 		tui.Dim("  Type / for commands, @ to reference a file, or just ask."),
 	})
+	if notice := mcpFailureNotice(deps.MCPStatuses); notice != "" {
+		bridge.Commit([]string{tui.Dim("  " + notice)})
+	}
 
 	deps.Started.OnModelChanged = func(ctx context.Context, resolved provider.Resolved) {
 		// provider/model, the same label the footer showed at startup and
@@ -244,4 +251,27 @@ func runGit(ctx context.Context, cwd string, args ...string) (string, error) {
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	return string(out), err
+}
+
+// mcpFailureNotice is the one-line, dim aside for servers that did not
+// connect: the session degrades to the servers that did, and /mcp has the
+// details. Empty when everything connected.
+func mcpFailureNotice(statuses []mcpgate.ServerStatus) string {
+	var failed []mcpgate.ServerStatus
+	for _, s := range statuses {
+		if !s.OK {
+			failed = append(failed, s)
+		}
+	}
+	switch len(failed) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("mcp: %s unavailable (%s) · /mcp for details", failed[0].Name, failed[0].Error)
+	}
+	names := make([]string, len(failed))
+	for i, s := range failed {
+		names[i] = s.Name
+	}
+	return fmt.Sprintf("mcp: %d servers unavailable (%s) · /mcp for details", len(failed), strings.Join(names, ", "))
 }

@@ -325,7 +325,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	hub := mcpgate.NewHub()
 	mcpConfigs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
 	hub.ConnectAll(ctx, mcpConfigs)
-	warnFailedServers(stderr, hub.Statuses())
+	if args.Print {
+		// Interactive mode reports failures inside the transcript instead
+		// (internal/cli/tui.go), so nothing spills onto the glass before
+		// the TUI paints.
+		warnFailedServers(stderr, hub.Statuses())
+	}
 	defer hub.Close(context.Background())
 
 	activePosture := resolvePosture()
@@ -710,6 +715,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		exitCode := RunInteractive(ctx, InteractiveDeps{
 			Cwd:             cwd,
 			Keybindings:     keys.Bindings,
+			MCPStatuses:     hub.Statuses(),
 			SetPlanApprover: func(fn tools.PlanApprover) { planApprover.set(fn) },
 			SetHookNotice:   func(fn func(string)) { hookNotice.set(fn) },
 			ModelLabel:      providerID + "/" + modelID,

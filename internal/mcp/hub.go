@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -49,11 +52,60 @@ type McpTool struct {
 // ServerStatus is the outcome of connecting to one configured server.
 // Mirrors client.ts's ServerStatus.
 type ServerStatus struct {
-	Name      string
-	OK        bool
+	Name string
+	OK   bool
+	// Error is a one-line, human-readable reason when OK is false
+	// ("command not found: /path/tsx"), for the transcript notice, /mcp
+	// and /doctor. Detail is the underlying error text in full.
 	Error     string
+	Detail    string
 	ToolCount int
 	Ms        int64
+}
+
+// describeConnectError turns the SDK's and exec's error chains into the
+// one line a user can act on. The raw text is kept in ServerStatus.Detail.
+func describeConnectError(cfg ServerConfig, err error) string {
+	var pathErr *fs.PathError
+	switch {
+	case errors.Is(err, exec.ErrNotFound):
+		return fmt.Sprintf("command not found: %s", cfg.Command)
+	case errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrNotExist):
+		return fmt.Sprintf("command not found: %s", pathErr.Path)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Sprintf("no response within %s", connectTimeout())
+	}
+	text := err.Error()
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(lower, "connection refused"):
+		return "connection refused" + atURL(cfg)
+	case strings.Contains(lower, "no such host"):
+		return "host not found" + atURL(cfg)
+	case strings.Contains(lower, "unauthorized") || strings.Contains(text, " 401"):
+		return "unauthorized (check its token)" + atURL(cfg)
+	case strings.Contains(lower, "forbidden") || strings.Contains(text, " 403"):
+		return "forbidden" + atURL(cfg)
+	case strings.Contains(lower, "eof") || strings.Contains(lower, "exited") || strings.Contains(lower, "broken pipe"):
+		return "the server exited before it answered"
+	}
+	// Last resort: the innermost error, which is usually the useful one.
+	inner := err
+	for {
+		next := errors.Unwrap(inner)
+		if next == nil {
+			break
+		}
+		inner = next
+	}
+	return strings.TrimSpace(inner.Error())
+}
+
+func atURL(cfg ServerConfig) string {
+	if cfg.URL != "" {
+		return " at " + cfg.URL
+	}
+	return ""
 }
 
 // serverConn is what Hub keeps per connected server: the live session, and
@@ -121,7 +173,7 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 		transport, cmd, err := buildTransport(cfg)
 		if err != nil {
 			h.mu.Lock()
-			h.statuses = append(h.statuses, ServerStatus{Name: name, OK: false, Error: err.Error(), Ms: elapsedMs(started)})
+			h.statuses = append(h.statuses, ServerStatus{Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: err.Error(), Ms: elapsedMs(started)})
 			h.mu.Unlock()
 			continue
 		}
@@ -140,7 +192,7 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 			killGroup(cmd)
 			h.mu.Lock()
 			h.statuses = append(h.statuses, ServerStatus{
-				Name: name, OK: false, Error: fmt.Sprintf("%s connect timed out or failed: %s", name, err), Ms: elapsedMs(started),
+				Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: fmt.Sprintf("connect: %s", err), Ms: elapsedMs(started),
 			})
 			h.mu.Unlock()
 			continue
@@ -154,7 +206,7 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 			killGroup(cmd)
 			h.mu.Lock()
 			h.statuses = append(h.statuses, ServerStatus{
-				Name: name, OK: false, Error: fmt.Sprintf("%s listTools timed out or failed: %s", name, err), Ms: elapsedMs(started),
+				Name: name, OK: false, Error: "connected, but listing its tools failed: " + describeConnectError(cfg, err), Detail: fmt.Sprintf("listTools: %s", err), Ms: elapsedMs(started),
 			})
 			h.mu.Unlock()
 			continue
