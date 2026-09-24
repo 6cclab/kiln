@@ -23,6 +23,31 @@ var anthropicLogin = func(ctx context.Context, ia oauth.Interaction) (oauth.Anth
 	return oauth.LoginAnthropic(ctx, ia)
 }
 
+// The remaining OAuth flows are package vars for the same reason: tests
+// inject fakes (or point the real flow's endpoints at an httptest server via
+// each flow's SetXxxURLsForTesting/WithXxxCallbackPort helpers) rather than
+// hitting the network.
+var (
+	openaiCodexLogin = func(ctx context.Context, ia oauth.FlowInteraction) (oauth.OpenAICodexToken, error) {
+		return oauth.LoginOpenAICodex(ctx, ia)
+	}
+	githubCopilotLogin = func(ctx context.Context, ia oauth.FlowInteraction, domain string) (oauth.GitHubCopilotCredential, error) {
+		return oauth.LoginGitHubCopilot(ctx, ia, domain)
+	}
+	kimiLogin = func(ctx context.Context, ia oauth.FlowInteraction) (oauth.Token, error) {
+		return oauth.LoginKimi(ctx, ia)
+	}
+	openrouterLogin = func(ctx context.Context, ia oauth.FlowInteraction) (string, error) {
+		return oauth.LoginOpenRouter(ctx, ia)
+	}
+	xaiLogin = func(ctx context.Context, ia oauth.FlowInteraction) (oauth.Token, error) {
+		return oauth.LoginXai(ctx, ia)
+	}
+	radiusLogin = func(ctx context.Context, ia oauth.FlowInteraction, name, gateway string) (oauth.Token, error) {
+		return oauth.LoginRadius(ctx, ia, name, gateway)
+	}
+)
+
 // ProviderAuthStatus is one provider's auth kind and whether it is
 // currently configured, mirroring cli.ts's listProviders row.
 type ProviderAuthStatus struct {
@@ -58,6 +83,28 @@ func (a *oauthInteractionAdapter) PromptManualCode(ctx context.Context, message,
 	return a.ia.Prompt(ctx, auth.Prompt{Type: auth.PromptManualCode, Message: message, Placeholder: placeholder})
 }
 
+// NotifyDeviceCode and PromptSelect implement oauth.FlowInteraction, the
+// wider surface the device-code and multi-method flows (OpenAI Codex,
+// GitHub Copilot, Kimi, xAI, Radius) need beyond the narrower oauth.
+// Interaction LoginAnthropic uses.
+func (a *oauthInteractionAdapter) NotifyDeviceCode(userCode, verificationURI string, intervalSeconds, expiresInSeconds int) {
+	a.ia.Notify(auth.Event{
+		Type:             auth.EventDeviceCode,
+		UserCode:         userCode,
+		VerificationURI:  verificationURI,
+		IntervalSeconds:  intervalSeconds,
+		ExpiresInSeconds: expiresInSeconds,
+	})
+}
+
+func (a *oauthInteractionAdapter) PromptSelect(ctx context.Context, message string, options []oauth.SelectOption) (string, error) {
+	opts := make([]auth.SelectOption, len(options))
+	for i, o := range options {
+		opts[i] = auth.SelectOption{ID: o.ID, Label: o.Label}
+	}
+	return a.ia.Prompt(ctx, auth.Prompt{Type: auth.PromptSelect, Message: message, Options: opts})
+}
+
 // Login logs providerID in: the OAuth flow if the provider declares one
 // (only "anthropic" has a flow implemented this phase), else an API-key
 // prompt via ia.Prompt(secret). The resulting credential is persisted
@@ -91,25 +138,83 @@ func Login(ctx context.Context, reg *provider.Registry, store auth.CredentialSto
 	return nil
 }
 
+func storeOAuthCredential(store auth.CredentialStore, providerID string, refresh, access string, expires int64) error {
+	return store.Modify(providerID, func(_ *auth.Credential) (*auth.Credential, error) {
+		return &auth.Credential{OAuth: &auth.OAuthCredential{Refresh: refresh, Access: access, Expires: expires}}, nil
+	})
+}
+
 func loginOAuth(ctx context.Context, store auth.CredentialStore, providerID string, ia auth.Interaction) error {
-	if providerID != "anthropic" {
-		// No other provider's OAuth flow is implemented this phase
-		// (github-copilot, openai-codex, kimi-coding, ... in pi-ai are out
-		// of scope; see builtin.implementedAPIs).
+	adapter := &oauthInteractionAdapter{ia: ia}
+	switch providerID {
+	case "anthropic":
+		tok, err := anthropicLogin(ctx, adapter)
+		if err != nil {
+			return err
+		}
+		return storeOAuthCredential(store, providerID, tok.Refresh, tok.Access, tok.Expires)
+
+	case "openai-codex":
+		tok, err := openaiCodexLogin(ctx, adapter)
+		if err != nil {
+			return err
+		}
+		ia.Notify(auth.Event{Type: auth.EventInfo, Message: fmt.Sprintf("Signed in as ChatGPT account %s.", tok.AccountID)})
+		return storeOAuthCredential(store, providerID, tok.Refresh, tok.Access, tok.Expires)
+
+	case "github-copilot":
+		domain, err := ia.Prompt(ctx, auth.Prompt{
+			Type:        auth.PromptText,
+			Message:     "GitHub Enterprise URL/domain (blank for github.com)",
+			Placeholder: "company.ghe.com",
+		})
+		if err != nil {
+			return err
+		}
+		cred, err := githubCopilotLogin(ctx, adapter, domain)
+		if err != nil {
+			return err
+		}
+		return storeOAuthCredential(store, providerID, cred.Refresh, cred.Access, cred.Expires)
+
+	case "kimi-coding":
+		tok, err := kimiLogin(ctx, adapter)
+		if err != nil {
+			return err
+		}
+		return storeOAuthCredential(store, providerID, tok.Refresh, tok.Access, tok.Expires)
+
+	case "openrouter":
+		// OpenRouter's OAuth exchange yields a permanent, user-controlled
+		// API key, not a refresh/access/expiry triple -- stored as a plain
+		// api_key credential, matching this phase's brief (pi itself boxes
+		// it as `{ type: "oauth", refresh: "", expires: MAX_SAFE_INTEGER }`;
+		// storing it as what it actually is avoids a bogus refresh cycle).
+		key, err := openrouterLogin(ctx, adapter)
+		if err != nil {
+			return err
+		}
+		return store.Modify(providerID, func(_ *auth.Credential) (*auth.Credential, error) {
+			return &auth.Credential{APIKey: &auth.APIKeyCredential{Key: key}}, nil
+		})
+
+	case "xai":
+		tok, err := xaiLogin(ctx, adapter)
+		if err != nil {
+			return err
+		}
+		return storeOAuthCredential(store, providerID, tok.Refresh, tok.Access, tok.Expires)
+
+	case "radius":
+		tok, err := radiusLogin(ctx, adapter, "Radius", oauth.RadiusDefaultGateway)
+		if err != nil {
+			return err
+		}
+		return storeOAuthCredential(store, providerID, tok.Refresh, tok.Access, tok.Expires)
+
+	default:
 		return fmt.Errorf("no OAuth login flow implemented for provider %q", providerID)
 	}
-	adapter := &oauthInteractionAdapter{ia: ia}
-	tok, err := anthropicLogin(ctx, adapter)
-	if err != nil {
-		return err
-	}
-	return store.Modify(providerID, func(_ *auth.Credential) (*auth.Credential, error) {
-		return &auth.Credential{OAuth: &auth.OAuthCredential{
-			Refresh: tok.Refresh,
-			Access:  tok.Access,
-			Expires: tok.Expires,
-		}}, nil
-	})
 }
 
 func loginAPIKey(ctx context.Context, store auth.CredentialStore, providerID, label string, ia auth.Interaction) error {

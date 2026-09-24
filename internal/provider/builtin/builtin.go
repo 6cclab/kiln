@@ -23,28 +23,67 @@ import (
 	"github.com/andrepato/harness/internal/provider/catalog"
 )
 
-// This phase registers Provider implementations for exactly the two API
-// shapes with a working streaming client: anthropic-messages and
-// openai-completions. Every other api value present in the vendored catalog
-// (openai-responses, google-generative-ai, bedrock-converse-stream, ...) is
-// catalog data the harness can read (models, cost, context windows) but
-// cannot yet stream; KnownNotStreamable lists those provider ids so
-// `harness providers` can show them as "known, not yet streamable" rather
-// than silently omitting them.
-
-// anthropicEnvKeys mirrors pi-ai's env-api-keys.js getApiKeyEnvVars("anthropic"):
-// ANTHROPIC_AUTH_TOKEN participates in env discovery but is sent as
-// Authorization: Bearer rather than an api key.
-var anthropicEnvKeys = []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"}
-
-// openaiEnvKeys mirrors env-api-keys.js's envMap["openai"].
-var openaiEnvKeys = []string{"OPENAI_API_KEY"}
+// Every provider in the vendored catalog is registered (RegisterAll), and
+// all ten pi-ai API shapes have a streaming client. implementedAPIs is kept
+// as the single gate so that an api value the catalog gains before a client
+// exists is reported as "known, not yet streamable" by Stream and
+// KnownNotStreamable rather than silently omitted.
 
 // implementedAPIs are the api values this phase can stream. Every other
-// provider id in the catalog is exposed as catalog data only.
+// provider id in the catalog is exposed as catalog data only (Models()
+// still lists every catalog model regardless of api; Stream reports
+// ErrNotYetStreamable for a model whose api is not in this set).
 var implementedAPIs = map[provider.Api]bool{
-	provider.ApiAnthropicMessages: true,
-	provider.ApiOpenAICompletions: true,
+	provider.ApiAnthropicMessages:     true,
+	provider.ApiOpenAICompletions:     true,
+	provider.ApiOpenAIResponses:       true,
+	provider.ApiOpenAICodexResponses:  true,
+	provider.ApiAzureOpenAIResponses:  true,
+	provider.ApiMistralConversations:  true,
+	provider.ApiGoogleGenerativeAI:    true,
+	provider.ApiGoogleVertex:          true,
+	provider.ApiBedrockConverseStream: true,
+	provider.ApiPiMessages:            true,
+}
+
+// oauthRefresher refreshes a stored OAuth credential for one provider id,
+// returning the rotated (refresh, access, expires) triple. Every provider
+// in catalog.Providers with AuthKind==AuthOAuth and a refresh flow this
+// phase implements has an entry here; OpenRouter is deliberately absent
+// (its OAuth exchange yields a permanent API key stored as an api_key
+// credential, never an OAuthCredential -- see login.go).
+type oauthRefresher func(ctx context.Context, refreshToken string) (oauth.Token, error)
+
+var oauthRefreshers = map[string]oauthRefresher{
+	"anthropic": func(ctx context.Context, refreshToken string) (oauth.Token, error) {
+		tok, err := oauth.RefreshAnthropicToken(ctx, refreshToken)
+		if err != nil {
+			return oauth.Token{}, err
+		}
+		return oauth.Token(tok), nil
+	},
+	"openai-codex": func(ctx context.Context, refreshToken string) (oauth.Token, error) {
+		tok, err := oauth.RefreshOpenAICodexToken(ctx, refreshToken)
+		if err != nil {
+			return oauth.Token{}, err
+		}
+		return tok.Token, nil
+	},
+	"github-copilot": func(ctx context.Context, refreshToken string) (oauth.Token, error) {
+		// Enterprise domain is not persisted this phase (auth.OAuthCredential
+		// has no field for it); every stored GitHub Copilot credential
+		// refreshes against github.com. See github_copilot.go's doc comment.
+		cred, err := oauth.RefreshGitHubCopilotToken(ctx, refreshToken, "")
+		if err != nil {
+			return oauth.Token{}, err
+		}
+		return cred.Token, nil
+	},
+	"kimi-coding": oauth.RefreshKimiToken,
+	"xai":         oauth.RefreshXaiToken,
+	"radius": func(ctx context.Context, refreshToken string) (oauth.Token, error) {
+		return oauth.RefreshRadiusToken(ctx, oauth.RadiusDefaultGateway, refreshToken)
+	},
 }
 
 // catalogProvider is a provider.Provider backed by catalog.All()'s static
@@ -65,49 +104,84 @@ type catalogProvider struct {
 
 	anthropicClient api.AnthropicClient
 	openaiClient    api.OpenAICompletionsClient
+	responsesClient api.OpenAIResponsesClient
+	codexClient     api.OpenAICodexResponsesClient
+	azureClient     api.AzureOpenAIResponsesClient
+	mistralClient   api.MistralConversationsClient
+	googleClient    api.GoogleGenerativeAIClient
+	vertexClient    api.GoogleVertexClient
+	bedrockClient   api.BedrockConverseStreamClient
+	piClient        api.PiMessagesClient
 }
 
+// newCatalogProvider builds a provider over every catalog model for id
+// (unfiltered by api: Models() must list a provider's full catalog even
+// where Stream cannot yet drive every model's api, so `harness models <id>`
+// is complete). Stream itself reports ErrNotYetStreamable for a model whose
+// api is not in implementedAPIs.
 func newCatalogProvider(id, name string, envKeys []string, creds auth.CredentialStore) *catalogProvider {
-	var models []provider.Model
-	for _, m := range catalog.All()[id] {
-		if implementedAPIs[m.Api] {
-			models = append(models, m)
-		}
-	}
+	models := catalog.All()[id]
 	return &catalogProvider{id: id, name: name, envKeys: envKeys, models: models, creds: creds}
 }
 
-// NewAnthropicProvider builds the built-in Anthropic provider (models with
-// api=="anthropic-messages" from the vendored catalog).
-func NewAnthropicProvider(creds auth.CredentialStore) provider.Provider {
-	p := newCatalogProvider("anthropic", "Anthropic", anthropicEnvKeys, creds)
-	// cli.ts's login() prefers a provider's OAuth flow over its api-key
-	// flow whenever both exist, since a Claude Pro/Max plan is what most
-	// people have; IsSubscription drives cli.ts's "subscription" vs
-	// "oauth" auth-kind column.
-	p.oauth = true
-	p.isSubscription = true
+// newProviderFromConfig builds a catalogProvider from a catalog.Providers
+// entry, wiring its AuthKind/IsSubscription straight from the vendored
+// pi-ai auth spec that entry was ported from.
+func newProviderFromConfig(cfg catalog.ProviderConfig, creds auth.CredentialStore) *catalogProvider {
+	p := newCatalogProvider(cfg.ID, cfg.Name, cfg.EnvVars, creds)
+	p.oauth = cfg.AuthKind == catalog.AuthOAuth
+	p.isSubscription = cfg.IsSubscription
 	return p
 }
 
-// NewOpenAIProvider builds the built-in OpenAI provider. pi's own "openai"
-// provider id is primarily openai-responses; this phase only streams
-// openai-completions, so only the catalog's openai-completions models under
-// the "openai" provider id are exposed here.
-func NewOpenAIProvider(creds auth.CredentialStore) provider.Provider {
-	return newCatalogProvider("openai", "OpenAI", openaiEnvKeys, creds)
+// NewAnthropicProvider builds the built-in Anthropic provider.
+func NewAnthropicProvider(creds auth.CredentialStore) provider.Provider {
+	cfg, _ := catalog.ProviderConfigByID("anthropic")
+	return newProviderFromConfig(cfg, creds)
 }
 
-// KnownNotStreamable lists every catalog provider id besides "anthropic" and
-// "openai" (this phase's two implemented shapes), for `harness providers` to
-// list as known but not yet streamable.
+// NewOpenAIProvider builds the built-in OpenAI provider.
+func NewOpenAIProvider(creds auth.CredentialStore) provider.Provider {
+	cfg, _ := catalog.ProviderConfigByID("openai")
+	return newProviderFromConfig(cfg, creds)
+}
+
+// RegisterAll registers every provider id in catalog.Providers (which
+// providers_test.go asserts covers exactly the vendored catalog's ids) into
+// reg, backed by store. This is how `harness providers`/`harness models
+// <id>` are meant to see all 41 catalog providers; internal/cli owns
+// whether/where it calls this (out of this phase's file ownership).
+func RegisterAll(reg *provider.Registry, store auth.CredentialStore) {
+	for _, cfg := range catalog.Providers {
+		reg.Register(newProviderFromConfig(cfg, store))
+	}
+}
+
+// IsStreamable reports whether providerID has at least one model whose api
+// this phase can actually drive (Stream), as opposed to catalog data it can
+// only list.
+func IsStreamable(providerID string) bool {
+	for _, m := range catalog.All()[providerID] {
+		if implementedAPIs[m.Api] {
+			return true
+		}
+	}
+	return false
+}
+
+// KnownNotStreamable lists every catalog provider id with zero models whose
+// api this phase implements (anthropic-messages, openai-completions), for
+// `harness providers` to list as known but not yet streamable. Computed
+// from the vendored catalog data, not hardcoded to "everything but
+// anthropic/openai": a provider like OpenRouter or Vercel AI Gateway, whose
+// vendored models are anthropic-messages/openai-completions shaped, is
+// streamable even though this phase did not write its api client.
 func KnownNotStreamable() []string {
 	var out []string
 	for _, id := range catalog.ProviderIDs() {
-		if id == "anthropic" || id == "openai" {
-			continue
+		if !IsStreamable(id) {
+			out = append(out, id)
 		}
-		out = append(out, id)
 	}
 	return out
 }
@@ -171,14 +245,16 @@ func (p *catalogProvider) resolveAuth(ctx context.Context) (key string, isBearer
 	return "", false, nil
 }
 
-// refreshOAuthIfNeeded returns o unchanged if it is not yet within its
-// expiry margin (Expires already has pi's 5-minute margin baked in at
-// store time), else refreshes it under the store's per-provider lock,
+// refreshOAuthIfNeeded returns o unchanged if the provider has no refresh
+// flow (oauthRefreshers has no entry for it) or it is not yet within its
+// expiry margin (Expires already has each flow's own refresh margin baked
+// in at store time), else refreshes it under the store's per-provider lock,
 // double-checking expiry under that lock so two concurrent requests do not
 // both refresh, and persists the rotated tokens via store.Modify before
 // returning.
 func (p *catalogProvider) refreshOAuthIfNeeded(ctx context.Context, o *auth.OAuthCredential) (*auth.OAuthCredential, error) {
-	if p.id != "anthropic" || o == nil || time.Now().UnixMilli() < o.Expires {
+	refresher, ok := oauthRefreshers[p.id]
+	if !ok || o == nil || time.Now().UnixMilli() < o.Expires {
 		return o, nil
 	}
 	var refreshed *auth.OAuthCredential
@@ -190,9 +266,9 @@ func (p *catalogProvider) refreshOAuthIfNeeded(ctx context.Context, o *auth.OAut
 			refreshed = current.OAuth // another request already refreshed it
 			return nil, nil
 		}
-		tok, rerr := oauth.RefreshAnthropicToken(ctx, current.OAuth.Refresh)
+		tok, rerr := refresher(ctx, current.OAuth.Refresh)
 		if rerr != nil {
-			return nil, fmt.Errorf("anthropic OAuth refresh failed: %w", rerr)
+			return nil, fmt.Errorf("%s OAuth refresh failed: %w", p.id, rerr)
 		}
 		refreshed = &auth.OAuthCredential{Refresh: tok.Refresh, Access: tok.Access, Expires: tok.Expires}
 		return &auth.Credential{OAuth: refreshed}, nil
@@ -201,12 +277,15 @@ func (p *catalogProvider) refreshOAuthIfNeeded(ctx context.Context, o *auth.OAut
 		return nil, err
 	}
 	if refreshed == nil {
-		return nil, fmt.Errorf("anthropic OAuth credential was removed during refresh")
+		return nil, fmt.Errorf("%s OAuth credential was removed during refresh", p.id)
 	}
 	return refreshed, nil
 }
 
 func (p *catalogProvider) Stream(ctx context.Context, model provider.Model, transcript []msg.Message, opts provider.StreamOptions) (<-chan msg.StreamEvent, func() (*msg.AssistantMessage, error)) {
+	if !implementedAPIs[model.Api] {
+		return authErrorStream(model, fmt.Errorf("%s: model %q speaks %q, which has no streaming client yet (known, not yet streamable)", p.id, model.ID, model.Api))
+	}
 	key, isBearer, err := p.resolveAuth(ctx)
 	if err != nil {
 		return authErrorStream(model, err)
@@ -216,7 +295,23 @@ func (p *catalogProvider) Stream(ctx context.Context, model provider.Model, tran
 	switch model.Api {
 	case provider.ApiOpenAICompletions:
 		return p.openaiClient.Stream(ctx, model, transcript, opts, a)
-	default:
+	case provider.ApiOpenAIResponses:
+		return p.responsesClient.Stream(ctx, model, transcript, opts, a)
+	case provider.ApiOpenAICodexResponses:
+		return p.codexClient.Stream(ctx, model, transcript, opts, a)
+	case provider.ApiAzureOpenAIResponses:
+		return p.azureClient.Stream(ctx, model, transcript, opts, a)
+	case provider.ApiMistralConversations:
+		return p.mistralClient.Stream(ctx, model, transcript, opts, a)
+	case provider.ApiGoogleGenerativeAI:
+		return p.googleClient.Stream(ctx, model, transcript, opts, a)
+	case provider.ApiGoogleVertex:
+		return p.vertexClient.Stream(ctx, model, transcript, opts, a)
+	case provider.ApiBedrockConverseStream:
+		return p.bedrockClient.Stream(ctx, model, transcript, opts, a)
+	case provider.ApiPiMessages:
+		return p.piClient.Stream(ctx, model, transcript, opts, a)
+	default: // provider.ApiAnthropicMessages, guarded by implementedAPIs above
 		return p.anthropicClient.Stream(ctx, model, transcript, opts, a)
 	}
 }
