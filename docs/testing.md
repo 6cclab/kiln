@@ -204,3 +204,16 @@ commands) to `<path>`, so a bug seen once on a real run can be replayed
 deterministically afterward — including at a different terminal size,
 which is often when layout bugs actually reproduce — without needing the
 original model conversation again.
+
+### 5. Parity oracle — `make parity` (until cutover)
+
+`test/parity` runs the TypeScript `runApp` in-process (FakeTerminal piped into headless
+xterm, a real pi-ai `fauxProvider` fed from the same faux YAML) and the Go binary through
+the PTY driver, on the same action script, then diffs the rows after normalising elapsed
+seconds, the wall clock, token counts (pi-ai re-estimates usage rather than honouring the
+script's) and the spinner's animation frame. Cases live in `test/parity/cases/*.json` with
+their action scripts in `test/parity/scripts/`.
+
+It needs the TypeScript dependencies: `ln -s /path/to/main-checkout/node_modules node_modules`
+in the worktree (the link is git-ignored). Any row difference fails the run and prints a
+unified diff per screen. The oracle and the TypeScript source go away at cutover.
