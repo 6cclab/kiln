@@ -18,49 +18,31 @@ import (
 )
 
 // residentAll is gating.ts's own RESIDENT list, kept as a documented
-// constant even though this phase only ever passes a subset of it as
-// resident.
+// constant even though residentToolNames (below) may still drop
+// "session_search" when this process has no session index open.
 //
-// Only "bash", "read", "edit", "write", "todo_write" and (when
-// internal/search compiles) "session_search" exist as real tools in this
-// Go port as of phase 5. "exit_plan_mode", "task", "bash_background",
-// "bash_output" and "kill_shell" arrive in phase 6; listing them as
-// resident before the tool exists would advertise a capability the harness
-// cannot actually offer, so residentToolNames (below) filters this list
-// down to what is real right now.
+// As of phase 6 every name here names a real tool: "exit_plan_mode",
+// "task", "bash_background", "bash_output" and "kill_shell" all exist now
+// (internal/tools/planmode.go, task.go, backgroundshell.go), so the phase
+// 5 residentPhase6Only filter that used to hide them is gone.
 var residentAll = []string{
 	"bash", "read", "edit", "write",
 	"session_search",
 	"todo_write",
-	"exit_plan_mode",  // phase 6
-	"task",            // phase 6
-	"bash_background", // phase 6
-	"bash_output",     // phase 6
-	"kill_shell",      // phase 6
+	"exit_plan_mode",
+	"task",
+	"bash_background",
+	"bash_output",
+	"kill_shell",
 }
 
-// residentPhase6Only names residentAll's entries that arrive in phase 6:
-// listing them as resident before the tool exists would advertise a
-// capability the harness cannot actually offer.
-var residentPhase6Only = map[string]bool{
-	"exit_plan_mode":  true,
-	"task":            true,
-	"bash_background": true,
-	"bash_output":     true,
-	"kill_shell":      true,
-}
-
-// residentToolNames filters residentAll down to what this phase actually
-// implements: bash/read/edit/write and todo_write always (agent.Start's
-// own built-ins plus internal/tools/todo.go's tool); session_search only
-// when hasSessionSearch is true (internal/search opened successfully —
-// see chat.go's own comment on that check).
+// residentToolNames filters residentAll down to what this run actually
+// has: everything, except "session_search" when hasSessionSearch is false
+// (internal/search failed to open — see chat.go's own comment on that
+// check).
 func residentToolNames(hasSessionSearch bool) []string {
 	out := make([]string, 0, len(residentAll))
 	for _, name := range residentAll {
-		if residentPhase6Only[name] {
-			continue
-		}
 		if name == "session_search" && !hasSessionSearch {
 			continue
 		}

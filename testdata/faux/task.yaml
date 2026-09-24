@@ -1,0 +1,10 @@
+model: faux-1
+steps:
+  - tool_call:
+      name: task
+      args: {subagent_type: "general-purpose", description: "look something up", prompt: "find X"}
+      id: tc1
+  - text: "subagent report"
+  - on_tool_result: tc1
+    then:
+      - text: "Done."

@@ -55,20 +55,6 @@ const defaultModel = "ollama/qwen3.8:latest"
 // defaultSystemPrompt is cli.ts's fallback when --system-prompt is absent.
 const defaultSystemPrompt = "You are a coding assistant operating in a terminal."
 
-// planModePrompt is a verbatim copy of src/agent/plan-mode.ts's
-// PLAN_MODE_PROMPT. Duplicated here rather than imported because this port
-// has no Go package for plan mode yet (exit_plan_mode is a phase 6 tool);
-// when that package exists, this const should move there and this copy
-// should be deleted.
-const planModePrompt = "You are in PLAN MODE. You may read files, search, and run read-only commands,\n" +
-	"but you must not edit, write, or run anything that changes state.\n" +
-	"\n" +
-	"Research the task thoroughly first. When you have a concrete plan, call\n" +
-	"exit_plan_mode with it and wait for approval. Do not attempt changes before\n" +
-	"the plan is approved - they will be refused.\n" +
-	"\n" +
-	"If the user only asked a question, answer it; do not present a plan."
-
 // buildRegistry constructs the provider registry chat.go and suslashcommands.go
 // both need: the two built-in API clients (Anthropic, OpenAI), Ollama
 // (discovering against OLLAMA_HOST/OLLAMA_BASE_URL), and the faux test
@@ -210,6 +196,32 @@ func hookNoticeSink(stderr io.Writer) func(string) {
 	}
 }
 
+// subagentEventSink builds an agent.Dispatcher.OnEvent that prints the same
+// three lines the TUI's transcript does (src/tui/app.ts:644-654) — start,
+// done, error — to stderr, plain (no color/bold: this port has no TUI yet,
+// and stderr here is for the user, same audience the TUI lines are for).
+// Tool-start events are not printed: cli.ts's own comment on this is that a
+// subagent's tool calls are deliberately not echoed, only the dispatch, the
+// model it landed on, and the result size. Kept as a plain func value, not
+// inlined at the call site, so a future TUI can swap it for its own
+// rendering without touching the wiring around it.
+func subagentEventSink(stderr io.Writer) func(agent.SubagentEvent) {
+	return func(e agent.SubagentEvent) {
+		switch e.Kind {
+		case agent.SubagentEventStart:
+			note := ""
+			if e.Inherited {
+				note = " (inherited; the requested model is not on this provider)"
+			}
+			fmt.Fprintf(stderr, "└ %s %s on %s%s\n", e.Agent, e.Description, e.ModelID, note)
+		case agent.SubagentEventDone:
+			fmt.Fprintf(stderr, "  %s finished - %d tool calls, %d chars returned\n", e.Agent, e.ToolCalls, e.Chars)
+		case agent.SubagentEventError:
+			fmt.Fprintf(stderr, "%s: %s\n", e.Agent, e.Message)
+		}
+	}
+}
+
 // Run implements cli.ts's chat(): registry, settings, model resolution,
 // memory, skills, the permission gate, the system prompt, the started
 // session, hooks, and (this phase) the print-mode path. Interactive mode
@@ -340,11 +352,73 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	toolSearch := tools.ToolSearchTool(mcpTools, activePosture, gateState, onAdmit)
 	todoWrite := tools.TodoTool(todos.Set)
 
-	extraTools := make([]*tool.Tool, 0, len(mcpTools)+3)
+	// Subagent roster: the built-in general-purpose agent first, then every
+	// .claude/agents/*.md definition — matching cli.ts's
+	// `[GENERAL_PURPOSE, ...(await loadAgents(cwd))]`. Loaded before the
+	// tool list so `task`'s catalog and schema enum are correct on the
+	// first turn.
+	agentsList := append([]claudeagents.Definition{agent.GeneralPurpose}, claudeagents.LoadAgents(cwd)...)
+
+	// sessionsDirEnv mirrors agent.Options.SessionsRoot's own default
+	// resolution (internal/agent/session.go's unexported
+	// defaultSessionsDirEnv): HARNESS_SESSIONS_DIR if set, else
+	// jsonl.NewRepo's own "~/.harness/sessions" default. Resolved here
+	// (rather than after Start, as an earlier phase had it) so the
+	// dispatcher's subagent sessions and the main session agree on where
+	// they live.
+	sessionRepo, err := jsonl.NewRepo(os.Getenv("HARNESS_SESSIONS_DIR"))
+	if err != nil {
+		fmt.Fprintln(stderr, "harness:", err)
+		return 1
+	}
+
+	// task: dispatch is wired lazily, matching cli.ts's own
+	// `dispatch: (req) => createDispatcher({...})(req)` — the Dispatcher's
+	// Parent field is only set once agent.Start returns below, but the
+	// closure is not invoked until the model actually calls the tool
+	// during a turn, by which point it is always set (same reasoning as
+	// mcpSess.lane, just below).
+	dispatcher := &agent.Dispatcher{
+		Registry:     reg,
+		Gate:         gate,
+		Agents:       agentsList,
+		SessionsRoot: sessionRepo.Root,
+		Env:          env,
+		OnEvent:      subagentEventSink(stderr),
+	}
+	dispatchFn := func(ctx context.Context, agentName, description, prompt string) (tools.TaskDispatchResult, error) {
+		r, err := dispatcher.Dispatch(ctx, agentName, description, prompt)
+		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars}, err
+	}
+	taskTool := tools.TaskTool(dispatchFn, agentsList, resolved.Tier)
+
+	// Plan mode: active iff the resolved permission mode is "plan" (either
+	// --permission-mode plan or the settings/env-var equivalents
+	// resolvePermissionMode already folded in above).
+	planController := agent.NewPlanController()
+	planController.SetActive(permissionMode == claudesettings.ModePlan)
+	// Bound to the TUI in cli.ts (approvePlan is reassigned once runApp
+	// starts); this port has no interactive TUI yet (phase 7), so there is
+	// nobody to ask, and every plan is reported back exactly as cli.ts's
+	// own fallback does: "No interactive approval available. Describe the
+	// plan in your reply instead." (src/cli.ts:221-222).
+	approvePlan := func(ctx context.Context, plan string) (tools.PlanDecision, error) {
+		return tools.PlanDecision{
+			Kind:     tools.PlanDecisionRevise,
+			Feedback: "No interactive approval available. Describe the plan in your reply instead.",
+		}, nil
+	}
+	exitPlanModeTool := tools.ExitPlanModeTool(planController, approvePlan)
+
+	shells := agent.NewBackgroundShells()
+	bgShellTools := tools.BackgroundShellTools(shells, env)
+
+	extraTools := make([]*tool.Tool, 0, len(mcpTools)+7)
 	for _, t := range mcpTools {
 		extraTools = append(extraTools, mcpgate.ToHarnessTool(hub, t))
 	}
-	extraTools = append(extraTools, toolSearch, todoWrite)
+	extraTools = append(extraTools, toolSearch, todoWrite, taskTool, exitPlanModeTool)
+	extraTools = append(extraTools, bgShellTools...)
 	if sessionSearch != nil {
 		extraTools = append(extraTools, tools.SessionSearchTool(sessionSearch))
 	}
@@ -361,7 +435,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 	promptParts := []string{systemPromptBase, args.AppendSystemPrompt}
 	if permissionMode == claudesettings.ModePlan {
-		promptParts = append(promptParts, planModePrompt)
+		promptParts = append(promptParts, agent.PlanModePrompt)
 	}
 	promptParts = append(promptParts, memory.Text, skillsIndex, mcpIndexText)
 	systemPrompt := strings.Join(nonEmpty(promptParts), "\n\n")
@@ -370,6 +444,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Registry:        reg,
 		Resolved:        resolved,
 		Cwd:             cwd,
+		SessionsRoot:    sessionRepo.Root,
 		Resume:          args.Resume,
 		ResumeLatest:    args.ResumeLatest || args.ContinueLatest,
 		SessionID:       args.SessionID,
@@ -380,22 +455,20 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Env:             env,
 		ExtraTools:      extraTools,
 		ActiveToolNames: mcpSess.activeToolNames(),
-		// phase 6: task, exit_plan_mode, bash_background/output/kill_shell
-		// join ExtraTools/residentNow once those tools exist.
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "harness:", err)
 		return 1
 	}
 	mcpSess.lane = started.Lane
+	// dispatcher.Parent is read only once a subagent is actually dispatched
+	// (during a turn, from taskTool's Execute), by which point started is
+	// always set — see the dispatcher construction above.
+	dispatcher.Parent = started
 
 	sessionID := started.SessionID
 	transcriptPath := started.TranscriptPath
 	notice := hookNoticeSink(stderr)
-
-	// Subagent roster, loaded once (agents.md files do not change mid-run),
-	// used by /agents, /status and /doctor.
-	agentsList := claudeagents.LoadAgents(cwd)
 
 	// ContextUsed (for /usage) tracks the last usage event's total token
 	// count; nil until the first one arrives.
@@ -419,16 +492,6 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return lastUsage.TotalTokens, true
 	}
 
-	// sessionsDirEnv mirrors agent.Options.SessionsRoot's own default
-	// resolution (internal/agent/session.go's unexported
-	// defaultSessionsDirEnv): HARNESS_SESSIONS_DIR if set, else
-	// jsonl.NewRepo's own "~/.harness/sessions" default.
-	sessionRepo, err := jsonl.NewRepo(os.Getenv("HARNESS_SESSIONS_DIR"))
-	if err != nil {
-		fmt.Fprintln(stderr, "harness:", err)
-		return 1
-	}
-
 	settingsLoadedFrom := make([]string, 0, len(settings.LoadedFrom))
 	for _, s := range settings.LoadedFrom {
 		settingsLoadedFrom = append(settingsLoadedFrom, string(s))
@@ -447,6 +510,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Skills:             skillList,
 		MCP:                mcpSess,
 		Todos:              todos,
+		Shells:             shells,
 		SettingsLoadedFrom: settingsLoadedFrom,
 		ModelLabel:         providerID + "/" + modelID,
 		SessionRepo:        sessionRepo,
@@ -563,6 +627,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 
 	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)
+
+	// Nothing outlives the session: a background shell started during this
+	// run must not hold a port open after the process exits. Killed BEFORE
+	// SessionEnd fires, matching cli.ts's own ordering (src/cli.ts:653-659) —
+	// hub.Close is already deferred above, so it runs last of the three.
+	shells.KillAll()
 
 	claudehooks.RunHooks(claudehooks.RunOptions{
 		Config: hookConfig,

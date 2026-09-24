@@ -46,6 +46,7 @@ type registryDeps struct {
 	Skills   []claudeskills.Skill
 	MCP      *mcpSession
 	Todos    *agent.TodoStore
+	Shells   *agent.BackgroundShells
 
 	SettingsLoadedFrom []string
 	// ModelLabel is a snapshot taken at construction time, matching cli.ts:
@@ -198,9 +199,14 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 			}
 			return len(scopedMCPTools(mcpSess.tools, p))
 		},
-		SwitchPosture:   func(ctx context.Context, name string) error { return switchPosture(mcpSess, name) },
-		RenderShellList: nil, // phase 6: internal/agent/background-shell
-		Todos:           deps.Todos,
+		SwitchPosture: func(ctx context.Context, name string) error { return switchPosture(mcpSess, name) },
+		RenderShellList: func() []string {
+			if deps.Shells == nil {
+				return nil
+			}
+			return strings.Split(agent.RenderShellList(deps.Shells.List()), "\n")
+		},
+		Todos: deps.Todos,
 	}))
 
 	for _, s := range slashcommands.ClaudeCommandSources(deps.Cwd) {

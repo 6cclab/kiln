@@ -14,9 +14,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/auth"
 	authlogin "github.com/andrepato/harness/internal/auth/login"
 	"github.com/andrepato/harness/internal/budget"
+	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
@@ -267,9 +269,8 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	}
 	lines = append(lines, fmt.Sprintf("hooks      %d across %d events", hookCount, eventsWithHooks))
 
-	// phase 6: the subagent roster (.claude/agents plus the built-in
-	// general-purpose agent) belongs here once the task tool exists.
-	lines = append(lines, "agents     not implemented yet (phase 6)")
+	agentsList := append([]claudeagents.Definition{agent.GeneralPurpose}, claudeagents.LoadAgents(cwd)...)
+	lines = append(lines, fmt.Sprintf("agents     %d available", len(agentsList)))
 
 	loadedFrom := make([]string, 0, len(settings.LoadedFrom))
 	for _, s := range settings.LoadedFrom {
