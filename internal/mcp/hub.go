@@ -26,6 +26,10 @@ import (
 // defaultConnectTimeout is CONNECT_TIMEOUT_MS in client.ts.
 const defaultConnectTimeout = 30 * time.Second
 
+// terminateGrace is how long a stdio transport's Close waits for the
+// child to exit on its own before killing it.
+const terminateGrace = 500 * time.Millisecond
+
 // connectTimeoutEnv overrides the per-server connect/list-tools timeout, for
 // tests that need a fast, deterministic timeout against a hung server.
 const connectTimeoutEnv = "HARNESS_MCP_CONNECT_TIMEOUT"
@@ -323,8 +327,12 @@ func buildTransport(cfg ServerConfig) (sdk.Transport, *exec.Cmd, error) {
 		cmd := exec.Command(cfg.Command, cfg.Args...)
 		cmd.Env = mergeEnv(os.Environ(), cfg.Env)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		timeout := connectTimeout()
-		return &sdk.CommandTransport{Command: cmd, TerminateDuration: timeout}, cmd, nil
+		// TerminateDuration is how long Close waits after closing stdin
+		// before it kills the child. It used to equal the connect timeout,
+		// so a server that never answered cost two timeouts: one for the
+		// handshake, one for a child that ignores stdin closing. A short
+		// grace is enough; the failure path SIGKILLs the group anyway.
+		return &sdk.CommandTransport{Command: cmd, TerminateDuration: terminateGrace}, cmd, nil
 	}
 }
 

@@ -732,6 +732,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// SessionStart fires once, before the first turn. Its stdout becomes
 	// context for that first prompt only (see the <hook-context> wrapping
 	// below).
+	phase("hooks SessionStart start")
 	sessionStart := claudehooks.RunHooks(claudehooks.RunOptions{
 		Config: hookConfig,
 		Event:  claudehooks.SessionStart,
@@ -742,6 +743,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		},
 		OnNotice: notice,
 	})
+	phase("hooks SessionStart end")
 
 	if !args.Print {
 		// phase 7: the interactive TUI. Everything above (registry,
@@ -763,6 +765,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		for _, conflict := range keys.Conflicts {
 			fmt.Fprintf(stderr, "keybindings: %s\n", conflict)
 		}
+		phase("tui start")
 		exitCode := RunInteractive(ctx, InteractiveDeps{
 			Cwd:            cwd,
 			Keybindings:    keys.Bindings,

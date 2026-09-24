@@ -25,6 +25,7 @@ import (
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/permission"
 	slashcommands "github.com/andrepato/harness/internal/commands"
+	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/execenv"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
@@ -219,9 +220,16 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		bridge.ModelSwitch(resolved.Model.Provider+"/"+resolved.Model.ID, resolved.Tier.Name, resolved.Tier.ContextWindow)
 	}
 
-	if status, ok := readGitStatus(ctx); ok {
-		bridge.Send(tui.MsgGitStatus{Status: status})
-	}
+	// Off the main goroutine: Program.Send blocks until the event loop is
+	// running, and this runs before program.Run(). Sending inline here
+	// deadlocked startup in any repo whose `git rev-parse` succeeded (a
+	// repo with at least one commit), which the scratch repos in tests,
+	// initialised without a commit, never did.
+	go func() {
+		if status, ok := readGitStatus(ctx); ok {
+			bridge.Send(tui.MsgGitStatus{Status: status})
+		}
+	}()
 
 	// SIGINT and a key-driven exit converge on program.Quit; the OS signal
 	// path exists for a terminal that delivers SIGINT directly rather
@@ -236,7 +244,9 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		}
 	}()
 
+	diag.L().Info("phase tui run", "elapsed", diag.Since())
 	_, err := program.Run()
+	diag.L().Info("phase tui exit", "elapsed", diag.Since(), "err", err)
 	bridge.Stop()
 	if err != nil {
 		fmt.Fprintln(stderr, "harness:", err)
