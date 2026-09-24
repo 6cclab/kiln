@@ -52,10 +52,16 @@ func startTUI(t *testing.T, cols, rows int, proj, home, sessDir, fauxAddr string
 		)
 	}
 
+	opts = append(opts, tuiExtraOpts...)
 	s := screen.Start(t, harnessBin, args, cols, rows, opts...)
 
 	return s
 }
+
+// tuiExtraOpts lets one test add driver options (extra env, mostly) to
+// startTUI's fixed set. Tests that set it must clear it in a Cleanup; this
+// package never runs tests in parallel.
+var tuiExtraOpts []screen.Option
 
 // tuiFixture bundles the scratch environment a fix-bug-shaped TUI test
 // needs: a project with the buggy src/math.js, an isolated HOME/session

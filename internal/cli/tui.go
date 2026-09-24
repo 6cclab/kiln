@@ -51,9 +51,17 @@ type InteractiveDeps struct {
 	HookConfig     claudehooks.Config
 	SessionStart   claudehooks.Outcome
 	ScreenReader   bool
-	// MCPStatuses is every configured server's connect outcome; failures
-	// become one dim transcript line after the banner.
-	MCPStatuses []mcpgate.ServerStatus
+	// MCPServerCount is how many servers ConnectMCP will attempt; 0 skips
+	// the connect entirely. ConnectMCP connects them all, registers their
+	// tools with the session and returns every server's outcome. It runs
+	// on its own goroutine after the program is up, so a slow server never
+	// delays the first frame; progress reaches the footer as a note and
+	// failures become one dim transcript line pointing at /mcp.
+	MCPServerCount int
+	ConnectMCP     func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus
+	// LogPath is this run's diagnostics log; announced when debugging.
+	LogPath string
+	Debug   bool
 	// Keybindings is the raw action->key map from ~/.claude/keybindings.json
 	// (nil when absent). Applied to the editor once it supports overrides.
 	Keybindings map[string]string
@@ -186,8 +194,23 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		tui.Green(tui.G().Call) + " " + tui.Bold("harness") + " " + tui.Dim("— "+deps.ModelLabel),
 		tui.Dim("  Type / for commands, @ to reference a file, or just ask."),
 	})
-	if notice := mcpFailureNotice(deps.MCPStatuses); notice != "" {
-		bridge.Commit([]string{tui.Dim("  " + notice)})
+	if deps.Debug && deps.LogPath != "" {
+		bridge.Commit([]string{tui.Dim("  debug log: " + deps.LogPath)})
+	}
+	if deps.ConnectMCP != nil && deps.MCPServerCount > 0 {
+		go func() {
+			n := deps.MCPServerCount
+			done := 0
+			bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: connecting %d servers…", n)})
+			statuses := deps.ConnectMCP(func(mcpgate.ServerStatus) {
+				done++
+				bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: %d/%d servers…", done, n)})
+			})
+			bridge.Send(tui.MsgFooterNote{Text: ""})
+			if notice := mcpFailureNotice(statuses); notice != "" {
+				bridge.Commit([]string{tui.Dim("  " + notice)})
+			}
+		}()
 	}
 
 	deps.Started.OnModelChanged = func(ctx context.Context, resolved provider.Resolved) {

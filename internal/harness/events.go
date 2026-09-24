@@ -62,6 +62,7 @@ const (
 	ConfigStreamOptions      ConfigProperty = "streamOptions"
 	ConfigRetryPolicy        ConfigProperty = "retryPolicy"
 	ConfigCompactionSettings ConfigProperty = "compactionSettings"
+	ConfigSystemPrompt       ConfigProperty = "systemPrompt"
 	ConfigSteeringMode       ConfigProperty = "steeringMode"
 	ConfigFollowUpMode       ConfigProperty = "followUpMode"
 )

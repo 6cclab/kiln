@@ -92,6 +92,37 @@ func (h *Harness) SetTools(tools *tool.Set) {
 	h.events.Emit(Event{Type: EventConfigUpdate, ConfigProperty: ConfigTools})
 }
 
+// SetSystemPrompt replaces the system prompt the next request is built
+// with. Used when the MCP tool index arrives after the session started.
+func (h *Harness) SetSystemPrompt(prompt string) {
+	h.mu.Lock()
+	h.opts.SystemPrompt = prompt
+	h.mu.Unlock()
+	h.events.Emit(Event{Type: EventConfigUpdate, ConfigProperty: ConfigSystemPrompt})
+}
+
+// AddTools registers tools alongside the existing ones, replacing any with
+// the same name, without activating them. The set is rebuilt rather than
+// mutated so a turn already holding the old set keeps a consistent view.
+func (h *Harness) AddTools(tools ...*tool.Tool) {
+	h.mu.Lock()
+	old := h.opts.Tools
+	next := tool.NewSet()
+	if old != nil {
+		for _, name := range old.Names() {
+			if t, ok := old.Get(name); ok {
+				next.Add(t)
+			}
+		}
+	}
+	for _, t := range tools {
+		next.Add(t)
+	}
+	h.opts.Tools = next
+	h.mu.Unlock()
+	h.events.Emit(Event{Type: EventConfigUpdate, ConfigProperty: ConfigTools})
+}
+
 // SetCompactionSettings replaces the default compaction settings new
 // operations pick up; it does not affect an operation already running.
 func (h *Harness) SetCompactionSettings(s CompactionSettings) {

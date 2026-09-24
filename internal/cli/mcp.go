@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
@@ -108,6 +109,10 @@ func scopedMCPTools(tools []mcpgate.McpTool, active mcpgate.Posture) []mcpgate.M
 // same regate() rather than three copies of activeToolNames' argument
 // list drifting apart.
 type mcpSession struct {
+	// mu guards tools and tier: the background MCP connect writes them
+	// from its own goroutine while tool_search's admit and /model's switch
+	// read them from turn and command goroutines.
+	mu       sync.Mutex
 	tools    []mcpgate.McpTool
 	posture  mcpgate.Posture
 	state    *mcpgate.GateState
@@ -128,7 +133,10 @@ type laneSetter interface {
 }
 
 func (m *mcpSession) activeToolNames() []string {
-	return mcpgate.ActiveToolNames(m.tools, m.posture, m.tier.ToolStrategy, m.state, m.resident)
+	m.mu.Lock()
+	tools, strategy := m.tools, m.tier.ToolStrategy
+	m.mu.Unlock()
+	return mcpgate.ActiveToolNames(tools, m.posture, strategy, m.state, m.resident)
 }
 
 // regate recomputes the active tool set and pushes it onto the lane. A nil
@@ -139,6 +147,13 @@ func (m *mcpSession) regate() error {
 		return nil
 	}
 	return m.lane.SetActiveTools(m.activeToolNames())
+}
+
+// setTools replaces the catalog the gate works over.
+func (m *mcpSession) setTools(tools []mcpgate.McpTool) {
+	m.mu.Lock()
+	m.tools = tools
+	m.mu.Unlock()
 }
 
 // switchModel applies a full model switch: resolve, move the lane's model
@@ -159,7 +174,9 @@ func switchModel(ctx context.Context, reg *provider.Registry, started *agent.Sta
 	if err := agent.SetModel(ctx, started, resolved); err != nil {
 		return budget.Tier{}, err
 	}
+	mcpSess.mu.Lock()
 	mcpSess.tier = resolved.Tier
+	mcpSess.mu.Unlock()
 	if err := mcpSess.regate(); err != nil {
 		return budget.Tier{}, err
 	}

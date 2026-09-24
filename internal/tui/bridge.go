@@ -368,6 +368,11 @@ type msgCommitMarkdown struct{ Text string }
 // current width and commit it.
 type msgCommitToolCall struct{ View ToolCallView }
 
+// MsgFooterNote sets the footer's transient note ("mcp: connecting 11
+// servers…"); an empty Text clears it. Sent by the CLI for work that
+// continues after the TUI is up.
+type MsgFooterNote struct{ Text string }
+
 // MsgRefreshMode asks the app to re-read the gate's permission mode into
 // the footer, after something other than Shift+Tab changed it (a plan
 // approval). Mirrors app.ts's refreshStatus() on approve.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/andrepato/harness/internal/diag"
 	"io/fs"
 	"net/http"
 	"os"
@@ -124,11 +125,32 @@ type Hub struct {
 
 	tools    []McpTool
 	statuses []ServerStatus
+
+	// OnServer, if set before ConnectAll, is called after each server's
+	// connect attempt finishes, so a UI can show progress while the
+	// remaining servers connect. Called from ConnectAll's goroutine.
+	OnServer func(ServerStatus)
 }
 
 // NewHub builds an empty, unconnected Hub.
 func NewHub() *Hub {
 	return &Hub{conns: map[string]*serverConn{}}
+}
+
+// record appends a server's outcome, logs it, and reports it to OnServer.
+func (h *Hub) record(st ServerStatus) {
+	h.mu.Lock()
+	h.statuses = append(h.statuses, st)
+	cb := h.OnServer
+	h.mu.Unlock()
+	if st.OK {
+		diag.L().Info("mcp connected", "server", st.Name, "tools", st.ToolCount, "ms", st.Ms)
+	} else {
+		diag.L().Warn("mcp failed", "server", st.Name, "reason", st.Error, "detail", st.Detail, "ms", st.Ms)
+	}
+	if cb != nil {
+		cb(st)
+	}
 }
 
 // Tools returns every tool of every server that connected successfully.
@@ -172,9 +194,7 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 
 		transport, cmd, err := buildTransport(cfg)
 		if err != nil {
-			h.mu.Lock()
-			h.statuses = append(h.statuses, ServerStatus{Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: err.Error(), Ms: elapsedMs(started)})
-			h.mu.Unlock()
+			h.record(ServerStatus{Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: err.Error(), Ms: elapsedMs(started)})
 			continue
 		}
 
@@ -190,11 +210,9 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 			// spawning `node`), which the SDK's Close only ever reaches for
 			// the direct child.
 			killGroup(cmd)
-			h.mu.Lock()
-			h.statuses = append(h.statuses, ServerStatus{
+			h.record(ServerStatus{
 				Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: fmt.Sprintf("connect: %s", err), Ms: elapsedMs(started),
 			})
-			h.mu.Unlock()
 			continue
 		}
 
@@ -204,11 +222,9 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 		if err != nil {
 			_ = session.Close()
 			killGroup(cmd)
-			h.mu.Lock()
-			h.statuses = append(h.statuses, ServerStatus{
+			h.record(ServerStatus{
 				Name: name, OK: false, Error: "connected, but listing its tools failed: " + describeConnectError(cfg, err), Detail: fmt.Sprintf("listTools: %s", err), Ms: elapsedMs(started),
 			})
-			h.mu.Unlock()
 			continue
 		}
 
@@ -227,8 +243,8 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 		h.mu.Lock()
 		h.conns[name] = &serverConn{session: session, cmd: cmd}
 		h.tools = append(h.tools, tools...)
-		h.statuses = append(h.statuses, ServerStatus{Name: name, OK: true, ToolCount: len(tools), Ms: elapsedMs(started)})
 		h.mu.Unlock()
+		h.record(ServerStatus{Name: name, OK: true, ToolCount: len(tools), Ms: elapsedMs(started)})
 	}
 }
 

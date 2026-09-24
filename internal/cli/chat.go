@@ -37,6 +37,7 @@ import (
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/skills"
 	slashcommands "github.com/andrepato/harness/internal/commands"
+	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/harness"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
@@ -235,6 +236,21 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return 1
 	}
 
+	// The run log (internal/diag): always on at Info, Debug with --debug.
+	// Its path is reported by `harness doctor`; with --debug it is also
+	// announced so a report can point at it.
+	logPath, closeLog, logErr := diag.Start("", args.Debug)
+	if logErr != nil {
+		fmt.Fprintln(stderr, "harness:", logErr)
+	} else if args.Debug && args.Print {
+		fmt.Fprintln(stderr, "harness: debug log:", logPath)
+	}
+	defer closeLog()
+	phase := func(name string, kv ...any) {
+		diag.L().Info("phase "+name, append([]any{"elapsed", diag.Since()}, kv...)...)
+	}
+	phase("start", "cwd", cwd, "print", args.Print)
+
 	// Settings are read before the model is chosen, because `model` may
 	// come from them.
 	settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{
@@ -324,14 +340,21 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 
 	hub := mcpgate.NewHub()
 	mcpConfigs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
-	hub.ConnectAll(ctx, mcpConfigs)
+	mcpCtx, cancelMCP := context.WithCancel(ctx)
+	connectMCP := func(ctx context.Context) {
+		phase("mcp connect start", "servers", len(mcpConfigs))
+		hub.ConnectAll(ctx, mcpConfigs)
+		phase("mcp connect end", "statuses", len(hub.Statuses()), "tools", len(hub.Tools()))
+	}
 	if args.Print {
-		// Interactive mode reports failures inside the transcript instead
-		// (internal/cli/tui.go), so nothing spills onto the glass before
-		// the TUI paints.
+		// Print mode has exactly one prompt, so the MCP catalog must be
+		// complete before it runs. Interactive mode connects after the TUI
+		// is up (internal/cli/tui.go) and registers the tools when done.
+		connectMCP(mcpCtx)
 		warnFailedServers(stderr, hub.Statuses())
 	}
 	defer hub.Close(context.Background())
+	defer cancelMCP()
 
 	activePosture := resolvePosture()
 	gateState := mcpgate.NewGateState()
@@ -356,7 +379,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	onAdmit := func(ctx context.Context, names []string) error {
 		return mcpSess.regate()
 	}
-	toolSearch := tools.ToolSearchTool(mcpTools, activePosture, gateState, onAdmit)
+	// The MCP-derived pieces (tool_search over the catalog, one adapter per
+	// server tool, the posture index in the prompt) are built from a tool
+	// list so they can be rebuilt once the background connect finishes.
+	buildMCPExtras := func(mcpTools []mcpgate.McpTool) ([]*tool.Tool, string) {
+		extras := []*tool.Tool{tools.ToolSearchTool(mcpTools, activePosture, gateState, onAdmit)}
+		for _, t := range mcpTools {
+			extras = append(extras, mcpgate.ToHarnessTool(hub, t))
+		}
+		return extras, mcpgate.IndexPromptText(scopedMCPTools(mcpTools, activePosture))
+	}
 	todoWrite := tools.TodoTool(todos.Set)
 
 	// Subagent roster: the built-in general-purpose agent first, then every
@@ -430,32 +462,32 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	shells := agent.NewBackgroundShells()
 	bgShellTools := tools.BackgroundShellTools(shells, env)
 
-	extraTools := make([]*tool.Tool, 0, len(mcpTools)+7)
-	for _, t := range mcpTools {
-		extraTools = append(extraTools, mcpgate.ToHarnessTool(hub, t))
-	}
-	extraTools = append(extraTools, toolSearch, todoWrite, taskTool, exitPlanModeTool)
+	mcpExtras, mcpIndexText := buildMCPExtras(mcpTools)
+	extraTools := make([]*tool.Tool, 0, len(mcpExtras)+7)
+	extraTools = append(extraTools, mcpExtras...)
+	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool)
 	extraTools = append(extraTools, bgShellTools...)
 	if sessionSearch != nil {
 		extraTools = append(extraTools, tools.SessionSearchTool(sessionSearch))
 	}
 
-	scoped := scopedMCPTools(mcpTools, activePosture)
-	mcpIndexText := mcpgate.IndexPromptText(scoped)
-
 	// System prompt assembly order, matching cli.ts exactly: base persona,
 	// --append-system-prompt, the plan-mode prompt (only in plan mode),
 	// memory, the skills index, the MCP tool index.
-	systemPromptBase := args.SystemPrompt
-	if systemPromptBase == "" {
-		systemPromptBase = defaultSystemPrompt
+	buildSystemPrompt := func(mcpIndexText string) string {
+		systemPromptBase := args.SystemPrompt
+		if systemPromptBase == "" {
+			systemPromptBase = defaultSystemPrompt
+		}
+		promptParts := []string{systemPromptBase, args.AppendSystemPrompt}
+		if permissionMode == claudesettings.ModePlan {
+			promptParts = append(promptParts, agent.PlanModePrompt)
+		}
+		promptParts = append(promptParts, memory.Text, skillsIndex, mcpIndexText)
+		return strings.Join(nonEmpty(promptParts), "\n\n")
 	}
-	promptParts := []string{systemPromptBase, args.AppendSystemPrompt}
-	if permissionMode == claudesettings.ModePlan {
-		promptParts = append(promptParts, agent.PlanModePrompt)
-	}
-	promptParts = append(promptParts, memory.Text, skillsIndex, mcpIndexText)
-	systemPrompt := strings.Join(nonEmpty(promptParts), "\n\n")
+	systemPrompt := buildSystemPrompt(mcpIndexText)
+	phase("session start", "model", providerID+"/"+modelID, "tools", len(extraTools))
 
 	started, err := agent.Start(ctx, agent.Options{
 		Registry:        reg,
@@ -478,6 +510,25 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return 1
 	}
 	mcpSess.lane = started.Lane
+	phase("session started", "session", started.SessionID, "transcript", started.TranscriptPath)
+	diag.L().Info("run log", "session", started.SessionID, "path", logPath)
+	logHarnessEvents(started.Harness)
+
+	// applyMCP registers the catalog once the background connect is done:
+	// adapters and a rebuilt tool_search into the tool set, the posture
+	// index into the prompt, and a re-gate so the active list reflects the
+	// tier's strategy over the real catalog.
+	applyMCP := func() {
+		mcpTools := hub.Tools()
+		extras, idx := buildMCPExtras(mcpTools)
+		mcpSess.setTools(mcpTools)
+		started.Harness.AddTools(extras...)
+		started.Harness.SetSystemPrompt(buildSystemPrompt(idx))
+		if err := mcpSess.regate(); err != nil {
+			diag.L().Warn("mcp regate failed", "err", err)
+		}
+		phase("mcp applied", "tools", len(mcpTools))
+	}
 	// dispatcher.Parent is read only once a subagent is actually dispatched
 	// (during a turn, from taskTool's Execute), by which point started is
 	// always set — see the dispatcher construction above.
@@ -713,9 +764,17 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			fmt.Fprintf(stderr, "keybindings: %s\n", conflict)
 		}
 		exitCode := RunInteractive(ctx, InteractiveDeps{
-			Cwd:             cwd,
-			Keybindings:     keys.Bindings,
-			MCPStatuses:     hub.Statuses(),
+			Cwd:            cwd,
+			Keybindings:    keys.Bindings,
+			MCPServerCount: len(mcpConfigs),
+			ConnectMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
+				hub.OnServer = progress
+				connectMCP(mcpCtx)
+				applyMCP()
+				return hub.Statuses()
+			},
+			LogPath:         logPath,
+			Debug:           args.Debug,
 			SetPlanApprover: func(fn tools.PlanApprover) { planApprover.set(fn) },
 			SetHookNotice:   func(fn func(string)) { hookNotice.set(fn) },
 			ModelLabel:      providerID + "/" + modelID,
@@ -928,4 +987,34 @@ func (r *rebindable[T]) set(fn T) {
 	r.mu.Lock()
 	r.fn = fn
 	r.mu.Unlock()
+}
+
+// logHarnessEvents mirrors the harness's event stream into the run log so
+// a stuck or failed turn can be read back: runs, turns, tool calls,
+// retries, compaction and faults, each with the lane and the fields a
+// reader would ask for first.
+func logHarnessEvents(h *harness.Harness) {
+	on := func(t harness.EventType, fn func(ev harness.Event) []any) {
+		h.Events().On(t, func(ev harness.Event) {
+			diag.L().Info(string(ev.Type), append([]any{"lane", ev.Lane}, fn(ev)...)...)
+		})
+	}
+	none := func(ev harness.Event) []any { return nil }
+	status := func(ev harness.Event) []any { return []any{"status", ev.Status} }
+	on(harness.EventRunStart, none)
+	on(harness.EventRunEnd, status)
+	on(harness.EventTurnStart, none)
+	on(harness.EventTurnEnd, status)
+	on(harness.EventToolStart, func(ev harness.Event) []any { return []any{"tool", ev.ToolName, "id", ev.ToolCallID} })
+	on(harness.EventToolEnd, func(ev harness.Event) []any {
+		isErr := ev.ToolResult != nil && ev.ToolResult.IsError
+		return []any{"tool", ev.ToolName, "id", ev.ToolCallID, "error", isErr}
+	})
+	on(harness.EventRetryScheduled, func(ev harness.Event) []any {
+		return []any{"attempt", ev.Attempt, "delay_ms", ev.DelayMs, "err", ev.RetryError}
+	})
+	on(harness.EventCompactionStart, none)
+	on(harness.EventCompactionEnd, none)
+	on(harness.EventFault, func(ev harness.Event) []any { return []any{"err", ev.Err} })
+	on(harness.EventHandlerError, func(ev harness.Event) []any { return []any{"hook", ev.HookName, "err", ev.Err} })
 }

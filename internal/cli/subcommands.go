@@ -8,9 +8,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/andrepato/harness/internal/diag"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -281,10 +283,20 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		settingsLine = strings.Join(loadedFrom, ", ")
 	}
 	lines = append(lines, fmt.Sprintf("settings   %s", settingsLine))
+	logsLine := diag.Dir()
+	if latest := diag.Latest(); latest != "" {
+		logsLine += "  (latest: " + filepath.Base(latest) + ")"
+	}
+	lines = append(lines, fmt.Sprintf("logs       %s", logsLine))
 
 	var problems []string
 	if permissionMode == "bypassPermissions" {
 		problems = append(problems, "permission mode is bypassPermissions: every tool call runs unchecked")
+	}
+	for _, st := range statuses {
+		if !st.OK {
+			problems = append(problems, fmt.Sprintf("mcp %q is down: %s", st.Name, st.Error))
+		}
 	}
 	lines = append(lines, "")
 	if len(problems) == 0 {

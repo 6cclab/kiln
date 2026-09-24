@@ -256,6 +256,10 @@ func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgRefreshMode:
 		return m.refreshMode(), nil
 
+	case MsgFooterNote:
+		m.footer.SetNote(msg.Text)
+		return m, nil
+
 	case msgModalResult:
 		if m.modal != nil {
 			m.modal.Apply(msg)

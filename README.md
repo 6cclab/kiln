@@ -55,9 +55,20 @@ harness -p "fix the bug"     # one prompt, then exit (see --output-format)
 harness providers            # who you can talk to, and auth status
 harness models [provider]    # models, their tiers, and usable budget
 harness login anthropic      # log in with a Claude Pro/Max plan
-harness doctor               # model, tier, tools, MCP, hooks, agents, problems
+harness doctor               # model, tier, tools, MCP, hooks, agents, logs, problems
 harness mcp                  # MCP servers and their state
+harness --debug              # debug-level run log, path announced at startup
 ```
+
+MCP servers connect in the background after the prompt appears: the footer shows
+progress, and any server that fails is named once in the transcript with a reason
+you can act on (`/mcp` has the details). The model can use a server's tools as soon
+as that connect finishes.
+
+Every run writes a log to `~/.harness/logs` (the last 30 are kept): startup phases
+with elapsed time, each server's connect outcome and duration, and every turn, tool
+call, retry and compaction. `harness doctor` prints the directory and the latest
+file; attach that file to a bug report.
 
 Inside a session: `/` for commands, `@` to reference a file, `!` to run a shell
 command directly, `#` to add a memory. `Ctrl+R` opens the full transcript with

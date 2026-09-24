@@ -50,6 +50,7 @@ type Args struct {
 
 	ScreenReader bool
 	Verbose      bool
+	Debug        bool
 	Version      bool
 	Help         bool
 
@@ -269,6 +270,8 @@ func Parse(argv []string) Args {
 			args.ScreenReader = true
 		case "--verbose":
 			args.Verbose = true
+		case "--debug":
+			args.Debug = true
 		case "-v", "--version":
 			args.Version = true
 		case "-h", "--help":
@@ -332,6 +335,7 @@ output:
   -p, --print                        non-interactive: print and exit
       --output-format <fmt>          text | json | stream-json
       --verbose                      report tool calls on stderr
+      --debug                        debug-level run log; prints its path (see harness doctor)
       --ax-screen-reader             flat text, no borders or animation
 
   -v, --version
