@@ -37,7 +37,7 @@ func key(s string) tea.KeyPressMsg {
 
 func TestModalView_EscCloses(t *testing.T) {
 	v := NewModalView(fakeModalSpec())
-	consumed, shouldClose := v.HandleKey(key("esc"))
+	consumed, shouldClose, _ := v.HandleKey(key("esc"))
 	if !consumed || !shouldClose {
 		t.Fatalf("esc: consumed=%v shouldClose=%v, want true,true", consumed, shouldClose)
 	}
@@ -45,7 +45,7 @@ func TestModalView_EscCloses(t *testing.T) {
 
 func TestModalView_EnterSelects(t *testing.T) {
 	v := NewModalView(fakeModalSpec())
-	v.HandleKey(key("enter"))
+	runKey(v, key("enter"))
 	if v.status != "selected a" {
 		t.Errorf("status = %q, want %q", v.status, "selected a")
 	}
@@ -53,11 +53,11 @@ func TestModalView_EnterSelects(t *testing.T) {
 
 func TestModalView_DownMovesCursorThenEnterSelectsSecond(t *testing.T) {
 	v := NewModalView(fakeModalSpec())
-	v.HandleKey(key("down"))
+	runKey(v, key("down"))
 	if v.cursor != 1 {
 		t.Fatalf("cursor = %d, want 1", v.cursor)
 	}
-	v.HandleKey(key("enter"))
+	runKey(v, key("enter"))
 	if v.status != "selected b" {
 		t.Errorf("status = %q, want %q", v.status, "selected b")
 	}
@@ -65,10 +65,14 @@ func TestModalView_DownMovesCursorThenEnterSelectsSecond(t *testing.T) {
 
 func TestModalView_ActionKeyRunsAct(t *testing.T) {
 	v := NewModalView(fakeModalSpec())
-	consumed, shouldClose := v.HandleKey(key("d"))
+	consumed, shouldClose, cmd := v.HandleKey(key("d"))
 	if !consumed || shouldClose {
 		t.Fatalf("consumed=%v shouldClose=%v, want true,false", consumed, shouldClose)
 	}
+	if cmd == nil {
+		t.Fatal("expected an Act command")
+	}
+	v.Apply(cmd().(msgModalResult))
 	if v.status != "acted d on a" {
 		t.Errorf("status = %q, want %q", v.status, "acted d on a")
 	}
@@ -76,8 +80,18 @@ func TestModalView_ActionKeyRunsAct(t *testing.T) {
 
 func TestModalView_UnknownKeyIsSwallowed(t *testing.T) {
 	v := NewModalView(fakeModalSpec())
-	consumed, shouldClose := v.HandleKey(key("z"))
+	consumed, shouldClose, _ := v.HandleKey(key("z"))
 	if !consumed || shouldClose {
 		t.Fatalf("consumed=%v shouldClose=%v, want true,false (swallowed)", consumed, shouldClose)
+	}
+}
+
+// runKey presses a key and, when it yields a Select/Act command, runs it
+// synchronously and applies the result, as the app's Update would.
+func runKey(v *ModalView, k tea.KeyPressMsg) {
+	if _, _, cmd := v.HandleKey(k); cmd != nil {
+		if r, ok := cmd().(msgModalResult); ok {
+			v.Apply(r)
+		}
 	}
 }

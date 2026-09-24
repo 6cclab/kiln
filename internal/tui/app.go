@@ -256,6 +256,12 @@ func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgRefreshMode:
 		return m.refreshMode(), nil
 
+	case msgModalResult:
+		if m.modal != nil {
+			m.modal.Apply(msg)
+		}
+		return m, nil
+
 	case MsgThinking:
 		return m.handleThinking(msg), nil
 
@@ -394,13 +400,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.modal != nil {
-		consumed, shouldClose := m.modal.HandleKey(msg)
+		consumed, shouldClose, cmd := m.modal.HandleKey(msg)
 		if shouldClose {
 			m.modal = nil
 			return m, nil
 		}
 		if consumed {
-			return m, nil
+			return m, cmd
 		}
 	}
 
@@ -743,9 +749,16 @@ func (m Model) View() tea.View {
 		if modalWidth < 20 {
 			modalWidth = width
 		}
-		modalHeight := len(lines) * 8 / 10
+		// Sized against the terminal, not the live region: modal.ts's
+		// showOverlay takes 80% of the screen. The idle live region is
+		// five rows, which clipped every panel's hint row.
+		screenHeight := m.height
+		if screenHeight <= 0 {
+			screenHeight = 24
+		}
+		modalHeight := screenHeight * 8 / 10
 		if modalHeight < 6 {
-			modalHeight = min(6, len(lines))
+			modalHeight = min(6, screenHeight)
 		}
 		overlay := m.modal.Render(modalWidth, modalHeight)
 		lines = compositeCenter(lines, overlay, width)

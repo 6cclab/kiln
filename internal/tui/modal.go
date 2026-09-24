@@ -40,10 +40,16 @@ func NewModalView(spec commands.ModalSpec) *ModalView {
 //   - Enter runs Select against the selected item's value.
 //   - Any key matching an Action's key (case-insensitively) runs Act.
 //   - Everything else is swallowed: a modal owns the keyboard.
-func (m *ModalView) HandleKey(msg tea.KeyPressMsg) (consumed, shouldClose bool) {
+//
+// Select and Act run off the Update goroutine, as a tea.Cmd whose result
+// arrives as msgModalResult: /model's Select switches the model, which
+// notifies the bridge, which Sends to the program; a Send from inside
+// Update deadlocks the event loop (found by the PTY suite: selecting in
+// /model froze the process).
+func (m *ModalView) HandleKey(msg tea.KeyPressMsg) (consumed, shouldClose bool, cmd tea.Cmd) {
 	key := msg.String()
 	if key == "esc" {
-		return true, true
+		return true, true, nil
 	}
 
 	switch key {
@@ -51,20 +57,24 @@ func (m *ModalView) HandleKey(msg tea.KeyPressMsg) (consumed, shouldClose bool) 
 		if m.cursor > 0 {
 			m.cursor--
 		}
-		return true, false
+		return true, false, nil
 	case "down", "j":
 		if m.cursor < len(m.spec.Items)-1 {
 			m.cursor++
 		}
-		return true, false
+		return true, false, nil
 	case "enter":
 		if m.spec.Select != nil {
 			if item, ok := m.selected(); ok {
-				msg, err := m.spec.Select(item.Value)
-				m.setStatus(msg, err)
+				sel, value := m.spec.Select, item.Value
+				m.status, m.statusOK = "…", true
+				return true, false, func() tea.Msg {
+					msg, err := sel(value)
+					return msgModalResult{msg: msg, err: err}
+				}
 			}
 		}
-		return true, false
+		return true, false, nil
 	}
 
 	for _, action := range m.spec.Actions {
@@ -74,16 +84,29 @@ func (m *ModalView) HandleKey(msg tea.KeyPressMsg) (consumed, shouldClose bool) 
 				if item, ok := m.selected(); ok {
 					value = item.Value
 				}
-				msg, err := m.spec.Act(action.Key, value)
-				m.setStatus(msg, err)
+				act, k := m.spec.Act, action.Key
+				m.status, m.statusOK = "…", true
+				return true, false, func() tea.Msg {
+					msg, err := act(k, value)
+					return msgModalResult{msg: msg, err: err}
+				}
 			}
-			return true, false
+			return true, false, nil
 		}
 	}
 
 	// Swallow everything else; a modal owns the keyboard while it is up.
-	return true, false
+	return true, false, nil
 }
+
+// msgModalResult carries a Select or Act result back to the open modal.
+type msgModalResult struct {
+	msg string
+	err error
+}
+
+// Apply records a Select/Act result as the panel's status line.
+func (m *ModalView) Apply(r msgModalResult) { m.setStatus(r.msg, r.err) }
 
 func (m *ModalView) selected() (commands.Item, bool) {
 	if m.cursor < 0 || m.cursor >= len(m.spec.Items) {

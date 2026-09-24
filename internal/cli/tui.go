@@ -184,7 +184,9 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	})
 
 	deps.Started.OnModelChanged = func(ctx context.Context, resolved provider.Resolved) {
-		bridge.ModelSwitch(resolved.Model.ID, resolved.Tier.Name, resolved.Tier.ContextWindow)
+		// provider/model, the same label the footer showed at startup and
+		// cli.ts's onModelChanged passes.
+		bridge.ModelSwitch(resolved.Model.Provider+"/"+resolved.Model.ID, resolved.Tier.Name, resolved.Tier.ContextWindow)
 	}
 
 	if status, ok := readGitStatus(ctx); ok {

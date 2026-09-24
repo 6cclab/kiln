@@ -47,6 +47,7 @@ const DefaultTimeout = 5 * time.Second
 
 // config accumulates options before a Screen is started.
 type config struct {
+	dir        string
 	env        map[string]string
 	unsetEnv   map[string]bool
 	timeout    time.Duration
@@ -55,6 +56,12 @@ type config struct {
 
 // Option configures a Screen at Start/StartDetached time.
 type Option func(*config)
+
+// WithDir sets the spawned process's working directory (the project the
+// harness runs in). Empty keeps the test process's own.
+func WithDir(dir string) Option {
+	return func(c *config) { c.dir = dir }
+}
 
 // WithEnv sets or overrides an environment variable for the spawned process.
 // It may be called multiple times; later calls win. Passing "KEY=" (empty
@@ -174,6 +181,7 @@ func start(tb testing.TB, binary string, args []string, cols, rows int, opts ...
 
 	cmd := exec.Command(binary, args...)
 	cmd.Env = env
+	cmd.Dir = cfg.dir
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)}) //nolint:gosec
 	if err != nil {
