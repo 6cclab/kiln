@@ -37,7 +37,13 @@ func TestExecExitCode(t *testing.T) {
 func TestExecStreamsUpdates(t *testing.T) {
 	env := New(t.TempDir())
 	var kinds []UpdateKind
-	_, err := env.Exec(context.Background(), `for i in $(seq 1 50); do echo "line $i"; done`, ExecOptions{
+	// Two short bursts with a pause between them, together smaller than
+	// the retained tail (10 lines, 200 bytes). The pause guarantees two
+	// reads; staying inside the window guarantees the second snapshot is
+	// the first plus a tail, so it is an append. Under load a single long
+	// burst arrived in one read (one replace), and two long bursts were
+	// disjoint tails (two replaces): both were spurious failures.
+	_, err := env.Exec(context.Background(), `for i in 1 2 3; do echo "line $i"; done; sleep 0.2; for i in 4 5 6; do echo "line $i"; done`, ExecOptions{
 		InheritEnv: true,
 		Capture:    CaptureLimits{MaxBytes: 200, MaxLines: 10, Retain: RetainTail},
 		OnUpdate: func(u ShellOutputUpdate) {
