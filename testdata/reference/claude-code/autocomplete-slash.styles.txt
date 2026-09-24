@@ -1,0 +1,40 @@
+ Claude Code                                                                                        
+[fg=#d77757] ▐[/][fg=#d77757 bg=#000000]▛███▛█[/]   [b]Claude Code[/] [fg=#999999]v2.1.281[/]                                                                     
+[fg=#d77757]▝▜[/][fg=#d77757 bg=#000000]█████[/][fg=#d77757]█▀[/]  [fg=#999999]Opus 5 (1M context) with medium effort · Claude Max[/]                                      
+[fg=#d77757]  ▝▝ ▝▝  [/]  [fg=#999999]/private/var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T/cc-ref/proj[/]                     
+                                                                                                    
+  Get to finished work sooner with Opus 5.5. Switch anytime with [fg=#b1b9f9]/model[/].                            
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+  [fg=#b1b9f9]/[/][fg=#b1b9f9 b]mod[/][fg=#b1b9f9]el                                  Set the AI [/][fg=#b1b9f9 b]mod[/][fg=#b1b9f9]el for Claude Code (currently Opus 5 (1M[/]    
+                                          [fg=#b1b9f9]context))[/]                                                 
+  [fg=#999999]/track-work                             Track work as epics and stories in the self-hosted Task[/]   
+                                          [fg=#999999]Tracker, streamed live to the mobile dashboard. Use whe…[/]  
+[fg=#888888]────────────────────────────────────────────────────────────────────────────────────────────────────[/]
+❯ /mod                                                                                              
+[fg=#888888]────────────────────────────────────────────────────────────────────────────────────────────────────[/]
+  [fg=#e5c07b]Opus 5 (1M context)[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#999999 d]⎇[/][fg=#999999] [/][fg=#c678dd]main[/][fg=#999999] [/][fg=#50c878]✔[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#50c878 d]░░░░░░[/][fg=#999999] [/][fg=#ffb055]0[/][fg=#ffb055 d]/[/][fg=#dcdcdc]1.0m[/][fg=#999999] [/][fg=#999999 d]0%[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#999999 d]◇ thinking[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#999999 d]$0.00[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#999999 d]5h[/][fg=#999999] [/][fg=#50c878 d]░░░░░░[/][fg=#999999] [/][fg=#56b6c2]6%[/][fg=#999999] [/][fg=#999999 d]↺ 11:49am[/]   
+  [fg=#ffc107]⏵⏵ auto mode on[/][fg=#999999] (shift+tab to cycle)[/]                                                              

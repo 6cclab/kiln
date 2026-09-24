@@ -1,0 +1,40 @@
+ Claude Code                                                                                        
+[fg=#d77757] ▐[/][fg=#d77757 bg=#000000]▛███▛█[/]   [b]Claude Code[/] [fg=#999999]v2.1.281[/]                                                                     
+[fg=#d77757]▝▜[/][fg=#d77757 bg=#000000]█████[/][fg=#d77757]█▀[/]  [fg=#999999]Opus 5 (1M context) with medium effort · Claude Max[/]                                      
+[fg=#d77757]  ▝▝ ▝▝  [/]  [fg=#999999]/private/var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T/cc-ref/proj[/]                     
+                                                                                                    
+  Get to finished work sooner with Opus 5.5. Switch anytime with [fg=#b1b9f9]/model[/].                            
+                                                                                                    
+[fg=#505050 bg=#373737]❯[/][bg=#373737] [/][fg=#ffffff bg=#373737]/model[/][bg=#373737] [/]                                                                                           
+[fg=#999999]  ⎿  [/]Kept model as [fg=#b1b9f9]Opus 5 (1M context)[/]                                                              
+                                                                                                    
+[fg=#505050 bg=#373737]❯ [/][fg=#ffffff bg=#373737]Use the Edit tool to change math.js so add returns a + b. Do not explain.[/][bg=#373737]                         [/]
+                                                                                                    
+  [fg=#999999]Read [/][fg=#999999 b]1[/][fg=#999999] file [/]                                                                                      
+                                                                                                    
+[fg=#4eba65]⏺[/] [b]Update[/](math.js)                                                                                   
+[fg=#999999]  ⎿  [/]Added [b]1[/] line, removed [b]1[/] line                                                                   
+     [fg=#dc5a5a bg=#3d0100] 1 -[/][fg=#f8f8f2 bg=#3d0100]function add(a,b){ return a [/][fg=#f8f8f2 bg=#5c0200]-[/][fg=#f8f8f2 bg=#3d0100] b }                                                   [/]       
+     [fg=#50c850 bg=#022800] 1 +[/][fg=#66d9ef bg=#022800]function[/][fg=#f8f8f2 bg=#022800] [/][fg=#a6e22e bg=#022800]add[/][fg=#f8f8f2 bg=#022800]([/][fg=#fd971f bg=#022800]a,b[/][fg=#f8f8f2 bg=#022800]){ [/][fg=#f92672 bg=#022800]return[/][fg=#f8f8f2 bg=#022800] a [/][fg=#f8f8f2 bg=#044700]+[/][fg=#f8f8f2 bg=#022800] b }                                                   [/]       
+                                                                                                    
+[fg=#ffffff]⏺[/] Done.                                                                                             
+                                                                                                    
+[fg=#999999]✻[/] [fg=#999999]Crunched for 4s · done 10:03 AM[/]                                                                   
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                [fg=#999999]◐ medium · /effort[/]  
+[fg=#888888]────────────────────────────────────────────────────────────────────────────────────────────────────[/]
+❯ [d]commit this[/]d function                                                                             
+[fg=#888888]────────────────────────────────────────────────────────────────────────────────────────────────────[/]
+  [fg=#e5c07b]Opus 5 (1M context)[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#999999 d]⎇[/][fg=#999999] [/][fg=#c678dd]main[/][fg=#999999] [/][fg=#50c878]✔[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#50c878 d]░░░░░░[/][fg=#999999] [/][fg=#ffb055]47k[/][fg=#ffb055 d]/[/][fg=#dcdcdc]1.0m[/][fg=#999999] [/][fg=#999999 d]4%[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#999999 d]◇ thinking[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#999999 d]$0.53[/][fg=#999999] [/][fg=#999999 d]│[/][fg=#999999] [/][fg=#999999 d]5h[/][fg=#999999] [/][fg=#50c878 d]░░░░░░[/][fg=#999999] [/][fg=#56b6c2]6%[/][fg=#999999] [/][fg=#999999 d]↺ 11:49…[/]  
+  [fg=#999999]⏸ manual mode on · ← for agents[/]                                                                   

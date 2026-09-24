@@ -95,7 +95,8 @@ unless stated; right-aligned items end at the last column.
 - Result row `␠␠⎿␠␠<summary>`. Edit: `Added 1 line, removed 1 line`, then diff lines
   indented six spaces: `      1 -old` / `      1 +new` (number right-aligned to the widest,
   then `-`/`+`, no space before text). Bash: output lines (`  ⎿  parity-check`). Read: `Read
-  2 lines`. Long outputs end `… +N lines (ctrl+o to expand)` **[chk]**.
+  2 lines`. Long outputs end `… +N lines (ctrl+o to expand)` **[chk]**. A running Bash call with a
+  description renders `⏺ <description>` then `  ⎿  $ <command>` (`permission-bash.txt`).
 - Assistant text `⏺␠<markdown>`, continuation indented two.
 - Turn summary `✻ <Verb> for <N>s · done <h:mm AM/PM>`. Observed verbs: Brewed, Crunched,
   Cooked. Full set **[chk]**.
@@ -185,10 +186,32 @@ replace the input box and mode line under the transcript:
  Esc to cancel · Tab to amend
 ```
 
-  Bash **[chk]**: ` Bash command`, the command, its description, `Do you want to proceed?`,
-  `1. Yes`, `2. Yes, and don't ask again for: <cmd> in <cwd>`, `3. No, and tell Claude what
-  to do differently (esc)`. Keys: 1/2/3, Enter, Esc = No, Tab amends. `3` on an Edit
-  opens a feedback input **[chk]**.
+  Bash (`permission-bash.txt`), inline in place of the input box; the transcript above it
+  shows the call as `⏺ <tool description>` and `  ⎿  $ <command>`:
+
+```
+⏺ Generating 4 random hex bytes
+  ⎿  $ openssl rand -hex 4
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+   openssl rand -hex 4
+   Generate 4 random hex bytes
+ This command requires approval
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don’t ask again for: openssl rand *
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+ Esc to cancel · Tab to amend
+```
+
+  ` Bash command`, one tip row, the command indented three, its description indented
+  three, ` This command requires approval`, ` Do you want to proceed?`, four options (the
+  "don't ask again" rule is the command's first two words plus ` *`), legend. Keys: 1 to 4,
+  Enter, Esc = No, Tab amends. Interrupting a turn (Esc) leaves `  ⎿  Interrupted · What
+  should Claude do instead?` under the collapsed group row (`permission-bash-after-esc.txt`).
+  Write prompts mirror Edit with ` Write file`.
 - Plan approval (`plan-approval.txt`): `▔` rule; inner `─` rule indented two; ` Ready to
   code?`; ` Here is Claude's plan:` (harness: `Here is the plan:`); `╌` rule; the plan
   indented three with `↓` at the right edge when it scrolls; `─` rule; `Claude has written

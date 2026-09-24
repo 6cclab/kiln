@@ -1,0 +1,40 @@
+ Claude Code                                                                                        
+[fg=#d77757] ▐[/][fg=#d77757 bg=#000000]▛███▛█[/]   [b]Claude Code[/] [fg=#999999]v2.1.281[/]                                                                     
+[fg=#d77757]▝▜[/][fg=#d77757 bg=#000000]█████[/][fg=#d77757]█▀[/]  [fg=#999999]Opus 5 (1M context) with medium effort · Claude Max[/]                                      
+[fg=#d77757]  ▝▝ ▝▝  [/]  [fg=#999999]/private/var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T/cc-ref/proj[/]                     
+                                                                                                    
+  Get to finished work sooner with Opus 5.5. Switch anytime with [fg=#b1b9f9]/model[/].                            
+                                                                                                    
+[fg=#505050 bg=#373737]❯[/][bg=#373737] [/][fg=#ffffff bg=#373737]/model[/][bg=#373737] [/]                                                                                           
+[fg=#999999]  ⎿  [/]Kept model as [fg=#b1b9f9]Opus 5 (1M context)[/]                                                              
+                                                                                                    
+[fg=#505050 bg=#373737]❯ [/][fg=#ffffff bg=#373737]Use the Edit tool to change math.js so add returns a + b. Do not explain.[/][bg=#373737]                         [/]
+                                                                                                    
+  [fg=#999999]Read [/][fg=#999999 b]1[/][fg=#999999] file [/]                                                                                      
+                                                                                                    
+[fg=#4eba65]⏺[/] [b]Update[/](math.js)                                                                                   
+[fg=#999999]  ⎿  [/]Added [b]1[/] line, removed [b]1[/] line                                                                   
+     [fg=#dc5a5a bg=#3d0100] 1 -[/][fg=#f8f8f2 bg=#3d0100]function add(a,b){ return a [/][fg=#f8f8f2 bg=#5c0200]-[/][fg=#f8f8f2 bg=#3d0100] b }                                                   [/]       
+     [fg=#50c850 bg=#022800] 1 +[/][fg=#66d9ef bg=#022800]function[/][fg=#f8f8f2 bg=#022800] [/][fg=#a6e22e bg=#022800]add[/][fg=#f8f8f2 bg=#022800]([/][fg=#fd971f bg=#022800]a,b[/][fg=#f8f8f2 bg=#022800]){ [/][fg=#f92672 bg=#022800]return[/][fg=#f8f8f2 bg=#022800] a [/][fg=#f8f8f2 bg=#044700]+[/][fg=#f8f8f2 bg=#022800] b }                                                   [/]       
+                                                                                                    
+[fg=#ffffff]⏺[/] Done.                                                                                             
+                                                                                                    
+[fg=#999999]✻[/] [fg=#999999]Crunched for 4s · done 10:03 AM[/]                                                                   
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                [fg=#999999]◐ medium · /effort[/]  
+[fg=#888888]────────────────────────────────────────────────────────────────────────────────────────────────────[/]
+❯ [d]commit this[/]                                                                                       
+[fg=#888888]────────────────────────────────────────────────────────────────────────────────────────────────────[/]
+  [fg=#999999]! for shell mode[/]        [fg=#999999]double tap esc to clear input[/]      [fg=#999999]ctrl + shift + _ to undo[/]               
+  [fg=#999999]/ for commands[/]          [fg=#999999]shift + tab to auto-accept edits[/]   [fg=#999999]ctrl + z to suspend[/]                    
+  [fg=#999999]@ for file paths[/]        [fg=#999999]ctrl + o for verbose output[/]        [fg=#999999]ctrl + v to paste images[/]               
+  [fg=#999999]/btw for side question[/]  [fg=#999999]ctrl + t to toggle tasks[/]           [fg=#999999]opt + p to switch model[/]                
+                          [fg=#999999]shift + ⏎ for newline[/]              [fg=#999999]opt + o to toggle fast mode[/]            
+                                                             [fg=#999999]ctrl + s to stash prompt[/]               
+                                                             [fg=#999999]ctrl + g to edit in $EDITOR[/]            
+                                                             [fg=#999999]/keybindings to customize[/]              

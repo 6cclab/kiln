@@ -172,10 +172,19 @@ func (d *driver) cmdWait(rest string) error {
 }
 
 func (d *driver) cmdScreen(rest string) error {
-	asJSON := strings.TrimSpace(rest) == "--json"
+	arg := strings.TrimSpace(rest)
+	asJSON := arg == "--json"
+	asStyles := arg == "--styles"
 	rows := d.screen.Viewport()
 	cursorRow := d.screen.CursorRow()
 	occupied := d.screen.OccupiedHeight()
+
+	if asStyles {
+		styles := d.screen.Styles()
+		fmt.Fprintln(d.out, screen.EncodeStyledScreen(rows, styles))
+		fmt.Fprintf(d.out, "-- cursor: row %d, occupied: %d, size: %dx%d --\n", cursorRow, occupied, d.cols, len(rows))
+		return nil
+	}
 
 	if asJSON {
 		payload := struct {

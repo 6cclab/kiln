@@ -1,0 +1,17 @@
+SLEEP 5s
+KEY shift+tab
+SLEEP 500ms
+SEND Run exactly this shell command and report its output: openssl rand -hex 4
+KEY enter
+WAIT 180s /Do you want|proceed\?/
+SLEEP 800ms
+SCREEN
+KEY 3
+SLEEP 1500ms
+SCREEN
+KEY esc
+SLEEP 800ms
+SCREEN
+KEY ctrl+c
+KEY ctrl+c
+EXIT
