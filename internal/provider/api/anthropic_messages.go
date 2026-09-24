@@ -257,6 +257,10 @@ func anthropicHeaders(model provider.Model, auth Auth, hasTools bool) http.Heade
 	h.Set("Content-Type", "application/json")
 	h.Set("Accept", "application/json")
 	h.Set("anthropic-dangerous-direct-browser-access", "true")
+	// Always sent: pi's Anthropic SDK client adds it on every request,
+	// and the API rejects an OAuth request without it (400, "anthropic-
+	// version: header is required", seen live).
+	h.Set("anthropic-version", anthropicVersion)
 
 	var betas []string
 	if auth.IsOAuth {
@@ -266,7 +270,6 @@ func anthropicHeaders(model provider.Model, auth Auth, hasTools bool) http.Heade
 		betas = append(betas, "claude-code-20250219", "oauth-2025-04-20")
 	} else {
 		h.Set("x-api-key", auth.APIKey)
-		h.Set("anthropic-version", anthropicVersion)
 	}
 	compat := model.AnthropicMessagesCompat()
 	if hasTools && !boolDefault(compat.SupportsEagerToolInputStreaming, true) {
