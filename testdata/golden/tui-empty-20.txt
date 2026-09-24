@@ -1,0 +1,10 @@
+⏺ harness — faux/fau
+x-1
+  Type / for command
+s, @ to reference a
+file, or just ask.
+────────────────────
+❯  Try "fix typechec
+────────────────────
+faux/faux-1 (128k c…
+▶▶ manual mode (shi…

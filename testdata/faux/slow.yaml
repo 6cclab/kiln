@@ -1,0 +1,5 @@
+model: faux-1
+steps:
+  - text: "Done."
+    delay: 800ms
+    usage: {input: 100, output: 12}

@@ -151,6 +151,50 @@ model, real network access, or real API keys are named so they match
 anything network-bound, so a plain `make e2e` (and CI) never talks to the
 network; only `make e2e-live` does.
 
+### Go TUI e2e — `test/e2e/tui_test.go`
+
+Drives the real, compiled `harness` binary's interactive TUI through
+`internal/testkit/screen`: every assertion is against the emulated
+terminal grid (`Rows`/`Viewport`/`CursorRow`/`OccupiedHeight`), never
+against raw escape bytes, matching the screen-layer rule above. It covers
+the startup frame at several widths, the fix-bug flow, the busy/spinner
+state, the inline permission prompt (allow and deny-with-feedback), the
+`/model`/`/permissions`/`/mcp`/`/agents`/`/config` panels, Shift+Tab's
+permission-mode cycle, the Ctrl+R transcript view, a resize sweep, `--ax-
+screen-reader`, the `!`/`#` input modes, and Ctrl+C/Ctrl+D exit.
+
+Run it as part of `make e2e`, or on its own:
+
+    go test -tags e2e ./test/e2e/... -run TestTUI_ -v
+
+To update a golden after an intentional UI change:
+
+    UPDATE=1 go test -tags e2e ./test/e2e/... -run TestTUI_FixBug -v
+
+Goldens live under `testdata/golden/tui-*.txt`. `testdata/faux/slow.yaml`
+(a single response with a `delay`) exists so the busy-state test has
+something to observe while a turn is still running.
+
+A few of these tests carry comments describing real, reproduced bugs
+found while writing them (a modal panel whose key-hint/status rows get
+silently clipped by an undersized height budget; selecting a model
+hanging the whole program) rather than routing around them — see the
+comments at each call site, and the suite's own report, for the repro.
+
+`testdata/drive/tui-smoke.txt` reproduces the fix-bug flow by hand through
+`cmd/harness-drive` instead of a Go test, for a person (or another agent)
+driving the real binary interactively:
+
+    go build -o bin/harness ./cmd/harness
+    go build -o bin/faux ./cmd/faux
+    ./bin/faux testdata/faux/fix-bug.yaml &   # prints its listen address, e.g. 127.0.0.1:54321
+    go run ./cmd/harness-drive --bin bin/harness \
+      --env HARNESS_FAUX_ADDR=127.0.0.1:54321 \
+      --env HARNESS_FAUX_API=anthropic-messages \
+      --env HARNESS_MODEL=faux/faux-1 \
+      -- --permission-mode bypassPermissions \
+      < testdata/drive/tui-smoke.txt
+
 ### Record/replay via `harness-drive --record`
 
 Like the TypeScript layer's `HARNESS_RECORD_TTY`/`npm run replay`,

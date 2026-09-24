@@ -1,0 +1,6 @@
+WAIT ❯
+SEND fix the bug in math.js
+KEY enter
+WAIT Worked for
+SCREEN
+EXIT
