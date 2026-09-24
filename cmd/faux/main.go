@@ -14,8 +14,8 @@ import (
 )
 
 func main() {
-	if err := faux.Main(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "faux:", err)
-		os.Exit(1)
-	}
+	// Main serves until it fails or is interrupted, so it never returns nil.
+	err := faux.Main(os.Args[1:])
+	fmt.Fprintln(os.Stderr, "faux:", err)
+	os.Exit(1)
 }
