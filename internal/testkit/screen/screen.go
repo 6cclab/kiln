@@ -413,6 +413,7 @@ func (s *Screen) WaitFor(pattern any, timeout time.Duration) error {
 	for {
 		rows := s.Viewport()
 		if matches(strings.Join(rows, "\n")) {
+			s.settle(deadline)
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -421,6 +422,36 @@ func (s *Screen) WaitFor(pattern any, timeout time.Duration) error {
 		time.Sleep(15 * time.Millisecond)
 	}
 }
+
+// settle waits until the screen has stopped changing for settleQuiet, or
+// the deadline passes. Bubbletea inserts committed lines immediately but
+// repaints the live region on its own frame tick, so the instant a WAIT
+// pattern appears the frame under it can still be the previous one (a
+// spinner row under a finished turn's summary). A person never sees that
+// frame; a dump taken inside it does.
+func (s *Screen) settle(deadline time.Time) {
+	last := strings.Join(s.Viewport(), "\n")
+	quietSince := time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(15 * time.Millisecond)
+		now := strings.Join(s.Viewport(), "\n")
+		if now != last {
+			last = now
+			quietSince = time.Now()
+			continue
+		}
+		if time.Since(quietSince) >= settleQuiet {
+			return
+		}
+	}
+}
+
+// settleQuiet is how long the screen must stay unchanged after a WAIT
+// match before WaitFor returns. Longer than one Bubbletea frame (16ms),
+// shorter than the 80ms spinner tick so a busy spinner does not hold WAIT
+// hostage: while the spinner animates the frame changes every 80ms, so the
+// 60ms window still closes between ticks.
+const settleQuiet = 60 * time.Millisecond
 
 func dumpRows(rows []string, cols int) string {
 	var b strings.Builder

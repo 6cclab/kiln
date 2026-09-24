@@ -62,3 +62,5 @@ require (
 )
 
 replace github.com/charmbracelet/ultraviolet => ./third_party/ultraviolet
+
+replace charm.land/bubbletea/v2 => ./third_party/bubbletea
