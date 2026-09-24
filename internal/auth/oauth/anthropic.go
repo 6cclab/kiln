@@ -21,15 +21,26 @@ import (
 const anthropicClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
 const (
-	anthropicAuthorizeURL = "https://claude.ai/oauth/authorize"
-	anthropicCallbackPort = 53692
-	anthropicCallbackPath = "/callback"
-	anthropicScopes       = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+	anthropicAuthorizeURL        = "https://claude.ai/oauth/authorize"
+	defaultAnthropicCallbackPort = 53692
+	anthropicCallbackPath        = "/callback"
+	anthropicScopes              = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 )
 
 // anthropicTokenURL is a var, not a const, so tests can point it at an
 // httptest server instead of platform.claude.com.
 var anthropicTokenURL = "https://platform.claude.com/v1/oauth/token"
+
+// SetTokenURLForTesting points the Anthropic OAuth token endpoint at url
+// (an httptest server) for the duration of a test, returning a restore
+// function. For tests outside this package (e.g. internal/auth/login,
+// internal/provider/builtin) that need to exercise LoginAnthropic/
+// RefreshAnthropicToken without a real network call.
+func SetTokenURLForTesting(url string) (restore func()) {
+	orig := anthropicTokenURL
+	anthropicTokenURL = url
+	return func() { anthropicTokenURL = orig }
+}
 
 // anthropicCallbackHost honors PI_OAUTH_CALLBACK_HOST, matching pi's
 // getProviderEnvValue("PI_OAUTH_CALLBACK_HOST").
@@ -40,8 +51,22 @@ func anthropicCallbackHost() string {
 	return "127.0.0.1"
 }
 
-func anthropicRedirectURI() string {
-	return fmt.Sprintf("http://localhost:%d%s", anthropicCallbackPort, anthropicCallbackPath)
+func anthropicRedirectURI(port int) string {
+	return fmt.Sprintf("http://localhost:%d%s", port, anthropicCallbackPath)
+}
+
+// AnthropicLoginOption configures LoginAnthropic.
+type AnthropicLoginOption func(*anthropicLoginConfig)
+
+type anthropicLoginConfig struct {
+	port int
+}
+
+// WithCallbackPort overrides the local callback server's port (default
+// 53692, the same port pi's CLI binds). Tests use this so the local OAuth
+// callback server does not need the real port.
+func WithCallbackPort(port int) AnthropicLoginOption {
+	return func(c *anthropicLoginConfig) { c.port = port }
 }
 
 // AnthropicOAuth is the harness's login/refresh/toAuth surface for Anthropic
@@ -84,15 +109,15 @@ type callbackServer struct {
 	once        sync.Once
 }
 
-func startAnthropicCallbackServer(expectedState string) (*callbackServer, error) {
+func startAnthropicCallbackServer(expectedState string, port int) (*callbackServer, error) {
 	host := anthropicCallbackHost()
-	addr := fmt.Sprintf("%s:%d", host, anthropicCallbackPort)
+	addr := fmt.Sprintf("%s:%d", host, port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 
-	cs := &callbackServer{ln: ln, redirectURI: anthropicRedirectURI(), resultCh: make(chan *authCode, 1)}
+	cs := &callbackServer{ln: ln, redirectURI: anthropicRedirectURI(port), resultCh: make(chan *authCode, 1)}
 	mux := http.NewServeMux()
 	mux.HandleFunc(anthropicCallbackPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -190,7 +215,12 @@ func parseAuthorizationInput(input string) (code, state string) {
 //
 // ctx cancellation aborts the whole flow (matching interaction.signal in the
 // TS version).
-func LoginAnthropic(ctx context.Context, interaction Interaction) (AnthropicToken, error) {
+func LoginAnthropic(ctx context.Context, interaction Interaction, opts ...AnthropicLoginOption) (AnthropicToken, error) {
+	cfg := anthropicLoginConfig{port: defaultAnthropicCallbackPort}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	pkce, err := GeneratePKCE()
 	if err != nil {
 		return AnthropicToken{}, err
@@ -201,7 +231,7 @@ func LoginAnthropic(ctx context.Context, interaction Interaction) (AnthropicToke
 	// what platform.claude.com expects back.
 	state := pkce.Verifier
 
-	cs, err := startAnthropicCallbackServer(state)
+	cs, err := startAnthropicCallbackServer(state, cfg.port)
 	if err != nil {
 		return AnthropicToken{}, fmt.Errorf("start OAuth callback server: %w", err)
 	}

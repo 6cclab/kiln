@@ -117,17 +117,13 @@ func (r *Registry) CheckAuth(ctx context.Context, providerID string) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	if cred != nil {
-		switch spec.Kind {
-		case AuthKindAPIKey:
-			if cred.APIKey != nil {
-				return true, nil
-			}
-		case AuthKindOAuth:
-			if cred.OAuth != nil {
-				return true, nil
-			}
-		}
+	// A stored credential of either kind counts: a provider whose preferred
+	// login flow is OAuth (spec.Kind, used to pick which flow `login` runs)
+	// can still have an api-key credential stored from an earlier login --
+	// pi's resolveProviderAuth dispatches on the stored credential's own
+	// type, not the provider's preferred kind.
+	if cred != nil && ((cred.APIKey != nil && cred.APIKey.Key != "") || cred.OAuth != nil) {
+		return true, nil
 	}
 	for _, envVar := range spec.EnvVars {
 		if v := os.Getenv(envVar); v != "" {

@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"id":"chatcmpl_trunc","model":"faux-1","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"Hello, wor

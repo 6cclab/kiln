@@ -1,0 +1,20 @@
+data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"id":"chatcmpl_faux_1","model":"faux-1","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"Reasonin"},"finish_reason":null,"index":0}],"id":"chatcmpl_faux_1","model":"faux-1","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"g about "},"finish_reason":null,"index":0}],"id":"chatcmpl_faux_1","model":"faux-1","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"the ques"},"finish_reason":null,"index":0}],"id":"chatcmpl_faux_1","model":"faux-1","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning_content":"tion."},"finish_reason":null,"index":0}],"id":"chatcmpl_faux_1","model":"faux-1","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"Here is "},"finish_reason":null,"index":0}],"id":"chatcmpl_faux_1","model":"faux-1","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"the answ"},"finish_reason":null,"index":0}],"id":"chatcmpl_faux_1","model":"faux-1","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"er."},"finish_reason":null,"index":0}],"id":"chatcmpl_faux_1","model":"faux-1","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"id":"chatcmpl_faux_1","model":"faux-1","object":"chat.completion.chunk","usage":{"completion_tokens":80,"prompt_tokens":200,"total_tokens":280}}
+
+data: [DONE]
+
