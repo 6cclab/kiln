@@ -1,0 +1,4 @@
+data: {"responseId":"resp-2","candidates":[{"content":{"role":"model","parts":[{"text":"Thinking about the question.","thought":true,"thoughtSignature":"c2lnbmF0dXJl"}]},"index":0}]}
+
+data: {"responseId":"resp-2","candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"search","args":{"query":"weather in san francisco"}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":8,"thoughtsTokenCount":3,"cachedContentTokenCount":4,"totalTokenCount":35}}
+

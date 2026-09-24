@@ -1,0 +1,18 @@
+data: {"type":"start"}
+
+data: {"type":"thinking_start","contentIndex":0}
+
+data: {"type":"thinking_delta","contentIndex":0,"delta":"Let me check that."}
+
+data: {"type":"thinking_end","contentIndex":0,"content":"Let me check that.","contentSignature":"sig-abc"}
+
+data: {"type":"toolcall_start","contentIndex":1,"id":"tc1","toolName":"search"}
+
+data: {"type":"toolcall_delta","contentIndex":1,"delta":"{\"query\":"}
+
+data: {"type":"toolcall_delta","contentIndex":1,"delta":"\"weather\"}"}
+
+data: {"type":"toolcall_end","contentIndex":1,"toolCall":{"type":"toolCall","id":"tc1","name":"search","arguments":{"query":"weather"}}}
+
+data: {"type":"done","reason":"toolUse","usage":{"input":30,"output":12,"cacheRead":0,"cacheWrite":0,"totalTokens":42,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"responseId":"pi-resp-2"}
+

@@ -1,0 +1,4 @@
+data: {"responseId":"resp-1","candidates":[{"content":{"role":"model","parts":[{"text":"Hello "}]},"index":0}]}
+
+data: {"responseId":"resp-1","candidates":[{"content":{"role":"model","parts":[{"text":"world."}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}
+

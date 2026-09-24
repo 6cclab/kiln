@@ -1,0 +1,12 @@
+data: {"type":"start"}
+
+data: {"type":"text_start","contentIndex":0}
+
+data: {"type":"text_delta","contentIndex":0,"delta":"Hello "}
+
+data: {"type":"text_delta","contentIndex":0,"delta":"world."}
+
+data: {"type":"text_end","contentIndex":0,"content":"Hello world."}
+
+data: {"type":"done","reason":"stop","usage":{"input":10,"output":4,"cacheRead":0,"cacheWrite":0,"totalTokens":14,"cost":{"input":0.00003,"output":0.00006,"cacheRead":0,"cacheWrite":0,"total":0.00009}},"responseId":"pi-resp-1"}
+
