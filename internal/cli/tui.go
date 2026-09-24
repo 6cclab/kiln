@@ -74,7 +74,25 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	unwire := bridge.Wire(deps.Started, deps.Resolved.Tier.ToolOutputTokens)
 	defer unwire()
 
-	deps.Gate.SetPrompter(bridge.Prompter(deps.Cwd))
+	// Notification fires when the user is about to be asked for
+	// permission, before the prompt paints, as Claude Code's
+	// permission_prompt notification does.
+	prompter := bridge.Prompter(deps.Cwd)
+	deps.Gate.SetPrompter(func(ctx context.Context, req permission.Request) (permission.PromptChoice, error) {
+		claudehooks.RunHooks(claudehooks.RunOptions{
+			Config: deps.HookConfig,
+			Event:  claudehooks.Notification,
+			Payload: claudehooks.Payload{
+				SessionID:        deps.Started.SessionID,
+				TranscriptPath:   deps.Started.TranscriptPath,
+				Cwd:              deps.Cwd,
+				Message:          "Claude needs your permission to use " + req.ToolName,
+				NotificationType: "permission_prompt",
+			},
+			OnNotice: bridge.HookNotice,
+		})
+		return prompter(ctx, req)
+	})
 	if deps.SetPlanApprover != nil {
 		approve := bridge.PlanApprover()
 		deps.SetPlanApprover(func(ctx context.Context, plan string) (tools.PlanDecision, error) {

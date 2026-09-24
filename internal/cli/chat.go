@@ -508,6 +508,62 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Hooks from .claude/settings.json, accumulated across scopes.
 	hookConfig := claudehooks.LoadHooks(cwd)
 
+	// The four events the TS parsed but never fired. Stop runs when the
+	// parent's run ends; a blocking Stop hook is reported to the user, not
+	// fed back into the model (this port does not re-prompt on Stop).
+	// PreCompact runs when the harness starts compacting; the harness does
+	// not tell us whether /compact or the threshold triggered it, so the
+	// trigger is always "auto". SubagentStop runs from the dispatcher when
+	// a subagent's run ends. Notification is wired where the permission
+	// prompt is shown (internal/cli/tui.go).
+	stopHookActive := false
+	started.Harness.Events().On(harness.EventRunEnd, func(ev harness.Event) {
+		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
+			Config: hookConfig,
+			Event:  claudehooks.Stop,
+			Payload: claudehooks.Payload{
+				SessionID:      sessionID,
+				TranscriptPath: transcriptPath,
+				Cwd:            cwd,
+				StopHookActive: &stopHookActive,
+			},
+			OnNotice: notice,
+		})
+		if outcome.Blocked != nil {
+			notice("Stop hook asked to continue: " + outcome.Blocked.Reason)
+		}
+	})
+	started.Harness.Events().On(harness.EventCompactionStart, func(ev harness.Event) {
+		claudehooks.RunHooks(claudehooks.RunOptions{
+			Config: hookConfig,
+			Event:  claudehooks.PreCompact,
+			Payload: claudehooks.Payload{
+				SessionID:      sessionID,
+				TranscriptPath: transcriptPath,
+				Cwd:            cwd,
+				Trigger:        "auto",
+			},
+			OnNotice: notice,
+		})
+	})
+	dispatcher.OnSubagentStop = func(agentName string, sub *agent.Started) {
+		subSession, subTranscript := sessionID, transcriptPath
+		if sub != nil {
+			subSession, subTranscript = sub.SessionID, sub.TranscriptPath
+		}
+		claudehooks.RunHooks(claudehooks.RunOptions{
+			Config: hookConfig,
+			Event:  claudehooks.SubagentStop,
+			Payload: claudehooks.Payload{
+				SessionID:      subSession,
+				TranscriptPath: subTranscript,
+				Cwd:            cwd,
+				StopHookActive: &stopHookActive,
+			},
+			OnNotice: notice,
+		})
+	}
+
 	registry := buildCommandRegistry(registryDeps{
 		Cwd:                cwd,
 		Started:            started,

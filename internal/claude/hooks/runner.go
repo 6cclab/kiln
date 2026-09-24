@@ -22,6 +22,17 @@ type Payload struct {
 	ToolResponse   any            `json:"tool_response,omitempty"`
 	Prompt         string         `json:"prompt,omitempty"`
 	Reason         string         `json:"reason,omitempty"`
+	// Stop / SubagentStop: true when the run is already continuing because
+	// of a Stop hook. Always sent for those events, so a pointer, not a
+	// bool with omitempty.
+	StopHookActive *bool `json:"stop_hook_active,omitempty"`
+	// Notification: the text shown to the user and its kind
+	// ("permission_prompt").
+	Message          string `json:"message,omitempty"`
+	NotificationType string `json:"notification_type,omitempty"`
+	// PreCompact: "auto" or "manual", and the user's /compact instructions.
+	Trigger            string `json:"trigger,omitempty"`
+	CustomInstructions string `json:"custom_instructions,omitempty"`
 }
 
 // Blocked is set when a hook refused the call.

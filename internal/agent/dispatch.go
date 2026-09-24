@@ -59,6 +59,10 @@ type Dispatcher struct {
 	// SessionsRoot is where the subagent's own JSONL session file is
 	// created, alongside the parent's.
 	SessionsRoot string
+	// OnSubagentStop, if set, runs once when a dispatched subagent's run
+	// has ended, however it ended. It carries the subagent's own session so
+	// the SubagentStop hook can name its transcript.
+	OnSubagentStop func(agentName string, sub *Started)
 	// Env is the filesystem/shell context the subagent's built-in tools
 	// run against; its Cwd anchors the subagent's session too.
 	Env *execenv.Env
@@ -187,6 +191,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, agentName, description, promp
 	defer unsubMsg()
 
 	result, err := started.Lane.Prompt(ctx, prompt, nil)
+	if d.OnSubagentStop != nil {
+		d.OnSubagentStop(def.Name, started)
+	}
 	if err != nil {
 		if d.OnEvent != nil {
 			d.OnEvent(SubagentEvent{Kind: SubagentEventError, Agent: def.Name, Message: err.Error()})
