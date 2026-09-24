@@ -8,6 +8,22 @@ import (
 
 const largeFixture = "../../../testdata/sessions/2026-09-23T11-37-47-498Z_01a0ce0e-bcea-7701-a97e-cc374e8c56d1.jsonl"
 
+// threeSeedWrites returns three arbitrary value writes (a lane's tip,
+// config and state), used only to give storage-layer tests a nonzero seq
+// to start from. It is not a copy of any production write sequence — the
+// harness package (internal/harness) is what actually writes a lane's
+// initial values, on that lane's first use.
+func threeSeedWrites(lane string) []session.Write {
+	tip, _ := session.SetValue(session.BranchTip(lane), (*string)(nil))
+	cfg, _ := session.SetValue(session.LaneConfig(lane), session.LaneConfiguration{
+		Model:           session.ModelRef{Provider: "ollama", ModelID: "qwen3.8:latest"},
+		ThinkingLevel:   "off",
+		ActiveToolNames: []string{"bash"},
+	})
+	st, _ := session.SetValue(session.LaneStateValue(lane), session.LaneState{Inbox: []session.InboxItem{}})
+	return []session.Write{tip, cfg, st}
+}
+
 // TestOpenLargeFixture opens the 1090-line real fixture and asserts header
 // identity, lane configuration, the branch tip, and that ScanBranch from
 // that tip reaches every entry with every parentId resolved.
@@ -82,7 +98,7 @@ func TestCommitAndReopen(t *testing.T) {
 		V: session.FormatVersion, Kind: "header", ID: "test-id",
 		StorageVersion: session.StorageVersion, CreatedAt: 1000, Cwd: "/tmp/proj",
 	}
-	st, err := Create(path, header, initialLaneWrites("main"), nil)
+	st, err := Create(path, header, threeSeedWrites("main"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

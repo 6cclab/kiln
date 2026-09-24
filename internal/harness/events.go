@@ -1,0 +1,211 @@
+package harness
+
+import (
+	"sync"
+	"sync/atomic"
+
+	"github.com/andrepato/harness/internal/msg"
+)
+
+// EventType is the discriminator on Event, covering all 34 pi harness
+// event variants (agent-harness.d.ts HarnessEvent).
+type EventType string
+
+const (
+	EventRunStart   EventType = "run_start"
+	EventRunResume  EventType = "run_resume"
+	EventRunSuspend EventType = "run_suspend"
+	EventRunEnd     EventType = "run_end"
+	EventTurnStart  EventType = "turn_start"
+	EventTurnEnd    EventType = "turn_end"
+
+	EventMessageStart  EventType = "message_start"
+	EventMessageUpdate EventType = "message_update"
+	EventMessageEnd    EventType = "message_end"
+
+	EventToolStart  EventType = "tool_start"
+	EventToolUpdate EventType = "tool_update"
+	EventToolEnd    EventType = "tool_end"
+
+	EventRetryScheduled EventType = "retry_scheduled"
+	EventRetryStart     EventType = "retry_start"
+	EventRetryEnd       EventType = "retry_end"
+
+	EventCompactionStart EventType = "compaction_start"
+	EventCompactionEnd   EventType = "compaction_end"
+
+	EventNavigationStart EventType = "navigation_start"
+	EventNavigationEnd   EventType = "navigation_end"
+
+	EventEntryAdded     EventType = "entry_added"
+	EventLaneCreated    EventType = "lane_created"
+	EventQueueUpdate    EventType = "queue_update"
+	EventOperationAbort EventType = "operation_abort"
+
+	EventConfigUpdate EventType = "config_update"
+	EventValueUpdate  EventType = "value_update"
+
+	EventFault        EventType = "fault"
+	EventHandlerError EventType = "handler_error"
+	EventUsage        EventType = "usage"
+)
+
+// ConfigProperty names the field config_update reports as having changed.
+type ConfigProperty string
+
+const (
+	ConfigModel              ConfigProperty = "model"
+	ConfigThinkingLevel      ConfigProperty = "thinkingLevel"
+	ConfigActiveTools        ConfigProperty = "activeTools"
+	ConfigTools              ConfigProperty = "tools"
+	ConfigResources          ConfigProperty = "resources"
+	ConfigStreamOptions      ConfigProperty = "streamOptions"
+	ConfigRetryPolicy        ConfigProperty = "retryPolicy"
+	ConfigCompactionSettings ConfigProperty = "compactionSettings"
+	ConfigSteeringMode       ConfigProperty = "steeringMode"
+	ConfigFollowUpMode       ConfigProperty = "followUpMode"
+)
+
+// ValueNamespace names the field value_update reports as having changed.
+type ValueNamespace string
+
+const (
+	ValueSessionName ValueNamespace = "session_name"
+	ValueEntryLabel  ValueNamespace = "entry_label"
+)
+
+// Event is one flat superset of every pi harness event payload, tagged by
+// Type. Only the fields relevant to Type are populated. This trades a
+// larger struct for a hot path with no per-variant allocation or type
+// assertion, as the plan specifies.
+type Event struct {
+	Type EventType
+	Lane string
+
+	OperationID string
+	EntryID     string
+	ParentID    string
+
+	// message_update
+	StreamEvent *msg.StreamEvent
+
+	// tool_start/tool_update/tool_end
+	ToolCallID string
+	ToolName   string
+	ToolArgs   map[string]any
+	ToolResult *msg.ToolResultMessage
+
+	// retry_*
+	Attempt     int
+	MaxAttempts int
+	DelayMs     int64
+	RetryError  string
+
+	// compaction_*
+	CompactionSummary string
+
+	// navigation_*
+	TargetEntryID string
+
+	// config_update
+	ConfigProperty ConfigProperty
+
+	// value_update
+	ValueNamespace ValueNamespace
+	ValueKey       string
+
+	// fault / handler_error
+	Err      error
+	HookName string
+
+	// usage
+	UsageRow    *msg.Usage
+	UsageTotals *msg.Usage
+
+	// run_end / turn_end
+	Status string // "completed" | "aborted" | "failed"
+	TipID  string
+
+	// queue_update
+	QueueLen int
+}
+
+// Events is a synchronous, in-process pub/sub bus for Event. Handlers run
+// on the emitting goroutine (the lane's turn loop), in subscription order;
+// a slow or blocking handler will therefore delay the loop, matching pi's
+// own synchronous EventEmitter semantics.
+type Events struct {
+	mu        sync.Mutex
+	byType    map[EventType][]subscription
+	all       []subscription
+	nextToken int64
+}
+
+type subscription struct {
+	token int64
+	fn    func(Event)
+}
+
+// NewEvents returns an empty Events bus.
+func NewEvents() *Events {
+	return &Events{byType: map[EventType][]subscription{}}
+}
+
+// On registers fn to run for every event of the given type. The returned
+// func unsubscribes it.
+func (e *Events) On(t EventType, fn func(Event)) func() {
+	tok := atomic.AddInt64(&e.nextToken, 1)
+	e.mu.Lock()
+	e.byType[t] = append(e.byType[t], subscription{token: tok, fn: fn})
+	e.mu.Unlock()
+	return func() { e.unsubscribeType(t, tok) }
+}
+
+// OnAll registers fn to run for every event, of any type, in emission
+// order. The returned func unsubscribes it.
+func (e *Events) OnAll(fn func(Event)) func() {
+	tok := atomic.AddInt64(&e.nextToken, 1)
+	e.mu.Lock()
+	e.all = append(e.all, subscription{token: tok, fn: fn})
+	e.mu.Unlock()
+	return func() { e.unsubscribeAll(tok) }
+}
+
+func (e *Events) unsubscribeType(t EventType, tok int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	subs := e.byType[t]
+	for i, s := range subs {
+		if s.token == tok {
+			e.byType[t] = append(subs[:i:i], subs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (e *Events) unsubscribeAll(tok int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i, s := range e.all {
+		if s.token == tok {
+			e.all = append(e.all[:i:i], e.all[i+1:]...)
+			return
+		}
+	}
+}
+
+// Emit runs every matching handler synchronously, in subscription order:
+// type-specific handlers first, then OnAll handlers, matching pi's
+// emitter.emit(type, ...) then emitter.emit('*', ...) order.
+func (e *Events) Emit(ev Event) {
+	e.mu.Lock()
+	byType := append([]subscription(nil), e.byType[ev.Type]...)
+	all := append([]subscription(nil), e.all...)
+	e.mu.Unlock()
+	for _, s := range byType {
+		s.fn(ev)
+	}
+	for _, s := range all {
+		s.fn(ev)
+	}
+}

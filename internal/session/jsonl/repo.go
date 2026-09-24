@@ -127,8 +127,13 @@ func (r *Repo) Create(opts CreateOptions) (*Storage, Metadata, error) {
 		Cwd:             opts.Cwd,
 		ParentSessionID: opts.ParentSessionID,
 	}
-	initial := initialLaneWrites("main")
-	storage, err := Create(path, header, initial, r.Now)
+	// Create writes only the header; a lane's initial pi.branch.tip /
+	// pi.lane.config / pi.lane.state values are written by
+	// harness.Harness.Lane on that lane's first use, matching pi's
+	// repo.create (which writes only the header) and moving the lane
+	// bootstrap into the harness layer where the lane's actual
+	// configuration (model, tools) is known.
+	storage, err := Create(path, header, nil, r.Now)
 	if err != nil {
 		_ = os.Remove(path)
 		return nil, Metadata{}, err
@@ -138,21 +143,6 @@ func (r *Repo) Create(opts CreateOptions) (*Storage, Metadata, error) {
 		return nil, Metadata{}, err
 	}
 	return storage, metadataFromHeader(header, path, info.ModTime().UnixMilli()), nil
-}
-
-// initialLaneWrites is the transaction pi writes on Create: an empty
-// "main" branch tip, its default lane configuration, and its idle lane
-// state — copied from the shapes in testdata/sessions/*_...9d61e6.jsonl
-// (the 2-line fixture).
-func initialLaneWrites(lane string) []session.Write {
-	tip, _ := session.SetValue(session.BranchTip(lane), (*string)(nil))
-	cfg, _ := session.SetValue(session.LaneConfig(lane), session.LaneConfiguration{
-		Model:           session.ModelRef{Provider: "ollama", ModelID: "qwen3.8:latest"},
-		ThinkingLevel:   "off",
-		ActiveToolNames: []string{"bash", "read", "edit", "write", "session_search", "todo_write", "exit_plan_mode", "task", "tool_search"},
-	})
-	st, _ := session.SetValue(session.LaneStateValue(lane), session.LaneState{Inbox: []session.InboxItem{}})
-	return []session.Write{tip, cfg, st}
 }
 
 func assertSessionIDAvailable(dir, id string) error {

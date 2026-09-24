@@ -23,11 +23,13 @@ func TestNaming(t *testing.T) {
 	}
 }
 
-// TestCreateMatchesFixtureShape creates a fresh session in a temp root and
-// compares its header and first transaction's shape (same keys, same
-// namespaces, same value shapes) to the 2-line fixture; ids and timestamps
-// necessarily differ.
-func TestCreateMatchesFixtureShape(t *testing.T) {
+// TestCreateWritesHeaderOnly asserts Repo.Create writes only the header
+// line, matching pi's repo.create. The lane-bootstrap transaction (branch
+// tip / lane config / lane state) that the small fixture's second line
+// shows is written by harness.Harness.Lane on a lane's first use instead
+// (see internal/harness's TestLaneCreationWritesMatchFixtureShape), because
+// only the harness layer knows the lane's actual model/tool configuration.
+func TestCreateWritesHeaderOnly(t *testing.T) {
 	repo, err := NewRepo(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -43,8 +45,8 @@ func TestCreateMatchesFixtureShape(t *testing.T) {
 		t.Fatalf("fixture has %d lines, want 2", len(fixtureLines))
 	}
 	gotLines := readLines(t, meta.Path)
-	if len(gotLines) != 2 {
-		t.Fatalf("created session has %d lines, want 2", len(gotLines))
+	if len(gotLines) != 1 {
+		t.Fatalf("created session has %d lines, want 1 (header only): %v", len(gotLines), gotLines)
 	}
 
 	var wantHeader, gotHeader map[string]any
@@ -58,23 +60,6 @@ func TestCreateMatchesFixtureShape(t *testing.T) {
 	for _, key := range []string{"id", "cwd", "createdAt"} {
 		if _, ok := gotHeader[key]; !ok {
 			t.Errorf("header missing key %q", key)
-		}
-	}
-
-	var wantTxn, gotTxn []map[string]any
-	mustUnmarshal(t, fixtureLines[1], &wantTxn)
-	mustUnmarshal(t, gotLines[1], &gotTxn)
-	if len(wantTxn) != len(gotTxn) {
-		t.Fatalf("transaction has %d writes, want %d", len(gotTxn), len(wantTxn))
-	}
-	for i := range wantTxn {
-		wantNamespace := wantTxn[i]["namespace"]
-		gotNamespace := gotTxn[i]["namespace"]
-		if wantNamespace != gotNamespace {
-			t.Errorf("write[%d].namespace = %v, want %v", i, gotNamespace, wantNamespace)
-		}
-		if wantTxn[i]["kind"] != gotTxn[i]["kind"] || wantTxn[i]["op"] != gotTxn[i]["op"] {
-			t.Errorf("write[%d] kind/op mismatch: got %v/%v want %v/%v", i, gotTxn[i]["kind"], gotTxn[i]["op"], wantTxn[i]["kind"], wantTxn[i]["op"])
 		}
 	}
 
