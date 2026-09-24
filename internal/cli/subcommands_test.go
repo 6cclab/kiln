@@ -100,7 +100,7 @@ func TestMCP_NoConfig(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	var stdout, stderr bytes.Buffer
-	code := MCP(context.Background(), "", &stdout, &stderr)
+	code := MCP(context.Background(), baseArgs(), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
 	}

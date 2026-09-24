@@ -1,0 +1,211 @@
+// Package cli, this file: builds the slash-command registry, wiring every
+// internal/commands source's Deps struct against this run's session,
+// following cli.ts's registration order (src/cli.ts:381-533) — least
+// specific first, so a later source's command of the same name wins.
+//
+// Deviation from cli.ts's literal registration order: internal/commands'
+// InlineCommands bundles /posture, /bashes and /todos into ONE Source
+// (cli.ts registers them at three separate points: posture early, bashes
+// after sessionCommands, todos last, after manageCommands). Splitting that
+// package to match the three positions exactly is out of this phase's
+// scope (internal/commands is not owned by this agent). Registering
+// InlineCommands last instead reproduces cli.ts's actual OUTCOME — its
+// /todos still wins over accountCommands' /todos, the only collision that
+// position affects — even though /posture and /bashes land later than
+// cli.ts places them. See the phase report for this deviation.
+package cli
+
+import (
+	"context"
+	"strings"
+
+	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/budget"
+	claudeagents "github.com/andrepato/harness/internal/claude/agents"
+	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
+	"github.com/andrepato/harness/internal/claude/permission"
+	claudeskills "github.com/andrepato/harness/internal/claude/skills"
+	"github.com/andrepato/harness/internal/claude/writesettings"
+	slashcommands "github.com/andrepato/harness/internal/commands"
+	mcpgate "github.com/andrepato/harness/internal/mcp"
+	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/session/jsonl"
+)
+
+// registryDeps is everything buildCommandRegistry needs from Run. Kept as
+// one struct rather than a long parameter list, since most of its fields
+// are handed unchanged to several of internal/commands' Deps structs.
+type registryDeps struct {
+	Cwd     string
+	Started *agent.Started
+
+	Registry *provider.Registry
+	Gate     *permission.Gate
+	Hooks    claudehooks.Config
+	Agents   []claudeagents.Definition
+	Skills   []claudeskills.Skill
+	MCP      *mcpSession
+	Todos    *agent.TodoStore
+
+	SettingsLoadedFrom []string
+	// ModelLabel is a snapshot taken at construction time, matching cli.ts:
+	// none of the report/manage commands re-read it after a /model switch
+	// (cli.ts computes `modelLabel: \`${provider}/${modelId}\`` once, from
+	// the session's initial resolve, and never updates it).
+	ModelLabel string
+
+	SessionRepo *jsonl.Repo
+	SessionsDir string
+
+	// ContextUsed reports the last usage event's total token count, for
+	// /usage. Nil is treated as "no usage yet".
+	ContextUsed func() (int, bool)
+}
+
+// mcpStatusesOf adapts mcp.ServerStatus onto slashcommands.ServerStatus, the
+// shape internal/commands' Deps structs use since that package cannot
+// import internal/mcp (see inspect_commands.go's own doc comment on this).
+func mcpStatusesOf(hub *mcpgate.Hub) func() []slashcommands.ServerStatus {
+	return func() []slashcommands.ServerStatus {
+		statuses := hub.Statuses()
+		out := make([]slashcommands.ServerStatus, len(statuses))
+		for i, s := range statuses {
+			out[i] = slashcommands.ServerStatus{Name: s.Name, OK: s.OK, ToolCount: s.ToolCount, Ms: s.Ms, Error: s.Error}
+		}
+		return out
+	}
+}
+
+// mcpToolsOf adapts mcp.McpTool onto slashcommands.MCPTool for /mcp's "t" (list
+// tools) action.
+func mcpToolsOf(hub *mcpgate.Hub) func() []slashcommands.MCPTool {
+	return func() []slashcommands.MCPTool {
+		tools := hub.Tools()
+		out := make([]slashcommands.MCPTool, len(tools))
+		for i, t := range tools {
+			out[i] = slashcommands.MCPTool{Name: t.Name, Server: t.Server}
+		}
+		return out
+	}
+}
+
+// isUnknownCommandResult reports whether res is registry.Execute's own
+// "not a command"/"no such command" failure text (commands/registry.go's
+// Execute: "Not a valid command: " / "Unknown command: "), as opposed to a
+// real command that simply has nothing to print. Print mode exits 1 for
+// the former and 0 for the latter.
+func isUnknownCommandResult(res slashcommands.Result) bool {
+	if res.Prompt != "" || len(res.Output) != 1 {
+		return false
+	}
+	line := res.Output[0]
+	return strings.HasPrefix(line, "Not a valid command: ") || strings.HasPrefix(line, "Unknown command: ")
+}
+
+// posturesOf adapts mcp.Postures onto slashcommands.Posture for InlineDeps.
+func posturesOf() []slashcommands.Posture {
+	out := make([]slashcommands.Posture, len(mcpgate.Postures))
+	for i, p := range mcpgate.Postures {
+		out[i] = slashcommands.Posture{Name: p.Name, Description: p.Description}
+	}
+	return out
+}
+
+// buildCommandRegistry wires every internal/commands source against this
+// run's session and returns the assembled registry, ready for
+// registry.Execute / registry.List.
+func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Registry {
+	started := deps.Started
+	reg := deps.Registry
+	gate := deps.Gate
+	mcpSess := deps.MCP
+
+	registry := slashcommands.NewRegistry()
+
+	builtinSource := slashcommands.BuiltinCommands(slashcommands.BuiltinDeps{
+		Lane:     started.Lane,
+		Registry: reg,
+		CurrentModel: func() (string, string) {
+			return started.Model.Provider, started.Model.ID
+		},
+		CurrentTier: func() budget.Tier { return started.Tier },
+		SwitchModel: func(ctx context.Context, providerID, modelID string) (budget.Tier, error) {
+			return switchModel(ctx, reg, started, mcpSess, providerID, modelID)
+		},
+		Agents:      deps.Agents,
+		SessionsDir: deps.SessionsDir,
+		OnClear:     func() {},
+		OnExit:      func() {},
+	})
+	registry.Add(slashcommands.BindHelp(builtinSource, registry.List))
+
+	registry.Add(slashcommands.SkillSource(deps.Skills))
+
+	registry.Add(slashcommands.SessionCommands(slashcommands.SessionCommandDeps{
+		Lane:        started.Lane,
+		Repo:        deps.SessionRepo,
+		Gate:        gate,
+		Cwd:         deps.Cwd,
+		SessionsDir: deps.SessionsDir,
+	}))
+
+	registry.Add(slashcommands.AccountCommands(slashcommands.AccountDeps{
+		Registry:    reg,
+		Todos:       deps.Todos,
+		Tier:        started.Tier,
+		ModelLabel:  deps.ModelLabel,
+		ContextUsed: deps.ContextUsed,
+	}))
+
+	registry.Add(slashcommands.InspectCommands(slashcommands.InspectDeps{
+		MCPStatuses:        mcpStatusesOf(hub),
+		Gate:               gate,
+		Hooks:              deps.Hooks,
+		Agents:             deps.Agents,
+		Tier:               started.Tier,
+		Cwd:                deps.Cwd,
+		ModelLabel:         deps.ModelLabel,
+		ActiveTools:        func() ([]string, error) { return started.Lane.GetActiveTools() },
+		SettingsLoadedFrom: deps.SettingsLoadedFrom,
+	}))
+
+	registry.Add(slashcommands.ManageCommands(slashcommands.ManageDeps{
+		Gate:               gate,
+		MCPStatuses:        mcpStatusesOf(hub),
+		MCPTools:           mcpToolsOf(hub),
+		Hooks:              deps.Hooks,
+		Agents:             deps.Agents,
+		Cwd:                deps.Cwd,
+		ModelLabel:         deps.ModelLabel,
+		SettingsLoadedFrom: deps.SettingsLoadedFrom,
+		SaveRule: func(list writesettings.RuleList, rule string) error {
+			gate.AddRule(permission.RuleList(list), rule)
+			return writesettings.AddRule(deps.Cwd, list, rule)
+		},
+		RemoveRule: func(list writesettings.RuleList, rule string) error {
+			gate.RemoveRule(permission.RuleList(list), rule)
+			return writesettings.RemoveRule(deps.Cwd, list, rule)
+		},
+	}))
+
+	registry.Add(slashcommands.InlineCommands(slashcommands.InlineDeps{
+		Postures:      posturesOf(),
+		ActivePosture: func() string { return mcpSess.posture.Name },
+		PostureToolCount: func(name string) int {
+			p, ok := mcpgate.PostureByName(name)
+			if !ok {
+				return 0
+			}
+			return len(scopedMCPTools(mcpSess.tools, p))
+		},
+		SwitchPosture:   func(ctx context.Context, name string) error { return switchPosture(mcpSess, name) },
+		RenderShellList: nil, // phase 6: internal/agent/background-shell
+		Todos:           deps.Todos,
+	}))
+
+	for _, s := range slashcommands.ClaudeCommandSources(deps.Cwd) {
+		registry.Add(s)
+	}
+
+	return registry
+}

@@ -69,7 +69,7 @@ func run(argv []string) int {
 	case "doctor":
 		return cli.Doctor(ctx, args, os.Stdout, os.Stderr)
 	case "mcp":
-		return cli.MCP(ctx, args.MCPConfig, os.Stdout, os.Stderr)
+		return cli.MCP(ctx, args, os.Stdout, os.Stderr)
 	case "session":
 		return sessionCommand(args.Positional)
 	default:

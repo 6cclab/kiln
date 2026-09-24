@@ -6,7 +6,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,9 +18,10 @@ import (
 	authlogin "github.com/andrepato/harness/internal/auth/login"
 	"github.com/andrepato/harness/internal/budget"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
-	"github.com/andrepato/harness/internal/claude/paths"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
+	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/search"
 )
 
 // subscriptionProviders returns the provider ids whose auth is a
@@ -186,9 +186,9 @@ var hookEvents = []claudehooks.Event{
 }
 
 // Doctor implements `harness doctor` / the `/doctor` report from
-// inspect-commands.ts, adapted to this phase's scope: no MCP hub and no
-// subagent roster exist yet, so those two lines say so plainly rather than
-// reporting a fake zero.
+// inspect-commands.ts: it connects to MCP for real (same as `harness mcp`)
+// rather than reporting a placeholder, and reports the resident tool count
+// against the resolved model's tier and tool strategy.
 func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -215,6 +215,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 
 	lines := []string{fmt.Sprintf("model      %s", wanted)}
 
+	var strategy budget.ToolStrategy
 	providerID, modelID, ok := splitProviderModel(wanted)
 	if ok {
 		reg := buildRegistry()
@@ -225,13 +226,31 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		if err != nil {
 			lines = append(lines, fmt.Sprintf("tier       unresolvable: %v", err))
 		} else {
+			strategy = resolved.Tier.ToolStrategy
 			lines = append(lines, fmt.Sprintf("tier       %s (%d tokens)", resolved.Tier.Name, resolved.Tier.ContextWindow))
-			lines = append(lines, fmt.Sprintf(`tools      4 resident, strategy "%s"`, resolved.Tier.ToolStrategy))
 		}
 	}
 
-	// phase 5: MCP hub status belongs here once it exists.
-	lines = append(lines, "mcp        not connected yet (phase 5)")
+	hub := mcpgate.NewHub()
+	mcpConfigs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
+	hub.ConnectAll(ctx, mcpConfigs)
+	defer hub.Close(ctx)
+	statuses := hub.Statuses()
+	connected := 0
+	for _, s := range statuses {
+		if s.OK {
+			connected++
+		}
+	}
+	lines = append(lines, fmt.Sprintf("mcp        %d/%d connected", connected, len(statuses)))
+
+	hasSessionSearch := false
+	if s, err := search.Open(""); err == nil {
+		hasSessionSearch = true
+		_ = s.Close()
+	}
+	residentNow := residentToolNames(hasSessionSearch)
+	lines = append(lines, fmt.Sprintf(`tools      %d resident, strategy "%s"`, len(residentNow), strategy))
 
 	hookConfig := claudehooks.LoadHooks(cwd)
 	hookCount := 0
@@ -280,63 +299,17 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// mcpServerConfig mirrors mcp/client.ts's McpServerConfig, read from
-// ~/.claude.json's "mcpServers" map.
-type mcpServerConfig struct {
-	Type    string            `json:"type"`
-	Command string            `json:"command"`
-	Args    []string          `json:"args"`
-	Env     map[string]string `json:"env"`
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers"`
-}
-
-func readMCPServerConfigs(path string) map[string]mcpServerConfig {
-	if path == "" {
-		path = paths.ClaudeJSONPath()
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var cfg struct {
-		MCPServers map[string]mcpServerConfig `json:"mcpServers"`
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil
-	}
-	return cfg.MCPServers
-}
-
 // MCP implements `harness mcp` / the `/mcp` report from
-// inspect-commands.ts, adapted to this phase's scope: no MCP hub connects
-// yet, so servers are listed by configuration only, with their status
-// explicitly deferred rather than faked as connected or failed.
-func MCP(ctx context.Context, mcpConfigPath string, stdout, stderr io.Writer) int {
-	servers := readMCPServerConfigs(mcpConfigPath)
-	if len(servers) == 0 {
-		fmt.Fprintln(stdout, "No MCP servers configured. They are read from ~/.claude.json")
-		return 0
-	}
-
-	names := make([]string, 0, len(servers))
-	for name := range servers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	fmt.Fprintf(stdout, "%d server(s) configured. Connection status arrives in phase 5.\n\n", len(names))
-	for _, name := range names {
-		cfg := servers[name]
-		switch {
-		case cfg.URL != "":
-			fmt.Fprintf(stdout, "  %-22s url      %s\n", name, cfg.URL)
-		case cfg.Command != "":
-			fmt.Fprintf(stdout, "  %-22s command  %s %s\n", name, cfg.Command, strings.Join(cfg.Args, " "))
-		default:
-			fmt.Fprintf(stdout, "  %-22s (no command or url configured)\n", name)
-		}
-	}
+// inspect-commands.ts: it connects to every configured server for real
+// (ResolveConfigs applies --mcp-config/--strict-mcp-config the same way
+// chat.go's Run does) and renders mcp.RenderMCPReport's connected/failed
+// summary, rather than listing configuration only.
+func MCP(ctx context.Context, args Args, stdout, stderr io.Writer) int {
+	configs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
+	hub := mcpgate.NewHub()
+	hub.ConnectAll(ctx, configs)
+	defer hub.Close(ctx)
+	fmt.Fprintln(stdout, mcpgate.RenderMCPReport(hub.Statuses()))
 	return 0
 }
 

@@ -26,19 +26,26 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/budget"
+	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	claudememory "github.com/andrepato/harness/internal/claude/memory"
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/skills"
+	slashcommands "github.com/andrepato/harness/internal/commands"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/harness"
+	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/provider/builtin"
 	fauxprovider "github.com/andrepato/harness/internal/provider/faux"
 	"github.com/andrepato/harness/internal/provider/ollama"
+	"github.com/andrepato/harness/internal/search"
+	"github.com/andrepato/harness/internal/session/jsonl"
+	"github.com/andrepato/harness/internal/tool"
+	"github.com/andrepato/harness/internal/tools"
 )
 
 // defaultModel is cli.ts's own default: qwen3.8 pinned resident on the GPU
@@ -62,7 +69,7 @@ const planModePrompt = "You are in PLAN MODE. You may read files, search, and ru
 	"\n" +
 	"If the user only asked a question, answer it; do not present a plan."
 
-// buildRegistry constructs the provider registry chat.go and subcommands.go
+// buildRegistry constructs the provider registry chat.go and suslashcommands.go
 // both need: the two built-in API clients (Anthropic, OpenAI), Ollama
 // (discovering against OLLAMA_HOST/OLLAMA_BASE_URL), and the faux test
 // provider when HARNESS_FAUX_ADDR is set. Shared with cmd/harness-providers's
@@ -165,7 +172,7 @@ func formatSkillsIndex(list []skills.Skill) string {
 	lines := []string{
 		"The following skills provide specialized instructions for specific tasks.",
 		"Read the full skill file when the task matches its description.",
-		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool slashcommands.",
 		"",
 		"<available_skills>",
 	}
@@ -294,11 +301,60 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Mode:        permissionMode,
 	})
 
+	// --- MCP ---------------------------------------------------------
+	// Ported from cli.ts's MCP block (src/cli.ts:180-348): connect every
+	// configured server, resolve the active posture, build tool_search and
+	// todo_write, and (when internal/search compiles — it does, as of this
+	// phase; see the phase report) session_search.
+	todos := agent.NewTodoStore()
+
+	hub := mcpgate.NewHub()
+	mcpConfigs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
+	hub.ConnectAll(ctx, mcpConfigs)
+	warnFailedServers(stderr, hub.Statuses())
+	defer hub.Close(context.Background())
+
+	activePosture := resolvePosture()
+	gateState := mcpgate.NewGateState()
+	mcpTools := hub.Tools()
+
+	var sessionSearch *search.Search
+	if s, err := search.Open(""); err == nil {
+		sessionSearch = s
+		defer sessionSearch.Close()
+	} else {
+		fmt.Fprintf(stderr, "harness: session search unavailable: %v\n", err)
+	}
+	residentNow := residentToolNames(sessionSearch != nil)
+
+	mcpSess := &mcpSession{
+		tools:    mcpTools,
+		posture:  activePosture,
+		state:    gateState,
+		resident: residentNow,
+		tier:     resolved.Tier,
+	}
+	onAdmit := func(ctx context.Context, names []string) error {
+		return mcpSess.regate()
+	}
+	toolSearch := tools.ToolSearchTool(mcpTools, activePosture, gateState, onAdmit)
+	todoWrite := tools.TodoTool(todos.Set)
+
+	extraTools := make([]*tool.Tool, 0, len(mcpTools)+3)
+	for _, t := range mcpTools {
+		extraTools = append(extraTools, mcpgate.ToHarnessTool(hub, t))
+	}
+	extraTools = append(extraTools, toolSearch, todoWrite)
+	if sessionSearch != nil {
+		extraTools = append(extraTools, tools.SessionSearchTool(sessionSearch))
+	}
+
+	scoped := scopedMCPTools(mcpTools, activePosture)
+	mcpIndexText := mcpgate.IndexPromptText(scoped)
+
 	// System prompt assembly order, matching cli.ts exactly: base persona,
 	// --append-system-prompt, the plan-mode prompt (only in plan mode),
-	// memory, the skills index. The MCP tool index is a phase 5 seam: cli.ts
-	// appends one more paragraph here ("Additional tools are available but
-	// not loaded...") once MCP exists.
+	// memory, the skills index, the MCP tool index.
 	systemPromptBase := args.SystemPrompt
 	if systemPromptBase == "" {
 		systemPromptBase = defaultSystemPrompt
@@ -307,39 +363,96 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	if permissionMode == claudesettings.ModePlan {
 		promptParts = append(promptParts, planModePrompt)
 	}
-	promptParts = append(promptParts, memory.Text, skillsIndex)
-	// phase 5: append the MCP tool index paragraph here, once MCP exists.
+	promptParts = append(promptParts, memory.Text, skillsIndex, mcpIndexText)
 	systemPrompt := strings.Join(nonEmpty(promptParts), "\n\n")
 
 	started, err := agent.Start(ctx, agent.Options{
-		Registry:      reg,
-		Resolved:      resolved,
-		Cwd:           cwd,
-		Resume:        args.Resume,
-		ResumeLatest:  args.ResumeLatest || args.ContinueLatest,
-		SessionID:     args.SessionID,
-		ForkSession:   args.ForkSession,
-		Name:          args.Name,
-		ThinkingLevel: args.Effort,
-		SystemPrompt:  systemPrompt,
-		Env:           env,
-		// phase 6: ExtraTools/ActiveToolNames grow here once tool_search,
-		// task, todo_write, exit_plan_mode, bash_background/output/kill_shell
-		// and MCP tool adapters exist. This phase runs only the four
-		// resident tools (bash, read, edit, write), which agent.Start
-		// defaults ActiveToolNames to when neither is set.
+		Registry:        reg,
+		Resolved:        resolved,
+		Cwd:             cwd,
+		Resume:          args.Resume,
+		ResumeLatest:    args.ResumeLatest || args.ContinueLatest,
+		SessionID:       args.SessionID,
+		ForkSession:     args.ForkSession,
+		Name:            args.Name,
+		ThinkingLevel:   args.Effort,
+		SystemPrompt:    systemPrompt,
+		Env:             env,
+		ExtraTools:      extraTools,
+		ActiveToolNames: mcpSess.activeToolNames(),
+		// phase 6: task, exit_plan_mode, bash_background/output/kill_shell
+		// join ExtraTools/residentNow once those tools exist.
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "harness:", err)
 		return 1
 	}
+	mcpSess.lane = started.Lane
 
 	sessionID := started.SessionID
 	transcriptPath := started.TranscriptPath
 	notice := hookNoticeSink(stderr)
 
+	// Subagent roster, loaded once (agents.md files do not change mid-run),
+	// used by /agents, /status and /doctor.
+	agentsList := claudeagents.LoadAgents(cwd)
+
+	// ContextUsed (for /usage) tracks the last usage event's total token
+	// count; nil until the first one arrives.
+	var usageMu sync.Mutex
+	var lastUsage *msg.Usage
+	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
+		usageMu.Lock()
+		defer usageMu.Unlock()
+		if ev.UsageTotals != nil {
+			lastUsage = ev.UsageTotals
+		} else if ev.UsageRow != nil {
+			lastUsage = ev.UsageRow
+		}
+	})
+	contextUsed := func() (int, bool) {
+		usageMu.Lock()
+		defer usageMu.Unlock()
+		if lastUsage == nil {
+			return 0, false
+		}
+		return lastUsage.TotalTokens, true
+	}
+
+	// sessionsDirEnv mirrors agent.Options.SessionsRoot's own default
+	// resolution (internal/agent/session.go's unexported
+	// defaultSessionsDirEnv): HARNESS_SESSIONS_DIR if set, else
+	// jsonl.NewRepo's own "~/.harness/sessions" default.
+	sessionRepo, err := jsonl.NewRepo(os.Getenv("HARNESS_SESSIONS_DIR"))
+	if err != nil {
+		fmt.Fprintln(stderr, "harness:", err)
+		return 1
+	}
+
+	settingsLoadedFrom := make([]string, 0, len(settings.LoadedFrom))
+	for _, s := range settings.LoadedFrom {
+		settingsLoadedFrom = append(settingsLoadedFrom, string(s))
+	}
+
 	// Hooks from .claude/settings.json, accumulated across scopes.
 	hookConfig := claudehooks.LoadHooks(cwd)
+
+	registry := buildCommandRegistry(registryDeps{
+		Cwd:                cwd,
+		Started:            started,
+		Registry:           reg,
+		Gate:               gate,
+		Hooks:              hookConfig,
+		Agents:             agentsList,
+		Skills:             skillList,
+		MCP:                mcpSess,
+		Todos:              todos,
+		SettingsLoadedFrom: settingsLoadedFrom,
+		ModelLabel:         providerID + "/" + modelID,
+		SessionRepo:        sessionRepo,
+		SessionsDir:        sessionRepo.Root,
+		ContextUsed:        contextUsed,
+	}, hub)
 
 	// blockedLog accumulates every before_tool refusal this run, whether it
 	// came from a PreToolUse hook or from the permission gate — unlike
@@ -449,7 +562,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return 2
 	}
 
-	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked)
+	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)
 
 	claudehooks.RunHooks(claudehooks.RunOptions{
 		Config: hookConfig,
@@ -486,7 +599,7 @@ func readStdin(r io.Reader) string {
 // wrapping here, in print mode, rather than leaving it absent until phase 7.
 // That is the one place this implementation intentionally diverges from
 // cli.ts's control flow instead of following it.
-func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string) int {
+func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry) int {
 	promptText := args.PrintPrompt
 	if promptText == "" {
 		promptText = readStdin(stdin)
@@ -496,11 +609,33 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 		return 1
 	}
 
-	// phase 5: slash commands. `harness -p "/agents"` should run the
-	// command, not be sent to the model.
+	// Slash commands run under -p too, matching cli.ts: `harness -p "/agents"`
+	// should print the roster, not ask the model to describe it from the
+	// tool catalog. A command whose Result carries a Prompt (e.g. /init,
+	// a skill, a .claude/commands file) becomes the model's prompt instead
+	// of the original text — mentions are then resolved against THAT text,
+	// not re-resolved against the original, matching cli.ts's own
+	// `resolveMentions(handledCommand?.prompt ?? promptText, ...)`. A
+	// command with no Prompt (the common case: a report or a modal's text
+	// fallback) prints its Output and returns without running a turn.
 	if strings.HasPrefix(strings.TrimSpace(promptText), "/") {
-		fmt.Fprintln(stderr, "slash commands arrive in phase 5")
-		return 1
+		result, err := registry.Execute(ctx, strings.TrimSpace(promptText))
+		if err != nil {
+			fmt.Fprintln(stderr, "harness:", err)
+			return 1
+		}
+		if result != nil {
+			if result.Prompt == "" {
+				for _, line := range result.Output {
+					fmt.Fprintln(stdout, line)
+				}
+				if isUnknownCommandResult(*result) {
+					return 1
+				}
+				return 0
+			}
+			promptText = result.Prompt
+		}
 	}
 
 	notice := hookNoticeSink(stderr)
