@@ -1,7 +1,7 @@
 MODULE := github.com/andrepato/harness
 BIN_DIR := bin
 
-.PHONY: build check e2e e2e-live parity race generate clean
+.PHONY: build check e2e e2e-live race generate clean
 
 # harness-drive (internal/testkit/screen's PTY driver) is owned by another
 # agent and doesn't have a main.go yet. Once cmd/harness-drive/main.go
@@ -41,17 +41,6 @@ e2e:
 # accordingly so a plain `make e2e` never talks to the network.
 e2e-live:
 	HARNESS_E2E_LIVE=1 go test -tags e2e -run Live ./test/e2e/... -timeout 10m
-
-# The parity oracle: runs the same scripted faux fixture through the real
-# TS harness (test/parity/run-ts.mts, in-process against @xterm/headless)
-# and the real Go harness (bin/harness, through a real PTY via
-# internal/testkit/screen) and diffs what lands on screen. See
-# test/parity/parity_test.go's header for how each side is driven.
-#
-# node_modules is not installed in this worktree; symlink it from the main
-# checkout first: ln -s /path/to/harness/node_modules node_modules
-parity: build
-	go test -tags parity ./test/parity/... -count=1 -timeout 5m -v
 
 race:
 	go test -race ./internal/testkit/...

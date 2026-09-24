@@ -78,7 +78,7 @@ neither is filesystem-verifiable, so it stays `[chk]`. Confirm against a live
 `/help` before shipping.
 
 **Done** (read from a live `/help`, not recalled — a grep of `src/commands/`
-misses `/bashes` and `/posture`, which register inline in `cli.ts`):
+misses `/bashes` and `/posture`, which register inline in `internal/cli`):
 
 `/add-dir` `/agents` `/bashes` `/clear` `/compact` `/config` `/context` `/cost`
 `/doctor` `/exit` `/export` `/help` `/hooks` `/init` `/login` `/logout` `/mcp`
@@ -217,7 +217,7 @@ the harness should have its own vocabulary rather than copying a word list.
 | `Shift+Tab` | cycle permission mode | done |
 | `Tab` | accept completion (pi-tui's editor) | done |
 
-Routing lives in `src/tui/keys.ts`, extracted from `runApp` so it can be tested
+Routing lives in `internal/tui/keys.go`, separate from the app model so it can be tested
 — while it was a closure over a dozen locals, the only way to check that Ctrl+C
 twice exits was to run a session and press it, so three of these bindings were
 never implemented and nothing noticed.
@@ -300,7 +300,7 @@ the TUI — someone who types `claude -c` should get the same result from
 
 Worth implementing, in rough priority order:
 
-All parsed by `src/cli-args.ts`, which accepts both `--flag value` and
+All parsed by `internal/cli/args.go`, which accepts both `--flag value` and
 `--flag=value`. The earlier `process.argv.indexOf` lookups handled only the
 space form and silently ignored the other.
 
