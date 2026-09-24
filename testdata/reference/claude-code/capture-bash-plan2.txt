@@ -1,0 +1,29 @@
+SLEEP 5s
+KEY shift+tab
+SLEEP 500ms
+SEND Run this exact shell command and report the first word of its output: uname -a
+KEY enter
+WAIT 180s /Do you want/
+SLEEP 800ms
+SCREEN
+KEY 3
+SLEEP 2s
+SCREEN
+KEY esc
+SLEEP 500ms
+KEY shift+tab
+KEY shift+tab
+SLEEP 500ms
+SEND Make a two-step plan to rename math.js to calc.js. Do not execute it, just present the plan.
+KEY enter
+WAIT 300s /Would you like to proceed|proceed\?/
+SLEEP 1500ms
+SCREEN
+KEY 3
+SLEEP 1500ms
+SCREEN
+KEY esc
+SLEEP 500ms
+KEY ctrl+c
+KEY ctrl+c
+EXIT

@@ -1,5 +1,9 @@
 # Claude Code parity spec
 
+> Rendering contract: `claude-code-reference.md`, built from screens captured from the real
+> `claude` binary (`testdata/reference/claude-code/`). Where this checklist and a captured
+> screen disagree, the screen wins.
+
 The harness must look and operate identically to Claude Code. This file turns
 that into a checklist so "identical" is testable rather than a matter of taste.
 

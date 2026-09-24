@@ -1,0 +1,41 @@
+ Claude Code
+ ▐▛███▛█   Claude Code v2.1.281
+▝▜██████▀  Opus 5 (1M context) with medium effort · Claude Max
+  ▝▝ ▝▝    /private/var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T/cc-ref/proj
+
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+
+❯ /model
+  ⎿  Kept model as Opus 5 (1M context)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  + math.js
+  + /Users/andrepato/.claude/commands/
+  + /Users/andrepato/.claude/commands/track-work.md
+  + /Users/andrepato/.claude/skills/golang-security/references/memory-safety.md
+  + /Users/andrepato/.claude/skills/synced/04938d12-7130-4838-8fed-2b66abab131e_f11ed4…/schemas.md
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ @ma
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5 (1M context) │ ⎇ main ✔ │ ░░░░░░ 0/1.0m 0% │ ◇ thinking │ $0.00 │ 5h ░░░░░░ 6% ↺ 11:49am
+  ⏵⏵ auto mode on (shift+tab to cycle)
+-- cursor: row 36, occupied: 40, size: 100x40 --

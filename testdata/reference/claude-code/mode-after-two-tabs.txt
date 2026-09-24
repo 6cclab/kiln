@@ -1,0 +1,41 @@
+ Claude Code
+ ▐▛███▛█   Claude Code v2.1.281
+▝▜██████▀  Opus 5 (1M context) with medium effort · Claude Max
+  ▝▝ ▝▝    /private/var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T/cc-ref/proj
+
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+
+❯ Run this exact shell command: echo parity-two. Then tell me the output in one short sentence.
+
+  Ran 1 shell command
+
+⏺ The command printed parity-two.
+
+✻ Crunched for 3s · done 10:06 AM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 3
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5 (1M context) │ ⎇ main ✗ │ ░░░░░░ 47k/1.0m 4% │ ◇ thinking │ $0.26 │ 5h ░░░░░░ 6% ↺ 11:49…
+  ⏸ plan mode on (shift+tab to cycle)
+-- cursor: row 36, occupied: 40, size: 100x40 --

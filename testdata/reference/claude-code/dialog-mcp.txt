@@ -1,0 +1,41 @@
+  ⎿  Addedd1 line, removed 1 line
+      1 -function add(a,b){ return a - b }
+      1 +function add(a,b){ return a + b }
+
+⏺ Done.
+
+✻ Crunched for 4s · done 10:03 AM
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔
+   Manage MCP servers
+   20 servers
+
+     User MCPs (/Users/andrepato/.claude.json)
+   ❯ ✔ argocd-mcp   16 tools
+     ✔ claude-relay   11 tools
+     ✔ grafana   81 tools
+     ✔ homelab-kb   5 tools
+     ✔ infisical   10 tools
+     ✔ ot   12 tools
+     ✔ personal-kb   3 tools
+     ✔ pocket-id   16 tools
+     ✘ proxmox
+     ✔ sentry   9 tools
+     ✔ unifi-mcp   11 tools
+
+     claude.ai
+     ⚠ claude.ai Gmail   needs authentication
+     ⚠ claude.ai Google Calendar   needs authentication
+     ✔ claude.ai Google Drive   11 tools
+     ⚠ claude.ai Homelab Mcp   needs authentication
+     ✔ claude.ai Slack   27 tools
+     ⚠ claude.ai Task Tracker   needs authentication
+
+     Built-in MCPs (always available)
+     ✔ claude-in-chrome   22 tools
+     ◯ computer-use
+     ✔ plugin:chrome-devtools-mcp:chrome-devtools   29 tools
+
+   ※ Run claude --debug to see error logs
+   https://code.claude.com/docs/en/mcp for help
+   ↑/↓ to navigate · Enter to confirm · Esc to cancel
+-- cursor: row 12, occupied: 40, size: 100x40 --

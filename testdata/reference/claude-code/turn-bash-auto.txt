@@ -1,0 +1,8 @@
+❯ run this shell command and report its output: echo parity-check
+  Ran 1 shell command
+⏺ Output: parity-check
+✻ Brewed for 4s · done 10:02 AM
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  Parity-check output
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

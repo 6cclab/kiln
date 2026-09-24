@@ -1,0 +1,41 @@
+ Claude Code
+ ▐▛███▛█   Claude Code v2.1.281
+▝▜██████▀  Opus 5 (1M context) with medium effort · Claude Max
+  ▝▝ ▝▝    /private/var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T/cc-ref/proj
+
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+
+❯ /model
+  ⎿  Kept model as Opus 5 (1M context)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                      Ctrl+Y to paste deleted text
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5 (1M context) │ ⎇ main ✔ │ ░░░░░░ 0/1.0m 0% │ ◇ thinking │ $0.00 │ 5h ░░░░░░ 6% ↺ 11:49am
+  ⏸ manual mode on · ← for agents
+-- cursor: row 36, occupied: 40, size: 100x40 --

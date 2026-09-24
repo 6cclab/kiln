@@ -1,0 +1,71 @@
+SLEEP 5s
+SCREEN
+SEND /mod
+SLEEP 1s
+SCREEN
+KEY enter
+SLEEP 2s
+SCREEN
+KEY esc
+SLEEP 500ms
+SEND @ma
+SLEEP 1s
+SCREEN
+KEY ctrl+u
+SLEEP 300ms
+KEY shift+tab
+SLEEP 500ms
+SCREEN
+SEND Use the Edit tool to change math.js so add returns a + b. Do not explain.
+KEY enter
+SLEEP 1500ms
+SCREEN
+WAIT 180s /Do you want|Yes/
+SLEEP 800ms
+SCREEN
+KEY enter
+WAIT 180s /· done|Brewed|Cooked|Worked|Baked/
+SLEEP 2500ms
+SCREEN
+KEY ctrl+o
+SLEEP 1s
+SCREEN
+KEY ctrl+o
+SLEEP 500ms
+SEND ?
+SLEEP 1s
+SCREEN
+KEY backspace
+SLEEP 300ms
+SEND /mcp
+KEY enter
+SLEEP 3s
+SCREEN
+KEY esc
+SLEEP 500ms
+SEND /permissions
+KEY enter
+SLEEP 2s
+SCREEN
+KEY esc
+SLEEP 500ms
+SEND /config
+KEY enter
+SLEEP 2s
+SCREEN
+KEY esc
+SLEEP 500ms
+SEND /help
+KEY enter
+SLEEP 2s
+SCREEN
+KEY esc
+SLEEP 500ms
+RESIZE 60 24
+SLEEP 1500ms
+SCREEN
+KEY ctrl+c
+SLEEP 300ms
+SCREEN
+KEY ctrl+c
+EXIT

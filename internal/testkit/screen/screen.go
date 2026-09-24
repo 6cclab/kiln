@@ -282,7 +282,34 @@ func buildEnv(cfg *config, home string) []string {
 func (s *Screen) Send(data string) {
 	text := unescape(data)
 	s.recordIn(text)
-	s.emu.SendText(text)
+	s.sendGuarded(func() { s.emu.SendText(text) })
+}
+
+// sendGuarded runs an emulator write unless the process has already
+// exited, and gives up if the write does not complete promptly. The
+// emulator writes into a pipe drained towards the PTY; once the child is
+// gone nothing drains it, and a plain write blocked forever ("all
+// goroutines are asleep") on the key after an exit. Returns false when the
+// write was skipped or abandoned.
+func (s *Screen) sendGuarded(write func()) bool {
+	select {
+	case <-s.waitDone:
+		return false
+	default:
+	}
+	done := make(chan struct{})
+	go func() {
+		write()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-s.waitDone:
+		return false
+	case <-time.After(2 * time.Second):
+		return false
+	}
 }
 
 func unescape(s string) string {
@@ -349,7 +376,9 @@ func (s *Screen) SendKey(names ...string) {
 			continue
 		}
 		s.recordIn(fmt.Sprintf("<%s>", name))
-		s.emu.SendKey(ev)
+		if !s.sendGuarded(func() { s.emu.SendKey(ev) }) {
+			return
+		}
 		if ev.Code == vt.KeyEscape && ev.Mod == 0 {
 			// A bare ESC immediately followed by another byte in the
 			// same read is, in legacy key mode, an Alt-modified key

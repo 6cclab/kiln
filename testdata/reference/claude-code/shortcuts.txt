@@ -1,0 +1,41 @@
+ Claude Code
+ ▐▛███▛█   Claude Code v2.1.281
+▝▜██████▀  Opus 5 (1M context) with medium effort · Claude Max
+  ▝▝ ▝▝    /private/var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T/cc-ref/proj
+
+  Get to finished work sooner with Opus 5.5. Switch anytime with /model.
+
+❯ /model
+  ⎿  Kept model as Opus 5 (1M context)
+
+❯ Use the Edit tool to change math.js so add returns a + b. Do not explain.
+
+  Read 1 file
+
+⏺ Update(math.js)
+  ⎿  Added 1 line, removed 1 line
+      1 -function add(a,b){ return a - b }
+      1 +function add(a,b){ return a + b }
+
+⏺ Done.
+
+✻ Crunched for 4s · done 10:03 AM
+
+
+
+
+
+
+                                                                                ◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ commit this
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ! for shell mode        double tap esc to clear input      ctrl + shift + _ to undo
+  / for commands          shift + tab to auto-accept edits   ctrl + z to suspend
+  @ for file paths        ctrl + o for verbose output        ctrl + v to paste images
+  /btw for side question  ctrl + t to toggle tasks           opt + p to switch model
+                          shift + ⏎ for newline              opt + o to toggle fast mode
+                                                             ctrl + s to stash prompt
+                                                             ctrl + g to edit in $EDITOR
+                                                             /keybindings to customize
+-- cursor: row 30, occupied: 40, size: 100x40 --

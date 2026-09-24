@@ -1,0 +1,5 @@
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+  ⏸ manual mode on · ← for agents
+  ⏵⏵ accept edits on (shift+tab to cycle)
+  ⏸ plan mode on (shift+tab to cycle)
+  Press Ctrl-C again to exit
