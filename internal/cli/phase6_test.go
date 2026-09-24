@@ -243,30 +243,12 @@ steps:
 	}
 }
 
-// TestRun_PlanMode_ExitPlanModeAlsoBlockedByGate documents a real,
-// pre-existing gap this phase's brief did not anticipate: calling
-// exit_plan_mode WHILE the session is in --permission-mode plan never
-// reaches the tool's own Execute (and so never reaches its "revise" stub
-// text) at all. internal/claude/settings/settings.go's Decide (a verbatim
-// port of harness/src/claude/settings.ts's own READ_ONLY set) treats every
-// tool not in READ_ONLY as a mutation in plan mode and denies it outright —
-// and exit_plan_mode is not in that set, in EITHER the TS source or this
-// port. The gate's before_tool hook therefore blocks the call itself,
-// before agent.PlanController or the exit_plan_mode tool ever sees it; the
-// blocked reason comes from claude/permission.Gate.Check
-// ("plan mode is read-only, so exit_plan_mode is not available. Describe
-// the change instead of making it."), not from tools.PlanDecisionRevise's
-// feedback text.
-//
-// This is not a Go-port regression — cli.ts exhibits the identical gap,
-// verified by reading settings.ts's own READ_ONLY set (it lacks
-// exit_plan_mode/task/todo_write/bash_background/kill_shell too) — so it is
-// out of this phase's scope to fix (internal/claude/settings is not owned
-// by internal/cli's agent). The real fix, if wanted, is adding
-// exit_plan_mode (and arguably task) to that set, on both sides.
-// See the phase report for this deviation from the brief, which expected
-// this scenario to reach the revise stub.
-func TestRun_PlanMode_ExitPlanModeAlsoBlockedByGate(t *testing.T) {
+// TestRun_PlanMode_ExitPlanModeReachesTheApprover: under plan mode the gate
+// must let exit_plan_mode through (settings.ReadOnly includes it; the TS
+// READ_ONLY set omitted it and made plan mode a dead end). In print mode
+// there is no interactive approver, so the tool answers with cli.ts's own
+// stub text, which reaches the model as the tool result.
+func TestRun_PlanMode_ExitPlanModeReachesTheApprover(t *testing.T) {
 	script := `model: faux-1
 steps:
   - tool_call: {name: exit_plan_mode, args: {plan: "do the thing"}, id: tc1}
@@ -274,7 +256,7 @@ steps:
     then:
       - text: "ok"
 `
-	startFaux(t, script)
+	srv := startFaux(t, script)
 	scratchProject(t)
 
 	args := baseArgs()
@@ -288,14 +270,15 @@ steps:
 	if code != 0 {
 		t.Fatalf("exit code %d, stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `"isError":true`) {
-		t.Errorf("exit_plan_mode tool_end was not an error under plan mode:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), `{"type":"tool_end","name":"exit_plan_mode","isError":false}`) {
+		t.Errorf("exit_plan_mode should run under plan mode:\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "plan mode is read-only") {
-		t.Errorf("stdout missing the gate's plan-mode block reason:\n%s", stdout.String())
+	reqs := srv.Requests()
+	if len(reqs) < 2 {
+		t.Fatalf("expected the tool result to be sent back to the model, got %d requests", len(reqs))
 	}
-	if strings.Contains(stdout.String(), "No interactive approval available") {
-		t.Error("stdout contains the tool's own revise stub text; the gate no longer blocks exit_plan_mode in plan mode — update this test's doc comment, it documented a gap that is now fixed")
+	if !strings.Contains(string(reqs[len(reqs)-1].Messages), "No interactive approval available") {
+		t.Errorf("tool result did not carry the print-mode approver stub: %s", reqs[len(reqs)-1].Messages)
 	}
 }
 

@@ -122,3 +122,13 @@ func TestAutoMode(t *testing.T) {
 		}
 	})
 }
+
+func TestPlanModeAllowsExitPlanMode(t *testing.T) {
+	perms := Permissions{}
+	if got := Decide(perms, "exit_plan_mode", "", ModePlan); got != Allow {
+		t.Fatalf("plan mode must allow exit_plan_mode, got %s", got)
+	}
+	if got := Decide(perms, "write", "x", ModePlan); got != Deny {
+		t.Fatalf("plan mode must still deny write, got %s", got)
+	}
+}

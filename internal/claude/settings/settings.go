@@ -214,6 +214,11 @@ var ReadOnly = map[string]bool{
 	"session_search": true,
 	"tool_search":    true,
 	"bash_output":    true,
+	// exit_plan_mode changes nothing on disk and is the only way out of plan
+	// mode; the TS READ_ONLY set omitted it, which made plan mode a dead end.
+	// todo_write only edits the in-memory todo list.
+	"exit_plan_mode": true,
+	"todo_write":     true,
 }
 
 // Decision is the outcome of Decide.
