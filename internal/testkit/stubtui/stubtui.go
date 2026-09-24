@@ -18,6 +18,7 @@ package stubtui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -69,6 +70,18 @@ func (m model) Init() tea.Cmd {
 // transition is about to shrink the frame works around it.
 func clearScreenCmd() tea.Msg { return tea.ClearScreen() }
 
+// shrinkCmd is what the stub returns when a view transition shrinks the
+// frame. With the patched renderer in third_party/ultraviolet a shrink is
+// redrawn correctly and nothing is needed. STUBTUI_CLEAR=1 re-enables the
+// tea.ClearScreen workaround that the unpatched renderer required, so the
+// two behaviours can be compared through the driver.
+func shrinkCmd() tea.Cmd {
+	if os.Getenv("STUBTUI_CLEAR") != "" {
+		return clearScreenCmd
+	}
+	return nil
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -84,12 +97,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			wasOpen := m.overlay
 			m.overlay = !m.overlay
 			if wasOpen {
-				return m, clearScreenCmd
+				return m, shrinkCmd()
 			}
 		case "esc":
 			if m.overlay {
 				m.overlay = false
-				return m, clearScreenCmd
+				return m, shrinkCmd()
 			}
 		}
 	}

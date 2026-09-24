@@ -1,0 +1,37 @@
+--- terminal_renderer.go	2026-09-23 19:23:20
++++ /Users/andrepato/projects/harness-go/third_party/ultraviolet/terminal_renderer.go	2026-09-23 20:08:15
+@@ -1299,18 +1299,27 @@
+ 
+ 	if !s.clear && partialClear {
+ 		s.clearBelow(newbuf, nil, newHeight-1)
+-	}
+-
+-	// Resize the model before diffing so the loop below walks every row
+-	// of the new screen, including rows added by a grow.
+-	if curWidth != newWidth || curHeight != newHeight {
+-		s.curbuf.Resize(newWidth, newHeight)
+ 	}
+ 
++	cleared := s.clear
+ 	if s.clear { //nolint:nestif
++		// Erase against the OLD model first. clearUpdate -> clearBelow ->
++		// move computes the cursor-up distance from s.curbuf.Height(); if
++		// the model has already been resized to a shorter frame, move()
++		// clamps s.cur.Y to newHeight-1 and the erase starts too low,
++		// leaving the taller frame's rows on screen (inline mode only).
+ 		s.clearUpdate(newbuf)
+ 		s.clear = false
+-	} else if touchedLines > 0 {
++		if curWidth != newWidth || curHeight != newHeight {
++			s.curbuf.Resize(newWidth, newHeight)
++		}
++	} else if curWidth != newWidth || curHeight != newHeight {
++		// Resize the model before diffing so the loop below walks every row
++		// of the new screen, including rows added by a grow.
++		s.curbuf.Resize(newWidth, newHeight)
++	}
++
++	if !cleared && touchedLines > 0 {
+ 		// On Windows, there's a bug with Windows Terminal where [ansi.DECSTBM]
+ 		// misbehaves and moves the cursor outside of the scrolling region. For
+ 		// now, we disable the optimizations completely on Windows.

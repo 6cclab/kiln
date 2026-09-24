@@ -1,6 +1,7 @@
 package screen_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -94,10 +95,20 @@ func TestOverlayGrowsAndShrinks(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 
+	// Commit one line first. Closing the overlay must give the rows back
+	// without erasing what was already committed above the live region;
+	// tea.ClearScreen reclaims rows but wipes this line, which is why the
+	// renderer is patched instead (third_party/ultraviolet).
+	s.SendKey("p")
+	if err := s.WaitFor("committed line 1", 5*time.Second); err != nil {
+		t.Fatalf("waiting for committed line: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
 	occBefore := s.OccupiedHeight()
 	cursorBefore := s.CursorRow()
-	if occBefore != 3 {
-		t.Fatalf("expected the base live region to occupy 3 rows, got %d\n%v", occBefore, s.Viewport())
+	if occBefore != 4 {
+		t.Fatalf("expected one committed line plus a 3-row live region, got %d\n%v", occBefore, s.Viewport())
 	}
 
 	s.SendKey("o")
@@ -110,8 +121,8 @@ func TestOverlayGrowsAndShrinks(t *testing.T) {
 	if occOpen <= occBefore {
 		t.Fatalf("expected opening the overlay to grow occupied height past %d, got %d", occBefore, occOpen)
 	}
-	if occOpen != 12 {
-		t.Errorf("expected the overlay to occupy 12 rows, got %d\n%v", occOpen, s.Viewport())
+	if occOpen != occBefore-3+12 {
+		t.Errorf("expected the overlay to occupy 12 rows above the committed line, got %d\n%v", occOpen, s.Viewport())
 	}
 
 	s.SendKey("escape")
@@ -128,6 +139,18 @@ func TestOverlayGrowsAndShrinks(t *testing.T) {
 	if cursorClosed != cursorBefore {
 		t.Errorf("shrink-band regression: cursor row after close = %d, want %d (pre-open)", cursorClosed, cursorBefore)
 	}
+	if !containsRow(s.Rows(), "committed line 1") {
+		t.Errorf("closing the overlay erased a committed line\n%v", s.Viewport())
+	}
+}
+
+func containsRow(rows []string, want string) bool {
+	for _, r := range rows {
+		if strings.Contains(r, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestKeyEncodings answers part of phase 0 question (iii): sent as legacy
