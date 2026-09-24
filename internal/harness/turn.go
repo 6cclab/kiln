@@ -506,7 +506,7 @@ func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEn
 	}
 	l.h.events.Emit(Event{Type: EventEntryAdded, Lane: l.name, EntryID: resultEntryID, ParentID: parentTip})
 	l.invokeAfterTool(ctx, call, &toolResultMsg)
-	l.h.events.Emit(Event{Type: EventToolEnd, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolResult: &toolResultMsg})
+	l.h.events.Emit(Event{Type: EventToolEnd, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments, ToolResult: &toolResultMsg})
 
 	// The toolResult commit above already carries op.state=checkpoint as
 	// its last item (matching the reference session's line 35); the

@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mattn/go-isatty"
+
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/budget"
@@ -619,11 +621,42 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	if !args.Print {
 		// phase 7: the interactive TUI. Everything above (registry,
 		// settings, model, memory, skills, the gate, the started session,
-		// hooks) is already fully wired for it; only runApp itself is
-		// missing.
-		fmt.Fprintln(stderr, "interactive mode arrives in phase 7; use -p")
+		// hooks) is already wired; RunInteractive (internal/cli/tui.go)
+		// binds the gate's prompter, the dispatcher's subagent sink, and
+		// drives the Bubbletea program.
+		if stdinFile, ok := stdin.(*os.File); !ok || !isatty.IsTerminal(stdinFile.Fd()) {
+			fmt.Fprintln(stderr, "harness: interactive mode requires a TTY on stdin; use -p")
+			_ = started.Harness.Close()
+			return 2
+		}
+		exitCode := RunInteractive(ctx, InteractiveDeps{
+			Cwd:            cwd,
+			ModelLabel:     providerID + "/" + modelID,
+			Resolved:       resolved,
+			Started:        started,
+			Gate:           gate,
+			PlanController: planController,
+			Registry:       registry,
+			Env:            env,
+			Dispatcher:     dispatcher,
+			HookConfig:     hookConfig,
+			SessionStart:   sessionStart,
+			ScreenReader:   args.ScreenReader,
+		}, stdout, stderr, stdin)
+
+		shells.KillAll()
+		claudehooks.RunHooks(claudehooks.RunOptions{
+			Config: hookConfig,
+			Event:  claudehooks.SessionEnd,
+			Payload: claudehooks.Payload{
+				SessionID:      sessionID,
+				TranscriptPath: transcriptPath,
+				Cwd:            cwd,
+				Reason:         "exit",
+			},
+		})
 		_ = started.Harness.Close()
-		return 2
+		return exitCode
 	}
 
 	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)

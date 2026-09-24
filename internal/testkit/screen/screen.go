@@ -342,8 +342,20 @@ func (s *Screen) SendKey(names ...string) {
 		}
 		s.recordIn(fmt.Sprintf("<%s>", name))
 		s.emu.SendKey(ev)
+		if ev.Code == vt.KeyEscape && ev.Mod == 0 {
+			// A bare ESC immediately followed by another byte in the
+			// same read is, in legacy key mode, an Alt-modified key
+			// ("esc" then "ctrl+c" arrives as alt+ctrl+c). A person
+			// cannot type two keys inside the parser's escape timeout;
+			// pausing here keeps scripts describing human keypresses.
+			time.Sleep(escGap)
+		}
 	}
 }
+
+// escGap is how long SendKey waits after a bare Escape before the next
+// key. Bubbletea's input parser treats ESC+byte in one read as Alt+key.
+const escGap = 100 * time.Millisecond
 
 func parseKeyName(name string) (vt.KeyPressEvent, error) {
 	if ev, ok := namedKeys[name]; ok {

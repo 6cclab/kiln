@@ -600,9 +600,11 @@ func TestRun_SessionStartAndEnd_Hooks(t *testing.T) {
 	}
 }
 
-// TestRun_NotPrint_Phase7Seam checks the interactive-mode stub: no -p means
-// "not implemented yet", not a silent no-op.
-func TestRun_NotPrint_Phase7Seam(t *testing.T) {
+// TestRun_NotPrint_RequiresTTY checks that interactive mode (no -p) refuses
+// to start against a non-TTY stdin — RunInteractive (phase 7) needs a real
+// terminal, and running it against a plain io.Reader would hang or panic
+// rather than degrade gracefully, so chat.go's seam checks first.
+func TestRun_NotPrint_RequiresTTY(t *testing.T) {
 	startFaux(t, unreadScript)
 	scratchProject(t)
 
@@ -612,7 +614,7 @@ func TestRun_NotPrint_Phase7Seam(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "phase 7") {
-		t.Errorf("stderr = %q, want a mention of phase 7", stderr.String())
+	if !strings.Contains(stderr.String(), "TTY") {
+		t.Errorf("stderr = %q, want a mention of requiring a TTY", stderr.String())
 	}
 }
