@@ -11,6 +11,18 @@ Go session-store and transcript-rendering tests.
 - `2026-09-23T04-00-59-438Z_01a0cc6c-862e-70d7-b46f-cf4005693013.jsonl` — a
   session from a throwaway demo project, exercising a different `cwd` and
   tool set (including several MCP servers).
+- `legacy-v3-fixture.jsonl` — **synthetic**, not scrubbed output of a real
+  session. There is no real legacy v3 (`{"type":"session","version":3,...}`)
+  session file on this machine to scrub, so this fixture was constructed by
+  hand from pi's `legacy-v3.d.ts` types and `legacy-v3.js`'s parsing
+  expectations (see `internal/session/jsonl/legacy_v3.go` for the mapping it
+  exercises). It has a header, a user/assistant/toolResult turn, a
+  `model_change`/`thinking_level_change`/`active_tools_change` run, a branch
+  (two children of one entry — one abandoned, one continued), a `custom`
+  entry, a `compaction` (whose retained tail reconstruction spans the
+  branch), a `branch_summary` referencing the abandoned branch, a `label`,
+  and a `session_info`. Used only by
+  `internal/session/jsonl/legacy_v3_test.go`.
 
 ## Scrubbing
 

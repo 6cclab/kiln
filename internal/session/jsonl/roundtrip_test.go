@@ -10,12 +10,23 @@ import (
 	"testing"
 )
 
+// fixturePaths returns the v4 fixtures under testdata/sessions/, excluding
+// legacy-v3-fixture.jsonl: that file is a v3 header on purpose (see
+// legacy_v3_test.go, which exercises it) and would fail line 1's "expected
+// v4 header" assertion below by design.
 func fixturePaths(t *testing.T) []string {
 	t.Helper()
 	matches, err := filepath.Glob("../../../testdata/sessions/*.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
+	filtered := matches[:0]
+	for _, m := range matches {
+		if filepath.Base(m) != "legacy-v3-fixture.jsonl" {
+			filtered = append(filtered, m)
+		}
+	}
+	matches = filtered
 	if len(matches) == 0 {
 		t.Fatal("no fixture files found")
 	}

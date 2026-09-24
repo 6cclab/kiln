@@ -21,9 +21,9 @@ type Storage struct {
 	closed bool
 }
 
-// Header returns the storage's line-1 header as currently known in memory
-// (Create/Open do not mutate it further; a legacy-v3 upgrade would, but that
-// path is not implemented — see legacy_v3.go).
+// Header returns the storage's line-1 header as currently known in memory.
+// Open never returns a Storage still backed by a legacy v3 file: it
+// upgrades one to v4 first (UpgradeLegacyV3, legacy_v3.go) and reopens it.
 func (s *Storage) Header() session.Header { return s.header }
 
 // Path returns the file path backing this storage.
@@ -87,7 +87,14 @@ func Open(path string, now func() time.Time) (*Storage, error) {
 		return nil, fmt.Errorf("jsonl: invalid storage %s: invalid header: %w", path, err)
 	}
 	if parsed.Format == FormatV3Legacy {
-		return nil, ErrLegacyV3Unsupported
+		f.Close()
+		// See legacy_v3.go's file-level comment for how this eager upgrade
+		// (on Open, rather than lazily on the first commit) deviates from
+		// pi. UpgradeLegacyV3 leaves path untouched on any error.
+		if err := UpgradeLegacyV3(path, now); err != nil {
+			return nil, err
+		}
+		return Open(path, now)
 	}
 	header := *parsed.V4
 	if header.StorageVersion != session.StorageVersion {

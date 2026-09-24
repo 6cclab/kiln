@@ -165,8 +165,12 @@ func readSourceTransactions(path string, stopBeforeSeq int64, yield func(writes 
 }
 
 // Fork creates a new session at destPath by copying source (never modifying
-// it) according to opts. It mirrors runJsonlFork in fork.js, restricted to
-// v4 sources (a legacy v3 source returns ErrLegacyV3Unsupported).
+// it) according to opts. It mirrors runJsonlFork in fork.js and only ever
+// sees a v4 sourcePath: callers reach Fork by first calling Open on the
+// source, and Open upgrades a legacy v3 file to v4 (as a side effect, before
+// Fork ever reads it) rather than Fork special-casing v3 itself. See
+// legacy_v3.go for how that differs from pi, which forks a closed v3
+// source directly from LegacyV3Source without touching the original file.
 func Fork(sourcePath string, sourceHeader session.Header, sourceNextSeq int64, destPath string, opts ForkOptions, now func() int64) error {
 	idx := newForkIndex()
 	if err := readSourceTransactions(sourcePath, sourceNextSeq, func(writes []session.CommittedWrite) error {

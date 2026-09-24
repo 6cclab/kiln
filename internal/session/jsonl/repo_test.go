@@ -2,9 +2,13 @@ package jsonl
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/andrepato/harness/internal/session"
 )
 
 const smallFixture = "../../../testdata/sessions/2026-09-23T13-15-57-415Z_01a0ce68-9c67-7740-9867-7150069d61e6.jsonl"
@@ -131,20 +135,90 @@ func TestListAndDelete(t *testing.T) {
 	}
 }
 
-// TestOpenLegacyV3Rejected asserts Open surfaces a clear error rather than
-// misinterpreting a legacy v3 header.
-func TestOpenLegacyV3Rejected(t *testing.T) {
+// TestOpenLegacyV3HeaderOnlyUpgrades asserts Open on a legacy v3 file (even
+// a degenerate header-only one, with zero v3 records) upgrades it to v4 in
+// place rather than rejecting it, and that the result opens like any other
+// v4 session. See legacy_v3.go for why Open upgrades eagerly rather than
+// leaving the file legacy until a commit, unlike pi.
+func TestOpenLegacyV3HeaderOnlyUpgrades(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/legacy.jsonl"
 	content := `{"type":"session","version":3,"id":"legacy-1","cwd":"/tmp","timestamp":"2024-01-01T00:00:00.000Z"}` + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Open(path, nil)
-	if err == nil {
-		t.Fatal("expected error opening legacy v3 session")
+	st, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("Open legacy v3 header-only file: %v", err)
 	}
-	if err != ErrLegacyV3Unsupported {
+	defer st.Close()
+	if st.Header().V != session.FormatVersion {
+		t.Fatalf("header v = %d, want %d", st.Header().V, session.FormatVersion)
+	}
+	if st.Header().ID != "legacy-1" {
+		t.Fatalf("header id = %q", st.Header().ID)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := ParseHeader(strings.SplitN(string(raw), "\n", 2)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Format != FormatV4 {
+		t.Fatalf("on-disk header format = %v, want v4", first.Format)
+	}
+
+	// A header-only v3 file has no model_change, so no configuration is
+	// derivable and pi.lane.config/pi.lane.state are not written — only the
+	// branch tip (null, since there is no final entry) and the usage
+	// adjustment row.
+	tipRaw, _, ok := st.GetValue(session.NamespaceBranchTip, "main")
+	if !ok {
+		t.Fatal("missing pi.branch.tip/main after upgrade")
+	}
+	tip, err := session.GetTypedValue[*string](tipRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tip != nil {
+		t.Fatalf("branch tip = %v, want nil", tip)
+	}
+	if _, _, ok := st.GetValue(session.NamespaceLaneConfig, "main"); ok {
+		t.Fatal("pi.lane.config/main should not exist: no model_change in source")
+	}
+}
+
+// TestOpenLegacyV3Malformed asserts a genuinely corrupt v3 file (an unknown
+// record type on line 2) is rejected without modifying the file.
+func TestOpenLegacyV3Malformed(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/legacy.jsonl"
+	content := `{"type":"session","version":3,"id":"legacy-1","cwd":"/tmp","timestamp":"2024-01-01T00:00:00.000Z"}` + "\n" +
+		`{"id":"e1","parentId":null,"timestamp":"2024-01-01T00:00:01.000Z","type":"not_a_real_type"}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Open(path, nil)
+	if err == nil {
+		t.Fatal("expected error opening malformed legacy v3 session")
+	}
+	if !errors.Is(err, ErrLegacyV3Unsupported) {
 		t.Fatalf("err = %v, want ErrLegacyV3Unsupported", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("malformed legacy v3 file was modified")
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("expected no .tmp file left behind, stat err = %v", err)
 	}
 }
