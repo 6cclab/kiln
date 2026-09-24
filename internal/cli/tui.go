@@ -110,6 +110,13 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	historyPath := editor.Path()
 	history := editor.Load(historyPath)
 
+	// User keybindings over pi-tui's defaults; conflicts among the editor's
+	// own actions are reported to the user as cli.ts does for the loader's.
+	bindings, conflicts := tui.ApplyOverrides(tui.DefaultEditorBindings(), deps.Keybindings)
+	for _, c := range conflicts {
+		fmt.Fprintf(stderr, "keybindings: %s\n", c)
+	}
+
 	cfg := tui.Config{
 		Cwd:            deps.Cwd,
 		ModelLabel:     deps.ModelLabel,
@@ -155,6 +162,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		HistoryPath:    historyPath,
 		StartupHistory: history,
 		SessionName:    deps.Started.SessionID,
+		Keymap:         bindings.Keymap(),
 	}
 
 	model := tui.NewModel(cfg)

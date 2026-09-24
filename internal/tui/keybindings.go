@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/andrepato/harness/internal/tui/editor"
 	"sort"
 )
 
@@ -152,6 +153,24 @@ func ApplyOverrides(defaults EditorBindings, bindings map[string]string) (Editor
 // puts " and " between every pair, so three items render as "a and b and
 // c", not "a, b and c" — the same rendering internal/claude/keybindings.go's
 // joinAnd already uses for file-level conflicts.
+// Keymap converts the bindings to the editor's keymap: every action the
+// editor knows, with its key list. undo is dropped (no editor undo).
+func (b EditorBindings) Keymap() editor.Keymap {
+	return editor.Keymap{
+		editor.KeySubmit:          b.Submit,
+		editor.KeyNewLine:         b.NewLine,
+		editor.KeyHistoryPrevious: b.HistoryPrevious,
+		editor.KeyHistoryNext:     b.HistoryNext,
+		editor.KeyWordLeft:        b.WordLeft,
+		editor.KeyWordRight:       b.WordRight,
+		editor.KeyDeleteWord:      b.DeleteWord,
+		editor.KeyKillLine:        b.KillLine,
+		editor.KeyYank:            b.Yank,
+		editor.KeyLineStart:       b.LineStart,
+		editor.KeyLineEnd:         b.LineEnd,
+	}
+}
+
 func joinAnd(items []string) string {
 	if len(items) == 0 {
 		return ""

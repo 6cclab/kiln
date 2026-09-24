@@ -75,6 +75,9 @@ type Config struct {
 	StartupHistory []string
 	// SessionName sets the terminal title via View.WindowTitle.
 	SessionName string
+	// Keymap is the editor's resolved key bindings (defaults plus the
+	// user's ~/.claude/keybindings.json overrides); nil keeps defaults.
+	Keymap editor.Keymap
 }
 
 // Model is the interactive shell's Bubbletea v2 model — the Go port of
@@ -162,6 +165,9 @@ func NewModel(cfg Config) Model {
 	}
 	if len(cfg.StartupHistory) > 0 {
 		m.editor.SetHistory(cfg.StartupHistory)
+	}
+	if cfg.Keymap != nil {
+		m.editor.SetKeymap(cfg.Keymap)
 	}
 	m.initCmd = m.editor.Focus()
 	return m

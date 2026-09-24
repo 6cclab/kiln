@@ -3,9 +3,44 @@ package editor
 import (
 	"strings"
 
+	bkey "charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 )
+
+// Keymap maps an editor action id (the tui.* ids from
+// ~/.claude/keybindings.json) to the key names, as tea.KeyPressMsg.String()
+// spells them, that trigger it. Nil means the built-in defaults. Actions
+// the editor handles itself: submit, newLine, historyPrevious,
+// historyNext, deleteWordBackward, deleteToLineEnd, yank. Cursor motion
+// (cursorWordLeft/Right, cursorLineStart/End) is handed to the textarea's
+// own KeyMap. undo is accepted and ignored: the textarea has no undo.
+type Keymap map[string][]string
+
+// Action ids, spelled as pi-tui's TUI_KEYBINDINGS spells them.
+const (
+	KeySubmit          = "tui.input.submit"
+	KeyNewLine         = "tui.input.newLine"
+	KeyHistoryPrevious = "tui.editor.historyPrevious"
+	KeyHistoryNext     = "tui.editor.historyNext"
+	KeyWordLeft        = "tui.editor.cursorWordLeft"
+	KeyWordRight       = "tui.editor.cursorWordRight"
+	KeyDeleteWord      = "tui.editor.deleteWordBackward"
+	KeyKillLine        = "tui.editor.deleteToLineEnd"
+	KeyYank            = "tui.editor.yank"
+	KeyLineStart       = "tui.editor.cursorLineStart"
+	KeyLineEnd         = "tui.editor.cursorLineEnd"
+)
+
+// defaultKeymap is what handleKey used before overrides existed; kept as
+// data so an override replaces exactly one action.
+var defaultKeymap = Keymap{
+	KeySubmit:     {"enter"},
+	KeyNewLine:    {"shift+enter", "alt+enter", "ctrl+j"},
+	KeyDeleteWord: {"ctrl+w", "alt+backspace"},
+	KeyKillLine:   {"ctrl+k"},
+	KeyYank:       {"ctrl+y"},
+}
 
 // maxTextareaHeight caps how tall the editor grows before it starts
 // scrolling internally, matching the plan's "max height e.g. 8, then
@@ -43,6 +78,9 @@ type Event struct {
 type Model struct {
 	ta     textarea.Model
 	styles Styles
+	// keys is the active Keymap for the actions handleKey resolves itself;
+	// nil means defaultKeymap.
+	keys Keymap
 
 	// PopupActive is set by the app while an autocomplete popup (the `/`
 	// or `@` list) is open. Tab, Enter and Esc belong to the popup then —
@@ -137,6 +175,48 @@ func (m *Model) SetHistory(entries []string) {
 	m.historyIdx = -1
 }
 
+// SetKeymap applies user key overrides. Actions absent from km keep their
+// defaults; cursor-motion actions are pushed into the textarea's KeyMap.
+func (m *Model) SetKeymap(km Keymap) {
+	merged := Keymap{}
+	for action, keys := range defaultKeymap {
+		merged[action] = keys
+	}
+	for action, keys := range km {
+		merged[action] = keys
+	}
+	m.keys = merged
+	bind := func(b *bkey.Binding, action string) {
+		if keys, ok := km[action]; ok && len(keys) > 0 {
+			*b = bkey.NewBinding(bkey.WithKeys(keys...))
+		}
+	}
+	bind(&m.ta.KeyMap.WordBackward, KeyWordLeft)
+	bind(&m.ta.KeyMap.WordForward, KeyWordRight)
+	bind(&m.ta.KeyMap.LineStart, KeyLineStart)
+	bind(&m.ta.KeyMap.LineEnd, KeyLineEnd)
+	// The textarea binds ctrl+k and ctrl+w itself (DeleteAfterCursor,
+	// DeleteWordBackward). handleKey answers first for the editor's own
+	// keys, but a rebound default would otherwise still reach the
+	// textarea's copy, so those follow the override too.
+	bind(&m.ta.KeyMap.DeleteAfterCursor, KeyKillLine)
+	bind(&m.ta.KeyMap.DeleteWordBackward, KeyDeleteWord)
+}
+
+// is reports whether key s triggers action under the active keymap.
+func (m Model) is(s, action string) bool {
+	km := m.keys
+	if km == nil {
+		km = defaultKeymap
+	}
+	for _, k := range km[action] {
+		if k == s {
+			return true
+		}
+	}
+	return false
+}
+
 // AddToHistory appends one entry as the newest, e.g. right after a submit.
 // Blank entries are ignored, matching Append's own semantics.
 func (m *Model) AddToHistory(s string) {
@@ -198,8 +278,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd, Event) {
 	wasPendingBackslash := m.pendingBackslash
 	m.pendingBackslash = false
 
-	switch s {
-	case "enter":
+	switch {
+	case m.is(s, KeySubmit):
 		if wasPendingBackslash {
 			m.removeTrailingBackslash()
 			m.ta.InsertString("\n")
@@ -213,40 +293,48 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd, Event) {
 		m.syncHeight()
 		return m, nil, Event{Kind: EventSubmit, Text: text}
 
-	case "shift+enter", "alt+enter":
+	case m.is(s, KeyNewLine):
 		m.ta.InsertString("\n")
 		m.historyIdx = -1
 		m.syncHeight()
 		return m, nil, Event{}
 
-	case "esc":
+	case s == "esc":
 		return m, nil, Event{Kind: EventCancel}
 
-	case "up":
+	case m.is(s, KeyHistoryPrevious):
+		m.navigateHistory(-1)
+		return m, nil, Event{}
+
+	case m.is(s, KeyHistoryNext):
+		m.navigateHistory(1)
+		return m, nil, Event{}
+
+	case s == "up":
 		if m.ta.Line() == 0 {
 			m.navigateHistory(-1)
 			return m, nil, Event{}
 		}
 
-	case "down":
+	case s == "down":
 		if m.ta.Line() == m.ta.LineCount()-1 {
 			m.navigateHistory(1)
 			return m, nil, Event{}
 		}
 
-	case "ctrl+k":
-		m.killToLineEnd()
+	case m.is(s, KeyKillLine):
+		m.killToLineEnd(msg)
 		return m, nil, Event{}
 
-	case "ctrl+u":
+	case s == "ctrl+u":
 		m.killToLineStart()
 		return m, nil, Event{}
 
-	case "ctrl+w", "alt+backspace":
-		m.killWordBack()
+	case m.is(s, KeyDeleteWord):
+		m.killWordBack(msg)
 		return m, nil, Event{}
 
-	case "ctrl+y":
+	case m.is(s, KeyYank):
 		m.yank()
 		return m, nil, Event{}
 	}
@@ -416,8 +504,10 @@ func ctrlKey(r rune) tea.KeyPressMsg {
 // killToLineEnd is Ctrl+K: capture the text from the cursor to end of line
 // (or, at end of line, the newline that a merge-with-next-line delete would
 // consume) into the kill ring, then let the textarea's own DeleteAfterCursor
-// binding (bound to ctrl+k by default) perform the deletion.
-func (m *Model) killToLineEnd() {
+// binding perform the deletion. The pressed key is forwarded as-is: the
+// textarea's binding follows the user's override (SetKeymap), so a
+// hard-coded ctrl+k would no longer match after a rebind.
+func (m *Model) killToLineEnd(msg tea.KeyPressMsg) {
 	line, row, col := m.currentLineRunes()
 	lineCount := m.ta.LineCount()
 	if col >= len(line) {
@@ -427,7 +517,7 @@ func (m *Model) killToLineEnd() {
 	} else {
 		m.kill.push(string(line[col:]))
 	}
-	ta, _ := m.ta.Update(ctrlKey('k'))
+	ta, _ := m.ta.Update(msg)
 	m.ta = ta
 	m.historyIdx = -1
 	m.syncHeight()
@@ -451,8 +541,9 @@ func (m *Model) killToLineStart() {
 
 // killWordBack is Ctrl+W / Alt+Backspace: capture the word (and the
 // whitespace deleteWordLeft is about to consume with it) before forwarding
-// to the textarea's DeleteWordBackward binding.
-func (m *Model) killWordBack() {
+// to the textarea's DeleteWordBackward binding (the pressed key, so a
+// rebound binding still matches).
+func (m *Model) killWordBack(msg tea.KeyPressMsg) {
 	line, row, col := m.currentLineRunes()
 	if col == 0 {
 		if row > 0 {
@@ -462,7 +553,7 @@ func (m *Model) killWordBack() {
 		start := wordBackStart(line, col)
 		m.kill.push(string(line[start:col]))
 	}
-	ta, _ := m.ta.Update(tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModAlt})
+	ta, _ := m.ta.Update(msg)
 	m.ta = ta
 	m.historyIdx = -1
 	m.syncHeight()
