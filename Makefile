@@ -34,7 +34,7 @@ check:
 # test/e2e is gated behind the e2e build tag so `go build ./...` and
 # `make check` never pull it in; only `make e2e`/`make e2e-live` do.
 e2e:
-	go test -tags e2e ./test/e2e/...
+	go test -tags e2e ./test/e2e/... -count=1 -timeout 10m
 
 # HARNESS_E2E_LIVE=1 additionally allows tests gated on that env var (real
 # model calls, real network) to run; -run Live restricts to tests named

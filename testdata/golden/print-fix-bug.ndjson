@@ -1,0 +1,7 @@
+{"type":"assistant","text":"I'll look at the file."}
+{"type":"tool_start","name":"read","arg":"src/math.js"}
+{"type":"tool_end","name":"read","isError":false}
+{"type":"tool_start","name":"edit","arg":"src/math.js"}
+{"type":"tool_end","name":"edit","isError":false}
+{"type":"assistant","text":"Fixed."}
+{"type":"result","ok":true,"text":"I'll look at the file.\nFixed.","blocked":[]}
