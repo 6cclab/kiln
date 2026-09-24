@@ -85,10 +85,11 @@ steps:
       - text: "final"
   - text: "compaction summary"
 `, []string{"bash"})
-	// ReserveTokens close to the faux model's ContextWindow (32768, see
-	// internal/provider/faux) so ShouldCompact trips after the first
-	// exchange's estimated tokens exceed contextWindow-reserveTokens.
-	rig.H.SetCompactionSettings(compaction.Settings{Enabled: true, ReserveTokens: 32760, KeepRecentTokens: 1})
+	// ReserveTokens close to the faux model's ContextWindow (128000, pi-ai's
+	// fauxProvider default, see internal/provider/faux) so ShouldCompact
+	// trips after the first exchange's estimated tokens exceed
+	// contextWindow-reserveTokens.
+	rig.H.SetCompactionSettings(compaction.Settings{Enabled: true, ReserveTokens: 127992, KeepRecentTokens: 1})
 	lane := rig.mustLane("main")
 
 	if _, err := lane.Prompt(context.Background(), "go", nil); err != nil {

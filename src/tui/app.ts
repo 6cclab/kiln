@@ -552,6 +552,12 @@ export interface AppOptions {
 	startupContext?: string[];
 	/** Flat text, no color or animation. Mirrors Claude Code's --ax-screen-reader. */
 	plain?: boolean;
+	/**
+	 * Injectable output device, for driving this exact component stack against
+	 * a fake terminal in-process (test/parity/run-ts.mts). Defaults to a real
+	 * `ProcessTerminal` - production callers never pass this.
+	 */
+	terminal?: import("@earendil-works/pi-tui").Terminal;
 }
 
 export async function runApp(opts: AppOptions): Promise<void> {
@@ -561,7 +567,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
 	// HARNESS_RECORD_TTY records the exact bytes the terminal receives, so a
 	// rendering bug seen once can be replayed offline. See src/tui/record.ts.
 	const recordTo = process.env.HARNESS_RECORD_TTY;
-	const terminal = recordTo ? recordingTerminal(new ProcessTerminal(), recordTo) : new ProcessTerminal();
+	const baseTerminal = opts.terminal ?? new ProcessTerminal();
+	const terminal = recordTo ? recordingTerminal(baseTerminal, recordTo) : baseTerminal;
 	const tui: TUI = new TuiMainScreen(terminal);
 
 	// Reclaim rows when the frame gets shorter.

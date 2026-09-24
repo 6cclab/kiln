@@ -1,0 +1,10 @@
+{
+	"name": "hello",
+	"faux": "testdata/faux/hello.yaml",
+	"actions": "test/parity/scripts/hello.actions",
+	"cols": 80,
+	"rows": 24,
+	"permissionMode": "bypassPermissions",
+	"allowedTools": [],
+	"fixture": "none"
+}

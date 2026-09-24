@@ -1,0 +1,10 @@
+{
+	"name": "fix-bug",
+	"faux": "testdata/faux/fix-bug.yaml",
+	"actions": "test/parity/scripts/fix-bug.actions",
+	"cols": 100,
+	"rows": 30,
+	"permissionMode": "bypassPermissions",
+	"allowedTools": [],
+	"fixture": "mathjs"
+}

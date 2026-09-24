@@ -42,11 +42,16 @@ e2e:
 e2e-live:
 	HARNESS_E2E_LIVE=1 go test -tags e2e -run Live ./test/e2e/... -timeout 10m
 
-# The parity oracle (comparing Go and TypeScript harness output byte for
-# byte on the same fixtures) lands in phase 7.
-parity:
-	@echo "parity oracle lands in phase 7"
-	@exit 0
+# The parity oracle: runs the same scripted faux fixture through the real
+# TS harness (test/parity/run-ts.mts, in-process against @xterm/headless)
+# and the real Go harness (bin/harness, through a real PTY via
+# internal/testkit/screen) and diffs what lands on screen. See
+# test/parity/parity_test.go's header for how each side is driven.
+#
+# node_modules is not installed in this worktree; symlink it from the main
+# checkout first: ln -s /path/to/harness/node_modules node_modules
+parity: build
+	go test -tags parity ./test/parity/... -count=1 -timeout 5m -v
 
 race:
 	go test -race ./internal/testkit/...

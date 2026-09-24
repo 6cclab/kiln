@@ -1,0 +1,9 @@
+WAIT Try "fix typecheck errors"
+SEND run the echo command
+KEY enter
+WAIT Permission required
+SCREEN --json
+KEY y
+WAIT Worked for
+SCREEN --json
+EXIT

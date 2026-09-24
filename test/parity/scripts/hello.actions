@@ -1,0 +1,7 @@
+WAIT Try "fix typecheck errors"
+SCREEN --json
+SEND hi
+KEY enter
+WAIT Hello from faux
+SCREEN --json
+EXIT

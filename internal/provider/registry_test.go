@@ -40,7 +40,7 @@ steps:
 	if !ok {
 		t.Fatal("GetModel(faux, faux-1) not found")
 	}
-	if m.ContextWindow != 32768 {
+	if m.ContextWindow != 128000 {
 		t.Fatalf("ContextWindow = %d", m.ContextWindow)
 	}
 
@@ -48,8 +48,8 @@ steps:
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if resolved.Tier.Name != "small" {
-		t.Fatalf("Tier.Name = %q, want small", resolved.Tier.Name)
+	if resolved.Tier.Name != "medium" {
+		t.Fatalf("Tier.Name = %q, want medium for a 128k window", resolved.Tier.Name)
 	}
 	if resolved.Suppression.Suffix != "" {
 		t.Fatalf("expected no suppression for a non-reasoning model, got %+v", resolved.Suppression)

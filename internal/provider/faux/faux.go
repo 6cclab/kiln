@@ -42,14 +42,17 @@ func New() (*Provider, bool) {
 	}
 
 	model := provider.Model{
-		ID:            ModelID,
-		Name:          ModelID,
-		Api:           apiShape,
-		Provider:      ProviderID,
-		BaseURL:       baseURL,
-		Input:         []string{"text", "image"},
-		ContextWindow: 32768,
-		MaxTokens:     4096,
+		ID:       ModelID,
+		Name:     ModelID,
+		Api:      apiShape,
+		Provider: ProviderID,
+		BaseURL:  baseURL,
+		Input:    []string{"text", "image"},
+		// pi-ai's fauxProvider defaults (providers/faux.js: contextWindow
+		// 128000, maxTokens 16384), so the TS oracle and this port compute
+		// the same tier and footer for faux-1.
+		ContextWindow: 128000,
+		MaxTokens:     16384,
 		Cost:          provider.ModelCost{},
 	}
 

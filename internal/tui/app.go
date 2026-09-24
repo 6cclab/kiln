@@ -657,9 +657,11 @@ func (m Model) runMode(c Classified) tea.Cmd {
 
 func (m Model) beginTurn(prompt string, images []msg.ImageContent) (tea.Model, tea.Cmd) {
 	m.busy = true
-	m.turn++
 	m.turnStartedAt = time.Now()
+	// Seeded from zero, as app.ts's `spinner.start(turn++)` is, so the
+	// first turn picks the same gerund as the TS oracle.
 	m.spinner.Start(m.turn)
+	m.turn++
 	m.footer.SetBusy(true)
 
 	lane := m.cfg.Lane

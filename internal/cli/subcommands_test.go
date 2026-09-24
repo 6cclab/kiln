@@ -41,8 +41,8 @@ func TestModels_Faux(t *testing.T) {
 	if !strings.Contains(out, "faux-1") {
 		t.Errorf("models output missing faux-1:\n%s", out)
 	}
-	if !strings.Contains(out, "small") {
-		t.Errorf("models output missing the small tier for a 32768-token window:\n%s", out)
+	if !strings.Contains(out, "medium") {
+		t.Errorf("models output missing the medium tier for a 128000-token window:\n%s", out)
 	}
 }
 

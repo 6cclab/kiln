@@ -1,0 +1,6 @@
+WAIT Try "fix typecheck errors"
+SEND fix the bug in math.js
+KEY enter
+WAIT Worked for
+SCREEN --json
+EXIT

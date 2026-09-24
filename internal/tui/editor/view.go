@@ -117,10 +117,11 @@ func (m Model) scrollHints(ta interface {
 // content line, after the (hardware, invisible-in-the-string) cursor —
 // ported from BorderedEditor.placeholderLine (app.ts:208-214). Because this
 // package uses the hardware cursor rather than pi-tui's inline cursor
-// block, there is no cell to splice after; the placeholder simply starts
-// at column 0, which is where that inline block would otherwise have sat.
+// block, one blank cell stands where that block sits in pi-tui's output
+// (the hardware cursor is parked on it) and the placeholder follows, so
+// the glass reads the same as the TS oracle's.
 func (m Model) splicePlaceholder(line string, inner int) string {
-	trimmed := strings.TrimRight(line, " ")
+	trimmed := strings.TrimRight(line, " ") + " "
 	room := inner - ansi.StringWidth(trimmed)
 	if room < 0 {
 		room = 0
