@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -485,5 +486,161 @@ func TestApp_EscClosesPopupWithoutCancellingEditor(t *testing.T) {
 	}
 	if got := m.editor.Value(); got != "/mod" {
 		t.Fatalf("editor value = %q, want the typed text left untouched by Esc", got)
+	}
+}
+
+// --- fullscreen mode (docs/kiln-fullscreen-plan.md) -------------------------
+
+// newFullscreenTestModel builds a fullscreen Model and drives it through a
+// real WindowSizeMsg (not just setting m.width/m.height directly), since
+// the fullscreen path's viewport sizing/banner commit both live in that
+// message's handler.
+func newFullscreenTestModel(t *testing.T, w, h int) Model {
+	t.Helper()
+	m := NewModel(Config{
+		Cwd:         "/tmp",
+		ModelLabel:  "ollama/qwen3.8",
+		InitialMode: "manual",
+		StartedAt:   time.Unix(0, 0),
+		Fullscreen:  true,
+	})
+	mi, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	m, ok := mi.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want Model", mi)
+	}
+	if !m.fullscreen {
+		t.Fatalf("expected m.fullscreen after NewModel with Config.Fullscreen=true")
+	}
+	return m
+}
+
+func manyLines(n int) string {
+	lines := make([]string, n)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TestFullscreen_AppendFollowsBottom checks a fullscreen append follows the
+// viewport to the bottom, that the composed frame is exactly the terminal's
+// height, that the last row is the mode line, and that the view carries
+// AltScreen.
+func TestFullscreen_AppendFollowsBottom(t *testing.T) {
+	m := newFullscreenTestModel(t, 80, 10)
+
+	mi, _ := m.Update(MsgTranscriptAppend{Text: manyLines(30)})
+	m = mi.(Model)
+
+	if !m.viewport.AtBottom() {
+		t.Fatalf("viewport not at bottom after an append with no prior scroll")
+	}
+
+	v := m.View()
+	rows := strings.Split(v.Content, "\n")
+	if len(rows) != 10 {
+		t.Fatalf("frame has %d rows, want 10 (the terminal height):\n%s", len(rows), v.Content)
+	}
+	last := ansiStrip(rows[len(rows)-1])
+	if !strings.Contains(last, "mode on") {
+		t.Errorf("last row = %q, want the mode line", last)
+	}
+	if !v.AltScreen {
+		t.Errorf("AltScreen = false, want true in fullscreen")
+	}
+}
+
+// TestFullscreen_ScrollPauses checks PgUp leaves the viewport off the
+// bottom, that a subsequent append does not yank it back down
+// (scroll-to-pause), and that PgDn returns it to the bottom.
+func TestFullscreen_ScrollPauses(t *testing.T) {
+	m := newFullscreenTestModel(t, 80, 10)
+
+	mi, _ := m.Update(MsgTranscriptAppend{Text: manyLines(30)})
+	m = mi.(Model)
+
+	mi, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	m = mi.(Model)
+	if m.viewport.AtBottom() {
+		t.Fatalf("expected the viewport off the bottom after pgup")
+	}
+	off := m.viewport.YOffset()
+
+	mi, _ = m.Update(MsgTranscriptAppend{Text: manyLines(5)})
+	m = mi.(Model)
+	if got := m.viewport.YOffset(); got != off {
+		t.Fatalf("YOffset changed from %d to %d after an append while scrolled up; scroll-to-pause should hold it", off, got)
+	}
+
+	for i := 0; i < 20 && !m.viewport.AtBottom(); i++ {
+		mi, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
+		m = mi.(Model)
+	}
+	if !m.viewport.AtBottom() {
+		t.Fatalf("expected the viewport back at the bottom after pgdown")
+	}
+}
+
+// TestFullscreen_ClearResetsTranscript checks tea.ClearScreen empties the
+// fullscreen transcript buffer (the same message a Ctrl+O/toggle/resize
+// sequence sends ahead of its own replay).
+func TestFullscreen_ClearResetsTranscript(t *testing.T) {
+	m := newFullscreenTestModel(t, 80, 10)
+
+	mi, _ := m.Update(MsgTranscriptAppend{Text: manyLines(5)})
+	m = mi.(Model)
+	if len(m.transcript) == 0 {
+		t.Fatalf("expected a non-empty transcript before clearing")
+	}
+
+	mi, _ = m.Update(tea.ClearScreen())
+	m = mi.(Model)
+	if len(m.transcript) != 0 {
+		t.Fatalf("transcript not reset by tea.ClearScreen: %v", m.transcript)
+	}
+}
+
+// TestFullscreen_PlainFallsBackInline checks Config{Fullscreen: true, Plain:
+// true} falls back to inline (docs/kiln-fullscreen-plan.md: "fullscreen
+// falls back to inline" under screen-reader mode).
+func TestFullscreen_PlainFallsBackInline(t *testing.T) {
+	SetPlainMode(true)
+	defer SetPlainMode(false)
+
+	m := NewModel(Config{
+		Cwd:         "/tmp",
+		ModelLabel:  "ollama/qwen3.8",
+		InitialMode: "manual",
+		StartedAt:   time.Unix(0, 0),
+		Fullscreen:  true,
+		Plain:       true,
+	})
+	if m.fullscreen {
+		t.Fatalf("expected m.fullscreen=false with Plain=true")
+	}
+	mi, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = mi.(Model)
+	if v := m.View(); v.AltScreen {
+		t.Errorf("View().AltScreen = true, want false with Plain=true")
+	}
+}
+
+// TestRouter_CtrlF_ToggleFullscreen checks ctrl+f fires ToggleFullscreen
+// when wired, and falls through unconsumed when it is nil (so a test that
+// does not wire it is unaffected).
+func TestRouter_CtrlF_ToggleFullscreen(t *testing.T) {
+	r, router, _ := routed()
+	router.actions.ToggleFullscreen = func() { r.calls = append(r.calls, "toggleFullscreen") }
+	if !router.Route(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl}) {
+		t.Fatalf("ctrl+f not consumed with ToggleFullscreen wired")
+	}
+	if !r.has("toggleFullscreen") {
+		t.Errorf("ToggleFullscreen was not called")
+	}
+
+	_, router2, _ := routed()
+	if router2.Route(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl}) {
+		t.Fatalf("ctrl+f consumed with ToggleFullscreen nil")
 	}
 }

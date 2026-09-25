@@ -54,6 +54,9 @@ type InteractiveDeps struct {
 	HookConfig     claudehooks.Config
 	SessionStart   claudehooks.Outcome
 	ScreenReader   bool
+	// Fullscreen selects kiln's alt-screen TUI mode (--fullscreen). Falls
+	// back to inline when ScreenReader is set — see RunInteractive.
+	Fullscreen bool
 	// MCPServerCount is how many servers ConnectMCP will attempt; 0 skips
 	// the connect entirely. ConnectMCP connects them all, registers their
 	// tools with the session and returns every server's outcome. It runs
@@ -147,6 +150,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		InitialMode:    string(deps.Gate.Mode()),
 		StartedAt:      time.Now(),
 		Plain:          deps.ScreenReader,
+		Fullscreen:     deps.Fullscreen,
 		StartupContext: append([]string(nil), deps.SessionStart.Context...),
 
 		Env:            deps.Env,
@@ -211,6 +215,15 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 				diag.L().Warn("trust store", "err", err)
 			}
 		}
+	}
+
+	// Flip the bridge's commit sink before anything commits through it (the
+	// debug-log line and MCP notices below, both enqueued ahead of
+	// program.Run()). Fullscreen falls back to inline under the
+	// screen-reader flag — tui.NewModel makes the same check for the
+	// model's own m.fullscreen, so the two stay in sync.
+	if deps.Fullscreen && !deps.ScreenReader {
+		bridge.SetFullscreen(true)
 	}
 
 	model := tui.NewModel(cfg)

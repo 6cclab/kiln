@@ -1,8 +1,12 @@
 # kiln: optional full-screen (alt-screen) TUI mode — plan
 
-> Status: proposed / not yet built. kiln renders inline today (blocks commit to native
-> scrollback, small live region at the bottom). This documents the plan for an opt-in
-> full-screen mode. Inline stays the default.
+> Status: built (2026-09-25). `--fullscreen` / `Ctrl+F`; inline stays the default.
+> Built as designed below with two settled decisions: scroll keys are `PgUp`/`PgDn`,
+> `Shift+Up`/`Shift+Down` and the mouse wheel only (plain arrows stay the editor's
+> history recall, `j`/`k` must still type), and the toggle uses the same clear+replay
+> path as `Ctrl+O`, so non-session lines (`!` output, hook notices) are lost on toggle.
+> Fullscreen turns mouse reporting on, so terminal text selection needs the terminal's
+> modifier (usually Shift or Option) while it is active.
 
 ## Context
 Full-screen mode is an alt-screen TUI with an internal scrolling transcript viewport and a fixed

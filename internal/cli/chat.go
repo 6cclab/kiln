@@ -796,6 +796,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			HookConfig:      hookConfig,
 			SessionStart:    sessionStart,
 			ScreenReader:    args.ScreenReader,
+			Fullscreen:      args.Fullscreen,
 		}, stdout, stderr, stdin)
 
 		shells.KillAll()

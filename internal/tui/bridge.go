@@ -41,9 +41,19 @@ import (
 //     was caught the hard way: see the phase report). Commit only ever
 //     enqueues; the actual Println call happens on run's own goroutine,
 //     never on the caller's.
+//
+// sink is the subset of *tea.Program the bridge's committer goroutine
+// needs. It exists so a test can inject a recorder in place of a real
+// *tea.Program (which needs a live event loop) — *tea.Program satisfies it
+// via its existing Println/Send methods, no adapter required.
+type sink interface {
+	Println(...any)
+	Send(tea.Msg)
+}
+
 type Bridge struct {
-	mu      sync.Mutex
-	program *tea.Program
+	mu       sync.Mutex
+	progSink sink
 
 	queue chan bridgeItem
 	quit  chan struct{}
@@ -59,17 +69,27 @@ type Bridge struct {
 	// Ctrl+O, the event handler when deciding how to render a tool call).
 	verboseMu sync.Mutex
 	verbose   bool
+
+	// fsMu guards fullscreen, the commit sink's current mode. It is written
+	// only by run() (the committer goroutine), when it drains a mode-flip
+	// item off the queue, and read by printNow (same goroutine, no lock
+	// needed there in principle, but taking it anyway keeps every access
+	// uniform) and by Fullscreen (any goroutine).
+	fsMu       sync.Mutex
+	fullscreen bool
 }
 
-// bridgeItem is one entry on the commit queue: a block of text to print.
-//
-// Used to carry an alt-screen state change too, for the Ctrl+R full-
-// transcript view transcriptview.go implemented. That view is gone —
-// replaced by the Ctrl+O verbose toggle (see SetVerbose/Verbose/
-// MsgClearAndReplay) — and tea.Program.Println no longer has a reason to
-// have its output held back, so the queue carries only text now.
+// bridgeItem is one entry on the commit queue: either a block of text to
+// print, or — when mode is non-nil — a request to flip the commit sink
+// between native scrollback (tea.Println) and the fullscreen transcript
+// buffer (MsgTranscriptAppend). The flip is queued exactly like a text
+// commit so it is ordered relative to every Commit call already enqueued:
+// text committed before a SetFullscreen call still lands on the old sink,
+// even though both are drained by the same goroutine after the flip is
+// requested.
 type bridgeItem struct {
 	text string
+	mode *bool
 }
 
 // commitQueueSize is generous relative to actual traffic (keystrokes and
@@ -96,6 +116,12 @@ func (b *Bridge) run() {
 	for {
 		select {
 		case item := <-b.queue:
+			if item.mode != nil {
+				b.fsMu.Lock()
+				b.fullscreen = *item.mode
+				b.fsMu.Unlock()
+				continue
+			}
 			b.printNow(item.text)
 		case <-b.quit:
 			return
@@ -103,9 +129,21 @@ func (b *Bridge) run() {
 	}
 }
 
+// printNow runs on the run goroutine, so calling p.Send here (the
+// fullscreen sink) cannot deadlock the Update loop the way calling it
+// directly from Update would: Send only blocks until the event loop picks
+// the message up, and this goroutine is never the one running Update.
 func (b *Bridge) printNow(text string) {
 	p := b.prog()
-	if p != nil {
+	if p == nil {
+		return
+	}
+	b.fsMu.Lock()
+	fs := b.fullscreen
+	b.fsMu.Unlock()
+	if fs {
+		p.Send(MsgTranscriptAppend{Text: text})
+	} else {
 		p.Println(text)
 	}
 }
@@ -114,8 +152,37 @@ func (b *Bridge) printNow(text string) {
 // program starts receiving events that reach the bridge.
 func (b *Bridge) SetProgram(p *tea.Program) {
 	b.mu.Lock()
-	b.program = p
+	b.progSink = p
 	b.mu.Unlock()
+}
+
+// setSink is SetProgram's test-only counterpart: it accepts any sink, not
+// just a real *tea.Program, so a test can inject a recorder.
+func (b *Bridge) setSink(s sink) {
+	b.mu.Lock()
+	b.progSink = s
+	b.mu.Unlock()
+}
+
+// SetFullscreen enqueues a request to switch the commit sink between
+// native scrollback and the fullscreen transcript buffer. Like Commit, it
+// only enqueues — the actual flag flip happens on run's own goroutine when
+// it drains the item — so it is ordered relative to every other Commit
+// call and safe to call from Update. Calling it before SetProgram (at
+// startup) is fine: the flip item just sets the flag once drained, with no
+// program to print through yet.
+func (b *Bridge) SetFullscreen(v bool) {
+	select {
+	case b.queue <- bridgeItem{mode: &v}:
+	case <-b.quit:
+	}
+}
+
+// Fullscreen reports the bridge's current commit-sink mode.
+func (b *Bridge) Fullscreen() bool {
+	b.fsMu.Lock()
+	defer b.fsMu.Unlock()
+	return b.fullscreen
 }
 
 // Stop shuts the bridge's committer goroutine down. Idempotent. Anything
@@ -125,10 +192,10 @@ func (b *Bridge) Stop() {
 	b.once.Do(func() { close(b.quit) })
 }
 
-func (b *Bridge) prog() *tea.Program {
+func (b *Bridge) prog() sink {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.program
+	return b.progSink
 }
 
 // Commit enqueues lines to be printed to the transcript, in order,
@@ -186,6 +253,16 @@ func (b *Bridge) Verbose() bool {
 // sequence above without a message at all — a message is only needed if
 // the clear must happen asynchronously relative to the keypress).
 type MsgClearAndReplay struct{}
+
+// MsgTranscriptAppend carries one committed block's text to the app when
+// the bridge's commit sink is switched to fullscreen (Bridge.SetFullscreen):
+// in the alt screen there is no native scrollback for tea.Println to
+// scroll into, so a fullscreen commit instead lands here and the app
+// appends it to its own transcript buffer, rendered by the viewport (see
+// app.go's appendTranscript). Text may itself contain embedded newlines
+// (Commit joins its lines with "\n" before enqueueing), so the app splits
+// on "\n" before appending.
+type MsgTranscriptAppend struct{ Text string }
 
 // CommitCommandResult commits a slash command's result row(s) under its
 // own echo: "  ⎿  <line>" for the first line, two-space continuation for

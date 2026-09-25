@@ -53,6 +53,11 @@ type Args struct {
 	Debug        bool
 	Version      bool
 	Help         bool
+	// Fullscreen selects kiln's alt-screen TUI mode: a scrolling transcript
+	// viewport with the input pinned at the bottom, toggled at runtime with
+	// ctrl+f. Falls back to inline under --ax-screen-reader (see
+	// internal/cli/tui.go's RunInteractive).
+	Fullscreen bool
 
 	// Unknown is flags that look like flags but are not recognized.
 	Unknown []string
@@ -268,6 +273,8 @@ func Parse(argv []string) Args {
 			args.AppendSystemPrompt = value
 		case "--ax-screen-reader":
 			args.ScreenReader = true
+		case "--fullscreen":
+			args.Fullscreen = true
 		case "--verbose":
 			args.Verbose = true
 		case "--debug":
@@ -337,6 +344,7 @@ output:
       --verbose                      report tool calls on stderr
       --debug                        debug-level run log; prints its path (see kiln doctor)
       --ax-screen-reader             flat text, no borders or animation
+      --fullscreen                   alt-screen TUI: scrolling transcript, input pinned at the bottom (ctrl+f toggles)
 
   -v, --version
   -h, --help`

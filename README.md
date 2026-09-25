@@ -62,6 +62,7 @@ kiln login anthropic      # log in with a Claude Pro/Max plan
 kiln doctor               # model, tier, tools, MCP, hooks, agents, logs, problems
 kiln mcp                  # MCP servers and their state
 kiln --debug              # debug-level run log, path announced at startup
+kiln --fullscreen         # alt-screen TUI: scrolling transcript, input pinned at the bottom
 ```
 
 MCP servers connect in the background after the prompt appears: the footer shows
@@ -77,7 +78,13 @@ file; attach that file to a bug report.
 Inside a session: `/` for commands, `@` to reference a file, `!` to run a shell
 command directly, `#` to add a memory. `Ctrl+O` toggles the detailed transcript
 (tool output and reasoning expanded), `Shift+Tab` cycles permission mode, `Esc`
-interrupts, `Ctrl+C` twice exits.
+interrupts, `Ctrl+C` twice exits. `Ctrl+F` toggles full-screen mode (also
+`--fullscreen`): the transcript scrolls inside the terminal with `PgUp`/`PgDn`,
+`Shift+Up`/`Shift+Down` or the mouse wheel, new output follows only while you are
+at the bottom, and history re-wraps on resize. Toggling either way redraws the
+transcript from the session log, so shell (`!`) output and hook notices that are
+not part of the log do not survive the switch. Inline mode stays the default; the
+screen-reader flag always uses inline.
 
 `@path` inlines the file so the model has it without spending a turn on a read,
 capped at the tier's per-result budget. `@screenshot.png` attaches the image

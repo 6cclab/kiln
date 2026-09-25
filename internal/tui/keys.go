@@ -34,6 +34,11 @@ type KeyActions struct {
 	ClearScreen         func()
 	Rewind              func()
 	Exit                func()
+	// ToggleFullscreen flips fullscreen mode (ctrl+f,
+	// docs/kiln-fullscreen-plan.md). Nil means the caller has not wired it
+	// (e.g. a test using only the actions its case cares about) — Route
+	// then leaves ctrl+f unconsumed rather than nil-panicking.
+	ToggleFullscreen func()
 	// Hint surfaces a transient message for the footer, e.g. "press ctrl+c
 	// again to exit".
 	Hint func(message string)
@@ -97,6 +102,13 @@ func (r *Router) Route(msg tea.KeyPressMsg) bool {
 
 	case "ctrl+l":
 		r.actions.ClearScreen()
+		return true
+
+	case "ctrl+f":
+		if r.actions.ToggleFullscreen == nil {
+			return false
+		}
+		r.actions.ToggleFullscreen()
 		return true
 
 	case "ctrl+c":

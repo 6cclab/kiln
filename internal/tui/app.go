@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -56,12 +57,16 @@ type GitStatusFunc func(ctx context.Context) (GitStatus, bool)
 // needs is here, so app.go stays testable with a fake Bridge/Lane and no
 // real harness, provider or filesystem underneath.
 type Config struct {
-	Cwd            string
-	ModelLabel     string
-	Tier           budget.Tier
-	InitialMode    string
-	StartedAt      time.Time
-	Plain          bool
+	Cwd         string
+	ModelLabel  string
+	Tier        budget.Tier
+	InitialMode string
+	StartedAt   time.Time
+	Plain       bool
+	// Fullscreen selects kiln's alt-screen TUI: a scrolling transcript
+	// viewport with the input pinned at the bottom (docs/kiln-fullscreen-plan.md).
+	// Falls back to inline under Plain (screen-reader mode) — see NewModel.
+	Fullscreen     bool
 	StartupContext []string
 	// Effort is the reasoning effort label shown in the hint row above the
 	// input box (`◐ medium · /effort`, docs/claude-code-reference.md §2).
@@ -212,6 +217,27 @@ type Model struct {
 	// and leave the real one permanently unfocused (every keystroke would
 	// then have nowhere to go).
 	initCmd tea.Cmd
+
+	// --- fullscreen mode (docs/kiln-fullscreen-plan.md) --------------------
+
+	// fullscreen is cfg.Fullscreen && !cfg.Plain, computed once in NewModel
+	// and flipped at runtime by toggleFullscreen (ctrl+f). Plain mode never
+	// enters fullscreen: it has no alt-screen rendering to fall back from.
+	fullscreen bool
+	// transcript holds every committed row while fullscreen (already
+	// rendered, one string per terminal row), rebuilt from the session log
+	// on ClearScreen/toggle/resize-rewrap — see appendTranscript and
+	// replayTranscript.
+	transcript []string
+	// viewport renders transcript, scrolled. Its own KeyMap is emptied in
+	// NewModel (see there) so it never intercepts a keypress on its own;
+	// scrolling is driven explicitly from handleKey/Update instead.
+	viewport viewport.Model
+	// resizeGen guards the debounced re-wrap a width change schedules
+	// (msgFullscreenRewrap): only the most recent WindowSizeMsg's tick may
+	// trigger the clear+replay, so a burst of resizes during a drag
+	// rewraps once, not once per event.
+	resizeGen int
 }
 
 // NewModel builds the interactive shell's model, already focused. Init
@@ -245,7 +271,19 @@ func NewModel(cfg Config) Model {
 		footer:         NewFooterState(StatusState{ModelLabel: cfg.ModelLabel, ContextWindow: cfg.Tier.ContextWindow, Mode: cfg.InitialMode, StartedAt: cfg.StartedAt}),
 		prompt:         NewPromptState(cfg.Cwd),
 		startupContext: append([]string(nil), cfg.StartupContext...),
+		fullscreen:     cfg.Fullscreen && !cfg.Plain,
+		viewport:       viewport.New(),
 	}
+	// The viewport must never handle a key or wheel event on its own: every
+	// scroll it makes has to go through handleKey/Update explicitly (PgUp/
+	// PgDn/Shift+Up/Down here, wheel in Update), or a key meant for the
+	// editor (plain Up/Down, j/k while typing) would be silently eaten by
+	// viewport.Update instead of reaching the editor. An empty KeyMap means
+	// no binding ever matches; MouseWheelEnabled=false means viewport.Update
+	// ignores wheel messages too — Update's own tea.MouseWheelMsg case
+	// drives ScrollUp/ScrollDown directly instead.
+	m.viewport.KeyMap = viewport.KeyMap{}
+	m.viewport.MouseWheelEnabled = false
 	if len(cfg.StartupHistory) > 0 {
 		m.editor.SetHistory(cfg.StartupHistory)
 	}
@@ -298,6 +336,14 @@ type toolGroup struct {
 	kind GroupKind
 	n    int
 }
+
+// msgFullscreenRewrap follows a debounced width change in fullscreen mode:
+// once 150ms have passed with no further WindowSizeMsg, the transcript is
+// cleared and replayed at the new width (the same tea.ClearScreen +
+// msgReplayTranscript sequence Ctrl+O uses), so history re-wraps instead of
+// staying wrapped to a stale width. gen must match Model.resizeGen at the
+// time the tick fires, or a later resize already superseded this one.
+type msgFullscreenRewrap struct{ gen int }
 
 // msgReplayTranscript follows the tea.ClearScreen a Ctrl+O toggle returns:
 // once the clear has been applied, the transcript so far is re-committed at
@@ -376,42 +422,87 @@ type msgTurnResult struct {
 
 // --- Update ---------------------------------------------------------------
 
+// Update wraps update with the one thing every fullscreen message handler
+// needs done afterward: the viewport resized to whatever room is left below
+// the (possibly just-changed) bottom region. Doing it here, once, means
+// update's own cases never have to remember to call layoutViewport
+// themselves.
 func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(tm)
+	nm, ok := next.(Model)
+	if !ok {
+		return next, cmd
+	}
+	if nm.fullscreen {
+		nm = nm.layoutViewport()
+	}
+	return nm, cmd
+}
+
+func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	if body, ok := tea.PrintedLines(tm); ok {
 		m.committedRows += strings.Count(body, "\n") + 1
 		return m, nil
 	}
 	if tea.IsClearScreen(tm) {
 		m.committedRows = 0
+		if m.fullscreen {
+			m.transcript = nil
+			m.viewport.SetContent("")
+			m.viewport.GotoTop()
+		}
 		return m, nil
 	}
 	switch msg := tm.(type) {
+	case MsgTranscriptAppend:
+		m = m.appendTranscript(strings.Split(msg.Text, "\n"))
+		return m, nil
+
+	case msgFullscreenRewrap:
+		if msg.gen != m.resizeGen {
+			return m, nil
+		}
+		return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
+
+	case tea.MouseWheelMsg:
+		if !m.fullscreen {
+			return m, nil
+		}
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.viewport.ScrollUp(3)
+		case tea.MouseWheelDown:
+			m.viewport.ScrollDown(3)
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
+		prevWidth := m.width
 		m.width, m.height = msg.Width, msg.Height
 		m.editor.SetWidth(m.liveEditorWidth())
 		// Kiln label rules and full-row tints size to the live content
 		// width (transcript.go's width-less Render* helpers read this).
 		SetRenderWidth(m.contentWidth())
 		if !m.bannerDone && m.cfg.Bridge != nil && len(m.cfg.Banner) > 0 {
-			rows := make([]string, len(m.cfg.Banner))
-			for i, r := range m.cfg.Banner {
-				rows[i] = FitStatus(r, m.contentWidth())
-			}
-			// The kiln banner block closes with a full-width `─` divider
-			// (design_handoff "Banner": it "sits above a `─` rule").
-			ruleCh := "─"
-			if IsPlain() {
-				ruleCh = "-"
-			}
-			rows = append(rows, Rule(strings.Repeat(ruleCh, m.contentWidth())))
+			rows := m.bannerRows()
 			// The input box sits directly below the banner in inline mode.
 			// (No bottom-pinning filler: on a tall terminal it opens a huge
 			// void and, as the statusline loads and notices commit, scrolls
-			// the banner off the top. Bottom-pinning belongs to the planned
-			// full-screen mode — see docs/kiln-fullscreen-plan.md.)
+			// the banner off the top.) In fullscreen the banner is the
+			// transcript's first content instead — appendTranscript (via
+			// the bridge's fullscreen sink) puts it at the top of the
+			// viewport, not scrollback.
 			m.cfg.Bridge.Commit(rows)
 		}
 		m.bannerDone = true
+		if m.fullscreen {
+			m = m.layoutViewport()
+			if prevWidth != 0 && prevWidth != m.width {
+				m.resizeGen++
+				gen := m.resizeGen
+				return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return msgFullscreenRewrap{gen: gen} })
+			}
+		}
 		return m, nil
 
 	case tea.QuitMsg:
@@ -694,6 +785,124 @@ func (m Model) flushGroup() Model {
 	return m
 }
 
+// --- fullscreen mode --------------------------------------------------------
+
+// appendTranscript appends newLines (already-rendered rows, split on "\n")
+// to the transcript buffer and re-sets the viewport's content, following
+// the viewport to the bottom only if it was already there — scroll-to-pause:
+// a user who scrolled up to read history is not yanked back down by new
+// output arriving underneath them.
+func (m Model) appendTranscript(newLines []string) Model {
+	wasBottom := m.viewport.AtBottom()
+	m.transcript = append(m.transcript, newLines...)
+	m.viewport.SetContent(strings.Join(m.transcript, "\n"))
+	if wasBottom {
+		m.viewport.GotoBottom()
+	}
+	return m
+}
+
+// layoutViewport sizes the viewport to whatever room is left below the
+// bottom region (spinner/dialog/prompt/editor/statusline/mode line),
+// following the viewport to the bottom if it was already there before the
+// resize — the same scroll-to-pause rule appendTranscript applies to new
+// content applies to a height change too, since a shrinking viewport can
+// otherwise leave the offset pointing past the bottom until it corrects.
+func (m Model) layoutViewport() Model {
+	width := m.contentWidth()
+	bottom, _ := m.liveLines(width)
+	h := m.height - len(bottom)
+	if h < 1 {
+		h = 1
+	}
+	wasBottom := m.viewport.AtBottom()
+	m.viewport.SetWidth(width)
+	m.viewport.SetHeight(h)
+	if wasBottom {
+		m.viewport.GotoBottom()
+	}
+	return m
+}
+
+// toggleFullscreen flips fullscreen mode (ctrl+f). A no-op in plain
+// (screen-reader) mode, which has no alt-screen rendering to switch to.
+// Both directions rebuild the transcript from the session log exactly like
+// Ctrl+O's clear+replay — including its existing limitation: a line that
+// is not a session entry (a hook notice, `!`/`#` output, a slash command's
+// result row) is not in the log and is lost on toggle. That is Ctrl+O's
+// contract already; toggling fullscreen inherits it rather than solving it
+// separately.
+func (m Model) toggleFullscreen() (tea.Model, tea.Cmd) {
+	if IsPlain() {
+		return m, nil
+	}
+	m.fullscreen = !m.fullscreen
+	if m.cfg.Bridge != nil {
+		m.cfg.Bridge.SetFullscreen(m.fullscreen)
+	}
+	m.transcript = nil
+	return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
+}
+
+// fullscreenView composes the alt-screen frame: the transcript viewport on
+// top, the same bottom region liveLines already builds (spinner/dialog/
+// prompt/editor/statusline/mode line) pinned to the last rows.
+func (m Model) fullscreenView() tea.View {
+	if m.height <= 0 {
+		// No WindowSizeMsg yet to size the viewport against; the inline
+		// view degrades gracefully instead of drawing a zero-height frame.
+		width := m.contentWidth()
+		lines, editorTop := m.liveLines(width)
+		v := tea.NewView(strings.Join(lines, "\n"))
+		if m.cfg.SessionName != "" {
+			v.WindowTitle = m.cfg.SessionName
+		}
+		if editorTop >= 0 {
+			if c := m.editor.Cursor(); c != nil {
+				c.Position.Y += editorTop
+				v.Cursor = c
+			}
+		}
+		return v
+	}
+
+	width := m.contentWidth()
+	bottom, editorTop := m.liveLines(width)
+	if len(bottom) > m.height-1 {
+		overflow := len(bottom) - (m.height - 1)
+		bottom = bottom[overflow:]
+		if editorTop >= 0 {
+			editorTop -= overflow
+			if editorTop < 0 {
+				editorTop = -1
+			}
+		}
+	}
+
+	vpRows := strings.Split(m.viewport.View(), "\n")
+	// viewport.View pads to its own Height; guard the invariant explicitly
+	// rather than trust it silently, since a short content string is the
+	// one case that could violate it.
+	for len(vpRows) < m.viewport.Height() {
+		vpRows = append(vpRows, "")
+	}
+
+	content := append(append([]string{}, vpRows...), bottom...)
+	v := tea.NewView(strings.Join(content, "\n"))
+	if m.cfg.SessionName != "" {
+		v.WindowTitle = m.cfg.SessionName
+	}
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	if editorTop >= 0 {
+		if c := m.editor.Cursor(); c != nil {
+			c.Position.Y += len(vpRows) + editorTop
+			v.Cursor = c
+		}
+	}
+	return v
+}
+
 // --- key handling ----------------------------------------------------------
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -720,6 +929,32 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if consumed {
 			return m, cmd
+		}
+	}
+
+	// Fullscreen scroll keys, consumed here rather than routed through
+	// viewport.Update (whose own KeyMap NewModel emptied for exactly this
+	// reason): PgUp/PgDn and Shift+Up/Down scroll the transcript. Plain
+	// arrows and j/k are deliberately NOT bound here — Up/Down on an empty
+	// input are the editor's own history recall (see editor.Update below)
+	// and j/k must still type — a deviation from the plan's looser
+	// "arrow/j/k when the input is empty" wording, chosen so a scroll key
+	// never silently swallows what the editor would otherwise have done
+	// with it.
+	if m.fullscreen {
+		switch msg.String() {
+		case "pgup":
+			m.viewport.PageUp()
+			return m, nil
+		case "pgdown":
+			m.viewport.PageDown()
+			return m, nil
+		case "shift+up":
+			m.viewport.ScrollUp(1)
+			return m, nil
+		case "shift+down":
+			m.viewport.ScrollDown(1)
+			return m, nil
 		}
 	}
 
@@ -777,14 +1012,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// keeping one long-lived Router closing over a Model value that
 	// Update replaces on every call).
 	var (
-		didAbort    bool
-		didClear    bool
-		didClearScr bool
-		didExit     bool
-		didCycle    bool
-		didToggle   bool
-		didRewind   bool
-		hintMessage string
+		didAbort      bool
+		didClear      bool
+		didClearScr   bool
+		didExit       bool
+		didCycle      bool
+		didToggle     bool
+		didRewind     bool
+		didFullscreen bool
+		hintMessage   string
 	)
 	router := NewRouter(KeyActions{
 		PermissionKey: func(msg tea.KeyPressMsg) bool {
@@ -802,6 +1038,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		ClearScreen:         func() { didClearScr = true },
 		Rewind:              func() { didRewind = true },
 		Exit:                func() { didExit = true },
+		ToggleFullscreen:    func() { didFullscreen = true },
 		// Hint's message replaces the mode line for modeHintDuration
 		// (currently only Ctrl+C's "Press Ctrl-C again to exit" — see
 		// modeHintText's doc comment); recorded here, applied below once
@@ -840,6 +1077,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if didToggle {
 			return m.toggleVerbose()
+		}
+		if didFullscreen {
+			return m.toggleFullscreen()
 		}
 		if didClearScr {
 			return m, tea.ClearScreen
@@ -1073,6 +1313,40 @@ func (m Model) liveEditorWidth() int {
 	return m.contentWidth()
 }
 
+// frameHeight is the terminal height available to whatever sizes itself
+// against it (dialogRows, renderPopup): m.height, falling back to 24 when
+// no WindowSizeMsg has arrived yet, minus one row in fullscreen to reserve
+// the viewport's own bottom row.
+func (m Model) frameHeight() int {
+	h := m.height
+	if h <= 0 {
+		return 24
+	}
+	if m.fullscreen {
+		h--
+	}
+	return h
+}
+
+// bannerRows renders cfg.Banner fitted to the content width, closed with a
+// full-width `─` divider (design_handoff "Banner": it "sits above a `─`
+// rule"). Factored out of the WindowSizeMsg handler so replayTranscript can
+// re-commit the same rows in fullscreen, where the banner lives in the
+// transcript buffer rather than native scrollback and is lost on every
+// clear+replay unless re-added.
+func (m Model) bannerRows() []string {
+	rows := make([]string, len(m.cfg.Banner))
+	for i, r := range m.cfg.Banner {
+		rows[i] = FitStatus(r, m.contentWidth())
+	}
+	ruleCh := "─"
+	if IsPlain() {
+		ruleCh = "-"
+	}
+	rows = append(rows, Rule(strings.Repeat(ruleCh, m.contentWidth())))
+	return rows
+}
+
 // View composes the live region: spinner, live thinking, permission/plan
 // prompt (or, in its place, the hint row), the editor frame, then the mode
 // line — docs/claude-code-reference.md §§1-2: no status row by default, the
@@ -1080,6 +1354,9 @@ func (m Model) liveEditorWidth() int {
 // redrawn every frame; the committed transcript lives in real scrollback
 // and is never touched.
 func (m Model) View() tea.View {
+	if m.fullscreen {
+		return m.fullscreenView()
+	}
 	width := m.contentWidth()
 	lines, editorTop := m.liveLines(width)
 
@@ -1186,10 +1463,7 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 // dialogRows renders the open dialog under its `▔` rule, sized to what is
 // left of the terminal below linesAbove.
 func (m Model) dialogRows(width, linesAbove int) []string {
-	height := m.height
-	if height <= 0 {
-		height = 24
-	}
+	height := m.frameHeight()
 	room := height - linesAbove - 1
 	if room < 4 {
 		room = 4
@@ -1242,9 +1516,17 @@ func (m Model) toggleVerbose() (tea.Model, tea.Cmd) {
 // rendered at the current width and verbosity. Committed rows live in
 // scrollback and cannot be repainted, so a verbosity change redraws from
 // the session log, the same source Claude Code redraws from.
+//
+// In fullscreen the banner needs the same treatment: it is part of the
+// transcript buffer (not native scrollback), so a clear wipes it along with
+// everything else, and it must be re-committed first — ahead of the
+// entries — or Ctrl+O/toggle/resize-rewrap would each drop it.
 func (m Model) replayTranscript() {
 	if m.cfg.Bridge == nil || m.cfg.Lane == nil {
 		return
+	}
+	if m.fullscreen && m.bannerDone && len(m.cfg.Banner) > 0 {
+		m.cfg.Bridge.Commit(m.bannerRows())
 	}
 	entries, err := m.cfg.Lane.FindEntries(context.Background())
 	if err != nil {
@@ -1313,10 +1595,7 @@ func parentOf(entries []session.Entry, entryID string) *string {
 // terminal-height one, so this cap is this port's own addition for the
 // no-room case the task calls out explicitly.
 func (m Model) renderPopup(width, linesAbove int) []string {
-	height := m.height
-	if height <= 0 {
-		height = 24
-	}
+	height := m.frameHeight()
 	// The bottom area is one row now (the mode line only — no status row,
 	// docs/claude-code-reference.md §1).
 	const footerRows = 1
