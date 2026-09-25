@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -191,21 +192,112 @@ type Candidate struct {
 	Provider string
 }
 
-// ResolveAgentModel resolves an agent's `model:` field against what this
-// harness is actually running on.
+// ResolveKind labels why ResolveModel landed on the ModelChoice it
+// returned. Diagnostics (the subagent start event, `/model roles`,
+// `doctor`) use it to say more than just "here's the model" - e.g. that a
+// request fell back to the parent rather than actually resolving.
+type ResolveKind string
+
+const (
+	// ResolveInherited means requested was empty or "inherit".
+	ResolveInherited ResolveKind = "inherited"
+	// ResolveRole means requested named a key of the roles map and that
+	// role's value resolved against candidates.
+	ResolveRole ResolveKind = "role"
+	// ResolveExplicit means requested was a literal "provider/model" that
+	// resolved against candidates.
+	ResolveExplicit ResolveKind = "explicit"
+	// ResolveAlias means requested was a bare alias (built-in or
+	// substring-matched against the parent's provider) that resolved.
+	ResolveAlias ResolveKind = "alias"
+	// ResolveFallback means requested named something that could not be
+	// resolved, so the parent's model was kept.
+	ResolveFallback ResolveKind = "fallback"
+)
+
+// Chooser is the seam for a future classifier that picks a model role
+// (e.g. "fast", "heavy") from a subagent's description and prompt, rather
+// than requiring every agent definition to spell out its own `model:`.
+// ResolveModel does not call this in this phase - it is defined so that
+// seam exists on the API, and ships unused; a nil Chooser is the correct
+// value everywhere today, and callers should treat it as "inherit".
+type Chooser interface {
+	// Choose returns a role name (a key ResolveModel would look up in its
+	// roles map) for the given subagent description/prompt, or ok=false to
+	// mean "no opinion, inherit".
+	Choose(ctx context.Context, description, prompt string) (role string, ok bool)
+}
+
+// builtinAliasRoles maps Claude Code's Anthropic-shaped bare aliases onto
+// this harness's own role names, so a definition that says "model: sonnet"
+// can be redirected by modelRoles.structured without every .md file in
+// existence being rewritten.
+var builtinAliasRoles = map[string]string{
+	"haiku":  "fast",
+	"sonnet": "structured",
+	"opus":   "heavy",
+}
+
+// splitProviderModelValue splits a "provider/model" role value into its two
+// halves. Deliberately local to this package rather than shared with
+// internal/cli's splitProviderModel: the two are allowed to diverge (this
+// one, for instance, need not reject a model id that itself contains "/").
+func splitProviderModelValue(v string) (providerID, modelID string, ok bool) {
+	idx := strings.IndexByte(v, '/')
+	if idx <= 0 || idx == len(v)-1 {
+		return "", "", false
+	}
+	return v[:idx], v[idx+1:], true
+}
+
+// resolveRoleValue resolves one modelRoles value ("provider/model")
+// against candidates, reporting whether it named something real.
+func resolveRoleValue(value string, candidates []Candidate) (ModelChoice, bool) {
+	providerID, modelID, ok := splitProviderModelValue(value)
+	if !ok {
+		return ModelChoice{}, false
+	}
+	for _, c := range candidates {
+		if c.Provider == providerID && c.ID == modelID {
+			return ModelChoice{ProviderID: providerID, ModelID: modelID}, true
+		}
+	}
+	return ModelChoice{}, false
+}
+
+// ResolveModel resolves an agent's (or /model's) requested model string
+// against what this harness is actually running on, honoring per-role
+// overrides from settings.json's modelRoles ahead of the built-in alias
+// behavior.
+//
+// Precedence:
+//
+//  1. "" or "inherit" -> the parent's model.
+//  2. requested is a key of roles -> that role's "provider/model" value,
+//     if it resolves against candidates; else the parent (fallback).
+//  3. requested contains "/" -> resolved literally against candidates as
+//     an explicit provider/model; else the parent (fallback).
+//  4. A bare alias (e.g. "sonnet"): if its built-in role
+//     (haiku->fast, sonnet->structured, opus->heavy) is configured in
+//     roles, resolved as in (2); otherwise the same-provider substring
+//     match this harness has always done, or the parent if nothing
+//     matches.
 //
 // "sonnet"/"opus"/"haiku" are Anthropic names. In a model-agnostic harness
 // they cannot be requirements: on a self-hosted Ollama session there is no
 // Sonnet to dispatch to, and failing the task over it would be absurd. So
-// they are treated as hints:
-//
-//   - "provider/model" is explicit and resolved literally, if it exists.
-//   - A bare alias is honored only if the parent's own provider offers a
-//     matching model.
-//   - "inherit", or anything unresolvable, inherits.
-func ResolveAgentModel(requested string, parent ModelChoice, candidates []Candidate) ModelChoice {
+// they, and roles, are always treated as hints that fall back to the
+// parent rather than erroring.
+func ResolveModel(requested string, roles map[string]string, parent ModelChoice, candidates []Candidate) (ModelChoice, ResolveKind) {
 	if requested == "" || requested == "inherit" {
-		return parent
+		return parent, ResolveInherited
+	}
+
+	if roleValue, ok := roles[requested]; ok {
+		if choice, found := resolveRoleValue(roleValue, candidates); found {
+			return choice, ResolveRole
+		}
+		return parent, ResolveFallback
 	}
 
 	if slash := strings.Index(requested, "/"); slash != -1 {
@@ -213,20 +305,75 @@ func ResolveAgentModel(requested string, parent ModelChoice, candidates []Candid
 		modelID := requested[slash+1:]
 		for _, c := range candidates {
 			if c.Provider == providerID && c.ID == modelID {
-				return ModelChoice{ProviderID: providerID, ModelID: modelID}
+				return ModelChoice{ProviderID: providerID, ModelID: modelID}, ResolveExplicit
 			}
 		}
-		return parent
+		return parent, ResolveFallback
 	}
 
-	// A bare alias is scoped to the parent's provider on purpose. Matching
-	// it across every configured provider would silently move a task onto
-	// a paid API because a local definition happened to say "opus".
 	alias := strings.ToLower(requested)
-	for _, c := range candidates {
-		if c.Provider == parent.ProviderID && strings.Contains(strings.ToLower(c.ID), alias) {
-			return ModelChoice{ProviderID: c.Provider, ModelID: c.ID}
+	if role, ok := builtinAliasRoles[alias]; ok {
+		if roleValue, ok := roles[role]; ok {
+			if choice, found := resolveRoleValue(roleValue, candidates); found {
+				return choice, ResolveAlias
+			}
+			return parent, ResolveFallback
 		}
 	}
-	return parent
+
+	// A bare alias with no matching role is scoped to the parent's
+	// provider on purpose. Matching it across every configured provider
+	// would silently move a task onto a paid API because a local
+	// definition happened to say "opus".
+	for _, c := range candidates {
+		if c.Provider == parent.ProviderID && strings.Contains(strings.ToLower(c.ID), alias) {
+			return ModelChoice{ProviderID: c.Provider, ModelID: c.ID}, ResolveAlias
+		}
+	}
+	return parent, ResolveFallback
+}
+
+// ResolveAgentModel is ResolveModel with no roles configured, kept so
+// existing callers (and their tests) that have no modelRoles to pass
+// still compile and behave exactly as before.
+func ResolveAgentModel(requested string, parent ModelChoice, candidates []Candidate) ModelChoice {
+	choice, _ := ResolveModel(requested, nil, parent, candidates)
+	return choice
+}
+
+// ValidateRoles checks every configured role's value against candidates,
+// returning one human-readable problem per role that fails - either
+// because the value is not "provider/model" shaped, or because it names no
+// available model - sorted by role name. `doctor` and startup warnings use
+// this; ResolveModel itself never reports failures, it only falls back.
+//
+// Each returned string is "<role>: <detail>", so a caller building
+// "kiln: role <name>: <problem>" needs only prepend "kiln: role ".
+func ValidateRoles(roles map[string]string, candidates []Candidate) []string {
+	names := make([]string, 0, len(roles))
+	for name := range roles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var problems []string
+	for _, name := range names {
+		value := roles[name]
+		providerID, modelID, ok := splitProviderModelValue(value)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("%s: %q is not provider/model", name, value))
+			continue
+		}
+		found := false
+		for _, c := range candidates {
+			if c.Provider == providerID && c.ID == modelID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			problems = append(problems, fmt.Sprintf("%s: %s is not among the available models", name, value))
+		}
+	}
+	return problems
 }

@@ -95,6 +95,31 @@ func ollamaOptionsFromEnv() ollama.Options {
 	return ollama.Options{URL: url, ServerDefaultContext: serverDefault, HTTPClient: &http.Client{Timeout: 3 * time.Minute}}
 }
 
+// refreshRoleProviders refreshes the model list of every provider a role
+// points at, other than the one already refreshed for the main model.
+//
+// Without this a role on a dynamic provider that is not the parent's
+// (an Anthropic session with `fast: ollama/...`) has an empty model list
+// at dispatch time, so ResolveModel silently falls back to the parent and
+// the role never fires. Roles are fixed for the session, so once at
+// startup is enough; a failure is reported and otherwise ignored exactly
+// like the main refresh above.
+func refreshRoleProviders(ctx context.Context, reg *provider.Registry, roles map[string]string, skip string, stderr io.Writer) {
+	done := map[string]bool{skip: true}
+	for _, value := range roles {
+		providerID, _, ok := splitProviderModel(value)
+		if !ok || done[providerID] {
+			continue
+		}
+		done[providerID] = true
+		if p, ok := reg.Provider(providerID); ok {
+			if err := p.RefreshModels(ctx); err != nil && stderr != nil {
+				fmt.Fprintf(stderr, "kiln: refreshing %s for roles: %v\n", providerID, err)
+			}
+		}
+	}
+}
+
 // splitProviderModel splits "provider/model" into its two halves. A model
 // id may itself contain "/" (e.g. Ollama tags rarely do, but nothing rules
 // it out), so this splits on the first "/" only.
@@ -217,9 +242,17 @@ func subagentEventSink(stderr io.Writer) func(agent.SubagentEvent) {
 			if e.Inherited {
 				note = " (inherited; the requested model is not on this provider)"
 			}
-			fmt.Fprintf(stderr, "└ %s %s on %s%s\n", e.Agent, e.Description, e.ModelID, note)
+			model := e.ModelID
+			if e.ProviderID != "" {
+				model = e.ProviderID + "/" + e.ModelID
+			}
+			kind := ""
+			if e.ModelKind != "" {
+				kind = " [" + e.ModelKind + "]"
+			}
+			fmt.Fprintf(stderr, "└ %s %s on %s%s%s\n", e.Agent, e.Description, model, kind, note)
 		case agent.SubagentEventDone:
-			fmt.Fprintf(stderr, "  %s finished - %d tool calls, %d chars returned\n", e.Agent, e.ToolCalls, e.Chars)
+			fmt.Fprintf(stderr, "  %s finished - %d tool calls, %d chars returned, %d tokens\n", e.Agent, e.ToolCalls, e.Chars, e.Usage.TotalTokens)
 		case agent.SubagentEventError:
 			fmt.Fprintf(stderr, "%s: %s\n", e.Agent, e.Message)
 		}
@@ -298,6 +331,26 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
+	}
+
+	// modelRoles warnings: printed once, up front, so a broken role is
+	// visible before it silently falls back to the parent model mid-run
+	// (agents.ResolveModel never errors, it only falls back - see its doc
+	// comment). Not fatal: a bad role is a misconfiguration to fix, not a
+	// reason to refuse to start.
+	if len(settings.ModelRoles) > 0 {
+		refreshRoleProviders(ctx, reg, settings.ModelRoles, providerID, stderr)
+		if available, err := reg.Available(ctx); err == nil {
+			var candidates []claudeagents.Candidate
+			for _, p := range available {
+				for _, m := range p.Models() {
+					candidates = append(candidates, claudeagents.Candidate{ID: m.ID, Provider: p.ID()})
+				}
+			}
+			for _, problem := range claudeagents.ValidateRoles(settings.ModelRoles, candidates) {
+				fmt.Fprintf(stderr, "kiln: role %s\n", problem)
+			}
+		}
 	}
 
 	// Memory is budgeted against the tier: on a 32k model the system prompt
@@ -422,15 +475,22 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Registry:     reg,
 		Gate:         gate,
 		Agents:       agentsList,
+		Roles:        settings.ModelRoles,
 		SessionsRoot: sessionRepo.Root,
 		Env:          env,
 		OnEvent:      subagentEventSink(stderr),
 	}
-	dispatchFn := func(ctx context.Context, agentName, description, prompt string) (tools.TaskDispatchResult, error) {
-		r, err := dispatcher.Dispatch(ctx, agentName, description, prompt)
-		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars}, err
+	dispatchFn := func(ctx context.Context, req tools.TaskRequest) (tools.TaskDispatchResult, error) {
+		r, err := dispatcher.Dispatch(ctx, agent.DispatchRequest{
+			Agent:       req.Agent,
+			Description: req.Description,
+			Prompt:      req.Prompt,
+			Model:       req.Model,
+			ToolCallID:  req.ToolCallID,
+		})
+		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars, Model: r.Model, Usage: r.Usage}, err
 	}
-	taskTool := tools.TaskTool(dispatchFn, agentsList, resolved.Tier)
+	taskTool := tools.TaskTool(dispatchFn, agentsList, settings.ModelRoles, resolved.Tier)
 
 	// Plan mode: active iff the resolved permission mode is "plan" (either
 	// --permission-mode plan or the settings/env-var equivalents
@@ -564,6 +624,43 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return lastUsage.TotalTokens, true
 	}
 
+	// usageByModel accumulates this session's usage per "provider/model",
+	// for /cost's by-model breakdown (internal/commands/builtins.go). The
+	// parent's own turns are added here from EventUsage's per-turn delta
+	// (UsageRow), keyed by started.Model at the time of the event — read
+	// live rather than captured once, so a /model switch mid-session
+	// attributes turns to whichever model actually ran them. A dispatched
+	// subagent's usage is added separately, from OnSubagentStop below,
+	// since that is the one dispatcher hook this file sets that neither
+	// print mode's subagentEventSink nor the TUI's bridge.SubagentSink
+	// (internal/tui/bridge.go) ever overwrites.
+	var usageByModelMu sync.Mutex
+	usageByModel := map[string]msg.Usage{}
+	addUsage := func(providerID, modelID string, u msg.Usage) {
+		if u.TotalTokens == 0 && u.Input == 0 && u.Output == 0 {
+			return
+		}
+		key := providerID + "/" + modelID
+		usageByModelMu.Lock()
+		usageByModel[key] = usageByModel[key].Add(u)
+		usageByModelMu.Unlock()
+	}
+	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
+		if ev.UsageRow == nil {
+			return
+		}
+		addUsage(started.Model.Provider, started.Model.ID, *ev.UsageRow)
+	})
+	getUsageByModel := func() map[string]msg.Usage {
+		usageByModelMu.Lock()
+		defer usageByModelMu.Unlock()
+		out := make(map[string]msg.Usage, len(usageByModel))
+		for k, v := range usageByModel {
+			out[k] = v
+		}
+		return out
+	}
+
 	settingsLoadedFrom := make([]string, 0, len(settings.LoadedFrom))
 	for _, s := range settings.LoadedFrom {
 		settingsLoadedFrom = append(settingsLoadedFrom, string(s))
@@ -614,6 +711,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		subSession, subTranscript := sessionID, transcriptPath
 		if sub != nil {
 			subSession, subTranscript = sub.SessionID, sub.TranscriptPath
+			addUsage(sub.Model.Provider, sub.Model.ID, sub.Harness.Stats().Usage)
 		}
 		claudehooks.RunHooks(claudehooks.RunOptions{
 			Config: hookConfig,
@@ -640,10 +738,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Todos:              todos,
 		Shells:             shells,
 		SettingsLoadedFrom: settingsLoadedFrom,
+		ModelRoles:         settings.ModelRoles,
 		ModelLabel:         providerID + "/" + modelID,
 		SessionRepo:        sessionRepo,
 		SessionsDir:        sessionRepo.Root,
 		ContextUsed:        contextUsed,
+		UsageByModel:       getUsageByModel,
 		MCPConfigPath:      mcpgate.ConfigPath(args.MCPConfig),
 	}, hub)
 

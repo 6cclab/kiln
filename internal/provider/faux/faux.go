@@ -1,6 +1,6 @@
 // Package faux registers provider id "faux" against the scripted server in
-// internal/testkit/faux, giving every later test one real, deterministic
-// model to drive Stream through.
+// internal/testkit/faux, giving every later test real, deterministic
+// models (faux-1, faux-2) to drive Stream through.
 //
 // It registers only when HARNESS_FAUX_ADDR is set (the address the test set
 // up already started faux at); it is never part of the default provider
@@ -19,8 +19,13 @@ import (
 // ProviderID is the registry id.
 const ProviderID = "faux"
 
-// ModelID is the id of the one model faux serves.
+// ModelID is the id of faux's default (large-tier) model.
 const ModelID = "faux-1"
+
+// ModelID2 is the id of faux's second, small-tier model, used to exercise
+// multi-model behavior (independent scripts, per-model tiers/cost) without
+// a second provider.
+const ModelID2 = "faux-2"
 
 // New builds the faux provider, reading its address and API shape from
 // HARNESS_FAUX_ADDR / HARNESS_FAUX_API. Returns nil, false when
@@ -56,12 +61,32 @@ func New() (*Provider, bool) {
 		Cost:          provider.ModelCost{},
 	}
 
-	return &Provider{model: model}, true
+	model2 := provider.Model{
+		ID:       ModelID2,
+		Name:     ModelID2,
+		Api:      apiShape,
+		Provider: ProviderID,
+		BaseURL:  baseURL,
+		Input:    []string{"text", "image"},
+		// A small-tier sibling to faux-1: a smaller context window/max
+		// tokens and a non-zero cost, so tests can exercise a second
+		// scripted model with a different tier and cost footer.
+		ContextWindow: 32768,
+		MaxTokens:     8192,
+		Cost: provider.ModelCost{
+			ModelCostRates: provider.ModelCostRates{
+				Input:  3.0,
+				Output: 15.0,
+			},
+		},
+	}
+
+	return &Provider{models: []provider.Model{model, model2}}, true
 }
 
 // Provider is the faux provider.Provider implementation.
 type Provider struct {
-	model     provider.Model
+	models    []provider.Model
 	anthropic api.AnthropicClient
 	openai    api.OpenAICompletionsClient
 }
@@ -73,7 +98,7 @@ func (p *Provider) Auth() provider.AuthSpec {
 	return provider.AuthSpec{Kind: provider.AuthKindNone}
 }
 
-func (p *Provider) Models() []provider.Model { return []provider.Model{p.model} }
+func (p *Provider) Models() []provider.Model { return p.models }
 
 func (p *Provider) RefreshModels(ctx context.Context) error { return nil }
 

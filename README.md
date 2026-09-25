@@ -114,6 +114,13 @@ credential wins over an environment variable for the same provider.
   8,316 if bodies were loaded.
 - **Subagents.** A `task` runs in its own session and window; the parent pays
   for one paragraph.
+- **Roles.** `settings.json`'s `modelRoles` (fast/structured/heavy →
+  provider/model) is the one place model names appear; a `task` call picks a
+  role instead of naming a provider and model itself. Concurrent `task` calls
+  from one turn run in parallel, each in its own session. A subagent can
+  dispatch subagents of its own, up to two levels deep; a role that crosses
+  onto a different paid provider asks once per session per role, not once per
+  dispatch.
 
 ## `.claude/` compatibility
 
@@ -127,6 +134,7 @@ Reads your existing configuration; writes nothing into it.
 | `.claude/settings.json` | permissions, merged `user` → `project` → `local` |
 | `~/.claude.json` | MCP servers |
 | `.claude/agents/*.md` | subagents, dispatched with the `task` tool |
+| `.claude/settings.json` `modelRoles` | model roles for `task` dispatch (fast/structured/heavy → provider/model) |
 | `~/.claude/keybindings.json` | editor key overrides; conflicts reported at startup |
 | `.claude/settings.json` `hooks` | `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `SubagentStop`, `Notification`, `PreCompact` |
 

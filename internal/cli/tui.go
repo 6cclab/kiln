@@ -130,7 +130,15 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		deps.SetHookNotice(bridge.HookNotice)
 	}
 	if deps.Dispatcher != nil {
-		deps.Dispatcher.OnEvent = bridge.SubagentSink()
+		// Fan out every dispatch event to both the transcript (a one-line
+		// note per start/done/error) and the live subagents panel (which
+		// tracks running/done rows for the turn in progress).
+		transcriptSink := bridge.SubagentSink()
+		panelSink := bridge.SubagentPanelSink()
+		deps.Dispatcher.OnEvent = func(e agent.SubagentEvent) {
+			transcriptSink(e)
+			panelSink(e)
+		}
 	}
 
 	historyPath := editor.Path()

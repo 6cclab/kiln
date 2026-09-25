@@ -149,6 +149,12 @@ func (h *Harness) SetName(name string) error {
 // Close closes the underlying storage.
 func (h *Harness) Close() error { return h.opts.Storage.Close() }
 
+// Stats returns the session's aggregate usage totals. Exported so a
+// caller running this harness on someone else's behalf (the subagent
+// dispatcher, internal/agent/dispatch.go) can report back what the run
+// actually cost, without reaching into opts.Storage directly.
+func (h *Harness) Stats() session.SessionStats { return h.opts.Storage.GetStats() }
+
 // Lane returns the named lane, creating it (and writing its initial
 // pi.branch.tip / pi.lane.config / pi.lane.state values) if this is the
 // first time it has been asked for. These writes used to happen in

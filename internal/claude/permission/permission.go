@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/andrepato/harness/internal/claude/settings"
 )
@@ -65,6 +66,11 @@ type Gate struct {
 	prompter    Prompter
 	mode        settings.PermissionMode
 
+	// mu guards sessionAllows and blockLog, which concurrent tool calls
+	// (from a Concurrent-tool run in the harness turn loop) can now touch
+	// from more than one goroutine at once.
+	mu sync.Mutex
+
 	// sessionAllows are grants added by "yes, don't ask again", scoped to
 	// this session only. Deliberately not persisted: a permission granted
 	// in a hurry to unblock one task should not silently become permanent
@@ -79,6 +85,16 @@ type Gate struct {
 	// ~/.ssh/id_rsa under an allow:[Read] rule the user only meant to apply
 	// to their project.
 	roots []string
+
+	// promptMu is held across an entire prompter round trip (both prompt
+	// branches of Check), so two concurrent Check calls asking about the
+	// same or different requests never show the user two dialogs at once.
+	// It is a separate lock from mu: mu is never held while the prompter
+	// runs (the prompter can take arbitrarily long, and may itself call
+	// back into the gate). The second waiter re-checks sessionAllows after
+	// acquiring promptMu, so a grant the first waiter just made is honored
+	// without asking again.
+	promptMu sync.Mutex
 }
 
 // NewGate builds a Gate. Roots are resolved to absolute paths and
@@ -151,10 +167,18 @@ func (g *Gate) WithinRoots(path string) bool {
 }
 
 // SetMode sets the active permission mode.
-func (g *Gate) SetMode(mode settings.PermissionMode) { g.mode = mode }
+func (g *Gate) SetMode(mode settings.PermissionMode) {
+	g.mu.Lock()
+	g.mode = mode
+	g.mu.Unlock()
+}
 
 // Mode returns the active permission mode.
-func (g *Gate) Mode() settings.PermissionMode { return g.mode }
+func (g *Gate) Mode() settings.PermissionMode {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.mode
+}
 
 // SetPrompter binds the UI that asks the user. The gate is often
 // constructed before the TUI, so the prompter arrives later rather than at
@@ -162,7 +186,11 @@ func (g *Gate) Mode() settings.PermissionMode { return g.mode }
 func (g *Gate) SetPrompter(p Prompter) { g.prompter = p }
 
 // Permissions returns the merged rules, for /permissions.
-func (g *Gate) Permissions() settings.Permissions { return g.permissions }
+func (g *Gate) Permissions() settings.Permissions {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.permissions
+}
 
 // RuleList selects which list AddRule/RemoveRule operate on.
 type RuleList string
@@ -190,6 +218,8 @@ func (g *Gate) list(list RuleList) *[]string {
 // persisting it: the in-memory set is what the next tool call is judged
 // against.
 func (g *Gate) AddRule(list RuleList, rule string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	l := g.list(list)
 	for _, r := range *l {
 		if r == rule {
@@ -201,6 +231,8 @@ func (g *Gate) AddRule(list RuleList, rule string) {
 
 // RemoveRule removes a rule from the in-memory set.
 func (g *Gate) RemoveRule(list RuleList, rule string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	l := g.list(list)
 	out := make([]string, 0, len(*l))
 	for _, r := range *l {
@@ -214,6 +246,8 @@ func (g *Gate) RemoveRule(list RuleList, rule string) {
 // SessionGrants returns grants made by "yes, don't ask again" this
 // session, surfaced because they are invisible otherwise.
 func (g *Gate) SessionGrants() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	out := make([]string, 0, len(g.sessionAllows))
 	for k := range g.sessionAllows {
 		out = append(out, k)
@@ -223,14 +257,34 @@ func (g *Gate) SessionGrants() []string {
 
 // Blocked returns the refusal log, for /permissions-style reporting.
 func (g *Gate) Blocked() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	out := make([]string, len(g.blockLog))
 	copy(out, g.blockLog)
 	return out
 }
 
+// record appends to blockLog under mu. Callers must not hold mu already.
 func (g *Gate) record(req Request, reason string) BlockResult {
+	g.mu.Lock()
 	g.blockLog = append(g.blockLog, fmt.Sprintf("%s(%s): %s", req.ToolName, req.PrimaryArg, reason))
+	g.mu.Unlock()
 	return BlockResult{Reason: reason}
+}
+
+// sessionAllowed reports whether key(toolName, primaryArg) was already
+// granted this session.
+func (g *Gate) sessionAllowed(k string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.sessionAllows[k]
+}
+
+// grantSession records a "don't ask again" grant.
+func (g *Gate) grantSession(k string) {
+	g.mu.Lock()
+	g.sessionAllows[k] = true
+	g.mu.Unlock()
 }
 
 // key scopes a session grant by tool plus argument, so "always" is not a
@@ -267,21 +321,39 @@ func PrimaryArgOf(args map[string]any) (string, bool) {
 
 // Check decides, prompting if necessary. A nil result means proceed; a
 // non-nil BlockResult carries the reason, written for the model.
+//
+// Two Concurrent tool calls from the same assistant message can call Check
+// at the same time. mu (via sessionAllowed/grantSession) guards the
+// grant/block bookkeeping; promptMu is held across an entire prompter round
+// trip so two concurrent asks never show the user two dialogs at once, and
+// each prompt branch re-checks sessionAllowed after acquiring promptMu so a
+// grant the first waiter just won is honored for the second without asking
+// again. mu is never held while the prompter runs.
 func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
-	if g.sessionAllows[key(req.ToolName, req.PrimaryArg)] {
+	k := key(req.ToolName, req.PrimaryArg)
+	if g.sessionAllowed(k) {
 		return nil, nil
 	}
 
-	verdict := settings.Decide(g.permissions, req.ToolName, req.PrimaryArg, g.mode)
+	g.mu.Lock()
+	permissions, mode := g.permissions, g.mode
+	g.mu.Unlock()
+
+	verdict := settings.Decide(permissions, req.ToolName, req.PrimaryArg, mode)
 
 	// A path outside the workspace always warrants a question, even when a
 	// rule would otherwise allow the tool.
 	path, hasPath := PathArgOf(req.Args)
 	escaped := hasPath && !g.WithinRoots(path)
-	if escaped && verdict == settings.Allow && g.mode != settings.ModeBypassPermissions {
+	if escaped && verdict == settings.Allow && mode != settings.ModeBypassPermissions {
 		if g.prompter == nil {
 			r := g.record(req, fmt.Sprintf("%s is outside the workspace and cannot be confirmed.", path))
 			return &r, nil
+		}
+		g.promptMu.Lock()
+		defer g.promptMu.Unlock()
+		if g.sessionAllowed(k) {
+			return nil, nil
 		}
 		promptReq := req
 		promptReq.OutsideWorkspace = true
@@ -294,7 +366,7 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 			return &r, nil
 		}
 		if choice.Kind == PromptAllowAlways {
-			g.sessionAllows[key(req.ToolName, req.PrimaryArg)] = true
+			g.grantSession(k)
 		}
 		return nil, nil
 	}
@@ -304,7 +376,7 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 	}
 	if verdict == settings.Deny {
 		reason := "blocked by permission rules."
-		if g.mode == settings.ModePlan {
+		if mode == settings.ModePlan {
 			reason = fmt.Sprintf("plan mode is read-only, so %s is not available. Describe the change instead of making it.", req.ToolName)
 		}
 		r := g.record(req, reason)
@@ -320,6 +392,11 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 		return &r, nil
 	}
 
+	g.promptMu.Lock()
+	defer g.promptMu.Unlock()
+	if g.sessionAllowed(k) {
+		return nil, nil
+	}
 	choice, err := g.prompter(ctx, req)
 	if err != nil {
 		return nil, err
@@ -328,7 +405,7 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 		return nil, nil
 	}
 	if choice.Kind == PromptAllowAlways {
-		g.sessionAllows[key(req.ToolName, req.PrimaryArg)] = true
+		g.grantSession(k)
 		return nil, nil
 	}
 

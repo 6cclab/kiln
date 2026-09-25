@@ -137,11 +137,31 @@ type Event struct {
 // on the emitting goroutine (the lane's turn loop), in subscription order;
 // a slow or blocking handler will therefore delay the loop, matching pi's
 // own synchronous EventEmitter semantics.
+//
+// # Concurrency
+//
+// Since P4, Emit can be called from more than one goroutine at once: a
+// Concurrent-tool run in the turn loop emits tool_start/tool_end from a
+// goroutine per tool call. Emit stays synchronous for every existing
+// caller (nothing needed a Flush/Wait added) by serializing handler
+// invocation itself: invokeMu is held for the whole "run every matching
+// handler" section of one Emit call, so handlers still run one at a time,
+// in subscription order, and two concurrent Emit calls never interleave
+// their handlers. subMu is a separate, narrower lock that only protects
+// the subscription lists (On/OnAll/unsubscribe and the snapshot Emit takes
+// of them) and is never held while a handler runs, so a handler that calls
+// On/OnAll/unsubscribe cannot deadlock against Emit. A handler that itself
+// calls Emit on the same goroutine (re-entrant emit) would deadlock on
+// invokeMu; grep of internal/harness, internal/tui and internal/cli at the
+// time this was written found no such handler, so the simpler
+// non-reentrant design was chosen over a per-goroutine reentrancy token.
 type Events struct {
-	mu        sync.Mutex
+	subMu     sync.Mutex
 	byType    map[EventType][]subscription
 	all       []subscription
 	nextToken int64
+
+	invokeMu sync.Mutex
 }
 
 type subscription struct {
@@ -158,9 +178,9 @@ func NewEvents() *Events {
 // func unsubscribes it.
 func (e *Events) On(t EventType, fn func(Event)) func() {
 	tok := atomic.AddInt64(&e.nextToken, 1)
-	e.mu.Lock()
+	e.subMu.Lock()
 	e.byType[t] = append(e.byType[t], subscription{token: tok, fn: fn})
-	e.mu.Unlock()
+	e.subMu.Unlock()
 	return func() { e.unsubscribeType(t, tok) }
 }
 
@@ -168,15 +188,15 @@ func (e *Events) On(t EventType, fn func(Event)) func() {
 // order. The returned func unsubscribes it.
 func (e *Events) OnAll(fn func(Event)) func() {
 	tok := atomic.AddInt64(&e.nextToken, 1)
-	e.mu.Lock()
+	e.subMu.Lock()
 	e.all = append(e.all, subscription{token: tok, fn: fn})
-	e.mu.Unlock()
+	e.subMu.Unlock()
 	return func() { e.unsubscribeAll(tok) }
 }
 
 func (e *Events) unsubscribeType(t EventType, tok int64) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.subMu.Lock()
+	defer e.subMu.Unlock()
 	subs := e.byType[t]
 	for i, s := range subs {
 		if s.token == tok {
@@ -187,8 +207,8 @@ func (e *Events) unsubscribeType(t EventType, tok int64) {
 }
 
 func (e *Events) unsubscribeAll(tok int64) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.subMu.Lock()
+	defer e.subMu.Unlock()
 	for i, s := range e.all {
 		if s.token == tok {
 			e.all = append(e.all[:i:i], e.all[i+1:]...)
@@ -199,12 +219,18 @@ func (e *Events) unsubscribeAll(tok int64) {
 
 // Emit runs every matching handler synchronously, in subscription order:
 // type-specific handlers first, then OnAll handlers, matching pi's
-// emitter.emit(type, ...) then emitter.emit('*', ...) order.
+// emitter.emit(type, ...) then emitter.emit('*', ...) order. invokeMu
+// serializes the actual handler calls across concurrent Emit callers (see
+// the Events doc comment); subMu, held only long enough to snapshot the
+// subscriber lists, is released before any handler runs.
 func (e *Events) Emit(ev Event) {
-	e.mu.Lock()
+	e.subMu.Lock()
 	byType := append([]subscription(nil), e.byType[ev.Type]...)
 	all := append([]subscription(nil), e.all...)
-	e.mu.Unlock()
+	e.subMu.Unlock()
+
+	e.invokeMu.Lock()
+	defer e.invokeMu.Unlock()
 	for _, s := range byType {
 		s.fn(ev)
 	}

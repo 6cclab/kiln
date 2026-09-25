@@ -593,6 +593,23 @@ func (b *Bridge) PlanApprover() agent.PlanApprover {
 	}
 }
 
+// MsgSubagentEvent carries one agent.SubagentEvent to the app's Update
+// loop, so the subagents panel (app.go's SubagentPanelState) can track
+// live dispatches the same way every other live-region piece of state is
+// driven by messages rather than by reading the dispatcher directly.
+type MsgSubagentEvent struct{ Event agent.SubagentEvent }
+
+// SubagentPanelSink returns an agent.Dispatcher OnEvent handler that feeds
+// the subagents panel. It is composed with SubagentSink (below) at the
+// call site (internal/cli/tui.go) rather than merged into one function,
+// so the transcript sink — which is stateless and Go-only-facing — stays
+// independent of the panel's Model-side state.
+func (b *Bridge) SubagentPanelSink() func(agent.SubagentEvent) {
+	return func(e agent.SubagentEvent) {
+		b.Send(MsgSubagentEvent{Event: e})
+	}
+}
+
 // SubagentSink returns an agent.Dispatcher OnEvent handler that renders
 // subagent progress into the transcript, matching app.ts's
 // onSubagentEvents (app.ts:640-650). Subagent tool calls are never
@@ -607,9 +624,16 @@ func (b *Bridge) SubagentSink() func(agent.SubagentEvent) {
 			if e.Inherited {
 				note = " " + Dim("(inherited; the requested model is not on this provider)")
 			}
-			b.Commit([]string{fmt.Sprintf("%s %s %s %s %s%s", Dim(G().Call), Bold(e.Agent), Dim(e.Description), Dim("on"), e.ModelID, note)})
+			model := e.ModelID
+			if e.ProviderID != "" {
+				model = e.ProviderID + "/" + e.ModelID
+			}
+			if e.ModelKind != "" {
+				model += Dim(" [" + e.ModelKind + "]")
+			}
+			b.Commit([]string{fmt.Sprintf("%s %s %s %s %s%s", Dim(G().Call), Bold(e.Agent), Dim(e.Description), Dim("on"), model, note)})
 		case agent.SubagentEventDone:
-			b.Commit([]string{Dim(fmt.Sprintf("  %s finished - %d tool calls, %d chars returned", e.Agent, e.ToolCalls, e.Chars))})
+			b.Commit([]string{Dim(fmt.Sprintf("  %s finished - %d tool calls, %d chars returned, %d tokens", e.Agent, e.ToolCalls, e.Chars, e.Usage.TotalTokens))})
 		case agent.SubagentEventError:
 			b.Commit(RenderError(fmt.Sprintf("%s: %s", e.Agent, e.Message)))
 		}

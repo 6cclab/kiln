@@ -22,9 +22,18 @@
 // implemented: Lane methods that would need them return an error whose
 // text names the missing state, rather than an incorrect approximation.
 //
-// Tool execution is sequential per turn, matching the "toolExecution":
-// "sequential" setting pi's own reference sessions record; nothing here
-// runs the tool calls of one assistant message concurrently.
+// Tool execution is sequential per turn by default. As of P4, a maximal
+// run of two or more consecutive tool calls in one assistant message whose
+// tool is marked tool.Tool.Concurrent (currently only `task`, since a
+// dispatched subagent owns its own session and storage) runs in parallel:
+// each call's before_tool hook and Execute happen on a goroutine of their
+// own, but every Storage.Commit for the turn still happens on the lane's
+// single driving goroutine, in source order, so results land on the
+// branch exactly where the sequential path would have put them and the
+// write sequence for a turn with no Concurrent calls (or only isolated,
+// unrun-length-1 ones) is unchanged. OpSettings.ToolExecution is still
+// recorded as "sequential" (see the comment on that field in state.go for
+// why) regardless of whether a given turn actually overlapped anything.
 //
 // # Dependency on internal/compaction and internal/tools
 //

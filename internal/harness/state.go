@@ -57,10 +57,22 @@ type OpCompactionSettings struct {
 // OpSettings is the operation-wide behavior snapshot, fixed for the life
 // of the operation.
 type OpSettings struct {
-	Compaction    OpCompactionSettings `json:"compaction"`
-	FollowUpMode  string               `json:"followUpMode"`  // "all"
-	SteeringMode  string               `json:"steeringMode"`  // "all"
-	ToolExecution string               `json:"toolExecution"` // "sequential"
+	Compaction   OpCompactionSettings `json:"compaction"`
+	FollowUpMode string               `json:"followUpMode"` // "all"
+	SteeringMode string               `json:"steeringMode"` // "all"
+	// ToolExecution is always "sequential": this is the value pi's own
+	// session format documents (session/types.d.ts) and its reference
+	// sessions record, regardless of how the harness that produced them
+	// actually scheduled tool calls. P4 lets the turn loop run
+	// tool.Tool.Concurrent calls in parallel (see doc.go), but that is a
+	// runtime scheduling detail this package keeps out of the recorded
+	// settings on purpose: pi (and any tool reading this session format
+	// back) has no "parallel" value defined for this field to read, and
+	// every write this package makes to the branch is still, in the end,
+	// committed one at a time in source order by the single driving
+	// goroutine (see commitToolResult) — "sequential" describes what
+	// lands on disk, which is exactly what this field is documenting.
+	ToolExecution string `json:"toolExecution"`
 }
 
 // GenerationConfiguration is the model/tool configuration in effect for

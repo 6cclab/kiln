@@ -1,0 +1,6 @@
+{"type":"tool_start","name":"task"}
+{"type":"tool_start","name":"task"}
+{"type":"tool_end","name":"task","isError":false}
+{"type":"tool_end","name":"task","isError":false}
+{"type":"assistant","text":"Both done."}
+{"type":"result","ok":true,"text":"Both done.","blocked":[]}

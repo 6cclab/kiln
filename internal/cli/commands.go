@@ -28,6 +28,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/writesettings"
 	slashcommands "github.com/andrepato/harness/internal/commands"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
+	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/session/jsonl"
 )
@@ -49,6 +50,9 @@ type registryDeps struct {
 	Shells   *agent.BackgroundShells
 
 	SettingsLoadedFrom []string
+	// ModelRoles is settings.json's modelRoles map, threaded through to
+	// /model roles. Nil when none are configured.
+	ModelRoles map[string]string
 	// ModelLabel is a snapshot taken at construction time, matching cli.ts:
 	// none of the report/manage commands re-read it after a /model switch
 	// (cli.ts computes `modelLabel: \`${provider}/${modelId}\`` once, from
@@ -61,6 +65,9 @@ type registryDeps struct {
 	// ContextUsed reports the last usage event's total token count, for
 	// /usage. Nil is treated as "no usage yet".
 	ContextUsed func() (int, bool)
+	// UsageByModel reports this session's accumulated usage keyed by
+	// "provider/model", for /cost's by-model table. Nil when not tracked.
+	UsageByModel func() map[string]msg.Usage
 	// MCPConfigPath is the mcpServers file /mcp names in its section header.
 	MCPConfigPath string
 }
@@ -126,8 +133,9 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 	registry := slashcommands.NewRegistry()
 
 	builtinSource := slashcommands.BuiltinCommands(slashcommands.BuiltinDeps{
-		Lane:     started.Lane,
-		Registry: reg,
+		Lane:       started.Lane,
+		Registry:   reg,
+		ModelRoles: deps.ModelRoles,
 		CurrentModel: func() (string, string) {
 			return started.Model.Provider, started.Model.ID
 		},
@@ -135,10 +143,11 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		SwitchModel: func(ctx context.Context, providerID, modelID string) (budget.Tier, error) {
 			return switchModel(ctx, reg, started, mcpSess, providerID, modelID)
 		},
-		Agents:      deps.Agents,
-		SessionsDir: deps.SessionsDir,
-		OnClear:     func() {},
-		OnExit:      func() {},
+		Agents:       deps.Agents,
+		SessionsDir:  deps.SessionsDir,
+		UsageByModel: deps.UsageByModel,
+		OnClear:      func() {},
+		OnExit:       func() {},
 	})
 	registry.Add(slashcommands.BindHelp(builtinSource, registry.List))
 

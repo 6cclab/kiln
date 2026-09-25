@@ -29,10 +29,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/agents"
+	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/tool"
 )
 
@@ -41,22 +43,41 @@ type TaskDispatchResult struct {
 	Text      string
 	ToolCalls int
 	Chars     int
+	// Model is the provider/model the subagent actually ran on.
+	Model string
+	Usage msg.Usage
 }
 
-// TaskDispatchFunc is satisfied by (*agent.Dispatcher).Dispatch.
-type TaskDispatchFunc func(ctx context.Context, agentName, description, prompt string) (TaskDispatchResult, error)
+// TaskRequest mirrors agent.DispatchRequest's shape — what the task tool
+// hands its dispatch function. ToolCallID comes from the Execute call's
+// tool.Invocation, not from the model's arguments.
+type TaskRequest struct {
+	Agent       string
+	Description string
+	Prompt      string
+	Model       string
+	ToolCallID  string
+}
+
+// TaskDispatchFunc is satisfied by an adapter over (*agent.Dispatcher).Dispatch
+// (see internal/tools/task_e2e_test.go for the one-line closure this
+// requires, and this file's header comment for why an adapter rather than
+// a direct reference is needed).
+type TaskDispatchFunc func(ctx context.Context, req TaskRequest) (TaskDispatchResult, error)
 
 type taskArgs struct {
 	SubagentType string `json:"subagent_type"`
 	Description  string `json:"description"`
 	Prompt       string `json:"prompt"`
+	Model        string `json:"model"`
 }
 
 // TaskTool builds the `task` tool. defs is the dispatchable agent catalog
 // (its names populate the subagent_type enum, and its descriptions are
-// embedded in the tool description, budgeted against tier); dispatch
-// actually runs one.
-func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, tier budget.Tier) *tool.Tool {
+// embedded in the tool description, budgeted against tier); roles is
+// settings.json's modelRoles map (nil or empty omits the `model` argument
+// entirely, see taskParameters); dispatch actually runs one.
+func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, roles map[string]string, tier budget.Tier) *tool.Tool {
 	names := make([]string, len(defs))
 	for i, a := range defs {
 		names[i] = a.Name
@@ -65,9 +86,13 @@ func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, tier budget.T
 	return &tool.Tool{
 		Name:        "task",
 		Label:       "Task",
-		Description: taskDescription(defs, tier),
-		Parameters:  taskParameters(names),
-		Execute: func(ctx context.Context, raw json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
+		Description: taskDescription(defs, roles, tier),
+		Parameters:  taskParameters(names, roles),
+		// A dispatched subagent gets its own session and its own storage,
+		// so running several task calls from one assistant message in
+		// parallel shares no mutable state with the parent session.
+		Concurrent: true,
+		Execute: func(ctx context.Context, raw json.RawMessage, _ tool.Update, inv tool.Invocation) (tool.Result, error) {
 			var a taskArgs
 			if len(raw) > 0 {
 				if err := json.Unmarshal(raw, &a); err != nil {
@@ -101,7 +126,13 @@ func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, tier budget.T
 				description = wanted
 			}
 
-			result, err := dispatch(ctx, wanted, description, prompt)
+			result, err := dispatch(ctx, TaskRequest{
+				Agent:       wanted,
+				Description: description,
+				Prompt:      prompt,
+				Model:       strings.TrimSpace(a.Model),
+				ToolCallID:  inv.ToolCallID,
+			})
 			if err != nil {
 				// A failed subagent is a failed tool call, not a failed
 				// session. The parent can retry, dispatch elsewhere, or do
@@ -144,10 +175,43 @@ func describeAgents(defs []agents.Definition, tier budget.Tier) string {
 	return strings.Join(lines, "\n")
 }
 
+// describeRoles is a standalone duplicate of agent.DescribeRoles; see this
+// file's header comment for why it is not a call into that package.
+func describeRoles(roles map[string]string, tier budget.Tier) string {
+	if len(roles) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(roles))
+	for name := range roles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var perRole int
+	unlimited := false
+	switch tier.Name {
+	case "small":
+		perRole = 120
+	case "medium":
+		perRole = 300
+	default:
+		unlimited = true
+	}
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		value := roles[name]
+		if !unlimited && len(value) > perRole {
+			value = strings.TrimRight(value[:perRole], " \t\n") + "..."
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s", name, value))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // taskDescription is a standalone duplicate of agent.TaskDescription.
-func taskDescription(defs []agents.Definition, tier budget.Tier) string {
+func taskDescription(defs []agents.Definition, roles map[string]string, tier budget.Tier) string {
 	catalog := describeAgents(defs, tier)
-	return strings.Join([]string{
+	parts := []string{
 		"Dispatch a task to a subagent with its own context window. The subagent's tool calls and reasoning",
 		"do not enter your context - you receive only its final report.",
 		"",
@@ -160,29 +224,46 @@ func taskDescription(defs []agents.Definition, tier budget.Tier) string {
 		"",
 		"Available agents:",
 		catalog,
-	}, "\n")
+	}
+	if roleCatalog := describeRoles(roles, tier); roleCatalog != "" {
+		parts = append(parts, "", "Available model roles:", roleCatalog)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // taskParameters is a standalone duplicate of agent.TaskParameters.
-func taskParameters(names []string) json.RawMessage {
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"subagent_type": map[string]any{
-				"type":        "string",
-				"enum":        names,
-				"description": "Which agent to dispatch to.",
-			},
-			"description": map[string]any{
-				"type":        "string",
-				"description": "A 3-5 word label for this task, shown to the user.",
-			},
-			"prompt": map[string]any{
-				"type":        "string",
-				"description": "The task. Self-contained: the subagent sees none of this conversation.",
-			},
+func taskParameters(names []string, roles map[string]string) json.RawMessage {
+	properties := map[string]any{
+		"subagent_type": map[string]any{
+			"type":        "string",
+			"enum":        names,
+			"description": "Which agent to dispatch to.",
 		},
-		"required": []string{"subagent_type", "prompt"},
+		"description": map[string]any{
+			"type":        "string",
+			"description": "A 3-5 word label for this task, shown to the user.",
+		},
+		"prompt": map[string]any{
+			"type":        "string",
+			"description": "The task. Self-contained: the subagent sees none of this conversation.",
+		},
+	}
+	if len(roles) > 0 {
+		roleNames := make([]string, 0, len(roles))
+		for name := range roles {
+			roleNames = append(roleNames, name)
+		}
+		sort.Strings(roleNames)
+		properties["model"] = map[string]any{
+			"type":        "string",
+			"enum":        append(roleNames, "inherit"),
+			"description": "Role for this task: fast for scripts and lookups, structured for well-specified changes, heavy for open-ended work. Omit to inherit the current model.",
+		}
+	}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": properties,
+		"required":   []string{"subagent_type", "prompt"},
 	}
 	raw, err := json.Marshal(schema)
 	if err != nil {

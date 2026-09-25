@@ -36,7 +36,14 @@ type Settings struct {
 	Permissions Permissions
 	Model       string
 	EffortLevel string
-	Env         map[string]string
+	// ModelRoles maps a role name (e.g. "fast", "structured", "heavy") to
+	// a "provider/model" string. Roles let a subagent or alias request a
+	// class of model ("give me something fast") without naming a literal
+	// provider/model, and without every definition on disk having to agree
+	// on what "fast" means across machines - see
+	// internal/claude/agents.ResolveModel, which consumes this map.
+	ModelRoles map[string]string
+	Env        map[string]string
 	// StatusLine is the configured status line command, nil when unset.
 	StatusLine *StatusLineConfig
 	// LoadedFrom records which scopes actually contributed, for diagnostics.
@@ -62,6 +69,7 @@ type rawSettings struct {
 	Permissions *rawPermissions   `json:"permissions"`
 	Model       string            `json:"model"`
 	EffortLevel string            `json:"effortLevel"`
+	ModelRoles  map[string]string `json:"modelRoles"`
 	Env         map[string]string `json:"env"`
 	StatusLine  *StatusLineConfig `json:"statusLine"`
 }
@@ -91,9 +99,10 @@ func wants(sources []paths.Scope, scope paths.Scope) bool {
 // LoadSettings reads and merges .claude/settings.json across scopes.
 //
 // Permission lists concatenate across scopes; defaultMode/model/effortLevel
-// use last-non-empty-wins; env is shallow-merged with later scopes
-// overriding. Malformed JSON warns (to stderr) and continues; a missing
-// file is silently skipped.
+// use last-non-empty-wins; env and modelRoles are shallow-merged with later
+// scopes overriding per key (so a project can override just the "fast"
+// role and still inherit "heavy" from the user's settings). Malformed JSON
+// warns (to stderr) and continues; a missing file is silently skipped.
 func LoadSettings(cwd string, opts LoadOptions) Settings {
 	merged := Settings{
 		Permissions: Permissions{Allow: []string{}, Deny: []string{}, Ask: []string{}},
@@ -138,6 +147,16 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		}
 		if raw.EffortLevel != "" {
 			merged.EffortLevel = raw.EffortLevel
+		}
+		if raw.ModelRoles != nil {
+			if merged.ModelRoles == nil {
+				merged.ModelRoles = map[string]string{}
+			}
+			for k, v := range raw.ModelRoles {
+				if v != "" {
+					merged.ModelRoles[k] = v
+				}
+			}
 		}
 		if raw.StatusLine != nil && raw.StatusLine.Command != "" {
 			merged.StatusLine = raw.StatusLine

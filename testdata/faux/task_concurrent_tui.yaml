@@ -1,0 +1,21 @@
+models:
+  faux-1:
+    # Turn 1: two concurrent `task` dispatches, same shape as
+    # task_concurrent.yaml (see that file's comments for why the ordering
+    # below is deterministic, not just likely).
+    - tool_calls:
+        - {name: task, args: {subagent_type: "general-purpose", description: "look something up", prompt: "find X"}, id: tc1}
+        - {name: task, args: {subagent_type: "general-purpose", description: "do the fast lookup", prompt: "find Y", model: "fast"}, id: tc2}
+    # Turn 2: the inherited subagent's (tc1) own turn. A delay holds this
+    # response back long enough that a PTY-driven test polling the screen
+    # can observe both tc1 and tc2 live in the subagents panel at once,
+    # before either finishes.
+    - text: "inherited subagent report"
+      delay: 400ms
+    - on_tool_results: [tc1, tc2]
+      then:
+        - text: "Both done."
+  faux-2:
+    # The "fast"-routed subagent's (tc2) own turn, held back the same way.
+    - text: "fast subagent report"
+      delay: 400ms

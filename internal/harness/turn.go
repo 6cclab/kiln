@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
@@ -252,16 +253,35 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 			return l.finishCompleted(operationID, tip)
 		}
 
-		for i, call := range toolCalls {
-			resultEntryID := stateVal.Batch.Calls[i].ResultEntryID
+		// Partition toolCalls into maximal runs of consecutive calls whose
+		// tool is Concurrent (see tool.Tool.Concurrent). A run of length 1
+		// (concurrent or not) and every non-concurrent call still goes
+		// through executeOneTool exactly as before P4; only a run of 2 or
+		// more actually overlaps execution. batch is the whole turn's
+		// []ToolCallState, threaded through every commit below so op.state
+		// always carries every call's current status, not just the one
+		// being touched.
+		batch := stateVal.Batch.Calls
+		for i := 0; i < len(toolCalls); {
+			j := i + 1
+			if l.isConcurrentTool(toolCalls[i].Name) {
+				for j < len(toolCalls) && l.isConcurrentTool(toolCalls[j].Name) {
+					j++
+				}
+			}
 			var runErr error
-			tip, runErr = l.executeOneTool(ctx, operationID, tip, responseEntryID, call, resultEntryID, i)
+			if j-i >= 2 {
+				tip, runErr = l.executeConcurrentRun(ctx, operationID, tip, responseEntryID, toolCalls, batch, i, j)
+			} else {
+				tip, runErr = l.executeOneTool(ctx, operationID, tip, responseEntryID, toolCalls[i], i, batch)
+			}
 			if runErr != nil {
 				if ctx.Err() != nil {
 					return l.finishAborted(operationID, tip)
 				}
 				return l.finishFailed(operationID, tip, runErr)
 			}
+			i = j
 		}
 		l.h.events.Emit(Event{Type: EventTurnEnd, Lane: l.name, OperationID: operationID})
 		tip = l.autoCompact(ctx, tip)
@@ -414,23 +434,106 @@ func buildStreamOptions(opts Options, cfg session.LaneConfiguration) provider.St
 	}
 }
 
-// executeOneTool runs the before_tool hook, the tool itself, the
-// after_tool hook, and commits the write sequence pi records for one tool
-// call: tool_args set -> (execute) -> pending.entry set/pending.tool_output
-// delete -> toolResult entry committed. It returns the branch's new tip.
-func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, resultEntryID string, sourceIndex int) (string, error) {
-	l.h.events.Emit(Event{Type: EventToolStart, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
+// isConcurrentTool reports whether name resolves to a tool marked
+// Concurrent. An unknown tool name is treated as non-concurrent: it will
+// hit the "unknown tool" error path in beginTool exactly as it always did,
+// alone in its own run.
+func (l *Lane) isConcurrentTool(name string) bool {
+	t, ok := l.h.opts.Tools.Get(name)
+	return ok && t.Concurrent
+}
 
-	argsRaw, _ := json.Marshal(call.Arguments)
-	argsW := session.SetValueRaw(session.NamespaceOpToolArgs, operationID+":"+assistantEntryID+":"+itoa(sourceIndex), argsRaw)
-	stateW, err := session.SetValue(opStateAddr(operationID), OpState{At: AtTools, Control: OpControl{Status: "running"}, Settings: l.opSettings(),
-		Batch: &Batch{AssistantEntryID: assistantEntryID, TurnID: assistantEntryID, Calls: []ToolCallState{{ResultEntryID: resultEntryID, SourceIndex: sourceIndex, Status: "effect_pending"}}}})
+// executeOneTool runs one tool call start to finish on the calling
+// goroutine: commitToolPending, beginTool, commitToolResult. It is the
+// sequential path used by drive() for a run of length 1 and by
+// resume.go's re-run of a not-yet-finished tool call. batch is the whole
+// turn's []ToolCallState; sourceIndex is this call's position in it.
+func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, batch []ToolCallState) (string, error) {
+	if err := l.commitToolPending(operationID, assistantEntryID, call, sourceIndex, batch); err != nil {
+		return tip, err
+	}
+	result, err := l.beginTool(ctx, operationID, call)
 	if err != nil {
 		return tip, err
 	}
-	if _, err := l.h.opts.Storage.Commit([]session.Write{argsW, stateW}); err != nil {
-		return tip, err
+	return l.commitToolResult(ctx, operationID, tip, assistantEntryID, call, sourceIndex, result, batch)
+}
+
+// executeConcurrentRun runs toolCalls[start:end] — a maximal run of
+// consecutive calls to Concurrent-safe tools from one assistant message —
+// in parallel: commitToolPending for each call in source order on the
+// driving goroutine, then one goroutine per call running beginTool (hooks
+// + Execute, no Storage.Commit), then commitToolResult for each call in
+// source order on the driving goroutine again, chaining tip. Committing
+// only ever happens on the driving goroutine because
+// jsonl.Storage.Commit is not safe to call from more than one goroutine at
+// a time; only beginTool (which never commits) runs concurrently.
+//
+// If ctx is canceled, or a beginTool goroutine otherwise errors, that is
+// handled once every goroutine has finished (never mid-flight): the
+// results of the calls before the first failure are committed, in source
+// order, and the first error is returned.
+func (l *Lane) executeConcurrentRun(ctx context.Context, operationID, tip, assistantEntryID string, toolCalls []msg.ToolCall, batch []ToolCallState, start, end int) (string, error) {
+	for idx := start; idx < end; idx++ {
+		if err := l.commitToolPending(operationID, assistantEntryID, toolCalls[idx], idx, batch); err != nil {
+			return tip, err
+		}
 	}
+
+	n := end - start
+	results := make([]msg.ToolResultMessage, n)
+	beginErrs := make([]error, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for k := 0; k < n; k++ {
+		go func(k int) {
+			defer wg.Done()
+			results[k], beginErrs[k] = l.beginTool(ctx, operationID, toolCalls[start+k])
+		}(k)
+	}
+	wg.Wait()
+
+	for k := 0; k < n; k++ {
+		if err := beginErrs[k]; err != nil {
+			return tip, err
+		}
+		idx := start + k
+		var err error
+		tip, err = l.commitToolResult(ctx, operationID, tip, assistantEntryID, toolCalls[idx], idx, results[k], batch)
+		if err != nil {
+			return tip, err
+		}
+	}
+	return tip, nil
+}
+
+// commitToolPending writes the first of a tool call's three transactions:
+// tool_args set and op.state=tools with this call's status advanced to
+// "effect_pending" in the whole-batch snapshot. No hook or Execute has run
+// yet.
+func (l *Lane) commitToolPending(operationID, assistantEntryID string, call msg.ToolCall, sourceIndex int, batch []ToolCallState) error {
+	argsRaw, _ := json.Marshal(call.Arguments)
+	argsW := session.SetValueRaw(session.NamespaceOpToolArgs, operationID+":"+assistantEntryID+":"+itoa(sourceIndex), argsRaw)
+	batch[sourceIndex].Status = "effect_pending"
+	stateW, err := session.SetValue(opStateAddr(operationID), OpState{At: AtTools, Control: OpControl{Status: "running"}, Settings: l.opSettings(),
+		Batch: &Batch{AssistantEntryID: assistantEntryID, TurnID: assistantEntryID, Calls: batch}})
+	if err != nil {
+		return err
+	}
+	_, err = l.h.opts.Storage.Commit([]session.Write{argsW, stateW})
+	return err
+}
+
+// beginTool runs the before_tool hook, the args rewrite it may request,
+// and the tool's own Execute, and builds the resulting ToolResultMessage.
+// It performs no Storage.Commit, which is what makes it safe to run on a
+// goroutine of its own for a Concurrent run: every write for this call
+// happens later, back on the driving goroutine, in commitToolResult.
+func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolCall) (msg.ToolResultMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return msg.ToolResultMessage{}, err
+	}
+	l.h.events.Emit(Event{Type: EventToolStart, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
 
 	before := l.invokeBeforeTool(ctx, call)
 
@@ -457,7 +560,7 @@ func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEn
 		result = tool.Errorf("unknown tool %q", call.Name)
 	}
 
-	toolResultMsg := msg.ToolResultMessage{
+	return msg.ToolResultMessage{
 		Content:    result.Content,
 		Details:    result.Details,
 		IsError:    result.IsError,
@@ -465,7 +568,17 @@ func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEn
 		Timestamp:  l.now(),
 		ToolCallID: call.ID,
 		ToolName:   call.Name,
-	}
+	}, nil
+}
+
+// commitToolResult writes a tool call's remaining two transactions: the
+// pending.entry set / pending.tool_output delete / op.state="outcome_ready"
+// commit, then the toolResult entry + branch tip + op.state=checkpoint
+// commit. Both commits carry the whole-batch []ToolCallState snapshot with
+// this call's entry updated. It emits entry_added, runs after_tool, emits
+// tool_end, and returns the branch's new tip (the toolResult entry's id).
+func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, toolResultMsg msg.ToolResultMessage, batch []ToolCallState) (string, error) {
+	resultEntryID := batch[sourceIndex].ResultEntryID
 
 	pendingRaw, err := json.Marshal(PendingToolResultPayload{Payload: toolResultMsg})
 	if err != nil {
@@ -477,8 +590,10 @@ func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEn
 	}
 	toolOutputDel := session.DeleteValue(session.PendingToolOutput(operationID, resultEntryID))
 	terminate := false
+	batch[sourceIndex].Status = "outcome_ready"
+	batch[sourceIndex].Terminate = &terminate
 	stateW2, err := session.SetValue(opStateAddr(operationID), OpState{At: AtTools, Control: OpControl{Status: "running"}, Settings: l.opSettings(),
-		Batch: &Batch{AssistantEntryID: assistantEntryID, TurnID: assistantEntryID, Calls: []ToolCallState{{ResultEntryID: resultEntryID, SourceIndex: sourceIndex, Status: "outcome_ready", Terminate: &terminate}}}})
+		Batch: &Batch{AssistantEntryID: assistantEntryID, TurnID: assistantEntryID, Calls: batch}})
 	if err != nil {
 		return tip, err
 	}

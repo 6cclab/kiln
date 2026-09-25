@@ -8,25 +8,45 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Script is the top-level YAML document loaded by the faux server.
+// Script is the top-level YAML document loaded by the faux server. Either
+// the single-model form (Model + Steps) or the multi-model form (Models) is
+// used; see modelScripts.
 type Script struct {
-	Model string `yaml:"model"`
-	Steps []Step `yaml:"steps"`
+	Model  string            `yaml:"model,omitempty"`
+	Steps  []Step            `yaml:"steps,omitempty"`
+	Models map[string][]Step `yaml:"models,omitempty"`
+}
+
+// modelScripts returns the per-model step lists a Script represents,
+// normalizing the single-model form (Model/Steps) into a one-entry map
+// keyed by the (possibly defaulted) model name. When Models is set, it is
+// returned as-is and Model/Steps are ignored.
+func (s *Script) modelScripts() map[string][]Step {
+	if len(s.Models) > 0 {
+		return s.Models
+	}
+	model := s.Model
+	if model == "" {
+		model = "faux-1"
+	}
+	return map[string][]Step{model: s.Steps}
 }
 
 // Step is one entry in a script's steps list. Exactly one of its
-// "kind" fields (Text, Thinking, ToolCall, OnToolResult, Error, Delay)
-// is expected to be set per YAML node, though Usage may accompany Text
-// or Thinking.
+// "kind" fields (Text, Thinking, ToolCall, ToolCalls, OnToolResult,
+// OnToolResults, Error, Delay) is expected to be set per YAML node, though
+// Usage may accompany Text or Thinking.
 type Step struct {
-	Text         string        `yaml:"text,omitempty"`
-	Thinking     string        `yaml:"thinking,omitempty"`
-	ToolCall     *ToolCallSpec `yaml:"tool_call,omitempty"`
-	OnToolResult string        `yaml:"on_tool_result,omitempty"`
-	Then         []Step        `yaml:"then,omitempty"`
-	Usage        *UsageSpec    `yaml:"usage,omitempty"`
-	Error        *ErrorSpec    `yaml:"error,omitempty"`
-	Delay        string        `yaml:"delay,omitempty"`
+	Text          string         `yaml:"text,omitempty"`
+	Thinking      string         `yaml:"thinking,omitempty"`
+	ToolCall      *ToolCallSpec  `yaml:"tool_call,omitempty"`
+	ToolCalls     []ToolCallSpec `yaml:"tool_calls,omitempty"`
+	OnToolResult  string         `yaml:"on_tool_result,omitempty"`
+	OnToolResults []string       `yaml:"on_tool_results,omitempty"`
+	Then          []Step         `yaml:"then,omitempty"`
+	Usage         *UsageSpec     `yaml:"usage,omitempty"`
+	Error         *ErrorSpec     `yaml:"error,omitempty"`
+	Delay         string         `yaml:"delay,omitempty"`
 }
 
 // ToolCallSpec describes a scripted tool call.
@@ -60,12 +80,12 @@ type contentStep struct {
 
 // turn is one flattened unit of script execution: either a scripted
 // error, or a scripted response built from content steps, optionally
-// gated on a tool result id from the request that triggers it.
+// gated on one or more tool result ids from the request that triggers it.
 type turn struct {
-	isError           bool
-	errSpec           ErrorSpec
-	requireToolResult string
-	content           []contentStep
+	isError            bool
+	errSpec            ErrorSpec
+	requireToolResults []string
+	content            []contentStep
 }
 
 // parseScriptYAML parses a YAML document into a Script.
@@ -74,7 +94,7 @@ func parseScriptYAML(doc string) (*Script, error) {
 	if err := yaml.Unmarshal([]byte(doc), &s); err != nil {
 		return nil, fmt.Errorf("faux: parse script: %w", err)
 	}
-	if s.Model == "" {
+	if len(s.Models) == 0 && s.Model == "" {
 		s.Model = "faux-1"
 	}
 	return &s, nil
@@ -98,9 +118,9 @@ func flattenSteps(steps []Step) ([]turn, error) {
 	var turns []turn
 	var pending []contentStep
 
-	flushPending := func(requireID string) {
-		if len(pending) > 0 || requireID != "" {
-			turns = append(turns, turn{requireToolResult: requireID, content: pending})
+	flushPending := func(requireIDs []string) {
+		if len(pending) > 0 || len(requireIDs) > 0 {
+			turns = append(turns, turn{requireToolResults: requireIDs, content: pending})
 			pending = nil
 		}
 	}
@@ -108,21 +128,28 @@ func flattenSteps(steps []Step) ([]turn, error) {
 	for _, s := range steps {
 		switch {
 		case s.Error != nil:
-			flushPending("")
+			flushPending(nil)
 			turns = append(turns, turn{isError: true, errSpec: *s.Error})
 
-		case s.OnToolResult != "":
-			flushPending("")
+		case s.OnToolResult != "" || len(s.OnToolResults) > 0:
+			flushPending(nil)
+			ids := onToolResultIDs(s)
 			inner, err := flattenSteps(s.Then)
 			if err != nil {
 				return nil, err
 			}
 			if len(inner) == 0 {
-				turns = append(turns, turn{requireToolResult: s.OnToolResult})
+				turns = append(turns, turn{requireToolResults: ids})
 				continue
 			}
-			inner[0].requireToolResult = s.OnToolResult
+			inner[0].requireToolResults = ids
 			turns = append(turns, inner...)
+
+		case len(s.ToolCalls) > 0:
+			for i := range s.ToolCalls {
+				pending = append(pending, contentStep{toolCall: &s.ToolCalls[i]})
+			}
+			flushPending(nil)
 
 		default:
 			cs, err := toContentStep(s)
@@ -131,12 +158,23 @@ func flattenSteps(steps []Step) ([]turn, error) {
 			}
 			pending = append(pending, cs)
 			if s.ToolCall != nil {
-				flushPending("")
+				flushPending(nil)
 			}
 		}
 	}
-	flushPending("")
+	flushPending(nil)
 	return turns, nil
+}
+
+// onToolResultIDs collects a step's required tool result ids from its
+// singular (OnToolResult) and plural (OnToolResults) forms, in that order.
+func onToolResultIDs(s Step) []string {
+	var ids []string
+	if s.OnToolResult != "" {
+		ids = append(ids, s.OnToolResult)
+	}
+	ids = append(ids, s.OnToolResults...)
+	return ids
 }
 
 func toContentStep(s Step) (contentStep, error) {

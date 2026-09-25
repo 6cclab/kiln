@@ -13,10 +13,12 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/agents"
+	"github.com/andrepato/harness/internal/msg"
 )
 
 // GeneralPurpose is the built-in agent, so `task` is useful in a project
@@ -46,12 +48,18 @@ var GeneralPurpose = agents.Definition{
 // Claude Code's casing (Read, Grep) while this harness's tools are
 // lowercase.
 //
-// "task" is never included: recursive dispatch turns one runaway agent
-// into a fork bomb, and nothing in a subagent's job needs it.
-func AllowedToolNames(requested []string, available []string) []string {
+// "task" is stripped from available unless allowTask is true — recursive
+// dispatch is depth-limited, not banned outright (see Dispatcher.Depth):
+// two levels lets a subagent fan work out to others of its own without
+// permitting unbounded recursion, which the caller enforces by only ever
+// passing allowTask=true when its own Depth is under the limit and by
+// never registering a `task` tool at all once it is not (a stripped name
+// here would still leave the tool schema visible to the model with
+// nothing behind it; not registering it is what actually closes the door).
+func AllowedToolNames(requested []string, available []string, allowTask bool) []string {
 	usable := make([]string, 0, len(available))
 	for _, n := range available {
-		if !strings.EqualFold(n, "task") {
+		if allowTask || !strings.EqualFold(n, "task") {
 			usable = append(usable, n)
 		}
 	}
@@ -118,36 +126,89 @@ func DescribeAgents(defs []agents.Definition, tier budget.Tier) string {
 // subagent.ts.
 const TaskToolName = "task"
 
+// DescribeRoles renders the configured model roles for the task tool's
+// description, one "role: provider/model" line per role, sorted by role
+// name. Clipped against the same per-tier limits as DescribeAgents: this
+// text, like the agent catalog, is resident on every turn, so the same
+// budget reasoning applies.
+func DescribeRoles(roles map[string]string, tier budget.Tier) string {
+	if len(roles) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(roles))
+	for name := range roles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var perRole int
+	unlimited := false
+	switch tier.Name {
+	case "small":
+		perRole = 120
+	case "medium":
+		perRole = 300
+	default:
+		unlimited = true
+	}
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		value := roles[name]
+		if !unlimited && len(value) > perRole {
+			value = strings.TrimRight(value[:perRole], " \t\n") + "..."
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s", name, value))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // TaskParameters builds the task tool's JSON Schema: subagent_type
 // (enumerated against defs, so a dispatch to a name that does not exist
-// cannot even be produced), description and prompt.
+// cannot even be produced), description, prompt, and, when roles is
+// non-empty, an optional model role selector.
 //
 // Deviation from the phase brief: the brief names the first field "agent";
 // subagent.ts calls it "subagent_type". Following the TS source (per the
 // phase instructions) rather than the brief's paraphrase.
-func TaskParameters(defs []agents.Definition) json.RawMessage {
+func TaskParameters(defs []agents.Definition, roles map[string]string) json.RawMessage {
 	names := make([]string, len(defs))
 	for i, a := range defs {
 		names[i] = a.Name
 	}
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"subagent_type": map[string]any{
-				"type":        "string",
-				"enum":        names,
-				"description": "Which agent to dispatch to.",
-			},
-			"description": map[string]any{
-				"type":        "string",
-				"description": "A 3-5 word label for this task, shown to the user.",
-			},
-			"prompt": map[string]any{
-				"type":        "string",
-				"description": "The task. Self-contained: the subagent sees none of this conversation.",
-			},
+	properties := map[string]any{
+		"subagent_type": map[string]any{
+			"type":        "string",
+			"enum":        names,
+			"description": "Which agent to dispatch to.",
 		},
-		"required": []string{"subagent_type", "prompt"},
+		"description": map[string]any{
+			"type":        "string",
+			"description": "A 3-5 word label for this task, shown to the user.",
+		},
+		"prompt": map[string]any{
+			"type":        "string",
+			"description": "The task. Self-contained: the subagent sees none of this conversation.",
+		},
+	}
+	// The schema gains a "model" property only when roles are actually
+	// configured — with none, "inherit" is the only meaningful value, and
+	// exposing a one-option enum would just be noise on every turn.
+	if len(roles) > 0 {
+		roleNames := make([]string, 0, len(roles))
+		for name := range roles {
+			roleNames = append(roleNames, name)
+		}
+		sort.Strings(roleNames)
+		properties["model"] = map[string]any{
+			"type":        "string",
+			"enum":        append(roleNames, "inherit"),
+			"description": "Role for this task: fast for scripts and lookups, structured for well-specified changes, heavy for open-ended work. Omit to inherit the current model.",
+		}
+	}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": properties,
+		"required":   []string{"subagent_type", "prompt"},
 	}
 	raw, err := json.Marshal(schema)
 	if err != nil {
@@ -160,10 +221,11 @@ func TaskParameters(defs []agents.Definition) json.RawMessage {
 }
 
 // TaskDescription builds the task tool's description text, embedding the
-// agent catalog (DescribeAgents) budgeted against tier.
-func TaskDescription(defs []agents.Definition, tier budget.Tier) string {
+// agent catalog (DescribeAgents) and, when configured, the model role
+// catalog (DescribeRoles), both budgeted against tier.
+func TaskDescription(defs []agents.Definition, roles map[string]string, tier budget.Tier) string {
 	catalog := DescribeAgents(defs, tier)
-	return strings.Join([]string{
+	parts := []string{
 		"Dispatch a task to a subagent with its own context window. The subagent's tool calls and reasoning",
 		"do not enter your context - you receive only its final report.",
 		"",
@@ -176,7 +238,11 @@ func TaskDescription(defs []agents.Definition, tier budget.Tier) string {
 		"",
 		"Available agents:",
 		catalog,
-	}, "\n")
+	}
+	if roleCatalog := DescribeRoles(roles, tier); roleCatalog != "" {
+		parts = append(parts, "", "Available model roles:", roleCatalog)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // SubagentEventKind discriminates SubagentEvent.
@@ -197,7 +263,30 @@ type SubagentEvent struct {
 	Agent       string
 	Description string
 	ModelID     string
-	Inherited   bool
+	// ID is the dispatching tool call's id (DispatchRequest.ToolCallID),
+	// so a UI that shows several concurrent dispatches (a Concurrent task
+	// tool run, see internal/tool/tool.go's Tool.Concurrent) can tell
+	// which start/tool/done/error events belong to the same call.
+	ID string
+	// ProviderID is the provider the resolved model actually runs on
+	// (choice.ProviderID from agents.ResolveModel), alongside ModelID.
+	ProviderID string
+	// ModelKind is the string form of agents.ResolveKind explaining why
+	// Dispatch landed on ModelID — "inherited", "role", "explicit",
+	// "alias" or "fallback". Named ModelKind rather than the phase
+	// brief's literal "Kind" because this struct already has a Kind field
+	// for the event's own kind (start/tool/done/error); the two would
+	// collide.
+	ModelKind string
+	Inherited bool
+	// Depth is the nesting depth of the subagent this event describes: 1
+	// for a subagent dispatched directly from the top-level session, 2 for
+	// one dispatched from inside that subagent, and so on. It is always one
+	// more than the Dispatcher.Depth of the Dispatcher that ran this
+	// dispatch (see dispatch.go's Dispatch), so it also names the Depth a
+	// child Dispatcher built for this subagent's own `task` tool would
+	// carry, when one was built at all.
+	Depth int
 
 	// tool
 	ToolName string
@@ -205,6 +294,9 @@ type SubagentEvent struct {
 	// done
 	ToolCalls int
 	Chars     int
+	// Usage is the subagent session's aggregate token/cost usage, set on
+	// SubagentEventDone only.
+	Usage msg.Usage
 
 	// error
 	Message string

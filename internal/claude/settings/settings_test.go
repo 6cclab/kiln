@@ -1,6 +1,10 @@
 package settings
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // Every case below is a real format found in ~/.claude/settings.json. Three
 // of them were bugs that shipped in the TS reference: case-sensitivity, the
@@ -131,4 +135,75 @@ func TestPlanModeAllowsExitPlanMode(t *testing.T) {
 	if got := Decide(perms, "write", "x", ModePlan); got != Deny {
 		t.Fatalf("plan mode must still deny write, got %s", got)
 	}
+}
+
+// TestLoadSettingsModelRoles covers modelRoles's merge: last-non-empty-wins
+// per role key across user -> project -> local, mirroring model/effortLevel
+// but keyed instead of scalar.
+func TestLoadSettingsModelRoles(t *testing.T) {
+	writeJSON := func(t *testing.T, path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("merges per key across scopes, later non-empty wins", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		cwd := t.TempDir()
+
+		writeJSON(t, filepath.Join(home, ".claude", "settings.json"),
+			`{"modelRoles": {"fast": "ollama/qwen3.8", "heavy": "anthropic/claude-opus-4-1"}}`)
+		writeJSON(t, filepath.Join(cwd, ".claude", "settings.json"),
+			`{"modelRoles": {"fast": "anthropic/claude-haiku-4-5"}}`)
+		writeJSON(t, filepath.Join(cwd, ".claude", "settings.local.json"),
+			`{"modelRoles": {"structured": "anthropic/claude-sonnet-4-5"}}`)
+
+		got := LoadSettings(cwd, LoadOptions{})
+		want := map[string]string{
+			"fast":       "anthropic/claude-haiku-4-5",  // project overrode user
+			"heavy":      "anthropic/claude-opus-4-1",   // inherited from user, untouched
+			"structured": "anthropic/claude-sonnet-4-5", // added by local
+		}
+		if len(got.ModelRoles) != len(want) {
+			t.Fatalf("got %v, want %v", got.ModelRoles, want)
+		}
+		for k, v := range want {
+			if got.ModelRoles[k] != v {
+				t.Errorf("role %q = %q, want %q", k, got.ModelRoles[k], v)
+			}
+		}
+	})
+
+	t.Run("an empty string for a role does not clear an earlier scope's value", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		cwd := t.TempDir()
+
+		writeJSON(t, filepath.Join(home, ".claude", "settings.json"),
+			`{"modelRoles": {"fast": "ollama/qwen3.8"}}`)
+		writeJSON(t, filepath.Join(cwd, ".claude", "settings.json"),
+			`{"modelRoles": {"fast": ""}}`)
+
+		got := LoadSettings(cwd, LoadOptions{})
+		if got.ModelRoles["fast"] != "ollama/qwen3.8" {
+			t.Errorf("fast = %q, want inherited value preserved", got.ModelRoles["fast"])
+		}
+	})
+
+	t.Run("absent modelRoles across every scope stays nil", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		cwd := t.TempDir()
+		writeJSON(t, filepath.Join(cwd, ".claude", "settings.json"), `{"model": "anthropic/claude-sonnet-4-5"}`)
+
+		got := LoadSettings(cwd, LoadOptions{})
+		if got.ModelRoles != nil {
+			t.Errorf("ModelRoles = %v, want nil", got.ModelRoles)
+		}
+	})
 }

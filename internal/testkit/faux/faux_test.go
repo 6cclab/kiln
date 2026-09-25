@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -384,7 +385,7 @@ steps:
 		t.Errorf("expected turn to proceed anyway, got %v", payload2)
 	}
 
-	st := s.engine.state()
+	st := s.engine.forModel("faux-1").state()
 	if len(st.Errors) == 0 {
 		t.Fatal("expected a recorded mismatch, got none")
 	}
@@ -418,7 +419,7 @@ steps:
 	})
 	resp2.Body.Close()
 
-	st := s.engine.state()
+	st := s.engine.forModel("faux-1").state()
 	if len(st.Errors) != 0 {
 		t.Fatalf("expected no mismatch, got %v", st.Errors)
 	}
@@ -448,7 +449,7 @@ steps:
 		t.Errorf("expected exhausted text, got %v", payload)
 	}
 
-	st := s.engine.state()
+	st := s.engine.forModel("faux-1").state()
 	if !st.Exhausted {
 		t.Error("expected exhausted = true")
 	}
@@ -592,5 +593,421 @@ steps:
 	resp.Body.Close()
 	if elapsed < 25*time.Millisecond {
 		t.Errorf("elapsed = %v, want >= ~30ms", elapsed)
+	}
+}
+
+// --- multi-model scripts -----------------------------------------------
+
+func TestMultiModelIndependentScripts(t *testing.T) {
+	// Each model gets a two-turn script (a tool_call, then a gated
+	// on_tool_result reply), so driving it end to end requires two
+	// requests per model and exercises that model's cursor advancing
+	// independently of the other's.
+	s, base := startTestServer(t, `
+models:
+  faux-1:
+    - tool_call: {name: read, args: {path: one.js}, id: t1}
+    - on_tool_result: t1
+      then:
+        - text: "one-done"
+  faux-2:
+    - tool_call: {name: read, args: {path: two.js}, id: t2}
+    - on_tool_result: t2
+      then:
+        - text: "two-done"
+`)
+
+	// driveModel runs a model's full two-turn conversation (tool_call,
+	// then the tool_result-gated reply) and returns the final text.
+	driveModel := func(model, toolID string) string {
+		t.Helper()
+		resp1 := postJSON(t, base+"/v1/messages", map[string]any{
+			"model":    model,
+			"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		})
+		var p1 map[string]any
+		json.NewDecoder(resp1.Body).Decode(&p1)
+		resp1.Body.Close()
+		content1 := p1["content"].([]any)
+		block := content1[0].(map[string]any)
+		if block["type"] != "tool_use" || block["name"] != "read" {
+			t.Fatalf("%s turn 1 = %v, want a read tool_use", model, p1)
+		}
+
+		resp2 := postJSON(t, base+"/v1/messages", map[string]any{
+			"model": model,
+			"messages": []map[string]any{
+				{"role": "user", "content": "hi"},
+				{"role": "assistant", "content": []map[string]any{{"type": "tool_use", "id": "toolu_" + toolID, "name": "read", "input": map[string]any{}}}},
+				{"role": "user", "content": []map[string]any{{"type": "tool_result", "tool_use_id": "toolu_" + toolID, "content": "ok"}}},
+			},
+		})
+		var p2 map[string]any
+		json.NewDecoder(resp2.Body).Decode(&p2)
+		resp2.Body.Close()
+		content2 := p2["content"].([]any)
+		return content2[0].(map[string]any)["text"].(string)
+	}
+
+	var wg sync.WaitGroup
+	var got1, got2 string
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		got1 = driveModel("faux-1", "t1")
+	}()
+	go func() {
+		defer wg.Done()
+		got2 = driveModel("faux-2", "t2")
+	}()
+	wg.Wait()
+
+	if got1 != "one-done" {
+		t.Errorf("faux-1 final text = %q, want one-done", got1)
+	}
+	if got2 != "two-done" {
+		t.Errorf("faux-2 final text = %q, want two-done", got2)
+	}
+
+	st1 := s.engine.forModel("faux-1").state()
+	st2 := s.engine.forModel("faux-2").state()
+	if st1.StepIndex != 2 {
+		t.Errorf("faux-1 stepIndex = %d, want 2 (both its turns consumed)", st1.StepIndex)
+	}
+	if st2.StepIndex != 2 {
+		t.Errorf("faux-2 stepIndex = %d, want 2 (both its turns consumed)", st2.StepIndex)
+	}
+	if len(st1.Errors) != 0 {
+		t.Errorf("faux-1 unexpected mismatches: %v", st1.Errors)
+	}
+	if len(st2.Errors) != 0 {
+		t.Errorf("faux-2 unexpected mismatches: %v", st2.Errors)
+	}
+}
+
+func TestUnknownModelReturns400(t *testing.T) {
+	_, base := startTestServer(t, `
+models:
+  faux-1:
+    - text: "hi"
+  faux-2:
+    - text: "hi"
+`)
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":    "faux-nope",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	errObj, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload = %v, missing error object", payload)
+	}
+	msg, _ := errObj["message"].(string)
+	if !strings.Contains(msg, "faux-nope") || !strings.Contains(msg, "faux-1") || !strings.Contains(msg, "faux-2") {
+		t.Errorf("message = %q, want mention of faux-nope, faux-1, faux-2", msg)
+	}
+
+	respOA := postJSON(t, base+"/v1/chat/completions", map[string]any{
+		"model":    "faux-nope",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	defer respOA.Body.Close()
+	if respOA.StatusCode != http.StatusBadRequest {
+		t.Fatalf("openai status = %d, want 400", respOA.StatusCode)
+	}
+}
+
+func TestSingleScriptFormIsOneEntryModelsMap(t *testing.T) {
+	s, base := startTestServer(t, `
+model: faux-1
+steps:
+  - text: "hi there"
+    usage: {input: 7, output: 3}
+`)
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	defer resp.Body.Close()
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	content := payload["content"].([]any)
+	if content[0].(map[string]any)["text"] != "hi there" {
+		t.Errorf("text = %v", content[0])
+	}
+
+	names := s.engine.modelNames()
+	if len(names) != 1 || names[0] != "faux-1" {
+		t.Errorf("modelNames() = %v, want [faux-1]", names)
+	}
+}
+
+// --- tool_calls (multiple tool calls in one turn) -----------------------
+
+func TestAnthropicToolCallsNonStreaming(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_calls:
+      - {name: read, args: {path: a.js}, id: tc1}
+      - {name: read, args: {path: b.js}, id: tc2}
+`)
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	defer resp.Body.Close()
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	content := payload["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("content len = %d, want 2: %v", len(content), content)
+	}
+	b0 := content[0].(map[string]any)
+	b1 := content[1].(map[string]any)
+	if b0["type"] != "tool_use" || b0["id"] != "toolu_tc1" || b0["name"] != "read" {
+		t.Errorf("block0 = %v", b0)
+	}
+	if b1["type"] != "tool_use" || b1["id"] != "toolu_tc2" || b1["name"] != "read" {
+		t.Errorf("block1 = %v", b1)
+	}
+	if payload["stop_reason"] != "tool_use" {
+		t.Errorf("stop_reason = %v", payload["stop_reason"])
+	}
+}
+
+func TestAnthropicToolCallsStreaming(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_calls:
+      - {name: read, args: {path: a.js}, id: tc1}
+      - {name: read, args: {path: b.js}, id: tc2}
+`)
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":  "faux-1",
+		"stream": true,
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+		},
+	})
+	defer resp.Body.Close()
+	events := readSSE(t, resp.Body)
+
+	var toolUseIDs []string
+	var toolUseIndexes []int
+	for _, ev := range events {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(ev.data), &payload); err != nil {
+			t.Fatalf("bad json in event %q: %v (%s)", ev.event, err, ev.data)
+		}
+		if payload["type"] != "content_block_start" {
+			continue
+		}
+		cb := payload["content_block"].(map[string]any)
+		if cb["type"] != "tool_use" {
+			continue
+		}
+		toolUseIDs = append(toolUseIDs, cb["id"].(string))
+		toolUseIndexes = append(toolUseIndexes, int(payload["index"].(float64)))
+	}
+	if len(toolUseIDs) != 2 {
+		t.Fatalf("saw %d tool_use content_block_start events, want 2: %v", len(toolUseIDs), toolUseIDs)
+	}
+	if toolUseIDs[0] != "toolu_tc1" || toolUseIDs[1] != "toolu_tc2" {
+		t.Errorf("tool use ids = %v, want [toolu_tc1 toolu_tc2]", toolUseIDs)
+	}
+	if toolUseIndexes[0] != 0 || toolUseIndexes[1] != 1 {
+		t.Errorf("tool use block indexes = %v, want [0 1]", toolUseIndexes)
+	}
+}
+
+func TestOpenAIToolCallsNonStreaming(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_calls:
+      - {name: read, args: {path: a.js}, id: tc1}
+      - {name: read, args: {path: b.js}, id: tc2}
+`)
+	resp := postJSON(t, base+"/v1/chat/completions", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	defer resp.Body.Close()
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	choices := payload["choices"].([]any)
+	message := choices[0].(map[string]any)["message"].(map[string]any)
+	toolCalls := message["tool_calls"].([]any)
+	if len(toolCalls) != 2 {
+		t.Fatalf("tool_calls len = %d, want 2: %v", len(toolCalls), toolCalls)
+	}
+	tc0 := toolCalls[0].(map[string]any)
+	tc1 := toolCalls[1].(map[string]any)
+	if tc0["id"] != "call_tc1" || tc1["id"] != "call_tc2" {
+		t.Errorf("tool call ids = %v / %v", tc0["id"], tc1["id"])
+	}
+}
+
+func TestOpenAIToolCallsStreaming(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_calls:
+      - {name: read, args: {path: a.js}, id: tc1}
+      - {name: read, args: {path: b.js}, id: tc2}
+`)
+	resp := postJSON(t, base+"/v1/chat/completions", map[string]any{
+		"model":  "faux-1",
+		"stream": true,
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+		},
+	})
+	defer resp.Body.Close()
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	seenIDs := map[string]bool{}
+	seenIndexes := map[int]bool{}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			break
+		}
+		var chunk map[string]any
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			t.Fatalf("bad chunk json: %v (%s)", err, data)
+		}
+		choice := chunk["choices"].([]any)[0].(map[string]any)
+		delta, ok := choice["delta"].(map[string]any)
+		if !ok {
+			continue
+		}
+		tcs, ok := delta["tool_calls"].([]any)
+		if !ok {
+			continue
+		}
+		for _, tcRaw := range tcs {
+			tc := tcRaw.(map[string]any)
+			seenIndexes[int(tc["index"].(float64))] = true
+			if id, ok := tc["id"].(string); ok {
+				seenIDs[id] = true
+			}
+		}
+	}
+	if !seenIDs["call_tc1"] || !seenIDs["call_tc2"] {
+		t.Errorf("seenIDs = %v, want call_tc1 and call_tc2", seenIDs)
+	}
+	if !seenIndexes[0] || !seenIndexes[1] {
+		t.Errorf("seenIndexes = %v, want 0 and 1", seenIndexes)
+	}
+}
+
+// --- on_tool_results (multi-id gate) -------------------------------------
+
+func TestOnToolResultsGateBothPresent(t *testing.T) {
+	s, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_calls:
+      - {name: read, args: {path: a.js}, id: tc1}
+      - {name: read, args: {path: b.js}, id: tc2}
+  - on_tool_results: [tc1, tc2]
+    then:
+      - text: "both done"
+`)
+	resp1 := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	resp1.Body.Close()
+
+	resp2 := postJSON(t, base+"/v1/messages", map[string]any{
+		"model": "faux-1",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+			{"role": "assistant", "content": []map[string]any{
+				{"type": "tool_use", "id": "toolu_tc1", "name": "read", "input": map[string]any{}},
+				{"type": "tool_use", "id": "toolu_tc2", "name": "read", "input": map[string]any{}},
+			}},
+			{"role": "user", "content": []map[string]any{
+				{"type": "tool_result", "tool_use_id": "toolu_tc1", "content": "a"},
+				{"type": "tool_result", "tool_use_id": "toolu_tc2", "content": "b"},
+			}},
+		},
+	})
+	var payload map[string]any
+	json.NewDecoder(resp2.Body).Decode(&payload)
+	resp2.Body.Close()
+	content := payload["content"].([]any)
+	if content[0].(map[string]any)["text"] != "both done" {
+		t.Errorf("expected 'both done', got %v", payload)
+	}
+
+	st := s.engine.forModel("faux-1").state()
+	if len(st.Errors) != 0 {
+		t.Fatalf("expected no mismatch when both results present, got %v", st.Errors)
+	}
+}
+
+func TestOnToolResultsGateOneMissing(t *testing.T) {
+	s, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_calls:
+      - {name: read, args: {path: a.js}, id: tc1}
+      - {name: read, args: {path: b.js}, id: tc2}
+  - on_tool_results: [tc1, tc2]
+    then:
+      - text: "both done"
+`)
+	resp1 := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	resp1.Body.Close()
+
+	// Second request supplies a tool_result for tc1 only.
+	resp2 := postJSON(t, base+"/v1/messages", map[string]any{
+		"model": "faux-1",
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+			{"role": "assistant", "content": []map[string]any{
+				{"type": "tool_use", "id": "toolu_tc1", "name": "read", "input": map[string]any{}},
+				{"type": "tool_use", "id": "toolu_tc2", "name": "read", "input": map[string]any{}},
+			}},
+			{"role": "user", "content": []map[string]any{
+				{"type": "tool_result", "tool_use_id": "toolu_tc1", "content": "a"},
+			}},
+		},
+	})
+	resp2.Body.Close()
+
+	st := s.engine.forModel("faux-1").state()
+	if len(st.Errors) == 0 {
+		t.Fatal("expected a recorded mismatch for the missing tc2 result, got none")
+	}
+	if !strings.Contains(st.Errors[0], "tc2") {
+		t.Errorf("mismatch message = %q, want mention of tc2", st.Errors[0])
 	}
 }

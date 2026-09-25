@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/agents"
 	"github.com/andrepato/harness/internal/claude/writesettings"
 	"github.com/andrepato/harness/internal/harness"
+	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 )
 
@@ -26,6 +28,11 @@ type BuiltinDeps struct {
 	// Registry is the provider registry, for /model's picker and /cost's
 	// rate lookup.
 	Registry *provider.Registry
+	// ModelRoles is settings.json's modelRoles map (role name ->
+	// "provider/model"), for `/model roles` and future callers that need
+	// to resolve a subagent's model against role config rather than a
+	// literal provider/model. Nil when none are configured.
+	ModelRoles map[string]string
 
 	// CurrentModel returns the active provider and model id.
 	CurrentModel func() (providerID, modelID string)
@@ -43,6 +50,13 @@ type BuiltinDeps struct {
 
 	// Agents is the subagent roster, for /agents and /status.
 	Agents []agents.Definition
+
+	// UsageByModel returns this session's accumulated usage, keyed by
+	// "provider/model" — the parent's own turns under its current model,
+	// plus every dispatched subagent's usage under whichever model it
+	// actually ran on. Nil (or a nil return) means "not tracked", and
+	// /cost falls back to just its single-model summary.
+	UsageByModel func() map[string]msg.Usage
 
 	// SessionsDir is shown by /status.
 	SessionsDir string
@@ -106,6 +120,52 @@ func modelDescription(m provider.Model) string {
 func modelDialogDescription(m provider.Model) string {
 	tier := budget.TierFor(m.ContextWindow)
 	return fmt.Sprintf("%s context · %s tier", formatTokens(m.ContextWindow), tier.Name)
+}
+
+// modelRolesTable renders `/model roles`' listing: one row per configured
+// role, its provider/model value, tier and usable-token budget - or an
+// "(unresolved: ...)" note when agents.ValidateRoles flags that role's
+// value as unusable. `kiln models` (internal/cli) renders the same shape
+// against the same data, so a change here should be mirrored there.
+func modelRolesTable(roles map[string]string, models []provider.Model) []string {
+	if len(roles) == 0 {
+		return []string{"no modelRoles configured (settings.json)"}
+	}
+
+	byID := map[string]provider.Model{}
+	candidates := make([]agents.Candidate, 0, len(models))
+	for _, m := range models {
+		byID[m.Provider+"/"+m.ID] = m
+		candidates = append(candidates, agents.Candidate{ID: m.ID, Provider: m.Provider})
+	}
+
+	// ValidateRoles' "<role>: <detail>" strings are split back apart here
+	// so the table can key its "unresolved" column by role name; see its
+	// doc comment for that format contract.
+	problems := map[string]string{}
+	for _, p := range agents.ValidateRoles(roles, candidates) {
+		if idx := strings.Index(p, ": "); idx != -1 {
+			problems[p[:idx]] = p[idx+2:]
+		}
+	}
+
+	names := make([]string, 0, len(roles))
+	for name := range roles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	lines := []string{fmt.Sprintf("  %-12s %-30s %8s %10s", "role", "provider/model", "tier", "usable")}
+	for _, name := range names {
+		value := roles[name]
+		if reason, bad := problems[name]; bad {
+			lines = append(lines, fmt.Sprintf("  %-12s %-30s (unresolved: %s)", name, value, reason))
+			continue
+		}
+		tier := budget.TierFor(byID[value].ContextWindow)
+		lines = append(lines, fmt.Sprintf("  %-12s %-30s %8s %10s", name, value, tier.Name, formatTokens(budget.UsableTokens(tier))))
+	}
+	return lines
 }
 
 // BuiltinCommands returns the source for the ten commands builtins.ts
@@ -174,7 +234,32 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				if rate.Input == 0 {
 					line += "  (self-hosted, no marginal cost)"
 				}
-				return Result{Output: []string{line}}, nil
+				out := []string{line}
+
+				// "by model" table: this session's parent turns plus
+				// every dispatched subagent's usage, broken out by
+				// whichever model it actually ran on — a session that
+				// dispatched to a cheaper role should be able to see
+				// that split, not just one blended number.
+				if deps.UsageByModel != nil {
+					if byModel := deps.UsageByModel(); len(byModel) > 0 {
+						names := make([]string, 0, len(byModel))
+						for name := range byModel {
+							names = append(names, name)
+						}
+						sort.Strings(names)
+						out = append(out, "", "by model:")
+						for _, name := range names {
+							u := byModel[name]
+							cost := "-"
+							if u.Cost.Total != 0 {
+								cost = fmt.Sprintf("$%.4f", u.Cost.Total)
+							}
+							out = append(out, fmt.Sprintf("  %-24s input %-8d output %-8d cost %s", name, u.Input, u.Output, cost))
+						}
+					}
+				}
+				return Result{Output: out}, nil
 			},
 		},
 		{
@@ -218,6 +303,13 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				}
 
 				trimmed := strings.TrimSpace(args)
+				if trimmed == "roles" {
+					models, err := cache.get(ctx, deps.Registry)
+					if err != nil {
+						models = nil
+					}
+					return Result{Output: modelRolesTable(deps.ModelRoles, models)}, nil
+				}
 				if trimmed != "" {
 					msgOut, err := apply(trimmed)
 					if err != nil {

@@ -658,13 +658,20 @@ func TestTUI_ModelPanel_Select(t *testing.T) {
 	if err := s.WaitFor(regexp.MustCompile(`✔.*faux/faux-1|faux/faux-1.*✔`), 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
+	// The faux provider registers both faux-1 and faux-2
+	// (internal/provider/faux/faux.go) regardless of which are scripted,
+	// so the picker always lists two rows here; faux-2's is unmarked (not
+	// the current model).
+	if err := s.WaitFor("faux/faux-2", 2*time.Second); err != nil {
+		t.Fatalf("model picker missing the second row (faux/faux-2): %v", err)
+	}
 
-	// Enter runs the modal's Select against the highlighted item (only
-	// faux/faux-1 exists here) as a tea.Cmd (dialog_model.go's HandleKey
-	// returns a func() tea.Msg rather than calling switchModel inline), so
-	// it no longer blocks Bubbletea's Update loop — the hang this test
-	// used to guard against is fixed. The panel stays open after Enter
-	// (Select reports a status line but does not close it); Esc closes it.
+	// Enter runs the modal's Select against the highlighted (faux-1) row
+	// as a tea.Cmd (dialog_model.go's HandleKey returns a func() tea.Msg
+	// rather than calling switchModel inline), so it no longer blocks
+	// Bubbletea's Update loop — the hang this test used to guard against
+	// is fixed. The panel stays open after Enter (Select reports a status
+	// line but does not close it); Esc closes it.
 	s.SendKey("enter")
 	s.SendKey("esc")
 	if err := s.WaitFor(tuiUserMark, 5*time.Second); err != nil {
@@ -1022,5 +1029,68 @@ func TestTUI_SlashExit_Quits(t *testing.T) {
 	}
 	if code != 0 {
 		t.Errorf("exit code %d, want 0", code)
+	}
+}
+
+// --- 8. Subagents panel ---------------------------------------------------
+
+// TestTUI_SubagentsPanel_TwoLiveThenCleared drives
+// testdata/faux/task_concurrent_tui.yaml through the real interactive
+// binary: two `task` calls dispatch from one assistant message (internal/
+// harness runs concurrent task tool calls in parallel), and the script's
+// 400ms delay on both subagents' replies holds them open long enough for
+// this test to observe the subagents panel showing two live rows at once,
+// before either finishes. Once the turn settles, both rows have resolved
+// (done) and then the panel clears entirely — cleared_at_next_turn is
+// covered by asserting the panel is gone once the *next* turn starts.
+func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
+	script, err := os.ReadFile("../../testdata/faux/task_concurrent_tui.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj, home, sessDir, addr, _ := tuiFixture(t, string(script))
+	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
+
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
+		"--permission-mode", "dontAsk",
+	)
+	waitReady(t, s)
+
+	s.Send("dispatch two tasks")
+	s.SendKey("enter")
+
+	// Both dispatches are live (running) at once: the header reads "2
+	// live · 0 done" while the 400ms delay on each subagent's reply is
+	// still in flight.
+	if err := s.WaitFor(regexp.MustCompile(`subagents.*2 live`), 3*time.Second); err != nil {
+		t.Fatalf("subagents panel never showed two live rows: %v", err)
+	}
+	if err := s.WaitFor("look something up", 500*time.Millisecond); err != nil {
+		t.Fatalf("subagents panel missing the inherited dispatch's description: %v", err)
+	}
+	if err := s.WaitFor("do the fast lookup", 500*time.Millisecond); err != nil {
+		t.Fatalf("subagents panel missing the fast-routed dispatch's description: %v", err)
+	}
+
+	waitTurnSettled(t, s)
+
+	// The panel is gone once the turn has settled and no further prompt
+	// has been submitted (finishTurn does not itself clear it — the panel
+	// clears at the *next* turn's start, app.go's beginTurn — so this
+	// checks it's still visible with both rows resolved right after the
+	// turn ends)...
+	if err := s.WaitFor(regexp.MustCompile(`subagents.*0 live.*2 done`), 2*time.Second); err != nil {
+		t.Fatalf("subagents panel did not settle to two done rows: %v", err)
+	}
+
+	// ...then submitting a new turn clears it, proving the reset actually
+	// happens at the turn boundary rather than lingering forever.
+	s.Send("another prompt")
+	s.SendKey("enter")
+	if err := s.WaitFor(turnSummaryPattern, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(s.Rows(), "\n"), "subagents") {
+		t.Errorf("subagents panel from the previous turn was not cleared for the new one:\n%s", strings.Join(s.Rows(), "\n"))
 	}
 }

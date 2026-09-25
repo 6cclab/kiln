@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -96,8 +97,19 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		Body:     body,
 	})
 
+	me := s.engine.forModel(req.Model)
+	if me == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": map[string]string{
+				"type":    "invalid_request_error",
+				"message": fmt.Sprintf("faux: no script for model %q (scripted models: %s)", req.Model, strings.Join(s.engine.modelNames(), ", ")),
+			},
+		})
+		return
+	}
+
 	presentIDs := openAIToolResultIDs(req.Messages)
-	t, exhausted, _ := s.engine.consume(presentIDs)
+	t, exhausted, _ := me.consume(presentIDs)
 
 	if t.isError {
 		writeJSON(w, t.errSpec.Status, map[string]any{

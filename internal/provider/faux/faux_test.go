@@ -44,7 +44,7 @@ steps:
 		t.Fatalf("ID() = %q", p.ID())
 	}
 	models := p.Models()
-	if len(models) != 1 || models[0].ID != "faux-1" {
+	if len(models) != 2 || models[0].ID != "faux-1" || models[1].ID != "faux-2" {
 		t.Fatalf("Models() = %+v", models)
 	}
 	if models[0].Api != provider.ApiAnthropicMessages {

@@ -51,6 +51,17 @@ type Tool struct {
 	Description string
 	Parameters  json.RawMessage
 	Execute     func(ctx context.Context, args json.RawMessage, onUpdate Update, inv Invocation) (Result, error)
+
+	// Concurrent marks this tool safe to run in parallel with other
+	// Concurrent calls from the same assistant message: its Execute must
+	// not share mutable state with the session it was called from (read or
+	// write anything the session's own turn loop reads or writes outside
+	// of what it's explicitly given through Invocation). The `task` tool
+	// qualifies because a dispatched subagent gets its own session and its
+	// own storage. Tools that touch the calling session's files, branch or
+	// process-wide state (bash, read, edit, write, ...) must leave this
+	// false so the turn loop keeps running them one at a time.
+	Concurrent bool
 }
 
 // Set is a name-indexed collection with stable order.

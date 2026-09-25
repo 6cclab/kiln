@@ -4,7 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/andrepato/harness/internal/claude/settings"
 )
@@ -188,6 +191,64 @@ func TestGateWorkspaceBoundary(t *testing.T) {
 			t.Errorf("reason %q does not include feedback", blocked.Reason)
 		}
 	})
+}
+
+// TestConcurrentCheckPromptsOnce drives two goroutines through Check for
+// the exact same ask-verdict request at once. Only one of them may ever be
+// inside the prompter at a time (asserted via a counter that must never
+// exceed 1), and once the first prompt answers AllowAlways the second
+// Check must see the session grant and return allow without invoking the
+// prompter again.
+func TestConcurrentCheckPromptsOnce(t *testing.T) {
+	g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{work(t)}})
+
+	var inFlight int32
+	var maxInFlight int32
+	var promptCalls int32
+	g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) {
+		n := atomic.AddInt32(&inFlight, 1)
+		for {
+			old := atomic.LoadInt32(&maxInFlight)
+			if n <= old || atomic.CompareAndSwapInt32(&maxInFlight, old, n) {
+				break
+			}
+		}
+		atomic.AddInt32(&promptCalls, 1)
+		// Give the second goroutine a window to (wrongly) enter the
+		// prompter concurrently if promptMu were not held.
+		time.Sleep(20 * time.Millisecond)
+		atomic.AddInt32(&inFlight, -1)
+		return PromptChoice{Kind: PromptAllowAlways}, nil
+	})
+
+	req := Request{ToolName: "bash", PrimaryArg: "echo hi", Args: map[string]any{}}
+
+	var wg sync.WaitGroup
+	results := make([]*BlockResult, 2)
+	errs := make([]error, 2)
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = g.Check(context.Background(), req)
+		}(i)
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&maxInFlight); got > 1 {
+		t.Fatalf("prompter had %d concurrent invocations, want at most 1", got)
+	}
+	if got := atomic.LoadInt32(&promptCalls); got != 1 {
+		t.Fatalf("prompter called %d times, want exactly 1 (the second Check should see the session grant)", got)
+	}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Check[%d]: %v", i, err)
+		}
+		if results[i] != nil {
+			t.Fatalf("Check[%d] = %+v, want allow (nil)", i, results[i])
+		}
+	}
 }
 
 func contains(s, sub string) bool {

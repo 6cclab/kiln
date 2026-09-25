@@ -1,0 +1,25 @@
+models:
+  faux-1:
+    # Turn 1: the parent dispatches two `task` calls in one assistant
+    # message (internal/harness now runs concurrent task tool calls in
+    # parallel). tc1 carries no "model" argument, so it inherits the
+    # parent's own model (faux-1); tc2 asks for the "fast" role, which
+    # settings.json's modelRoles routes to faux-2.
+    - tool_calls:
+        - {name: task, args: {subagent_type: "general-purpose", description: "look something up", prompt: "find X"}, id: tc1}
+        - {name: task, args: {subagent_type: "general-purpose", description: "do the fast lookup", prompt: "find Y", model: "fast"}, id: tc2}
+    # Turn 2: consumed by the INHERITED subagent's own single-turn session
+    # (tc1), not by the parent — the parent cannot send its next request
+    # until both task tool calls return, and tc1's dispatch cannot return
+    # until this request is answered, so this step is deterministically
+    # next in faux-1's sequential cursor.
+    - text: "inherited subagent report"
+    # Turn 3: the parent's next turn, gated on both tool results (tc1 and
+    # tc2) being present — which only happens once both dispatches have
+    # completed, i.e. after turn 2 above and after faux-2's own turn below.
+    - on_tool_results: [tc1, tc2]
+      then:
+        - text: "Both done."
+  faux-2:
+    # The "fast"-routed subagent's (tc2) own single-turn session.
+    - text: "fast subagent report"

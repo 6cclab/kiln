@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -106,8 +107,20 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		Body:     body,
 	})
 
+	me := s.engine.forModel(req.Model)
+	if me == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "invalid_request_error",
+				"message": fmt.Sprintf("faux: no script for model %q (scripted models: %s)", req.Model, strings.Join(s.engine.modelNames(), ", ")),
+			},
+		})
+		return
+	}
+
 	presentIDs := anthropicToolResultIDs(req.Messages)
-	t, exhausted, _ := s.engine.consume(presentIDs)
+	t, exhausted, _ := me.consume(presentIDs)
 
 	if t.isError {
 		writeJSON(w, t.errSpec.Status, map[string]any{

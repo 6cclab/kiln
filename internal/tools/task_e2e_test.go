@@ -82,15 +82,21 @@ func TestTaskToolEndToEndDispatchesToARealSubagent(t *testing.T) {
 	// tools.TaskDispatchResult even though the two are field-for-field
 	// identical; Go requires an explicit adapter to bridge them (see
 	// internal/tools/task.go's header comment, corrected by this test).
-	dispatch := func(ctx context.Context, agentName, description, prompt string) (tools.TaskDispatchResult, error) {
-		r, err := d.Dispatch(ctx, agentName, description, prompt)
-		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars}, err
+	dispatch := func(ctx context.Context, req tools.TaskRequest) (tools.TaskDispatchResult, error) {
+		r, err := d.Dispatch(ctx, agent.DispatchRequest{
+			Agent:       req.Agent,
+			Description: req.Description,
+			Prompt:      req.Prompt,
+			Model:       req.Model,
+			ToolCallID:  req.ToolCallID,
+		})
+		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars, Model: r.Model, Usage: r.Usage}, err
 	}
-	taskTool := tools.TaskTool(dispatch, []agents.Definition{agent.GeneralPurpose}, budget.TierForWindow(200_000))
+	taskTool := tools.TaskTool(dispatch, []agents.Definition{agent.GeneralPurpose}, nil, budget.TierForWindow(200_000))
 
 	res, err := taskTool.Execute(context.Background(),
 		[]byte(`{"subagent_type":"general-purpose","description":"look something up","prompt":"find X"}`),
-		nil, tool.Invocation{})
+		nil, tool.Invocation{ToolCallID: "tc-1"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -98,5 +104,68 @@ func TestTaskToolEndToEndDispatchesToARealSubagent(t *testing.T) {
 	text := msg.TextOf(res.Content)
 	if text != "subagent report" {
 		t.Fatalf("task tool text = %q, want %q", text, "subagent report")
+	}
+}
+
+// TestTaskToolEndToEndDispatchesToAConfiguredModelRole exercises the
+// `model` argument end to end: the parent runs on faux-1, the task tool is
+// built with roles = {fast: "faux/faux-2"}, the model calls task with
+// model: "fast", and the subagent's session must actually run on faux-2 —
+// verified two ways: the faux server's recorded requests name faux-2, and
+// the returned text is faux-2's own scripted line (faux-1's script would
+// answer differently, so a mix-up would fail on text alone).
+func TestTaskToolEndToEndDispatchesToAConfiguredModelRole(t *testing.T) {
+	script := "models:\n" +
+		"  faux-1:\n" +
+		"    - text: \"parent turn\"\n" +
+		"  faux-2:\n" +
+		"    - text: \"subagent on faux-2\"\n"
+	reg := newFauxRegistry(t, script)
+	resolved, err := reg.Resolve(fauxprovider.ProviderID, fauxprovider.ModelID)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	cwd := t.TempDir()
+	root := t.TempDir()
+
+	parent, err := agent.Start(context.Background(), agent.Options{
+		Registry: reg, Resolved: resolved, Cwd: cwd, SessionsRoot: root,
+	})
+	if err != nil {
+		t.Fatalf("agent.Start parent: %v", err)
+	}
+
+	roles := map[string]string{"fast": fauxprovider.ProviderID + "/" + fauxprovider.ModelID2}
+	d := &agent.Dispatcher{
+		Registry:     reg,
+		Parent:       parent,
+		Agents:       []agents.Definition{agent.GeneralPurpose},
+		Roles:        roles,
+		SessionsRoot: root,
+		Env:          execenv.New(cwd),
+	}
+	dispatch := func(ctx context.Context, req tools.TaskRequest) (tools.TaskDispatchResult, error) {
+		r, err := d.Dispatch(ctx, agent.DispatchRequest{
+			Agent:       req.Agent,
+			Description: req.Description,
+			Prompt:      req.Prompt,
+			Model:       req.Model,
+			ToolCallID:  req.ToolCallID,
+		})
+		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars, Model: r.Model, Usage: r.Usage}, err
+	}
+	taskTool := tools.TaskTool(dispatch, []agents.Definition{agent.GeneralPurpose}, roles, budget.TierForWindow(200_000))
+
+	res, err := taskTool.Execute(context.Background(),
+		[]byte(`{"subagent_type":"general-purpose","prompt":"find X","model":"fast"}`),
+		nil, tool.Invocation{ToolCallID: "tc-1"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	text := msg.TextOf(res.Content)
+	if text != "subagent on faux-2" {
+		t.Fatalf("task tool text = %q, want the faux-2 script's line", text)
 	}
 }

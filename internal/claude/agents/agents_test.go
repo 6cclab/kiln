@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -178,6 +179,106 @@ func TestResolveAgentModel(t *testing.T) {
 		}
 		if got := ResolveAgentModel("", localParent, ollama); got != localParent {
 			t.Errorf("got %+v", got)
+		}
+	})
+}
+
+func TestResolveModel(t *testing.T) {
+	ollama := []Candidate{
+		{ID: "qwen3.8:latest", Provider: "ollama"},
+		{ID: "qwen3-cc:latest", Provider: "ollama"},
+	}
+	anthropic := []Candidate{
+		{ID: "claude-sonnet-4-5", Provider: "anthropic"},
+		{ID: "claude-opus-4-1", Provider: "anthropic"},
+		{ID: "claude-haiku-4-5", Provider: "anthropic"},
+	}
+	localParent := ModelChoice{ProviderID: "ollama", ModelID: "qwen3.8:latest"}
+
+	t.Run("role hit resolves the role's value and reports kind role", func(t *testing.T) {
+		roles := map[string]string{"fast": "ollama/qwen3-cc:latest"}
+		got, kind := ResolveModel("fast", roles, localParent, ollama)
+		want := ModelChoice{ProviderID: "ollama", ModelID: "qwen3-cc:latest"}
+		if got != want || kind != ResolveRole {
+			t.Errorf("got %+v/%s, want %+v/%s", got, kind, want, ResolveRole)
+		}
+	})
+
+	t.Run("role value not among candidates falls back to the parent", func(t *testing.T) {
+		roles := map[string]string{"fast": "ollama/nope"}
+		got, kind := ResolveModel("fast", roles, localParent, ollama)
+		if got != localParent || kind != ResolveFallback {
+			t.Errorf("got %+v/%s, want %+v/%s", got, kind, localParent, ResolveFallback)
+		}
+	})
+
+	t.Run("alias resolves through its built-in role when configured", func(t *testing.T) {
+		roles := map[string]string{"structured": "anthropic/claude-sonnet-4-5"}
+		parent := ModelChoice{ProviderID: "anthropic", ModelID: "claude-opus-4-1"}
+		got, kind := ResolveModel("sonnet", roles, parent, anthropic)
+		want := ModelChoice{ProviderID: "anthropic", ModelID: "claude-sonnet-4-5"}
+		if got != want || kind != ResolveAlias {
+			t.Errorf("got %+v/%s, want %+v/%s", got, kind, want, ResolveAlias)
+		}
+	})
+
+	t.Run("alias with no configured role behaves exactly as before", func(t *testing.T) {
+		parent := ModelChoice{ProviderID: "anthropic", ModelID: "claude-opus-4-1"}
+		got, kind := ResolveModel("sonnet", nil, parent, anthropic)
+		want := ModelChoice{ProviderID: "anthropic", ModelID: "claude-sonnet-4-5"}
+		if got != want || kind != ResolveAlias {
+			t.Errorf("got %+v/%s, want %+v/%s", got, kind, want, ResolveAlias)
+		}
+	})
+
+	t.Run("explicit provider/model is unchanged by roles", func(t *testing.T) {
+		roles := map[string]string{"fast": "ollama/qwen3.8:latest"}
+		got, kind := ResolveModel("ollama/qwen3-cc:latest", roles, localParent, ollama)
+		want := ModelChoice{ProviderID: "ollama", ModelID: "qwen3-cc:latest"}
+		if got != want || kind != ResolveExplicit {
+			t.Errorf("got %+v/%s, want %+v/%s", got, kind, want, ResolveExplicit)
+		}
+	})
+
+	t.Run("inherit and empty report kind inherited", func(t *testing.T) {
+		if got, kind := ResolveModel("", nil, localParent, ollama); got != localParent || kind != ResolveInherited {
+			t.Errorf("got %+v/%s", got, kind)
+		}
+		if got, kind := ResolveModel("inherit", nil, localParent, ollama); got != localParent || kind != ResolveInherited {
+			t.Errorf("got %+v/%s", got, kind)
+		}
+	})
+}
+
+func TestValidateRoles(t *testing.T) {
+	candidates := []Candidate{
+		{ID: "claude-sonnet-4-5", Provider: "anthropic"},
+		{ID: "qwen3.8:latest", Provider: "ollama"},
+	}
+
+	t.Run("no problems when every role resolves", func(t *testing.T) {
+		roles := map[string]string{"structured": "anthropic/claude-sonnet-4-5", "fast": "ollama/qwen3.8:latest"}
+		if got := ValidateRoles(roles, candidates); len(got) != 0 {
+			t.Errorf("got %v, want none", got)
+		}
+	})
+
+	t.Run("flags a value that is not provider/model shaped", func(t *testing.T) {
+		roles := map[string]string{"fast": "sonnet"}
+		got := ValidateRoles(roles, candidates)
+		if len(got) != 1 || !strings.Contains(got[0], "fast") || !strings.Contains(got[0], "not provider/model") {
+			t.Errorf("got %v", got)
+		}
+	})
+
+	t.Run("flags a value not among candidates, sorted by role name", func(t *testing.T) {
+		roles := map[string]string{"heavy": "anthropic/claude-opus-4-1", "fast": "ollama/nope"}
+		got := ValidateRoles(roles, candidates)
+		if len(got) != 2 {
+			t.Fatalf("got %v", got)
+		}
+		if !strings.HasPrefix(got[0], "fast:") || !strings.HasPrefix(got[1], "heavy:") {
+			t.Errorf("got %v, want fast before heavy", got)
 		}
 	})
 }

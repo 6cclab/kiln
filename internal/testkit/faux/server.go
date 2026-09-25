@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 )
 
@@ -28,70 +29,61 @@ type Options struct {
 	RecordTo string
 }
 
-// State reports the faux engine's current position in its script.
+// State reports one model's current position in its script.
 type State struct {
 	StepIndex int      `json:"stepIndex"`
 	Exhausted bool     `json:"exhausted"`
 	Errors    []string `json:"errors,omitempty"`
 }
 
-// engineState holds the script execution state, guarded by mu.
-type engineState struct {
+// modelEngine holds one scripted model's execution state, guarded by mu.
+// Each scripted model gets its own modelEngine and therefore its own
+// cursor, so concurrent requests for different models never share one; the
+// mutex still serializes concurrent requests for the same model.
+type modelEngine struct {
 	mu         sync.Mutex
-	model      string
 	turns      []turn
 	pos        int
 	exhausted  bool
 	mismatches []string
 }
 
-func (e *engineState) load(s *Script) error {
-	turns, err := flattenSteps(s.Steps)
-	if err != nil {
-		return err
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.model = s.Model
-	e.turns = turns
-	e.pos = 0
-	e.exhausted = false
-	e.mismatches = nil
-	return nil
-}
-
-func (e *engineState) resetPosition() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.pos = 0
-	e.exhausted = false
-	e.mismatches = nil
-}
-
-func (e *engineState) modelName() string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.model
-}
-
 // consume returns the next turn to execute given the set of tool_result
 // ids present in the triggering request. It never blocks or errors on a
 // mismatched tool_result id; it records it instead.
-func (e *engineState) consume(presentToolResultIDs map[string]bool) (t turn, exhausted bool, index int) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.pos >= len(e.turns) {
-		e.exhausted = true
-		return turn{}, true, e.pos
+func (m *modelEngine) consume(presentToolResultIDs map[string]bool) (t turn, exhausted bool, index int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pos >= len(m.turns) {
+		m.exhausted = true
+		return turn{}, true, m.pos
 	}
-	t = e.turns[e.pos]
-	index = e.pos
-	e.pos++
-	if t.requireToolResult != "" && !toolResultPresent(presentToolResultIDs, t.requireToolResult) {
-		e.mismatches = append(e.mismatches, fmt.Sprintf(
-			"turn %d: expected a tool_result for id %q, none found in request", index, t.requireToolResult))
+	t = m.turns[m.pos]
+	index = m.pos
+	m.pos++
+	for _, id := range t.requireToolResults {
+		if !toolResultPresent(presentToolResultIDs, id) {
+			m.mismatches = append(m.mismatches, fmt.Sprintf(
+				"turn %d: expected a tool_result for id %q, none found in request", index, id))
+		}
 	}
 	return t, false, index
+}
+
+func (m *modelEngine) state() State {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	errs := make([]string, len(m.mismatches))
+	copy(errs, m.mismatches)
+	return State{StepIndex: m.pos, Exhausted: m.exhausted, Errors: errs}
+}
+
+func (m *modelEngine) resetPosition() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pos = 0
+	m.exhausted = false
+	m.mismatches = nil
 }
 
 // toolResultPresent reports whether the request's tool_result ids include
@@ -102,12 +94,65 @@ func toolResultPresent(present map[string]bool, rawID string) bool {
 	return present[rawID] || present[anthropicToolID(rawID)] || present[openAICallID(rawID)]
 }
 
-func (e *engineState) state() State {
+// engineState holds one modelEngine per scripted model. The map itself is
+// only ever replaced wholesale (on load) or read (to dispatch a request or
+// list models); mu guards that map reference, while each modelEngine's own
+// mutex guards its cursor.
+type engineState struct {
+	mu     sync.RWMutex
+	models map[string]*modelEngine
+}
+
+func newEngineState() *engineState {
+	return &engineState{models: map[string]*modelEngine{}}
+}
+
+// load replaces the engine's entire model set from a Script, flattening
+// each model's steps into its own turn sequence and rewinding every
+// model's cursor to the start.
+func (e *engineState) load(s *Script) error {
+	scripts := s.modelScripts()
+	models := make(map[string]*modelEngine, len(scripts))
+	for name, steps := range scripts {
+		turns, err := flattenSteps(steps)
+		if err != nil {
+			return fmt.Errorf("faux: model %q: %w", name, err)
+		}
+		models[name] = &modelEngine{turns: turns}
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	errs := make([]string, len(e.mismatches))
-	copy(errs, e.mismatches)
-	return State{StepIndex: e.pos, Exhausted: e.exhausted, Errors: errs}
+	e.models = models
+	return nil
+}
+
+// resetPosition rewinds every scripted model's cursor to the start,
+// without changing which models are scripted or their turns.
+func (e *engineState) resetPosition() {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, m := range e.models {
+		m.resetPosition()
+	}
+}
+
+// forModel returns the named model's engine, or nil if it isn't scripted.
+func (e *engineState) forModel(name string) *modelEngine {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.models[name]
+}
+
+// modelNames returns every scripted model name, sorted for determinism.
+func (e *engineState) modelNames() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	names := make([]string, 0, len(e.models))
+	for name := range e.models {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // Server is a deterministic scripted model server speaking the Anthropic
@@ -133,7 +178,7 @@ func New(opts Options) (*Server, error) {
 	}
 	s := &Server{
 		opts:   opts,
-		engine: &engineState{model: "faux-1"},
+		engine: newEngineState(),
 		rec:    newRecorder(opts.RecordTo),
 	}
 	switch {
@@ -268,12 +313,14 @@ func readBody(r *http.Request) ([]byte, error) {
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	model := s.engine.modelName()
+	names := s.engine.modelNames()
+	data := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		data = append(data, map[string]any{"id": name, "object": "model", "created": 0, "owned_by": "faux"})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
-		"data": []map[string]any{
-			{"id": model, "object": "model", "created": 0, "owned_by": "faux"},
-		},
+		"data":   data,
 	})
 }
 
@@ -299,6 +346,23 @@ func (s *Server) handleFauxScript(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "loaded"})
 }
 
+// MultiState reports every scripted model's current position, keyed by
+// model name.
+type MultiState struct {
+	Models map[string]State `json:"models"`
+}
+
 func (s *Server) handleFauxState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.engine.state())
+}
+
+// state reports the current position of every scripted model.
+func (e *engineState) state() MultiState {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string]State, len(e.models))
+	for name, m := range e.models {
+		out[name] = m.state()
+	}
+	return MultiState{Models: out}
 }

@@ -127,12 +127,16 @@ type Model struct {
 
 	width, height int
 
-	editor   editor.Model
-	spinner  SpinnerState
-	footer   *FooterState
-	prompt   *PromptState
-	dialog   Dialog
-	thinking *ThinkingView
+	editor  editor.Model
+	spinner SpinnerState
+	footer  *FooterState
+	prompt  *PromptState
+	// subagents tracks the current turn's `task` dispatches for the
+	// subagents panel (subagents.go); reset at the start of every turn in
+	// beginTurn.
+	subagents *SubagentPanelState
+	dialog    Dialog
+	thinking  *ThinkingView
 	// popup is the `/` or `@` autocomplete list, non-nil while one of the
 	// two triggers matches the editor's current line/cursor. Rebuilt from
 	// scratch on every keystroke by refreshPopup — see autocomplete.go.
@@ -270,6 +274,7 @@ func NewModel(cfg Config) Model {
 		editor:         ed,
 		footer:         NewFooterState(StatusState{ModelLabel: cfg.ModelLabel, ContextWindow: cfg.Tier.ContextWindow, Mode: cfg.InitialMode, StartedAt: cfg.StartedAt}),
 		prompt:         NewPromptState(cfg.Cwd),
+		subagents:      NewSubagentPanelState(),
 		startupContext: append([]string(nil), cfg.StartupContext...),
 		fullscreen:     cfg.Fullscreen && !cfg.Plain,
 		viewport:       viewport.New(),
@@ -560,6 +565,10 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgRefreshMode:
 		return m.refreshMode(), nil
+
+	case MsgSubagentEvent:
+		m.subagents.Apply(msg.Event)
+		return m, nil
 
 	case MsgFooterNote:
 		m.footer.SetNote(msg.Text)
@@ -1271,6 +1280,9 @@ func (m Model) beginTurn(prompt string, images []msg.ImageContent) (tea.Model, t
 	m.spinner.Start(m.turn)
 	m.turn++
 	m.footer.SetBusy(true)
+	// A fresh turn starts with no dispatches: the previous turn's
+	// subagents panel (if any) does not linger into this one.
+	m.subagents.Reset()
 
 	lane := m.cfg.Lane
 	bridge := m.cfg.Bridge
@@ -1434,6 +1446,13 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 			// Claude Code draws the suggestions directly above the input
 			// box's top rule (autocomplete-slash.txt rows 29-32).
 			lines = append(lines, m.renderPopup(width, len(lines))...)
+		}
+		// The subagents panel sits above the hint row/input box, live for
+		// the turn that dispatched at least one `task` call; empty
+		// otherwise, so it costs no rows when nothing is running.
+		if rows := m.subagents.Render(width); len(rows) > 0 {
+			lines = append(lines, rows...)
+			lines = append(lines, "")
 		}
 		if hint := m.hintRow(width); hint != "" {
 			lines = append(lines, hint)

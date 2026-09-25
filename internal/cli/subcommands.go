@@ -142,7 +142,69 @@ func Models(ctx context.Context, stdout, stderr io.Writer, providerID string) in
 			r.provider, truncateString(r.model.ID, 34), r.model.ContextWindow,
 			resolved.Tier.Name, resolved.Tier.ToolStrategy, budget.UsableTokens(resolved.Tier), suffix)
 	}
+
+	// Roles are printed as a second table, only when any are configured -
+	// most sessions have none, and an empty table would just be noise
+	// after the model listing.
+	if cwd, err := os.Getwd(); err == nil {
+		settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{})
+		if len(settings.ModelRoles) > 0 {
+			refreshRoleProviders(ctx, reg, settings.ModelRoles, providerID, nil)
+			var all []provider.Model
+			for _, p := range available {
+				for _, m := range p.Models() {
+					all = append(all, provider.Model{ID: m.ID, Provider: p.ID(), ContextWindow: m.ContextWindow})
+				}
+			}
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "roles")
+			for _, line := range renderModelRolesTable(settings.ModelRoles, all) {
+				fmt.Fprintln(stdout, "  "+line)
+			}
+		}
+	}
 	return 0
+}
+
+// renderModelRolesTable renders settings.json's modelRoles: one line per
+// role with its provider/model value, tier and usable-token budget, or
+// "(unresolved: ...)" when agents.ValidateRoles flags that role's value.
+// Mirrors internal/commands' modelRolesTable (/model roles); duplicated
+// rather than shared because the two packages use the value for different
+// surrounding output (a slash-command Result vs. a plain stdout report) and
+// internal/commands cannot import internal/cli.
+func renderModelRolesTable(roles map[string]string, models []provider.Model) []string {
+	byID := map[string]provider.Model{}
+	candidates := make([]claudeagents.Candidate, 0, len(models))
+	for _, m := range models {
+		byID[m.Provider+"/"+m.ID] = m
+		candidates = append(candidates, claudeagents.Candidate{ID: m.ID, Provider: m.Provider})
+	}
+	problems := map[string]string{}
+	for _, p := range claudeagents.ValidateRoles(roles, candidates) {
+		if idx := strings.Index(p, ": "); idx != -1 {
+			problems[p[:idx]] = p[idx+2:]
+		}
+	}
+
+	names := make([]string, 0, len(roles))
+	for name := range roles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	lines := make([]string, 0, len(names)+1)
+	lines = append(lines, fmt.Sprintf("%-12s %-30s %8s %10s", "role", "provider/model", "tier", "usable"))
+	for _, name := range names {
+		value := roles[name]
+		if reason, bad := problems[name]; bad {
+			lines = append(lines, fmt.Sprintf("%-12s %-30s (unresolved: %s)", name, value, reason))
+			continue
+		}
+		tier := budget.TierFor(byID[value].ContextWindow)
+		lines = append(lines, fmt.Sprintf("%-12s %-30s %8s %10d", name, value, tier.Name, budget.UsableTokens(tier)))
+	}
+	return lines
 }
 
 // LoginCmd implements `harness login <provider>`, matching cli.ts's login():
@@ -218,11 +280,12 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	}
 
 	lines := []string{fmt.Sprintf("model      %s", wanted)}
+	var problems []string
 
+	reg := buildRegistry()
 	var strategy budget.ToolStrategy
 	providerID, modelID, ok := splitProviderModel(wanted)
 	if ok {
-		reg := buildRegistry()
 		if p, ok := reg.Provider(providerID); ok {
 			_ = p.RefreshModels(ctx)
 		}
@@ -232,6 +295,55 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		} else {
 			strategy = resolved.Tier.ToolStrategy
 			lines = append(lines, fmt.Sprintf("tier       %s (%d tokens)", resolved.Tier.Name, resolved.Tier.ContextWindow))
+		}
+	}
+
+	if len(settings.ModelRoles) > 0 {
+		refreshRoleProviders(ctx, reg, settings.ModelRoles, providerID, nil)
+		if available, err := reg.Available(ctx); err == nil {
+			var candidates []claudeagents.Candidate
+			var models []provider.Model
+			for _, p := range available {
+				for _, m := range p.Models() {
+					candidates = append(candidates, claudeagents.Candidate{ID: m.ID, Provider: p.ID()})
+					models = append(models, provider.Model{ID: m.ID, Provider: p.ID(), ContextWindow: m.ContextWindow})
+				}
+			}
+			problems = append(problems, claudeagents.ValidateRoles(settings.ModelRoles, candidates)...)
+
+			names := make([]string, 0, len(settings.ModelRoles))
+			for name := range settings.ModelRoles {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			lines = append(lines, fmt.Sprintf("roles      %d configured", len(names)))
+			for _, line := range renderModelRolesTable(settings.ModelRoles, models) {
+				lines = append(lines, "             "+line)
+			}
+
+			// Two roles that both point at ollama but name different
+			// models: ollama typically keeps one model resident at a
+			// time, so a second role loading a second model can stall
+			// or evict the first mid-session.
+			ollamaModelByRole := map[string]string{}
+			for _, name := range names {
+				if pID, mID, ok := splitProviderModel(settings.ModelRoles[name]); ok && pID == "ollama" {
+					ollamaModelByRole[name] = mID
+				}
+			}
+			roleNamesWithOllama := make([]string, 0, len(ollamaModelByRole))
+			for name := range ollamaModelByRole {
+				roleNamesWithOllama = append(roleNamesWithOllama, name)
+			}
+			sort.Strings(roleNamesWithOllama)
+			for i := 0; i < len(roleNamesWithOllama); i++ {
+				for j := i + 1; j < len(roleNamesWithOllama); j++ {
+					a, b := roleNamesWithOllama[i], roleNamesWithOllama[j]
+					if ollamaModelByRole[a] != ollamaModelByRole[b] {
+						problems = append(problems, fmt.Sprintf("roles %s and %s both use ollama with different models; loading a second model may stall the host", a, b))
+					}
+				}
+			}
 		}
 	}
 
@@ -289,7 +401,6 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	}
 	lines = append(lines, fmt.Sprintf("logs       %s", logsLine))
 
-	var problems []string
 	if permissionMode == "bypassPermissions" {
 		problems = append(problems, "permission mode is bypassPermissions: every tool call runs unchecked")
 	}

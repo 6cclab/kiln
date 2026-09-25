@@ -210,3 +210,102 @@ func TestModelSwitchRejectsNonProviderModel(t *testing.T) {
 		t.Fatal("expected an error for a target that is not provider/model")
 	}
 }
+
+func modelCommand(t *testing.T, deps BuiltinDeps) Command {
+	t.Helper()
+	source := BuiltinCommands(deps)
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cmds {
+		if c.Name == "model" {
+			return c
+		}
+	}
+	t.Fatal("no /model command")
+	return Command{}
+}
+
+func TestModelRolesPrintsAMessageWhenNoneConfigured(t *testing.T) {
+	model := modelCommand(t, BuiltinDeps{
+		Registry:     testRegistry(t),
+		CurrentModel: func() (string, string) { return "", "" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{} },
+	})
+	res, err := model.Run(context.Background(), "roles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Output) != 1 || !strings.Contains(res.Output[0], "no modelRoles configured") {
+		t.Fatalf("got %v", res.Output)
+	}
+}
+
+func TestModelRolesTableReportsResolvedAndUnresolvedRoles(t *testing.T) {
+	model := modelCommand(t, BuiltinDeps{
+		Registry:     testRegistry(t),
+		CurrentModel: func() (string, string) { return "", "" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{} },
+		ModelRoles: map[string]string{
+			"heavy": "anthropic/claude-opus-5",
+			"fast":  "ollama/does-not-exist",
+		},
+	})
+	res, err := model.Run(context.Background(), "roles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(res.Output, "\n")
+	if !strings.Contains(joined, "heavy") || !strings.Contains(joined, "anthropic/claude-opus-5") {
+		t.Fatalf("missing resolved role row: %v", res.Output)
+	}
+	if !strings.Contains(joined, "fast") || !strings.Contains(joined, "unresolved") {
+		t.Fatalf("missing unresolved role row: %v", res.Output)
+	}
+}
+
+func TestCostCommandShowsByModelTable(t *testing.T) {
+	reg := testRegistry(t)
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     reg,
+		CurrentModel: func() (string, string) { return "ollama", "qwen3.8:latest" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{} },
+		UsageByModel: func() map[string]msg.Usage {
+			return map[string]msg.Usage{
+				"ollama/qwen3.8:latest": {Input: 100, Output: 50, TotalTokens: 150},
+				"anthropic/claude-opus-5": {
+					Input: 10, Output: 5, TotalTokens: 15,
+					Cost: msg.Cost{Total: 0.42},
+				},
+			}
+		},
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cost *Command
+	for i := range cmds {
+		if cmds[i].Name == "cost" {
+			cost = &cmds[i]
+		}
+	}
+	if cost == nil {
+		t.Fatal("no cost command registered")
+	}
+	res, err := cost.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("cost.Run: %v", err)
+	}
+	out := strings.Join(res.Output, "\n")
+	if !strings.Contains(out, "by model:") {
+		t.Fatalf("output = %q, want a by-model section", out)
+	}
+	if !strings.Contains(out, "anthropic/claude-opus-5") || !strings.Contains(out, "$0.4200") {
+		t.Fatalf("output = %q, want the priced model's cost", out)
+	}
+	if !strings.Contains(out, "ollama/qwen3.8:latest") || !strings.Contains(out, "cost -") {
+		t.Fatalf("output = %q, want the free model's cost shown as \"-\"", out)
+	}
+}

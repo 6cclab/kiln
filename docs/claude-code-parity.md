@@ -313,13 +313,25 @@ call, but API keys are.
 
 ## Deliberate divergences
 
-Three, all additive:
+Six, all additive:
 
 1. **Budget footer** (§7) — required by the 32k local case.
 2. **Model picker spans providers** — `/model` must offer local Ollama models
    beside Claude, which Claude Code has no reason to do.
 3. **`/tools`** — inspect which MCP tools are currently resident. Claude Code
    has no equivalent because it has no posture/index layering.
+4. **Model roles + `task`'s `model` argument** — `settings.json`'s
+   `modelRoles` (fast/structured/heavy → provider/model) names providers and
+   models once; a `task` call names a role instead of a literal model, or
+   `inherit`. Claude Code's `subagent_type` selection has no such role
+   indirection `[chk]`.
+5. **Concurrent `task` calls in one turn** — several `task` invocations in
+   one assistant message run in parallel, each getting its own session and
+   storage. Claude Code dispatches subagents from one turn serially `[chk]`.
+6. **Nested dispatch, depth 2** — a subagent's own `task` tool can dispatch
+   subagents of its own, up to two levels deep from the root session before
+   the tool stops being offered at all. Claude Code's subagents cannot
+   dispatch subagents of their own `[chk]`.
 
 ## Explicit non-goals
 
