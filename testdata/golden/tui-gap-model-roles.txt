@@ -1,0 +1,9 @@
+/model roles
+  ⎿    role         provider/model                     tier     usable
+       fast         faux/faux-2                       small      24.9k
+       heavy        faux/faux-1                      medium      94.8k
+                                                                                ◐ medium · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────
+› Try "how do I log an error?"
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ● manual mode on · ← for agents

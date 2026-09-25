@@ -2,6 +2,7 @@ package faux
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -142,11 +143,12 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 	}
 
 	msgID := fmt.Sprintf("msg_faux_%d", rec.Seq)
+	spec := t.disconnectSpec()
 	if req.Stream {
-		s.streamAnthropic(w, req.Model, msgID, t)
+		s.streamAnthropic(w, req.Model, msgID, t, spec, me.recordDisconnect)
 		return
 	}
-	s.respondAnthropicJSON(w, req.Model, msgID, t)
+	s.respondAnthropicJSON(w, req.Model, msgID, t, spec, me.recordDisconnect)
 }
 
 func exhaustedTurn() turn {
@@ -158,8 +160,22 @@ const exhaustedText = "(faux: script exhausted)"
 
 // --- non-streaming --------------------------------------------------------
 
-func (s *Server) respondAnthropicJSON(w http.ResponseWriter, model, msgID string, t turn) {
+// rawArgsSplice records a placeholder token planted in a JSON body for a
+// tool call's raw_args, so it can be replaced with the raw text after
+// marshaling (encoding/json cannot emit invalid JSON directly; see
+// raw_args in the package doc).
+type rawArgsSplice struct {
+	placeholder string
+	raw         string
+}
+
+func rawArgsPlaceholder(i int) string {
+	return fmt.Sprintf("__faux_raw_args_%d__", i)
+}
+
+func (s *Server) respondAnthropicJSON(w http.ResponseWriter, model, msgID string, t turn, spec *disconnectSpec, onCut func()) {
 	content := []map[string]any{}
+	var splices []rawArgsSplice
 	for _, c := range t.content {
 		switch {
 		case c.text != nil:
@@ -167,11 +183,17 @@ func (s *Server) respondAnthropicJSON(w http.ResponseWriter, model, msgID string
 		case c.thinking != nil:
 			content = append(content, map[string]any{"type": "thinking", "thinking": *c.thinking, "signature": ""})
 		case c.toolCall != nil:
+			var input any = c.toolCall.Args
+			if c.toolCall.RawArgs != "" {
+				placeholder := rawArgsPlaceholder(len(splices))
+				splices = append(splices, rawArgsSplice{placeholder: placeholder, raw: c.toolCall.RawArgs})
+				input = placeholder
+			}
 			content = append(content, map[string]any{
 				"type":  "tool_use",
 				"id":    anthropicToolID(c.toolCall.ID),
 				"name":  c.toolCall.Name,
-				"input": c.toolCall.Args,
+				"input": input,
 			})
 		}
 	}
@@ -181,7 +203,7 @@ func (s *Server) respondAnthropicJSON(w http.ResponseWriter, model, msgID string
 	}
 	usage := resolveUsage(t.lastUsage())
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	body, _ := json.Marshal(map[string]any{
 		"id":            msgID,
 		"type":          "message",
 		"role":          "assistant",
@@ -194,10 +216,30 @@ func (s *Server) respondAnthropicJSON(w http.ResponseWriter, model, msgID string
 			"output_tokens": usage.Output,
 		},
 	})
+	for _, sp := range splices {
+		body = bytes.Replace(body, []byte(`"`+sp.placeholder+`"`), []byte(sp.raw), 1)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	writeWithDisconnect(w, body, spec, onCut)
 }
 
 func anthropicToolID(id string) string {
 	return "toolu_" + id
+}
+
+// toolCallArgsJSON returns the JSON text to use for a tool call's
+// arguments: the spec's RawArgs verbatim if set (letting a script emit
+// intentionally invalid JSON, since it's carried as plain text in both
+// the Anthropic streaming partial_json chunks and the OpenAI
+// function.arguments string field), or Args marshaled normally otherwise.
+func toolCallArgsJSON(spec *ToolCallSpec) string {
+	if spec.RawArgs != "" {
+		return spec.RawArgs
+	}
+	b, _ := json.Marshal(spec.Args)
+	return string(b)
 }
 
 func resolveUsage(u *UsageSpec) UsageSpec {
@@ -261,7 +303,10 @@ func (sw *sseWriter) sendRaw(data string) {
 	}
 }
 
-func (s *Server) streamAnthropic(w http.ResponseWriter, model, msgID string, t turn) {
+func (s *Server) streamAnthropic(w http.ResponseWriter, model, msgID string, t turn, spec *disconnectSpec, onCut func()) {
+	if spec != nil {
+		w = newDisconnectWriter(w, spec, onCut)
+	}
 	sw := newSSEWriter(w)
 	w.WriteHeader(http.StatusOK)
 
@@ -343,8 +388,8 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, model, msgID string, t t
 					"input": map[string]any{},
 				},
 			})
-			argsJSON, _ := json.Marshal(c.toolCall.Args)
-			for _, chunk := range chunkString(string(argsJSON), chunkSize) {
+			argsJSON := toolCallArgsJSON(c.toolCall)
+			for _, chunk := range chunkString(argsJSON, chunkSize) {
 				sw.send("content_block_delta", map[string]any{
 					"type":  "content_block_delta",
 					"index": index,

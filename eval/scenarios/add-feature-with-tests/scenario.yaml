@@ -1,0 +1,33 @@
+name: add-feature-with-tests
+description: >
+  calc_test.go already has a failing test for a Multiply function that
+  doesn't exist yet. The agent must implement it so the whole package's
+  tests pass.
+tags: [editing, go]
+fixture: go-calc
+prompt: >
+  Running `go test ./...` fails: calc_test.go expects a Multiply(a, b int) int
+  function that doesn't exist in calc.go yet. Add it so the tests pass.
+permission_mode: bypassPermissions
+caps:
+  max_turns: 10
+  timeout: 90s
+checks:
+  - type: file_matches
+    name: multiply added
+    path: calc.go
+    regex: "func Multiply\\(a, b int\\) int"
+  - type: command
+    name: go test passes
+    run: "go test ./..."
+    expect_exit: 0
+  - type: result_ok
+judge:
+  rubric: >
+    Did the agent add a correct Multiply(a, b int) int function to calc.go
+    without breaking Add, and confirm the tests pass?
+  faux_verdict:
+    score: 9
+    reasons: ["implemented Multiply correctly", "verified tests pass"]
+faux:
+  anthropic-messages: faux.yaml

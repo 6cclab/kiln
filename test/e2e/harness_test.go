@@ -20,6 +20,7 @@ import (
 
 	"github.com/andrepato/harness/internal/session/jsonl"
 	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
+	"github.com/andrepato/harness/internal/testkit/fauxtest"
 )
 
 // harnessBin and fauxBin are absolute paths to binaries built once by
@@ -56,16 +57,7 @@ func TestMain(m *testing.M) {
 // binary at addr via HARNESS_FAUX_ADDR/HARNESS_FAUX_API in runHarness's env.
 func startFaux(t *testing.T, scriptYAML string) (addr string, srv *tkfaux.Server) {
 	t.Helper()
-	srv, err := tkfaux.New(tkfaux.Options{ScriptYAML: scriptYAML})
-	if err != nil {
-		t.Fatalf("tkfaux.New: %v", err)
-	}
-	addr, err = srv.Start()
-	if err != nil {
-		t.Fatalf("srv.Start: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
-	return addr, srv
+	return fauxtest.Start(t, scriptYAML)
 }
 
 // scratchHome builds an isolated $HOME and session store root under

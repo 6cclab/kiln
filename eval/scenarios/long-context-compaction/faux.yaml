@@ -1,0 +1,9 @@
+model: faux-2
+steps:
+  - text: "I'll take a look at the file."
+  - tool_call: {name: read, args: {path: bigfile.txt}, id: tc1}
+    usage: {input: 31000, output: 120}
+  - on_tool_result: tc1
+    then:
+      - text: "bigfile.txt repeats one sentence about a fox many times."
+        usage: {input: 500, output: 30}

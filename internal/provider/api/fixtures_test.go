@@ -22,6 +22,7 @@ package api
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -102,7 +103,10 @@ func assertCost(t *testing.T, model provider.Model, u msg.Usage) {
 	wantCacheRead := float64(u.CacheRead) / 1_000_000 * model.Cost.CacheRead
 	wantCacheWrite := float64(u.CacheWrite) / 1_000_000 * model.Cost.CacheWrite
 	wantTotal := wantInput + wantOutput + wantCacheRead + wantCacheWrite
-	if u.Cost.Total != wantTotal {
+	// Compared with a tolerance: the client sums the same products in a
+	// different order, and the race build changes multiply-add fusion on
+	// arm64, so an exact comparison fails by one ulp under -race.
+	if math.Abs(u.Cost.Total-wantTotal) > 1e-12 {
 		t.Fatalf("usage.Cost.Total = %v, want %v (derived from model.Cost and usage: input=%d output=%d cacheRead=%d cacheWrite=%d)",
 			u.Cost.Total, wantTotal, u.Input, u.Output, u.CacheRead, u.CacheWrite)
 	}

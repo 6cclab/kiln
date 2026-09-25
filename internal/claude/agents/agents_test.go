@@ -81,6 +81,48 @@ func TestParseAgent(t *testing.T) {
 	})
 }
 
+// FuzzParseAgent feeds arbitrary bytes to ParseAgent, which must never
+// panic regardless of malformed frontmatter, truncated delimiters, or
+// adversarial YAML.
+func FuzzParseAgent(f *testing.F) {
+	seeds := []string{
+		"---\nname: k8s-infra\ndescription: Kubernetes cluster infrastructure\nmodel: sonnet\ntools: Read, Glob, Grep\ncolor: green\npaths: [cluster/**]\n---\n\nYou are a Kubernetes expert.",
+		"---\nname: a\ndescription: d\nrole: x\nskills: [y]\n---\nbody",
+		"---\nname: a\ndescription: d\ntools:\n  - Read\n  - Grep\n---\nb",
+		"---\ndescription: d\n---\nbody",
+		"---\nname: a\n---\nbody",
+		"no frontmatter at all",
+		"---\nname: a\ndescription: d\ntools:\n---\nb",
+		"",
+		"---\n---\n",
+		"---",
+		"---\n\n---\n",
+		"---\nname: [not, a, string]\ndescription: {also: not}\n---\nbody",
+		"---\r\nname: crlf\r\ndescription: uses crlf\r\n---\r\nbody\r\n",
+		"---\nname: \"unterminated\ndescription: broken quote\n---\nbody",
+		"---\nname: a\ndescription: d\ntools: 12345\n---\nb",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+
+	agentsDir := filepath.Join("..", "..", "..", "testdata", "behaviour", "subagents")
+	entries, _ := os.ReadDir(agentsDir)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(agentsDir, e.Name()))
+		if err == nil {
+			f.Add(string(data))
+		}
+	}
+
+	f.Fuzz(func(t *testing.T, source string) {
+		_, _ = ParseAgent(source, "/x/fuzz.md", Project)
+	})
+}
+
 func TestLoadAgents(t *testing.T) {
 	dir := t.TempDir()
 	agentsDir := filepath.Join(dir, ".claude", "agents")

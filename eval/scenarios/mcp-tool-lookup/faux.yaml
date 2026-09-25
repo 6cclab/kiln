@@ -1,0 +1,10 @@
+model: faux-1
+steps:
+  - tool_call: {name: tool_search, args: {query: "echo text back"}, id: ts1}
+  - on_tool_result: ts1
+    then:
+      - tool_call: {name: mcp__fixture__echo, args: {text: "round trip"}, id: e1}
+  - on_tool_result: e1
+    then:
+      - text: "Found the fixture's echo tool via tool_search and it echoed back: round trip."
+        usage: {input: 300, output: 25}

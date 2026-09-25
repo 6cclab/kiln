@@ -1,0 +1,36 @@
+name: refactor-preserving-tests
+description: >
+  ClampLow and ClampHigh duplicate the same bounds-check shape. The agent
+  should extract a shared Clamp helper without changing any test's
+  expected behavior.
+tags: [editing, go, refactor]
+fixture: go-clamp
+prompt: >
+  ClampLow and ClampHigh in clamp.go both do a bounds check with the same
+  shape. Extract the duplication into a new `Clamp(x, lo, hi int) int`
+  helper that both call, without changing any observable behavior (the
+  existing tests must keep passing unmodified).
+permission_mode: bypassPermissions
+caps:
+  max_turns: 10
+  timeout: 90s
+checks:
+  - type: file_matches
+    name: Clamp helper added
+    path: clamp.go
+    regex: "func Clamp\\(x, lo, hi int\\) int"
+  - type: command
+    name: go test passes
+    run: "go test ./..."
+    expect_exit: 0
+  - type: result_ok
+judge:
+  rubric: >
+    Did the agent extract a genuinely shared Clamp helper (not just add
+    dead code), keep ClampLow/ClampHigh's behavior identical, and confirm
+    the tests still pass?
+  faux_verdict:
+    score: 8
+    reasons: ["extracted a real shared helper", "preserved behavior", "verified with go test"]
+faux:
+  anthropic-messages: faux.yaml

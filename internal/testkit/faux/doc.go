@@ -38,9 +38,10 @@
 //	                                step.
 //	GET  /_faux/state               Per scripted model: current step
 //	                                index, whether that model's script is
-//	                                exhausted, and any recorded errors
-//	                                (e.g. on_tool_result mismatches). See
-//	                                MultiState.
+//	                                exhausted, any recorded errors (e.g.
+//	                                on_tool_result mismatches), and how
+//	                                many disconnect_after faults have
+//	                                fired. See MultiState.
 //
 // # Script format
 //
@@ -100,7 +101,10 @@
 // (text, thinking, tool_call, tool_calls, delay, usage) that precede the
 // next turn boundary. A tool_call or tool_calls step always ends its turn,
 // and the response carries a tool-use stop reason; a turn with no tool
-// call ends with a normal end-of-turn stop reason.
+// call ends with a normal end-of-turn stop reason. A step carrying
+// disconnect_after (see "Fault injection" below) likewise always ends its
+// turn, even a plain text or thinking step that would otherwise merge
+// with the steps around it.
 //
 // An on_tool_result or on_tool_results step does not itself consume a
 // request. Instead it gates the *next* turn (built from its then: steps)
@@ -115,6 +119,67 @@
 //
 // A delay step sleeps for the given duration before the turn's response
 // is written.
+//
+// # Fault injection
+//
+// A text or thinking step may also carry disconnect_after, a mid-stream
+// (or mid-response) cut:
+//
+//	steps:
+//	  - text: "partial reply, then the connection dies"
+//	    disconnect_after: 20
+//	  - text: "the retry lands here"
+//
+// disconnect_after: 20 streams the response normally up to roughly 20
+// bytes of the response body (rounded up to whatever write happens to
+// cross that count; for a streaming response that's the nearest SSE
+// frame boundary) and then closes the connection instead of completing
+// it. disconnect_after: 200ms instead waits 200ms from the moment the
+// response begins and then closes the connection without writing any of
+// the turn's body first, since it's a hard deadline rather than a byte
+// count: for the deterministically small, in-memory responses this
+// server generates, "200ms in" and "before a single byte goes out" are
+// normally the same instant. Either form closes the underlying TCP
+// connection instead of completing the response: no terminating SSE
+// event for a streaming request, no closing bytes of the JSON body for a
+// non-streaming one. This is done via http.Hijacker, taking over and
+// closing the raw connection; if the ResponseWriter doesn't support
+// hijacking, the handler instead panics with http.ErrAbortHandler after
+// flushing whatever was already written, which net/http recognizes
+// specially and aborts the response the same way, without logging a
+// stack trace. Either path leaves a real HTTP client seeing an abrupt EOF
+// or a connection-reset error partway through reading the response, not
+// a well-formed one.
+//
+// A disconnect_after step always ends its own turn, the same way a
+// tool_call does, and still consumes it like any other step (the cursor
+// advances), so a client that retries after the cut receives the *next*
+// scripted step, not a repeat of the cut one. Script "cut once, then
+// succeed" as two separate steps, as in the example above. The number of
+// times a disconnect_after fault has fired for a model is reported in
+// /_faux/state as that model's disconnects count.
+//
+// A tool_call (or an entry inside tool_calls) may carry raw_args instead
+// of args:
+//
+//	steps:
+//	  - tool_call: {name: read, raw_args: '{"path": ', id: tc1}
+//
+// raw_args is spliced into the response verbatim as the tool call's
+// input/arguments, instead of being marshaled from a Go value, so a
+// script can emit intentionally invalid JSON to exercise a client's
+// error handling. args and raw_args are mutually exclusive; a script
+// setting both fails to load. For Anthropic responses, the tool_use
+// block's "input" field is normally a JSON object; raw_args bypasses
+// encoding/json for that field by marshaling the response with a
+// placeholder in its place and then splicing the raw text into the
+// marshaled bytes (encoding/json cannot itself emit invalid JSON), for
+// both the non-streaming body and, in the streaming form, the
+// input_json_delta partial_json chunks (which are plain text already, so
+// no splicing is needed there). For OpenAI responses, function.arguments
+// is always a JSON string field, so raw_args is simply used as that
+// string's value directly, in both the streaming and non-streaming
+// forms.
 //
 // Once a model's script is fully consumed, further requests to that model
 // receive a fixed reply "(faux: script exhausted)" with a normal

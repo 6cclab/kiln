@@ -1,0 +1,24 @@
+name: multi-step-bash-workflow
+description: >
+  A three-step bash workflow (write, inspect, append) that only passes if
+  the final on-disk state reflects all three steps.
+tags: [bash, workflow]
+fixture: bash-workflow
+prompt: >
+  In three separate bash steps: create greeting.txt containing "hello",
+  count its characters, then append a line "DONE" to it.
+permission_mode: bypassPermissions
+caps:
+  max_turns: 8
+  timeout: 60s
+checks:
+  - type: tool_calls
+    name: bash
+    min: 3
+  - type: command
+    name: greeting.txt has hello and DONE
+    run: "grep -q hello greeting.txt && grep -q DONE greeting.txt"
+    expect_exit: 0
+  - type: result_ok
+faux:
+  anthropic-messages: faux.yaml

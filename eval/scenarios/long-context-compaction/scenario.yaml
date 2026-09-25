@@ -1,0 +1,17 @@
+name: long-context-compaction
+description: >
+  Pinned to faux/faux-2 (a 32k-token window): repeatedly reading a large
+  file should push the conversation past the small tier's compaction
+  threshold mid-run.
+tags: [compaction, "pin-model:faux/faux-2"]
+fixture: compaction-project
+prompt: "Read bigfile.txt (in chunks if you need to) and tell me what it contains."
+permission_mode: bypassPermissions
+caps:
+  max_turns: 20
+  timeout: 120s
+checks:
+  - type: compaction_occurred
+  - type: result_ok
+faux:
+  anthropic-messages: faux.yaml

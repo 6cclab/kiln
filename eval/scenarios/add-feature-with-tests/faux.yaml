@@ -1,0 +1,34 @@
+model: faux-1
+steps:
+  - text: "Let me look at the failing test first."
+  - tool_call: {name: read, args: {path: calc_test.go}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - tool_call: {name: read, args: {path: calc.go}, id: tc2}
+  - on_tool_result: tc2
+    then:
+      - tool_call:
+          name: edit
+          args:
+            path: calc.go
+            edits:
+              - oldText: |
+                  func Add(a, b int) int {
+                  	return a + b
+                  }
+                newText: |
+                  func Add(a, b int) int {
+                  	return a + b
+                  }
+
+                  func Multiply(a, b int) int {
+                  	return a * b
+                  }
+          id: tc3
+  - on_tool_result: tc3
+    then:
+      - tool_call: {name: bash, args: {command: "go test ./..."}, id: tc4}
+  - on_tool_result: tc4
+    then:
+      - text: "Added Multiply(a, b int) int and the tests pass."
+        usage: {input: 900, output: 60}

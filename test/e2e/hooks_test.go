@@ -35,17 +35,18 @@ steps:
   - text: "hi"
 `
 
-// hooksTestdataDir is where this package's own copies of the hook fixture
-// scripts live (test/e2e/../..'s testdata/e2e/hooks), copied verbatim from
-// internal/claude/hooks/testdata/hooks so this package owns them per the
-// task brief rather than reaching into another package's testdata.
+// hooksTestdataDir is the repo-root testdata/hooks tree: one set of hook
+// fixture scripts shared by this package and internal/claude/hooks'/
+// internal/cli's own unit tests, rather than a second copy under
+// testdata/e2e that had drifted from it (different script bodies, and a
+// settings.json nothing read).
 func hooksTestdataDir(t *testing.T) string {
 	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	return filepath.Join(filepath.Dir(thisFile), "..", "..", "testdata", "e2e", "hooks")
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "testdata", "hooks")
 }
 
 func hookScript(t *testing.T, name string) string {

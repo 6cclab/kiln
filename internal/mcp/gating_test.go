@@ -1,6 +1,7 @@
 package mcp_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -196,4 +197,50 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestInPosture_UnknownServerIsInEveryPosture guards the rule that postures
+// exclude only servers they know about: a server named by no posture (a
+// test fixture, or one the user just added) stays discoverable under
+// "coding" and "ops", while a known-but-excluded one (grafana under
+// coding) stays out. Break to verify: make InPosture return false for
+// unknown servers.
+func TestInPosture_UnknownServerIsInEveryPosture(t *testing.T) {
+	coding, _ := mcpgate.PostureByName("coding")
+	if !mcpgate.InPosture(mcpgate.McpTool{Server: "fixture", Name: "echo"}, coding) {
+		t.Error("unknown server fixture should be in the coding posture")
+	}
+	if mcpgate.InPosture(mcpgate.McpTool{Server: "grafana", Name: "query"}, coding) {
+		t.Error("grafana is known and excluded from coding; it must stay out")
+	}
+	all := mcpgate.Posture{Servers: []string{"*"}}
+	if !mcpgate.InPosture(mcpgate.McpTool{Server: "grafana", Name: "query"}, all) {
+		t.Error("the all posture must include every server")
+	}
+}
+
+// benchTools builds n synthetic, structurally realistic mcpgate.McpTool
+// values for BenchmarkToolIndexRendering, spread across 9 servers to match
+// the real catalog gating.go's doc comment measures (165 tools, 9
+// servers).
+func benchTools(n int) []mcpgate.McpTool {
+	tools := make([]mcpgate.McpTool, n)
+	for i := 0; i < n; i++ {
+		server := fmt.Sprintf("server-%02d", i%9)
+		name := fmt.Sprintf("tool_%03d", i)
+		tools[i] = mkTool(server, name, "Does thing "+name+": a realistic one-paragraph description of what this tool does, its inputs, and when to call it, matching the length of real MCP tool descriptions found in production catalogs, running well past the 160-rune truncation this index applies.")
+	}
+	return tools
+}
+
+// BenchmarkToolIndexRendering measures BuildIndex over 165 synthetic
+// tools, matching the real catalog size gating.go's doc comment measures
+// token counts against.
+func BenchmarkToolIndexRendering(b *testing.B) {
+	tools := benchTools(165)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = mcpgate.BuildIndex(tools)
+	}
 }

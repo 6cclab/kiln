@@ -1,0 +1,17 @@
+models:
+  faux-1:
+    # Turn 1: the parent dispatches `task` to "sonnetagent" (model: sonnet)
+    # with no `model` argument. This script's scenario configures
+    # modelRoles {"structured": "faux/faux-2"} (see
+    # subagent_behaviour_test.go), so the built-in alias sonnet -> role
+    # "structured" resolves against faux-2 and ResolveModel must report
+    # kind "alias", not "fallback".
+    - tool_call:
+        name: task
+        args: {subagent_type: "sonnetagent", description: "sonnet alias", prompt: "say something"}
+        id: tc1
+    - on_tool_result: tc1
+      then:
+        - text: "Done alias."
+  faux-2:
+    - text: "sonnet-aliased subagent report"

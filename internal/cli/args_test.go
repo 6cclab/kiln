@@ -93,6 +93,34 @@ func TestParseValidatesEnumeratedValues(t *testing.T) {
 	}
 }
 
+func TestParseMaxTurns(t *testing.T) {
+	if got := Parse([]string{"--max-turns", "3"}).MaxTurns; got != 3 {
+		t.Errorf("max-turns 3: got %d", got)
+	}
+	if got := Parse([]string{"--max-turns=5"}).MaxTurns; got != 5 {
+		t.Errorf("max-turns=5: got %d", got)
+	}
+	if got := Parse([]string{}).MaxTurns; got != 0 {
+		t.Errorf("unset max-turns: got %d, want 0 (unlimited)", got)
+	}
+}
+
+func TestParseMaxTurnsInvalidValue(t *testing.T) {
+	for _, argv := range [][]string{
+		{"--max-turns", "0"},
+		{"--max-turns", "-1"},
+		{"--max-turns", "abc"},
+	} {
+		a := Parse(argv)
+		if a.MaxTurns != 0 {
+			t.Errorf("Parse(%v).MaxTurns = %d, want 0", argv, a.MaxTurns)
+		}
+		if a.MaxTurnsErr == "" {
+			t.Errorf("Parse(%v).MaxTurnsErr = \"\", want a usage error", argv)
+		}
+	}
+}
+
 func TestParseReportsUnknownFlags(t *testing.T) {
 	if got := Parse([]string{"--not-a-flag"}).Unknown; !reflect.DeepEqual(got, []string{"--not-a-flag"}) {
 		t.Errorf("got %v", got)

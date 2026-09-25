@@ -1,0 +1,14 @@
+model: faux-1
+steps:
+  - text: "I'll do this in three bash steps."
+  - tool_call: {name: bash, args: {command: "echo hello > greeting.txt"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - tool_call: {name: bash, args: {command: "wc -c < greeting.txt"}, id: tc2}
+  - on_tool_result: tc2
+    then:
+      - tool_call: {name: bash, args: {command: "echo DONE >> greeting.txt"}, id: tc3}
+  - on_tool_result: tc3
+    then:
+      - text: "Created greeting.txt, counted its characters, and appended DONE."
+        usage: {input: 400, output: 40}

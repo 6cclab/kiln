@@ -1,0 +1,20 @@
+name: mcp-tool-lookup
+description: >
+  An MCP server (cmd/mcpfixture) is wired in as "fixture". The agent must
+  discover its echo tool via tool_search rather than assuming a name, then
+  call it.
+tags: [mcp, mcp-fixture]
+fixture: mcp-project
+prompt: "Find a tool that can echo text back to me and use it to echo back 'round trip'."
+permission_mode: bypassPermissions
+caps:
+  max_turns: 6
+  timeout: 60s
+checks:
+  - type: tool_used
+    name: tool_search
+  - type: tool_used
+    name: mcp__fixture__echo
+  - type: result_ok
+faux:
+  anthropic-messages: faux.yaml

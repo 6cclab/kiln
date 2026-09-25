@@ -66,9 +66,10 @@ kiln --fullscreen         # alt-screen TUI: scrolling transcript, input pinned a
 ```
 
 MCP servers connect in the background after the prompt appears: the footer shows
-progress, and any server that fails is named once in the transcript with a reason
-you can act on (`/mcp` has the details). The model can use a server's tools as soon
-as that connect finishes.
+progress, and a one-line notice counts any servers that failed (`1 MCP server
+unavailable · run /mcp`). `/mcp` names each failed server with a reason you can
+act on; in print mode the same name and reason go to stderr. The model can use a
+server's tools as soon as that connect finishes.
 
 Every run writes a log to `~/.harness/logs` (the last 30 are kept): startup phases
 with elapsed time, each server's connect outcome and duration, and every turn, tool
@@ -124,7 +125,10 @@ credential wins over an environment variable for the same provider.
 
 ## `.claude/` compatibility
 
-Reads your existing configuration; writes nothing into it.
+Reads your existing configuration. It writes back in two places only:
+`/permissions` saves rules to `.claude/settings.local.json`, and `/model`
+saves the default model to `~/.claude/settings.json`. A project's shared
+`.claude/settings.json` is never written.
 
 | Asset | Behavior |
 |---|---|
@@ -151,12 +155,49 @@ when a rule would allow the tool: `allow: [Read]` means "reading is fine here",
 not "read anything on this machine". Widen the workspace with `/add-dir`. In
 print mode there is nobody to ask, so `ask` is a refusal.
 
+## Documentation
+
+`docs/README.md` is the index. The short version:
+
+- `docs/usage.md`: running a session, keys, slash commands, permissions, MCP, subagents.
+- `docs/configuration.md`: flags, environment variables, `settings.json`, `.claude` assets, MCP config.
+- `docs/troubleshooting.md`: `kiln doctor`, the run log, and the fix for each known symptom.
+- `docs/architecture.md`: package map, lifecycle of a turn, sessions, budget, providers, tools.
+- `docs/contributing.md`: building, testing, conventions, and how to add a tool, command or provider.
+
+## Evaluation
+
+`kiln eval` runs the built binary against a directory of scenarios
+(`eval/scenarios/`, one prompt/fixture/check set per subdirectory) and grades
+each run mechanically (`checks:` — file contents, tool calls, permission
+blocks, usage, compaction, subagent dispatch, ...) and, where a scenario
+declares a `judge:` rubric, by an LLM judge. Each run is written as one JSON
+record to a timestamped file under `eval/results/`.
+
+```bash
+make eval                    # every scenario against the faux provider, then a report
+bin/kiln eval run --only fix-bug -j 4
+bin/kiln eval report --results eval/results --format md
+```
+
+`eval/results/baseline.jsonl` is the committed reference: `kiln eval report`
+diffs the newest run against it and exits non-zero if any (scenario, model)
+pair's score regresses past `--fail-on-regression`. Everything else under
+`eval/results/` (timestamped run files, and `runs/` when `--keep` is passed)
+is machine-local and gitignored.
+
+Live runs (real providers, real network) are opt-in: `kiln eval run` refuses
+any non-faux model unless `KILN_EVAL_LIVE=1` is set, so `make eval` never
+leaves the faux provider. `make eval-live MODELS=ollama/qwen3.8` runs the
+suite against real models instead.
+
 ## Development
 
 ```bash
 make check        # vet, staticcheck, gofmt, go test ./...
 make e2e          # the real binary through a PTY and a scripted model (faux)
 make e2e-live     # the same against a real model; HARNESS_E2E_LIVE=1, HARNESS_LIVE_MODEL=...
+make eval         # eval/scenarios against faux, reported against eval/results/baseline.jsonl
 ```
 
 Every screen assertion runs against an emulated terminal, never against the

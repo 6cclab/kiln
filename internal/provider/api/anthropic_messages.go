@@ -52,6 +52,8 @@ func (c *AnthropicClient) httpClient() *http.Client {
 type anthropicContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
 	Source    *anthropicImage `json:"source,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
@@ -171,10 +173,19 @@ func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts 
 		case msg.AssistantMessage:
 			req.Messages = append(req.Messages, anthropicWireMessage{Role: "assistant", Content: convertBlocksToAnthropic(t.Content)})
 		case msg.ToolResultMessage:
+			// A text-only result stays a plain string (the common case and
+			// the shape every recorded request expects); a result carrying
+			// an image (the read tool on a PNG) must be sent as blocks or
+			// the image is silently dropped and the model only ever sees the
+			// text fallback.
+			var content any = msg.TextOf(t.Content)
+			if hasNonText(t.Content) {
+				content = convertBlocksToAnthropic(t.Content)
+			}
 			block := anthropicContentBlock{
 				Type:      "tool_result",
 				ToolUseID: t.ToolCallID,
-				Content:   msg.TextOf(t.Content),
+				Content:   content,
 				IsError:   t.IsError,
 			}
 			req.Messages = append(req.Messages, anthropicWireMessage{Role: "user", Content: []anthropicContentBlock{block}})
@@ -243,7 +254,17 @@ func convertBlocksToAnthropic(blocks msg.Blocks) []anthropicContentBlock {
 		case msg.ImageContent:
 			out = append(out, anthropicContentBlock{Type: "image", Source: &anthropicImage{Type: "base64", MediaType: c.MimeType, Data: c.Data}})
 		case msg.ThinkingContent:
-			out = append(out, anthropicContentBlock{Type: "thinking", Text: c.Thinking})
+			// The API accepts a replayed thinking block only with the
+			// signature it issued, in the `thinking` + `signature` fields.
+			// An unsigned block (reasoning from another provider, replayed
+			// after a /model switch) is dropped rather than sent: sending it
+			// fails the whole request with "thinking.thinking: Field
+			// required" (seen live, req_011CfQRRsevfwAHjMgHsbixh), and the
+			// text is the model's own scratch work, not conversation state.
+			if c.ThinkingSignature == "" {
+				continue
+			}
+			out = append(out, anthropicContentBlock{Type: "thinking", Thinking: c.Thinking, Signature: c.ThinkingSignature})
 		case msg.ToolCall:
 			args, _ := json.Marshal(c.Arguments)
 			out = append(out, anthropicContentBlock{Type: "tool_use", ID: c.ID, Name: c.Name, Input: args})
@@ -609,4 +630,14 @@ func computeAnthropicCost(model provider.Model, u *msg.Usage) {
 		CacheWrite: float64(u.CacheWrite) / 1_000_000 * rates.CacheWrite,
 	}
 	u.Cost.Total = u.Cost.Input + u.Cost.Output + u.Cost.CacheRead + u.Cost.CacheWrite
+}
+
+// hasNonText reports whether blocks holds anything other than text.
+func hasNonText(blocks msg.Blocks) bool {
+	for _, b := range blocks {
+		if _, ok := b.(msg.TextContent); !ok {
+			return true
+		}
+	}
+	return false
 }

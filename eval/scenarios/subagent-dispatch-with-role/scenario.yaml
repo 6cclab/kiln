@@ -1,0 +1,23 @@
+name: subagent-dispatch-with-role
+description: >
+  settings.json maps the "fast" role to faux/faux-2. The agent dispatches
+  a task asking for that role, and the run log should show it actually
+  resolved there.
+tags: [subagents, roles]
+fixture: subagent-project
+prompt: "Dispatch a quick subagent (use the fast role) to summarize what this project does in one sentence."
+permission_mode: bypassPermissions
+settings:
+  modelRoles:
+    fast: "faux/faux-2"
+caps:
+  max_turns: 6
+  timeout: 60s
+checks:
+  - type: tool_used
+    name: task
+  - type: subagent_used
+    role: fast
+  - type: result_ok
+faux:
+  anthropic-messages: faux.yaml

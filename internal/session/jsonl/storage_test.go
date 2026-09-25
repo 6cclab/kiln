@@ -1,10 +1,56 @@
 package jsonl
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/andrepato/harness/internal/session"
 )
+
+// FuzzOpen feeds arbitrary bytes, written to a temp file, through Open.
+// Open must never panic on malformed input; an error return is fine. This
+// exercises the header parse, the legacy-v3 detection/upgrade path, and the
+// per-line transaction replay, all of which run against untrusted disk
+// content. A temp copy is used (rather than fuzzing the checked-in
+// fixtures in place) because Open rewrites a legacy v3 file on disk as
+// part of upgrading it.
+func FuzzOpen(f *testing.F) {
+	sessionsDir := filepath.Join("..", "..", "..", "testdata", "sessions")
+	entries, _ := os.ReadDir(sessionsDir)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(sessionsDir, e.Name()))
+		if err == nil {
+			f.Add(data)
+		}
+	}
+
+	seeds := [][]byte{
+		nil,
+		[]byte(""),
+		[]byte("\n"),
+		[]byte("{}\n"),
+		[]byte(`{"id":"x"}` + "\n"),
+		[]byte("not json at all\n"),
+		[]byte(`{"storageVersion":999,"id":"x","cwd":"/","createdAt":0}` + "\n"),
+		[]byte(`{"storageVersion":4,"id":"x","cwd":"/","createdAt":0}` + "\nnot-a-transaction\n"),
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "session.jsonl")
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		_, _ = Open(path, nil)
+	})
+}
 
 const largeFixture = "../../../testdata/sessions/2026-09-23T11-37-47-498Z_01a0ce0e-bcea-7701-a97e-cc374e8c56d1.jsonl"
 

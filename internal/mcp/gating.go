@@ -62,10 +62,29 @@ func PostureByName(name string) (Posture, bool) {
 }
 
 // InPosture reports whether tool belongs to active's servers.
+//
+// A server that no built-in posture names at all is in scope for every
+// posture: the lists exist to keep known, noisy servers (UniFi, Grafana)
+// out of a coding session, not to hide a server the user just configured
+// until they discover /posture. Without this rule a new server was
+// indexed by nothing, tool_search could never admit it, and the model's
+// call was refused.
 func InPosture(t McpTool, active Posture) bool {
 	for _, s := range active.Servers {
 		if s == "*" || s == t.Server {
 			return true
+		}
+	}
+	return !knownServer(t.Server)
+}
+
+// knownServer reports whether any built-in posture names server.
+func knownServer(server string) bool {
+	for _, p := range Postures {
+		for _, s := range p.Servers {
+			if s == server {
+				return true
+			}
 		}
 	}
 	return false

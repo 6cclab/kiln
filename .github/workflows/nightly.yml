@@ -1,0 +1,54 @@
+name: Nightly
+
+# Slower, noisier checks that don't belong on every push/PR: TUI flake
+# detection (repeated runs to catch intermittent failures), the full race
+# suite (including the sqlite FTS test that `make race` skips via -short),
+# and a repeated eval run for score variance.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  tui-flake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: TUI e2e tests x3 (flake detection)
+        run: go test -tags e2e ./test/e2e/... -run TestTUI_ -count=3 -timeout 30m
+
+  race-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: make race-full
+        run: make race-full
+
+  eval-repeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: make eval (EVAL_REPEAT=3)
+        run: make eval EVAL_REPEAT=3
+
+      - name: upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-nightly
+          path: eval/results/*.jsonl

@@ -11,8 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrepato/harness/internal/claude/skills"
+	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/session/jsonl"
 	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
+	"github.com/andrepato/harness/internal/testkit/fauxtest"
 )
 
 // startFaux starts a scripted faux server and points HARNESS_FAUX_ADDR at
@@ -20,15 +23,7 @@ import (
 // t.Setenv), and returns the server so a test can inspect Requests().
 func startFaux(t *testing.T, scriptYAML string) *tkfaux.Server {
 	t.Helper()
-	srv, err := tkfaux.New(tkfaux.Options{ScriptYAML: scriptYAML})
-	if err != nil {
-		t.Fatalf("faux.New: %v", err)
-	}
-	addr, err := srv.Start()
-	if err != nil {
-		t.Fatalf("faux.Start: %v", err)
-	}
-	t.Cleanup(func() { _ = srv.Close() })
+	addr, srv := fauxtest.Start(t, scriptYAML)
 	t.Setenv("HARNESS_FAUX_ADDR", addr)
 	t.Setenv("HARNESS_FAUX_API", "anthropic-messages")
 	return srv
@@ -616,5 +611,78 @@ func TestRun_NotPrint_RequiresTTY(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "TTY") {
 		t.Errorf("stderr = %q, want a mention of requiring a TTY", stderr.String())
+	}
+}
+
+// benchSkillList builds n synthetic, structurally realistic skills.Skill
+// values for BenchmarkSystemPromptAssembly.
+func benchSkillList(n int) []skills.Skill {
+	list := make([]skills.Skill, n)
+	for i := 0; i < n; i++ {
+		list[i] = skills.Skill{
+			Name:        fmt.Sprintf("skill-%03d", i),
+			Description: fmt.Sprintf("Use this skill when the task involves scenario %03d: a short description of when it applies and what it does, matching the length of a typical real skill description.", i),
+			Content:     fmt.Sprintf("# Skill %03d\n\nFull instructions body for skill %03d go here.\n", i, i),
+			FilePath:    fmt.Sprintf("/Users/bench/.claude/skills/skill-%03d/SKILL.md", i),
+		}
+	}
+	return list
+}
+
+// benchMCPTools builds n synthetic, structurally realistic mcpgate.McpTool
+// values for BenchmarkSystemPromptAssembly.
+func benchMCPTools(n int) []mcpgate.McpTool {
+	tools := make([]mcpgate.McpTool, n)
+	for i := 0; i < n; i++ {
+		server := fmt.Sprintf("server-%02d", i%9)
+		name := fmt.Sprintf("tool_%03d", i)
+		tools[i] = mcpgate.McpTool{
+			Server:        server,
+			Name:          name,
+			QualifiedName: "mcp__" + server + "__" + name,
+			Description:   fmt.Sprintf("Does thing %03d: a realistic one-paragraph description of what this tool does, its inputs, and when to call it, matching the length of real MCP tool descriptions found in production catalogs.", i),
+			InputSchema:   json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
+		}
+	}
+	return tools
+}
+
+// benchClaudeMD builds a ~20KB CLAUDE.md-like string for
+// BenchmarkSystemPromptAssembly.
+func benchClaudeMD() string {
+	var b strings.Builder
+	line := "- Follow this project convention consistently across every file you touch, and check related tests before committing.\n"
+	for b.Len() < 20*1024 {
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// BenchmarkSystemPromptAssembly measures assembling the system prompt from
+// memory + the skills index + the MCP tool index, replicating chat.go's
+// buildSystemPrompt closure (an unexported local closure inside Run, not
+// callable directly) using the same building blocks: nonEmpty,
+// formatSkillsIndex and mcpgate.IndexPromptText over mcpgate.InPosture-
+// scoped tools.
+func BenchmarkSystemPromptAssembly(b *testing.B) {
+	memoryText := benchClaudeMD()
+	skillList := benchSkillList(30)
+	mcpTools := benchMCPTools(100)
+	skillsIndex := formatSkillsIndex(skillList)
+	active := mcpgate.Postures[0]
+	appendSystemPrompt := "Additional operator-supplied instructions for this session."
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var scoped []mcpgate.McpTool
+		for _, t := range mcpTools {
+			if mcpgate.InPosture(t, active) {
+				scoped = append(scoped, t)
+			}
+		}
+		mcpIndexText := mcpgate.IndexPromptText(scoped)
+		promptParts := []string{defaultSystemPrompt, appendSystemPrompt, memoryText, skillsIndex, mcpIndexText}
+		_ = strings.Join(nonEmpty(promptParts), "\n\n")
 	}
 }

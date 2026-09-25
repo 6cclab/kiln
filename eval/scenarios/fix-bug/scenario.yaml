@@ -1,0 +1,33 @@
+name: fix-bug
+description: >
+  A single-file bug fix: add() in src/math.js subtracts instead of adding.
+  The agent should read the file, fix exactly that bug, and leave mul()
+  untouched.
+tags: [smoke, editing]
+fixture: math-js
+prompt: "There's a bug in src/math.js: add() doesn't add. Find it and fix it."
+permission_mode: bypassPermissions
+caps:
+  max_turns: 8
+  timeout: 60s
+checks:
+  - type: file_matches
+    name: add fixed
+    path: src/math.js
+    regex: "return a \\+ b;"
+  - type: file_matches
+    name: mul untouched
+    path: src/math.js
+    regex: "return a \\* b;"
+  - type: result_ok
+  - type: tool_calls
+    max: 6
+judge:
+  rubric: >
+    Did the agent fix add() to return a + b, without changing mul() or any
+    unrelated code, and report back clearly that it did so?
+  faux_verdict:
+    score: 9
+    reasons: ["fixed the exact bug", "left mul() untouched", "clear report"]
+faux:
+  anthropic-messages: faux.yaml

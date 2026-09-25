@@ -7,6 +7,7 @@ import (
 
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/session"
 )
 
 // Ported from print.ts's behavior (there is no dedicated print.test.ts in
@@ -43,7 +44,7 @@ func TestCollectorAssistantText(t *testing.T) {
 	events.Emit(doneEvent("hello"))
 	events.Emit(doneEvent("world"))
 
-	result := c.Finish(true)
+	result := c.Finish(true, session.SessionStats{}, "")
 	if result.Text != "hello\nworld" {
 		t.Fatalf("Text = %q", result.Text)
 	}
@@ -57,7 +58,7 @@ func TestCollectorToolArgSelection(t *testing.T) {
 	events.Emit(toolStart("read", map[string]any{"path": "/tmp/x.txt"}))
 	events.Emit(toolStart("noop", map[string]any{}))
 
-	result := c.Finish(true)
+	result := c.Finish(true, session.SessionStats{}, "")
 	if len(result.ToolCalls) != 3 {
 		t.Fatalf("ToolCalls = %+v", result.ToolCalls)
 	}
@@ -100,7 +101,7 @@ func TestCollectorResultAlwaysLast(t *testing.T) {
 	events.Emit(toolEnd("bash", false))
 	events.Emit(doneEvent("done"))
 
-	result := c.Finish(true)
+	result := c.Finish(true, session.SessionStats{}, "")
 
 	if len(streamed) == 0 || streamed[len(streamed)-1].Type != "result" {
 		t.Fatalf("result event must be last: %+v", streamed)
@@ -149,12 +150,25 @@ func TestStreamEventJSONShapes(t *testing.T) {
 		{
 			"result",
 			StreamEvent{Type: "result", OK: true, Text: "done", Blocked: []string{"a"}},
-			`{"type":"result","ok":true,"text":"done","blocked":["a"]}`,
+			`{"type":"result","ok":true,"text":"done","blocked":["a"],"usage":{"input":0,"output":0,"cache_read":0,"cache_write":0},"total_cost_usd":0,"duration_ms":0,"num_turns":0,"num_tool_calls":0}`,
 		},
 		{
 			"result with no blocked",
 			StreamEvent{Type: "result", OK: false, Text: ""},
-			`{"type":"result","ok":false,"text":"","blocked":[]}`,
+			`{"type":"result","ok":false,"text":"","blocked":[],"usage":{"input":0,"output":0,"cache_read":0,"cache_write":0},"total_cost_usd":0,"duration_ms":0,"num_turns":0,"num_tool_calls":0}`,
+		},
+		{
+			"result with enriched fields and a reason",
+			StreamEvent{
+				Type: "result", OK: false, Text: "", Blocked: []string{},
+				Usage:        msg.Usage{Input: 812, Output: 34, CacheRead: 5, CacheWrite: 6},
+				CostUSD:      0.0123,
+				DurationMS:   4500,
+				Turns:        2,
+				NumToolCalls: 1,
+				Reason:       "max-turns-exceeded",
+			},
+			`{"type":"result","ok":false,"text":"","blocked":[],"usage":{"input":812,"output":34,"cache_read":5,"cache_write":6},"total_cost_usd":0.0123,"duration_ms":4500,"num_turns":2,"num_tool_calls":1,"reason":"max-turns-exceeded"}`,
 		},
 	}
 	for _, tc := range cases {
@@ -180,10 +194,15 @@ func TestFormatPrintResultText(t *testing.T) {
 func TestFormatPrintResultJSON(t *testing.T) {
 	arg := "echo hi"
 	r := PrintResult{
-		OK:        true,
-		Text:      "done",
-		ToolCalls: []toolCall{{Name: "bash", Arg: &arg}},
-		Blocked:   []string{"Write(/etc)"},
+		OK:           true,
+		Text:         "done",
+		ToolCalls:    []toolCall{{Name: "bash", Arg: &arg}},
+		Blocked:      []string{"Write(/etc)"},
+		Usage:        msg.Usage{Input: 100, Output: 20, CacheRead: 3, CacheWrite: 4},
+		CostUSD:      0.05,
+		DurationMS:   1234,
+		Turns:        2,
+		NumToolCalls: 1,
 	}
 	got := FormatPrintResult(r, "json")
 	want := `{
@@ -197,7 +216,17 @@ func TestFormatPrintResultJSON(t *testing.T) {
   ],
   "blocked": [
     "Write(/etc)"
-  ]
+  ],
+  "usage": {
+    "input": 100,
+    "output": 20,
+    "cache_read": 3,
+    "cache_write": 4
+  },
+  "total_cost_usd": 0.05,
+  "duration_ms": 1234,
+  "num_turns": 2,
+  "num_tool_calls": 1
 }`
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
@@ -210,10 +239,87 @@ func TestFormatPrintResultJSONEmptyCollections(t *testing.T) {
   "ok": false,
   "text": "x",
   "toolCalls": [],
-  "blocked": []
+  "blocked": [],
+  "usage": {
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "cache_write": 0
+  },
+  "total_cost_usd": 0,
+  "duration_ms": 0,
+  "num_turns": 0,
+  "num_tool_calls": 0
 }`
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestFormatPrintResultJSONReasonOmittedWhenEmpty checks that "reason" is
+// dropped entirely (omitempty) rather than rendered as "" — the field only
+// exists to explain an abnormal stop like --max-turns.
+func TestFormatPrintResultJSONReasonOmittedWhenEmpty(t *testing.T) {
+	got := FormatPrintResult(PrintResult{Text: "x"}, "json")
+	if strings.Contains(got, `"reason"`) {
+		t.Fatalf("reason should be omitted when empty, got:\n%s", got)
+	}
+}
+
+// TestFormatPrintResultJSONReasonPresent checks the mirror case: a non-empty
+// Reason (e.g. from --max-turns) does render.
+func TestFormatPrintResultJSONReasonPresent(t *testing.T) {
+	got := FormatPrintResult(PrintResult{Text: "x", Reason: "max-turns-exceeded"}, "json")
+	if !strings.Contains(got, `"reason": "max-turns-exceeded"`) {
+		t.Fatalf("want reason rendered, got:\n%s", got)
+	}
+}
+
+// TestCollectorFinishCountsTurnsAndCopiesStats checks Finish's enrichment:
+// EventTurnEnd increments Turns, stats.Usage/Cost are copied verbatim, and
+// DurationMS is positive once any time has passed.
+func TestCollectorFinishCountsTurnsAndCopiesStats(t *testing.T) {
+	events := harness.NewEvents()
+	c := NewCollector(events)
+
+	events.Emit(harness.Event{Type: harness.EventTurnEnd})
+	events.Emit(harness.Event{Type: harness.EventTurnEnd})
+	events.Emit(toolStart("bash", map[string]any{"command": "ls"}))
+
+	stats := session.SessionStats{
+		Usage: msg.Usage{Input: 812, Output: 34, Cost: msg.Cost{Total: 0.0042}},
+	}
+	result := c.Finish(true, stats, "")
+
+	if result.Turns != 2 {
+		t.Fatalf("Turns = %d, want 2", result.Turns)
+	}
+	if result.NumToolCalls != 1 {
+		t.Fatalf("NumToolCalls = %d, want 1", result.NumToolCalls)
+	}
+	if result.Usage != stats.Usage {
+		t.Fatalf("Usage = %+v, want %+v", result.Usage, stats.Usage)
+	}
+	if result.CostUSD != 0.0042 {
+		t.Fatalf("CostUSD = %v, want 0.0042", result.CostUSD)
+	}
+	if result.DurationMS < 0 {
+		t.Fatalf("DurationMS = %d, want >= 0", result.DurationMS)
+	}
+	if result.Reason != "" {
+		t.Fatalf("Reason = %q, want empty", result.Reason)
+	}
+}
+
+// TestCollectorFinishCarriesReason checks Finish passes reason straight
+// through to PrintResult.Reason (runPrintMode's --max-turns path sets
+// "max-turns-exceeded" here).
+func TestCollectorFinishCarriesReason(t *testing.T) {
+	events := harness.NewEvents()
+	c := NewCollector(events)
+	result := c.Finish(false, session.SessionStats{}, "max-turns-exceeded")
+	if result.Reason != "max-turns-exceeded" {
+		t.Fatalf("Reason = %q, want max-turns-exceeded", result.Reason)
 	}
 }
 

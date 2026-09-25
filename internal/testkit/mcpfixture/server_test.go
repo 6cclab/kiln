@@ -167,6 +167,58 @@ func TestFixtureFailStartup(t *testing.T) {
 	}
 }
 
+// TestServerRequestsLog exercises the in-process path (mcp.NewInMemoryTransports)
+// rather than the stdio binary, since Requests/Reset only observe calls made
+// against the same in-process *Server the test holds onto.
+func TestServerRequestsLog(t *testing.T) {
+	srv := mcpfixture.NewServer()
+
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+	if _, err := srv.Connect(ctx, serverTransport, nil); err != nil {
+		t.Fatalf("server Connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "mcpfixture-test-client", Version: "0.0.1"}, nil)
+	cs, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+
+	if got := srv.Requests(); len(got) != 0 {
+		t.Fatalf("expected no requests before any call, got %+v", got)
+	}
+
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"text": "hi"}}); err != nil {
+		t.Fatalf("CallTool echo: %v", err)
+	}
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "big", Arguments: map[string]any{"lines": 3}}); err != nil {
+		t.Fatalf("CallTool big: %v", err)
+	}
+
+	reqs := srv.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 recorded requests, got %d: %+v", len(reqs), reqs)
+	}
+	if reqs[0].Tool != "echo" || reqs[0].Seq != 0 {
+		t.Fatalf("unexpected first request: %+v", reqs[0])
+	}
+	if !strings.Contains(string(reqs[0].Args), `"hi"`) {
+		t.Fatalf("expected first request args to contain the echoed text, got %s", reqs[0].Args)
+	}
+	if reqs[1].Tool != "big" || reqs[1].Seq != 1 {
+		t.Fatalf("unexpected second request: %+v", reqs[1])
+	}
+	if reqs[0].Time.After(reqs[1].Time) {
+		t.Fatalf("expected requests in chronological order, got %+v", reqs)
+	}
+
+	srv.Reset()
+	if got := srv.Requests(); len(got) != 0 {
+		t.Fatalf("expected Reset to clear the log, got %+v", got)
+	}
+}
+
 func TestClaudeJSON(t *testing.T) {
 	got := mcpfixture.ClaudeJSON("/path/to/fixture-binary")
 

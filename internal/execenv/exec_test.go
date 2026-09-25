@@ -97,14 +97,18 @@ func TestExecCaptureLimitsTruncateTail(t *testing.T) {
 // invocation itself so this can't match an unrelated sleep on a shared
 // test machine.
 func sleepSurvives(marker string) bool {
-	err := exec.Command("pgrep", "-f", "sleep 3"+marker).Run()
+	err := exec.Command("pgrep", "-f", "sleep 3[.]"+marker).Run()
 	return err == nil // exit 0 means pgrep found a match
 }
 
 func TestExecTimeoutKillsProcessGroup(t *testing.T) {
 	env := New(t.TempDir())
-	marker := fmt.Sprintf("%d", time.Now().UnixNano()%1000)
-	command := fmt.Sprintf(`sleep 3%s & wait`, marker)
+	// A fractional suffix: the sleep stays a valid ~3s sleep, and the
+	// pgrep pattern below cannot match an unrelated "sleep 30" from another
+	// process on the machine (a three-digit integer marker did, when it
+	// happened to be 0).
+	marker := fmt.Sprintf("%09d", time.Now().UnixNano()%1_000_000_000)
+	command := fmt.Sprintf(`sleep 3.%s & wait`, marker)
 
 	_, err := env.Exec(context.Background(), command, ExecOptions{
 		InheritEnv: true,
@@ -121,13 +125,13 @@ func TestExecTimeoutKillsProcessGroup(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("background sleep 3%s survived Exec timeout", marker)
+	t.Fatalf("background sleep 3.%s survived Exec timeout", marker)
 }
 
 func TestExecContextCancelKillsProcessGroup(t *testing.T) {
 	env := New(t.TempDir())
-	marker := fmt.Sprintf("%d", time.Now().UnixNano()%1000+1)
-	command := fmt.Sprintf(`sleep 3%s & wait`, marker)
+	marker := fmt.Sprintf("%09d", time.Now().UnixNano()%1_000_000_000+1)
+	command := fmt.Sprintf(`sleep 3.%s & wait`, marker)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -146,5 +150,5 @@ func TestExecContextCancelKillsProcessGroup(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("background sleep 3%s survived context cancellation", marker)
+	t.Fatalf("background sleep 3.%s survived context cancellation", marker)
 }

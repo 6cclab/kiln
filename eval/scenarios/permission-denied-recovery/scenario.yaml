@@ -1,0 +1,28 @@
+name: permission-denied-recovery
+description: >
+  Only Read is allowed. The agent tries bash, gets denied, and should
+  recover by answering from what it can actually read rather than
+  stalling.
+tags: [permissions, recovery]
+fixture: denied-recovery
+prompt: "When do deploys happen? Check notes.txt, and run `date` to confirm the current time."
+allowed_tools: [Read]
+caps:
+  max_turns: 6
+  timeout: 60s
+checks:
+  - type: permission_blocked
+    min: 1
+  - type: tool_used
+    name: read
+  - type: result_ok
+judge:
+  rubric: >
+    When the bash call was denied, did the agent recover gracefully and
+    still answer the deploy-schedule question from notes.txt, rather than
+    giving up or repeating the denied call?
+  faux_verdict:
+    score: 8
+    reasons: ["recovered after the denial", "answered from notes.txt"]
+faux:
+  anthropic-messages: faux.yaml

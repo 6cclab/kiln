@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "The API_KEY_PREFIX in src/config.js is sk-eval-9f31."
+    usage: {input: 250, output: 15}

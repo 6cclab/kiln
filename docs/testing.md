@@ -166,3 +166,164 @@ commands) to `<path>`, so a bug seen once on a real run can be replayed
 deterministically afterward — including at a different terminal size,
 which is often when layout bugs actually reproduce — without needing the
 original model conversation again.
+
+## 6. Behaviour suite — `test/e2e/*_behaviour_test.go`
+
+`test/e2e/budget_behaviour_test.go`, `compaction_behaviour_test.go`,
+`mcp_behaviour_test.go`, `permission_behaviour_test.go`,
+`subagent_behaviour_test.go` and `tools_behaviour_test.go` drive the real,
+compiled `kiln` binary end to end to prove *wiring*, not the decision
+tables underneath it: each file's header names the package that already
+unit-tests the table itself (e.g. permission's deny/bypass/allow/ask
+ordering is unit-tested in `internal/claude/settings` and
+`internal/claude/permission`; `permission_behaviour_test.go` only proves
+`settings.json`, `--permission-mode`, `--add-dir` and the TUI's
+allow-always prompt reach that table correctly).
+
+Fixtures for these tests live under `testdata/behaviour/`: `mcp/` (e.g.
+`rewrite-echo-text.sh`, a hook script) and `subagents/` (`reader.md`,
+`sonnetagent.md`, subagent definitions a scenario dispatches with `task`).
+
+Scenario-shaped fixtures (this suite's and `eval/`'s) are loaded through
+`internal/testkit/scenario`, a loader-only package: it reads
+`scenario.yaml` plus whatever fixture, faux script and settings files sit
+beside it, and has no opinion on how the scenario is run or graded, so
+both `test/e2e` and `internal/eval` depend on it without pulling in faux,
+screen, or a build tag either side would rather not share.
+
+Tests that need a faux model server start one through
+`internal/testkit/fauxtest`, the shared helper that replaced four
+near-identical copies across `internal/cli`, `internal/provider/api` and
+`test/e2e`: `fauxtest.Start(t, scriptYAML)` starts a scripted
+`internal/testkit/faux` server, registers a `t.Cleanup` to close it, and
+returns its listen address plus the `*faux.Server` itself for
+`Requests()`/`Reset()`/`LoadScriptYAML()`. It takes `testing.TB`, so
+benchmarks can use it too.
+
+Two fault-injection steps in a faux script are worth knowing when writing
+a test against them:
+
+- `disconnect_after` — on a text/thinking step or as its own step, ends
+  the response mid-stream after a given number of response body bytes (an
+  integer) or after a given delay (a duration string, e.g. `200ms`). Like
+  a `tool_call` step, it always ends its own turn.
+- `raw_args` — on a `tool_call` (or an entry inside `tool_calls`), splices
+  a raw string into the tool call's arguments verbatim instead of a JSON
+  object, for exercising malformed/partial tool-call-argument handling.
+  `args` and `raw_args` are mutually exclusive; a script setting both
+  fails to load.
+
+`internal/testkit/mcpfixture`'s `Server` keeps an in-memory log of every
+tool call it receives (in-process callers only, not the `cmd/mcpfixture`
+stdio binary, which runs out of process); `Requests()` returns that log in
+order and `Reset()` clears it, so a behaviour test can assert exactly
+which MCP tool calls a run made.
+
+## 7. Eval runner — `kiln eval run` / `kiln eval report`
+
+`kiln eval` (`cmd/kiln/eval.go`, logic in `internal/eval`) runs the built
+`kiln` binary against a directory of scenarios and grades each run.
+
+```bash
+bin/kiln eval run --only fix-bug -j 4
+bin/kiln eval report --results eval/results --format md
+```
+
+`eval run` flags worth knowing: `--scenarios` (default `eval/scenarios`),
+`--fixtures` (default `eval/fixtures`), `--results` (default
+`eval/results`), `--models` (comma-separated `provider/model` list,
+default `faux/faux-1`), `--roles` (a JSON file or `k=v,k=v` list; defaults
+to the machine's own `modelRoles`), `--repeat`, `-j` (parallel workers),
+`--keep` (keep per-run artifacts under `<results>/runs/`), `--judge`
+(provider/model to grade live runs against a scenario's `judge:` rubric)
+and `--only` (comma-separated scenario name/tag filter). `eval report`
+flags: `--results`, `--target` (default: newest results file),
+`--baseline` (default `<results>/baseline.jsonl`), `--last`, `--format`
+(`text`/`md`/`json`) and `--fail-on-regression`.
+
+`eval/scenarios/` holds one subdirectory per scenario (`scenario.yaml`
+plus its prompt, checks and optional `judge:` rubric); `eval/fixtures/`
+holds the starting project state each scenario runs against;
+`eval/results/` receives one timestamped JSON-records file per `eval run`
+plus the committed `baseline.jsonl` that `eval report` diffs against —
+everything else under `eval/results/` is machine-local and gitignored.
+
+Live runs (real providers, real network) are opt-in: `eval run` refuses
+any non-faux model unless `KILN_EVAL_LIVE=1` is set in the environment, so
+`make eval` never leaves the faux provider and `make eval-live` sets it
+explicitly.
+
+**Judging.** A scenario that declares a `judge:` rubric is scored two
+ways depending on the model under test:
+
+- **Faux runs** are always scored against the scenario's own
+  `judge.faux_verdict` — a canned `{"score": ..., "reasons": [...]}`
+  written directly in the scenario's YAML — regardless of any `--judge`
+  flag. This keeps `make eval` fully offline and deterministic.
+- **Live runs** are scored by asking a real judge model
+  (`RunJudge` in `internal/eval/judge.go`) to grade the run's prompt,
+  final text, diff and tool calls against the rubric in one completion,
+  parsed as the first balanced JSON object in its response. If `--judge`
+  is not given, `kiln eval run` defaults the judge to the resolved
+  `fast` model role (`roles["fast"]`); if that role is also unset, live
+  runs go unjudged (mechanical `checks:` still run either way).
+
+## 8. Coverage — `make cover`, `make covercheck`, `.coverage-floors`
+
+`make cover` runs the whole module's tests under a coverage profile
+(`go test -coverprofile=coverage.out -covermode=atomic ./...`), prints the
+module-wide total, then prints `cmd/covercheck`'s per-package table
+(`covercheck -profile coverage.out -report`).
+
+`cmd/covercheck` (`covercheck -profile <coverprofile> [-report]
+[-floors <path>]`) parses a Go coverprofile and aggregates statement
+coverage per package. `-report` just prints the table; `-floors <path>`
+instead enforces a `.coverage-floors` file, a `<package>\t<floor>` list:
+a listed package whose measured coverage falls below its floor fails the
+check (exit 1), while a package not listed is reported but never fails —
+the floor file is an opt-in ratchet, not a blanket requirement.
+
+`make covercheck` runs `make cover` and then enforces `.coverage-floors`
+this way (`go run ./cmd/covercheck -profile coverage.out -floors
+.coverage-floors`).
+
+## 9. `make race` vs `make race-full`
+
+`make race` is the fast race layer run in CI on every push/PR: `go test
+-race -short ./...`, where `-short` skips the one test known to take
+minutes under `-race` (the sqlite FTS test in `internal/search`). `make
+race-full` runs the same suite without `-short`, including that test, and
+is reserved for a nightly run rather than every push.
+
+## 10. Fuzz targets
+
+Run any fuzz target with:
+
+```bash
+go test -run '^$' -fuzz <Name> -fuzztime 30s ./pkg/
+```
+
+Targets in the tree as of this writing:
+
+| Target | Package |
+|---|---|
+| `FuzzParseAgent` | `internal/claude/agents` |
+| `FuzzSplitFrontmatter` | `internal/claude/commands` |
+| `FuzzApplyArguments` | `internal/claude/commands` |
+| `FuzzParseSkill` | `internal/claude/skills` |
+| `FuzzParseScriptYAML` | `internal/testkit/faux` |
+| `FuzzOpen` | `internal/session/jsonl` |
+| `FuzzParseSequence` | `third_party/ultraviolet` (vendored, not this project's own code) |
+
+This list is a snapshot — check `grep -rl 'func Fuzz' --include=*_test.go .`
+for the current set before relying on it, since fuzz targets are added
+over time.
+
+## 11. Benchmarks
+
+Recorded results and methodology live in `docs/benchmarks.md`. Run any
+benchmark directly with:
+
+```bash
+go test -bench . -benchmem -run '^$' ./pkg/
+```

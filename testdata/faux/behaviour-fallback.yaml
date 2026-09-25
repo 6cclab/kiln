@@ -1,0 +1,20 @@
+model: faux-1
+steps:
+  # Turn 1: the parent dispatches `task` to "sonnetagent" (testdata/behaviour/
+  # subagents/sonnetagent.md, model: sonnet) with no `model` argument, so
+  # requested falls through to the definition's own "sonnet". No modelRoles
+  # are configured in this script's scenario, so the built-in alias
+  # (sonnet -> role "structured") has nothing to resolve against and
+  # ResolveModel must fall back to the parent's model, reporting kind
+  # "fallback".
+  - tool_call:
+      name: task
+      args: {subagent_type: "sonnetagent", description: "sonnet fallback", prompt: "say something"}
+      id: tc1
+  # Turn 2: the fallback subagent's own single-turn session, landing on
+  # faux-1 (the parent's model) since resolution fell back.
+  - text: "sonnet fallback report"
+  # Turn 3: the parent's next turn, gated on tc1's tool result.
+  - on_tool_result: tc1
+    then:
+      - text: "Done fallback."

@@ -243,3 +243,17 @@ func ShouldCompact(contextTokens, contextWindow int, settings Settings) bool {
 	}
 	return contextTokens > contextWindow-settings.ReserveTokens
 }
+
+// ContextMessages projects a branch's entries (oldest first) onto the
+// messages the model should see: only what follows the last compaction
+// entry, with that entry's summary and retained tail in front of it. It is
+// the same rule CalculateContextTokens counts by, so what is sent and what
+// is measured agree. Without it the turn loop replayed the full history
+// after every compaction and the summary never reached the model.
+func ContextMessages(entries []session.Entry) []msg.Message {
+	var out []msg.Message
+	for _, e := range buildContextEntries(entries) {
+		out = append(out, sessionEntryToContextMessages(e)...)
+	}
+	return out
+}

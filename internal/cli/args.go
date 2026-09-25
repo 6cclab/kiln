@@ -7,6 +7,7 @@ package cli
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -35,6 +36,16 @@ type Args struct {
 	Effort string // "" | "low" | "medium" | "high" | "xhigh" | "max"
 
 	PermissionMode string
+
+	// MaxTurns caps the number of assistant turns a print-mode (-p) run may
+	// take before it is cancelled. 0 means unlimited. Interactive mode
+	// ignores this field entirely — see runPrintMode's handling in chat.go.
+	MaxTurns int
+	// MaxTurnsErr is set instead of MaxTurns when --max-turns's value
+	// wasn't a positive integer. runPrintMode reports it and exits 1
+	// before doing anything else; there is no general ParseError path in
+	// this file to route it through (see Parse's doc comment).
+	MaxTurnsErr string
 
 	AddDir          []string
 	AllowedTools    []string
@@ -74,6 +85,7 @@ var valued = map[string]bool{
 	"--model":                true,
 	"--effort":               true,
 	"--permission-mode":      true,
+	"--max-turns":            true,
 	"--add-dir":              true,
 	"--allowed-tools":        true,
 	"--allowedTools":         true,
@@ -233,6 +245,12 @@ func Parse(argv []string) Args {
 			}
 		case "--permission-mode":
 			args.PermissionMode = value
+		case "--max-turns":
+			if n, err := strconv.Atoi(value); hasValue && err == nil && n > 0 {
+				args.MaxTurns = n
+			} else {
+				args.MaxTurnsErr = "kiln: --max-turns expects a positive integer"
+			}
 		case "--add-dir":
 			// Repeatable, and `claude --help` documents it as variadic.
 			if value != "" {
@@ -326,6 +344,7 @@ model:
 permissions:
       --permission-mode <mode>       manual | acceptEdits | auto | plan |
                                      dontAsk | bypassPermissions
+      --max-turns <n>                stop after n assistant turns (-p only)
       --add-dir <dirs>               extra directories tools may touch
       --allowed-tools "Bash(git *)"  allow without prompting
       --disallowed-tools "Write"     deny outright

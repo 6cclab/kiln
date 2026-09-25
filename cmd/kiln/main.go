@@ -27,6 +27,13 @@ func main() {
 }
 
 func run(argv []string) int {
+	// "eval" is dispatched before cli.Parse, not through it: it has its
+	// own flag set (--kiln-bin, --scenarios, --models, ...) that cli.Parse
+	// does not know and would otherwise reject as unknown flags.
+	if len(argv) > 0 && argv[0] == "eval" {
+		return evalCommand(context.Background(), argv[1:], os.Stdout, os.Stderr)
+	}
+
 	args := cli.Parse(argv)
 
 	// These two answer before anything else, deliberately ahead of the

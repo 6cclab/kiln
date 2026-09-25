@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: read, args: {path: version.go}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "The current version is 3.2.1, defined by the Version constant in version.go."
+        usage: {input: 300, output: 25}

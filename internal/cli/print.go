@@ -23,21 +23,28 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/session"
 )
 
 // StreamEvent is one line of `--output-format stream-json` output. It is a
 // union of four shapes (tool_start, tool_end, assistant, result); which
 // fields are meaningful depends on Type. MarshalJSON renders exactly one of
 // the four exact shapes below, field names and order matching print.ts's
-// StreamEvent union:
+// StreamEvent union, extended (P1) with the enriched result fields Claude
+// Code's own result reports: usage/cost/duration/turn accounting, and an
+// optional non-empty reason (e.g. "max-turns-exceeded"):
 //
 //	{"type":"tool_start","name":..,"arg":..?}
 //	{"type":"tool_end","name":..,"isError":bool}
 //	{"type":"assistant","text":..}
-//	{"type":"result","ok":bool,"text":..,"blocked":[..]}
+//	{"type":"result","ok":bool,"text":..,"blocked":[..],
+//	 "usage":{"input":..,"output":..,"cache_read":..,"cache_write":..},
+//	 "total_cost_usd":..,"duration_ms":..,"num_turns":..,
+//	 "num_tool_calls":..,"reason":..?}
 type StreamEvent struct {
 	Type string
 
@@ -52,8 +59,28 @@ type StreamEvent struct {
 	Text string
 
 	// result
-	OK      bool
-	Blocked []string
+	OK           bool
+	Blocked      []string
+	Usage        msg.Usage
+	CostUSD      float64
+	DurationMS   int64
+	Turns        int
+	NumToolCalls int
+	Reason       string
+}
+
+// usageJSON is the wire shape of a result event's "usage" field: Claude
+// Code's own field names (snake_case, and only the four totals it reports),
+// not msg.Usage's own camelCase json tags.
+type usageJSON struct {
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	CacheRead  int `json:"cache_read"`
+	CacheWrite int `json:"cache_write"`
+}
+
+func usageJSONOf(u msg.Usage) usageJSON {
+	return usageJSON{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}
 }
 
 // MarshalJSON renders the exact shape for e.Type, so a field meaningless
@@ -83,11 +110,21 @@ func (e StreamEvent) MarshalJSON() ([]byte, error) {
 			blocked = []string{}
 		}
 		return json.Marshal(struct {
-			Type    string   `json:"type"`
-			OK      bool     `json:"ok"`
-			Text    string   `json:"text"`
-			Blocked []string `json:"blocked"`
-		}{Type: e.Type, OK: e.OK, Text: e.Text, Blocked: blocked})
+			Type         string    `json:"type"`
+			OK           bool      `json:"ok"`
+			Text         string    `json:"text"`
+			Blocked      []string  `json:"blocked"`
+			Usage        usageJSON `json:"usage"`
+			TotalCostUSD float64   `json:"total_cost_usd"`
+			DurationMS   int64     `json:"duration_ms"`
+			NumTurns     int       `json:"num_turns"`
+			NumToolCalls int       `json:"num_tool_calls"`
+			Reason       string    `json:"reason,omitempty"`
+		}{
+			Type: e.Type, OK: e.OK, Text: e.Text, Blocked: blocked,
+			Usage: usageJSONOf(e.Usage), TotalCostUSD: e.CostUSD, DurationMS: e.DurationMS,
+			NumTurns: e.Turns, NumToolCalls: e.NumToolCalls, Reason: e.Reason,
+		})
 	default:
 		return json.Marshal(struct {
 			Type string `json:"type"`
@@ -110,9 +147,14 @@ func assistantEvent(text string) StreamEvent {
 	return StreamEvent{Type: "assistant", Text: text}
 }
 
-// resultEvent builds the {"type":"result","ok":bool,"text":...,"blocked":[...]} shape.
-func resultEvent(ok bool, text string, blocked []string) StreamEvent {
-	return StreamEvent{Type: "result", OK: ok, Text: text, Blocked: blocked}
+// resultEvent builds the terminal "result" StreamEvent from a finished
+// PrintResult, carrying every enriched field alongside ok/text/blocked.
+func resultEvent(r PrintResult) StreamEvent {
+	return StreamEvent{
+		Type: "result", OK: r.OK, Text: r.Text, Blocked: r.Blocked,
+		Usage: r.Usage, CostUSD: r.CostUSD, DurationMS: r.DurationMS,
+		Turns: r.Turns, NumToolCalls: r.NumToolCalls, Reason: r.Reason,
+	}
 }
 
 // toolCall is one entry of PrintResult.ToolCalls. Arg and Blocked are
@@ -125,12 +167,30 @@ type toolCall struct {
 }
 
 // PrintResult is the accumulated outcome of one print-mode run. Mirrors
-// print.ts's PrintResult.
+// print.ts's PrintResult, enriched (P1) with the usage/cost/duration/turn
+// accounting Claude Code's own result carries.
 type PrintResult struct {
 	Text      string
 	ToolCalls []toolCall
 	Blocked   []string
 	OK        bool
+
+	// Usage and CostUSD are the run's aggregate token/cost totals, copied
+	// from session.SessionStats (session.State.GetStats(), reachable via
+	// harness.Harness.Stats()) as of when Finish is called.
+	Usage   msg.Usage
+	CostUSD float64
+	// DurationMS is time.Since(NewCollector's construction) in
+	// milliseconds — wall-clock time for the whole run, not just model time.
+	DurationMS int64
+	// Turns is the number of harness.EventTurnEnd events observed.
+	Turns int
+	// NumToolCalls is len(ToolCalls).
+	NumToolCalls int
+	// Reason is non-empty only when the run was cut short for a reason
+	// worth reporting (e.g. "max-turns-exceeded"); omitted from JSON when
+	// empty.
+	Reason string
 }
 
 // Collector subscribes to a harness.Events bus and accumulates a
@@ -148,19 +208,30 @@ type Collector struct {
 	text      strings.Builder
 	toolCalls []toolCall
 	unsubs    []func()
+	startedAt time.Time
+	turns     int
 }
 
 // NewCollector builds a Collector and subscribes it to events. Call
 // Unsubscribe (or just let the Events bus die with the run) to stop
-// listening.
+// listening. startedAt is recorded here so Finish's DurationMS covers the
+// whole run, not just the time since the last event.
 func NewCollector(events *harness.Events) *Collector {
-	c := &Collector{}
+	c := &Collector{startedAt: time.Now()}
 	c.unsubs = append(c.unsubs,
 		events.On(harness.EventToolStart, c.onToolStart),
 		events.On(harness.EventToolEnd, c.onToolEnd),
 		events.On(harness.EventMessageUpdate, c.onMessageUpdate),
+		events.On(harness.EventTurnEnd, c.onTurnEnd),
 	)
 	return c
+}
+
+// onTurnEnd counts one assistant turn per harness.EventTurnEnd, matching
+// how internal/harness/turn.go's drive loop emits it: once per iteration,
+// whether or not that turn made tool calls.
+func (c *Collector) onTurnEnd(ev harness.Event) {
+	c.turns++
 }
 
 // Unsubscribe detaches the Collector from the Events bus.
@@ -220,29 +291,49 @@ func (c *Collector) onMessageUpdate(ev harness.Event) {
 }
 
 // Finish closes out the run: it reads the block log (if wired), builds the
-// final PrintResult, emits the terminal "result" stream event, and returns
-// the result. ok is the caller's run-status verdict (e.g.
-// result.Status == harness.StatusCompleted).
-func (c *Collector) Finish(ok bool) PrintResult {
+// final PrintResult (copying Usage/CostUSD from stats, and reason verbatim),
+// emits the terminal "result" stream event, and returns the result. ok is
+// the caller's run-status verdict (e.g. result.Status ==
+// harness.StatusCompleted, overridden to false by callers like
+// runPrintMode's --max-turns handling). stats is the harness's aggregate
+// session totals as of run end (harness.Harness.Stats(), i.e.
+// session.State.GetStats()). reason is copied straight into
+// PrintResult.Reason; pass "" when there is nothing to report.
+func (c *Collector) Finish(ok bool, stats session.SessionStats, reason string) PrintResult {
 	var blocked []string
 	if c.GetBlocked != nil {
 		blocked = c.GetBlocked()
 	}
 	text := strings.TrimSpace(c.text.String())
-	result := PrintResult{Text: text, ToolCalls: c.toolCalls, Blocked: blocked, OK: ok}
+	result := PrintResult{
+		Text: text, ToolCalls: c.toolCalls, Blocked: blocked, OK: ok,
+		Usage: stats.Usage, CostUSD: stats.Usage.Cost.Total,
+		DurationMS:   time.Since(c.startedAt).Milliseconds(),
+		Turns:        c.turns,
+		NumToolCalls: len(c.toolCalls),
+		Reason:       reason,
+	}
 	if c.Stream != nil {
-		c.Stream(resultEvent(ok, text, blocked))
+		c.Stream(resultEvent(result))
 	}
 	return result
 }
 
 // printJSON is the shape formatted for `--output-format json`. Field order
-// matches print.ts's JSON.stringify({ ok, text, toolCalls, blocked }, null, 2).
+// matches print.ts's JSON.stringify({ ok, text, toolCalls, blocked }, null, 2),
+// extended (P1) with the same usage/cost/duration/turn fields the "result"
+// stream event carries.
 type printJSON struct {
-	OK        bool       `json:"ok"`
-	Text      string     `json:"text"`
-	ToolCalls []toolCall `json:"toolCalls"`
-	Blocked   []string   `json:"blocked"`
+	OK           bool       `json:"ok"`
+	Text         string     `json:"text"`
+	ToolCalls    []toolCall `json:"toolCalls"`
+	Blocked      []string   `json:"blocked"`
+	Usage        usageJSON  `json:"usage"`
+	TotalCostUSD float64    `json:"total_cost_usd"`
+	DurationMS   int64      `json:"duration_ms"`
+	NumTurns     int        `json:"num_turns"`
+	NumToolCalls int        `json:"num_tool_calls"`
+	Reason       string     `json:"reason,omitempty"`
 }
 
 // FormatPrintResult renders r for the given output format. "stream-json"
@@ -260,7 +351,11 @@ func FormatPrintResult(r PrintResult, format string) string {
 		if blocked == nil {
 			blocked = []string{}
 		}
-		b, err := json.MarshalIndent(printJSON{OK: r.OK, Text: r.Text, ToolCalls: toolCalls, Blocked: blocked}, "", "  ")
+		b, err := json.MarshalIndent(printJSON{
+			OK: r.OK, Text: r.Text, ToolCalls: toolCalls, Blocked: blocked,
+			Usage: usageJSONOf(r.Usage), TotalCostUSD: r.CostUSD, DurationMS: r.DurationMS,
+			NumTurns: r.Turns, NumToolCalls: r.NumToolCalls, Reason: r.Reason,
+		}, "", "  ")
 		if err != nil {
 			return ""
 		}

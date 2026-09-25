@@ -31,9 +31,10 @@ type Options struct {
 
 // State reports one model's current position in its script.
 type State struct {
-	StepIndex int      `json:"stepIndex"`
-	Exhausted bool     `json:"exhausted"`
-	Errors    []string `json:"errors,omitempty"`
+	StepIndex   int      `json:"stepIndex"`
+	Exhausted   bool     `json:"exhausted"`
+	Errors      []string `json:"errors,omitempty"`
+	Disconnects int      `json:"disconnects,omitempty"`
 }
 
 // modelEngine holds one scripted model's execution state, guarded by mu.
@@ -41,11 +42,21 @@ type State struct {
 // cursor, so concurrent requests for different models never share one; the
 // mutex still serializes concurrent requests for the same model.
 type modelEngine struct {
-	mu         sync.Mutex
-	turns      []turn
-	pos        int
-	exhausted  bool
-	mismatches []string
+	mu          sync.Mutex
+	turns       []turn
+	pos         int
+	exhausted   bool
+	mismatches  []string
+	disconnects int
+}
+
+// recordDisconnect bumps the model's disconnect_after fault count. It is
+// passed as the onCut callback to a disconnectWriter, so it is called at
+// most once per triggered fault.
+func (m *modelEngine) recordDisconnect() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.disconnects++
 }
 
 // consume returns the next turn to execute given the set of tool_result
@@ -75,7 +86,7 @@ func (m *modelEngine) state() State {
 	defer m.mu.Unlock()
 	errs := make([]string, len(m.mismatches))
 	copy(errs, m.mismatches)
-	return State{StepIndex: m.pos, Exhausted: m.exhausted, Errors: errs}
+	return State{StepIndex: m.pos, Exhausted: m.exhausted, Errors: errs, Disconnects: m.disconnects}
 }
 
 func (m *modelEngine) resetPosition() {
@@ -84,6 +95,7 @@ func (m *modelEngine) resetPosition() {
 	m.pos = 0
 	m.exhausted = false
 	m.mismatches = nil
+	m.disconnects = 0
 }
 
 // toolResultPresent reports whether the request's tool_result ids include

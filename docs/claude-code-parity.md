@@ -45,7 +45,7 @@ see `kiln-design.md`'s "Input" section, not the notes column below.
 | `/` | slash command; opens the command palette | `[obs]` |
 | `@` | file mention; fuzzy path completion inline, contents inlined into the prompt on submit | `[obs]` |
 | `!` | run a bash command directly, output into transcript | `[obs]` |
-| `#` | write to memory / CLAUDE.md | `[chk]` exact target file |
+| `#` | write to memory / CLAUDE.md | `[obs]` project `CLAUDE.md` preferred, falls back to `~/.claude/CLAUDE.md` — `TestAddMemoryPrefersProjectFile`, `TestAddMemoryFallsBackToUserFile` (`internal/claude/memory/memory_test.go`) |
 
 All four are token-boundary triggers, matching `AutocompleteProvider.triggerCharacters`.
 
@@ -284,7 +284,8 @@ space form and silently ignored the other.
 | `--effort <level>` | done -> pi `ThinkingLevel` |
 | `--add-dir <dirs...>` | done, repeatable, enforced as a real boundary |
 | `--allowed-tools` / `--disallowed-tools` | done; additive to settings, deny still wins |
-| `--output-format` | done, all three; `stream-json` is NDJSON emitted as events happen |
+| `--output-format` | done, all three; `stream-json` is NDJSON emitted as events happen. The `json` format and the terminal `stream-json` `result` event both carry Claude Code's enriched result fields: `usage` (`input`/`output`/`cache_read`/`cache_write`), `total_cost_usd`, `duration_ms`, `num_turns`, `num_tool_calls`, and `reason` (omitted unless the run was cut short, e.g. `max-turns-exceeded`) |
+| `--max-turns <n>` | done, print mode (`-p`) only; caps the run at `n` assistant turns. A run that finishes exactly at turn `n` with no further tool call is not cut off — only a run that would start turn `n+1` is cancelled, ending with `ok:false` and `reason:"max-turns-exceeded"` (exit code 1). Not wired into the interactive TUI: a human there can just stop typing |
 | `--settings`, `--setting-sources` | done; `--settings` applies last, overriding the hierarchy |
 | `--mcp-config`, `--strict-mcp-config` | done |
 | `--system-prompt`, `--append-system-prompt` | done |
@@ -354,7 +355,10 @@ stdin. Implemented against this machine's real hooks (`rtk-rewrite.sh`,
 | `UserPromptSubmit` | `[obs]` stdout becomes turn context |
 | `SessionStart` | `[obs]` stdout becomes first-turn context |
 | `SessionEnd` | `[obs]` fires on exit with `transcript_path` |
-| `Stop`, `SubagentStop`, `Notification`, `PreCompact` | `[chk]` parsed, not yet fired |
+| `Stop` | `[obs]` fires at run end (`internal/cli/chat.go:684`) — `TestHooks_Stop_FiresOnRunEnd`, `TestHooks_StopBlock_ReportedOnceNotReprompted` |
+| `SubagentStop` | `[obs]` fires once per dispatched subagent (`internal/cli/chat.go:718`) — `TestHooks_SubagentStop_FiresPerSubagent`, `TestHooks_SubagentStop_PerDepth` |
+| `Notification` | `[obs]` fires on the TUI's permission prompt (`internal/cli/tui.go:110`) — `TestHooks_Notification_Payload` |
+| `PreCompact` | `[obs]` fires when compaction starts (`internal/cli/chat.go:700`); covered by `TestCompaction_PreCompactHookFires` in `test/e2e/compaction_behaviour_test.go` |
 
 Three stdout shapes are accepted: empty, plain text (becomes context), and JSON
 with `hookSpecificOutput`. Plain text is not a fallback — the relay inbox hook

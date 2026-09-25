@@ -1,0 +1,18 @@
+model: faux-1
+steps:
+  # Turn 1: the parent dispatches `task` to general-purpose with model:
+  # "ghost" - a role name that is NOT a key of the configured modelRoles
+  # (only "fast" is configured, see subagent_behaviour_test.go). faux does
+  # not validate tool-call arguments against the task tool's JSON Schema
+  # enum, so this scripted call can carry a value the real schema would
+  # reject; ResolveModel must still fall back to the parent's own model
+  # (faux-1) and report kind "fallback", and the dispatch must still
+  # complete rather than erroring.
+  - tool_call:
+      name: task
+      args: {subagent_type: "general-purpose", description: "unresolvable role", prompt: "say something", model: "ghost"}
+      id: tc1
+  - text: "fallback-routed subagent report"
+  - on_tool_result: tc1
+    then:
+      - text: "Done rolefallback."

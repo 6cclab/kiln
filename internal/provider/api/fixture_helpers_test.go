@@ -28,7 +28,7 @@ import (
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
-	fauxkit "github.com/andrepato/harness/internal/testkit/faux"
+	"github.com/andrepato/harness/internal/testkit/fauxtest"
 )
 
 // recordFixtures is true when the test binary was run with `-record`:
@@ -65,15 +65,7 @@ func (t *teeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // base URL and a cleanup func.
 func startFauxForFixture(t *testing.T, scriptYAML string) string {
 	t.Helper()
-	s, err := fauxkit.New(fauxkit.Options{ScriptYAML: scriptYAML})
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr, err := s.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	addr, _ := fauxtest.Start(t, scriptYAML)
 	return "http://" + addr
 }
 

@@ -4,7 +4,33 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/andrepato/harness/internal/claude/paths"
 )
+
+// FuzzParseSkill feeds arbitrary bytes to parseSkill, which must never
+// panic regardless of malformed frontmatter.
+func FuzzParseSkill(f *testing.F) {
+	seeds := []string{
+		"---\nname: greet\ndescription: says hi\n---\nHello.",
+		"---\nname: hidden\ndescription: not invocable\nuser-invocable: false\n---\nBody.",
+		"---\nname: dup\ndescription: project version\n---\nProject body.",
+		"",
+		"---\n---\n",
+		"---",
+		"no frontmatter",
+		"---\nname:\ndescription:\n---\n",
+		"---\nname: a\ndescription: d\nuser-invocable: not-a-bool\n---\nb",
+		"---\r\nname: crlf\r\ndescription: uses crlf\r\n---\r\nbody\r\n",
+		"---\nname: [list, not, scalar]\ndescription: d\n---\nb",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, source string) {
+		_, _ = parseSkill(source, "/x/fuzz/SKILL.md", paths.ScopeProject)
+	})
+}
 
 func TestLoadSkills(t *testing.T) {
 	dir := t.TempDir()

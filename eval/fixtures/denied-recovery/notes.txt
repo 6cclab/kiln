@@ -1,0 +1,1 @@
+Deploys happen every Tuesday at 3pm UTC.

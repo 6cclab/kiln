@@ -1,0 +1,34 @@
+name: answer-codebase-question
+description: >
+  A pure question-answering task: read one file, report a fact from it,
+  touch nothing. Graded mechanically (the file must be unchanged) and by
+  judge (did it actually answer the question).
+tags: [reading, qa]
+fixture: versioned-app
+prompt: "What is the current version of this application, and where is it defined?"
+permission_mode: bypassPermissions
+caps:
+  max_turns: 5
+  timeout: 60s
+checks:
+  - type: file_equals
+    name: version.go unchanged
+    path: version.go
+    expect: |
+      package app
+
+      // Version is the current release version of this application.
+      const Version = "3.2.1"
+  - type: text_matches
+    name: reports 3.2.1
+    regex: "3\\.2\\.1"
+  - type: result_ok
+judge:
+  rubric: >
+    Did the agent correctly state the version (3.2.1) and where it comes
+    from (the Version constant in version.go), without editing any files?
+  faux_verdict:
+    score: 10
+    reasons: ["correct version reported", "correct source cited", "no files touched"]
+faux:
+  anthropic-messages: faux.yaml

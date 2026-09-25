@@ -1,0 +1,18 @@
+name: use-file-mention
+description: >
+  Prompts using an @file mention should have that file's content injected
+  into context without the agent needing to call the read tool itself.
+tags: [reading, mentions]
+fixture: mention-config
+prompt: "What is the value of API_KEY_PREFIX in @src/config.js?"
+permission_mode: bypassPermissions
+caps:
+  max_turns: 3
+  timeout: 60s
+checks:
+  - type: text_matches
+    name: reports the mentioned value
+    regex: "sk-eval-9f31"
+  - type: result_ok
+faux:
+  anthropic-messages: faux.yaml

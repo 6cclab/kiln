@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/andrepato/harness/internal/compaction"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/session"
@@ -265,18 +266,13 @@ func (l *Lane) Compact(ctx context.Context, custom *string) error {
 }
 
 // entriesToTranscript projects entries (already oldest-first, as
-// ScanBranch with Order "oldestFirst" returns them) onto their
-// msg.Message payloads, in the same order. It does not reverse: callers
-// that hold newest-first entries (e.g. from FindEntries) must reverse
-// before calling this.
+// ScanBranch with Order "oldestFirst" returns them) onto the messages the
+// model sees. It is compaction-aware: history before the last compaction
+// entry is replaced by that entry's summary and retained tail
+// (compaction.ContextMessages), which is what makes compaction shrink the
+// next request rather than only the session's bookkeeping.
 func entriesToTranscript(entries []session.Entry) []msg.Message {
-	out := make([]msg.Message, 0, len(entries))
-	for _, e := range entries {
-		if e.Type == session.EntryMessage && e.Message != nil {
-			out = append(out, e.Message)
-		}
-	}
-	return out
+	return compaction.ContextMessages(entries)
 }
 
 // resolveModel resolves the lane's configured provider and model.

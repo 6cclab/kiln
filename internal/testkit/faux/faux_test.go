@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -1009,5 +1011,360 @@ steps:
 	}
 	if !strings.Contains(st.Errors[0], "tc2") {
 		t.Errorf("mismatch message = %q, want mention of tc2", st.Errors[0])
+	}
+}
+
+// --- disconnect_after ------------------------------------------------------
+
+const disconnectLongText = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ this reply is long enough that a small byte cutoff lands partway through it"
+
+func TestDisconnectAfterBytesAnthropicNonStreaming(t *testing.T) {
+	s, base := startTestServer(t, `
+model: faux-1
+steps:
+  - text: "`+disconnectLongText+`"
+    disconnect_after: 20
+  - text: "next step"
+`)
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr == nil {
+		t.Fatalf("expected a read error from the cut connection, got nil (body = %q)", body)
+	}
+	if len(body) == 0 {
+		t.Error("expected some partial body before the cut, got none")
+	}
+
+	st := s.engine.forModel("faux-1").state()
+	if st.Disconnects != 1 {
+		t.Errorf("Disconnects = %d, want 1", st.Disconnects)
+	}
+	if st.StepIndex != 1 {
+		t.Errorf("StepIndex = %d, want 1 (the cut step still consumed its turn)", st.StepIndex)
+	}
+
+	// A retry after the cut lands on the *next* step, not a repeat.
+	resp2 := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "retry"}},
+	})
+	var payload map[string]any
+	if err := json.NewDecoder(resp2.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode retry response: %v", err)
+	}
+	resp2.Body.Close()
+	content := payload["content"].([]any)
+	if content[0].(map[string]any)["text"] != "next step" {
+		t.Errorf("retry text = %v, want %q", payload, "next step")
+	}
+}
+
+func TestDisconnectAfterBytesAnthropicStreaming(t *testing.T) {
+	s, base := startTestServer(t, `
+model: faux-1
+steps:
+  - text: "`+disconnectLongText+`"
+    disconnect_after: 20
+`)
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":  "faux-1",
+		"stream": true,
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+		},
+	})
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	sawMessageStop := false
+	for scanner.Scan() {
+		if strings.Contains(scanner.Text(), `"type":"message_stop"`) {
+			sawMessageStop = true
+		}
+	}
+	scanErr := scanner.Err()
+	resp.Body.Close()
+	if sawMessageStop {
+		t.Fatal("stream completed normally (saw message_stop); expected it to be cut short")
+	}
+	if scanErr == nil {
+		t.Error("expected a scan error from the cut connection, got nil")
+	}
+
+	st := s.engine.forModel("faux-1").state()
+	if st.Disconnects != 1 {
+		t.Errorf("Disconnects = %d, want 1", st.Disconnects)
+	}
+}
+
+func TestDisconnectAfterBytesOpenAIStreaming(t *testing.T) {
+	s, base := startTestServer(t, `
+model: faux-1
+steps:
+  - text: "`+disconnectLongText+`"
+    disconnect_after: 20
+`)
+	resp := postJSON(t, base+"/v1/chat/completions", map[string]any{
+		"model":  "faux-1",
+		"stream": true,
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+		},
+	})
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	sawDone := false
+	for scanner.Scan() {
+		if strings.Contains(scanner.Text(), "[DONE]") {
+			sawDone = true
+		}
+	}
+	scanErr := scanner.Err()
+	resp.Body.Close()
+	if sawDone {
+		t.Fatal("stream completed normally (saw [DONE]); expected it to be cut short")
+	}
+	if scanErr == nil {
+		t.Error("expected a scan error from the cut connection, got nil")
+	}
+
+	st := s.engine.forModel("faux-1").state()
+	if st.Disconnects != 1 {
+		t.Errorf("Disconnects = %d, want 1", st.Disconnects)
+	}
+}
+
+func TestDisconnectAfterDurationCutsBeforeCompletion(t *testing.T) {
+	// A 1ms duration is far shorter than it takes to write the whole
+	// reply, so the cut fires at or near the very start of the response.
+	s, base := startTestServer(t, `
+model: faux-1
+steps:
+  - text: "`+disconnectLongText+`"
+    disconnect_after: 1ms
+`)
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr == nil {
+		t.Fatalf("expected a read error from the cut connection, got nil (body = %q)", body)
+	}
+
+	st := s.engine.forModel("faux-1").state()
+	if st.Disconnects != 1 {
+		t.Errorf("Disconnects = %d, want 1", st.Disconnects)
+	}
+}
+
+// --- raw_args ----------------------------------------------------------------
+
+const rawArgsText = `{"path": `
+
+func TestRawArgsAnthropicNonStreaming(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_call: {name: read, raw_args: '`+rawArgsText+`', id: tc1}
+`)
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), `"input":`+rawArgsText) {
+		t.Errorf("body = %s, want it to contain the raw text %q verbatim after \"input\":", body, rawArgsText)
+	}
+	// The body is deliberately invalid JSON.
+	var v map[string]any
+	if err := json.Unmarshal(body, &v); err == nil {
+		t.Errorf("expected invalid JSON body, but it decoded fine: %s", body)
+	}
+}
+
+func TestRawArgsAnthropicStreaming(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_call: {name: read, raw_args: '`+rawArgsText+`', id: tc1}
+`)
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model":  "faux-1",
+		"stream": true,
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+		},
+	})
+	defer resp.Body.Close()
+	events := readSSE(t, resp.Body)
+
+	var toolInputJSON string
+	for _, ev := range events {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(ev.data), &payload); err != nil {
+			t.Fatalf("bad json in event %q: %v (%s)", ev.event, err, ev.data)
+		}
+		if payload["type"] != "content_block_delta" {
+			continue
+		}
+		delta := payload["delta"].(map[string]any)
+		if delta["type"] == "input_json_delta" {
+			toolInputJSON += delta["partial_json"].(string)
+		}
+	}
+	if toolInputJSON != rawArgsText {
+		t.Errorf("toolInputJSON = %q, want %q", toolInputJSON, rawArgsText)
+	}
+}
+
+func TestRawArgsOpenAINonStreaming(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_call: {name: read, raw_args: '`+rawArgsText+`', id: tc1}
+`)
+	resp := postJSON(t, base+"/v1/chat/completions", map[string]any{
+		"model":    "faux-1",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	defer resp.Body.Close()
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	choices := payload["choices"].([]any)
+	message := choices[0].(map[string]any)["message"].(map[string]any)
+	toolCalls := message["tool_calls"].([]any)
+	args := toolCalls[0].(map[string]any)["function"].(map[string]any)["arguments"].(string)
+	if args != rawArgsText {
+		t.Errorf("arguments = %q, want %q", args, rawArgsText)
+	}
+}
+
+func TestRawArgsOpenAIStreaming(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - tool_call: {name: read, raw_args: '`+rawArgsText+`', id: tc1}
+`)
+	resp := postJSON(t, base+"/v1/chat/completions", map[string]any{
+		"model":  "faux-1",
+		"stream": true,
+		"messages": []map[string]any{
+			{"role": "user", "content": "hi"},
+		},
+	})
+	defer resp.Body.Close()
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var toolArgs string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			break
+		}
+		var chunk map[string]any
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			t.Fatalf("bad chunk json: %v (%s)", err, data)
+		}
+		choice := chunk["choices"].([]any)[0].(map[string]any)
+		delta, ok := choice["delta"].(map[string]any)
+		if !ok {
+			continue
+		}
+		tcs, ok := delta["tool_calls"].([]any)
+		if !ok {
+			continue
+		}
+		for _, tcRaw := range tcs {
+			tc := tcRaw.(map[string]any)
+			if fn, ok := tc["function"].(map[string]any); ok {
+				if a, ok := fn["arguments"].(string); ok {
+					toolArgs += a
+				}
+			}
+		}
+	}
+	if toolArgs != rawArgsText {
+		t.Errorf("toolArgs = %q, want %q", toolArgs, rawArgsText)
+	}
+}
+
+func TestToolCallArgsAndRawArgsMutuallyExclusive(t *testing.T) {
+	_, err := New(Options{ScriptYAML: `
+model: faux-1
+steps:
+  - tool_call: {name: read, args: {path: a.js}, raw_args: '{"path": ', id: tc1}
+`})
+	if err == nil {
+		t.Fatal("expected an error loading a script with both args and raw_args set, got nil")
+	}
+	if !strings.Contains(err.Error(), "args and raw_args") {
+		t.Errorf("error = %v, want mention of args and raw_args", err)
+	}
+}
+
+// --- Main -----------------------------------------------------------
+
+func TestMainInvalidScriptPathReturnsError(t *testing.T) {
+	err := Main([]string{"/nonexistent/definitely-not-a-script.yaml"})
+	if err == nil {
+		t.Fatalf("Main() with nonexistent script path returned nil error, want error")
+	}
+}
+
+func TestMainInvalidAddrReturnsError(t *testing.T) {
+	err := Main([]string{"-addr", "not a valid address"})
+	if err == nil {
+		t.Fatalf("Main() with invalid -addr returned nil error, want error")
+	}
+}
+
+func TestMainDefaultServesAndPrintsAddr(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStdout := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = origStdout }()
+
+	done := make(chan struct{})
+	go func() {
+		// Main blocks forever (select{}) once it starts serving; this
+		// goroutine is intentionally leaked for the rest of the test
+		// binary's life once the address line has been read.
+		_ = Main([]string{"-addr", "127.0.0.1:0"})
+		close(done)
+	}()
+
+	br := bufio.NewReader(r)
+	line, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("reading address line: %v", err)
+	}
+	os.Stdout = origStdout
+	_ = w.Close()
+
+	addr := strings.TrimSpace(line)
+	if addr == "" {
+		t.Fatalf("Main() printed empty address")
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		t.Fatalf("Main() printed %q, not a host:port: %v", addr, err)
 	}
 }

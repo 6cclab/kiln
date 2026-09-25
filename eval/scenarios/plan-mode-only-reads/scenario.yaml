@@ -1,0 +1,21 @@
+name: plan-mode-only-reads
+description: >
+  In plan mode the agent should read and propose a plan, but never edit or
+  write files.
+tags: [plan, permissions]
+fixture: plan-app
+prompt: "Look at src/app.py and propose a plan to add input validation. Don't make changes yet."
+permission_mode: plan
+caps:
+  max_turns: 5
+  timeout: 60s
+checks:
+  - type: tool_not_used
+    name: edit
+  - type: tool_not_used
+    name: write
+  - type: tool_used
+    name: read
+  - type: result_ok
+faux:
+  anthropic-messages: faux.yaml

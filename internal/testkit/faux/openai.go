@@ -131,11 +131,12 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 
 	chatID := fmt.Sprintf("chatcmpl_faux_%d", rec.Seq)
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+	spec := t.disconnectSpec()
 	if req.Stream {
-		s.streamOpenAI(w, req.Model, chatID, t, includeUsage)
+		s.streamOpenAI(w, req.Model, chatID, t, includeUsage, spec, me.recordDisconnect)
 		return
 	}
-	s.respondOpenAIJSON(w, req.Model, chatID, t)
+	s.respondOpenAIJSON(w, req.Model, chatID, t, spec, me.recordDisconnect)
 }
 
 func openAICallID(id string) string {
@@ -144,7 +145,7 @@ func openAICallID(id string) string {
 
 // --- non-streaming -----------------------------------------------------
 
-func (s *Server) respondOpenAIJSON(w http.ResponseWriter, model, chatID string, t turn) {
+func (s *Server) respondOpenAIJSON(w http.ResponseWriter, model, chatID string, t turn, spec *disconnectSpec, onCut func()) {
 	var text, thinking string
 	var toolCalls []map[string]any
 	for _, c := range t.content {
@@ -154,13 +155,12 @@ func (s *Server) respondOpenAIJSON(w http.ResponseWriter, model, chatID string, 
 		case c.thinking != nil:
 			thinking += *c.thinking
 		case c.toolCall != nil:
-			argsJSON, _ := json.Marshal(c.toolCall.Args)
 			toolCalls = append(toolCalls, map[string]any{
 				"id":   openAICallID(c.toolCall.ID),
 				"type": "function",
 				"function": map[string]any{
 					"name":      c.toolCall.Name,
-					"arguments": string(argsJSON),
+					"arguments": toolCallArgsJSON(c.toolCall),
 				},
 			})
 		}
@@ -183,7 +183,7 @@ func (s *Server) respondOpenAIJSON(w http.ResponseWriter, model, chatID string, 
 	}
 	usage := resolveUsage(t.lastUsage())
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	body, _ := json.Marshal(map[string]any{
 		"id":      chatID,
 		"object":  "chat.completion",
 		"model":   model,
@@ -194,6 +194,9 @@ func (s *Server) respondOpenAIJSON(w http.ResponseWriter, model, chatID string, 
 			"total_tokens":      usage.Input + usage.Output,
 		},
 	})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	writeWithDisconnect(w, body, spec, onCut)
 }
 
 func nullableString(s string) any {
@@ -205,7 +208,10 @@ func nullableString(s string) any {
 
 // --- streaming -----------------------------------------------------------
 
-func (s *Server) streamOpenAI(w http.ResponseWriter, model, chatID string, t turn, includeUsage bool) {
+func (s *Server) streamOpenAI(w http.ResponseWriter, model, chatID string, t turn, includeUsage bool, spec *disconnectSpec, onCut func()) {
+	if spec != nil {
+		w = newDisconnectWriter(w, spec, onCut)
+	}
 	sw := newSSEWriter(w)
 	w.WriteHeader(http.StatusOK)
 
@@ -244,8 +250,8 @@ func (s *Server) streamOpenAI(w http.ResponseWriter, model, chatID string, t tur
 					},
 				}},
 			}, nil))
-			argsJSON, _ := json.Marshal(c.toolCall.Args)
-			for _, chunk := range chunkString(string(argsJSON), chunkSize) {
+			argsJSON := toolCallArgsJSON(c.toolCall)
+			for _, chunk := range chunkString(argsJSON, chunkSize) {
 				sw.sendChunk(base(map[string]any{
 					"tool_calls": []map[string]any{{
 						"index": toolIndex,

@@ -1,0 +1,19 @@
+model: faux-1
+steps:
+  - text: "I'll look at the file."
+  - thinking: "the add function subtracts"
+  - tool_call: {name: read, args: {path: src/math.js}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - tool_call:
+          name: edit
+          args:
+            path: src/math.js
+            edits:
+              - oldText: "return a - b;"
+                newText: "return a + b;"
+          id: tc2
+  - on_tool_result: tc2
+    then:
+      - text: "Fixed: add() now adds instead of subtracting."
+        usage: {input: 812, output: 34}

@@ -1,0 +1,71 @@
+# .coverage-floors — per-package statement-coverage floors, enforced by
+# `make covercheck` (go run ./cmd/covercheck -floors .coverage-floors).
+#
+# Format: "<package path>\t<floor>" (floor is a percentage, one decimal).
+# Lines starting with '#' and blank lines are ignored. A package not listed
+# here is reported in `make cover`'s table but never fails covercheck: this
+# file is an opt-in ratchet, not a blanket coverage requirement.
+#
+# Floors were set from a `go test -coverprofile=coverage.out -covermode=atomic
+# ./...` run on 2026-09-25 (see cmd/covercheck/main.go for the aggregation),
+# as measured coverage minus 2.0 percentage points (one decimal), to leave
+# headroom for normal variance without letting coverage regress silently.
+
+cmd/covercheck	81.2
+cmd/kiln-drive	68.1
+cmd/mcpfixture	45.4
+internal/agent	86.9
+internal/auth	39.4
+internal/auth/login	45.3
+internal/auth/oauth	54.1
+internal/budget	95.1
+internal/claude/agents	93.8
+internal/claude/commands	93.9
+internal/claude/hooks	85.3
+internal/claude/keybindings	93.2
+internal/claude/memory	93.0
+internal/claude/paths	85.5
+internal/claude/permission	54.3
+internal/claude/settings	74.0
+internal/claude/skills	95.4
+internal/claude/statusline	92.4
+internal/claude/trust	73.8
+internal/claude/writesettings	81.6
+internal/cli	60.7
+internal/commands	52.2
+internal/compaction	78.6
+internal/diag	74.9
+internal/eval	63.3
+internal/execenv	75.9
+internal/harness	57.2
+internal/mcp	81.5
+internal/msg	75.2
+internal/provider	50.3
+internal/provider/api	64.3
+internal/provider/builtin	39.0
+internal/provider/catalog	80.2
+internal/provider/faux	69.4
+internal/provider/ollama	28.0
+internal/search	70.1
+internal/session	64.1
+internal/session/jsonl	72.1
+internal/testkit/faux	81.6
+internal/testkit/mcpfixture	76.6
+internal/testkit/scenario	75.4
+internal/testkit/screen	44.4
+internal/testkit/sessiondata	81.1
+internal/testkit/stubtui	85.2
+internal/tool	98.0
+internal/tools	78.6
+internal/tui	59.9
+internal/tui/editor	72.8
+
+# Packages with no tests today (0.0% measured, some with no _test.go files
+# at all). Listed at floor 0.0 so covercheck never fails on them; give them
+# a real floor (measured - 2.0, like the packages above) once tests land.
+cmd/faux	0.0
+cmd/kiln	0.0
+cmd/vtreplay	0.0
+eval/fixtures/vendor-rule/vendor	0.0
+internal/testkit/fauxtest	0.0
+internal/testkit/stubtui/cmd/stubtui	0.0

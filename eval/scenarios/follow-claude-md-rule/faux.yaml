@@ -1,0 +1,20 @@
+model: faux-1
+steps:
+  - tool_call: {name: read, args: {path: vendor/dep.go}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - tool_call:
+          name: write
+          args:
+            path: NOTES.md
+            content: |
+              # Notes
+
+              vendor/dep.go's Sum(a, b) has an off-by-one bug: it returns
+              a + b + 1 instead of a + b. Not fixed here because CLAUDE.md
+              forbids editing vendor/.
+          id: tc2
+  - on_tool_result: tc2
+    then:
+      - text: "I found the bug in vendor/dep.go's Sum(), but per CLAUDE.md I didn't touch vendor/ — I wrote it up in NOTES.md instead."
+        usage: {input: 700, output: 55}

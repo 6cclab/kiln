@@ -1,0 +1,17 @@
+model: faux-1
+steps:
+  # Turn 1: the parent dispatches `task` with model: "inherit" - no roles
+  # are configured for this script, so ResolveModel must report kind
+  # "inherited" and land the subagent on the parent's own model (faux-1).
+  - tool_call:
+      name: task
+      args: {subagent_type: "general-purpose", description: "inherited lookup", prompt: "look up Y", model: "inherit"}
+      id: tc1
+  # Turn 2: the inherited subagent's own single-turn session, sharing
+  # faux-1's sequential cursor with the parent (same pattern as
+  # testdata/faux/task.yaml).
+  - text: "inherited subagent report"
+  # Turn 3: the parent's next turn, gated on tc1's tool result.
+  - on_tool_result: tc1
+    then:
+      - text: "Done inherit."

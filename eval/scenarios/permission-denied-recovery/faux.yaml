@@ -1,0 +1,11 @@
+model: faux-1
+steps:
+  - text: "Let me check the deploy schedule."
+  - tool_call: {name: read, args: {path: notes.txt}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - tool_call: {name: bash, args: {command: "date"}, id: tc2}
+  - on_tool_result: tc2
+    then:
+      - text: "I wasn't allowed to run a shell command, but notes.txt says deploys happen every Tuesday at 3pm UTC."
+        usage: {input: 500, output: 45}

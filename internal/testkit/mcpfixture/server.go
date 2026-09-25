@@ -8,6 +8,11 @@
 // (e.g. over mcp.NewInMemoryTransports) and as the cmd/mcpfixture binary for
 // out-of-process stdio use, which is what most harness tests want since it
 // exercises the same code path the real product uses to launch MCP servers.
+//
+// A Server returned by NewServer also keeps an in-memory log of every tool
+// call it receives, inspectable via Requests and clearable via Reset. This
+// only observes in-process callers; the stdio binary runs in a separate
+// process, so its calls are not logged here.
 package mcpfixture
 
 import (
@@ -15,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,14 +32,67 @@ const Name = "fixture"
 // Version is the MCP server version reported by NewServer.
 const Version = "0.0.1"
 
+// ToolCall records one tool invocation received by a Server, in the order
+// it arrived. Args is the raw JSON the client sent (not re-marshaled from
+// the decoded struct), so a test can assert on the exact bytes a real MCP
+// client would have produced.
+type ToolCall struct {
+	Tool string
+	Args json.RawMessage
+	Seq  int
+	Time time.Time
+}
+
+// Server wraps the go-sdk *mcp.Server with an in-memory log of every tool
+// call it receives. The log only observes in-process use (NewServer callers
+// holding onto the *Server, e.g. over mcp.NewInMemoryTransports); the
+// cmd/mcpfixture stdio binary runs in a separate process and so cannot be
+// inspected this way, but embeds and runs the same *mcp.Server underneath.
+type Server struct {
+	*mcp.Server
+
+	mu    sync.Mutex
+	calls []ToolCall
+}
+
+// log appends a ToolCall for tool with raw argument bytes args, assigning
+// it the next sequence number.
+func (s *Server) log(tool string, args json.RawMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, ToolCall{
+		Tool: tool,
+		Args: append(json.RawMessage(nil), args...),
+		Seq:  len(s.calls),
+		Time: time.Now(),
+	})
+}
+
+// Requests returns every tool call recorded so far, in order.
+func (s *Server) Requests() []ToolCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ToolCall, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
+// Reset clears the recorded tool call log.
+func (s *Server) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = nil
+}
+
 // NewServer builds the "fixture" MCP server with its four test tools:
 //
 //   - echo{text}: returns text unchanged.
 //   - slow{ms}: sleeps for ms milliseconds, then returns "slept <ms>ms".
 //   - fail{message}: always returns an error result (isError true).
 //   - big{lines}: returns N numbered lines, for truncation tests.
-func NewServer() *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: Name, Version: Version}, nil)
+func NewServer() *Server {
+	s := &Server{Server: mcp.NewServer(&mcp.Implementation{Name: Name, Version: Version}, nil)}
+	server := s.Server
 
 	type echoArgs struct {
 		Text string `json:"text" jsonschema:"text to echo back"`
@@ -42,6 +101,7 @@ func NewServer() *mcp.Server {
 		Name:        "echo",
 		Description: "echo back the given text",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args echoArgs) (*mcp.CallToolResult, any, error) {
+		s.log("echo", req.Params.Arguments)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: args.Text}},
 		}, nil, nil
@@ -54,6 +114,7 @@ func NewServer() *mcp.Server {
 		Name:        "slow",
 		Description: "sleep for the given number of milliseconds, then return",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args slowArgs) (*mcp.CallToolResult, any, error) {
+		s.log("slow", req.Params.Arguments)
 		timer := time.NewTimer(time.Duration(args.MS) * time.Millisecond)
 		defer timer.Stop()
 		select {
@@ -73,6 +134,7 @@ func NewServer() *mcp.Server {
 		Name:        "fail",
 		Description: "always fail with the given message",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args failArgs) (*mcp.CallToolResult, any, error) {
+		s.log("fail", req.Params.Arguments)
 		// Returning an error from a ToolHandlerFor causes the SDK to build a
 		// CallToolResult with IsError set to true and the error text as
 		// content, rather than an MCP protocol-level error response. That is
@@ -87,6 +149,7 @@ func NewServer() *mcp.Server {
 		Name:        "big",
 		Description: "return N numbered lines, for truncation tests",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args bigArgs) (*mcp.CallToolResult, any, error) {
+		s.log("big", req.Params.Arguments)
 		var b strings.Builder
 		for i := 1; i <= args.Lines; i++ {
 			fmt.Fprintf(&b, "%d\n", i)
@@ -96,7 +159,7 @@ func NewServer() *mcp.Server {
 		}, nil, nil
 	})
 
-	return server
+	return s
 }
 
 // claudeMCPServer mirrors the shape Claude Code's ~/.claude.json uses for a

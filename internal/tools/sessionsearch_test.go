@@ -29,6 +29,11 @@ func openTestSearch(t *testing.T) *search.Search {
 }
 
 func TestSessionSearchToolResultFormat(t *testing.T) {
+	// The tool's own Sync walks the default roots under HOME
+	// (~/.harness/sessions, ~/.claude/projects). Pointed at the real home
+	// this test indexed a workstation's entire session history (minutes
+	// under -race); a scratch HOME keeps it to the fixture below.
+	t.Setenv("HOME", t.TempDir())
 	sessDir := t.TempDir()
 	data, err := os.ReadFile(largeFixture)
 	if err != nil {

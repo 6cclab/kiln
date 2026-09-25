@@ -35,25 +35,71 @@ func (s *Script) modelScripts() map[string][]Step {
 // Step is one entry in a script's steps list. Exactly one of its
 // "kind" fields (Text, Thinking, ToolCall, ToolCalls, OnToolResult,
 // OnToolResults, Error, Delay) is expected to be set per YAML node, though
-// Usage may accompany Text or Thinking.
+// Usage may accompany Text or Thinking, and DisconnectAfter may accompany
+// Text or Thinking.
 type Step struct {
-	Text          string         `yaml:"text,omitempty"`
-	Thinking      string         `yaml:"thinking,omitempty"`
-	ToolCall      *ToolCallSpec  `yaml:"tool_call,omitempty"`
-	ToolCalls     []ToolCallSpec `yaml:"tool_calls,omitempty"`
-	OnToolResult  string         `yaml:"on_tool_result,omitempty"`
-	OnToolResults []string       `yaml:"on_tool_results,omitempty"`
-	Then          []Step         `yaml:"then,omitempty"`
-	Usage         *UsageSpec     `yaml:"usage,omitempty"`
-	Error         *ErrorSpec     `yaml:"error,omitempty"`
-	Delay         string         `yaml:"delay,omitempty"`
+	Text            string          `yaml:"text,omitempty"`
+	Thinking        string          `yaml:"thinking,omitempty"`
+	ToolCall        *ToolCallSpec   `yaml:"tool_call,omitempty"`
+	ToolCalls       []ToolCallSpec  `yaml:"tool_calls,omitempty"`
+	OnToolResult    string          `yaml:"on_tool_result,omitempty"`
+	OnToolResults   []string        `yaml:"on_tool_results,omitempty"`
+	Then            []Step          `yaml:"then,omitempty"`
+	Usage           *UsageSpec      `yaml:"usage,omitempty"`
+	Error           *ErrorSpec      `yaml:"error,omitempty"`
+	Delay           string          `yaml:"delay,omitempty"`
+	DisconnectAfter *disconnectSpec `yaml:"disconnect_after,omitempty"`
 }
 
-// ToolCallSpec describes a scripted tool call.
+// ToolCallSpec describes a scripted tool call. Args and RawArgs are
+// mutually exclusive: Args is marshaled normally as the tool's input,
+// while RawArgs is spliced into the response verbatim (see raw_args in
+// the package doc) to let a script emit intentionally invalid tool-call
+// JSON for fault-injection tests.
 type ToolCallSpec struct {
-	Name string         `yaml:"name"`
-	Args map[string]any `yaml:"args"`
-	ID   string         `yaml:"id"`
+	Name    string         `yaml:"name"`
+	Args    map[string]any `yaml:"args"`
+	RawArgs string         `yaml:"raw_args,omitempty"`
+	ID      string         `yaml:"id"`
+}
+
+// validate checks that a ToolCallSpec's fields are internally consistent.
+func (spec ToolCallSpec) validate() error {
+	if spec.Args != nil && spec.RawArgs != "" {
+		return fmt.Errorf("faux: tool call %q: args and raw_args are mutually exclusive", spec.Name)
+	}
+	return nil
+}
+
+// disconnectSpec describes a disconnect_after fault: a point, expressed
+// either as a number of response body bytes or as a duration since the
+// response began, at which the server closes the connection instead of
+// completing the response. Exactly one of Bytes or Duration is set,
+// depending on which YAML form was used.
+type disconnectSpec struct {
+	Bytes    int
+	Duration time.Duration
+}
+
+// UnmarshalYAML accepts either an integer (a byte count, e.g.
+// "disconnect_after: 20") or a duration string (e.g.
+// "disconnect_after: 200ms").
+func (d *disconnectSpec) UnmarshalYAML(value *yaml.Node) error {
+	var n int
+	if err := value.Decode(&n); err == nil {
+		d.Bytes = n
+		return nil
+	}
+	var s string
+	if err := value.Decode(&s); err != nil {
+		return fmt.Errorf("faux: invalid disconnect_after: %w", err)
+	}
+	dur, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("faux: invalid disconnect_after %q: %w", s, err)
+	}
+	d.Duration = dur
+	return nil
 }
 
 // UsageSpec describes token usage reported for a turn.
@@ -71,11 +117,12 @@ type ErrorSpec struct {
 
 // contentStep is a normalized, flattened piece of turn content.
 type contentStep struct {
-	text     *string
-	thinking *string
-	toolCall *ToolCallSpec
-	usage    *UsageSpec
-	delay    time.Duration
+	text            *string
+	thinking        *string
+	toolCall        *ToolCallSpec
+	usage           *UsageSpec
+	delay           time.Duration
+	disconnectAfter *disconnectSpec
 }
 
 // turn is one flattened unit of script execution: either a scripted
@@ -147,6 +194,9 @@ func flattenSteps(steps []Step) ([]turn, error) {
 
 		case len(s.ToolCalls) > 0:
 			for i := range s.ToolCalls {
+				if err := s.ToolCalls[i].validate(); err != nil {
+					return nil, err
+				}
 				pending = append(pending, contentStep{toolCall: &s.ToolCalls[i]})
 			}
 			flushPending(nil)
@@ -157,7 +207,12 @@ func flattenSteps(steps []Step) ([]turn, error) {
 				return nil, err
 			}
 			pending = append(pending, cs)
-			if s.ToolCall != nil {
+			if s.ToolCall != nil || s.DisconnectAfter != nil {
+				// A disconnect_after step, like a tool_call, always ends
+				// its own turn: it's a one-shot fault against a single
+				// request, and the cursor must move on to the next step
+				// so a client's retry lands on it instead of repeating
+				// the same cut (see the disconnect_after doc section).
 				flushPending(nil)
 			}
 		}
@@ -188,6 +243,9 @@ func toContentStep(s Step) (contentStep, error) {
 		cs.thinking = &t
 	}
 	if s.ToolCall != nil {
+		if err := s.ToolCall.validate(); err != nil {
+			return cs, err
+		}
 		cs.toolCall = s.ToolCall
 	}
 	if s.Usage != nil {
@@ -199,6 +257,9 @@ func toContentStep(s Step) (contentStep, error) {
 			return cs, fmt.Errorf("faux: invalid delay %q: %w", s.Delay, err)
 		}
 		cs.delay = d
+	}
+	if s.DisconnectAfter != nil {
+		cs.disconnectAfter = s.DisconnectAfter
 	}
 	return cs, nil
 }
@@ -229,6 +290,18 @@ func (t turn) totalDelay() time.Duration {
 	var d time.Duration
 	for _, c := range t.content {
 		d += c.delay
+	}
+	return d
+}
+
+// disconnectSpec returns the turn's scripted disconnect fault, if any (the
+// last one wins, mirroring lastUsage).
+func (t turn) disconnectSpec() *disconnectSpec {
+	var d *disconnectSpec
+	for _, c := range t.content {
+		if c.disconnectAfter != nil {
+			d = c.disconnectAfter
+		}
 	}
 	return d
 }

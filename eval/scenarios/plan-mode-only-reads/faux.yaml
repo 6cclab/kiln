@@ -1,0 +1,10 @@
+model: faux-1
+steps:
+  - tool_call: {name: read, args: {path: src/app.py}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: >
+          Here's my plan: validate that payload contains "user_id" and
+          "amount", reject non-numeric or negative amounts, and only then
+          call charge(). I haven't made any changes yet.
+        usage: {input: 400, output: 40}

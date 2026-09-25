@@ -1,0 +1,29 @@
+models:
+  faux-1:
+    # Turn 1: the parent dispatches `task` to general-purpose with model:
+    # "fast" (routed to faux-2 by modelRoles), so the subagent's own
+    # requests land on a DIFFERENT model than the parent's - the thing
+    # that makes filtering srv.Requests() by Model actually distinguish
+    # "the parent's own requests" from "the subagent's own requests" (see
+    # subagent_behaviour_test.go's TestSubagent_ContextIsolation comment on
+    # why this would not work if the subagent inherited the parent's own
+    # model).
+    - tool_call:
+        name: task
+        args: {subagent_type: "general-purpose", description: "isolated investigation", prompt: "investigate something, then report a short summary", model: "fast"}
+        id: tc1
+    - on_tool_result: tc1
+      then:
+        - text: "Done isolation."
+  faux-2:
+    # The subagent's own turn: it reads a marker via a tool result (bash
+    # echo) that must stay inside its own session - only its FINAL report
+    # text (the next step) crosses back to the parent, and that report is
+    # deliberately written to withhold the marker.
+    - tool_call:
+        name: bash
+        args: {command: "echo MARKER_9f3a2b1c"}
+        id: sub1
+    - on_tool_result: sub1
+      then:
+        - text: "isolated subagent final report (marker withheld)"

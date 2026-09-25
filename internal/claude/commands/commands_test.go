@@ -37,6 +37,54 @@ func TestSplitFrontmatter(t *testing.T) {
 	})
 }
 
+// FuzzSplitFrontmatter feeds arbitrary bytes to SplitFrontmatter, which
+// must never panic - malformed YAML or a missing/truncated delimiter falls
+// back to treating the whole input as body.
+func FuzzSplitFrontmatter(f *testing.F) {
+	seeds := []string{
+		"---\ndescription: Track work\n---\nDo the thing.\n",
+		"Just a prompt.",
+		"---\n: : bad\n---\nStill works.\n",
+		"",
+		"---\n---\n",
+		"---",
+		"---\n\n---\n",
+		"---\ndescription: Track work\nargument-hint: <file>\nallowed-tools: Read, Grep\nmodel: sonnet\n---\nBody.",
+		"---\nallowed-tools:\n  - Read\n  - Grep\n---\nBody.",
+		"---\r\ndescription: crlf\r\n---\r\nBody.\r\n",
+		"---\ndescription: [not, a, string]\n---\nBody.",
+		"---\nallowed-tools: 42\n---\nBody.",
+		"---\ndescription: \"unterminated\n---\nBody.",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, source string) {
+		_, _ = SplitFrontmatter(source)
+	})
+}
+
+// FuzzApplyArguments feeds arbitrary body/args pairs to ApplyArguments,
+// which must never panic regardless of malformed placeholders.
+func FuzzApplyArguments(f *testing.F) {
+	seeds := []struct{ body, args string }{
+		{"Review $ARGUMENTS", "src/a.ts"},
+		{"Compare $1 to $2", "main dev"},
+		{"Summarize", "the repo"},
+		{"Review $ARGUMENTS", ""},
+		{"$999999999999999999", "x"},
+		{"$0 $-1 $abc", "one two"},
+		{"", ""},
+		{"$ARGUMENTS$ARGUMENTS", "a b c"},
+	}
+	for _, s := range seeds {
+		f.Add(s.body, s.args)
+	}
+	f.Fuzz(func(t *testing.T, body, args string) {
+		_ = ApplyArguments(body, args)
+	})
+}
+
 func TestApplyArguments(t *testing.T) {
 	t.Run("substitutes $ARGUMENTS", func(t *testing.T) {
 		if got := ApplyArguments("Review $ARGUMENTS", "src/a.ts"); got != "Review src/a.ts" {

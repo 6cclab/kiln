@@ -7,6 +7,38 @@ import (
 	"testing"
 )
 
+// FuzzLoad feeds arbitrary bytes, written to a temp keybindings.json, into
+// Load. It is a user-editable file, so it must never panic regardless of
+// how malformed the JSON is; an Error result is fine.
+func FuzzLoad(f *testing.F) {
+	seeds := []string{
+		"",
+		"{}",
+		"{ not json",
+		"[1,2,3]",
+		`{"a":"ctrl+s","b":"ctrl+s"}`,
+		"null",
+		"true",
+		`"just a string"`,
+		"42",
+		`{"a": 1, "b": true, "c": null, "d": ["x"], "e": {}}`,
+		`{"a":"ctrl+s","b":"ctrl+s","c":"ctrl+s"}`,
+		`{"unicode\u0000key": "ctrl+é"}`,
+		`{"a":"x"` + "\x00",
+	}
+	for _, s := range seeds {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "keybindings.json")
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		_ = Load(path)
+	})
+}
+
 func TestLoad(t *testing.T) {
 	dir := t.TempDir()
 

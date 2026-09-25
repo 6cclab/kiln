@@ -7,7 +7,7 @@ import (
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
-	"github.com/andrepato/harness/internal/testkit/faux"
+	"github.com/andrepato/harness/internal/testkit/fauxtest"
 )
 
 const script = `
@@ -23,15 +23,7 @@ steps:
 
 func startFaux(t *testing.T) string {
 	t.Helper()
-	s, err := faux.New(faux.Options{ScriptYAML: script})
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr, err := s.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	addr, _ := fauxtest.Start(t, script)
 	return "http://" + addr
 }
 
@@ -179,19 +171,11 @@ func TestOpenAICompletionsClientFauxRoundTrip(t *testing.T) {
 }
 
 func TestAnthropicClientErrorStep(t *testing.T) {
-	s, err := faux.New(faux.Options{ScriptYAML: `
+	addr, _ := fauxtest.Start(t, `
 model: faux-1
 steps:
   - error: {status: 529, type: overloaded_error, message: "Overloaded"}
-`})
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr, err := s.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+`)
 
 	model := fauxModel(provider.ApiAnthropicMessages, "http://"+addr)
 	client := &AnthropicClient{}
@@ -201,7 +185,7 @@ steps:
 		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("hi")}},
 	}, provider.StreamOptions{}, Auth{APIKey: "test-key"})
 	_ = collectEvents(events)
-	_, err = wait()
+	_, err := wait()
 	if err == nil {
 		t.Fatal("expected an error for a 529 response")
 	}

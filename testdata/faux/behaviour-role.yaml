@@ -1,0 +1,19 @@
+models:
+  faux-1:
+    # Turn 1: the parent dispatches `task` to general-purpose with model:
+    # "fast", which settings.json's modelRoles routes to faux-2.
+    - tool_call:
+        name: task
+        args: {subagent_type: "general-purpose", description: "fast lookup", prompt: "look up X fast", model: "fast"}
+        id: tc1
+    # Turn 2 (gated on tc1's tool result): the parent's own next request now
+    # carries the subagent's final report as tool_result content, so this
+    # canned text is not what proves the plumbing worked - the REQUEST BODY
+    # of this turn is (see subagent_behaviour_test.go's assertion on
+    # srv.Requests()).
+    - on_tool_result: tc1
+      then:
+        - text: "Parent received the fast lookup."
+  faux-2:
+    # The "fast"-routed subagent's own single-turn session.
+    - text: "fast subagent report BEHAVIOUR_ROLE_9c31"

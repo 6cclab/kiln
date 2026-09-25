@@ -958,6 +958,11 @@ func readStdin(r io.Reader) string {
 // That is the one place this implementation intentionally diverges from
 // cli.ts's control flow instead of following it.
 func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry) int {
+	if args.MaxTurnsErr != "" {
+		fmt.Fprintln(stderr, args.MaxTurnsErr)
+		return 1
+	}
+
 	promptText := args.PrintPrompt
 	if promptText == "" {
 		promptText = readStdin(stdin)
@@ -1062,13 +1067,58 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 		defer unsubVerbose()
 	}
 
+	// --max-turns (print mode only; the interactive TUI has a human who can
+	// just stop typing, so this cap has no equivalent there). turn.go's
+	// drive loop (internal/harness/turn.go) emits EventTurnEnd once per
+	// iteration whether or not that turn made tool calls, and emits the
+	// NEXT EventTurnStart only when it is about to loop back for another
+	// assistant request. EventTurnEnd alone can't tell "this was the last
+	// turn" from "more turns are coming" — but a subsequent EventTurnStart
+	// can: it only fires when the harness is about to request again. So
+	// once turnsAtEnd reaches MaxTurns, arm limitReached and cancel ctx
+	// from the *next* EventTurnStart, not from EventTurnEnd itself. A run
+	// that finishes exactly at turn N (final assistant message, no tool
+	// calls) returns from drive() without ever emitting that next
+	// EventTurnStart, so it is never cut off.
+	var maxTurnsHit bool
+	if args.MaxTurns > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+
+		turnsAtEnd := 0
+		limitReached := false
+		unsubEnd := started.Harness.Events().On(harness.EventTurnEnd, func(harness.Event) {
+			turnsAtEnd++
+			if turnsAtEnd >= args.MaxTurns {
+				limitReached = true
+			}
+		})
+		defer unsubEnd()
+		unsubStart := started.Harness.Events().On(harness.EventTurnStart, func(harness.Event) {
+			if limitReached && !maxTurnsHit {
+				maxTurnsHit = true
+				cancel()
+			}
+		})
+		defer unsubStart()
+	}
+
 	runResult, promptErr := started.Lane.Prompt(ctx, prompt, resolvedMentions.Images)
 	ok := runResult.Status == harness.StatusCompleted
-	result := collector.Finish(ok)
+	reason := ""
+	if maxTurnsHit {
+		ok = false
+		reason = "max-turns-exceeded"
+	}
+	stats := started.Harness.Stats()
+	result := collector.Finish(ok, stats, reason)
 	if rendered := FormatPrintResult(result, format); rendered != "" {
 		fmt.Fprintln(stdout, rendered)
 	}
-	if promptErr != nil {
+	if maxTurnsHit {
+		fmt.Fprintf(stderr, "kiln: stopped after %d turns (--max-turns)\n", args.MaxTurns)
+	} else if promptErr != nil {
 		fmt.Fprintln(stderr, "kiln:", promptErr)
 	}
 	if result.OK {

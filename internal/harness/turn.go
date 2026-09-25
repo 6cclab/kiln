@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/session"
@@ -548,6 +549,15 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	var result tool.Result
 	if before.Block != nil {
 		result = tool.Result{Content: msg.Blocks{msg.Text(before.Block.Reason)}, IsError: true}
+	} else if !l.toolActive(call.Name) {
+		active, _ := l.GetActiveTools()
+		diag.L().Info("tool refused: not active", "lane", l.name, "tool", call.Name, "active", active)
+		// The active set is not only what the model is offered: a subagent
+		// restricted to Read must not run bash because its model guessed
+		// the name, and a gated MCP tool must be activated through
+		// tool_search before it executes. Refusing here, not just in the
+		// schema, is what makes an allowlist an allowlist.
+		result = tool.Errorf("tool %q is not available to this agent: it is not in the active tool set", call.Name)
 	} else if t, ok := l.h.opts.Tools.Get(call.Name); ok {
 		argsJSON, _ := json.Marshal(args)
 		res, execErr := t.Execute(ctx, argsJSON, func(tool.Result) {}, tool.Invocation{ToolCallID: call.ID, ToolName: call.Name, Cwd: l.h.opts.Cwd})
@@ -651,4 +661,22 @@ func itoa(i int) string {
 		buf[pos] = '-'
 	}
 	return string(buf[pos:])
+}
+
+// toolActive reports whether name is in the lane's active tool set. A lane
+// with no recorded configuration (older sessions) or an empty set is not
+// filtered, matching buildStreamOptions' "offer nothing" only for the
+// schema side; execution stays permissive there so a resumed legacy
+// session keeps working.
+func (l *Lane) toolActive(name string) bool {
+	cfg, err := l.config()
+	if err != nil || len(cfg.ActiveToolNames) == 0 {
+		return true
+	}
+	for _, n := range cfg.ActiveToolNames {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }

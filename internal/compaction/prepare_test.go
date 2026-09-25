@@ -158,3 +158,29 @@ func newTurnAfterCompaction() []session.Entry {
 		assistantTextEntry("a-new", "done"),
 	}
 }
+
+// BenchmarkCompaction measures the preparation-only path over a synthetic
+// 300-message conversation: Prepare (cut-point selection, file-op
+// extraction) followed by SerializeConversation over the messages Prepare
+// selected for summarization. The full Compact call additionally streams a
+// summary from the model via a Streamer, which has no synthetic
+// counterpart available in a benchmark, so this measures the boundary
+// Compact hands off to the model at: everything up to and including
+// building the summarization prompt's conversation text.
+func BenchmarkCompaction(b *testing.B) {
+	entries := turnTranscript(75) // 75 turns * 4 entries/turn = 300 entries
+	settings := Settings{Enabled: true, ReserveTokens: 1000, KeepRecentTokens: 500}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prep, err := Prepare(entries, settings)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if prep == nil {
+			b.Fatal("Prepare returned nil, nil; want a Preparation")
+		}
+		_ = SerializeConversation(prep.MessagesToSummarize)
+	}
+}

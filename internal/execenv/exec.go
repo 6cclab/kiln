@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -147,22 +148,23 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 		return ExecResult{}, err
 	}
 
-	var timedOut bool
-	var timer *time.Timer
-	if opts.Timeout > 0 {
-		timer = time.AfterFunc(opts.Timeout, func() {
-			timedOut = true
-			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
-		})
+	if err := cmd.Start(); err != nil {
+		return ExecResult{}, err
 	}
 
-	if err := cmd.Start(); err != nil {
-		if timer != nil {
-			timer.Stop()
-		}
-		return ExecResult{}, err
+	// Armed only once Start has returned: the callback runs on the timer's
+	// goroutine and reads the process it kills, so arming it earlier raced
+	// with Start's own write of cmd.Process (seen under -race). The flag is
+	// atomic for the same reason: Stop does not synchronize with a callback
+	// that is already running.
+	var timedOut atomic.Bool
+	var timer *time.Timer
+	if opts.Timeout > 0 {
+		pid := cmd.Process.Pid
+		timer = time.AfterFunc(opts.Timeout, func() {
+			timedOut.Store(true)
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		})
 	}
 
 	var wg sync.WaitGroup
@@ -196,7 +198,7 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	final := capture.Snapshot()
 	mu.Unlock()
 
-	if timedOut {
+	if timedOut.Load() {
 		return ExecResult{TimedOut: true, Text: final.Text, Truncation: final.Truncation, SpillPath: final.SpillPath},
 			fmt.Errorf("timeout after %s", opts.Timeout)
 	}

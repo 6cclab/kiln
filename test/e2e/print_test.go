@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -44,11 +45,20 @@ func goldenPath(name string) string {
 	return filepath.Join(filepath.Dir(thisFile), "..", "..", "testdata", "golden", name)
 }
 
-// assertGolden compares actual against the golden file at path. With
-// UPDATE=1 it rewrites the golden file instead of comparing (used once, by
-// hand, to (re)generate testdata/golden/print-fix-bug.ndjson).
+// durationMSRe matches a result event's "duration_ms" field so
+// assertGolden can normalize it to a fixed value: wall-clock duration is
+// inherently non-deterministic between runs, so the golden file records
+// "duration_ms":0 and the raw value is asserted separately (see e.g.
+// TestPrint_ResultCarriesUsageAndTurns), never against the golden.
+var durationMSRe = regexp.MustCompile(`"duration_ms":\d+`)
+
+// assertGolden compares actual against the golden file at path, after
+// normalizing any "duration_ms":<n> to "duration_ms":0 in actual (see
+// durationMSRe). With UPDATE=1 it rewrites the golden file instead of
+// comparing (used once, by hand, to (re)generate testdata/golden/*.ndjson).
 func assertGolden(t *testing.T, path, actual string) {
 	t.Helper()
+	actual = durationMSRe.ReplaceAllString(actual, `"duration_ms":0`)
 	if os.Getenv("UPDATE") == "1" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -327,5 +337,157 @@ func TestPrint_EmptyPrompt_ExitsOne(t *testing.T) {
 	}
 	if !strings.Contains(res.Stderr, "usage:") {
 		t.Errorf("stderr = %q, want a usage message", res.Stderr)
+	}
+}
+
+// usageTurnsScript drives two turns, each with an explicit usage step, so
+// the aggregate usage the result event reports is a known sum rather than
+// faux's per-turn default (100 input / 50 output — see
+// internal/testkit/faux/anthropic.go's resolveUsage). Turn 1 ends in a
+// tool_call (a turn boundary); turn 2, gated on that tool's result, ends
+// with plain text and no further tool call, so the run completes after
+// exactly two assistant turns.
+const usageTurnsScript = `model: faux-1
+steps:
+  - text: "Looking around."
+    usage: {input: 300, output: 40}
+  - tool_call: {name: bash, args: {command: "echo hi"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "All done."
+        usage: {input: 512, output: 60}
+`
+
+// TestPrint_ResultCarriesUsageAndTurns checks the P1 enrichment of the
+// print-mode result: usage totals sum every scripted turn's usage step
+// (usageTurnsScript's 300+512 input, 40+60 output), num_turns counts the
+// two assistant turns (one tool-calling, one final), duration_ms is
+// positive (wall-clock, so only checked for sign — the golden comparison
+// itself normalizes it, see durationMSRe), and total_cost_usd is exactly 0
+// because faux-1 carries no pricing (internal/provider/faux/faux.go's
+// provider.ModelCost{}).
+func TestPrint_ResultCarriesUsageAndTurns(t *testing.T) {
+	addr, _ := startFaux(t, usageTurnsScript)
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+
+	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
+		"-p", "look around then report",
+		"--output-format", "json",
+		"--permission-mode", "dontAsk",
+	)
+	if res.Code != 0 {
+		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
+	}
+
+	var parsed struct {
+		OK    bool `json:"ok"`
+		Usage struct {
+			Input      int `json:"input"`
+			Output     int `json:"output"`
+			CacheRead  int `json:"cache_read"`
+			CacheWrite int `json:"cache_write"`
+		} `json:"usage"`
+		TotalCostUSD float64 `json:"total_cost_usd"`
+		DurationMS   int64   `json:"duration_ms"`
+		NumTurns     int     `json:"num_turns"`
+		NumToolCalls int     `json:"num_tool_calls"`
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), &parsed); err != nil {
+		t.Fatalf("parse json output: %v\n%s", err, res.Stdout)
+	}
+	if !parsed.OK {
+		t.Errorf("ok = false, stdout=%s", res.Stdout)
+	}
+	if parsed.Usage.Input != 812 {
+		t.Errorf("usage.input = %d, want 812 (300+512)", parsed.Usage.Input)
+	}
+	if parsed.Usage.Output != 100 {
+		t.Errorf("usage.output = %d, want 100 (40+60)", parsed.Usage.Output)
+	}
+	if parsed.NumTurns != 2 {
+		t.Errorf("num_turns = %d, want 2", parsed.NumTurns)
+	}
+	if parsed.NumToolCalls != 1 {
+		t.Errorf("num_tool_calls = %d, want 1", parsed.NumToolCalls)
+	}
+	if parsed.TotalCostUSD != 0 {
+		t.Errorf("total_cost_usd = %v, want 0 (faux-1 has no pricing)", parsed.TotalCostUSD)
+	}
+	if parsed.DurationMS <= 0 {
+		t.Errorf("duration_ms = %d, want > 0", parsed.DurationMS)
+	}
+}
+
+// maxTurnsScript would run four tool-calling turns followed by a fifth,
+// final, text-only turn if allowed to run to completion. --max-turns 2
+// should stop it after the second tool-calling turn, before the harness
+// ever requests a third.
+const maxTurnsScript = `model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "echo 1"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - tool_call: {name: bash, args: {command: "echo 2"}, id: tc2}
+      - on_tool_result: tc2
+        then:
+          - tool_call: {name: bash, args: {command: "echo 3"}, id: tc3}
+          - on_tool_result: tc3
+            then:
+              - tool_call: {name: bash, args: {command: "echo 4"}, id: tc4}
+              - on_tool_result: tc4
+                then:
+                  - text: "Done after 4."
+`
+
+// TestPrint_MaxTurns_StopsRun checks --max-turns's cancel-on-next-turn-start
+// behavior (see chat.go's runPrintMode doc comment on the EventTurnEnd /
+// EventTurnStart handoff): with --max-turns 2 against maxTurnsScript (which
+// wants 4 tool-calling turns plus a final text-only turn), the run is
+// cancelled once the harness is about to start turn 3, exits 1, and the
+// JSON result reports ok:false and reason:"max-turns-exceeded". The session
+// file is the independent check that the harness itself really stopped
+// after 2 turns rather than merely truncating the printed result: it holds
+// exactly 2 assistant message entries.
+func TestPrint_MaxTurns_StopsRun(t *testing.T) {
+	addr, _ := startFaux(t, maxTurnsScript)
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+
+	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
+		"-p", "run several commands",
+		"--output-format", "json",
+		"--permission-mode", "dontAsk",
+		"--max-turns", "2",
+	)
+	if res.Code != 1 {
+		t.Fatalf("exit code = %d, want 1; stdout=%s stderr=%s", res.Code, res.Stdout, res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "stopped after 2 turns") {
+		t.Errorf("stderr = %q, want a --max-turns stop message", res.Stderr)
+	}
+
+	var parsed struct {
+		OK       bool   `json:"ok"`
+		Reason   string `json:"reason"`
+		NumTurns int    `json:"num_turns"`
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), &parsed); err != nil {
+		t.Fatalf("parse json output: %v\n%s", err, res.Stdout)
+	}
+	if parsed.OK {
+		t.Errorf("ok = true, want false")
+	}
+	if parsed.Reason != "max-turns-exceeded" {
+		t.Errorf("reason = %q, want max-turns-exceeded", parsed.Reason)
+	}
+
+	sess := sessionFile(t, sessDir, proj)
+	raw, err := os.ReadFile(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(raw), `"role":"assistant"`); n > 2 {
+		t.Errorf("session file has %d assistant messages, want at most 2 (--max-turns 2 stopped the run):\n%s", n, raw)
 	}
 }

@@ -1,0 +1,34 @@
+model: faux-1
+steps:
+  # Turn 1: the parent dispatches `task` to "reader" (testdata/behaviour/
+  # subagents/reader.md, tools: Read). The subagent and the parent both
+  # inherit faux-1 (no roles configured), so they share one sequential
+  # cursor, same pattern as task.yaml.
+  - tool_call:
+      name: task
+      args: {subagent_type: "reader", description: "read then probe", prompt: "read a file, then run a shell command"}
+      id: tc1
+  # Turn 2: the reader subagent's own first turn. It is scripted to call
+  # bash even though its definition's allowlist is "Read" only - the tools
+  # actually offered to the model for this request are what
+  # subagent_behaviour_test.go inspects via srv.Requests()[i].Tools. What
+  # happens when this call is nonetheless made (whether the harness
+  # rejects it locally or actually executes it) is exactly what
+  # TestSubagent_ToolAllowlist verifies against the real production code -
+  # see that test's doc comment for the finding.
+  - tool_call:
+      name: bash
+      # The output must not equal the command text: the command is replayed
+      # as tool_use input in every later request, so only a string that
+      # exists solely in the OUTPUT proves the call executed.
+      args: {command: "printf ALLOWLIST_; printf OUT_c3d2"}
+      id: sub1
+  # Turn 3: the reader subagent's own final turn, gated on sub1's tool
+  # result.
+  - on_tool_result: sub1
+    then:
+      - text: "reader report: probe attempted"
+  # Turn 4: the parent's next turn, gated on tc1's tool result.
+  - on_tool_result: tc1
+    then:
+      - text: "Done allowlist."
