@@ -913,7 +913,16 @@ func (c *OpenAICodexResponsesClient) run(ctx context.Context, model provider.Mod
 		}
 	})
 	if streamErr != io.EOF {
-		return errorOut(partial, events, ctx.Err() != nil, streamErr)
+		// A read error before the terminal event (unexpected EOF from a
+		// mid-stream disconnect, or another transport failure) is a
+		// retryable transport failure, not a context cancellation -- unless
+		// the context itself was canceled/timed out, in which case that
+		// takes precedence and the stream is reported as aborted, not
+		// retried.
+		if ctx.Err() != nil {
+			return errorOut(partial, events, true, streamErr)
+		}
+		return errorOut(partial, events, false, provider.StreamInterrupted{Cause: streamErr})
 	}
 
 	if ctx.Err() != nil {

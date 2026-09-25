@@ -207,7 +207,7 @@ func checkFloors(w io.Writer, pkgs map[string]*pkgStats, floors map[string]float
 		}
 		got := st.percent()
 		if got+1e-9 < floor {
-			fmt.Fprintf(w, "FAIL %-50s %9.1f%% < floor %.1f%%\n", name, got, floor)
+			fmt.Fprintf(w, "FAIL %-50s %9.2f%% < floor %.2f%%\n", name, got, floor)
 			failing = append(failing, name)
 		}
 	}

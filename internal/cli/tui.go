@@ -243,6 +243,20 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	program := tea.NewProgram(model, opts...)
 	bridge.SetProgram(program)
 
+	// Finish any operation a previous process left running (see
+	// agent.ResumeIncomplete's doc comment) before the program starts
+	// accepting input — "the first user turn" for the TUI is whatever the
+	// person types into the editor, which cannot happen before
+	// program.Run() below, so this runs synchronously here instead.
+	// bridge.Commit only enqueues (see its own doc comment), so this note
+	// lands in the transcript right alongside the debug-log line and any
+	// MCP notices, all enqueued ahead of program.Run() the same way.
+	if _, err := agent.ResumeIncomplete(ctx, deps.Started, func(m string) {
+		bridge.Commit([]string{tui.Muted("  " + m)})
+	}); err != nil {
+		diag.L().Warn("resume incomplete operation", "err", err)
+	}
+
 	// The startup banner is cfg.Banner: the app commits it on its first
 	// frame, fitted to the terminal width. Commit only enqueues (see
 	// bridge.go's doc comment), so the rows below, enqueued before

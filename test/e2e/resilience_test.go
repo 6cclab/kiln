@@ -94,24 +94,29 @@ steps:
 // own 60s timeout (t.Fatal on expiry) so a hang would be reported as a
 // failure rather than left to run forever.
 //
-// Documents ACTUAL behaviour (verified against the real binary, not
-// assumed): the run does NOT retry and does NOT hang. It exits 1 with
-// stderr "kiln: unexpected EOF" and the recovery text is never reached.
-// This is a real asymmetry against TestResilience_OverloadedRetriesThenSucceeds
-// (a 529 status IS retried): internal/harness/retry.go's isRetriable does
-// treat a generic net.Error / "connection reset"/"EOF"-shaped error as
-// retriable in its own logic, so the gap is upstream of that check --
-// likely the streaming client surfaces "unexpected EOF" as a plain error
-// that never reaches isRetriable's classification, or the retry wrapper
-// isn't in the code path a mid-stream (as opposed to pre-response) cut
-// takes. Desired behaviour: a mid-stream disconnect should retry the same
-// way an overloaded/5xx response does, per this task's plan ("assert the
-// run completes (retry) or fails cleanly with exit 1 and no hang").
+// Fixed behaviour (previously this test documented a real gap: the run did
+// NOT retry a mid-stream disconnect, exiting 1 with stderr "kiln:
+// unexpected EOF" even though an overloaded/5xx response IS retried by
+// TestResilience_OverloadedRetriesThenSucceeds). The gap was that a plain
+// "unexpected EOF" read error never reached internal/harness/retry.go's
+// isRetriable as a recognized shape: it isn't a net.Error, and its message
+// doesn't match isRetriable's string-sniffing needles ("connection reset",
+// "429", "529", "overloaded", "timeout"). The fix: internal/provider/api's
+// streaming clients (anthropic_messages.go and the other Stream
+// implementations) now wrap a read error that happens before the stream's
+// terminal event in provider.StreamInterrupted (internal/provider/types.go),
+// and retry.go's isRetriable recognizes that type explicitly and treats it
+// as retriable, the same as a 429/529/5xx status. See
+// internal/provider/api/conformance_test.go's
+// TestAnthropicClientDisconnectMidStream and
+// internal/harness/retry_test.go's TestIsRetriable_StreamInterrupted for
+// the fix verified in isolation at the provider/retry-policy layer.
 //
-// Proved able to fail: temporarily inverted the exit-code check to
-// `if res.Code == 1 { t.Fatalf(...) }` -- went red with "exit code 1, want
-// 1 ... stderr=\"kiln: unexpected EOF\\n\"" -- then reverted to the
-// original `!= 1` check that matches the real, observed behaviour.
+// Proved able to fail (both directions): temporarily reverted retry.go's
+// isRetriable to not special-case provider.StreamInterrupted -- went red
+// with exit code 1 and stderr "kiln: unexpected EOF" (today's old,
+// documented-broken behaviour) -- then restored the fix, which turns this
+// test green again.
 func TestResilience_StreamCutMidResponse(t *testing.T) {
 	const script = `model: faux-1
 steps:
@@ -128,44 +133,23 @@ steps:
 	env["HARNESS_LOG_DIR"] = logDir
 	res := runHarness(t, proj, env, "-p", "hello", "--output-format", "text")
 
-	if res.Code != 1 {
-		t.Fatalf("exit code %d, want 1 (documenting today's fail-clean-no-retry behaviour on a mid-stream disconnect; see this test's doc comment for the gap against the 529 case); stdout=%q stderr=%q", res.Code, res.Stdout, res.Stderr)
+	if res.Code != 0 {
+		t.Fatalf("exit code %d, want 0 (a mid-stream disconnect should retry, same as a 529); stdout=%q stderr=%q", res.Code, res.Stdout, res.Stderr)
 	}
-	if !strings.Contains(res.Stderr, "unexpected EOF") {
-		t.Errorf("stderr = %q, want it to mention the disconnect (unexpected EOF)", res.Stderr)
+	if !strings.Contains(res.Stdout, "recovered after disconnect") {
+		t.Errorf("stdout missing the recovery text after the retried disconnect, got: %q", res.Stdout)
 	}
-	if strings.Contains(res.Stdout, "recovered after disconnect") {
-		t.Errorf("stdout unexpectedly contains the recovery text; the run is expected to fail before reaching it (today's behaviour) -- if a retry was added, this whole test should be rewritten to expect exit 0")
+
+	logText := resilienceReadLog(t, logDir)
+	if !strings.Contains(logText, "retry_scheduled") {
+		t.Errorf("run log missing a retry_scheduled line for the mid-stream disconnect:\n%s", logText)
 	}
 }
 
-// TestResilience_MalformedToolArgs scripts a bash tool_call with raw_args
-// set to invalid JSON (`{"command": ` — unterminated), which the faux
-// server splices in verbatim (see doc.go on raw_args) instead of
-// marshaling valid JSON.
-//
-// Documents ACTUAL behaviour (verified against the real binary, not
-// assumed): the harness does NOT surface this as a tool_result error. The
-// streaming client's incremental JSON parse of the tool call's
-// input_json_delta chunks apparently tolerates/recovers from the broken
-// JSON by falling back to an empty object ({}), so bash runs with no
-// command and returns its ordinary "(no output)" result with is_error
-// unset/false -- not an error tool_result naming the parse failure. The
-// run still completes and reaches the scripted final text (that part does
-// match the plan's expectation), but the model is never told its own tool
-// call was malformed.
-//
-// Desired behaviour, per this task's plan ("assert the model receives a
-// tool_result error"): a tool call whose arguments could not be parsed
-// should come back as an is_error tool_result explaining that, not silently
-// default to an empty/no-op call. This is a real gap, not a test bug.
-//
-// Proved able to fail: the committed assertion below fails if an is_error
-// tool_result IS found (documenting that none is, today). Temporarily
-// inverted it to fail if one is NOT found instead
-// (`if !resilienceFindErrorToolResult(parsed, "tc1") { t.Errorf(...) }`) --
-// went red (no is_error result exists, so the inverted check tripped) --
-// then reverted to the version matching reality.
+// TestResilience_MalformedToolArgs feeds a tool call whose arguments are
+// not valid JSON (faux raw_args). The provider flags it (ToolCall.InvalidArgs)
+// and the harness refuses to run the tool, returning an is_error tool_result
+// that names the parse failure.
 func TestResilience_MalformedToolArgs(t *testing.T) {
 	const script = `model: faux-1
 steps:
@@ -203,8 +187,15 @@ steps:
 		t.Fatalf("parse second request messages: %v\n%s", err, reqs[1].Messages)
 	}
 	// This documents the gap: today's tool_result is NOT an error.
-	if resilienceFindErrorToolResult(parsed, "tc1") {
-		t.Errorf("got an is_error tool_result for tc1 -- if malformed-arg handling was fixed to surface an error, update this test's doc comment and flip this assertion to require it; messages=%s", msgs)
+	// The harness refuses the call (internal/harness/turn.go beginTool,
+	// call.InvalidArgs) and the model receives an is_error tool_result naming
+	// the parse failure instead of a "(no output)" from bash run with empty
+	// arguments. Break to verify: drop the InvalidArgs branch in beginTool.
+	if !resilienceFindErrorToolResult(parsed, "tc1") {
+		t.Errorf("no is_error tool_result for tc1: the malformed call executed instead of being refused; messages=%s", msgs)
+	}
+	if !strings.Contains(msgs, "arguments were not valid JSON") {
+		t.Errorf("tool_result for tc1 does not name the JSON parse failure; messages=%s", msgs)
 	}
 }
 

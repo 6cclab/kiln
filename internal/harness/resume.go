@@ -23,6 +23,27 @@ import (
 //     prompt entry itself was durably recorded yet).
 //   - at any of the not-implemented states (deferred.*, summary.*): Resume
 //     returns an error naming the state instead of guessing.
+//
+// PendingOperation reports whether this lane's durable state still carries
+// an operation a previous process left running — normally because that
+// process crashed or was killed before the operation reached a terminal
+// state. finishOperation (turn.go) always clears
+// pi.lane.state.currentOperationId on completion, abort or failure, so a
+// non-nil value here can only mean the operation never got there: exactly
+// the case Resume (above) knows how to continue. ok is false for a lane
+// with no recorded state yet, or one whose last operation finished
+// cleanly — both are "nothing to resume", not an error.
+func (l *Lane) PendingOperation() (operationID string, ok bool) {
+	st, err := l.laneState()
+	if err != nil {
+		return "", false
+	}
+	if st.CurrentOperationID == nil {
+		return "", false
+	}
+	return *st.CurrentOperationID, true
+}
+
 func (l *Lane) Resume(ctx context.Context) (RunResult, error) {
 	st, err := l.laneState()
 	if err != nil {

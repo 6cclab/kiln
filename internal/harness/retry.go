@@ -7,6 +7,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/andrepato/harness/internal/provider"
 )
 
 // RetryPolicy is pi's NormalizedRetryPolicy: retry on retriable provider
@@ -56,11 +58,17 @@ type RetriableError interface {
 	StatusCode() int
 }
 
-// isRetriable mirrors pi's retry predicate: HTTP 429/529/5xx, or a network
-// error (connection reset, timeout, DNS failure).
+// isRetriable mirrors pi's retry predicate: HTTP 429/529/5xx, a mid-stream
+// disconnect (provider.StreamInterrupted, e.g. an unexpected EOF partway
+// through an SSE response, before the terminal event), or a network error
+// (connection reset, timeout, DNS failure).
 func isRetriable(err error) bool {
 	if err == nil {
 		return false
+	}
+	var si provider.StreamInterrupted
+	if errors.As(err, &si) {
+		return true
 	}
 	var re RetriableError
 	if errors.As(err, &re) {

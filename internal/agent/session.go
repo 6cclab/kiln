@@ -189,8 +189,11 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 		ActiveToolNames: activeToolNames,
 		SystemPrompt:    systemPrompt,
 		Compaction:      compactionFromTier(tier),
-		Cwd:             cwd,
-		Now:             now,
+		// Every tool result is capped at the tier's share of the window
+		// before it is sent; the tools' own fixed limits are only a first line.
+		ToolOutputTokens: tier.ToolOutputTokens,
+		Cwd:              cwd,
+		Now:              now,
 	})
 	if err != nil {
 		_ = storage.Close()
@@ -217,6 +220,50 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 		Tier:           tier,
 		Created:        created,
 	}, nil
+}
+
+// ResumeIncomplete completes an operation a previous process left running
+// on started's lane — typically because that process crashed or was
+// killed mid-tool-call — before the caller issues its own first turn.
+// harness.Lane.Prompt always starts a brand-new operation and has no idea
+// a prior one never reached a terminal state (finishOperation, turn.go,
+// always clears pi.lane.state.currentOperationId on completion, abort or
+// failure), so this has to run first: it detects that leftover state via
+// harness.Lane.PendingOperation and, if found, drives it to completion via
+// harness.Lane.Resume (which re-executes whichever tool calls in the
+// interrupted batch never reached "outcome_ready", gets the model's
+// follow-up, and finishes the operation like any other).
+//
+// Callers must invoke this only once the lane's tool set and hooks are
+// fully wired (Resume re-runs tool calls, which needs both) — chat.go
+// calls it from print mode after the hook registrations and from the TUI
+// before program.Run(), both well after agent.Start and the hook wiring
+// that follows it.
+//
+// notice, if non-nil, receives one message before the attempt and, on
+// failure, one more naming the error; it is meant to be the same sink a
+// caller already uses for hook activity (print mode's stderr notice, the
+// TUI's transcript). A clean lane (PendingOperation reports ok=false) is a
+// silent no-op — resumed reports false and err is nil — so this is safe to
+// call unconditionally on every run, resumed or not.
+func ResumeIncomplete(ctx context.Context, started *Started, notice func(string)) (resumed bool, err error) {
+	if started == nil || started.Lane == nil {
+		return false, nil
+	}
+	operationID, pending := started.Lane.PendingOperation()
+	if !pending {
+		return false, nil
+	}
+	if notice != nil {
+		notice("resuming interrupted operation " + operationID)
+	}
+	if _, err := started.Lane.Resume(ctx); err != nil {
+		if notice != nil {
+			notice("failed to resume interrupted operation " + operationID + ": " + err.Error())
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // SetModel switches a started session's model, mirroring cli.ts's model

@@ -67,12 +67,27 @@ type ImageContent struct {
 
 // ToolCall is a model-issued tool invocation.
 type ToolCall struct {
-	Arguments        map[string]any `json:"arguments"`
-	ID               string         `json:"id"`
-	Name             string         `json:"name"`
-	Namespace        string         `json:"namespace,omitempty"`
-	ThoughtSignature string         `json:"thoughtSignature,omitempty"`
-	Type             string         `json:"type"`
+	Arguments map[string]any `json:"arguments"`
+	ID        string         `json:"id"`
+	// InvalidArgs holds the raw, not-yet-JSON argument text when the
+	// provider layer could not parse the model's accumulated tool-call
+	// arguments as JSON (e.g. a truncated/malformed input_json_delta
+	// stream). When set, Arguments is left empty rather than silently
+	// defaulting to {}, so a consumer can tell "no arguments" apart from
+	// "arguments the model sent were broken".
+	//
+	// TODO(harness/turn.go beginTool): turn.go must check
+	// `call.InvalidArgs != ""` before executing a tool and, if set, return
+	// an error tool.Result (e.g. tool.Errorf("tool call arguments were not
+	// valid JSON: %s", call.InvalidArgs) or a more specific parse-error
+	// message) instead of calling t.Execute with empty/zero-value args.
+	// turn.go is owned by another agent this phase, so that two-line
+	// change is not made here -- see this task's report.
+	InvalidArgs      string `json:"invalidArgs,omitempty"`
+	Name             string `json:"name"`
+	Namespace        string `json:"namespace,omitempty"`
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
+	Type             string `json:"type"`
 }
 
 func (TextContent) contentType() string     { return "text" }

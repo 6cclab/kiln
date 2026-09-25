@@ -62,19 +62,18 @@ func gapWriteHooks(t *testing.T, proj, event, matcher string, commands ...string
 // tool_response reaches the hook) and context-json.sh (emits
 // hookSpecificOutput.additionalContext - see testdata/hooks/context-json.sh).
 //
-// Read directly rather than assumed: internal/cli/chat.go's
-// OnAfterTool callback (around chat.go:808) calls
-// claudehooks.RunHooks(...) for PostToolUse and DISCARDS its return value
-// entirely - the call's result is never assigned to a variable, so
-// nothing a PostToolUse hook returns (additionalContext, a block) can
-// ever reach the model or the run. This is a real gap, not something
-// this test works around: the test documents both halves - the payload
-// *is* delivered to the hook (tool_response present), but the hook's
-// own JSON output (additionalContext) never makes it into the next
-// request. Desired behavior: PostToolUse's outcome.Context should be
-// appended the same way UserPromptSubmit's is (see
-// TestHooks_UserPromptSubmit_Context in hooks_test.go for the working
-// version of this wiring on a different event).
+// Fixed in internal/cli/chat.go: OnAfterTool now captures RunHooks'
+// Outcome instead of discarding it. Read directly
+// (internal/harness/turn.go's commitToolResult): the tool's own
+// toolResult entry is already committed to the branch by the time
+// invokeAfterTool runs, so additionalContext cannot be appended to the
+// tool_result content itself; it is queued instead and threaded into the
+// transcript via the transform_context hook (turn.go:183 calls
+// invokeTransformContext right before every assistant request,
+// including the one immediately following this tool result within the
+// same operation). A PostToolUse block decision is reported to the user
+// via the notice sink, since the tool has already run and cannot be
+// undone - matching Claude Code's own PostToolUse semantics.
 //
 // Proved able to fail (for the half that does work): commenting out
 // record-payload.sh's invocation (passing zero commands) turned this red
@@ -108,19 +107,18 @@ func TestHooks_PostToolUse_ReceivesResultAndCanAddContext(t *testing.T) {
 		t.Errorf("payload = %s, want a tool_response field (the tool's own result)", raw)
 	}
 
-	// Documenting today's gap: context-json.sh's additionalContext
-	// ("extra context from hook") is never threaded into any later
-	// request, because chat.go discards PostToolUse's Outcome. If this
-	// assertion ever starts failing (finding the text), the gap has been
-	// fixed and this test should be tightened to require it, not loosened.
+	// context-json.sh's additionalContext ("extra context from hook") must
+	// reach the model on a later request, threaded in via the
+	// transform_context hook (see this test's doc comment for why it
+	// cannot land inside the tool_result itself).
 	var sawContext bool
 	for _, r := range srv.Requests() {
 		if strings.Contains(string(r.Messages), "extra context from hook") {
 			sawContext = true
 		}
 	}
-	if sawContext {
-		t.Log("PostToolUse additionalContext now reaches the model - the gap described in this test's doc comment appears to be fixed; update the comment and assertion")
+	if !sawContext {
+		t.Errorf("no request carried PostToolUse's additionalContext (%q); want it threaded into a later request", "extra context from hook")
 	}
 }
 

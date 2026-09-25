@@ -554,6 +554,27 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 				events <- msg.StreamEvent{Type: msg.EventThinkingEnd, ContentIndex: pos, Content: tc.Thinking, Partial: partial}
 			case "toolCall":
 				tc := partial.Content[pos].(msg.ToolCall)
+				// Validate the fully-accumulated argument JSON now that the
+				// block is closed, rather than trusting whatever the last
+				// successful per-delta parse left in tc.Arguments: each
+				// input_json_delta above only updates Arguments when that
+				// delta's accumulated prefix happens to parse, so a stream
+				// that ends mid-object (e.g. a raw, unterminated
+				// `{"path": `) silently leaves Arguments at its last-good
+				// value (often {}) with no signal that the model's real
+				// tool call was malformed. Re-parsing the whole
+				// accumulated string here catches that.
+				if bi.partialJSON != "" {
+					var args map[string]any
+					if err := json.Unmarshal([]byte(bi.partialJSON), &args); err != nil {
+						tc.Arguments = map[string]any{}
+						tc.InvalidArgs = bi.partialJSON
+					} else {
+						tc.Arguments = args
+						tc.InvalidArgs = ""
+					}
+					partial.Content[pos] = tc
+				}
 				events <- msg.StreamEvent{Type: msg.EventToolCallEnd, ContentIndex: pos, ToolCall: &tc, Partial: partial}
 			}
 		case "message_delta":
@@ -586,7 +607,16 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 		}
 	})
 	if streamErr != io.EOF {
-		return errorOut(partial, events, ctx.Err() != nil, streamErr)
+		// A read error before the terminal event (unexpected EOF from a
+		// mid-stream disconnect, or another transport failure) is a
+		// retryable transport failure, not a context cancellation -- unless
+		// the context itself was canceled/timed out, in which case that
+		// takes precedence and the stream is reported as aborted, not
+		// retried.
+		if ctx.Err() != nil {
+			return errorOut(partial, events, true, streamErr)
+		}
+		return errorOut(partial, events, false, provider.StreamInterrupted{Cause: streamErr})
 	}
 
 	if ctx.Err() != nil {

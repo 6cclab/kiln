@@ -302,84 +302,93 @@ func budgetBuildMCPFixtureConfig(t *testing.T) string {
 }
 
 // TestBudget_ToolOutputTruncated exercises internal/budget's
-// ToolOutputTokens ceiling. There is no per-tier truncation on a live bash
-// tool_result today: internal/tools/bash.go truncates by fixed line/byte
-// counts (execenv.DefaultMaxBytes and a line cap), independent of the
-// model's tier. The mechanism that IS gated by ToolOutputTokens is `@path`
-// mention inlining (internal/cli/mentions.go's ResolveMentions, wired into
-// the headless print path at internal/cli/chat.go:1027 -- "@path inlines
-// files here too. A prompt that behaves differently under -p than it does
-// interactively is a trap"). So this test mentions a large file in the
-// prompt and checks it gets capped to (approximately) the tier's
-// ToolOutputTokens on faux-2 (small tier => small per-mention budget) while
-// fitting whole on faux-1.
+// ToolOutputTokens ceiling against a *live tool_result*, not an @mention.
 //
-// Desired behaviour, if a genuine per-tier cap on live tool_result content
-// is wanted (not just @mentions): none exists in internal/tools/bash.go
-// today; this test documents that gap rather than asserting something
-// untrue about it.
+// Previously (see git history) this test documented a real gap: only
+// `@path` mention inlining (internal/cli/mentions.go) was gated by
+// ToolOutputTokens, while a live bash tool_result used internal/tools/
+// bash.go's fixed line/byte limits (execenv.DefaultMaxBytes, a line cap)
+// regardless of the model's tier -- so on a 32k model a tool result could
+// carry far more than its tier's ToolOutputTokens share. The fix
+// (internal/harness/toolout.go's truncateToolResult, called from
+// beginTool in turn.go) caps every tool result's text content at the
+// lane's ToolOutputTokens before it is committed, independent of which
+// tool produced it, with a "[truncated: N of M estimated tokens shown...]"
+// marker the model can act on. This test now asserts that behaviour
+// directly: the model issues one bash tool call whose output is sized to
+// land under bash.go's own 50KB/2000-line limit (so THAT limit never
+// fires) but over tier2's ToolOutputTokens, then the harness's second
+// request (which carries the tool_result) is checked for the cap and the
+// marker.
 //
-// Proved able to fail: temporarily inverted `len(msgs2) >= len(msgs1)` to
-// `len(msgs2) <= len(msgs1)` -- went red with "faux-2's first request
-// messages (15052 bytes) not shorter than faux-1's (29281 bytes)" --
-// confirming the two runs really do produce different-sized requests, not
-// identical ones -- then reverted.
+// NOTE: internal/harness.Options has no wiring from internal/agent's
+// session.Start into ToolOutputTokens yet (internal/agent is owned by
+// another agent in this workstream) -- see this file's accompanying
+// report for the one-line wiring needed in internal/agent/session.go.
+// Until that lands, ToolOutputTokens stays 0 (unlimited) end to end and
+// this test is expected to fail red, which is intentional: it asserts the
+// intended behaviour, not the currently-wired one.
 func TestBudget_ToolOutputTruncated(t *testing.T) {
 	tier2 := budget.TierForWindow(32768)
 
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
 
-	// One big file: comfortably over tier2's ToolOutputTokens (a small
-	// tier's floor/share is a few hundred to low thousands of tokens; see
-	// budget/tier.go's shareToolOutput=0.12 and its 2,048 floor) but well
-	// under tier1's (128k window => much larger share).
-	// Sized (empirically, against countTokens' message-wrapped estimate) to
-	// fit under tier1's ToolOutputTokens (~15,360 for a 128k window) but
-	// overflow tier2's (~3,932 for a 32k window).
-	const bigLines = 550
-	var big strings.Builder
-	for i := 0; i < bigLines; i++ {
-		fmt.Fprintf(&big, "line %04d: %s\n", i, strings.Repeat("x", 40))
-	}
-	bigPath := filepath.Join(proj, "big.txt")
-	budgetWriteFile(t, bigPath, big.String())
+	// Sized to land well under bash.go's own head-truncation limits
+	// (execenv.DefaultMaxLines=2000, DefaultMaxBytes=50KB) -- so that
+	// truncation, if it happens, is provably the harness's per-tier cap
+	// and not the tool's own fixed limit -- but comfortably over tier2's
+	// ToolOutputTokens (a few hundred to low thousands of tokens; see
+	// budget/tier.go's shareToolOutput=0.12 and its 2,048 floor).
+	const bigLines = 700
+	const lineWidth = 40
+	// 700 lines * ~48 bytes/line =~ 33.6KB, under the 50KB tool cap and
+	// well under the 2000-line cap, but tier2.ToolOutputTokens (chars/4
+	// estimate) is a few thousand tokens =~ a few thousand to ~16KB,
+	// smaller than this.
+	script := fmt.Sprintf(`model: faux-2
+steps:
+  - tool_call: {name: bash, args: {command: "for i in $(seq -w 0 %d); do printf 'line %%s: %s\n' \"$i\"; done"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "done"
+`, bigLines-1, strings.Repeat("x", lineWidth))
 
-	addr1, srv1 := startFaux(t, budgetSimpleScript)
-	env1 := baseEnv(home, sessDir, addr1)
-	env1["HARNESS_MODEL"] = "faux/faux-1"
-	res1 := runHarness(t, proj, env1, "-p", "@big.txt summarize", "--output-format", "json")
-	if res1.Code != 0 {
-		t.Fatalf("faux-1 run: exit %d, stderr=%s", res1.Code, res1.Stderr)
+	addr, srv := startFaux(t, script)
+	env := baseEnv(home, sessDir, addr)
+	env["HARNESS_MODEL"] = "faux/faux-2"
+	res := runHarness(t, proj, env, "-p", "run the command", "--output-format", "json", "--permission-mode", "dontAsk")
+	if res.Code != 0 {
+		t.Fatalf("run: exit %d, stderr=%s", res.Code, res.Stderr)
 	}
-	reqs1 := srv1.Requests()
-	if len(reqs1) == 0 {
-		t.Fatal("faux-1: no requests recorded")
-	}
-	msgs1 := string(reqs1[0].Messages)
 
-	addr2, srv2 := startFaux(t, budgetSimpleScript)
-	env2 := baseEnv(home, sessDir, addr2)
-	env2["HARNESS_MODEL"] = "faux/faux-2"
-	res2 := runHarness(t, proj, env2, "-p", "@big.txt summarize", "--output-format", "json")
-	if res2.Code != 0 {
-		t.Fatalf("faux-2 run: exit %d, stderr=%s", res2.Code, res2.Stderr)
+	reqs := srv.Requests()
+	if len(reqs) < 2 {
+		t.Fatalf("expected at least 2 recorded requests (initial + post-tool_result), got %d", len(reqs))
 	}
-	reqs2 := srv2.Requests()
-	if len(reqs2) == 0 {
-		t.Fatal("faux-2: no requests recorded")
-	}
-	msgs2 := string(reqs2[0].Messages)
+	// The tool_result lands in the request that follows the one carrying
+	// the tool_call; with a single tool call that is reqs[1].
+	msgs := string(reqs[1].Messages)
 
-	tailMarker := fmt.Sprintf("line %04d", bigLines-1)
-	if strings.Contains(msgs1, tailMarker) && !strings.Contains(msgs2, tailMarker) {
-		// Good: faux-1 (large budget) got the whole file, faux-2 (small
-		// budget, ToolOutputTokens=%d) got a head-truncated version.
-	} else {
-		t.Errorf("expected faux-1's request to contain the file's tail (%s) and faux-2's to have it cut; faux1 has tail=%v faux2 has tail=%v (tier2.ToolOutputTokens=%d)",
-			tailMarker, strings.Contains(msgs1, tailMarker), strings.Contains(msgs2, tailMarker), tier2.ToolOutputTokens)
+	if !strings.Contains(msgs, "tool_result") {
+		t.Fatalf("reqs[1].Messages does not contain a tool_result block: %s", msgs)
 	}
-	if len(msgs2) >= len(msgs1) {
-		t.Errorf("faux-2's first request messages (%d bytes) not shorter than faux-1's (%d bytes)", len(msgs2), len(msgs1))
+
+	tailMarker := fmt.Sprintf("line %03d", bigLines-1)
+	if strings.Contains(msgs, tailMarker) {
+		t.Errorf("expected the tool_result to be truncated (tier2.ToolOutputTokens=%d), but its tail (%s) is still present", tier2.ToolOutputTokens, tailMarker)
+	}
+	if !strings.Contains(msgs, "[truncated:") {
+		t.Errorf("expected a truncation marker (\"[truncated: N of M estimated tokens shown...\") in the tool_result, found none:\n%s", msgs)
+	}
+
+	// The whole request body should be comfortably smaller than what the
+	// full ~33.6KB untruncated output plus surrounding JSON would produce
+	// (a loose upper bound -- this is a sanity check on the cap actually
+	// biting, not a precise budget assertion; the marker + head-only
+	// check above is the precise one).
+	const looseUpperBound = 25_000
+	if len(msgs) > looseUpperBound {
+		t.Errorf("reqs[1].Messages is %d bytes, want < %d (loose bound suggesting truncation actually shrank the payload)", len(msgs), looseUpperBound)
 	}
 }

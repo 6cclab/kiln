@@ -392,6 +392,30 @@ type AuthSpec struct {
 	IsSubscription bool
 }
 
+// StreamInterrupted marks a stream that ended abnormally before its
+// terminal event -- an unexpected EOF or another read error while the
+// connection was mid-response, as opposed to a clean stream end (a normal
+// io.EOF after the terminal SSE/JSON event was already parsed, or a
+// context cancellation). It is always retriable, the same as a
+// 429/529/5xx status: retry.go's isRetriable recognizes it explicitly so a
+// mid-stream disconnect is retried like an overloaded/5xx response,
+// instead of surfacing as a bare "unexpected EOF" that isRetriable's
+// string-sniffing fallback does not recognize.
+type StreamInterrupted struct {
+	// Cause is the underlying read/transport error (e.g. io.ErrUnexpectedEOF).
+	Cause error
+}
+
+func (e StreamInterrupted) Error() string {
+	if e.Cause == nil {
+		return "provider: stream interrupted"
+	}
+	return "provider: stream interrupted: " + e.Cause.Error()
+}
+
+// Unwrap exposes Cause to errors.Is/errors.As.
+func (e StreamInterrupted) Unwrap() error { return e.Cause }
+
 // Provider is one model backend the harness can stream through.
 type Provider interface {
 	ID() string

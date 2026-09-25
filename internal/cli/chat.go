@@ -808,12 +808,46 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return harness.BeforeToolResult{}, nil
 	})
 
+	// postToolCtxQueue carries PostToolUse additionalContext into the
+	// model's NEXT request via the transform_context hook.
+	//
+	// Read directly (internal/harness/turn.go's commitToolResult): the
+	// tool's own toolResult entry is committed to the branch (Storage.Commit
+	// at ~turn.go:627) BEFORE invokeAfterTool runs (~turn.go:633) — so by
+	// the time a PostToolUse hook sees the result, it has already been
+	// written; mutating *msg.ToolResultMessage in this handler would not
+	// change what is on disk. additionalContext therefore cannot be
+	// appended to the tool result itself. Instead it rides the
+	// transform_context seam (drive()'s loop calls invokeTransformContext
+	// right before every assistant request, turn.go:183), which fires
+	// again immediately after this tool result — within the same
+	// operation, before the model's next turn — so the context still
+	// reaches the very next request, just as a synthetic context message
+	// rather than as part of the tool_result content block.
+	var postToolCtxMu sync.Mutex
+	var postToolCtxQueue []string
+	started.Harness.Hooks().OnTransformContext(func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error) {
+		postToolCtxMu.Lock()
+		pending := postToolCtxQueue
+		postToolCtxQueue = nil
+		postToolCtxMu.Unlock()
+		if len(pending) == 0 {
+			return transcript, nil
+		}
+		text := fmt.Sprintf("<hook-context>\n%s\n</hook-context>", strings.Join(pending, "\n\n"))
+		return append(transcript, msg.UserMessage{
+			Role:      msg.RoleUser,
+			Content:   msg.Blocks{msg.Text(text)},
+			Timestamp: time.Now().UnixMilli(),
+		}), nil
+	})
+
 	started.Harness.Hooks().OnAfterTool(func(ctx context.Context, call msg.ToolCall, result *msg.ToolResultMessage) error {
 		var toolResponse any
 		if result != nil {
 			toolResponse = result.Content
 		}
-		claudehooks.RunHooks(claudehooks.RunOptions{
+		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
 			Config:      hookConfig,
 			Event:       claudehooks.PostToolUse,
 			ToolName:    call.Name,
@@ -828,6 +862,20 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			},
 			OnNotice: notice,
 		})
+		if len(outcome.Context) > 0 {
+			postToolCtxMu.Lock()
+			postToolCtxQueue = append(postToolCtxQueue, outcome.Context...)
+			postToolCtxMu.Unlock()
+		}
+		if outcome.Blocked != nil {
+			// PostToolUse cannot undo a tool that already ran (the result is
+			// already committed — see the doc comment above). Claude Code's
+			// own semantics for this event are the same: a block decision
+			// here can only flag the run, not retroactively refuse the
+			// call. Reported to the user, matching the Stop-hook block
+			// handling above (~chat.go:693-695), not fed back to the model.
+			notice("PostToolUse hook blocked (tool already ran, cannot be undone): " + outcome.Blocked.Reason)
+		}
 		return nil
 	})
 
@@ -1066,6 +1114,19 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 	if unsubVerbose != nil {
 		defer unsubVerbose()
 	}
+
+	// Finish any operation a previous process left running (see
+	// agent.ResumeIncomplete's doc comment) before this prompt's own turn
+	// starts, and before --max-turns starts counting below — a resumed
+	// operation's turns belong to the interrupted run, not to this
+	// invocation's own turn budget. Done after the collector above has
+	// already subscribed to the harness's events, so the resumed
+	// operation's own tool calls and final text are captured into this
+	// run's PrintResult exactly like the new prompt's own turn: a resumed
+	// run's reply is real output, not something to discard just because it
+	// came from an interrupted operation instead of this call's own
+	// prompt.
+	agent.ResumeIncomplete(ctx, started, notice)
 
 	// --max-turns (print mode only; the interactive TUI has a human who can
 	// just stop typing, so this cap has no equivalent there). turn.go's

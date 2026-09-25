@@ -29,6 +29,12 @@ type Options struct {
 	// compaction-only provider.
 	Compaction CompactionSettings
 
+	// ToolOutputTokens is the tier's ceiling for a single tool result's
+	// text content before beginTool truncates it (see toolout.go). 0 (the
+	// zero value) means unlimited: tool results are committed as-is,
+	// same as before this field existed.
+	ToolOutputTokens int
+
 	Retry RetryPolicy
 
 	Cwd string

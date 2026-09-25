@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -198,6 +199,84 @@ steps:
 	}
 	if statusErr.Status != 529 || !statusErr.Retriable {
 		t.Fatalf("status error = %+v, want status=529 retriable=true", statusErr)
+	}
+}
+
+// TestAnthropicClientDisconnectMidStream drives the real AnthropicClient
+// against a faux server that cuts the TCP connection mid-response
+// (disconnect_after), the same fault test/e2e/resilience_test.go's
+// TestResilience_StreamCutMidResponse exercises end to end. It asserts the
+// provider layer's half of that e2e test's fix in isolation: the resulting
+// error is a provider.StreamInterrupted (so internal/harness/retry.go's
+// isRetriable treats it the same as a 5xx/529 response), wrapping the
+// underlying read error (io.ErrUnexpectedEOF for a mid-chunk TCP cut).
+func TestAnthropicClientDisconnectMidStream(t *testing.T) {
+	addr, _ := fauxtest.Start(t, `
+model: faux-1
+steps:
+  - text: "this reply gets cut short"
+    disconnect_after: 20
+`)
+	model := fauxModel(provider.ApiAnthropicMessages, "http://"+addr)
+	client := &AnthropicClient{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events, wait := client.Stream(ctx, model, []msg.Message{
+		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("hi")}},
+	}, provider.StreamOptions{}, Auth{APIKey: "test-key"})
+	_ = collectEvents(events)
+	_, err := wait()
+	if err == nil {
+		t.Fatal("expected an error for a mid-stream disconnect")
+	}
+	var si provider.StreamInterrupted
+	if !errors.As(err, &si) {
+		t.Fatalf("expected a provider.StreamInterrupted, got %T: %v", err, err)
+	}
+	if si.Cause == nil {
+		t.Fatalf("StreamInterrupted.Cause is nil, want the underlying read error (e.g. io.ErrUnexpectedEOF)")
+	}
+}
+
+// TestAnthropicClientMalformedToolArgs drives the real AnthropicClient
+// against a faux server scripting a tool call with raw_args set to
+// unterminated JSON (`{"path": `), the same faux script
+// test/e2e/resilience_test.go's TestResilience_MalformedToolArgs uses. It
+// asserts the provider-visible half of that gap: the accumulated tool call
+// ends with ToolCall.InvalidArgs set to the raw, unparsed text and
+// Arguments left empty, rather than silently defaulting Arguments to {}
+// with no signal that the model's tool call was malformed.
+//
+// The harness-side half (internal/harness/turn.go's beginTool must check
+// call.InvalidArgs != "" and return an error tool_result instead of
+// executing) is a separate, not-yet-made change; see this task's report.
+func TestAnthropicClientMalformedToolArgs(t *testing.T) {
+	addr, _ := fauxtest.Start(t, `
+model: faux-1
+steps:
+  - tool_call: {name: bash, raw_args: '{"path": ', id: tc1}
+`)
+	model := fauxModel(provider.ApiAnthropicMessages, "http://"+addr)
+	client := &AnthropicClient{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events, wait := client.Stream(ctx, model, []msg.Message{
+		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("run something")}},
+	}, provider.StreamOptions{}, Auth{APIKey: "test-key"})
+	_ = collectEvents(events)
+	final, err := wait()
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	calls := msg.ToolCallsOf(final.Content)
+	if len(calls) != 1 || calls[0].Name != "bash" {
+		t.Fatalf("tool calls = %+v", calls)
+	}
+	if calls[0].InvalidArgs == "" {
+		t.Fatalf("tool call InvalidArgs is empty, want the raw unparsed args text")
+	}
+	if len(calls[0].Arguments) != 0 {
+		t.Fatalf("tool call Arguments = %+v, want empty when InvalidArgs is set", calls[0].Arguments)
 	}
 }
 

@@ -558,6 +558,10 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		// tool_search before it executes. Refusing here, not just in the
 		// schema, is what makes an allowlist an allowlist.
 		result = tool.Errorf("tool %q is not available to this agent: it is not in the active tool set", call.Name)
+	} else if call.InvalidArgs != "" {
+		// The provider could not parse the call's arguments; running the
+		// tool with empty arguments would silently do the wrong thing.
+		result = tool.Errorf("tool call arguments were not valid JSON: %s", call.InvalidArgs)
 	} else if t, ok := l.h.opts.Tools.Get(call.Name); ok {
 		argsJSON, _ := json.Marshal(args)
 		res, execErr := t.Execute(ctx, argsJSON, func(tool.Result) {}, tool.Invocation{ToolCallID: call.ID, ToolName: call.Name, Cwd: l.h.opts.Cwd})
@@ -571,7 +575,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	}
 
 	return msg.ToolResultMessage{
-		Content:    result.Content,
+		Content:    truncateToolResult(result.Content, l.h.opts.ToolOutputTokens),
 		Details:    result.Details,
 		IsError:    result.IsError,
 		Role:       msg.RoleToolResult,

@@ -8,15 +8,12 @@ package e2e
 // storage.go's Open (auto-upgrades a legacy v3 file in place via
 // UpgradeLegacyV3 before reopening it), internal/session/jsonl/repo.go's
 // readSessionMetadata (a legacy header's own "id"/"cwd"/"timestamp"
-// fields are what --resume matches against, before any upgrade),
-// internal/harness/turn.go's Prompt (starts a brand-new operation every
-// call - no code path anywhere in this repo checks laneState.
-// CurrentOperationID or calls Lane.Resume from the CLI at all; grepped
-// the whole tree for `.Resume(` and `CurrentOperationID` outside
-// internal/harness's own package and found nothing), and
-// internal/harness/resume.go's Lane.Resume (which DOES know how to
-// replay a pending tool batch, but is simply never invoked in this
-// binary's actual startup path).
+// fields are what --resume matches against, before any upgrade), and
+// internal/harness/resume.go's Lane.Resume (which knows how to replay a
+// pending tool batch) plus its PendingOperation helper, now called from
+// internal/cli/chat.go (print mode) and internal/cli/tui.go (interactive)
+// before either mode's first turn — see internal/agent/session.go's
+// ResumeIncomplete, which both call.
 
 import (
 	"encoding/json"
@@ -27,8 +24,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/session/jsonl"
 )
+
+// toolResultCount opens the session file directly (rather than grepping its
+// raw JSONL text, which also contains the transient pi.pending.entry write
+// every tool result passes through on its way to being committed — the
+// same toolCallId legitimately appears twice in the raw log for one real
+// result) and counts durable toolResult entries on record for toolCallID.
+func toolResultCount(t *testing.T, path, toolCallID string) int {
+	t.Helper()
+	st, err := jsonl.Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	count := 0
+	for _, e := range st.ScanEntries(session.EntryScan{}) {
+		if tr, ok := e.Message.(msg.ToolResultMessage); ok && tr.ToolCallID == toolCallID {
+			count++
+		}
+	}
+	return count
+}
 
 // TestSession_LegacyV3FixtureResumes copies testdata/sessions/legacy-v3-
 // fixture.jsonl into the scratch project's session bucket (rewriting only
@@ -179,28 +199,22 @@ func startHarnessBackground(t *testing.T, dir string, env map[string]string, arg
 // still deciding what to do) plus a fixed buffer, SIGKILLs the harness
 // process outright, and then runs `--resume <id>` with a fresh prompt.
 //
-// This documents a real gap, not a working recovery path. Read directly:
-// internal/harness/turn.go's Prompt unconditionally starts a brand-new
-// operation on every call (a fresh operationID, AtStarting state,
-// laneState.CurrentOperationID overwritten) - it never inspects whether
-// the lane already has a CurrentOperationID left over from a crash, and
-// Lane.Resume (resume.go), which DOES know how to replay a pending tool
-// batch, is never called anywhere outside internal/harness's own
-// package. So `--resume <id> -p "..."` after a mid-tool crash does not
-// continue the interrupted bash call - it starts an entirely new turn,
-// appended as a new entry in the same branch, right after the still-
-// unresolved assistant tool_call entry from the crashed run. Verified
-// live below: the session ends up with ZERO tool_result entries for the
-// interrupted call's id, ever - the call is simply abandoned, not
-// retried, not reported as failed, not replayed. Desired behavior (per
-// resume.go's own AtTools case, which already implements exactly this):
-// a `--resume` on a lane with a pending operation should call
-// Lane.Resume instead of Lane.Prompt, so the interrupted tool call is
-// re-run and gets a real tool_result before any new user turn is added.
+// Fixed in internal/cli/chat.go: before either mode's first turn, a
+// pending operation left by a crashed process (laneState.CurrentOperationID
+// still set - harness.Lane.PendingOperation, resume.go) is now completed
+// via harness.Lane.Resume before the new prompt is issued. Resume's own
+// AtTools case re-executes whichever tool calls in the interrupted batch
+// never reached "outcome_ready" (here, the sole `bash sleep 5` call, id
+// b1), commits a real tool_result for it, then drives the loop to the
+// model's follow-up and lets that operation finish before the new prompt
+// ("what happened?") starts a fresh one. Verified live below: the session
+// ends up with exactly ONE tool_result entry for b1's id, and the run
+// still reaches the interrupted turn's own scripted reply ("resumed
+// done") before the new prompt's turn runs.
 //
-// Proved able to fail: asserting the interrupted call's tool_result COUNT
-// is 1 (claiming it gets resolved) turned this red with "tool_result
-// entries for b1 = 0, want 1"; reverted to documenting the actual (zero)
+// Proved able to fail: asserting the interrupted call's tool_result count
+// is 0 (the old, broken behavior) turned this red with "tool_result
+// entries for b1 = 1, want 0"; reverted to requiring the fixed (one)
 // count.
 func TestSession_CrashMidToolThenResume(t *testing.T) {
 	addr, srv := startFaux(t, crashMidToolScript)
@@ -236,10 +250,12 @@ func TestSession_CrashMidToolThenResume(t *testing.T) {
 	if !strings.Contains(string(beforeResume), `"name":"bash"`) {
 		t.Fatalf("crashed session has no record of the bash tool_call at all - the process may have been killed too early:\n%s", beforeResume)
 	}
-	if strings.Contains(string(beforeResume), `"toolCallId":"b1"`) && strings.Contains(string(beforeResume), `"type":"toolResult"`) {
-		// Weak double-check; the real assertion is the post-resume count
-		// below, which counts precisely.
-		t.Log("session already shows some tool result content pre-resume; the post-resume count below is what actually matters")
+	// The tool call's id as actually recorded carries the wire-format
+	// prefix a real client echoes back exactly as given (faux's own
+	// toolResultPresent helper, internal/testkit/faux/server.go): "b1"
+	// becomes "toolu_b1" on the Anthropic-shaped wire, never bare "b1".
+	if n := toolResultCount(t, sess, "toolu_b1"); n != 0 {
+		t.Fatalf("session already has %d tool_result entries for toolu_b1 before resume ran at all; the process may not have been killed where this test expects", n)
 	}
 
 	id := sessionHeaderID(t, sess)
@@ -252,12 +268,7 @@ func TestSession_CrashMidToolThenResume(t *testing.T) {
 		t.Errorf("stdout = %q, want the resumed turn's reply", res.Stdout)
 	}
 
-	after, err := os.ReadFile(sess)
-	if err != nil {
-		t.Fatal(err)
-	}
-	toolResultsForB1 := strings.Count(string(after), `"toolCallId":"b1"`)
-	if toolResultsForB1 != 0 {
-		t.Errorf("session mentions toolCallId b1 %d time(s) after resume, want 0 (see this test's doc comment: the interrupted call is abandoned, not replayed, by today's --resume)", toolResultsForB1)
+	if n := toolResultCount(t, sess, "toolu_b1"); n != 1 {
+		t.Errorf("tool_result entries for toolu_b1 after resume = %d, want 1 (see this test's doc comment: --resume must replay the interrupted call exactly once, not abandon it or replay it more than once)", n)
 	}
 }
