@@ -6,7 +6,7 @@
 > the same underlying architecture. Where a row below still describes an
 > exact glyph or layout, treat it as historical context for the *behavior*
 > it documents, not as a rendering spec — see `kiln-design.md` for what the
-> harness actually draws today.
+> kiln actually draws today.
 
 kiln (née harness) keeps Claude Code's *feature surface* — keybindings, CLI
 flags, permission-mode semantics, hooks, MCP, slash commands, subagents — but
@@ -108,9 +108,9 @@ it must not start mid-turn. `/usage` reports the context budget, since no plan
 limit applies to a self-hosted model.
 
 `/plugin` reports that marketplaces are not supported and names what this
-harness extends with instead (skills, agents, commands, MCP, hooks).
+kiln extends with instead (skills, agents, commands, MCP, hooks).
 
-**Adapt:** `/login` `/logout` already exist in the harness CLI and should also
+**Adapt:** `/login` `/logout` already exist in kiln's CLI and should also
 be slash commands. `/usage` becomes budget/tier reporting rather than plan
 limits. `/fast` has no meaning here; `/effort` (§9) replaces it.
 
@@ -178,7 +178,7 @@ Claude Code's frame set.
 | `Ctrl+C` | clear input or interrupt; twice within 1s exits | done |
 | `Ctrl+D` | exit on empty input; passed to the editor otherwise | done |
 | `Ctrl+L` | clear the rendered transcript, not the conversation | done |
-| `Ctrl+R` | expand tool output and reasoning | done |
+| `Ctrl+O` | toggle detailed transcript (tool output and reasoning) | done |
 | `Shift+Tab` | cycle permission mode | done |
 | `Tab` | accept completion (pi-tui's editor) | done |
 
@@ -203,15 +203,15 @@ dropping one produces a key that works until it doesn't.
 | "esc to stop" while a turn is loading (CC: "esc to interrupt") | done |
 
 Claude Code shows `? for shortcuts` when idle and `esc to interrupt` while
-loading. The harness's status line replaces the idle hint (a status line always
+loading. kiln's status line replaces the idle hint (a status line always
 present is the documented divergence), so only the loading hint is threaded
 through — it rides the first status row while a turn runs. Its exact wording
 and colour theming are kiln's own — see `kiln-design.md`'s "Status line"
 section.
 
-**Harness addition, deliberately not in Claude Code:** live budget consumption
+**kiln addition, deliberately not in Claude Code:** live budget consumption
 against the active tier. On a 32k local model this is the difference between a
-working session and a mysterious truncation, and it is the one place the harness
+working session and a mysterious truncation, and it is the one place kiln
 should diverge — an addition, not a change to existing elements.
 
 ## 7a. Permission modes
@@ -236,12 +236,12 @@ are the two that carry most of the daily value.
 Related, also confirmed from `--help`:
 
 - **Effort levels** are `low | medium | high | xhigh | max` (`--effort`). Maps to
-  pi's `ThinkingLevel`, which the harness already threads through
+  pi's `ThinkingLevel`, which kiln already threads through
   `AgentHarnessOptions.thinkingLevel`.
 - **Settings sources** are `user`, `project`, `local` (`--setting-sources`),
   confirming the three-tier hierarchy Phase 4 must merge.
 - **Session names** are "shown in the prompt box, /resume picker, and terminal
-  title" — so the input box renders a name when one is set, and the harness
+  title" — so the input box renders a name when one is set, and kiln
   should set the terminal title too.
 - **`--ax-screen-reader`** renders "flat text, no decorative borders or
   animations". Worth mirroring: the whole TUI must degrade to plain text, which
@@ -300,13 +300,13 @@ fail with `Unknown model "" on provider "opus[1m]"`. It is now used only when it
 is in `provider/model` form.
 
 Subcommands worth mirroring: `doctor` (health check), `mcp` (manage servers),
-`auth` (manage credentials — the harness already has `login`/`logout`).
+`auth` (manage credentials — kiln already has `login`/`logout`).
 
 Out of scope, Anthropic-infrastructure specific: `gateway`, `install`,
 `update`, `ultrareview`, `setup-token`, `--from-pr`, `--remote-control`,
 `--chrome`, `--betas`.
 
-Notable for the budget work: `--max-budget-usd` caps spend per run. The harness
+Notable for the budget work: `--max-budget-usd` caps spend per run. kiln
 equivalent is the tier system, but a dollar cap still makes sense once a paid
 provider is in use — local models are free, subscriptions are not metered per
 call, but API keys are.
@@ -354,7 +354,7 @@ judges the rewritten command rather than the one the model proposed. See
 
 **Known upstream quirk:** `rtk-rewrite.sh` stops rewriting whenever a project
 `.claude/settings.local.json` exists, even an empty one. That is rtk's own
-behavior, not the harness's, and it makes end-to-end tests of rewriting
+behavior, not kiln's, and it makes end-to-end tests of rewriting
 unreliable in any repo that has one.
 
 

@@ -1,4 +1,4 @@
-# Testing the harness
+# Testing kiln
 
 Pick the cheapest layer that can actually observe the bug, and before writing an
 assertion, check it can fail. Every screen assertion runs against an emulated
@@ -29,7 +29,7 @@ model.
 
 `internal/testkit/faux` (owned separately from this document) runs a small
 HTTP server that speaks the Anthropic and OpenAI-compatible wire formats
-against a scripted transcript, so tests can drive harness against a fake
+against a scripted transcript, so tests can drive kiln against a fake
 model without hitting the network or a real API key. Tests that want it
 set:
 
@@ -39,7 +39,7 @@ set:
   turn-by-turn responses (and any tool calls) the faux server should play
   back for that test.
 - `HARNESS_MODEL=faux/faux-1` — selects the faux provider/model pair so
-  harness's normal model-selection path is exercised unchanged, rather than
+  kiln's normal model-selection path is exercised unchanged, rather than
   special-cased for tests.
 
 Use for anything that needs a real request/response round trip (streaming,

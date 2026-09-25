@@ -32,6 +32,10 @@ catalog are ports of [`@earendil-works/pi`](https://github.com/earendil-works/pi
 [Bubble Tea v2](https://github.com/charmbracelet/bubbletea); finished output is
 committed to the terminal's own scrollback, only the live region repaints.
 
+The interface follows the kiln "Ruled" design language (`docs/kiln-design.md`):
+a labelled hairline rule above every transcript block, a warm-dark truecolor
+palette, ruled diffs and permission prompts, and a block-letter banner.
+
 Model-agnostic by construction: local Ollama, an API key, or a Claude Pro/Max,
 ChatGPT Plus/Pro, GitHub Copilot, Kimi or xAI subscription. No code path branches
 on provider; only the budget tier differs.
@@ -71,9 +75,9 @@ call, retry and compaction. `kiln doctor` prints the directory and the latest
 file; attach that file to a bug report.
 
 Inside a session: `/` for commands, `@` to reference a file, `!` to run a shell
-command directly, `#` to add a memory. `Ctrl+R` opens the full transcript with
-tool output and reasoning expanded (`Esc` returns), `Shift+Tab` cycles permission
-mode, `Esc` interrupts, `Ctrl+C` twice exits.
+command directly, `#` to add a memory. `Ctrl+O` toggles the detailed transcript
+(tool output and reasoning expanded), `Shift+Tab` cycles permission mode, `Esc`
+interrupts, `Ctrl+C` twice exits.
 
 `@path` inlines the file so the model has it without spending a turn on a read,
 capped at the tier's per-result budget. `@screenshot.png` attaches the image
@@ -145,9 +149,11 @@ bytes written, because that is where every rendering bug in this project has
 lived. `docs/testing.md` explains the driver, the faux model server and
 `kiln-drive`, which turns a bug report into a replayable script.
 
-Two upstream libraries are vendored under `third_party/` with one patch each,
-described in their `HARNESS-PATCH.md`: ultraviolet (inline renderer shrink) and
-bubbletea (`Println` scrolling by a stale frame height).
+Two upstream libraries are vendored under `third_party/`, each with patches
+described in its `HARNESS-PATCH.md`: ultraviolet (inline-renderer shrink
+handling) and bubbletea (ordered `Println` commits, a full repaint of the live
+region, restoring the caret after a committed line, and guarding autowrap on a
+full-width committed line).
 
 `docs/claude-code-parity.md` is the interface checklist. Items are marked
 `[obs]` (directly observed) or `[chk]` (from familiarity, verify before

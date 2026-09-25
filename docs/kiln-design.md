@@ -4,7 +4,7 @@ This is kiln's own rendering contract — the "Ruled" layout (Layout 1b) from
 the design handoff (`docs/kiln-design-handoff/README.md`, copied into this
 repo for reference; the original bundle also has an interactive HTML
 prototype and screenshots that aren't reproduced here). It replaces
-`docs/claude-code-reference.md`, which pinned the harness to Claude Code's
+`docs/claude-code-reference.md`, which pinned kiln to Claude Code's
 own look; kiln has its own palette, glyphs and block layout, applied on top
 of the same inline-scrollback renderer (blocks commit to native terminal
 scrollback via `Bridge.Commit → tea.Println`; a small live region — spinner,
@@ -116,7 +116,7 @@ Below the input box, one row:
 A filled dot `●` leads the line, coloured by mode: `ask`/`manual` dim, the
 auto-edit family (`auto`, `acceptEdits`, `bypassPermissions`, `dontAsk`)
 green, `plan` blue. The design's own statusline segments (`ctx` meter,
-`$cost`, git branch) are the harness's pre-existing statusLine feature,
+`$cost`, git branch) are kiln's pre-existing statusLine feature,
 re-themed dim rather than replaced.
 
 Meter: filled cells amber (red above 70%), empty cells in `rule`. Terminal
@@ -237,7 +237,7 @@ absent) marker. The Trust dialog draws its own full-width `─` rule as its
 first row (rather than sitting under the app-owned rule the numbered-option
 dialogs share) and says `kiln will be able to read, edit, and execute files
 here.` (kiln, not "Claude Code'll be able to…", and no "Security guide"
-row — the harness has no such doc to link).
+row — kiln has no such doc to link).
 
 The `/model` dialog additionally shows a `◐ <Effort> effort ←/→ to adjust`
 row using the spinner glyph as a static effort indicator, and legends like
