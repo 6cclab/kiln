@@ -1,8 +1,0 @@
-❯ run this shell command and report its output: echo parity-check
-⏺ Bash(echo parity-check)
-  ⎿  parity-check
-                                                                      10:02 AM claude-opus-5
-⏺ Output: parity-check
-✻ Brewed for 4s · done 10:02 AM
-────────────────────────────────────────────────────────────────────────────────────────────────────
-  Showing detailed transcript · ctrl+o to toggle · ? for shortcuts                          verbose

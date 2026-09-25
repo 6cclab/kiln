@@ -214,9 +214,12 @@ func TestKillToLineEndAndYank(t *testing.T) {
 		m, _, ev = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 		_ = ev
 	}
-	press(t, &m, "ctrl+k")
+	ev := press(t, &m, "ctrl+k")
 	if got, want := m.Value(), "hello"; got != want {
 		t.Fatalf("Value() after ctrl+k = %q, want %q", got, want)
+	}
+	if ev.Kind != EventKilled {
+		t.Fatalf("ctrl+k Kind = %v, want EventKilled (drives the \"Ctrl+Y to paste deleted text\" hint)", ev.Kind)
 	}
 	press(t, &m, "ctrl+y")
 	if got, want := m.Value(), "hello world"; got != want {
@@ -230,9 +233,12 @@ func TestKillToLineStart(t *testing.T) {
 	for i := 0; i < len("world"); i++ {
 		m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	}
-	press(t, &m, "ctrl+u")
+	ev := press(t, &m, "ctrl+u")
 	if got, want := m.Value(), "world"; got != want {
 		t.Fatalf("Value() after ctrl+u = %q, want %q", got, want)
+	}
+	if ev.Kind != EventKilled {
+		t.Fatalf("ctrl+u Kind = %v, want EventKilled", ev.Kind)
 	}
 	press(t, &m, "ctrl+y")
 	if got, want := m.Value(), "hello world"; got != want {

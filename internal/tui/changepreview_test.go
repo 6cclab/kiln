@@ -48,8 +48,10 @@ func TestRenderChangePreviewWriteNoChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := RenderChangePreview("write", map[string]any{"path": path, "content": "same content"})
-	if len(out) != 1 || !strings.Contains(out[0], "no change") {
-		t.Errorf("expected no-change marker, got %v", out)
+	// kiln adds a label-rule header row above the body, so this is now
+	// header + "no change", not "no change" alone.
+	if len(out) != 2 || !strings.Contains(out[1], "no change") {
+		t.Errorf("expected header + no-change marker, got %v", out)
 	}
 }
 

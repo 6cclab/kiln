@@ -76,3 +76,12 @@ func ResolveConfigs(path string, strict bool) map[string]ServerConfig {
 	}
 	return ReadServerConfigs(path)
 }
+
+// ConfigPath is the mcpServers file the harness reads: path when given,
+// otherwise the default ~/.claude.json.
+func ConfigPath(path string) string {
+	if path != "" {
+		return path
+	}
+	return paths.ClaudeJSONPath()
+}

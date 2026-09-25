@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/andrepato/harness/internal/claude/paths"
 )
 
 // RuleList selects which permission list AddRule/RemoveRule operate on.
@@ -118,6 +120,31 @@ func RemoveRule(cwd string, list RuleList, rule string) error {
 	}
 	permissions[string(list)] = toAnySlice(out)
 	settings["permissions"] = permissions
+	return write(path, settings)
+}
+
+// UserSettingsPath is ~/.claude/settings.json — paths.SettingsFiles' user
+// scope entry, re-exported here so callers that only need to write the
+// model default don't need to import paths for one constant.
+func UserSettingsPath() string {
+	for _, f := range paths.SettingsFiles("") {
+		if f.Scope == paths.ScopeUser {
+			return f.Path
+		}
+	}
+	return filepath.Join(".", ".claude", "settings.json")
+}
+
+// SetUserModel writes "model": "<provider/model>" into
+// ~/.claude/settings.json, the default for new sessions (/model's Enter
+// path), preserving every other key via the same read-modify-write
+// approach as AddRule. Unlike AddRule/RemoveRule, this touches the USER
+// settings.json, not a project's settings.local.json — /model's default
+// is a per-user preference, not a per-project permission rule.
+func SetUserModel(model string) error {
+	path := UserSettingsPath()
+	settings := read(path)
+	settings["model"] = model
 	return write(path, settings)
 }
 

@@ -2,10 +2,14 @@ package editor
 
 import "charm.land/lipgloss/v2"
 
-// DefaultPlaceholder is the dim example text shown in an empty editor,
-// ported from BorderedEditor's default in src/tui/app.ts (the constructor's
-// `placeholder = 'Try "fix typecheck errors"'` parameter).
-const DefaultPlaceholder = `Try "fix typecheck errors"`
+// DefaultPlaceholder is the dim example text shown in an empty editor. The
+// harness has no rotating-tip infrastructure of its own yet (nothing else
+// in this package or its caller picks a tip at random or on a timer); this
+// is the one placeholder shown, and it must read exactly as Claude Code's
+// own first tip does (docs/claude-code-reference.md §2,
+// testdata/reference/claude-code/startup-default-home.txt row 9: `❯ Try "how
+// do I log an error?"`).
+const DefaultPlaceholder = `Try "how do I log an error?"`
 
 // Styles is the small set of colours and glyphs the app injects into the
 // editor, so this package never has to import the (not-yet-written) theme
@@ -17,10 +21,13 @@ type Styles struct {
 	// line, e.g. "❯" (figures.pointer in the TS source).
 	Marker string
 
-	// Rule colours the top/bottom horizontal rules and the marker glyph.
-	// app.ts uses a single `gray` function for both (`this.color(...)`
-	// applied to the rule and to `g().userMark`), so one style covers both
-	// here too.
+	// MarkerStyle colours the marker glyph itself. Kiln colours the
+	// prompt glyph amber, distinct from the rule colour (rule-strong),
+	// so it is its own field rather than sharing Rule the way the
+	// Claude Code original did (a single `gray` function for both).
+	MarkerStyle lipgloss.Style
+
+	// Rule colours the top/bottom horizontal rules.
 	Rule lipgloss.Style
 
 	// Placeholder colours the placeholder text spliced into an empty

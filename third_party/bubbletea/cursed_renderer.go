@@ -511,8 +511,18 @@ func (s *cursedRenderer) flushLocked(closing bool) error {
 		setProgressBar(s, view.ProgressBar)
 	}
 
-	// Render and queue changes to the screen buffer.
-	s.scr.Render(s.cellbuf.RenderBuffer)
+	// Render and queue changes to the screen buffer. HARNESS-PATCH: use
+	// Redraw (a full repaint of the live region), not Render (an
+	// incremental cell diff. The incremental diff intermittently fails to
+	// clear a changed cell after the live region has been scrolled by
+	// insertAbove (committed transcript lines) — for example a plan-prompt
+	// or dialog selection marker that moved would leave a stale copy
+	// behind. This runs only when the frame actually changed: the
+	// viewEquals early-return above skips idle frames, so an unchanged
+	// screen still emits nothing. The live region is small (spinner, input
+	// box, footer, an open prompt/dialog), so a full repaint per change is
+	// cheap, and synchronized-output mode makes it flicker-free.
+	s.scr.Redraw(s.cellbuf.RenderBuffer)
 
 	if cur := view.Cursor; cur != nil {
 		// MoveTo must come after [uv.TerminalRenderer.Render] because the
@@ -809,8 +819,22 @@ func (s *cursedRenderer) insertAbove(str string) error {
 	sb.WriteString(ansi.CursorUp(up))
 	sb.WriteString(ansi.InsertLine(offset))
 	for _, line := range lines {
-		sb.WriteString(line)
-		sb.WriteString(ansi.EraseLineRight)
+		// HARNESS-PATCH: a committed line exactly as wide as the terminal
+		// must not trigger the terminal's pending-wrap at the last column,
+		// or the final cell is lost (kiln's full-width label rules and the
+		// right-aligned filename meta showed this: "src/math.js" clipped to
+		// "src/math.j"). Mirror the main render path: disable autowrap
+		// around a full-width write so the last char lands, and skip
+		// EraseLineRight (there is nothing to its right, and at the stuck
+		// last-column cursor it would erase the char just written).
+		if w > 0 && ansi.StringWidth(line) >= w {
+			sb.WriteString(ansi.ResetModeAutoWrap)
+			sb.WriteString(line)
+			sb.WriteString(ansi.SetModeAutoWrap)
+		} else {
+			sb.WriteString(line)
+			sb.WriteString(ansi.EraseLineRight)
+		}
 		sb.WriteString("\r\n")
 	}
 
@@ -820,9 +844,28 @@ func (s *cursedRenderer) insertAbove(str string) error {
 		s.logger.Printf("insert above: %q", sb.String())
 	}
 
-	_, err := io.WriteString(s.w, sb.String())
-	if err != nil {
+	if _, err := io.WriteString(s.w, sb.String()); err != nil {
 		return fmt.Errorf("bubbletea: error writing insert above to the writer: %w", err)
+	}
+
+	// HARNESS-PATCH: repaint the live region onto its new position so the
+	// hardware cursor lands on the input caret. insertAbove leaves the
+	// physical cursor at the end of the committed lines it just wrote, and
+	// shifts the live region down by the inserted-line count. Normally the
+	// next frame's flush repositions everything, but when a committed line
+	// is the LAST thing to run — nothing changes the view afterward, so the
+	// viewEquals early-return in flushLocked short-circuits the next flush
+	// — the caret is left dangling on the committed text instead of in the
+	// input box. Force one full re-flush here (via the proven flushLocked
+	// path, which Redraws the live region and MoveTo's the cursor exactly
+	// as every normal frame does) so the caret always ends up correct.
+	// See HARNESS-PATCH.md.
+	if len(s.view.Content) > 0 {
+		s.lastView = nil      // defeat the viewEquals early-return
+		s.pendingErase = true // force a full repaint at the new position
+		if err := s.flushLocked(false); err != nil {
+			return err
+		}
 	}
 
 	return nil

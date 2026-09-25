@@ -88,16 +88,17 @@ func TestKeyStrings(t *testing.T) {
 	}
 }
 
-func ctrlR() tea.KeyPressMsg    { return tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl} }
 func shiftTab() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift} }
 func ctrlL() tea.KeyPressMsg    { return tea.KeyPressMsg{Code: 'l', Mod: tea.ModCtrl} }
 func ctrlC() tea.KeyPressMsg    { return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl} }
 func ctrlD() tea.KeyPressMsg    { return tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl} }
 func esc() tea.KeyPressMsg      { return tea.KeyPressMsg{Code: tea.KeyEscape} }
 
-func TestExpandsToolOutputOnCtrlR(t *testing.T) {
+func ctrlO() tea.KeyPressMsg { return tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl} }
+
+func TestTogglesVerboseOnCtrlO(t *testing.T) {
 	r, router, _ := routed()
-	if !router.Route(ctrlR()) {
+	if !router.Route(ctrlO()) {
 		t.Fatal("not consumed")
 	}
 	if len(r.calls) != 1 || r.calls[0] != "toggleExpanded" {

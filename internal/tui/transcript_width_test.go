@@ -101,28 +101,39 @@ func TestPermissionPromptWrapsLongCommand(t *testing.T) {
 
 func TestPlanApprovalWrapsLongLines(t *testing.T) {
 	plan := "# Plan\n\n1. " + strings.Repeat("do a thing and then another thing ", 8) + "\n2. " + longURL
-	out := RenderPlanApproval(plan, width40, false, "")
+	out := RenderPlanApproval(plan, "", width40, 0, 0, false, "")
 	assertFits(t, out, width40)
 }
 
-func TestUserMessagePointerOnlyOnFirstLine(t *testing.T) {
+// TestUserMessageHasBlankRowLabelRuleThenBody checks kiln's "you" block
+// anatomy (docs/kiln-design.md): one blank row, then the "you" label rule
+// (amber, no meta), then the message on the raised surface. kiln drops
+// the old "❯" prompt glyph from the echoed message entirely — the "you"
+// label identifies the block instead.
+func TestUserMessageHasBlankRowLabelRuleThenBody(t *testing.T) {
 	out := RenderUserMessage("short question", width40)
-	if len(out) != 1 || out[0] != "❯ short question" {
+	if len(out) != 3 || out[0] != "" {
+		t.Fatalf("got %v, want blank/label rule/echo", out)
+	}
+	if !strings.Contains(out[1], "you") {
+		t.Errorf("row 1 = %q, want the \"you\" label rule", out[1])
+	}
+	if !strings.Contains(out[2], "short question") {
 		t.Errorf("got %v", out)
 	}
 }
 
-func TestUserMessageMarksOnlyFirstWrappedLine(t *testing.T) {
+func TestUserMessageHasExactlyOneLabelRule(t *testing.T) {
 	msg := "short " + strings.Repeat("very long segment ", 6) + "tail"
 	out := RenderUserMessage(msg, width40)
 	count := 0
 	for _, l := range out {
-		if strings.Contains(l, "❯") {
+		if strings.Contains(l, "you") {
 			count++
 		}
 	}
 	if count != 1 {
-		t.Errorf("pointer appeared %d times, want 1", count)
+		t.Errorf("\"you\" label rule appeared %d times, want 1", count)
 	}
 	assertFits(t, out, width40)
 }
@@ -149,30 +160,20 @@ func TestUserMessageRewrapsOnResize(t *testing.T) {
 	}
 }
 
-func TestTurnSummaryLeadsWithElapsed(t *testing.T) {
-	line := strings.Join(RenderTurnSummary(TurnSummary{Seconds: 32, Tokens: 4200, ToolCalls: 1}), "")
-	if !strings.Contains(line, "32s") {
-		t.Fatal("missing elapsed time")
-	}
-	if strings.Index(line, "32s") > strings.Index(line, "4.2k") {
-		t.Error("tokens led instead of time")
-	}
-}
-
-func TestTurnSummaryOmitsZeroParts(t *testing.T) {
-	line := strings.Join(RenderTurnSummary(TurnSummary{Seconds: 5}), "")
-	if strings.Contains(line, "tool call") || strings.Contains(line, "tokens") {
-		t.Errorf("summary should omit empty parts: %q", line)
+func TestTurnSummaryMatchesReferenceRow(t *testing.T) {
+	// docs/claude-code-reference.md §3 / testdata/reference/claude-code/
+	// turn-edit.txt row 21: "✻ Crunched for 4s · done 10:03 AM".
+	done := time.Date(2026, 9, 24, 10, 3, 0, 0, time.UTC)
+	line := strings.Join(RenderTurnSummary(TurnSummary{Seconds: 4, Verb: "Crunched", Done: done}), "")
+	want := "Crunched for 4s · done 10:03 AM"
+	if !strings.Contains(line, want) {
+		t.Errorf("got %q, want it to contain %q", line, want)
 	}
 }
 
-func TestTurnSummaryPlural(t *testing.T) {
-	one := strings.Join(RenderTurnSummary(TurnSummary{Seconds: 1, ToolCalls: 1}), "")
-	if !strings.Contains(one, "1 tool call") || strings.Contains(one, "1 tool calls") {
-		t.Errorf("singular form wrong: %q", one)
-	}
-	three := strings.Join(RenderTurnSummary(TurnSummary{Seconds: 1, ToolCalls: 3}), "")
-	if !strings.Contains(three, "3 tool calls") {
-		t.Errorf("plural form wrong: %q", three)
+func TestTurnSummaryDefaultsToWorked(t *testing.T) {
+	line := strings.Join(RenderTurnSummary(TurnSummary{Seconds: 1, Done: time.Unix(0, 0)}), "")
+	if !strings.Contains(line, "Worked for 1s") {
+		t.Errorf("got %q, want the Worked fallback", line)
 	}
 }

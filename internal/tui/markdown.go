@@ -33,11 +33,13 @@ import (
 // numeric strings lipgloss.Color (and therefore glamour's StylePrimitive.
 // Color) accepts.
 const (
-	colorRed     = "1"
-	colorGreen   = "2"
-	colorYellow  = "3"
-	colorCyan    = "6"
-	colorGray    = "8"
+	// kiln palette (truecolor). Retargeted from ANSI indices so assistant
+	// markdown reads in the kiln design language.
+	colorRed     = hexRed   // errors, deletions
+	colorGreen   = hexGreen // list bullets, insertions, names
+	colorYellow  = hexAmber // inline code, literals/strings/numbers
+	colorCyan    = hexBlue  // links, keywords
+	colorGray    = hexDim   // comments, quotes, dim chrome
 	colorDefault = ""
 )
 
@@ -109,7 +111,7 @@ func buildStyle(plain bool) glansi.StyleConfig {
 		BlockQuote: glansi.StyleBlock{
 			StylePrimitive: glansi.StylePrimitive{Faint: boolPtr(true)},
 			Indent:         uintPtr(1),
-			IndentToken:    strPtr(Gray("│") + " "),
+			IndentToken:    strPtr(Muted("│") + " "),
 		},
 		// hr: (t) => dim(t)
 		HorizontalRule: glansi.StylePrimitive{Faint: boolPtr(true), Format: "\n───\n"},
@@ -131,11 +133,20 @@ func uintPtr(u uint) *uint { return &u }
 // chromaColor converts the package's ANSI colour numbers into the hex form
 // chroma's style parser requires (it rejects bare ANSI indices). The values
 // are the xterm defaults for those indices.
-func chromaColor(ansi string) *string {
+func chromaColor(c string) *string {
+	if c == "" {
+		return nil
+	}
+	// kiln colours are already hex; pass them through. (Legacy ANSI
+	// indices, if any remain, map to their xterm defaults.)
+	if strings.HasPrefix(c, "#") {
+		hex := c
+		return &hex
+	}
 	hex := map[string]string{
 		"1": "#cd3131", "2": "#0dbc79", "3": "#e5e510", "4": "#2472c8",
 		"5": "#bc3fbc", "6": "#11a8cd", "8": "#808080", "9": "#f14c4c",
-	}[ansi]
+	}[c]
 	if hex == "" {
 		return nil
 	}

@@ -1,4 +1,4 @@
-# harness
+# kiln
 
 A coding agent with Claude Code's interface that runs on self-hosted models.
 
@@ -15,7 +15,7 @@ this machine, against a 32,768-token window:
 The catalog consumes the window before a system prompt, a file read, or a single
 user turn. That is an architecture problem, not a tuning problem.
 
-This harness keeps the same interface and slash commands, and spends context
+kiln keeps the same interface and slash commands, and spends context
 deliberately: tools are indexed rather than resident, skills load their bodies
 only on invocation, and memory is budgeted against the model's actual window.
 
@@ -41,23 +41,23 @@ on provider; only the budget tier differs.
 Requires Go 1.26.
 
 ```bash
-make build                    # bin/harness
-go install ./cmd/harness      # or: puts `harness` on $GOBIN / ~/go/bin
+make build                 # bin/kiln
+go install ./cmd/kiln      # or: puts `kiln` on $GOBIN / ~/go/bin
 ```
 
 ## Use
 
 ```bash
-harness                      # interactive session
-harness -c                   # continue the most recent session here
-harness --resume <id>        # resume a specific session
-harness -p "fix the bug"     # one prompt, then exit (see --output-format)
-harness providers            # who you can talk to, and auth status
-harness models [provider]    # models, their tiers, and usable budget
-harness login anthropic      # log in with a Claude Pro/Max plan
-harness doctor               # model, tier, tools, MCP, hooks, agents, logs, problems
-harness mcp                  # MCP servers and their state
-harness --debug              # debug-level run log, path announced at startup
+kiln                      # interactive session
+kiln -c                   # continue the most recent session here
+kiln --resume <id>        # resume a specific session
+kiln -p "fix the bug"     # one prompt, then exit (see --output-format)
+kiln providers            # who you can talk to, and auth status
+kiln models [provider]    # models, their tiers, and usable budget
+kiln login anthropic      # log in with a Claude Pro/Max plan
+kiln doctor               # model, tier, tools, MCP, hooks, agents, logs, problems
+kiln mcp                  # MCP servers and their state
+kiln --debug              # debug-level run log, path announced at startup
 ```
 
 MCP servers connect in the background after the prompt appears: the footer shows
@@ -67,7 +67,7 @@ as that connect finishes.
 
 Every run writes a log to `~/.harness/logs` (the last 30 are kept): startup phases
 with elapsed time, each server's connect outcome and duration, and every turn, tool
-call, retry and compaction. `harness doctor` prints the directory and the latest
+call, retry and compaction. `kiln doctor` prints the directory and the latest
 file; attach that file to a bug report.
 
 Inside a session: `/` for commands, `@` to reference a file, `!` to run a shell
@@ -122,7 +122,7 @@ Reads your existing configuration; writes nothing into it.
 A `PreToolUse` hook may rewrite a command before it runs. Hooks are applied
 **before** the permission gate, so the gate judges what will actually execute
 rather than what the model proposed. A blocking `Stop` hook is reported to you;
-this harness does not re-prompt the model on it.
+kiln does not re-prompt the model on it.
 
 ## Safety
 
@@ -143,7 +143,7 @@ make e2e-live     # the same against a real model; HARNESS_E2E_LIVE=1, HARNESS_L
 Every screen assertion runs against an emulated terminal, never against the
 bytes written, because that is where every rendering bug in this project has
 lived. `docs/testing.md` explains the driver, the faux model server and
-`harness-drive`, which turns a bug report into a replayable script.
+`kiln-drive`, which turns a bug report into a replayable script.
 
 Two upstream libraries are vendored under `third_party/` with one patch each,
 described in their `HARNESS-PATCH.md`: ultraviolet (inline renderer shrink) and

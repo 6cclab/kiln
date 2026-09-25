@@ -38,9 +38,9 @@ import (
 //     only between Update calls. Calling it — or blocking on it —
 //     directly from inside Update would deadlock the program the instant
 //     anything tries to commit as a direct result of a keypress (this
-//     was caught the hard way: see the phase report). Commit/SetAltScreen
-//     only ever enqueue; the actual Println call happens on run's own
-//     goroutine, never on the caller's.
+//     was caught the hard way: see the phase report). Commit only ever
+//     enqueues; the actual Println call happens on run's own goroutine,
+//     never on the caller's.
 type Bridge struct {
 	mu      sync.Mutex
 	program *tea.Program
@@ -53,16 +53,23 @@ type Bridge struct {
 	// ts is the live turn state Wire's handler mutates. See
 	// ResetTurnCounters for why this needs no lock.
 	ts *turnState
+
+	// verboseMu guards verbose, the only piece of Bridge state the app's
+	// Update goroutine and Wire's event-bus goroutine both read (Update on
+	// Ctrl+O, the event handler when deciding how to render a tool call).
+	verboseMu sync.Mutex
+	verbose   bool
 }
 
-// bridgeItem is one entry on the commit queue: either a block of text to
-// print, or an alt-screen state change. Both go through the same channel
-// so they are applied in the order they actually happened, not just the
-// order two separately-locked booleans happened to be read.
+// bridgeItem is one entry on the commit queue: a block of text to print.
+//
+// Used to carry an alt-screen state change too, for the Ctrl+R full-
+// transcript view transcriptview.go implemented. That view is gone —
+// replaced by the Ctrl+O verbose toggle (see SetVerbose/Verbose/
+// MsgClearAndReplay) — and tea.Program.Println no longer has a reason to
+// have its output held back, so the queue carries only text now.
 type bridgeItem struct {
-	text        string
-	setAltScren bool
-	altActive   bool
+	text string
 }
 
 // commitQueueSize is generous relative to actual traffic (keystrokes and
@@ -83,41 +90,12 @@ func NewBridge(cwd string) *Bridge {
 	return b
 }
 
-// run is the bridge's single committer goroutine: it owns Program.Println
-// and the alt-screen queueing state, so neither ever needs a lock.
+// run is the bridge's single committer goroutine: it owns Program.Println,
+// so nothing else ever needs a lock around calling it.
 func (b *Bridge) run() {
-	var altScreen bool
-	var held []string
-
 	for {
 		select {
 		case item := <-b.queue:
-			if item.setAltScren {
-				altScreen = item.altActive
-				if !altScreen && len(held) > 0 {
-					for _, text := range held {
-						b.printNow(text)
-					}
-					held = nil
-				}
-				continue
-			}
-			if altScreen {
-				// tea.Program.Println drops its output outright while
-				// the alt screen is active ("If the altscreen is active
-				// no output will be printed" — its own doc comment), so
-				// anything committed while the Ctrl+R transcript view is
-				// open is held here and flushed in order once it closes.
-				held = append(held, item.text)
-				// Also mirror it straight into the open transcript view
-				// (see transcriptview.go's msgAltScreenAppend doc comment)
-				// so Ctrl+R does not go stale for however long it stays
-				// open.
-				if p := b.prog(); p != nil {
-					p.Send(msgAltScreenAppend{Text: item.text})
-				}
-				continue
-			}
 			b.printNow(item.text)
 		case <-b.quit:
 			return
@@ -154,10 +132,10 @@ func (b *Bridge) prog() *tea.Program {
 }
 
 // Commit enqueues lines to be printed to the transcript, in order,
-// relative to every other Commit/SetAltScreen call from any goroutine.
-// Safe to call from Bubbletea's Update itself — unlike calling
-// Program.Println directly, this never blocks waiting for the event loop,
-// so it cannot deadlock it.
+// relative to every other Commit call from any goroutine. Safe to call
+// from Bubbletea's Update itself — unlike calling Program.Println
+// directly, this never blocks waiting for the event loop, so it cannot
+// deadlock it.
 func (b *Bridge) Commit(lines []string) {
 	if len(lines) == 0 {
 		return
@@ -168,15 +146,67 @@ func (b *Bridge) Commit(lines []string) {
 	}
 }
 
-// SetAltScreen tells the bridge whether the Ctrl+R transcript view is
-// open. Enqueued like Commit, so a Commit and a SetAltScreen from the
-// same Update call (e.g. closing the view) are applied in the order they
-// were issued, not raced against each other.
-func (b *Bridge) SetAltScreen(active bool) {
-	select {
-	case b.queue <- bridgeItem{setAltScren: true, altActive: active}:
-	case <-b.quit:
+// SetVerbose sets the bridge's verbose-transcript flag. Called by the app
+// on Ctrl+O (app.go owns the key binding; this is its side of the
+// interface). Verbose mode changes how EventToolEnd renders going forward
+// — it does not, by itself, repaint anything already committed, because
+// committed lines are in scrollback and cannot be repainted. The app is
+// responsible for the repaint: on toggle it must send MsgClearAndReplay
+// (defined below) after calling SetVerbose, so the whole transcript-so-far
+// commits fresh in the new mode. See MsgClearAndReplay's doc comment for
+// exactly what the app must do with it.
+func (b *Bridge) SetVerbose(v bool) {
+	b.verboseMu.Lock()
+	b.verbose = v
+	b.verboseMu.Unlock()
+}
+
+// Verbose reports the bridge's current verbose-transcript flag.
+func (b *Bridge) Verbose() bool {
+	b.verboseMu.Lock()
+	defer b.verboseMu.Unlock()
+	return b.verbose
+}
+
+// MsgClearAndReplay asks the app to clear the screen and re-commit the
+// transcript so far in the bridge's new verbose/collapsed mode.
+//
+// Sent by the app itself around its Ctrl+O handler (Bridge has no access
+// to the session's own entry log — app.go/its Config does), in this order:
+// call Bridge.SetVerbose(newValue), then return tea.ClearScreen as the
+// handler's Cmd, then — once the clear has taken effect — rebuild every
+// committed block from the session's entries (the same shape
+// transcriptview.go's buildTranscriptLines used to walk, now rendered with
+// RenderToolCall/RenderAssistantText/RenderUserMessage at the new
+// verbosity) and Commit them in order. This message type exists so that
+// contract is documented in one place; Bridge does not send or handle it
+// itself, since it owns no session data and no screen — only the app can
+// do the actual clear-and-replay. It is included here as the agreed shape
+// for S1's Ctrl+O handler to send to itself (or simply inline the
+// sequence above without a message at all — a message is only needed if
+// the clear must happen asynchronously relative to the keypress).
+type MsgClearAndReplay struct{}
+
+// CommitCommandResult commits a slash command's result row(s) under its
+// own echo: "  ⎿  <line>" for the first line, two-space continuation for
+// the rest (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
+// model as Opus 5 (1M context)"). The echo itself is committed separately
+// via RenderUserMessage, same as a typed prompt — this only adds the
+// result row(s) that follow it.
+func (b *Bridge) CommitCommandResult(lines []string) {
+	if len(lines) == 0 {
+		return
 	}
+	gl := G()
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		if i == 0 {
+			out[i] = fmt.Sprintf("%s%s  %s", resultIndent, TranscriptDim(gl.Result), l)
+		} else {
+			out[i] = continuationIndent + l
+		}
+	}
+	b.Commit(out)
 }
 
 // Send delivers msg to the program's Update loop. tea.Program.Send already
@@ -306,7 +336,7 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		ts.toolCallsInTurn++
 
 	case harness.EventToolEnd:
-		name := titleCase(ev.ToolName)
+		name := MapToolName(ev.ToolName)
 		primary := PrimaryArg(ev.ToolArgs)
 		summary := summarizeToolResult(ev.ToolResult)
 		max := toolOutputTokens / 400
@@ -323,6 +353,33 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		}
 		if ev.ToolResult != nil && ev.ToolResult.IsError {
 			view.Status = CallError
+		}
+		// Edit's result renders as a diff, not a text summary — matching
+		// docs/claude-code-reference.md §3's "Added N lines, removed M
+		// lines" row. internal/tools/edit.go attaches a real unified
+		// patch (editDetails.Patch, generateUnifiedPatch) as the tool
+		// result's Details; ParseUnifiedDiff reads it directly rather
+		// than reconstructing a diff from the edit's raw old/new
+		// arguments, so line numbers come from the actual file content.
+		if strings.EqualFold(ev.ToolName, "edit") && view.Status == CallOK && ev.ToolResult != nil {
+			if d := diffFromToolDetails(ev.ToolResult.Details); d != nil {
+				view.Diff = d
+				view.ResultLines = nil
+			} else if args := ev.ToolArgs; args != nil {
+				// Fallback for a result that, for whatever reason,
+				// carries no Details (an older session log, a stub in
+				// tests): pair the edit's own old/new text line-for-line
+				// (DiffFromEdit's doc comment explains the limits of
+				// that).
+				if edits, ok := args["edits"].([]any); ok && len(edits) == 1 {
+					if e, ok := edits[0].(map[string]any); ok {
+						old, _ := e["oldText"].(string)
+						next, _ := e["newText"].(string)
+						view.Diff = DiffFromEdit(old, next, 1)
+						view.ResultLines = nil
+					}
+				}
+			}
 		}
 		// Rendered on the Update goroutine (like markdown) so result lines
 		// are fitted to the live width, and so tool calls and assistant
@@ -523,6 +580,24 @@ func assistantText(m *msg.AssistantMessage) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, ""))
+}
+
+// diffFromToolDetails decodes an edit result's Details payload
+// (internal/tools/edit.go's editDetails: {diff, patch, firstChangedLine})
+// and parses its unified Patch into a ToolDiff. Returns nil when Details
+// is empty or carries no patch, so the caller can fall back.
+func diffFromToolDetails(details json.RawMessage) *ToolDiff {
+	if len(details) == 0 {
+		return nil
+	}
+	var v struct {
+		Patch            string `json:"patch"`
+		FirstChangedLine int    `json:"firstChangedLine"`
+	}
+	if err := json.Unmarshal(details, &v); err != nil || v.Patch == "" {
+		return nil
+	}
+	return ParseUnifiedDiff(v.Patch, v.FirstChangedLine)
 }
 
 // summarizeToolResult converts a ToolResultMessage into the shape

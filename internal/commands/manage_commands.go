@@ -47,6 +47,11 @@ type ManageDeps struct {
 	Cwd                string
 	ModelLabel         string
 	SettingsLoadedFrom []string
+	// MCPConfigPath is the mcpServers config file /mcp's "User MCPs
+	// (<path>)" section header names (~/.claude.json, or --mcp-config's
+	// value). Empty renders the header without a path — the integrator
+	// has not wired this yet; see the handback report.
+	MCPConfigPath string
 
 	// SaveRule persists a rule to .claude/settings.local.json AND applies
 	// it to the in-memory gate: in memory so the next tool call obeys it,
@@ -192,56 +197,69 @@ func mcpStatusesText(statuses []ServerStatus) []string {
 	return lines
 }
 
+// mcpModal builds /mcp's dialog spec (commands.ModalSpec.Kind == "mcp",
+// rendered by internal/tui's dialogMCP — see that file's doc comment).
+//
+// The harness reads MCP servers from exactly one flat source
+// (~/.claude.json, or --mcp-config's file: see internal/mcp/config.go),
+// unlike Claude Code's own /mcp, which sections servers into "User MCPs",
+// a per-connector "claude.ai" group and "Built-in MCPs". Reproducing
+// those extra sections is not possible from the harness's actual state —
+// there is no connector-origin metadata anywhere in internal/mcp — so
+// this builds exactly one "User MCPs (<path>)" section from
+// deps.MCPConfigPath (empty renders the header with no path). It also
+// never emits ⚠ (needs authentication) or ◯ (disabled): the harness's
+// mcp.ServerStatus has no such states (see internal/mcp/hub.go — OK is
+// the only signal), so every server is either ✔ (OK) or ✘ (failed); a
+// failed server's marker carries no trailing text, matching
+// dialog-mcp.txt's plain ✘ rows (its ⚠ rows are the ones with the "needs
+// authentication" suffix, which the harness cannot distinguish).
 func mcpModal(deps ManageDeps) *ModalSpec {
 	var statuses []ServerStatus
 	if deps.MCPStatuses != nil {
 		statuses = deps.MCPStatuses()
 	}
 	sorted := append([]ServerStatus{}, statuses...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		if sorted[i].OK != sorted[j].OK {
-			return sorted[i].OK
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+
+	var toolsByServer map[string][]string
+	if deps.MCPTools != nil {
+		toolsByServer = make(map[string][]string)
+		for _, t := range deps.MCPTools() {
+			toolsByServer[t.Server] = append(toolsByServer[t.Server], t.Name)
 		}
-		return sorted[i].ToolCount > sorted[j].ToolCount
-	})
+	}
+
+	group := "User MCPs"
+	if deps.MCPConfigPath != "" {
+		group = fmt.Sprintf("User MCPs (%s)", deps.MCPConfigPath)
+	}
+
 	items := make([]Item, 0, len(sorted))
 	for _, s := range sorted {
-		desc := fmt.Sprintf("%d tools · %dms", s.ToolCount, s.Ms)
-		if !s.OK {
-			desc = "failed: " + truncate(orDefault(s.Error, "unknown"), 70)
+		it := Item{
+			Value: s.Name,
+			Label: s.Name,
+			Group: group,
+			Ms:    s.Ms,
+			Tools: toolsByServer[s.Name],
 		}
-		items = append(items, Item{Value: s.Name, Label: s.Name, Description: desc})
-	}
-	ok := 0
-	toolTotal := 0
-	for _, s := range statuses {
 		if s.OK {
-			ok++
-			toolTotal += s.ToolCount
+			it.Marker = "✔"
+			it.Description = fmt.Sprintf("%d tools", s.ToolCount)
+		} else {
+			it.Marker = "✘"
+			it.Error = s.Error
+			it.Detail = s.Detail
 		}
+		items = append(items, it)
 	}
+
 	return &ModalSpec{
-		Title:  "MCP servers",
-		Header: []string{fmt.Sprintf("%d/%d connected · %d tools", ok, len(statuses), toolTotal)},
+		Title:  "Manage MCP servers",
+		Kind:   "mcp",
+		Header: []string{fmt.Sprintf("%d servers", len(statuses))},
 		Items:  items,
-		Actions: []Action{
-			{Key: "t", Label: "list tools"},
-		},
-		Act: func(key, value string) (string, error) {
-			if key != "t" || deps.MCPTools == nil {
-				return "", nil
-			}
-			var names []string
-			for _, t := range deps.MCPTools() {
-				if t.Server == value {
-					names = append(names, t.Name)
-				}
-			}
-			if len(names) == 0 {
-				return "no tools from this server", nil
-			}
-			return truncate(strings.Join(names, ", "), 400), nil
-		},
 	}
 }
 

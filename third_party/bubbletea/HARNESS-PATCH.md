@@ -22,3 +22,60 @@ Verified through internal/testkit/screen: a one-turn faux run whose final conten
 fills a 60x14 terminal keeps its first row on screen and ends with no trailing blank row;
 before the patch it scrolled one row and left one. `make parity` fix-bug case at 100x30
 matches the TypeScript oracle's rows after the patch.
+
+
+## Patch: redraw the live region fully instead of an incremental diff (cursed_renderer.go)
+
+The renderer diffs each new frame against its tracked model of the terminal and writes only
+changed cells. After `insertAbove` (tea.Println) scrolls the live region — which it does for
+every committed transcript line — that tracked model desyncs from the real terminal, and the
+incremental diff then intermittently fails to clear a cell that changed in place (observed:
+a plan-prompt / dialog selection marker that moved to another row left a stale copy on the
+old row). The render call now uses `TerminalRenderer.Redraw` (full repaint of the live
+region) rather than `Render` (incremental). The `viewEquals` early-return still skips
+unchanged frames, so idle screens emit nothing; the live region is small, so a full repaint
+per change is cheap and, under synchronized output, flicker-free.
+
+
+## Patch: repaint the live region after insertAbove so the cursor lands on the caret (cursed_renderer.go)
+
+After `insertAbove` writes the committed lines it resets its cursor model to the top of the
+live region and returns, leaving the hardware cursor at the end of the committed text. The
+live region has physically shifted down by the inserted-line count. Normally the next
+frame's flush repaints it and repositions the cursor via `MoveTo`. But when a committed
+line is the LAST thing to run — e.g. closing a dialog (which shrinks the live region) and
+then committing the slash-command echo, with no view change afterward — the `viewEquals`
+early-return in `flushLocked` short-circuits the next flush, so the caret is left dangling
+on the committed text (observed: cursor two rows above the input box after `/mcp` Esc).
+
+The patch, at the end of `insertAbove`, invalidates the frame cache (`s.lastView = nil`,
+`s.pendingErase = true`) and calls `flushLocked(false)` once, forcing a full repaint of the
+live region at its new position through the same proven path every normal frame uses. The
+caret then always ends on the input box. This also removed the need for the app-level
+"bottom-anchoring" pad (a full-height live region), which was masking this bug and was itself
+incompatible with insertAbove (it overpainted the committed banner and left bottom residue).
+
+Verified through internal/testkit/screen: `/mcp` open→Esc leaves the cursor on the input row
+(was two rows above); a one-turn faux run leaves no trailing blank residue (OccupiedHeight
+grows, never shrinks).
+
+
+## Patch: don't lose the last cell of a full-width committed line (cursed_renderer.go)
+
+insertAbove wrote each committed line as `line + EraseLineRight + "\r\n"` with no
+autowrap guard. A line exactly as wide as the terminal writes its final glyph into the
+last column, which arms the terminal's pending-wrap; the subsequent EraseLineRight at the
+stuck last-column cursor (and the pending-wrap state) drops that final cell. It went
+unnoticed until the kiln redesign, whose label rules (`{label}────  {meta}`) are the first
+content reliably drawn at exactly the terminal width — the trailing rule dash, and worse
+the right-aligned filename meta (`src/math.js` clipped to `src/math.j`), disappeared.
+
+The patch mirrors the main render path: for a line whose width is >= the terminal width,
+disable autowrap (`ansi.ResetModeAutoWrap`) around the write and re-enable it after
+(`ansi.SetModeAutoWrap`), and skip EraseLineRight (there is nothing to its right, and at the
+last-column cursor it would erase the just-written glyph). Shorter lines keep the
+write+EraseLineRight+"\r\n" path unchanged.
+
+Verified through internal/testkit/screen: kiln label-rule rows and the "edit" block's
+filename meta now render at the full terminal width with the last character intact (was
+one column short); make check and make e2e green.

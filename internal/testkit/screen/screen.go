@@ -260,6 +260,9 @@ func buildEnv(cfg *config, home string) []string {
 	m["TERM"] = "xterm-256color"
 	m["COLORTERM"] = "truecolor"
 	m["HOME"] = home
+	// A fresh HOME has trusted no folder; the trust dialog is exercised by
+	// the test that opts back in with WithEnv("HARNESS_TRUST_ALL", "").
+	m["HARNESS_TRUST_ALL"] = "1"
 	delete(m, "NO_COLOR")
 
 	for k, v := range cfg.env {

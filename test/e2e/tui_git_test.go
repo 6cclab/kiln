@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 // TestTUI_StartsInRepoWithCommits guards the startup deadlock found on
@@ -33,12 +32,16 @@ func TestTUI_StartsInRepoWithCommits(t *testing.T) {
 	}
 
 	s := startTUI(t, 100, 24, proj, home, sessDir, addr)
+	// The git branch/status row this test used to wait for has been
+	// removed from the default UI (docs/claude-code-reference.md §1: no
+	// status row at all any more; Claude Code only shows git through an
+	// optional, separately-configured statusLine, not by default). Checked
+	// in internal/tui/app.go's View: MsgGitStatus still updates
+	// footer.State().Git (see internal/cli/tui.go's readGitStatus/
+	// MsgGitStatus wiring), but nothing in View ever reads footer.State().Git
+	// any more — the branch genuinely is not rendered. This test now only
+	// guards the original regression it was written for: startup must not
+	// deadlock in a repo that already has commits (waitReady must succeed).
 	waitReady(t, s)
-	// The branch name reaches the footer once the loop is running.
-	if err := s.WaitFor("main", 5*time.Second); err != nil {
-		if err2 := s.WaitFor("master", time.Second); err2 != nil {
-			t.Fatalf("footer never showed the branch: %v", err)
-		}
-	}
 	assertFooterInvariant(t, s)
 }

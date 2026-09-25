@@ -1,6 +1,9 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFormatTokens(t *testing.T) {
 	cases := map[int]string{
@@ -44,8 +47,10 @@ func TestRenderToolCallExpansionHint(t *testing.T) {
 		ResultLines: []string{"line one"}, TotalLines: 240, HasTotalLines: true,
 	}
 	out := RenderToolCall(view)
-	if len(out) != 3 {
-		t.Fatalf("got %d lines, want head + result + hint", len(out))
+	// kiln's "tool" block adds a label-rule row above the head line, so
+	// this is now label rule + head + result + hint.
+	if len(out) != 4 {
+		t.Fatalf("got %d lines, want label rule + head + result + hint", len(out))
 	}
 }
 
@@ -55,23 +60,165 @@ func TestRenderTodosStatuses(t *testing.T) {
 		{Content: "b", Status: TodoInProgressStatus},
 		{Content: "c", Status: TodoPendingStatus},
 	})
-	if len(out) != 4 { // header + 3 items
-		t.Fatalf("got %d lines, want 4", len(out))
-	}
-}
-
-func TestRenderDiffLineNumbers(t *testing.T) {
-	patch := "@@ -10,2 +10,3 @@\n-old line\n+new line one\n+new line two\n context line"
-	out := RenderDiff(patch, 0)
+	// kiln's "plan" block adds a label-rule row above "Update Todos", so
+	// this is now label rule + "Update Todos" + 3 items.
 	if len(out) != 5 {
 		t.Fatalf("got %d lines, want 5", len(out))
 	}
 }
 
+func TestRenderDiffLineNumbers(t *testing.T) {
+	// docs/claude-code-reference.md §3: only the +/- rows render (no hunk
+	// header, no context lines) — the reference example has neither.
+	patch := "@@ -10,2 +10,3 @@\n-old line\n+new line one\n+new line two\n context line"
+	out := RenderDiff(patch, 0)
+	if len(out) != 3 {
+		t.Fatalf("got %d lines, want 3 (1 removed + 2 added)", len(out))
+	}
+}
+
+func TestParseUnifiedDiffSkipsFileHeaders(t *testing.T) {
+	// go-udiff's Unified() output (internal/tools/editdiff.go's
+	// generateUnifiedPatch): "--- path\n+++ path\n@@ ... @@\n...". The
+	// "--- "/"+++ " header lines must not be misread as -/+ content rows.
+	patch := "--- math.js\n+++ math.js\n@@ -1,1 +1,1 @@\n-function add(a,b){ return a - b }\n+function add(a,b){ return a + b }\n"
+	d := ParseUnifiedDiff(patch, 1)
+	if d.Removed != 1 || d.Added != 1 {
+		t.Fatalf("got Added=%d Removed=%d, want 1/1", d.Added, d.Removed)
+	}
+	if len(d.Lines) != 2 {
+		t.Fatalf("got %d diff lines, want 2", len(d.Lines))
+	}
+	if d.Lines[0].Sign != '-' || d.Lines[0].Num != 1 {
+		t.Errorf("got %+v, want removed line 1", d.Lines[0])
+	}
+	if d.Lines[1].Sign != '+' || d.Lines[1].Num != 1 {
+		t.Errorf("got %+v, want added line 1", d.Lines[1])
+	}
+}
+
+func TestRenderDiffLinesAlignsWidestNumber(t *testing.T) {
+	lines := []DiffLine{{Num: 1, Sign: '-', Text: "a"}, {Num: 12, Sign: '+', Text: "b"}}
+	out := RenderDiffLines(lines)
+	// kiln's "edit" block anatomy: diffIndent (6 spaces) + number in a
+	// 4-column field (not padded to the widest digit count — %4d always
+	// right-aligns within 4 columns) + " " + a 2-column sign + the code,
+	// then padded to the full rule width by the added/removed background
+	// tint.
+	if got := stripANSI(out[0]); strings.TrimRight(got, " ") != "         1 − a" {
+		t.Errorf("got %q, want %q", got, "         1 − a")
+	}
+	if got := stripANSI(out[1]); strings.TrimRight(got, " ") != "        12 + b" {
+		t.Errorf("got %q, want %q", got, "        12 + b")
+	}
+}
+
+func TestRenderToolCallDiffRendersAddedRemovedSummary(t *testing.T) {
+	view := ToolCallView{
+		Name: "Update", PrimaryArg: "math.js", Status: CallOK,
+		Diff: &ToolDiff{Added: 1, Removed: 1, Lines: []DiffLine{
+			{Num: 1, Sign: '-', Text: "old"},
+			{Num: 1, Sign: '+', Text: "new"},
+		}},
+	}
+	out := RenderToolCall(view)
+	// kiln's "edit" block: label rule ("edit" + filename meta) + head
+	// ("Update math.js") + the "→ +N  −N" summary + 2 diff rows.
+	if len(out) != 5 {
+		t.Fatalf("got %d lines, want label rule + head + summary + 2 diff rows: %v", len(out), out)
+	}
+	if !strings.Contains(stripANSI(out[2]), "+1") || !strings.Contains(stripANSI(out[2]), "−1") {
+		t.Errorf("got %q, want the +1/−1 summary", stripANSI(out[2]))
+	}
+}
+
+func TestMapToolNameEditBecomesUpdate(t *testing.T) {
+	if got := MapToolName("edit"); got != "Update" {
+		t.Errorf("MapToolName(edit) = %q, want Update", got)
+	}
+	if got := MapToolName("bash"); got != "Bash" {
+		t.Errorf("MapToolName(bash) = %q, want Bash", got)
+	}
+}
+
+func TestRenderToolGroupRowsCollapseAndPluralize(t *testing.T) {
+	if got := stripANSI(RenderToolGroupRunning(GroupRead, 1)); got != "  Reading 1 file…" {
+		t.Errorf("got %q", got)
+	}
+	if got := stripANSI(RenderToolGroupDone(GroupRead, 3)); got != "  Read 3 files" {
+		t.Errorf("got %q", got)
+	}
+	if got := stripANSI(RenderToolGroupRunning(GroupBash, 1)); got != "⏺ Running 1 shell command…" {
+		t.Errorf("got %q", got)
+	}
+	if got := stripANSI(RenderToolGroupDone(GroupBash, 2)); got != "  Ran 2 shell commands" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// TestRenderAssistantTextHasLabelRuleThenPlainLines checks kiln's "text"
+// block anatomy: a "kiln" label rule above the body, then the lines
+// unchanged — no per-line "⏺" marker or continuation indent (that was
+// Claude Code's turn-summary model, which kiln's label rules replace per
+// docs/kiln-design.md).
+func TestRenderAssistantTextHasLabelRuleThenPlainLines(t *testing.T) {
+	out := RenderAssistantText([]string{"Done.", "more"})
+	if len(out) != 3 {
+		t.Fatalf("got %d lines, want label rule + 2 body lines", len(out))
+	}
+	if !strings.Contains(stripANSI(out[0]), "kiln") {
+		t.Errorf("row 0 = %q, want the \"kiln\" label rule", stripANSI(out[0]))
+	}
+	if stripANSI(out[1]) != "Done." {
+		t.Errorf("got %q, want %q", stripANSI(out[1]), "Done.")
+	}
+	if stripANSI(out[2]) != "more" {
+		t.Errorf("got %q, want %q", stripANSI(out[2]), "more")
+	}
+}
+
+func TestPastTenseMatchesSpinnerFamily(t *testing.T) {
+	cases := map[string]string{
+		"Brewing": "Brewed", "Cooking": "Cooked", "Crunching": "Crunched",
+		"Baking": "Baked", "Churning": "Churned", "Whirring": "Whirred",
+		"Simmering": "Simmered", "Working": "Worked",
+	}
+	for gerund, want := range cases {
+		if got := PastTense(gerund); got != want {
+			t.Errorf("PastTense(%q) = %q, want %q", gerund, got, want)
+		}
+	}
+}
+
+// stripANSI removes SGR escapes so a rendered line can be compared against
+// plain expected text regardless of whether colour is enabled.
+func stripANSI(s string) string {
+	var out strings.Builder
+	inEsc := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if r == 'm' {
+				inEsc = false
+			}
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
 func TestRenderThinkingCollapsedVsExpanded(t *testing.T) {
+	// docs/claude-code-reference.md §7: "collapsed mode shows nothing but
+	// the spinner suffix" — RenderThinking renders nothing at all when
+	// not Expanded; the spinner's own "thinking with <effort> effort"
+	// suffix (RenderSpinner) carries that state instead.
 	collapsed := RenderThinking(ThinkingView{Text: "reasoning here", Active: false, Expanded: false})
-	if len(collapsed) != 1 {
-		t.Fatalf("collapsed thinking should be one line, got %d", len(collapsed))
+	if len(collapsed) != 0 {
+		t.Fatalf("collapsed thinking should render nothing, got %d lines", len(collapsed))
 	}
 	expanded := RenderThinking(ThinkingView{Text: "reasoning here", Active: false, Expanded: true})
 	if len(expanded) != 2 {

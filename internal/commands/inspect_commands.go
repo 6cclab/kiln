@@ -22,6 +22,12 @@ type ServerStatus struct {
 	ToolCount int
 	Ms        int64
 	Error     string
+	// Detail is the failure's full underlying text (mcp.ServerStatus.Detail),
+	// shown dim in /mcp's per-server detail view. Empty unless the
+	// integrator's mcpStatusesOf adapter (internal/cli/commands.go) maps
+	// it through — see the /mcp dialog's handback report for whether that
+	// wiring landed.
+	Detail string
 }
 
 // InspectGate is the subset of permission.Gate that /permissions and

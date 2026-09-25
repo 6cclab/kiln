@@ -69,13 +69,13 @@ func TestPlaceholderPresentWhenEmptyGoneAfterTyping(t *testing.T) {
 	m.Focus()
 
 	empty := strings.Join(m.View(80), "\n")
-	if !strings.Contains(empty, "fix typecheck errors") {
+	if !strings.Contains(empty, "how do I log an error") {
 		t.Fatalf("expected placeholder text in empty view, got:\n%s", empty)
 	}
 
 	m.SetValue("go")
 	typed := strings.Join(m.View(80), "\n")
-	if strings.Contains(typed, "fix typecheck errors") {
+	if strings.Contains(typed, "how do I log an error") {
 		t.Fatalf("placeholder should be gone once text exists, got:\n%s", typed)
 	}
 	if !strings.Contains(typed, "go") {
@@ -83,16 +83,50 @@ func TestPlaceholderPresentWhenEmptyGoneAfterTyping(t *testing.T) {
 	}
 }
 
-func TestMarkerPrefixesEveryContentLine(t *testing.T) {
+// TestMarkerOnFirstLineOnly checks only the editor's first rendered content
+// row carries the marker; every row after it — including a second logical
+// line the user typed with Shift+Enter, as here — gets the same-width
+// two-space continuation indent instead, matching RenderUserMessage's own
+// convention once the line is echoed into the transcript (transcript.go)
+// and docs/claude-code-reference.md §2's resize-60.txt citation.
+func TestMarkerOnFirstLineOnly(t *testing.T) {
 	m := New(testStyles())
 	m.Focus()
 	m.SetValue("a\nb")
 	lines := m.View(40)
 	// lines[0] and lines[len-1] are rules; the rest are content lines.
-	for _, l := range lines[1 : len(lines)-1] {
-		if !strings.HasPrefix(l, "❯ ") {
-			t.Fatalf("content line %q does not start with the marker", l)
+	content := lines[1 : len(lines)-1]
+	if len(content) < 2 {
+		t.Fatalf("expected at least 2 content lines for a 2-line value, got %d: %v", len(content), content)
+	}
+	if !strings.HasPrefix(content[0], "❯ ") {
+		t.Fatalf("first content line %q does not start with the marker", content[0])
+	}
+	for _, l := range content[1:] {
+		if strings.HasPrefix(l, "❯") {
+			t.Fatalf("continuation line %q repeats the marker, want a plain two-space indent", l)
 		}
+		if !strings.HasPrefix(l, "  ") {
+			t.Fatalf("continuation line %q does not start with the two-space indent", l)
+		}
+	}
+}
+
+// TestPlaceholderOneSpaceAfterMarker checks the empty-input placeholder
+// starts exactly one space after the marker, with no extra blank cell
+// (docs/claude-code-reference.md §2, startup-default-home.txt row 9:
+// `❯ Try "how do I log an error?"`).
+func TestPlaceholderOneSpaceAfterMarker(t *testing.T) {
+	m := New(testStyles())
+	m.Focus()
+	lines := m.View(80)
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d", len(lines))
+	}
+	want := "❯ " + DefaultPlaceholder
+	got := strings.TrimRight(lines[1], " ")
+	if got != want {
+		t.Fatalf("empty-input content row = %q, want %q", got, want)
 	}
 }
 

@@ -61,6 +61,11 @@ const (
 	EventSubmit
 	// EventCancel means Esc was pressed while no popup owned it.
 	EventCancel
+	// EventKilled means Ctrl+K or Ctrl+U just pushed text onto the kill
+	// ring, so the app should show "Ctrl+Y to paste deleted text" until
+	// the next keystroke (docs/claude-code-reference.md §2,
+	// mode-manual.txt row 8).
+	EventKilled
 )
 
 // Event is Update's second return value: what the keystroke did, beyond
@@ -324,11 +329,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd, Event) {
 
 	case m.is(s, KeyKillLine):
 		m.killToLineEnd(msg)
-		return m, nil, Event{}
+		return m, nil, Event{Kind: EventKilled}
 
 	case s == "ctrl+u":
 		m.killToLineStart()
-		return m, nil, Event{}
+		return m, nil, Event{Kind: EventKilled}
 
 	case m.is(s, KeyDeleteWord):
 		m.killWordBack(msg)

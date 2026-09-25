@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -52,5 +53,43 @@ func TestSpinnerTokensReplaceNotAdd(t *testing.T) {
 	s.SetTokens(50)
 	if s.Tokens() != 50 {
 		t.Errorf("SetTokens should replace, got %d", s.Tokens())
+	}
+}
+
+func TestRenderSpinnerNoSuffixAtZero(t *testing.T) {
+	// kiln's spinner glyphs are ◐◓◑◒ (docs/kiln-design.md); frame 0 is
+	// always "◐", including at t=0 with no thinking/tokens yet, which
+	// still renders only "<frame> <Label>…", no suffix.
+	line := stripANSI(RenderSpinner(SpinnerArgs{Frame: 0, Label: "Whirring", ElapsedSeconds: 0}))
+	if line != "◐ Whirring…" {
+		t.Errorf("got %q, want %q", line, "◐ Whirring…")
+	}
+}
+
+func TestRenderSpinnerThinkingSuffix(t *testing.T) {
+	line := stripANSI(RenderSpinner(SpinnerArgs{Frame: 0, Label: "Computing", ElapsedSeconds: 1, Thinking: true, Effort: "medium"}))
+	if line != "◐ Computing… (1s · thinking with medium effort)" {
+		t.Errorf("got %q", line)
+	}
+}
+
+func TestRenderSpinnerTokenSuffixOverridesThinking(t *testing.T) {
+	tokens := 1200
+	line := stripANSI(RenderSpinner(SpinnerArgs{Frame: 0, Label: "Crunching", ElapsedSeconds: 4, Thinking: true, Tokens: &tokens}))
+	if line != "◐ Crunching… (4s · ↓ 1.2k tokens)" {
+		t.Errorf("got %q", line)
+	}
+}
+
+func TestSpinnerStateLabelAndThinking(t *testing.T) {
+	var s SpinnerState
+	s.Start(2) // Crunching
+	if s.Label() != "Crunching" {
+		t.Fatalf("got label %q", s.Label())
+	}
+	s.SetThinking(true, "high")
+	out := stripANSI(strings.Join(s.Render(80, time.Time{}), ""))
+	if !strings.Contains(out, "thinking with high effort") {
+		t.Errorf("got %q", out)
 	}
 }

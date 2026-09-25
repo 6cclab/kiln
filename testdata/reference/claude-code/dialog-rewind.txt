@@ -1,7 +1,0 @@
-▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔
-   Rewind
-   Restore the code and/or conversation to the point before…
-     run this shell command and report its output: echo parity-check
-     No code changes
-   ❯ (current)
-   Enter to continue · Esc to cancel

@@ -219,9 +219,9 @@ steps:
 	}
 }
 
-// TestRun_PrintHelp_28Builtins checks /help lists all 28 built-in slash
+// TestRun_PrintHelp_29Builtins checks /help lists all 29 built-in slash
 // commands the registry wiring in commands.go registers.
-func TestRun_PrintHelp_28Builtins(t *testing.T) {
+func TestRun_PrintHelp_29Builtins(t *testing.T) {
 	startFaux(t, unreadScript)
 	scratchProject(t)
 
@@ -240,8 +240,8 @@ func TestRun_PrintHelp_28Builtins(t *testing.T) {
 			count++
 		}
 	}
-	if count != 28 {
-		t.Errorf("/help listed %d commands, want 28:\n%s", count, stdout.String())
+	if count != 29 {
+		t.Errorf("/help listed %d commands, want 29:\n%s", count, stdout.String())
 	}
 }
 

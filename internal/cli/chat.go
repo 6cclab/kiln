@@ -27,6 +27,7 @@ import (
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/auth"
+	"github.com/andrepato/harness/internal/auth/login"
 	"github.com/andrepato/harness/internal/budget"
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
@@ -232,7 +233,7 @@ func subagentEventSink(stderr io.Writer) func(agent.SubagentEvent) {
 func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Reader) int {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(stderr, "harness:", err)
+		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
 	}
 
@@ -241,9 +242,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// announced so a report can point at it.
 	logPath, closeLog, logErr := diag.Start("", args.Debug)
 	if logErr != nil {
-		fmt.Fprintln(stderr, "harness:", logErr)
+		fmt.Fprintln(stderr, "kiln:", logErr)
 	} else if args.Debug && args.Print {
-		fmt.Fprintln(stderr, "harness: debug log:", logPath)
+		fmt.Fprintln(stderr, "kiln: debug log:", logPath)
 	}
 	defer closeLog()
 	phase := func(name string, kv ...any) {
@@ -274,7 +275,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 	providerID, modelID, ok := splitProviderModel(wanted)
 	if !ok {
-		fmt.Fprintf(stderr, "harness: invalid model %q: expected provider/model\n", wanted)
+		fmt.Fprintf(stderr, "kiln: invalid model %q: expected provider/model\n", wanted)
 		return 1
 	}
 
@@ -285,7 +286,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			// never need one, and a dynamic one (Ollama) that fails to
 			// refresh still resolves against whatever this process already
 			// knew, surfacing as "unknown model" below if that is empty.
-			fmt.Fprintf(stderr, "harness: refreshing %s: %v\n", providerID, err)
+			fmt.Fprintf(stderr, "kiln: refreshing %s: %v\n", providerID, err)
 		}
 	}
 	resolved, err := reg.Resolve(providerID, modelID)
@@ -295,7 +296,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			fmt.Fprintln(stderr, tooSmall.Error())
 			return 1
 		}
-		fmt.Fprintln(stderr, "harness:", err)
+		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
 	}
 
@@ -365,7 +366,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		sessionSearch = s
 		defer sessionSearch.Close()
 	} else {
-		fmt.Fprintf(stderr, "harness: session search unavailable: %v\n", err)
+		fmt.Fprintf(stderr, "kiln: session search unavailable: %v\n", err)
 	}
 	residentNow := residentToolNames(sessionSearch != nil)
 
@@ -407,7 +408,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// they live.
 	sessionRepo, err := jsonl.NewRepo(os.Getenv("HARNESS_SESSIONS_DIR"))
 	if err != nil {
-		fmt.Fprintln(stderr, "harness:", err)
+		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
 	}
 
@@ -506,7 +507,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		ActiveToolNames: mcpSess.activeToolNames(),
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, "harness:", err)
+		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
 	}
 	mcpSess.lane = started.Lane
@@ -643,6 +644,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		SessionRepo:        sessionRepo,
 		SessionsDir:        sessionRepo.Root,
 		ContextUsed:        contextUsed,
+		MCPConfigPath:      mcpgate.ConfigPath(args.MCPConfig),
 	}, hub)
 
 	// blockedLog accumulates every before_tool refusal this run, whether it
@@ -752,7 +754,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		// binds the gate's prompter, the dispatcher's subagent sink, and
 		// drives the Bubbletea program.
 		if stdinFile, ok := stdin.(*os.File); !ok || !isatty.IsTerminal(stdinFile.Fd()) {
-			fmt.Fprintln(stderr, "harness: interactive mode requires a TTY on stdin; use -p")
+			fmt.Fprintln(stderr, "kiln: interactive mode requires a TTY on stdin; use -p")
 			_ = started.Harness.Close()
 			return 2
 		}
@@ -768,6 +770,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		phase("tui start")
 		exitCode := RunInteractive(ctx, InteractiveDeps{
 			Cwd:            cwd,
+			Effort:         args.Effort,
+			AuthKind:       authKindLabel(ctx, reg, providerID),
 			Keybindings:    keys.Bindings,
 			MCPServerCount: len(mcpConfigs),
 			ConnectMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
@@ -778,6 +782,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			},
 			LogPath:         logPath,
 			Debug:           args.Debug,
+			StatusLine:      settings.StatusLine,
 			SetPlanApprover: func(fn tools.PlanApprover) { planApprover.set(fn) },
 			SetHookNotice:   func(fn func(string)) { hookNotice.set(fn) },
 			ModelLabel:      providerID + "/" + modelID,
@@ -857,7 +862,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 		promptText = readStdin(stdin)
 	}
 	if strings.TrimSpace(promptText) == "" {
-		fmt.Fprintln(stderr, `usage: harness -p "your prompt"   (or pipe text on stdin)`)
+		fmt.Fprintln(stderr, `usage: kiln -p "your prompt"   (or pipe text on stdin)`)
 		return 1
 	}
 
@@ -873,7 +878,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 	if strings.HasPrefix(strings.TrimSpace(promptText), "/") {
 		result, err := registry.Execute(ctx, strings.TrimSpace(promptText))
 		if err != nil {
-			fmt.Fprintln(stderr, "harness:", err)
+			fmt.Fprintln(stderr, "kiln:", err)
 			return 1
 		}
 		if result != nil {
@@ -963,7 +968,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 		fmt.Fprintln(stdout, rendered)
 	}
 	if promptErr != nil {
-		fmt.Fprintln(stderr, "harness:", promptErr)
+		fmt.Fprintln(stderr, "kiln:", promptErr)
 	}
 	if result.OK {
 		return 0
@@ -1020,4 +1025,38 @@ func logHarnessEvents(h *harness.Harness) {
 	on(harness.EventCompactionEnd, none)
 	on(harness.EventFault, func(ev harness.Event) []any { return []any{"err", ev.Err} })
 	on(harness.EventHandlerError, func(ev harness.Event) []any { return []any{"hook", ev.HookName, "err", ev.Err} })
+}
+
+// authKindLabel is the banner's auth description for the active provider,
+// standing in for Claude Code's "Claude Max" / "API Usage Billing":
+// "Claude subscription" for a stored OAuth plan credential, "API key" for a
+// key, the provider's own name for local providers such as Ollama, and ""
+// when nothing is configured.
+func authKindLabel(ctx context.Context, reg *provider.Registry, providerID string) string {
+	if providerID == "ollama" {
+		return "Ollama"
+	}
+	store := auth.NewFileCredentialStore("")
+	for _, st := range login.Status(ctx, reg, store) {
+		if st.ProviderID != providerID {
+			continue
+		}
+		if !st.Authed {
+			return ""
+		}
+		switch st.Kind {
+		case "subscription":
+			if providerID == "anthropic" {
+				return "Claude subscription"
+			}
+			return "subscription"
+		case "oauth":
+			return "OAuth"
+		default:
+			// Claude Code's own label for API-key billing
+			// (startup-default-home.txt row 3).
+			return "API Usage Billing"
+		}
+	}
+	return ""
 }

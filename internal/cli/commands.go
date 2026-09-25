@@ -61,6 +61,8 @@ type registryDeps struct {
 	// ContextUsed reports the last usage event's total token count, for
 	// /usage. Nil is treated as "no usage yet".
 	ContextUsed func() (int, bool)
+	// MCPConfigPath is the mcpServers file /mcp names in its section header.
+	MCPConfigPath string
 }
 
 // mcpStatusesOf adapts mcp.ServerStatus onto slashcommands.ServerStatus, the
@@ -71,7 +73,7 @@ func mcpStatusesOf(hub *mcpgate.Hub) func() []slashcommands.ServerStatus {
 		statuses := hub.Statuses()
 		out := make([]slashcommands.ServerStatus, len(statuses))
 		for i, s := range statuses {
-			out[i] = slashcommands.ServerStatus{Name: s.Name, OK: s.OK, ToolCount: s.ToolCount, Ms: s.Ms, Error: s.Error}
+			out[i] = slashcommands.ServerStatus{Name: s.Name, OK: s.OK, ToolCount: s.ToolCount, Ms: s.Ms, Error: s.Error, Detail: s.Detail}
 		}
 		return out
 	}
@@ -172,6 +174,7 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 
 	registry.Add(slashcommands.ManageCommands(slashcommands.ManageDeps{
 		Gate:               gate,
+		MCPConfigPath:      deps.MCPConfigPath,
 		MCPStatuses:        mcpStatusesOf(hub),
 		MCPTools:           mcpToolsOf(hub),
 		Hooks:              deps.Hooks,

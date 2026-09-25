@@ -1,11 +1,18 @@
-# Claude Code parity spec
+# Claude Code feature parity spec
 
-> Rendering contract: `claude-code-reference.md`, built from screens captured from the real
-> `claude` binary (`testdata/reference/claude-code/`). Where this checklist and a captured
-> screen disagree, the screen wins.
+> Rendering contract: `kiln-design.md` — kiln's own palette, glyphs and block
+> anatomy (Layout 1b "Ruled"). This file no longer tracks pixel/glyph parity
+> with Claude Code's look; kiln has its own visual design, applied on top of
+> the same underlying architecture. Where a row below still describes an
+> exact glyph or layout, treat it as historical context for the *behavior*
+> it documents, not as a rendering spec — see `kiln-design.md` for what the
+> harness actually draws today.
 
-The harness must look and operate identically to Claude Code. This file turns
-that into a checklist so "identical" is testable rather than a matter of taste.
+kiln (née harness) keeps Claude Code's *feature surface* — keybindings, CLI
+flags, permission-mode semantics, hooks, MCP, slash commands, subagents — but
+replaces its visual design language with kiln's own. This file turns the
+feature surface into a checklist so "does the behavior match" is testable
+rather than a matter of taste; it is not a visual-parity checklist any more.
 
 **Confidence is marked per item.** `[obs]` means directly observable in a running
 Claude Code session and safe to treat as settled. `[chk]` means stated from
@@ -17,10 +24,13 @@ item without looking at it first.
 
 ## 1. Input line
 
+Exact rule/glyph rendering (the prompt glyph, rule colour) is kiln's own —
+see `kiln-design.md`'s "Input" section, not the notes column below.
+
 | Behavior | Conf | Notes |
 |---|---|---|
 | Two full-width rules around the input (top and bottom), no sides | `[obs]` | matches CC's `borderLeft/right: false` box |
-| `❯` prompt glyph at the left inside the box | `[obs]` | `figures.pointer` |
+| A prompt glyph at the left inside the box | `[obs]` | kiln uses `›`, not CC's `❯` — `kiln-design.md` |
 | Placeholder hint when empty | done | `Try "fix typecheck errors"`; hidden once text exists |
 | Multiline: newline inserts, Enter submits | `[obs]` | `Editor` handles |
 | `\` + Enter, and Option/Shift+Enter, insert a newline | `[chk]` | which combos are bound |
@@ -112,100 +122,51 @@ limits. `/fast` has no meaning here; `/effort` (§9) replaces it.
 Omit these rather than stubbing them. A command that exists and does nothing is
 worse than one that is absent.
 
-## 4a. Exact transcript layout
+## 4a. Transcript layout — superseded by kiln-design.md
 
-Written from direct operational familiarity. Glyphs are the highest-risk detail
-in this document — verify them against a live session before committing, since a
-wrong glyph is the single most noticeable parity failure.
-
-A tool call and its result:
-
-```
-⏺ Read(src/provider/ollama.ts)
-  ⎿  Read 240 lines (ctrl+r to expand)
-
-⏺ Bash(npm run typecheck)
-  ⎿  > tsc --noEmit
-     (no output)
-```
-
-Key properties, each of which people get wrong:
-
-- The call marker is a **filled circle** `⏺`, flush left, colored by status.
-- The result is indented **two spaces**, then `⎿`, then **two more spaces**
-  before content. The glyph appears on the *first* result line only; subsequent
-  lines align under the content, not under the glyph.
-- The call line is `ToolName(primaryArg)` — one argument, the identifying one.
-  Not a serialized argument object.
-- Results are summarized, not dumped: `Read 240 lines`, not 240 lines. The
-  expansion hint is part of the line.
-- A failed call colors the `⏺` red and the result carries the error text.
-
-An assistant turn is plain markdown at the left margin with no marker of its
-own — only tool calls get `⏺`. This matters: marking assistant prose the same
-way makes the transcript unreadable.
-
-Todo list:
-
-```
-⏺ Update Todos
-  ⎿  ☒ Measure tool-schema cost
-     ☒ Wire the provider registry
-     ☐ Build the TUI shell
-```
-
-Completed items are `☒` and dimmed; pending are `☐`. The in-progress item is
-shown distinctly from both.
-
-Input box:
-
-```
-──────────────────────────────────────────────
-❯ Try "fix typecheck errors"
-──────────────────────────────────────────────
-```
-
-Two full-width rules (top and bottom), no sides — Claude Code's
-`borderStyle="round"` with `borderLeft`/`borderRight` off. `❯` then a space
-before the cursor; a dim example command fills the empty box and disappears
-once you type.
-
-A user message reads the same way, `❯` then the text, with no fill band.
-
-Working indicator — a spinning glyph of Claude Code's own frame set, a
-lowercase gerund, elapsed time and the live token count on one line:
-
-```
-✳ working (12s · ↓ 3.4k tokens)
-```
-
-The `esc to interrupt` hint moved to the footer: it rides the status line's
-first row while a turn is loading, exactly where Claude Code puts it rather
-than inside the still spinner. The gerund varies per turn; it is flavor, and
-the harness should have its own vocabulary rather than copying a word list.
+This section used to pin the exact Claude-Code-shaped transcript layout
+(`⏺ Name(arg)` / `⎿` result glyph / `☒`/`☐` todo checkboxes / a bare `❯`
+prompt with no label). kiln replaced all of that with its own "label rule"
+block anatomy (a `{label}──── {meta}` hairline above every block, block
+colours, and its own glyph table) — see `kiln-design.md`'s "Block anatomy"
+section for the current, exact layout of every block type (user, text,
+tool, diff, permission, plan, subagents, error, context) and the banner and
+input box. The *behavioral* facts this section used to carry — a tool call
+collapses to one line with a status-coloured marker and a summarized
+result, an assistant turn has no leading marker on its own, a todo list
+shows which item is done/current/pending, the input box is two full-width
+rules with no sides — are unchanged and are covered by §4/§5 below; only
+the exact characters and colours moved to `kiln-design.md`.
 
 ## 4. Transcript rendering
 
+Exact glyphs/colours are kiln's own (`kiln-design.md`'s block anatomy
+table), not the ones implied below; the "Behavior" column describes what
+still holds structurally.
+
 | Element | Behavior | Conf |
 |---|---|---|
-| User message | plain `❯` pointer then the text at the left margin, no fill — its own voice without a background band | `[obs]` |
+| User message | the message renders in its own block, no fill band shared with other blocks | `[obs]` |
 | Assistant text | markdown rendered; code blocks syntax-highlighted | `[obs]` done |
-| Tool call | one collapsed line: bullet, tool name, key argument | `[obs]` |
-| Tool result | indented under the call with a `⎿` continuation glyph | `[obs]` |
-| Long output | truncated with a "+N lines" affordance, Ctrl+R expands | `[obs]` done |
+| Tool call | one collapsed line: a status-coloured marker, tool name, key argument | `[obs]` |
+| Tool result | indented under the call with a continuation glyph | `[obs]` |
+| Long output | truncated with a "+N lines" affordance, Ctrl+O expands (Ctrl+R in old CC) | `[obs]` done |
 | File edits | unified diff, green additions / red deletions, line numbers | `[obs]` |
-| Todo list | checkbox list, completed struck through or dimmed | `[obs]` done |
+| Todo list | list of items, completed struck through or dimmed, current item distinct | `[obs]` done |
 | Thinking | dimmed italic block, collapsed by default | `[obs]` done |
-| Errors | red, visually distinct from normal tool output | `[obs]` |
+| Errors | visually distinct from normal tool output | `[obs]` |
 
 ## 5. Spinner / working indicator
 
+Exact spinner frames are kiln's own (`kiln-design.md`: `◐◓◑◒` at 140ms), not
+Claude Code's frame set.
+
 | Behavior | Conf |
 |---|---|
-| Animated glyph (Claude Code's frame set) plus a varying lowercase gerund | `[obs]` |
+| Animated glyph plus a varying lowercase gerund | `[obs]` |
 | Elapsed seconds counter | `[obs]` |
 | Token count `↓ N`, updating live during streaming | `[obs]` |
-| "esc to interrupt" hint on the footer, only while loading | `[obs]` |
+| "esc to stop" hint (was "esc to interrupt" in CC) on the footer, only while loading | `[obs]` |
 | Replaced in-place by the result, leaving no spinner residue | `[obs]` |
 
 ## 6. Keybindings
@@ -239,12 +200,14 @@ dropping one produces a key that works until it doesn't.
 | Active model name | `[obs]` |
 | Permission mode when not default | `[obs]` |
 | Context-remaining indicator | `[obs]` |
-| "esc to interrupt" while a turn is loading | done |
+| "esc to stop" while a turn is loading (CC: "esc to interrupt") | done |
 
 Claude Code shows `? for shortcuts` when idle and `esc to interrupt` while
 loading. The harness's status line replaces the idle hint (a status line always
 present is the documented divergence), so only the loading hint is threaded
-through — it rides the first status row while a turn runs.
+through — it rides the first status row while a turn runs. Its exact wording
+and colour theming are kiln's own — see `kiln-design.md`'s "Status line"
+section.
 
 **Harness addition, deliberately not in Claude Code:** live budget consumption
 against the active tier. On a 32k local model this is the difference between a
@@ -286,6 +249,9 @@ Related, also confirmed from `--help`:
 
 ## 8. Permission prompts
 
+Exact framing/colours are kiln's own — an amber-ruled "perm" block with
+"Allow kiln to …?" copy — see `kiln-design.md`'s "perm" block anatomy.
+
 | Behavior | Conf |
 |---|---|
 | Inline block, not a modal | `[obs]` |
@@ -300,7 +266,7 @@ Related, also confirmed from `--help`:
 
 From `claude --help`, so these are exact. Muscle memory lives here as much as in
 the TUI — someone who types `claude -c` should get the same result from
-`harness -c`.
+`kiln -c`.
 
 Worth implementing, in rough priority order:
 
@@ -358,8 +324,9 @@ Three, all additive:
 ## Explicit non-goals
 
 - Anthropic-account features (`/bug`, `/upgrade`, billing).
-- Pixel-matching Claude Code's *current* build forever. It ships weekly; this
-  spec is a snapshot. Re-verify `[chk]` items when they are implemented.
+- Pixel-matching Claude Code's look at all. kiln has its own visual design
+  (`kiln-design.md`) — this file tracks *feature* parity, not rendering
+  parity, and re-verifying `[chk]` items is about behavior, not appearance.
 
 
 ## Hooks

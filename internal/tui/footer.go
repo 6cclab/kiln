@@ -68,6 +68,9 @@ func (f *FooterState) Apply(p StatusPatch) {
 // FooterView.setNote.
 func (f *FooterState) SetNote(note string) { f.note = note }
 
+// Note returns the transient note, "" when none.
+func (f *FooterState) Note() string { return f.note }
+
 // SetBusy toggles the "esc to interrupt" hint, matching FooterView.setBusy.
 func (f *FooterState) SetBusy(busy bool) { f.busy = busy }
 

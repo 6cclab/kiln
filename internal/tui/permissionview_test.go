@@ -90,7 +90,7 @@ func TestPromptState_UnknownKeySwallowedWhileActive(t *testing.T) {
 
 func TestPromptState_PlanApproveAcceptEdits(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskPlan("do the thing")
+	reply := p.AskPlan("do the thing", "~/.harness/plans/test.md")
 	p.HandleKey(key("1"))
 	decision := <-reply
 	if decision.Kind != PlanApprove || decision.Mode != "acceptEdits" {
@@ -100,7 +100,7 @@ func TestPromptState_PlanApproveAcceptEdits(t *testing.T) {
 
 func TestPromptState_PlanApproveManual(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskPlan("do the thing")
+	reply := p.AskPlan("do the thing", "~/.harness/plans/test.md")
 	p.HandleKey(key("2"))
 	decision := <-reply
 	if decision.Kind != PlanApprove || decision.Mode != "manual" {
@@ -110,12 +110,13 @@ func TestPromptState_PlanApproveManual(t *testing.T) {
 
 func TestPromptState_PlanReviseWithFeedback(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskPlan("do the thing")
-	p.HandleKey(key("3"))
+	reply := p.AskPlan("do the thing", "~/.harness/plans/test.md")
+	p.HandleKey(key("3"))     // highlight "Tell the model what to change"
+	p.HandleKey(key("enter")) // open the feedback field
 	for _, r := range "add tests" {
 		p.HandleKey(key(string(r)))
 	}
-	p.HandleKey(key("enter"))
+	p.HandleKey(key("enter")) // send
 	decision := <-reply
 	if decision.Kind != PlanRevise || decision.Feedback != "add tests" {
 		t.Errorf("decision = %+v, want revise with feedback", decision)
@@ -124,8 +125,9 @@ func TestPromptState_PlanReviseWithFeedback(t *testing.T) {
 
 func TestPromptState_PlanEmptyFeedbackCancelsBackToMenu(t *testing.T) {
 	p := NewPromptState("/tmp")
-	p.AskPlan("do the thing")
-	p.HandleKey(key("3"))
+	p.AskPlan("do the thing", "~/.harness/plans/test.md")
+	p.HandleKey(key("3"))     // highlight option 3
+	p.HandleKey(key("enter")) // open the feedback field
 	p.HandleKey(key("enter")) // empty feedback: back to the menu, not a revise
 	if p.plan == nil {
 		t.Fatal("plan prompt closed on empty feedback; want back to the menu")

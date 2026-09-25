@@ -267,28 +267,63 @@ func TestPopup_RenderSelectedRowUsesSuggestionColour(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("expected at least two rows, got %d", len(lines))
 	}
-	want := Suggestion("x") // just to get the escape prefix/suffix shape
-	_ = want
+	// kiln: the selected row's raised background wraps the whole row, and
+	// its command is amber; unselected rows are still styled (command in
+	// ink, description dim), just without the raised background.
 	if !strings.Contains(lines[1], "\x1b[") {
 		t.Fatalf("selected row %q does not appear styled", lines[1])
 	}
-	if strings.Contains(lines[0], "\x1b[") {
-		t.Fatalf("unselected row %q is unexpectedly styled", lines[0])
+	if !strings.Contains(lines[0], "\x1b[") {
+		t.Fatalf("unselected row %q should still carry ink/dim styling", lines[0])
+	}
+	if strings.Contains(lines[0], "48;2;36;31;24") {
+		t.Fatalf("unselected row %q should not carry the raised background", lines[0])
 	}
 }
 
-func TestPopup_RenderScrollIndicator(t *testing.T) {
+// TestPopup_RenderClampsToMaxRows: Claude Code shows a window of the list
+// with no scroll indicator (autocomplete-at.txt lists five rows of many).
+func TestPopup_RenderClampsToMaxRows(t *testing.T) {
 	items := make([]AutocompleteItem, 10)
 	for i := range items {
 		items[i] = AutocompleteItem{Value: string(rune('a' + i))}
 	}
 	p := &Popup{Items: items, Selected: 0}
 	lines := p.Render(40, 3)
-	if len(lines) != 4 { // 3 rows + scroll indicator
-		t.Fatalf("got %d lines, want 4 (3 rows + scroll indicator)", len(lines))
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want 3", len(lines))
 	}
-	if !strings.Contains(lines[3], "(1/10)") {
-		t.Fatalf("scroll indicator line = %q, want it to contain (1/10)", lines[3])
+}
+
+// TestPopup_RenderMatchesReferenceColumns pins the slash layout to
+// autocomplete-slash.txt rows 29-30: value at column 2, description at
+// column 42, continuation aligned under it, clipped with "…" on the second
+// row.
+func TestPopup_RenderMatchesReferenceColumns(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+	p := &Popup{Kind: KindSlashCommand, Items: []AutocompleteItem{
+		{Value: "model", Description: "Set the AI model for Claude Code (currently Opus 5 (1M context))"},
+		{Value: "track-work", Description: "Track work as epics and stories in the self-hosted Task Tracker, streamed live to the mobile dashboard. Use when starting work."},
+	}}
+	got := p.Render(100, 5)
+	want := []string{
+		"  /model                                  Set the AI model for Claude Code (currently Opus 5 (1M",
+		"                                          context))",
+		"  /track-work                             Track work as epics and stories in the self-hosted Task",
+		"                                          Tracker, streamed live to the mobile dashboard. Use whe…",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("rows = %d, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))
+	}
+	for i := range want {
+		if strings.TrimRight(got[i], " ") != want[i] {
+			t.Errorf("row %d:\n got: %q\nwant: %q", i, strings.TrimRight(got[i], " "), want[i])
+		}
+	}
+	files := &Popup{Kind: KindFile, Items: []AutocompleteItem{{Value: "math.js"}}}
+	if row := strings.TrimRight(files.Render(100, 5)[0], " "); row != "  + math.js" {
+		t.Errorf("file row = %q, want %q", row, "  + math.js")
 	}
 }
 

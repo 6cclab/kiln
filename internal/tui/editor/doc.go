@@ -47,7 +47,10 @@
 //     yanks the most recent one back in. textarea has no kill ring or
 //     yank at all.
 //   - The BorderedEditor frame itself (view.go): the two full-width rules,
-//     the `Marker + " "` prefix on every content line, the placeholder
+//     the `Marker + " "` prefix on the first content line only (every row
+//     after it — a wrapped continuation or a Shift+Enter'd second line —
+//     gets a same-width two-space indent instead, matching
+//     RenderUserMessage's transcript-echo convention), the placeholder
 //     splice for an empty buffer, and a scroll hint drawn into the rules
 //     when the textarea has more lines than fit its capped height.
 //

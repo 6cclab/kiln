@@ -112,13 +112,20 @@ func (p *Popup) Accept() (replacement string, cursorCol int) {
 	return replacement, p.Start + len([]rune(replacement))
 }
 
-// Render draws up to maxRows item rows plus a "(n/total)" scroll indicator
-// when the list is longer than that, the selected row painted in the
-// `suggestion` colour — matching SelectList.render/renderItem
-// (select-list.js) and app.ts's editorTheme comment on why the selected
-// row uses Suggestion rather than a bold/green highlight. Every returned
-// line is exactly width columns via VisibleWidth, the same invariant
-// width.go documents for every other renderer in this package.
+// Render draws up to maxRows item rows the way Claude Code lays its
+// suggestions out (docs/claude-code-reference.md §4, autocomplete-slash.txt
+// rows 29-32, autocomplete-at.txt rows 9-13):
+//
+//	/model                                  Set the AI model … (currently Opus 5 (1M
+//	                                        context))
+//	+ math.js
+//
+// Two-space indent, the value column popupValueColumn wide, the description
+// wrapped in the remaining width (two columns short of the edge) onto at
+// most popupDescRows rows, the last one ending in "…" when clipped. File
+// items are "+ <path>", middle-truncated to keep the file name. The
+// selected row is painted in the suggestion colour; there is no marker
+// glyph. Every returned line is exactly width columns via VisibleWidth.
 func (p *Popup) Render(width, maxRows int) []string {
 	if width < 1 {
 		width = 1
@@ -127,40 +134,96 @@ func (p *Popup) Render(width, maxRows int) []string {
 		maxRows = 1
 	}
 	if len(p.Items) == 0 {
-		return []string{padTo(Dim("  No matching commands"), width)}
+		return []string{padTo(Muted("  No matching commands"), width)}
 	}
 
 	start, end := visibleRange(p.Selected, len(p.Items), maxRows)
-	primaryWidth := primaryColumnWidth(p.Items, width)
-
-	lines := make([]string, 0, maxRows+1)
+	var lines []string
 	for i := start; i < end; i++ {
-		lines = append(lines, padTo(renderItem(p.Items[i], i == p.Selected, width, primaryWidth), width))
-	}
-	if start > 0 || end < len(p.Items) {
-		scroll := "  (" + itoa(p.Selected+1) + "/" + itoa(len(p.Items)) + ")"
-		lines = append(lines, padTo(Dim(truncateToWidth(scroll, width-2)), width))
+		selected := i == p.Selected
+		for _, row := range renderItem(p.Kind, p.Items[i], selected, width) {
+			row = padTo(row, width)
+			if selected {
+				row = OnRaise(row)
+			}
+			lines = append(lines, row)
+		}
 	}
 	return lines
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// popupValueColumn is where a slash command's description starts: two
+// columns of indent plus a 40-column value column (autocomplete-slash.txt).
+const popupValueColumn = 42
+
+// popupDescRows caps a description at two rows, the second clipped with
+// "…" (autocomplete-slash.txt row 32: "… Use whe…").
+const popupDescRows = 2
+
+// renderItem renders one item as one or more rows, per kiln's selection
+// model: the selected row's command/value is amber (the raised background
+// is applied by the caller, Popup.Render), unselected rows show the
+// command in ink and the description dimmed.
+func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, width int) []string {
+	paintValue := func(s string) string {
+		if selected {
+			return KilnAmber(s)
+		}
+		return Ink(s)
 	}
-	neg := n < 0
-	if neg {
-		n = -n
+	paintDesc := func(s string) string {
+		return Muted(s)
 	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
+	if kind == KindFile {
+		return []string{"  " + paintValue("+ "+truncateMiddle(displayValue(item), width-4))}
 	}
-	if neg {
-		b = append([]byte{'-'}, b...)
+
+	value := displayValue(item)
+	if kind == KindSlashCommand && !strings.HasPrefix(value, "/") {
+		value = "/" + value
 	}
-	return string(b)
+	desc := normalizeToSingleLine(item.Description)
+	descWidth := width - popupValueColumn - 2
+	if desc == "" || descWidth < minDescriptionWidth {
+		return []string{"  " + paintValue(truncateToWidth(value, width-2))}
+	}
+	value = truncateToWidth(value, popupValueColumn-2-1)
+	first := "  " + paintValue(value) + strings.Repeat(" ", popupValueColumn-2-VisibleWidth(value))
+	descRows := wrapPlain(desc, descWidth)
+	if len(descRows) > popupDescRows {
+		descRows = descRows[:popupDescRows]
+		last := descRows[popupDescRows-1]
+		descRows[popupDescRows-1] = truncateToWidth(last, descWidth-1) + "…"
+	}
+	rows := make([]string, 0, len(descRows))
+	for i, d := range descRows {
+		if i == 0 {
+			rows = append(rows, first+paintDesc(d))
+			continue
+		}
+		rows = append(rows, strings.Repeat(" ", popupValueColumn)+paintDesc(d))
+	}
+	return rows
+}
+
+// truncateMiddle keeps the last path segment and clips the front with "…"
+// when s is wider than width (autocomplete-at.txt row 13).
+func truncateMiddle(s string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if VisibleWidth(s) <= width {
+		return s
+	}
+	tail := s
+	if i := strings.LastIndex(s, "/"); i > 0 {
+		tail = s[i:]
+	}
+	if VisibleWidth(tail)+1 >= width {
+		return truncateToWidth(s, width-1) + "…"
+	}
+	head := truncateToWidth(s, width-1-VisibleWidth(tail))
+	return head + "…" + tail
 }
 
 // visibleRange is SelectList.getVisibleRange: a window of maxVisible
@@ -194,80 +257,6 @@ func displayValue(item AutocompleteItem) string {
 		return item.Label
 	}
 	return item.Value
-}
-
-// primaryColumnWidth is SelectList.getPrimaryColumnWidth: the widest label
-// plus a gap, clamped to [1, defaultPrimaryColumnWidth] (this port has no
-// layout override, so min==max==32 the way pi-tui's own default bounds
-// collapse when minPrimaryColumnWidth/maxPrimaryColumnWidth are unset).
-func primaryColumnWidth(items []AutocompleteItem, _ int) int {
-	widest := 0
-	for _, it := range items {
-		if w := VisibleWidth(displayValue(it)) + primaryColumnGap; w > widest {
-			widest = w
-		}
-	}
-	if widest < 1 {
-		widest = 1
-	}
-	if widest > defaultPrimaryColumnWidth {
-		widest = defaultPrimaryColumnWidth
-	}
-	return widest
-}
-
-// renderItem is SelectList.renderItem: "→ " / "  " prefix, then either a
-// two-column value+description layout (when width > 40 and a description
-// exists) or a single truncated value.
-func renderItem(item AutocompleteItem, selected bool, width, primaryWidth int) string {
-	prefix := "  "
-	if selected {
-		prefix = "→ "
-	}
-	prefixWidth := VisibleWidth(prefix)
-
-	desc := normalizeToSingleLine(item.Description)
-	if desc != "" && width > 40 {
-		effective := primaryWidth
-		if max := width - prefixWidth - 4; effective > max {
-			effective = max
-		}
-		if effective < 1 {
-			effective = 1
-		}
-		maxPrimary := effective - primaryColumnGap
-		if maxPrimary < 1 {
-			maxPrimary = 1
-		}
-		value := truncateToWidth(displayValue(item), maxPrimary)
-		spacing := strings.Repeat(" ", max0(effective-VisibleWidth(value)))
-		descStart := prefixWidth + VisibleWidth(value) + len(spacing)
-		remaining := width - descStart - 2
-		if remaining > minDescriptionWidth {
-			truncDesc := truncateToWidth(desc, remaining)
-			if selected {
-				return Suggestion(prefix + value + spacing + truncDesc)
-			}
-			return prefix + value + spacing + Dim(truncDesc)
-		}
-	}
-
-	maxWidth := width - prefixWidth - 2
-	if maxWidth < 1 {
-		maxWidth = 1
-	}
-	value := truncateToWidth(displayValue(item), maxWidth)
-	if selected {
-		return Suggestion(prefix + value)
-	}
-	return prefix + value
-}
-
-func max0(n int) int {
-	if n < 0 {
-		return 0
-	}
-	return n
 }
 
 func normalizeToSingleLine(s string) string {

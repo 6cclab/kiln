@@ -34,7 +34,7 @@ func clipPreview(lines []string) []string {
 	}
 	hidden := len(lines) - maxPreviewLines
 	out := append([]string{}, lines[:maxPreviewLines]...)
-	out = append(out, Dim(fmt.Sprintf("  … %d more line(s)", hidden)))
+	out = append(out, Muted(fmt.Sprintf("  … %d more line(s)", hidden)))
 	return out
 }
 
@@ -53,10 +53,10 @@ func clipPreview(lines []string) []string {
 func renderReplacement(op EditOp) []string {
 	var lines []string
 	for _, line := range firstN(strings.Split(op.OldText, "\n"), maxPreviewLines) {
-		lines = append(lines, Red("  - "+line))
+		lines = append(lines, OnDiffDel(padToWidth(KilnRed("  − "+line), ruleWidth())))
 	}
 	for _, line := range firstN(strings.Split(op.NewText, "\n"), maxPreviewLines) {
-		lines = append(lines, Green("  + "+line))
+		lines = append(lines, OnDiffAdd(padToWidth(KilnGreen("  + "+line), ruleWidth())))
 	}
 	return lines
 }
@@ -93,6 +93,47 @@ func firstN(s []string, n int) []string {
 	return s[:n]
 }
 
+// DiffFromEdit builds a ToolDiff (transcript.go) from one Edit's literal
+// old/new text, for the committed result row after the edit has run —
+// distinct from RenderChangePreview, which renders the same EditOp shape
+// before the tool runs, for the permission prompt.
+//
+// Edit's arguments are two exact strings to match and replace, not a
+// unified patch, so there is no hunk header to read a real starting line
+// from. Old and new are paired line-for-line (line 1 of old against line 1
+// of new, and so on): correct for the common case this harness's own edit
+// tool is built around — a same-shaped replacement — and exactly what the
+// reference capture shows (a one-line-for-one-line change numbered "1").
+// A replacement that changes line count still renders every old line as
+// removed and every new line as added, just without a claim that line N
+// old corresponds to line N new beyond their shared position.
+func DiffFromEdit(oldText, newText string, startLine int) *ToolDiff {
+	if startLine <= 0 {
+		startLine = 1
+	}
+	oldLines := strings.Split(oldText, "\n")
+	newLines := strings.Split(newText, "\n")
+	d := &ToolDiff{Added: len(newLines), Removed: len(oldLines)}
+	for i, l := range oldLines {
+		d.Lines = append(d.Lines, DiffLine{Num: startLine + i, Sign: '-', Text: l})
+	}
+	for i, l := range newLines {
+		d.Lines = append(d.Lines, DiffLine{Num: startLine + i, Sign: '+', Text: l})
+	}
+	return d
+}
+
+// changePreviewHeader renders the kiln "edit" label rule above a pending
+// diff preview: blue label, filename meta when the path is known. Per the
+// block anatomy, a preview with no filename keeps its header minimal (no
+// rule at all) rather than drawing a blue rule with nothing to point at.
+func changePreviewHeader(path string) []string {
+	if path == "" {
+		return nil
+	}
+	return []string{labelRule("edit", KilnBlue, path, ruleWidth())}
+}
+
 // RenderChangePreview renders a human-readable preview of a pending
 // change, or nil when the call has nothing to show beyond its arguments
 // (bash, reads, MCP calls).
@@ -104,20 +145,22 @@ func RenderChangePreview(toolName string, args map[string]any) []string {
 		if len(edits) == 0 {
 			return nil
 		}
+		path, _ := args["path"].(string)
 		var lines []string
 		multi := len(edits) > 1
 		for i, op := range edits {
 			if multi {
-				lines = append(lines, Dim(fmt.Sprintf("  edit %d of %d", i+1, len(edits))))
+				lines = append(lines, Muted(fmt.Sprintf("  edit %d of %d", i+1, len(edits))))
 			}
 			lines = append(lines, renderReplacement(op)...)
 		}
-		return clipPreview(lines)
+		return append(changePreviewHeader(path), clipPreview(lines)...)
 	}
 
 	if tool == "write" {
 		path, _ := args["path"].(string)
 		content, _ := args["content"].(string)
+		header := changePreviewHeader(path)
 
 		// Whether this creates or overwrites is the single most important
 		// fact about a write, and it is invisible in the arguments alone.
@@ -133,25 +176,25 @@ func RenderChangePreview(toolName string, args map[string]any) []string {
 		contentLines := strings.Split(content, "\n")
 
 		if !exists {
-			out := []string{Dim(fmt.Sprintf("  new file, %d line(s)", len(contentLines)))}
+			out := []string{Muted(fmt.Sprintf("  new file, %d line(s)", len(contentLines)))}
 			for _, l := range contentLines {
-				out = append(out, Green("  + "+l))
+				out = append(out, OnDiffAdd(padToWidth(KilnGreen("  + "+l), ruleWidth())))
 			}
-			return clipPreview(out)
+			return append(header, clipPreview(out)...)
 		}
 		if existing == content {
-			return []string{Dim("  no change")}
+			return append(header, Muted("  no change"))
 		}
 
 		existingLines := strings.Split(existing, "\n")
-		out := []string{Dim(fmt.Sprintf("  overwrites %d existing line(s)", len(existingLines)))}
+		out := []string{Muted(fmt.Sprintf("  overwrites %d existing line(s)", len(existingLines)))}
 		for _, l := range firstN(existingLines, 6) {
-			out = append(out, Red("  - "+l))
+			out = append(out, OnDiffDel(padToWidth(KilnRed("  − "+l), ruleWidth())))
 		}
 		for _, l := range firstN(contentLines, 6) {
-			out = append(out, Green("  + "+l))
+			out = append(out, OnDiffAdd(padToWidth(KilnGreen("  + "+l), ruleWidth())))
 		}
-		return clipPreview(out)
+		return append(header, clipPreview(out)...)
 	}
 
 	return nil

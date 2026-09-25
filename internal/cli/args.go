@@ -292,12 +292,12 @@ func Parse(argv []string) Args {
 }
 
 // Help is the help text, copied from cli-args.ts.
-const Help = `harness - a coding agent with Claude Code's interface, on any model
+const Help = `kiln - a coding agent with Claude Code's interface, on any model
 
 usage:
-  harness [options]                  start an interactive session
-  harness -p "prompt" [options]      run one prompt and exit
-  harness <command> [args]
+  kiln [options]                     start an interactive session
+  kiln -p "prompt" [options]         run one prompt and exit
+  kiln <command> [args]
 
 commands:
   providers                          list providers and auth status
@@ -335,7 +335,7 @@ output:
   -p, --print                        non-interactive: print and exit
       --output-format <fmt>          text | json | stream-json
       --verbose                      report tool calls on stderr
-      --debug                        debug-level run log; prints its path (see harness doctor)
+      --debug                        debug-level run log; prints its path (see kiln doctor)
       --ax-screen-reader             flat text, no borders or animation
 
   -v, --version

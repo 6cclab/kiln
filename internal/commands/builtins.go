@@ -9,6 +9,7 @@ import (
 
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/agents"
+	"github.com/andrepato/harness/internal/claude/writesettings"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/provider"
 )
@@ -95,6 +96,16 @@ func modelID(m provider.Model) string { return m.Provider + "/" + m.ID }
 func modelDescription(m provider.Model) string {
 	tier := budget.TierFor(m.ContextWindow)
 	return fmt.Sprintf("%s · %s · %s usable", formatTokens(m.ContextWindow), tier.Name, formatTokens(budget.UsableTokens(tier)))
+}
+
+// modelDialogDescription is /model's dialog-row description, per the work
+// item's brief: "<context window, e.g. 128k context> · <tier name> tier".
+// Distinct from modelDescription (used by argument completions and the
+// print-mode listing, which also report usable tokens) since the dialog
+// row has less room and the brief specifies this exact, shorter format.
+func modelDialogDescription(m provider.Model) string {
+	tier := budget.TierFor(m.ContextWindow)
+	return fmt.Sprintf("%s context · %s tier", formatTokens(m.ContextWindow), tier.Name)
 }
 
 // BuiltinCommands returns the source for the ten commands builtins.ts
@@ -225,28 +236,61 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				if err != nil {
 					models = nil
 				}
+				// models is already provider-grouped: modelCache.get
+				// appends p.Models() per provider in reg.Available's
+				// order, so numbering it in place reproduces /model's
+				// "grouped by provider via ordering, no section headers"
+				// contract with no extra sort here.
 				items := make([]Item, 0, len(models))
 				lines := []string{fmt.Sprintf("current: %s", orUnknown(currentID)), ""}
-				for _, m := range models {
+				for i, m := range models {
 					id := modelID(m)
-					label := id
-					if id == currentID {
-						label = id + "  ←"
+					it := Item{
+						Value:       id,
+						Label:       fmt.Sprintf("%d. %s", i+1, id),
+						Description: modelDialogDescription(m),
 					}
-					items = append(items, Item{Value: id, Label: label, Description: modelDescription(m)})
+					if id == currentID {
+						it.Marker = "✔"
+					}
+					items = append(items, it)
 					lines = append(lines, "  "+id)
 				}
 
 				modal := &ModalSpec{
 					Title:  "Model",
+					Kind:   "model",
 					Header: []string{fmt.Sprintf("current    %s", orUnknown(currentID))},
 					Items:  items,
+					// Effort is a static "Medium" label: the harness has
+					// no reasoning-effort concept anywhere else in the
+					// codebase (no field on provider.Model, no setting,
+					// nothing budget/tier tracks), so there is nothing
+					// real to report or adjust. SetEffort is left nil,
+					// which internal/tui's dialogModel renders as a
+					// static row (←/→ a no-op) — see the handback
+					// report.
+					Effort: "Medium",
 					Select: func(value string) (string, error) {
 						providerID, mID, ok := splitProviderModel(value)
 						if !ok {
 							return "", fmt.Errorf(`"%s" is not provider/model`, value)
 						}
 						return apply(providerID + "/" + mID)
+					},
+					SelectDefault: func(value string) (string, error) {
+						providerID, mID, ok := splitProviderModel(value)
+						if !ok {
+							return "", fmt.Errorf(`"%s" is not provider/model`, value)
+						}
+						if _, err := apply(providerID + "/" + mID); err != nil {
+							return "", err
+						}
+						label := providerID + "/" + mID
+						if err := writesettings.SetUserModel(label); err != nil {
+							return "", fmt.Errorf("switched but could not persist default: %w", err)
+						}
+						return fmt.Sprintf("⎿  Model set to %s (default for new sessions)", label), nil
 					},
 				}
 				return Result{Output: lines, Modal: modal}, nil
@@ -320,7 +364,17 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				if deps.OnExit != nil {
 					deps.OnExit()
 				}
-				return Result{}, nil
+				return Result{Exit: true}, nil
+			},
+		},
+		{
+			Name:        "quit",
+			Description: "Exit the harness",
+			Run: func(ctx context.Context, args string) (Result, error) {
+				if deps.OnExit != nil {
+					deps.OnExit()
+				}
+				return Result{Exit: true}, nil
 			},
 		},
 	}

@@ -32,6 +32,28 @@ type Item struct {
 	Value       string
 	Label       string
 	Description string
+
+	// Group is an optional section header this item is displayed under
+	// (e.g. /mcp's "User MCPs (<path>)"). Consecutive items sharing the
+	// same non-empty Group are rendered under one header; Kind-aware
+	// dialogs (see ModalSpec.Kind) are the only ones that read it — the
+	// generic commandDialog ignores it. Empty means no section header.
+	Group string
+	// Marker is a one-glyph status indicator shown before Label, e.g.
+	// "✔"/"✘"/"⚠"/"◯" for /mcp server rows. Empty means no glyph column.
+	Marker string
+	// Error is a short, one-line failure reason (e.g. an MCP server's
+	// connect error), shown in a Kind-aware detail view.
+	Error string
+	// Detail is the failure's full underlying text, shown dim and wrapped
+	// under Error in a detail view. Empty means none.
+	Detail string
+	// Tools lists this item's own rows for a detail view (e.g. an MCP
+	// server's tool names). Empty means none.
+	Tools []string
+	// Ms is a latency figure (e.g. an MCP server's connect time in
+	// milliseconds) shown in a detail view. Zero means not applicable.
+	Ms int64
 }
 
 // Action is one keybinding a ModalSpec offers against its selected item.
@@ -50,9 +72,31 @@ type ModalSpec struct {
 	Items   []Item
 	Actions []Action
 
-	// Select runs when an item is chosen (Enter in the TUI). It returns a
-	// short status message to show, or an error.
+	// Kind selects which Dialog implementation the TUI builds for this
+	// spec: "" for the generic, flat-list dialog; "model" for /model's
+	// provider-ordered list plus the effort row; "mcp" for /mcp's
+	// sectioned server list plus a per-server detail view. Consumed by
+	// internal/tui.NewCommandDialog (see internal/tui/dialog_model.go and
+	// dialog_mcp.go's doc comments for the exact dispatch it needs).
+	Kind string
+	// Effort is the current reasoning-effort label for /model's
+	// "◐ <Effort> effort ←/→ to adjust" row (e.g. "Medium"). Empty omits
+	// the row entirely.
+	Effort string
+	// SetEffort cycles the effort level (←/→) when set, returning the new
+	// label or an error. Nil renders the ◐ row static (arrows are a
+	// no-op) — used today, since the harness has no effort concept yet.
+	SetEffort func(level string) (label string, err error)
+
+	// Select runs when an item is chosen (Enter in the TUI, or 's' for
+	// /model's session-only switch). It returns a short status message to
+	// show, or an error.
 	Select func(value string) (string, error)
+	// SelectDefault runs instead of Select on Enter when set (only
+	// /model's spec sets it): it applies the switch AND persists the
+	// choice as the default for new sessions. Select still runs for 's'
+	// (session-only, no persistence).
+	SelectDefault func(value string) (string, error)
 	// Act runs when an Action's key is pressed against a selected item's
 	// value. It returns a short status message to show, or an error.
 	Act func(key, value string) (string, error)
@@ -69,6 +113,9 @@ type Result struct {
 	// Modal is a panel to open instead of printing. Commands that open one
 	// also populate Output, so print mode degrades gracefully.
 	Modal *ModalSpec
+	// Exit signals the interactive shell to quit after this command (e.g.
+	// /exit, /quit). Print mode ignores it.
+	Exit bool
 }
 
 // Command is one slash command.

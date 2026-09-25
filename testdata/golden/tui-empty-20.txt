@@ -1,10 +1,14 @@
-⏺ harness — faux/fau
-x-1
-  Type / for command
-s, @ to reference a
-file, or just ask.
+█ ▄▀  █  █    █▄ █
+█▀▄   █  █    █▀▄█
+█ ▀▄  █  █▄▄  █  █
+dev · coding agent
+
+<cwd>…
+
+<cwd>…
+
 ────────────────────
-❯  Try "fix typechec
 ────────────────────
-faux/faux-1 (128k c…
-▶▶ manual mode (shi…
+› Try "how do I log
+────────────────────
+  ● manual mode on …

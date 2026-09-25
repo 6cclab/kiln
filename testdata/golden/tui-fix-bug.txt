@@ -1,29 +1,27 @@
-  Type / for commands, @ to reference a file, or just ask.
+/ commands   @ add files   ⇧⇥ cycle mode   esc stop
 
-❯ fix the bug in math.js
+────────────────────────────────────────────────────────────────────────────────────────────────────
 
+you ────────────────────────────────────────────────────────────────────────────────────────────────
+fix the bug in math.js
 
-∴ Thinking (ctrl+r to expand)
-
+kiln ───────────────────────────────────────────────────────────────────────────────────────────────
 I'll look at the file.
 
-⏺ Read(src/math.js)
-  ⎿  function add(a, b) {
-       return a - b;
-     }
+  Read 1 file
 
-     function mul(a, b) {
-       return a * b;
-     }
+edit ──────────────────────────────────────────────────────────────────────────────────  src/math.js
+Update src/math.js
+→ +1  −1
+         2 −   return a - b;
+         2 +   return a + b;
 
-⏺ Edit(src/math.js)
-  ⎿  Successfully replaced 1 block(s) in src/math.js.
-
+kiln ───────────────────────────────────────────────────────────────────────────────────────────────
 Fixed.
-✳ Worked for 1s · 2 tool calls · 1.1k tokens
 
+✻ Brewed for 1s · done 12:00 PM
+                                                                                ◐ medium · /effort
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-❯  Try "fix typecheck errors"
+› Try "how do I log an error?"
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-faux/faux-1 (128k ctx) │ ░░░░░░ 846/128k 1% │ 0s · 12:00pm
-▶▶ bypassPermissions mode (shift+tab to cycle)
+  ● bypass permissions on (shift+tab to cycle)

@@ -24,6 +24,8 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/permission"
+	claudesettings "github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/claude/trust"
 	slashcommands "github.com/andrepato/harness/internal/commands"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/execenv"
@@ -60,6 +62,14 @@ type InteractiveDeps struct {
 	// failures become one dim transcript line pointing at /mcp.
 	MCPServerCount int
 	ConnectMCP     func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus
+	// Effort is the reasoning effort label shown in the banner ("medium");
+	// AuthKind is how the model's provider is authenticated ("Claude
+	// subscription", "API key", "Ollama").
+	Effort   string
+	AuthKind string
+	// StatusLine is the configured status-line command (settings.json
+	// "statusLine"), run to render the row below the input box. Nil = none.
+	StatusLine *claudesettings.StatusLineConfig
 	// LogPath is this run's diagnostics log; announced when debugging.
 	LogPath string
 	Debug   bool
@@ -174,8 +184,33 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 
 		HistoryPath:    historyPath,
 		StartupHistory: history,
-		SessionName:    deps.Started.SessionID,
+		SessionName:    "kiln", // the terminal title, as Claude Code sets "Claude Code"
+		Effort:         deps.Effort,
+		ModelID:        deps.Resolved.Model.ID,
+		Banner:         bannerRows(deps),
+		SessionID:      deps.Started.SessionID,
+		TranscriptPath: deps.Started.TranscriptPath,
+		Version:        Version,
 		Keymap:         bindings.Keymap(),
+	}
+	if deps.StatusLine != nil {
+		cfg.StatusLineCommand = deps.StatusLine.Command
+	}
+
+	// Folder trust, once per new folder (docs/claude-code-reference.md §5,
+	// dialog-trust.txt): the harness reads the project's .claude settings
+	// and hooks, so an untrusted folder is asked about before the first
+	// prompt. HARNESS_TRUST_ALL=1 skips the dialog (tests, automation).
+	if store, err := trust.NewStore(); err == nil && os.Getenv("HARNESS_TRUST_ALL") != "1" && !store.IsTrusted(deps.Cwd) {
+		cfg.NeedsTrust = true
+		cfg.OnTrust = func(trusted bool) {
+			if !trusted {
+				return
+			}
+			if err := store.Trust(deps.Cwd); err != nil {
+				diag.L().Warn("trust store", "err", err)
+			}
+		}
 	}
 
 	model := tui.NewModel(cfg)
@@ -187,16 +222,12 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	program := tea.NewProgram(model, opts...)
 	bridge.SetProgram(program)
 
-	// The startup banner, matching app.ts:1065-1068 exactly. Commit only
-	// enqueues (see bridge.go's doc comment), so calling it here, before
-	// program.Run(), is safe: the bridge's own committer goroutine
-	// applies it once a program is attached and running.
-	bridge.Commit([]string{
-		tui.Green(tui.G().Call) + " " + tui.Bold("harness") + " " + tui.Dim("— "+deps.ModelLabel),
-		tui.Dim("  Type / for commands, @ to reference a file, or just ask."),
-	})
+	// The startup banner is cfg.Banner: the app commits it on its first
+	// frame, fitted to the terminal width. Commit only enqueues (see
+	// bridge.go's doc comment), so the rows below, enqueued before
+	// program.Run(), land right after it.
 	if deps.Debug && deps.LogPath != "" {
-		bridge.Commit([]string{tui.Dim("  debug log: " + deps.LogPath)})
+		bridge.Commit([]string{tui.Muted("  debug log: " + deps.LogPath)})
 	}
 	if deps.ConnectMCP != nil && deps.MCPServerCount > 0 {
 		go func() {
@@ -209,7 +240,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			})
 			bridge.Send(tui.MsgFooterNote{Text: ""})
 			if notice := mcpFailureNotice(statuses); notice != "" {
-				bridge.Commit([]string{tui.Dim("  " + notice)})
+				bridge.Commit([]string{tui.Amber("⚠") + " " + tui.Muted(notice)})
 			}
 		}()
 	}
@@ -289,22 +320,90 @@ func runGit(ctx context.Context, cwd string, args ...string) (string, error) {
 // mcpFailureNotice is the one-line, dim aside for servers that did not
 // connect: the session degrades to the servers that did, and /mcp has the
 // details. Empty when everything connected.
+// mcpFailureNotice is Claude Code's startup warning row for servers that did
+// not connect (claude-code-reference.md section 1: "⚠ 1 MCP server needs
+// authentication · run /mcp"). Empty when everything connected.
 func mcpFailureNotice(statuses []mcpgate.ServerStatus) string {
-	var failed []mcpgate.ServerStatus
+	failed := 0
 	for _, s := range statuses {
 		if !s.OK {
-			failed = append(failed, s)
+			failed++
 		}
 	}
-	switch len(failed) {
+	switch failed {
 	case 0:
 		return ""
 	case 1:
-		return fmt.Sprintf("mcp: %s unavailable (%s) · /mcp for details", failed[0].Name, failed[0].Error)
+		return "1 MCP server unavailable · run /mcp"
 	}
-	names := make([]string, len(failed))
-	for i, s := range failed {
-		names[i] = s.Name
+	return fmt.Sprintf("%d MCP servers unavailable · run /mcp", failed)
+}
+
+// bannerRows is the startup banner, row for row per the kiln design handoff
+// (design_handoff_kiln_tui/README.md "Banner"): the KILN wordmark and
+// version, the cwd/model line, then a shortcut tip row. No label rule above
+// it (it is the one block the design exempts) and no "Recent sessions" list
+// (no data source wired for it yet).
+func bannerRows(deps InteractiveDeps) []string {
+	// Version label: "v1.2.3" for a real semver, the bare string otherwise
+	// (so a "dev" build reads "dev · coding agent", never "vdev").
+	verLabel := Version
+	if len(Version) > 0 && Version[0] >= '0' && Version[0] <= '9' {
+		verLabel = "v" + Version
 	}
-	return fmt.Sprintf("mcp: %d servers unavailable (%s) · /mcp for details", len(failed), strings.Join(names, ", "))
+
+	// Row 2 per the design: "<cwd> · branch <b> · model <m>", cwd with the
+	// home dir abbreviated to ~.
+	loc := abbrevHome(deps.Cwd)
+	if st, ok := readGitStatus(context.Background()); ok && st.Branch != "" {
+		loc += " · branch " + st.Branch
+	}
+	loc += " · model " + deps.ModelLabel
+
+	tips := tui.KilnAmber("/") + " " + tui.Muted("commands") + "   " +
+		tui.KilnAmber("@") + " " + tui.Muted("add files") + "   " +
+		tui.KilnAmber("⇧⇥") + " " + tui.Muted("cycle mode") + "   " +
+		tui.KilnAmber("esc") + " " + tui.Muted("stop")
+
+	// The KILN wordmark as scaled block-letter art (the design's 22px
+	// wordmark; a single spaced line cannot convey that size in a
+	// terminal). Amber, per the design.
+	rows := make([]string, 0, len(kilnLogo)+5)
+	for _, r := range kilnLogo {
+		rows = append(rows, tui.KilnAmber(r))
+	}
+	// One blank row between rows for the design's spacing; the caller
+	// (app.go) appends a full-width `─` divider after these and pins the
+	// input box below.
+	rows = append(rows,
+		tui.Muted(verLabel+" · coding agent"),
+		"",
+		tui.Muted(loc),
+		"",
+		tips,
+		"",
+	)
+	return rows
+}
+
+// kilnLogo is the KILN wordmark in 5-row block letters (K, I, L, N).
+var kilnLogo = []string{
+	"█ ▄▀  █  █    █▄ █",
+	"█▀▄   █  █    █▀▄█",
+	"█ ▀▄  █  █▄▄  █  █",
+}
+
+// abbrevHome replaces the user's home directory prefix in path with "~".
+func abbrevHome(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	if strings.HasPrefix(path, home+string(os.PathSeparator)) {
+		return "~" + path[len(home):]
+	}
+	return path
 }

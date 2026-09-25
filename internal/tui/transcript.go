@@ -6,28 +6,91 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
-// Transcript rendering — the layout defined in docs/claude-code-parity.md
-// §4a, ported from transcript.ts.
+// Transcript rendering — the layout defined in docs/claude-code-reference.md
+// §3, matched row-for-row against testdata/reference/claude-code/*.txt.
 //
 // Pure functions from data to lines. Nothing here touches a terminal, which
 // is what lets the layout be asserted in tests rather than eyeballed, and
 // is where parity is actually won or lost.
-//
-// The rules that matter, each of which is easy to get subtly wrong:
-//
-//   - Tool calls get a flush-left marker. Assistant prose gets none.
-//     Marking both makes the transcript unreadable.
-//   - Results indent two spaces, then the glyph, then two more. The glyph
-//     appears on the FIRST result line only; continuation lines align
-//     under the content, not under the glyph.
-//   - A call line names one identifying argument, not a serialized object.
-//   - Results are summarized, never dumped.
 
 // Two spaces, glyph, two spaces -> content starts at column 5.
 const resultIndent = "  "
 const continuationIndent = "     "
+
+// diffIndent is the six-space indent for a diff's numbered rows
+// (docs/claude-code-reference.md §3: "diff rows indented six spaces").
+const diffIndent = "      "
+
+// fallbackRuleWidth is the label-rule width used by Render* functions that
+// have no width parameter of their own (RenderToolCall, RenderTodos,
+// RenderThinking, RenderTurnSummary, RenderAssistantText, RenderDiffLines,
+// RenderToolGroupRunning/Done). Their signatures are load-bearing — app.go
+// and bridge.go call them without a width — so this package cannot ask the
+// caller's terminal width without changing every call site. A fixed
+// fallback is the compromise: the header rule is drawn at a plausible
+// width and the *content* below it still gets wrapped/fitted to the real
+// terminal width downstream, by the caller, via FitLines(...,
+// m.contentWidth(), ...) (see app.go:442) — only the rule's own fill length
+// is approximate for these blocks. RenderUserMessage and
+// RenderVerboseModelRow, which already take width, use it for real.
+const fallbackRuleWidth = 56
+
+// renderWidth is the live terminal content width, set by the app on every
+// WindowSizeMsg (SetRenderWidth). The width-less Render* functions size
+// their label rules and row-background tints to it so kiln's hairlines
+// fill the full width. It falls back to fallbackRuleWidth before the first
+// size message (e.g. in unit tests that call a renderer directly).
+var renderWidth int
+
+// SetRenderWidth records the current terminal content width for the
+// width-less Render* helpers. A non-positive value is ignored.
+func SetRenderWidth(w int) {
+	if w > 0 {
+		renderWidth = w
+	}
+}
+
+// ruleWidth is the width the width-less blocks draw their label rule and
+// full-row background tints at.
+func ruleWidth() int {
+	if renderWidth > 0 {
+		return renderWidth
+	}
+	return fallbackRuleWidth
+}
+
+// longestLineWidth returns the widest visible line in lines, or 0.
+func longestLineWidth(lines []string) int {
+	max := 0
+	for _, l := range lines {
+		if w := VisibleWidth(l); w > max {
+			max = w
+		}
+	}
+	return max
+}
+
+// ruleWidthFor picks a label-rule width for a block with no width
+// parameter: fallbackRuleWidth, or the widest body line, whichever is
+// larger, so the rule never reads as narrower than its own content.
+func ruleWidthFor(lines []string) int {
+	if w := longestLineWidth(lines); w > ruleWidth() {
+		return w
+	}
+	return ruleWidth()
+}
+
+// padToWidth right-pads an already-styled (possibly ANSI-coloured) string
+// with spaces so a background tint applied around it spans the full width.
+func padToWidth(styled string, width int) string {
+	if pad := width - VisibleWidth(styled); pad > 0 {
+		return styled + strings.Repeat(" ", pad)
+	}
+	return styled
+}
 
 // CallStatus is the state of a tool call, for marker colour.
 type CallStatus string
@@ -38,60 +101,233 @@ const (
 	CallError   CallStatus = "error"
 )
 
-// ToolCallView is the data renderToolCall needs.
+// DiffLine is one numbered row of an Edit's rendered diff.
+type DiffLine struct {
+	Num  int
+	Sign byte // '-' or '+'
+	Text string
+}
+
+// ToolDiff is the structured, already-computed diff for an Edit call's
+// result row: "Added N lines, removed M lines" followed by the numbered
+// rows. Built by ParseUnifiedDiff from a unified patch, or directly by a
+// caller that already has old/new line pairs.
+type ToolDiff struct {
+	Added   int
+	Removed int
+	Lines   []DiffLine
+}
+
+// ToolCallView is the data RenderToolCall needs.
 type ToolCallView struct {
 	Name string
-	// PrimaryArg is the one identifying argument, already stringified.
+	// PrimaryArg is the one identifying argument, already stringified:
+	// the relative path in collapsed mode, absolute in verbose (the
+	// caller resolves which).
 	PrimaryArg string
 	Status     CallStatus
 	// ResultLines are summary line(s), already truncated by the caller to
-	// the tier's budget.
+	// the tier's budget. Ignored when Diff is set.
 	ResultLines []string
+	// Diff, when set, renders as "Added N lines, removed M lines" plus
+	// the numbered diff rows instead of ResultLines.
+	Diff *ToolDiff
 	// TotalLines is the total lines available, when more exist than are
-	// shown. Zero means "not set" (there is no ambiguity: a call with a
-	// result always has at least one line).
+	// shown. Zero means "not set".
 	TotalLines int
 	// HasTotalLines distinguishes "0 total lines" (never happens in
-	// practice) from "not tracked", matching the TS `number | undefined`.
+	// practice) from "not tracked".
 	HasTotalLines bool
+	// HeadCommitted is set when the "⏺ Name(arg)" row was already committed
+	// while the call awaited permission (permission-edit.txt row 15: the
+	// header sits above the prompt); only the result rows render then.
+	HeadCommitted bool
+	// Meta is the label-rule's right-aligned status/timing text, e.g.
+	// "approved · 4.1s" (kiln block anatomy). Optional; empty renders no
+	// meta. New field — existing callers that build a ToolCallView by name
+	// (app.go, bridge.go, replay.go) are unaffected.
+	Meta string
 }
 
-func markerColor(status CallStatus) func(string) string {
+// MapToolName title-cases a tool id for the call header, with the one
+// documented exception: edit renders as "Update"
+// (docs/claude-code-reference.md §3: "Tool names are title-cased from the
+// tool id except edit → Update").
+func MapToolName(id string) string {
+	if strings.EqualFold(id, "edit") {
+		return "Update"
+	}
+	return titleCase(id)
+}
+
+// toolStatusColor picks the kiln status colour for a tool call's label and
+// name: running amber, ok green, error red.
+func toolStatusColor(status CallStatus) func(string) string {
 	switch status {
 	case CallError:
-		return Red
+		return KilnRed
 	case CallRunning:
-		return Dim
+		return KilnAmber
 	default:
-		return Green
+		return KilnGreen
 	}
 }
 
-// RenderToolCall renders a tool call and its result:
+// diffSummaryLine renders the kiln "+N/−N" summary counts, coloured green
+// and red, omitting a zero side.
+func diffSummaryLine(d *ToolDiff) string {
+	switch {
+	case d.Added > 0 && d.Removed > 0:
+		return fmt.Sprintf("%s  %s", KilnGreen("+"+strconv.Itoa(d.Added)), KilnRed("−"+strconv.Itoa(d.Removed)))
+	case d.Added > 0:
+		return KilnGreen("+" + strconv.Itoa(d.Added))
+	case d.Removed > 0:
+		return KilnRed("−" + strconv.Itoa(d.Removed))
+	default:
+		return Muted("No changes")
+	}
+}
+
+// RenderDiffLines renders a diff's numbered rows in the kiln "edit" block
+// anatomy: line number (4 columns, right-aligned, Faint), sign (2 columns;
+// "+" green, "−" red), then the code (Ink; context lines Muted). Added
+// rows get the OnDiffAdd background, removed rows OnDiffDel, padded to
+// fallbackRuleWidth so the tint spans a full row (RenderDiffLines has no
+// width parameter of its own — see fallbackRuleWidth's doc comment).
+func RenderDiffLines(lines []DiffLine) []string {
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		numStr := fmt.Sprintf("%4d", l.Num)
+		var sign, row string
+		var bg func(string) string
+		switch l.Sign {
+		case '+':
+			sign = KilnGreen("+ ")
+			bg = OnDiffAdd
+			row = diffIndent + Faint(numStr) + " " + sign + Ink(l.Text)
+		case '-':
+			sign = KilnRed("− ")
+			bg = OnDiffDel
+			row = diffIndent + Faint(numStr) + " " + sign + Ink(l.Text)
+		default:
+			bg = func(s string) string { return s }
+			row = diffIndent + Faint(numStr) + "   " + Muted(l.Text)
+		}
+		out = append(out, bg(padToWidth(row, ruleWidth())))
+	}
+	return out
+}
+
+// RenderToolCall renders a mutating tool call and its result in the kiln
+// "tool"/"edit" block anatomy:
 //
-//	⏺ Read(src/provider/ollama.ts)
-//	  ⎿  Read 240 lines (ctrl+r to expand)
+//	edit────────────────────────────────  math.js
+//	Update math.js
+//	→ +1  −1
+//	      1 − function add(a,b){ return a - b }
+//	      1 + function add(a,b){ return a + b }
+//
+// The label rule is "edit" (blue) with the filename as meta when the call
+// carries a Diff, otherwise the tool name lowercased in the status colour
+// (running amber, ok green, err red) with Meta (e.g. "4.1s") as the rule's
+// meta. HeadCommitted drops the header entirely — the call was already
+// announced above a permission prompt, so only the result rows render now.
 func RenderToolCall(view ToolCallView) []string {
 	gl := G()
-	head := fmt.Sprintf("%s %s(%s)", markerColor(view.Status)(gl.Call), Bold(view.Name), Dim(view.PrimaryArg))
-	lines := []string{head}
+	statusColor := toolStatusColor(view.Status)
+	var lines []string
+	if !view.HeadCommitted {
+		if view.Diff != nil {
+			lines = append(lines, labelRule("edit", KilnBlue, view.PrimaryArg, ruleWidth()))
+		} else {
+			lines = append(lines, labelRule(strings.ToLower(view.Name), statusColor, view.Meta, ruleWidth()))
+		}
+		lines = append(lines, fmt.Sprintf("%s %s", statusColor(view.Name), Muted(view.PrimaryArg)))
+	}
+
+	if view.Diff != nil {
+		lines = append(lines, fmt.Sprintf("%s %s", Muted(gl.Action), diffSummaryLine(view.Diff)))
+		lines = append(lines, RenderDiffLines(view.Diff.Lines)...)
+		return lines
+	}
 
 	body := view.ResultLines
 	if len(body) == 0 {
 		return lines
 	}
 
-	// Glyph on the first result line only; the rest align under its
-	// content.
-	lines = append(lines, fmt.Sprintf("%s%s  %s", resultIndent, Gray(gl.Result), body[0]))
+	outputColor := Muted
+	// Errors: only the lines after the first render red (kiln block
+	// anatomy for "tool").
+	continuationColor := Muted
+	if view.Status == CallError {
+		continuationColor = KilnRed
+	}
+
+	// Arrow on the first result line only; later lines indent two columns
+	// under it.
+	lines = append(lines, fmt.Sprintf("%s %s", Muted(gl.Action), outputColor(body[0])))
 	for _, extra := range body[1:] {
-		lines = append(lines, continuationIndent+extra)
+		lines = append(lines, continuationIndent+continuationColor(extra))
 	}
 
 	if view.HasTotalLines && view.TotalLines > len(body) {
-		lines = append(lines, continuationIndent+Dim(fmt.Sprintf("… +%d lines (ctrl+r to expand)", view.TotalLines-len(body))))
+		lines = append(lines, continuationIndent+Muted(fmt.Sprintf("… +%d lines (ctrl+o to expand)", view.TotalLines-len(body))))
 	}
 	return lines
+}
+
+// GroupKind is which read-only grouping a collapsed row summarizes.
+type GroupKind string
+
+const (
+	GroupRead GroupKind = "read" // Read, Glob, Grep, web fetch, Bash without shown output
+	GroupBash GroupKind = "bash" // Bash whose output IS shown while running, before it collapses
+)
+
+func groupNoun(kind GroupKind, n int) string {
+	if kind == GroupBash {
+		if n == 1 {
+			return "shell command"
+		}
+		return "shell commands"
+	}
+	if n == 1 {
+		return "file"
+	}
+	return "files"
+}
+
+// RenderToolGroupRunning renders the collapsed row while a read-only group
+// is still in flight: a plain "  Reading N file(s)…" row for Read/Glob/
+// Grep/web-fetch groups (no marker glyph — Claude Code draws one in
+// intermediate frames but the settled row carries none, confirmed against
+// spinner.txt), and "⏺ Running N shell command(s)…" with the marker for a
+// Bash group (confirmed against spinner-2.txt).
+// dimWithBoldCount renders "<prefix><n> <suffix>" muted, with the count
+// bold, kiln's restyling of the grouped-read/bash row.
+func dimWithBoldCount(prefix string, n int, suffix string) string {
+	return Muted(prefix) + Bold(Muted(strconv.Itoa(n))) + Muted(suffix)
+}
+
+func RenderToolGroupRunning(kind GroupKind, n int) string {
+	switch kind {
+	case GroupBash:
+		return fmt.Sprintf("%s %s", Muted(G().Call), dimWithBoldCount("Running ", n, " "+groupNoun(kind, n)+"…"))
+	default:
+		return resultIndent + dimWithBoldCount("Reading ", n, " "+groupNoun(kind, n)+"…")
+	}
+}
+
+// RenderToolGroupDone renders the collapsed row once a read-only group has
+// finished: "  Read N file(s)" / "  Ran N shell command(s)", muted, no
+// marker.
+func RenderToolGroupDone(kind GroupKind, n int) string {
+	verb := "Read"
+	if kind == GroupBash {
+		verb = "Ran"
+	}
+	return resultIndent + dimWithBoldCount(verb+" ", n, " "+groupNoun(kind, n))
 }
 
 // TodoStatus is a todo item's completion state.
@@ -109,26 +345,26 @@ type TodoView struct {
 	Status  TodoStatus
 }
 
-// RenderTodos renders a todo list under a tool-call header. Completed
-// items are struck through and dimmed; the in-progress item is distinct
-// from both, because "which one is happening now" is the only question the
-// list has to answer at a glance.
+// RenderTodos renders the kiln "plan" block: a label rule, "Update Todos",
+// then one row per item. Completed items are green-checked and struck
+// through/muted; the in-progress item is amber with ink text; a pending
+// item is a faint circle with muted text — "which one is happening now" is
+// the only question the list has to answer at a glance.
 func RenderTodos(todos []TodoView) []string {
 	gl := G()
-	lines := []string{fmt.Sprintf("%s %s", Green(gl.Call), Bold("Update Todos"))}
+	lines := []string{
+		labelRule("plan", Muted, "", ruleWidth()),
+		Bold(Ink("Update Todos")),
+	}
 
-	for i, todo := range todos {
-		prefix := continuationIndent
-		if i == 0 {
-			prefix = fmt.Sprintf("%s%s  ", resultIndent, Gray(gl.Result))
-		}
+	for _, todo := range todos {
 		switch todo.Status {
 		case TodoCompletedStatus:
-			lines = append(lines, fmt.Sprintf("%s%s %s", prefix, Dim(gl.TodoDone), Dim(Strike(todo.Content))))
+			lines = append(lines, fmt.Sprintf("%s %s", KilnGreen(gl.OK), Muted(Strike(todo.Content))))
 		case TodoInProgressStatus:
-			lines = append(lines, fmt.Sprintf("%s%s %s", prefix, gl.TodoActive, Bold(todo.Content)))
+			lines = append(lines, fmt.Sprintf("%s %s", KilnAmber(gl.PlanCurrent), Ink(todo.Content)))
 		default:
-			lines = append(lines, fmt.Sprintf("%s%s %s", prefix, gl.TodoPending, todo.Content))
+			lines = append(lines, fmt.Sprintf("%s %s", Faint(gl.PlanTodo), Muted(todo.Content)))
 		}
 	}
 	return lines
@@ -136,49 +372,59 @@ func RenderTodos(todos []TodoView) []string {
 
 var hunkHeaderRe = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
-// RenderDiff renders a unified diff.
+// ParseUnifiedDiff turns a unified patch into a ToolDiff: line numbers come
+// from the new file for additions and the old file for deletions, so a
+// reader can navigate to what they are looking at, and Added/Removed count
+// the +/- rows for the summary line.
 //
-// Line numbers come from the new file for additions and the old file for
-// deletions, so a reader can navigate to what they are looking at.
-// Colouring the whole line rather than just the marker is what makes a
-// diff scannable at speed.
-func RenderDiff(patch string, startLine int) []string {
+// A real unified patch (internal/tools/editdiff.go's generateUnifiedPatch,
+// via go-udiff) starts with "--- path"/"+++ path" file headers before the
+// first "@@" hunk; those are skipped rather than misread as -/+ content
+// lines, by only looking at +/- rows once a hunk header has been seen.
+func ParseUnifiedDiff(patch string, startLine int) *ToolDiff {
 	if startLine == 0 {
 		startLine = 1
 	}
-	out := []string{}
+	d := &ToolDiff{}
 	oldNo := startLine
 	newNo := startLine
+	inHunk := false
 
 	for _, line := range strings.Split(patch, "\n") {
 		if strings.HasPrefix(line, "@@") {
-			// Re-anchor on a hunk header so line numbers stay truthful
-			// across gaps.
+			inHunk = true
 			if m := hunkHeaderRe.FindStringSubmatch(line); m != nil {
 				oldNo, _ = strconv.Atoi(m[1])
 				newNo, _ = strconv.Atoi(m[2])
 			}
-			out = append(out, Dim(line))
+			continue
+		}
+		if !inHunk {
 			continue
 		}
 		switch {
 		case strings.HasPrefix(line, "+"):
-			out = append(out, Green(fmt.Sprintf("%5d + %s", newNo, line[1:])))
+			d.Lines = append(d.Lines, DiffLine{Num: newNo, Sign: '+', Text: line[1:]})
+			d.Added++
 			newNo++
 		case strings.HasPrefix(line, "-"):
-			out = append(out, Red(fmt.Sprintf("%5d - %s", oldNo, line[1:])))
+			d.Lines = append(d.Lines, DiffLine{Num: oldNo, Sign: '-', Text: line[1:]})
+			d.Removed++
 			oldNo++
 		default:
-			rest := line
-			if len(rest) > 0 {
-				rest = rest[1:]
-			}
-			out = append(out, Dim(fmt.Sprintf("%5d   %s", newNo, rest)))
 			oldNo++
 			newNo++
 		}
 	}
-	return out
+	return d
+}
+
+// RenderDiff is kept for existing callers that want plain rendered lines
+// from a unified patch without the "Added/removed" summary row (e.g. an
+// inline permission-prompt preview): it parses the patch and renders only
+// the numbered rows.
+func RenderDiff(patch string, startLine int) []string {
+	return RenderDiffLines(ParseUnifiedDiff(patch, startLine).Lines)
 }
 
 // SpinnerArgs is the data RenderSpinner needs.
@@ -186,25 +432,53 @@ type SpinnerArgs struct {
 	Frame          int
 	Label          string
 	ElapsedSeconds int
-	// Tokens is nil when there is no live token count yet.
+	// Thinking selects the "thinking with <effort> effort" suffix over
+	// the plain "(Ns)" one, before token streaming starts.
+	Thinking bool
+	Effort   string
+	// Tokens is nil when there is no live token count yet; once set it
+	// takes priority over Thinking, matching a turn that has moved past
+	// reasoning into streaming its answer.
 	Tokens *int
 }
 
 // RenderSpinner renders the working indicator:
 //
-//	✢ working (3s · ↓ 4.2k tokens)
+//	✳ Whirring…
+//	✻ Crunching… (4s · ↓ 1.2k tokens)
+//	· Computing… (1s · thinking with medium effort)
 //
-// On a local model a turn runs past two minutes, so this is load-bearing
-// rather than decorative — a still screen reads as a hang. The token count
-// must come from the live stream, not from the final usage record.
+// docs/claude-code-reference.md §3: frames `·✢✳✶✻✽`, suffix
+// "(1s · thinking with medium effort)" while thinking, "(4s · ↓ 1.2k
+// tokens)" once tokens flow, no "esc to interrupt" text. The captured
+// spinner*.txt screens show no suffix at all at their first frame (0s,
+// before thinking or tokens); the suffix is omitted here in that same
+// state (ElapsedSeconds == 0, not thinking, no tokens yet) to match those
+// captures, which is an inference from three t=0 samples rather than a
+// captured "elapsed but still nothing to report" frame.
 func RenderSpinner(args SpinnerArgs) string {
 	gl := G()
 	spin := gl.Spinner[args.Frame%len(gl.Spinner)]
-	parts := []string{fmt.Sprintf("%ds", args.ElapsedSeconds)}
-	if args.Tokens != nil {
-		parts = append(parts, fmt.Sprintf("↓ %s tokens", FormatTokens(*args.Tokens)))
+	label := TranscriptOrangeLight(args.Label + "…")
+
+	var suffix string
+	switch {
+	case args.Tokens != nil:
+		suffix = fmt.Sprintf("(%ds · ↓ %s tokens)", args.ElapsedSeconds, FormatTokens(*args.Tokens))
+	case args.Thinking:
+		effort := args.Effort
+		if effort == "" {
+			effort = "medium"
+		}
+		suffix = fmt.Sprintf("(%ds · thinking with %s effort)", args.ElapsedSeconds, effort)
+	case args.ElapsedSeconds > 0:
+		suffix = fmt.Sprintf("(%ds)", args.ElapsedSeconds)
 	}
-	return fmt.Sprintf("%s %s %s", Green(spin), strings.ToLower(args.Label), Dim(fmt.Sprintf("(%s)", strings.Join(parts, " · "))))
+
+	if suffix == "" {
+		return fmt.Sprintf("%s %s", TranscriptOrange(spin), label)
+	}
+	return fmt.Sprintf("%s %s %s", TranscriptOrange(spin), label, TranscriptDim(suffix))
 }
 
 // FormatTokens renders a token count compactly: 450, 3.4k, 1.0m.
@@ -220,31 +494,67 @@ func FormatTokens(n int) string {
 	return fmt.Sprintf("%.1fk", float64(n)/1_000)
 }
 
-// Labels are gerunds for the spinner.
+// spinnerVerb pairs a spinner gerund with its past-tense form for the turn
+// summary (docs/claude-code-reference.md §3: "Turn summary matching the
+// spinner label family. Observed verbs: Brewed, Crunched, Cooked... Full
+// set [chk]"; §6 of the contract names the confirmed family: Brewed,
+// Cooked, Crunched, Baked, Churned, Whirred, Simmered, Worked).
 //
-// Deliberately this project's own vocabulary rather than Claude Code's
-// word list: the *shape* is the parity requirement, the specific words are
-// flavor, and copying someone's jokes is not parity.
-var Labels = []string{
-	"Thinking",
-	"Working",
-	"Pondering",
-	"Chewing",
-	"Considering",
-	"Noodling",
-	"Mulling",
-	"Digging",
-	"Untangling",
-	"Reckoning",
+// Deliberately restricted to exactly these eight: the contract's spinner
+// deliverable (§3/§5) lists a longer flavor-word pool (Computing,
+// Smooshing, Lollygagging, Thinking, Pondering, Percolating, Noodling,
+// Mulling, Ruminating, Cogitating...) but only gives past tenses for
+// eight. Rather than invent past tenses for the rest (guessing "Computed"
+// or "Smooshed" were never captured), the spinner picks only from this
+// eight-word family, so every turn summary is provably correct rather
+// than plausible.
+type spinnerVerb struct {
+	gerund string
+	past   string
 }
 
-// PickLabel picks a gerund deterministically from a seed.
-func PickLabel(seed int) string {
-	n := seed % len(Labels)
-	if n < 0 {
-		n += len(Labels)
+var spinnerVerbs = []spinnerVerb{
+	{"Brewing", "Brewed"},
+	{"Cooking", "Cooked"},
+	{"Crunching", "Crunched"},
+	{"Baking", "Baked"},
+	{"Churning", "Churned"},
+	{"Whirring", "Whirred"},
+	{"Simmering", "Simmered"},
+	{"Working", "Worked"},
+}
+
+// Labels is the spinner's gerund pool, exposed for callers that want the
+// list directly (tests, PickLabel's docstring).
+var Labels = func() []string {
+	out := make([]string, len(spinnerVerbs))
+	for i, v := range spinnerVerbs {
+		out[i] = v.gerund
 	}
-	return Labels[n]
+	return out
+}()
+
+// PickLabel picks a gerund deterministically from a seed, so a turn's
+// spinner label and its eventual turn-summary verb are the same pick.
+func PickLabel(seed int) string {
+	n := seed % len(spinnerVerbs)
+	if n < 0 {
+		n += len(spinnerVerbs)
+	}
+	return spinnerVerbs[n].gerund
+}
+
+// PastTense returns the turn-summary verb for a spinner gerund label
+// (Brewing -> Brewed). Falls back to "Worked" for any label outside the
+// eight-word family (defensive: should not happen since PickLabel only
+// returns members of it).
+func PastTense(gerund string) string {
+	for _, v := range spinnerVerbs {
+		if v.gerund == gerund {
+			return v.past
+		}
+	}
+	return "Worked"
 }
 
 // RenderError renders an error message: red, visually distinct from
@@ -253,7 +563,7 @@ func RenderError(message string) []string {
 	lines := strings.Split(message, "\n")
 	out := make([]string, len(lines))
 	for i, line := range lines {
-		out[i] = Red(line)
+		out[i] = TranscriptRed(line)
 	}
 	return out
 }
@@ -267,75 +577,55 @@ type ThinkingView struct {
 	Expanded bool
 }
 
-// RenderThinking renders a reasoning block:
-//
-//	∴ Thinking (ctrl+r to expand)
-//
-// Collapsed by default, per the parity spec. That is not only a visual
-// preference: the models this harness targets are reasoning models, and a
-// small local model emits a block of reasoning before most answers. Shown
-// in full it buries the answer under its own working, every turn.
-//
-// The label stays present tense ("Thinking") in both states, matching
-// Claude Code's "∴ Thinking" / "∴ Thinking…"; the expand hint appears only
-// once the block is stable, when there is something to expand.
-//
-// Dimmed italic when expanded, so it never competes with the assistant's
-// actual prose — the reader should be able to skip it without deciding to.
+// RenderThinking renders a reasoning block. Collapsed (default, non-verbose
+// mode) shows nothing — the spinner's own suffix carries "thinking with
+// <effort> effort" while it streams, and nothing at all once done, per
+// docs/claude-code-reference.md §7 ("collapsed mode shows nothing but the
+// spinner suffix"). Verbose mode shows a "∴ Thinking" row with the text
+// dim underneath.
 func RenderThinking(view ThinkingView) []string {
-	gl := G()
+	if !view.Expanded {
+		return []string{}
+	}
 	body := strings.TrimSpace(view.Text)
 	if body == "" {
 		return []string{}
 	}
-
-	lines := strings.Split(body, "\n")
-	// Present tense either way, like Claude Code: "Thinking…" while
-	// streaming (nothing stable to expand yet), "Thinking" once it has
-	// finished.
+	gl := G()
 	label := "Thinking"
 	if view.Active {
 		label = "Thinking…"
 	}
-
-	if !view.Expanded {
-		hint := ""
-		if !view.Active {
-			hint = " " + Dim("(ctrl+r to expand)")
-		}
-		return []string{fmt.Sprintf("%s %s%s", Dim(gl.Thinking), Dim(label), hint)}
-	}
-
-	out := []string{fmt.Sprintf("%s %s", Dim(gl.Thinking), Dim(label))}
-	for _, line := range lines {
-		out = append(out, resultIndent+Dim(Italic(line)))
+	out := []string{Muted(fmt.Sprintf("%s %s", gl.Thinking, label))}
+	for _, line := range strings.Split(body, "\n") {
+		out = append(out, resultIndent+Muted(Italic(line)))
 	}
 	return out
 }
 
-// RenderUserMessage renders the user's own message: a subtle "❯" pointer,
-// then the text, plain. No fill band — the pointer is what marks the line,
-// and the assistant's prose already sits flush at the left margin so the
-// two read as different voices without fighting.
-//
-// The pointer appears on the first visual line only; wrapped continuation
-// lines carry the text alone.
+// RenderUserMessage renders the kiln "you" block: a "you" label rule
+// (amber, no meta), then the message on the raised surface (`OnRaise`),
+// ink text, one blank row above (docs/claude-code-reference.md §3; every
+// transcript block starts with a blank row, so the row below the echo
+// comes from the next block). The old "❯" prompt glyph is dropped — the
+// "you" label identifies the block instead. Used for both a typed prompt
+// and a slash-command echo ("you" / "/model") — CommitCommandResult
+// (bridge.go) renders the result row that follows a command's echo.
 func RenderUserMessage(text string, width int) []string {
-	gl := G()
 	inner := width - 2
 	if inner < 1 {
 		inner = 1
 	}
-	var out []string
-	for i, line := range strings.Split(text, "\n") {
-		wrapped := splitLines(ansiWrap(line, inner))
-		for j, wl := range wrapped {
-			if i == 0 && j == 0 {
-				out = append(out, fmt.Sprintf("%s %s", Dim(gl.UserMark), wl))
-			} else {
-				out = append(out, wl)
-			}
-		}
+	var body []string
+	for _, line := range strings.Split(text, "\n") {
+		body = append(body, splitLines(ansiWrap(line, inner))...)
+	}
+
+	out := make([]string, 0, len(body)+2)
+	out = append(out, "")
+	out = append(out, labelRule("you", KilnAmber, "", width))
+	for _, wl := range body {
+		out = append(out, OnRaise(padToWidth(Ink(wl), width)))
 	}
 	return out
 }
@@ -343,35 +633,32 @@ func RenderUserMessage(text string, width int) []string {
 // TurnSummary is the data RenderTurnSummary needs.
 type TurnSummary struct {
 	Seconds int
-	// Tokens and ToolCalls are 0 when there is nothing to say about them,
-	// matching the TS `number | undefined`'s falsy-omit behavior (a turn
-	// that used exactly zero tokens or zero tool calls has nothing to
-	// report either way).
-	Tokens    int
-	ToolCalls int
+	// Verb is the past-tense spinner verb this turn picked (PastTense of
+	// the same label the spinner used), e.g. "Crunched".
+	Verb string
+	// Done is the wall-clock time the turn finished, honouring
+	// HARNESS_TEST_CLOCK (the caller is responsible for reading that env
+	// var; this just formats whatever time it is given).
+	Done time.Time
 }
 
-// RenderTurnSummary renders the line that closes a turn:
+// RenderTurnSummary renders the line that closes a turn, a single muted
+// row (kiln has no per-turn "⏺" marker; the ✻ glyph is kept but dimmed
+// either way, matching a settled — not currently animating — state):
 //
-//	✳ Worked for 32s · 1 tool call · 4.2k tokens
-//
-// Without it a finished turn just stops, and the transcript gives no sense
-// of what a request cost. Elapsed time is the honest headline; tokens and
-// tool calls explain it.
+//	✻ Crunched for 4s · done 10:03 AM
 func RenderTurnSummary(summary TurnSummary) []string {
 	gl := G()
-	parts := []string{fmt.Sprintf("%ds", summary.Seconds)}
-	if summary.ToolCalls != 0 {
-		plural := "s"
-		if summary.ToolCalls == 1 {
-			plural = ""
-		}
-		parts = append(parts, fmt.Sprintf("%d tool call%s", summary.ToolCalls, plural))
+	verb := summary.Verb
+	if verb == "" {
+		verb = "Worked"
 	}
-	if summary.Tokens != 0 {
-		parts = append(parts, fmt.Sprintf("%s tokens", FormatTokens(summary.Tokens)))
+	done := summary.Done
+	if done.IsZero() {
+		done = time.Now()
 	}
-	return []string{Dim(fmt.Sprintf("%s Worked for %s", gl.Summary, strings.Join(parts, " · ")))}
+	line := fmt.Sprintf("%s for %ds · done %s", verb, summary.Seconds, done.Format("3:04 PM"))
+	return []string{Muted(fmt.Sprintf("%s %s", gl.Summary, line))}
 }
 
 // PrimaryArg is the one identifying argument for a call line. Claude Code
@@ -475,4 +762,46 @@ func blockText(blocks []any) []string {
 		return []string{}
 	}
 	return summarizeLines(strings.Join(parts, "\n"))
+}
+
+// RenderAssistantText renders the kiln "text" block: a "kiln" label rule
+// (muted, no meta) above the already-rendered markdown lines (e.g. from
+// MarkdownRenderer.Render, which carries its own ink/dim/amber/green/blue
+// colouring). The old "⏺ " marker is dropped — the "kiln" label identifies
+// the block instead, same as "you" replaced "❯". There is no separate
+// streaming-caret variant of this function today (no call site passes a
+// streaming flag — the live region during streaming is owned by
+// bridge.go/app.go, outside this file's scope), so the trailing "▍" caret
+// the design calls for while streaming is not added here.
+func RenderAssistantText(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	width := ruleWidthFor(lines)
+	out := make([]string, 0, len(lines)+1)
+	out = append(out, labelRule("kiln", Muted, "", width))
+	out = append(out, lines...)
+	return out
+}
+
+// RenderVerboseModelRow renders the right-aligned dim row Claude Code
+// shows after a turn's last tool call in verbose mode:
+//
+//	10:03 AM claude-opus-5
+//
+// (docs/claude-code-reference.md §3/§7). Right-aligned to width.
+func RenderVerboseModelRow(done time.Time, modelID string, width int) string {
+	if done.IsZero() {
+		done = time.Now()
+	}
+	text := fmt.Sprintf("%s %s", done.Format("3:04 PM"), modelID)
+	// The row sits eight columns short of the right edge, not flush against
+	// it (verbose-ctrl-o.txt row 21 ends at column 92 of a 100-wide
+	// terminal — a right margin Claude Code leaves on this row alone).
+	const rightMargin = 8
+	pad := width - rightMargin - VisibleWidth(text)
+	if pad < 0 {
+		pad = 0
+	}
+	return strings.Repeat(" ", pad) + TranscriptDim(text)
 }

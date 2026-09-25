@@ -1,8 +1,15 @@
-⏺ harness — faux/faux-1
-  Type / for commands, @ to reference a
-file, or just ask.
+█ ▄▀  █  █    █▄ █
+█▀▄   █  █    █▀▄█
+█ ▀▄  █  █▄▄  █  █
+dev · coding agent
+
+<cwd>…
+
+<cwd>…
+
 ────────────────────────────────────────
-❯  Try "fix typecheck errors"
+                    ◐ medium · /effort
 ────────────────────────────────────────
-faux/faux-1 (128k ctx) │ 0s · 12:00pm
-▶▶ manual mode (shift+tab to cycle)
+› Try "how do I log an error?"
+────────────────────────────────────────
+  ● manual mode on · ← for agents

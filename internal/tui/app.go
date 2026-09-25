@@ -7,23 +7,33 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/claude/statusline"
 	"github.com/andrepato/harness/internal/commands"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/tui/editor"
 )
 
-// SPINNER_INTERVAL_MS, matching app.ts's own constant.
-const spinnerInterval = 80 * time.Millisecond
+// spinnerInterval is the frame interval for the busy-line spinner: kiln's
+// ◐◓◑◒ animates at 140ms/frame (design_handoff_kiln_tui/README.md), not
+// the Claude Code original's 80ms.
+const spinnerInterval = 140 * time.Millisecond
 
-// permissionModes cycles Shift+Tab, matching app.ts's MODES.
-var permissionModes = []string{"manual", "acceptEdits", "auto", "plan"}
+// permissionModeRing is the Shift+Tab cycle order (parity spec:
+// docs/claude-code-reference.md §2, verified row-by-row against
+// testdata/reference/claude-code/mode-cycle.txt): auto -> manual ->
+// acceptEdits -> plan -> auto. bypassPermissions and dontAsk are not in the
+// ring — cycleMode sends either of them straight to auto, matching the
+// task's explicit instruction, since neither is ever entered by cycling.
+var permissionModeRing = []string{"auto", "manual", "acceptEdits", "plan"}
 
 // ResolveMentions is the app's mention-resolution hook. tui cannot import
 // internal/cli (cli is going to import tui, and Go forbids the cycle), so
@@ -53,6 +63,10 @@ type Config struct {
 	StartedAt      time.Time
 	Plain          bool
 	StartupContext []string
+	// Effort is the reasoning effort label shown in the hint row above the
+	// input box (`◐ medium · /effort`, docs/claude-code-reference.md §2).
+	// Empty defaults to "medium" in NewModel.
+	Effort string
 
 	Env            *execenv.Env
 	Gate           *permission.Gate
@@ -78,6 +92,26 @@ type Config struct {
 	// Keymap is the editor's resolved key bindings (defaults plus the
 	// user's ~/.claude/keybindings.json overrides); nil keeps defaults.
 	Keymap editor.Keymap
+	// Banner is the startup banner, committed (fitted to the terminal
+	// width) on the first WindowSizeMsg so a long cwd row never wraps.
+	Banner []string
+	// ModelID is the provider/model id the verbose transcript's model row
+	// shows after a turn's last tool call (docs/claude-code-reference.md
+	// §3); empty falls back to ModelLabel.
+	ModelID string
+	// NeedsTrust opens the folder-trust dialog before the first prompt
+	// (docs/claude-code-reference.md §5, dialog-trust.txt). OnTrust receives
+	// the answer; "No, exit" quits the program.
+	NeedsTrust bool
+	OnTrust    func(trusted bool)
+	// StatusLineCommand is Claude Code's settings.json "statusLine" command
+	// (empty = none). It is run with the session status payload on stdin and
+	// its stdout is rendered below the input box, exactly as Claude Code
+	// does (docs/claude-code-reference.md §1, the "│ ⎇ …" row).
+	StatusLineCommand string
+	SessionID         string
+	TranscriptPath    string
+	Version           string
 }
 
 // Model is the interactive shell's Bubbletea v2 model — the Go port of
@@ -92,24 +126,67 @@ type Model struct {
 	spinner  SpinnerState
 	footer   *FooterState
 	prompt   *PromptState
-	modal    *ModalView
+	dialog   Dialog
 	thinking *ThinkingView
 	// popup is the `/` or `@` autocomplete list, non-nil while one of the
 	// two triggers matches the editor's current line/cursor. Rebuilt from
 	// scratch on every keystroke by refreshPopup — see autocomplete.go.
 	popup *Popup
-	// transcriptView is set while the Ctrl+R alt-screen transcript view is
-	// open. See transcriptview.go.
-	transcriptView *TranscriptView
+	// shortcuts is set while the `?` shortcuts panel is shown under the
+	// input box (docs/claude-code-reference.md §6); any key closes it.
+	shortcuts bool
+	// bannerDone is set once Banner has been committed.
+	bannerDone bool
+	// committedRows counts rows printed above the live region since the last
+	// clear (tea.PrintedLines). View pads the live region so the input box
+	// sits at the bottom of the terminal; a constant-height live region is
+	// also what keeps the renderer's cursor tracking stable across a
+	// dialog/prompt opening and closing (a shrinking live region desyncs it
+	// and the cursor lands above the box).
+	committedRows int
+	// statusLine is the rendered rows of the configured statusLine command,
+	// refreshed on turn boundaries, model changes and a periodic tick.
+	statusLine []string
+	// lastSummary is the turn-summary lines the last finishTurn committed,
+	// re-appended by a Ctrl+O replay (the summary is derived at turn end,
+	// not a session entry, so replayTranscript cannot rebuild it).
+	lastSummary []string
+	// pendingHead is the "Name(arg)" of a mutating tool call whose header
+	// row was committed when its permission prompt opened; the matching
+	// result then renders without the header (ToolCallView.HeadCommitted).
+	pendingHead string
+	// dialogEcho is the slash command line whose dialog is open; Claude
+	// Code echoes the command (and its result row) only once the dialog
+	// closes (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
+	// model as …").
+	dialogEcho string
+	// group is the in-flight collapsed row for consecutive read-only tool
+	// calls ("  Reading 2 files…", docs/claude-code-reference.md §3). It is
+	// live (redrawn every frame) until a non-grouped commit or the turn's
+	// end flushes it into scrollback as "  Read 2 files".
+	group *toolGroup
 
 	busy          bool
 	turn          int
 	turnStartedAt time.Time
 
-	// hint is a one-shot status-line note the router's actions set (e.g.
-	// "press ctrl+c again to exit", "nothing truncated"), cleared by
-	// refreshStatus the way app.ts's refreshStatus(note = "") does.
 	quitting bool
+
+	// justKilled is true for exactly the one frame right after a Ctrl+K or
+	// Ctrl+U kill, and false again from the very next keystroke on — it
+	// drives the "Ctrl+Y to paste deleted text" hint replacing the effort
+	// indicator above the input box (docs/claude-code-reference.md §2,
+	// mode-manual.txt row 8: "until the next keystroke").
+	justKilled bool
+
+	// modeHintText/modeHintGen replace the mode line for one second after a
+	// Ctrl+C ("Press Ctrl-C again to exit", ctrl-c-hint.txt). modeHintGen
+	// guards the delayed msgClearModeHint the Hint action schedules: a
+	// second Ctrl+C's own 1s timer must not be cancelled early by the
+	// first's, so the clear message only takes effect if the generation it
+	// carries still matches the one currently showing.
+	modeHintText string
+	modeHintGen  int
 
 	// lastCtrlC/lastEsc persist Router's double-press timing across
 	// keypresses. handleKey rebuilds a fresh Router on every call (so its
@@ -150,11 +227,17 @@ func NewModel(cfg Config) Model {
 	if t, ok := clockOverride(); ok {
 		cfg.StartedAt = t
 	}
+	if cfg.Effort == "" {
+		cfg.Effort = "medium"
+	}
 	marker := G().UserMark
 	ed := editor.New(editor.Styles{
-		Marker:      marker,
-		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
-		Placeholder: lipgloss.NewStyle().Faint(true),
+		Marker: marker,
+		// Kiln: prompt glyph amber, rules in rule-strong (#3a3228),
+		// placeholder in kiln faint (#7d7262).
+		MarkerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color(hexAmber)),
+		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color(hexRuleStrong)),
+		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color(hexFaint)),
 	})
 	m := Model{
 		cfg:            cfg,
@@ -169,12 +252,27 @@ func NewModel(cfg Config) Model {
 	if cfg.Keymap != nil {
 		m.editor.SetKeymap(cfg.Keymap)
 	}
+	if cfg.NeedsTrust {
+		onTrust, bridge := cfg.OnTrust, cfg.Bridge
+		m.dialog = NewTrustDialog(cfg.Cwd, func(trusted bool) {
+			if onTrust != nil {
+				onTrust(trusted)
+			}
+			// Off the Update goroutine: Send blocks on the event loop.
+			if bridge != nil {
+				go bridge.Send(MsgTrustAnswered{Trusted: trusted})
+			}
+		})
+	}
 	m.initCmd = m.editor.Focus()
 	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.initCmd
+	if m.cfg.StatusLineCommand == "" {
+		return m.initCmd
+	}
+	return tea.Batch(m.initCmd, statusLineTickCmd(), m.refreshStatusLine())
 }
 
 // --- messages owned by app.go itself ------------------------------------
@@ -183,6 +281,86 @@ type msgSpinnerTick struct{}
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(spinnerInterval, func(time.Time) tea.Msg { return msgSpinnerTick{} })
+}
+
+// msgClearModeHint restores the mode line one second after a Ctrl+C
+// replaced it with "Press Ctrl-C again to exit" (see Model.modeHintGen's
+// doc comment).
+type msgClearModeHint struct{ gen int }
+
+// modeHintDuration is how long the Ctrl+C hint replaces the mode line,
+// matching keys.ts's DOUBLE_PRESS_MS window that the hint is meant to
+// describe.
+const modeHintDuration = time.Second
+
+// toolGroup counts consecutive grouped tool calls of one kind.
+type toolGroup struct {
+	kind GroupKind
+	n    int
+}
+
+// msgReplayTranscript follows the tea.ClearScreen a Ctrl+O toggle returns:
+// once the clear has been applied, the transcript so far is re-committed at
+// the new verbosity (see replayTranscript and Bridge.MsgClearAndReplay).
+type msgReplayTranscript struct{}
+
+// MsgTrustAnswered carries the trust dialog's answer; "No, exit" quits.
+type MsgTrustAnswered struct{ Trusted bool }
+
+// msgStatusLine carries the statusLine command's freshly-rendered rows.
+type msgStatusLine struct{ lines []string }
+
+// msgStatusLineTick drives the periodic statusLine refresh so time-based
+// fields (the 5-hour reset clock, elapsed cost) stay current between turns.
+type msgStatusLineTick struct{}
+
+// statusLineInterval is how often the statusLine command re-runs while
+// idle. Claude Code refreshes on a ~300ms render throttle; a 2s cadence
+// keeps a 700-line shell script from dominating CPU while staying live.
+const statusLineInterval = 2 * time.Second
+
+func statusLineTickCmd() tea.Cmd {
+	return tea.Tick(statusLineInterval, func(time.Time) tea.Msg { return msgStatusLineTick{} })
+}
+
+// refreshStatusLine runs the configured statusLine command off the Update
+// loop (a tea.Cmd runs on its own goroutine) with the current session
+// status, and returns its rows as msgStatusLine. It is a no-op when no
+// command is configured.
+func (m Model) refreshStatusLine() tea.Cmd {
+	cmd := m.cfg.StatusLineCommand
+	if cmd == "" {
+		return nil
+	}
+	st := m.footer.State()
+	used := 0
+	if st.ContextUsed != nil {
+		used = *st.ContextUsed
+	}
+	in := statusline.Input{
+		SessionID:      m.cfg.SessionID,
+		TranscriptPath: m.cfg.TranscriptPath,
+		Cwd:            m.cfg.Cwd,
+		Version:        m.cfg.Version,
+		Model: statusline.Model{
+			ID:          m.cfg.ModelID,
+			DisplayName: st.ModelLabel,
+		},
+		Workspace: statusline.Workspace{CurrentDir: m.cfg.Cwd, ProjectDir: m.cfg.Cwd},
+		ContextWindow: statusline.ContextWindow{
+			ContextWindowSize: st.ContextWindow,
+			TotalInputTokens:  used,
+			CurrentUsage:      statusline.Usage{InputTokens: used},
+		},
+		Cost: statusline.Cost{TotalCostUSD: st.Cost},
+	}
+	if st.ContextWindow > 0 {
+		in.ContextWindow.UsedPercentage = float64(used) / float64(st.ContextWindow) * 100
+	}
+	return func() tea.Msg {
+		lines, _ := statusline.Run(context.Background(), cmd, in, 5*time.Second)
+		return msgStatusLine{lines: lines}
+	}
 }
 
 // msgTurnResult carries what a turn cost, once lane.Prompt returns, so
@@ -199,26 +377,41 @@ type msgTurnResult struct {
 // --- Update ---------------------------------------------------------------
 
 func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
+	if body, ok := tea.PrintedLines(tm); ok {
+		m.committedRows += strings.Count(body, "\n") + 1
+		return m, nil
+	}
+	if tea.IsClearScreen(tm) {
+		m.committedRows = 0
+		return m, nil
+	}
 	switch msg := tm.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.editor.SetWidth(m.liveEditorWidth())
-		if m.transcriptView != nil {
-			m.transcriptView.vp.SetWidth(m.contentWidth())
-			m.transcriptView.vp.SetHeight(m.transcriptViewportHeight())
+		// Kiln label rules and full-row tints size to the live content
+		// width (transcript.go's width-less Render* helpers read this).
+		SetRenderWidth(m.contentWidth())
+		if !m.bannerDone && m.cfg.Bridge != nil && len(m.cfg.Banner) > 0 {
+			rows := make([]string, len(m.cfg.Banner))
+			for i, r := range m.cfg.Banner {
+				rows[i] = FitStatus(r, m.contentWidth())
+			}
+			// The kiln banner block closes with a full-width `─` divider
+			// (design_handoff "Banner": it "sits above a `─` rule").
+			ruleCh := "─"
+			if IsPlain() {
+				ruleCh = "-"
+			}
+			rows = append(rows, Rule(strings.Repeat(ruleCh, m.contentWidth())))
+			// The input box sits directly below the banner in inline mode.
+			// (No bottom-pinning filler: on a tall terminal it opens a huge
+			// void and, as the statusline loads and notices commit, scrolls
+			// the banner off the top. Bottom-pinning belongs to the planned
+			// full-screen mode — see docs/kiln-fullscreen-plan.md.)
+			m.cfg.Bridge.Commit(rows)
 		}
-		return m, nil
-
-	case msgAltScreenAppend:
-		if m.transcriptView != nil {
-			m.transcriptView.Append(msg.Text)
-		}
-		return m, nil
-
-	case tea.MouseWheelMsg:
-		if m.transcriptView != nil {
-			return m.handleTranscriptViewMouse(msg)
-		}
+		m.bannerDone = true
 		return m, nil
 
 	case tea.QuitMsg:
@@ -239,18 +432,39 @@ func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd()
 
 	case msgCommitMarkdown:
+		m = m.flushGroup()
 		if m.cfg.Bridge != nil {
 			renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
-			lines := append([]string{""}, renderer.Render(msg.Text)...)
+			lines := append([]string{""}, RenderAssistantText(renderer.Render(msg.Text))...)
 			m.cfg.Bridge.Commit(lines)
 		}
 		return m, nil
 
 	case msgCommitToolCall:
-		if m.cfg.Bridge != nil {
-			lines := FitLines(RenderToolCall(msg.View), m.contentWidth(), "     ")
-			m.cfg.Bridge.Commit(append([]string{""}, lines...))
+		if m.cfg.Bridge == nil {
+			return m, nil
 		}
+		if kind, grouped := groupKindFor(msg.View.Name); grouped && !m.cfg.Bridge.Verbose() {
+			if m.group != nil && m.group.kind != kind {
+				m = m.flushGroup()
+			}
+			if m.group == nil {
+				m.group = &toolGroup{kind: kind}
+			}
+			m.group.n++
+			return m, nil
+		}
+		m = m.flushGroup()
+		view := msg.View
+		if m.pendingHead != "" && m.pendingHead == view.Name+"("+view.PrimaryArg+")" {
+			view.HeadCommitted = true
+			m.pendingHead = ""
+		}
+		lines := FitLines(RenderToolCall(view), m.contentWidth(), "     ")
+		if !view.HeadCommitted {
+			lines = append([]string{""}, lines...)
+		}
+		m.cfg.Bridge.Commit(lines)
 		return m, nil
 
 	case MsgRefreshMode:
@@ -260,11 +474,34 @@ func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.footer.SetNote(msg.Text)
 		return m, nil
 
-	case msgModalResult:
-		if m.modal != nil {
-			m.modal.Apply(msg)
+	case msgDialogResult:
+		if applier, ok := m.dialog.(interface{ Apply(msgDialogResult) }); ok {
+			applier.Apply(msg)
 		}
 		return m, nil
+
+	case msgReplayTranscript:
+		m.replayTranscript()
+		return m, nil
+
+	case msgStatusLine:
+		m.statusLine = msg.lines
+		return m, nil
+
+	case msgStatusLineTick:
+		if m.cfg.StatusLineCommand == "" {
+			return m, nil
+		}
+		return m, tea.Batch(m.refreshStatusLine(), statusLineTickCmd())
+
+	case MsgTrustAnswered:
+		if !msg.Trusted {
+			return m, tea.Quit
+		}
+		return m, nil
+
+	case MsgClearAndReplay:
+		return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
 
 	case MsgThinking:
 		return m.handleThinking(msg), nil
@@ -290,7 +527,7 @@ func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.footer.Apply(StatusPatch{ModelLabel: &label, ContextWindow: nonZeroOr(window, m.footer.State().ContextWindow)})
 		var nilInt *int
 		m.footer.Apply(StatusPatch{ContextUsed: nilInt})
-		return m, nil
+		return m, m.refreshStatusLine()
 
 	case MsgGitStatus:
 		g := msg.Status
@@ -298,6 +535,15 @@ func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgPermissionPrompt:
+		m = m.flushGroup()
+		// A mutating call's header goes into the transcript above the
+		// prompt (permission-edit.txt row 15, "⏺ Update(math.js)"); the
+		// result rows follow once it has run.
+		if name := strings.ToLower(msg.Request.ToolName); (name == "edit" || name == "write") && m.cfg.Bridge != nil {
+			view := ToolCallView{Name: MapToolName(msg.Request.ToolName), PrimaryArg: msg.Request.PrimaryArg, Status: CallOK}
+			m.pendingHead = view.Name + "(" + view.PrimaryArg + ")"
+			m.cfg.Bridge.Commit(append([]string{""}, RenderToolCall(view)...))
+		}
 		p := m.prompt
 		p.pending = &pendingPermission{request: msg.Request, reply: msg.Reply}
 		p.feedback = nil
@@ -312,7 +558,13 @@ func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msgTurnResult:
-		return m.finishTurn(msg), nil
+		return m.finishTurn(msg), m.refreshStatusLine()
+
+	case msgClearModeHint:
+		if msg.gen == m.modeHintGen {
+			m.modeHintText = ""
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -354,6 +606,7 @@ func (m Model) handleThinking(msg MsgThinking) Model {
 }
 
 func (m Model) finishTurn(msg msgTurnResult) Model {
+	m = m.flushGroup()
 	m.busy = false
 	m.spinner.Stop()
 	m.footer.SetBusy(false)
@@ -373,12 +626,22 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 		toolCalls = m.cfg.Bridge.ToolCallsInTurn()
 	}
 	if m.cfg.Bridge != nil {
-		lines := append([]string{}, RenderTurnSummary(TurnSummary{
-			Seconds:   msg.seconds,
-			Tokens:    m.spinner.Tokens(),
-			ToolCalls: toolCalls,
-		})...)
+		done := time.Now()
+		if t, ok := clockOverride(); ok {
+			done = t
+		}
+		var lines []string
+		if toolCalls > 0 && m.cfg.Bridge.Verbose() {
+			lines = append(lines, RenderVerboseModelRow(done, m.modelID(), m.contentWidth()))
+		}
 		lines = append(lines, "")
+		summary := RenderTurnSummary(TurnSummary{
+			Seconds: msg.seconds,
+			Verb:    PastTense(m.spinner.Label()),
+			Done:    done,
+		})
+		m.lastSummary = summary
+		lines = append(lines, summary...)
 		m.cfg.Bridge.Commit(lines)
 	}
 	m.footer.SetNote("")
@@ -396,22 +659,75 @@ func (m Model) refreshMode() Model {
 	return m
 }
 
+// dialogOutcome is implemented by dialogs that leave a result row in the
+// transcript when they close ("Kept model as …").
+type dialogOutcome interface{ Outcome() string }
+
+// closeDialog drops the open dialog and, for a slash command's dialog,
+// echoes the command with its outcome row.
+func (m Model) closeDialog() Model {
+	outcome := ""
+	if d, ok := m.dialog.(dialogOutcome); ok {
+		outcome = d.Outcome()
+	}
+	m.dialog = nil
+	if m.dialogEcho != "" && m.cfg.Bridge != nil {
+		m.cfg.Bridge.Commit(RenderUserMessage(m.dialogEcho, m.contentWidth()))
+		if outcome != "" {
+			m.cfg.Bridge.CommitCommandResult([]string{outcome})
+		}
+	}
+	m.dialogEcho = ""
+	return m
+}
+
+// flushGroup commits the in-flight collapsed tool-group row, if any, as
+// its settled form ("  Read N files" / "  Ran N shell commands").
+func (m Model) flushGroup() Model {
+	if m.group == nil {
+		return m
+	}
+	if m.cfg.Bridge != nil {
+		m.cfg.Bridge.Commit([]string{"", RenderToolGroupDone(m.group.kind, m.group.n)})
+	}
+	m.group = nil
+	return m
+}
+
 // --- key handling ----------------------------------------------------------
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.transcriptView != nil {
-		return m.handleTranscriptViewKey(msg)
+	// The `?` shortcuts panel is dismissed by any key
+	// (docs/claude-code-reference.md §6); the key itself is not otherwise
+	// acted on, so a stray Enter cannot submit while it is up.
+	if m.shortcuts {
+		m.shortcuts = false
+		return m, nil
 	}
 
-	if m.modal != nil {
-		consumed, shouldClose, cmd := m.modal.HandleKey(msg)
+	// Every keystroke but a fresh kill clears the "Ctrl+Y to paste deleted
+	// text" hint (docs/claude-code-reference.md §2: "until the next
+	// keystroke"). Reset here, unconditionally, then the editor.Update
+	// path below re-arms it only when this key's own Event says a kill
+	// just happened.
+	m.justKilled = false
+
+	if m.dialog != nil {
+		consumed, shouldClose, cmd := m.dialog.HandleKey(msg)
 		if shouldClose {
-			m.modal = nil
-			return m, nil
+			m = m.closeDialog()
+			return m, cmd
 		}
 		if consumed {
 			return m, cmd
 		}
+	}
+
+	// `?` on an empty input shows the shortcuts panel
+	// (docs/claude-code-reference.md §6, shortcuts.txt).
+	if msg.String() == "?" && !m.busy && !m.prompt.Active() && strings.TrimSpace(m.editor.Value()) == "" {
+		m.shortcuts = true
+		return m, nil
 	}
 
 	// The autocomplete popup owns up/down/tab/enter/esc while it is open —
@@ -429,11 +745,24 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.popup.Move(1)
 			return m, nil
 		case "tab", "enter":
-			replacement, _ := m.popup.Accept()
-			m.editor.ReplaceCursorLine(m.popup.Start, m.popup.End, replacement)
-			m.popup = nil
-			m.editor.PopupActive = false
-			return m, nil
+			// A fully-typed slash command submitted with Enter runs on this
+			// one keypress, as Claude Code does — the popup does not eat the
+			// Enter to merely re-insert what is already there. A partial name
+			// (or Tab) still completes first; a second Enter then submits.
+			item, hasItem := m.popup.SelectedItem()
+			line, _ := m.editor.CursorLine()
+			if msg.String() == "enter" && hasItem && m.popup.Kind == KindSlashCommand &&
+				strings.TrimSpace(line) == "/"+item.Value {
+				m.popup = nil
+				m.editor.PopupActive = false
+				// Fall through to the editor's submit pipeline below.
+			} else {
+				replacement, _ := m.popup.Accept()
+				m.editor.ReplaceCursorLine(m.popup.Start, m.popup.End, replacement)
+				m.popup = nil
+				m.editor.PopupActive = false
+				return m, nil
+			}
 		case "esc":
 			m.popup = nil
 			m.editor.PopupActive = false
@@ -454,6 +783,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		didExit     bool
 		didCycle    bool
 		didToggle   bool
+		didRewind   bool
+		hintMessage string
 	)
 	router := NewRouter(KeyActions{
 		PermissionKey: func(msg tea.KeyPressMsg) bool {
@@ -469,13 +800,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		CyclePermissionMode: func() { didCycle = true },
 		ClearInput:          func() { didClear = true },
 		ClearScreen:         func() { didClearScr = true },
-		Rewind: func() {
-			if m.cfg.Bridge != nil {
-				m.cfg.Bridge.Commit([]string{Dim("  rewind: use /rewind <entry-id>; /resume lists past sessions")})
-			}
-		},
-		Exit: func() { didExit = true },
-		Hint: func(message string) { m.footer.SetNote(message) },
+		Rewind:              func() { didRewind = true },
+		Exit:                func() { didExit = true },
+		// Hint's message replaces the mode line for modeHintDuration
+		// (currently only Ctrl+C's "Press Ctrl-C again to exit" — see
+		// modeHintText's doc comment); recorded here, applied below once
+		// Route returns, the same pattern as every other action this
+		// router closes over.
+		Hint: func(message string) { hintMessage = message },
 	})
 
 	router.lastCtrlC = m.lastCtrlC
@@ -484,6 +816,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.lastCtrlC = router.lastCtrlC
 	m.lastEsc = router.lastEsc
 	if consumed {
+		var hintCmd tea.Cmd
+		if hintMessage != "" {
+			m.modeHintGen++
+			gen := m.modeHintGen
+			m.modeHintText = hintMessage
+			hintCmd = tea.Tick(modeHintDuration, func(time.Time) tea.Msg { return msgClearModeHint{gen: gen} })
+		}
 		if didAbort && m.cfg.Lane != nil {
 			_ = m.cfg.Lane.Abort()
 		}
@@ -493,17 +832,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if didCycle {
 			m = m.cycleMode()
 		}
-		if didToggle {
-			m = m.openTranscriptView()
+		if didRewind && strings.TrimSpace(m.editor.Value()) == "" {
+			m = m.openRewind()
 		}
 		if didExit {
 			return m, tea.Quit
+		}
+		if didToggle {
+			return m.toggleVerbose()
 		}
 		if didClearScr {
 			return m, tea.ClearScreen
 		}
 		m = m.refreshPopup()
-		return m, nil
+		return m, hintCmd
 	}
 
 	ed, cmd, ev := m.editor.Update(msg)
@@ -516,6 +858,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Idle Esc with no prompt/turn up: nothing to cancel but the
 		// router's own double-press/rewind bookkeeping, already handled
 		// above.
+		return m, cmd
+	case editor.EventKilled:
+		m.justKilled = true
 		return m, cmd
 	}
 	return m, cmd
@@ -532,19 +877,22 @@ func (m Model) refreshPopup() Model {
 	return m
 }
 
+// cycleMode advances the permission mode one step around
+// permissionModeRing. A mode not in the ring (bypassPermissions, dontAsk)
+// goes straight to auto, the ring's first entry, rather than panicking on a
+// not-found index or silently no-op'ing.
 func (m Model) cycleMode() Model {
 	if m.cfg.Gate == nil {
 		return m
 	}
 	cur := string(m.cfg.Gate.Mode())
-	idx := 0
-	for i, mode := range permissionModes {
+	next := permissionModeRing[0]
+	for i, mode := range permissionModeRing {
 		if mode == cur {
-			idx = i
+			next = permissionModeRing[(i+1)%len(permissionModeRing)]
 			break
 		}
 	}
-	next := permissionModes[(idx+1)%len(permissionModes)]
 	m.cfg.Gate.SetMode(claudesettings.PermissionMode(next))
 	m.footer.SetNote("")
 	nextStr := next
@@ -565,13 +913,14 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	}
 
 	width := m.contentWidth()
-	if m.cfg.Bridge != nil {
-		echo := append([]string{""}, RenderUserMessage(line, width)...)
-		echo = append(echo, "")
-		m.cfg.Bridge.Commit(echo)
+	echo := func() {
+		if m.cfg.Bridge != nil {
+			m.cfg.Bridge.Commit(RenderUserMessage(line, width))
+		}
 	}
 
 	if classified, ok := ClassifyInput(line); ok {
+		echo()
 		return m, m.runMode(classified)
 	}
 
@@ -588,16 +937,25 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		handled = result
 	}
 	if handled != nil {
+		if handled.Exit {
+			echo()
+			return m, tea.Quit
+		}
 		if handled.Modal != nil {
-			m.modal = NewModalView(*handled.Modal)
+			// Echoed when the dialog closes — see dialogEcho.
+			m.dialogEcho = line
+			m.dialog = NewCommandDialog(*handled.Modal)
 			return m, nil
 		}
+		echo()
 		if len(handled.Output) > 0 && m.cfg.Bridge != nil {
-			m.cfg.Bridge.Commit(handled.Output)
+			m.cfg.Bridge.CommitCommandResult(handled.Output)
 		}
 		if handled.Prompt == "" {
 			return m, nil
 		}
+	} else {
+		echo()
 	}
 
 	prompt := line
@@ -716,20 +1074,57 @@ func (m Model) liveEditorWidth() int {
 }
 
 // View composes the live region: spinner, live thinking, permission/plan
-// prompt, the editor frame, then the 2-row footer — app.ts's own layout
-// order (transcript above; spinner, prompt, input box, status line, in
-// that order, below). Everything here is redrawn every frame; the
-// committed transcript lives in real scrollback and is never touched.
+// prompt (or, in its place, the hint row), the editor frame, then the mode
+// line — docs/claude-code-reference.md §§1-2: no status row by default, the
+// bottom area is the input box and the mode line only. Everything here is
+// redrawn every frame; the committed transcript lives in real scrollback
+// and is never touched.
 func (m Model) View() tea.View {
-	if m.transcriptView != nil {
-		return m.transcriptViewView()
-	}
-
 	width := m.contentWidth()
-	var lines []string
+	lines, editorTop := m.liveLines(width)
 
-	if s := m.spinner.Render(width, time.Time{}); len(s) > 0 {
-		lines = append(lines, s...)
+	// The live region renders at its natural height directly below the
+	// committed transcript. An earlier version padded it to fill the
+	// terminal so the input box sat on the last rows (like Claude Code),
+	// but a full-height live region is fundamentally incompatible with
+	// Bubbletea's inline renderer: tea.Println/insertAbove scrolls the
+	// whole (full-height) region, overpainting the committed banner and
+	// leaving blank residue at the bottom, and the constant-height padding
+	// only masked a separate insertAbove cursor bug (fixed in
+	// third_party/bubbletea/cursed_renderer.go). To match Claude Code's
+	// startup screen (input box near the bottom) the harness instead
+	// commits blank filler lines once at startup (see WindowSizeMsg), which
+	// is real scrollback and keeps the live region small.
+	v := tea.NewView(strings.Join(lines, "\n"))
+	if m.cfg.SessionName != "" {
+		v.WindowTitle = m.cfg.SessionName
+	}
+	if editorTop >= 0 {
+		if c := m.editor.Cursor(); c != nil {
+			c.Position.Y += editorTop
+			v.Cursor = c
+		}
+	}
+	return v
+}
+
+// liveLines builds the live-region rows (everything below the committed
+// transcript: spinner, dialog/prompt, input box, statusLine, mode line) and
+// the index of the editor's first row (editorTop, -1 when the editor is not
+// shown). Split out of View so WindowSizeMsg can measure the live region's
+// height to size the startup filler.
+func (m Model) liveLines(width int) (lines []string, editorTop int) {
+	editorTop = -1
+
+	if m.group != nil {
+		lines = append(lines, "", RenderToolGroupRunning(m.group.kind, m.group.n))
+	}
+	// No spinner while a permission or plan prompt is up: Claude Code shows
+	// the question alone (permission-edit.txt, plan-approval.txt).
+	if !m.prompt.Active() {
+		if s := m.spinner.Render(width, time.Time{}); len(s) > 0 {
+			lines = append(lines, s...)
+		}
 	}
 	if m.thinking != nil {
 		view := *m.thinking
@@ -738,46 +1133,173 @@ func (m Model) View() tea.View {
 			lines = append(lines, FitStatus(collapsed[0], width))
 		}
 	}
-	if m.prompt.Active() {
+	switch {
+	case m.dialog != nil:
+		// A dialog replaces the input box and mode line under a `▔` rule
+		// carrying the effort indicator (docs/claude-code-reference.md §5).
+		lines = append(lines, m.dialogRows(width, len(lines))...)
+	case m.prompt.Active():
+		// Permission and plan prompts render inline in place of the input
+		// box, with no hint row or mode line (§5, permission-edit.txt). Plan
+		// approval sits under a full `▔` rule and a blank row
+		// (plan-approval.txt rows 3-4).
+		if m.prompt.plan != nil {
+			lines = append(lines, Rule(strings.Repeat("▔", width)), "")
+		}
 		lines = append(lines, m.prompt.Render(width)...)
+	case m.cfg.Bridge != nil && m.cfg.Bridge.Verbose():
+		// The detailed transcript view (verbose-ctrl-o.txt rows 38-39): a
+		// rule and the notice row take the input box's place until Ctrl+O
+		// toggles back.
+		lines = append(lines, RuleColour(strings.Repeat("─", width)), m.renderModeLine(width))
+	default:
+		if m.popup != nil {
+			// Claude Code draws the suggestions directly above the input
+			// box's top rule (autocomplete-slash.txt rows 29-32).
+			lines = append(lines, m.renderPopup(width, len(lines))...)
+		}
+		if hint := m.hintRow(width); hint != "" {
+			lines = append(lines, hint)
+		}
+		editorTop = len(lines)
+		lines = append(lines, m.editor.View(width)...)
+		if m.shortcuts {
+			// The shortcuts panel takes the mode line's place
+			// (shortcuts.txt rows 32-39).
+			lines = append(lines, RenderShortcuts(width)...)
+		} else {
+			// The configured statusLine sits between the input box and the
+			// mode line (docs/claude-code-reference.md §1: the "│ ⎇ …" row).
+			// The statusLine command emits its own (non-kiln) colours, so
+			// strip them and re-tint the row in the kiln dim tone: it keeps
+			// its text/segments and layout, just in the kiln palette.
+			for _, sl := range m.statusLine {
+				lines = append(lines, FitStatus("  "+Muted(ansi.Strip(sl)), width))
+			}
+			lines = append(lines, m.renderModeLine(width))
+		}
 	}
-	lines = append(lines, m.editor.View(width)...)
-	if m.popup != nil {
-		lines = append(lines, m.renderPopup(width, len(lines))...)
-	}
-	footerRows := m.footer.Render(width)
-	lines = append(lines, footerRows[0], footerRows[1])
 
-	if m.modal != nil {
-		modalWidth := width * 8 / 10
-		if modalWidth < 20 {
-			modalWidth = width
-		}
-		// Sized against the terminal, not the live region: modal.ts's
-		// showOverlay takes 80% of the screen. The idle live region is
-		// five rows, which clipped every panel's hint row.
-		screenHeight := m.height
-		if screenHeight <= 0 {
-			screenHeight = 24
-		}
-		modalHeight := screenHeight * 8 / 10
-		if modalHeight < 6 {
-			modalHeight = min(6, screenHeight)
-		}
-		overlay := m.modal.Render(modalWidth, modalHeight)
-		lines = compositeCenter(lines, overlay, width)
-	}
+	return lines, editorTop
+}
 
-	v := tea.NewView(strings.Join(lines, "\n"))
-	if m.cfg.SessionName != "" {
-		v.WindowTitle = m.cfg.SessionName
+// dialogRows renders the open dialog under its `▔` rule, sized to what is
+// left of the terminal below linesAbove.
+func (m Model) dialogRows(width, linesAbove int) []string {
+	height := m.height
+	if height <= 0 {
+		height = 24
 	}
-	if !m.prompt.Active() && m.modal == nil {
-		if c := m.editorCursor(); c != nil {
-			v.Cursor = c
+	room := height - linesAbove - 1
+	if room < 4 {
+		room = 4
+	}
+	rows := []string{m.dialogRule(width)}
+	for _, r := range m.dialog.Render(width, room) {
+		rows = append(rows, FitStatus(r, width))
+	}
+	return rows
+}
+
+// dialogRule is the `▔` rule above a dialog with the effort indicator set
+// in near the right edge: `▔…▔ ◐ medium · /effort ▔` (dialog-model.txt row 24).
+func (m Model) dialogRule(width int) string {
+	effort := m.cfg.Effort
+	if effort == "" {
+		effort = "medium"
+	}
+	label := " " + effortGlyph(effort) + " " + effort + " · /effort "
+	lead := width - VisibleWidth(label) - 1
+	if lead < 0 {
+		return FitStatus(Muted(strings.TrimSpace(label)), width)
+	}
+	// Kiln restyle: the ▔ rule uses the kiln hairline colour rather than
+	// the Claude Code accent.
+	return Rule(strings.Repeat("▔", lead)) + Muted(label) + Rule("▔")
+}
+
+// modelID is the id the verbose model row shows.
+func (m Model) modelID() string {
+	if m.cfg.ModelID != "" {
+		return m.cfg.ModelID
+	}
+	return m.footer.State().ModelLabel
+}
+
+// toggleVerbose flips the bridge's verbose flag on Ctrl+O, clears the
+// screen and replays the transcript so far at the new verbosity
+// (docs/claude-code-reference.md §3; Bridge.MsgClearAndReplay documents
+// the sequence).
+func (m Model) toggleVerbose() (tea.Model, tea.Cmd) {
+	if m.cfg.Bridge == nil {
+		return m, nil
+	}
+	m.cfg.Bridge.SetVerbose(!m.cfg.Bridge.Verbose())
+	return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
+}
+
+// replayTranscript re-commits every entry on the lane's current branch,
+// rendered at the current width and verbosity. Committed rows live in
+// scrollback and cannot be repainted, so a verbosity change redraws from
+// the session log, the same source Claude Code redraws from.
+func (m Model) replayTranscript() {
+	if m.cfg.Bridge == nil || m.cfg.Lane == nil {
+		return
+	}
+	entries, err := m.cfg.Lane.FindEntries(context.Background())
+	if err != nil {
+		m.cfg.Bridge.Commit(RenderError(err.Error()))
+		return
+	}
+	m.cfg.Bridge.Commit(RenderTranscriptEntries(oldestFirst(entries), m.contentWidth(), m.cfg.Bridge.Verbose(), m.cfg.Cwd, m.lastSummary))
+}
+
+// openRewind opens the Rewind dialog over the lane's user messages
+// (docs/claude-code-reference.md §5, dialog-rewind.txt). Choosing a message
+// navigates the session tree to just before it and redraws the transcript.
+func (m Model) openRewind() Model {
+	if m.cfg.Lane == nil {
+		return m
+	}
+	entries, err := m.cfg.Lane.FindEntries(context.Background())
+	if err != nil {
+		if m.cfg.Bridge != nil {
+			m.cfg.Bridge.Commit(RenderError(err.Error()))
+		}
+		return m
+	}
+	lane := m.cfg.Lane
+	bridge := m.cfg.Bridge
+	m.dialog = NewRewindDialog(RewindEntriesFromSession(entries), func(entryID string) error {
+		if err := lane.NavigateTree(context.Background(), parentOf(entries, entryID)); err != nil {
+			return err
+		}
+		if bridge != nil {
+			bridge.Send(MsgClearAndReplay{})
+		}
+		return nil
+	})
+	return m
+}
+
+// oldestFirst reverses Lane.FindEntries's newest-first order.
+func oldestFirst(entries []session.Entry) []session.Entry {
+	out := make([]session.Entry, len(entries))
+	for i, e := range entries {
+		out[len(entries)-1-i] = e
+	}
+	return out
+}
+
+// parentOf returns the parent id of entryID (nil for a root entry or an
+// unknown id): the point "before" that message the Rewind dialog promises.
+func parentOf(entries []session.Entry, entryID string) *string {
+	for _, e := range entries {
+		if e.ID == entryID {
+			return e.ParentID
 		}
 	}
-	return v
+	return nil
 }
 
 // renderPopup renders the `/`/`@` autocomplete list directly below the
@@ -795,7 +1317,9 @@ func (m Model) renderPopup(width, linesAbove int) []string {
 	if height <= 0 {
 		height = 24
 	}
-	const footerRows = 2
+	// The bottom area is one row now (the mode line only — no status row,
+	// docs/claude-code-reference.md §1).
+	const footerRows = 1
 	room := height - linesAbove - footerRows
 	if room < 1 {
 		return nil
@@ -807,60 +1331,151 @@ func (m Model) renderPopup(width, linesAbove int) []string {
 	return m.popup.Render(width, maxRows)
 }
 
-// editorCursor offsets the editor's own cursor by the number of live-
-// region rows drawn above it (spinner, thinking, prompt).
-func (m Model) editorCursor() *tea.Cursor {
-	c := m.editor.Cursor()
-	if c == nil {
-		return nil
+// --- hint row and mode line -------------------------------------------------
+
+// hintRow renders the right-aligned row above the input box's top rule:
+// "Ctrl+Y to paste deleted text" for exactly one frame after a kill,
+// otherwise the effort indicator "◐ medium · /effort"
+// (docs/claude-code-reference.md §2). Empty while a permission/plan prompt
+// or the autocomplete popup owns the area below — "the hint row is
+// omitted" per the task's explicit instruction — matching startup.txt's
+// own layout where the effort row sits directly above the rule with
+// nothing else competing for it.
+func (m Model) hintRow(width int) string {
+	if m.prompt.Active() || m.popup != nil {
+		return ""
 	}
-	width := m.contentWidth()
-	above := 0
-	above += len(m.spinner.Render(width, time.Time{}))
-	if m.thinking != nil {
-		above++
+	// Two trailing columns after the indicator (startup.txt row 26 ends at
+	// column 98 of 100).
+	if m.justKilled {
+		return rightAlign(Muted("Ctrl+Y to paste deleted text"), width-2)
 	}
-	c.Position.Y += above
-	return c
+	effort := m.cfg.Effort
+	if effort == "" {
+		effort = "medium"
+	}
+	// Kiln restyle: the effort glyph+label is the accent (amber), the
+	// "· /effort" hint stays dim.
+	right := KilnAmber(effortGlyph(effort)+" "+effort) + Muted(" · /effort")
+	// A transient footer note ("mcp: connecting 11 servers…") takes the
+	// left of the same row; the harness's own addition, Claude Code has no
+	// equivalent row.
+	left := ""
+	if note := m.footer.Note(); note != "" {
+		left = "  " + Muted(note)
+	}
+	pad := width - 2 - VisibleWidth(left) - VisibleWidth(right)
+	if pad < 1 {
+		return FitStatus(left, width)
+	}
+	return left + strings.Repeat(" ", pad) + right
 }
 
-// compositeCenter splices overlay over base, centered, matching modal.ts's
-// showOverlay({width: "80%", maxHeight: "80%", anchor: "center"}) — a
-// panel that takes the keyboard should look like it is floating over the
-// conversation it is asking about, not replacing it outright.
-func compositeCenter(base, overlay []string, width int) []string {
-	if len(overlay) == 0 {
-		return base
+// effortGlyph maps a reasoning-effort label to its indicator glyph
+// (docs/claude-code-reference.md §1: "Glyph by effort: `◔ low`, `◐
+// medium`, `◕ high`, `● xhigh/max`"). Unrecognized labels fall back to the
+// medium glyph rather than an empty one, since the row must always show
+// something.
+func effortGlyph(effort string) string {
+	switch effort {
+	case "low":
+		return "◔"
+	case "high":
+		return "◕"
+	case "xhigh", "max":
+		return "●"
+	default:
+		return "◐"
 	}
-	rows := make([]string, len(base))
-	copy(rows, base)
-	if len(overlay) > len(rows) {
-		rows = append(rows, make([]string, len(overlay)-len(rows))...)
+}
+
+// rightAlign pads s on the left so it ends at the row's last column,
+// truncating instead when it would overflow — FitStatus's own contract,
+// applied after right-padding rather than before.
+func rightAlign(s string, width int) string {
+	w := VisibleWidth(s)
+	if w >= width {
+		return FitStatus(s, width)
 	}
-	top := (len(rows) - len(overlay)) / 2
-	if top < 0 {
-		top = 0
+	return strings.Repeat(" ", width-w) + s
+}
+
+// modeLineText returns the mode line's lead-in glyph and remaining text
+// for mode, verbatim from docs/claude-code-reference.md §2 (verified
+// against mode-cycle.txt): a non-cycling mode still gets the glyph, just
+// no "(shift+tab to cycle)" suffix.
+func modeLineText(mode string) (glyph, rest string, ok bool) {
+	switch mode {
+	case "auto":
+		return "⏵⏵", "auto mode on (shift+tab to cycle)", true
+	case "manual":
+		return "⏸", "manual mode on", true
+	case "acceptEdits":
+		return "⏵⏵", "accept edits on (shift+tab to cycle)", true
+	case "plan":
+		return "⏸", "plan mode on (shift+tab to cycle)", true
+	case "bypassPermissions":
+		return "⏵⏵", "bypass permissions on (shift+tab to cycle)", true
+	case "dontAsk":
+		return "⏵⏵", "don't ask on (shift+tab to cycle)", true
+	default:
+		return "", "", false
 	}
-	overlayWidth := 0
-	for _, l := range overlay {
-		if w := VisibleWidth(l); w > overlayWidth {
-			overlayWidth = w
+}
+
+// renderModeLine draws the bottom area's one row: the mode line, indented
+// two spaces, glyph in Amber and the rest in Muted — or, for
+// modeHintDuration after a Ctrl+C, "Press Ctrl-C again to exit" in its
+// place (docs/claude-code-reference.md §2, ctrl-c-hint.txt). " · ← for
+// agents" follows the auto and manual modes only (mode-cycle.txt: accept
+// edits and plan never carry it; turn-edit.txt row 40 carries it with text
+// in the input) and is dropped while the autocomplete popup is open
+// (autocomplete-slash.txt row 36). The harness has no agents view yet, so
+// the suffix is parity-only and Left on an empty input does nothing.
+func (m Model) renderModeLine(width int) string {
+	if m.modeHintText != "" {
+		return FitStatus("  "+Muted(m.modeHintText), width)
+	}
+	if m.cfg.Bridge != nil && m.cfg.Bridge.Verbose() {
+		// docs/claude-code-reference.md §3 (verbose-ctrl-o.txt): the mode
+		// line gives way to the verbose notice with "verbose" right-aligned.
+		left := "  " + Muted("Showing detailed transcript · ctrl+o to toggle · ? for shortcuts")
+		right := Muted("verbose")
+		// One trailing column, matching verbose-ctrl-o.txt row 40 (the
+		// "verbose" label ends at column 99 of 100, not flush right).
+		pad := width - 1 - VisibleWidth(left) - VisibleWidth(right)
+		if pad < 1 {
+			return FitStatus(left, width)
 		}
+		return left + strings.Repeat(" ", pad) + right
 	}
-	left := (width - overlayWidth) / 2
-	if left < 0 {
-		left = 0
+	_, rest, ok := modeLineText(m.footer.State().Mode)
+	if !ok {
+		return FitStatus("", width)
 	}
-	pad := strings.Repeat(" ", left)
-	for i, l := range overlay {
-		rows[top+i] = pad + l
+	mode := m.footer.State().Mode
+	if (mode == "auto" || mode == "manual") && m.popup == nil {
+		rest += " · ← for agents"
 	}
-	return rows
+	// Kiln restyle: a filled dot "●" leads the line instead of the
+	// Claude Code ⏵⏵/⏸ glyph, coloured by mode (ask/manual dim, the
+	// auto-edit family green, plan blue); the wording itself is
+	// unchanged. See design_handoff_kiln_tui/README.md's status-line
+	// mode colours.
+	return FitStatus("  "+modeDotColor(mode)("●")+" "+Muted(rest), width)
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+// modeDotColor picks the kiln colour for the mode line's lead-in "●",
+// mapping the harness's permission-mode names onto the design's three
+// mode colours: ask/manual (dim), the auto-edit family — auto,
+// acceptEdits, bypassPermissions, dontAsk — (green), and plan (blue).
+func modeDotColor(mode string) func(string) string {
+	switch mode {
+	case "plan":
+		return KilnBlue
+	case "auto", "acceptEdits", "bypassPermissions", "dontAsk":
+		return KilnGreen
+	default:
+		return Muted
 	}
-	return b
 }

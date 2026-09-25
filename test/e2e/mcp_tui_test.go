@@ -54,18 +54,26 @@ func TestTUI_MCP_BackgroundConnect(t *testing.T) {
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--strict-mcp-config", "--mcp-config", cfg, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 
-	// The first frame arrives while the servers are still connecting.
+	// The first frame arrives while the servers are still connecting. The
+	// connect goroutine's progress reaches the hint row above the input box
+	// as a footer note (internal/cli/tui.go's ConnectMCP callback ->
+	// MsgFooterNote; app.go's hintRow renders m.footer.Note() on the left).
 	if err := s.WaitFor(regexp.MustCompile(`mcp: (connecting 2 servers|1/2 servers)`), 3*time.Second); err != nil {
 		t.Fatalf("footer never showed MCP progress: %v", err)
 	}
-	// The hanging server times out and is reported; the fixture connected.
-	if err := s.WaitFor("mcp: hang unavailable (no response within 2s)", 20*time.Second); err != nil {
-		t.Fatalf("hang notice never appeared: %v", err)
+	// The hanging server times out; only the fixture connects. The failure
+	// summary commits to the transcript once the connect goroutine
+	// finishes — mcpFailureNotice (internal/cli/tui.go) reports it as "N
+	// MCP servers unavailable · run /mcp" (singular here, since exactly one
+	// of the two servers failed), not the per-server "no response within
+	// Ns" text describeConnectError produces for /mcp's own detail view.
+	if err := s.WaitFor("1 MCP server unavailable · run /mcp", 20*time.Second); err != nil {
+		t.Fatalf("MCP failure notice never appeared: %v", err)
 	}
 
 	s.Send("echo something for me")
 	s.SendKey("enter")
-	if err := s.WaitFor("Worked for", 20*time.Second); err != nil {
+	if err := s.WaitFor(turnSummaryPattern, 20*time.Second); err != nil {
 		t.Fatalf("turn never finished: %v", err)
 	}
 	rows := s.Rows()
@@ -73,7 +81,15 @@ func TestTUI_MCP_BackgroundConnect(t *testing.T) {
 	for _, r := range rows {
 		joined += r + "\n"
 	}
-	for _, want := range []string{"Tool_search(echo text back)", "Mcp__fixture__echo(", "round trip", "Echoed."} {
+	// tool_search is a read-only tool now (internal/tui/replay.go's
+	// groupKindFor / app.go's msgCommitToolCall), so it collapses into the
+	// grouped "Read N files" row rather than showing its own
+	// "Tool_search(...)" header — matching the same read-only auto-allow
+	// grouping this task's item 4 describes for Read/Glob/Grep. The MCP
+	// tool's own call renders in kiln's "tool" block anatomy: a
+	// "mcp__fixture__echo" label rule, then "Mcp__fixture__echo" (no
+	// parens — transcript.go's RenderToolCall).
+	for _, want := range []string{"Read 1 file", "Mcp__fixture__echo", "round trip", "Echoed."} {
 		if !regexp.MustCompile(regexp.QuoteMeta(want)).MatchString(joined) {
 			t.Errorf("screen missing %q:\n%s", want, joined)
 		}

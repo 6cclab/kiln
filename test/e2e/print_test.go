@@ -149,7 +149,12 @@ func TestPrint_StreamJSON_FixBug(t *testing.T) {
 // tool_end comes back isError:true and the run's blocked list is non-empty,
 // even though the run itself still completes (the model gets the error as
 // tool content and gets to respond to it, same as any other tool error).
-func TestPrint_StreamJSON_ReadBlockedHeadless(t *testing.T) {
+// TestPrint_StreamJSON_EditBlockedHeadless: with no way to prompt (print
+// mode), a tool the gate would ask about is refused ("headless ask =
+// refusal"). Read-only tools (read/glob/grep) are auto-allowed to match
+// Claude Code, which never prompts for them, so the fix-bug script's read
+// proceeds; its edit, which asks in manual mode, is the one refused.
+func TestPrint_StreamJSON_EditBlockedHeadless(t *testing.T) {
 	addr, _ := startFaux(t, fixBugScript)
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
@@ -157,13 +162,13 @@ func TestPrint_StreamJSON_ReadBlockedHeadless(t *testing.T) {
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "fix the bug",
 		"--output-format", "stream-json",
-		"--permission-mode", "acceptEdits",
+		"--permission-mode", "manual",
 	)
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}
 
-	var sawBlockedReadToolEnd bool
+	var sawReadOK, sawBlockedEditToolEnd bool
 	var blocked []string
 	for _, line := range strings.Split(strings.TrimSpace(res.Stdout), "\n") {
 		if line == "" {
@@ -174,8 +179,13 @@ func TestPrint_StreamJSON_ReadBlockedHeadless(t *testing.T) {
 			t.Fatalf("parse stream-json line %q: %v", line, err)
 		}
 		if ev["type"] == "tool_end" && ev["name"] == "read" {
+			if isErr, _ := ev["isError"].(bool); !isErr {
+				sawReadOK = true
+			}
+		}
+		if ev["type"] == "tool_end" && ev["name"] == "edit" {
 			if isErr, _ := ev["isError"].(bool); isErr {
-				sawBlockedReadToolEnd = true
+				sawBlockedEditToolEnd = true
 			}
 		}
 		if ev["type"] == "result" {
@@ -186,8 +196,11 @@ func TestPrint_StreamJSON_ReadBlockedHeadless(t *testing.T) {
 			}
 		}
 	}
-	if !sawBlockedReadToolEnd {
-		t.Errorf("no tool_end{name:read, isError:true} in:\n%s", res.Stdout)
+	if !sawReadOK {
+		t.Errorf("read (a read-only tool) was not auto-allowed in:\n%s", res.Stdout)
+	}
+	if !sawBlockedEditToolEnd {
+		t.Errorf("no tool_end{name:edit, isError:true} in:\n%s", res.Stdout)
 	}
 	if len(blocked) == 0 {
 		t.Error("result.blocked is empty, want the headless-ask refusal reason")

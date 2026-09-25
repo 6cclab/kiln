@@ -59,7 +59,7 @@ func Providers(ctx context.Context, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  %-24s %-13s %s\n", s.ProviderID, s.Kind, status)
 	}
 	if len(subs) > 0 {
-		fmt.Fprintf(stdout, "\nLog in with a plan:  harness login <%s>\n", strings.Join(subs, "|"))
+		fmt.Fprintf(stdout, "\nLog in with a plan:  kiln login <%s>\n", strings.Join(subs, "|"))
 	}
 	return 0
 }
@@ -81,11 +81,11 @@ func Models(ctx context.Context, stdout, stderr io.Writer, providerID string) in
 	if providerID != "" {
 		p, ok := reg.Provider(providerID)
 		if !ok {
-			fmt.Fprintf(stderr, "harness: unknown provider %q\n", providerID)
+			fmt.Fprintf(stderr, "kiln: unknown provider %q\n", providerID)
 			return 1
 		}
 		if err := p.RefreshModels(ctx); err != nil {
-			fmt.Fprintf(stderr, "harness: refreshing %s: %v\n", providerID, err)
+			fmt.Fprintf(stderr, "kiln: refreshing %s: %v\n", providerID, err)
 		}
 	} else {
 		for _, p := range reg.Providers() {
@@ -95,7 +95,7 @@ func Models(ctx context.Context, stdout, stderr io.Writer, providerID string) in
 
 	available, err := reg.Available(ctx)
 	if err != nil {
-		fmt.Fprintln(stderr, "harness:", err)
+		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
 	}
 
@@ -113,7 +113,7 @@ func Models(ctx context.Context, stdout, stderr io.Writer, providerID string) in
 		}
 	}
 	if len(rows) == 0 {
-		fmt.Fprintln(stdout, "No models available. Configure a provider first: harness providers")
+		fmt.Fprintln(stdout, "No models available. Configure a provider first: kiln providers")
 		return 0
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -151,7 +151,7 @@ func Models(ctx context.Context, stdout, stderr io.Writer, providerID string) in
 func LoginCmd(ctx context.Context, providerID string, stdin io.Reader, stdout, stderr io.Writer) int {
 	reg := buildRegistry()
 	if _, ok := reg.Provider(providerID); !ok {
-		fmt.Fprintf(stderr, "Unknown provider %q. See: harness providers\n", providerID)
+		fmt.Fprintf(stderr, "Unknown provider %q. See: kiln providers\n", providerID)
 		return 1
 	}
 
@@ -169,7 +169,7 @@ func LoginCmd(ctx context.Context, providerID string, stdin io.Reader, stdout, s
 func LogoutCmd(ctx context.Context, providerID string, stdout, stderr io.Writer) int {
 	reg := buildRegistry()
 	if err := authlogin.Logout(ctx, reg, reg.Credentials(), providerID); err != nil {
-		fmt.Fprintln(stderr, "harness:", err)
+		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "Logged out of %s.\n", providerID)
@@ -196,7 +196,7 @@ var hookEvents = []claudehooks.Event{
 func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(stderr, "harness:", err)
+		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
 	}
 
@@ -326,17 +326,19 @@ func MCP(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// Version implements `harness --version` / `-v`.
-func Version(stdout io.Writer) int {
+// version implements `harness --version` / `-v`.
+func VersionCmd(stdout io.Writer) int {
 	fmt.Fprintln(stdout, version())
 	return 0
 }
 
-// version reads the module's own version. This phase has no build-time
-// version stamping, so it reports the binary name plus "dev" rather than
-// inventing a number; wiring a real version (e.g. via -ldflags) is a build
-// concern, not a cli one, and is left for whichever phase adds a release
-// process.
+// Version is the harness's own release version, set at build time via
+// `-ldflags "-X github.com/andrepato/harness/internal/cli.Version=<ver>"`;
+// "dev" otherwise. The startup banner's `harness v<version>` row
+// (internal/cli/tui.go) reads this directly.
+var Version = "dev"
+
+// version reads the module's own version for `--version`.
 func version() string {
-	return "harness dev (go port)"
+	return "kiln " + Version + " (go port)"
 }

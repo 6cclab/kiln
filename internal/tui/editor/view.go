@@ -50,7 +50,18 @@ func (m Model) View(width int) []string {
 	above, below := m.scrollHints(&ta)
 	body := strings.Split(ta.View(), "\n")
 
-	prefix := m.styles.Rule.Render(m.styles.Marker) + " "
+	prefix := m.styles.MarkerStyle.Render(m.styles.Marker) + " "
+	// continuation is the two-space indent every row after the first gets —
+	// whether it is a wrapped continuation of one long logical line or a
+	// second logical line the user entered with Shift+Enter. Only the very
+	// first rendered row carries the marker, matching RenderUserMessage's
+	// own convention for the same text once it is echoed into the
+	// transcript (transcript.go, resultIndent) and
+	// docs/claude-code-reference.md §2's resize-60.txt citation (`❯ Use the
+	// Edit tool …` then `  Do not explain.`, no repeated marker). It happens
+	// to be the same width as the marker prefix (markerColumns), since a
+	// single-cell marker plus its trailing space is two columns.
+	continuation := strings.Repeat(" ", m.markerColumns())
 	empty := ta.Value() == ""
 
 	out := make([]string, 0, len(body)+2)
@@ -61,7 +72,11 @@ func (m Model) View(width int) []string {
 		} else {
 			line = fitWidth(line, inner)
 		}
-		out = append(out, prefix+line)
+		if i == 0 {
+			out = append(out, prefix+line)
+		} else {
+			out = append(out, continuation+line)
+		}
 	}
 	out = append(out, m.rule(width, below))
 	return out
@@ -114,14 +129,17 @@ func (m Model) scrollHints(ta interface {
 }
 
 // splicePlaceholder splices the dim placeholder into an empty input's sole
-// content line, after the (hardware, invisible-in-the-string) cursor —
-// ported from BorderedEditor.placeholderLine (app.ts:208-214). Because this
-// package uses the hardware cursor rather than pi-tui's inline cursor
-// block, one blank cell stands where that block sits in pi-tui's output
-// (the hardware cursor is parked on it) and the placeholder follows, so
-// the glass reads the same as the TS oracle's.
+// content line, right after the marker-and-space prefix View has already
+// added — ported from BorderedEditor.placeholderLine (app.ts:208-214), with
+// one deviation named in doc.go: because this package uses the hardware
+// cursor (SetVirtualCursor(false)) rather than pi-tui's inline cursor
+// block, there is no inline cell to splice after, so the placeholder starts
+// immediately, giving `❯ Try "how do I log an error?"` — one space after
+// the marker, matching startup-default-home.txt row 9 — instead of the
+// extra blank cell an earlier pass here left in place for the inline-cursor
+// layout pi-tui uses but this package does not.
 func (m Model) splicePlaceholder(line string, inner int) string {
-	trimmed := strings.TrimRight(line, " ") + " "
+	trimmed := strings.TrimRight(line, " ")
 	room := inner - ansi.StringWidth(trimmed)
 	if room < 0 {
 		room = 0

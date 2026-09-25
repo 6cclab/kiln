@@ -85,7 +85,9 @@ func (r *Router) Route(msg tea.KeyPressMsg) bool {
 	}
 
 	switch msg.String() {
-	case "ctrl+r":
+	case "ctrl+o":
+		// Verbose transcript toggle (docs/claude-code-reference.md §3;
+		// Ctrl+R is not the expand key).
 		r.actions.ToggleExpanded()
 		return true
 
@@ -111,7 +113,10 @@ func (r *Router) Route(msg tea.KeyPressMsg) bool {
 		} else {
 			r.actions.ClearInput()
 		}
-		r.actions.Hint("press ctrl+c again to exit")
+		// Casing matches the mode line's own replacement text
+		// (docs/claude-code-reference.md §2, ctrl-c-hint.txt): "Press
+		// Ctrl-C again to exit", not the sentence-case "press ctrl+c".
+		r.actions.Hint("Press Ctrl-C again to exit")
 		return true
 
 	case "ctrl+d":

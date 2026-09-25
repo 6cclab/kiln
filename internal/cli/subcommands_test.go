@@ -132,7 +132,7 @@ func TestParse_UnknownFlag(t *testing.T) {
 
 func TestVersion_Prints(t *testing.T) {
 	var stdout bytes.Buffer
-	if code := Version(&stdout); code != 0 {
+	if code := VersionCmd(&stdout); code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
 	if strings.TrimSpace(stdout.String()) == "" {

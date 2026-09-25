@@ -34,8 +34,10 @@ type pendingPermission struct {
 }
 
 type pendingPlan struct {
-	plan  string
-	reply chan PlanReply
+	plan     string
+	path     string
+	reply    chan PlanReply
+	selected int // 0..2, the highlighted option row
 }
 
 // PromptChoice is the tool-permission answer, mirroring
@@ -90,10 +92,12 @@ func (p *PromptState) AskTool(req PermissionRequest) chan PromptChoice {
 	return reply
 }
 
-// AskPlan arms a plan-approval prompt.
-func (p *PromptState) AskPlan(plan string) chan PlanReply {
+// AskPlan arms a plan-approval prompt. path is the plan file's location
+// (deliverable 7: the harness writes it to ~/.harness/plans/<slug>.md),
+// shown on the prompt's last row.
+func (p *PromptState) AskPlan(plan, path string) chan PlanReply {
 	reply := make(chan PlanReply, 1)
-	p.plan = &pendingPlan{plan: plan, reply: reply}
+	p.plan = &pendingPlan{plan: plan, path: path, reply: reply}
 	p.feedback = nil
 	return reply
 }
@@ -198,15 +202,48 @@ func (p *PromptState) handlePlanKey(msg tea.KeyPressMsg) bool {
 	}
 
 	switch strings.ToLower(msg.String()) {
-	case "1", "y", "enter":
+	case "up", "k":
+		if p.plan.selected > 0 {
+			p.plan.selected--
+		}
+		return true
+	case "down", "j":
+		if p.plan.selected < 2 {
+			p.plan.selected++
+		}
+		return true
+	case "1", "y":
 		p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "acceptEdits"})
 		return true
 	case "2":
 		p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "manual"})
 		return true
-	case "3", "n", "esc":
+	case "3":
+		// Move to "Tell the model what to change"; shift+tab (or enter on
+		// it) opens the feedback field (plan-keep-planning.txt: ❯ on 3,
+		// no field yet).
+		p.plan.selected = 2
+		return true
+	case "n", "esc":
 		f := ""
 		p.feedback = &f
+		return true
+	case "shift+tab":
+		if p.plan.selected == 2 {
+			f := ""
+			p.feedback = &f
+		}
+		return true
+	case "enter":
+		switch p.plan.selected {
+		case 0:
+			p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "acceptEdits"})
+		case 1:
+			p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "manual"})
+		case 2:
+			f := ""
+			p.feedback = &f
+		}
 		return true
 	default:
 		return true
@@ -247,13 +284,23 @@ func (p *PromptState) handlePlanFeedbackKey(msg tea.KeyPressMsg) bool {
 
 // Render renders whichever prompt is active, fitted to width. Empty when
 // nothing is up.
+//
+// This keeps app.go's existing single-argument call site working
+// (app.go:810, m.prompt.Render(width) — outside this pass's scope to
+// edit). RenderPlanApproval also accepts a height for its vertical-scroll
+// clipping (see its doc comment); this method always passes 0
+// (unbounded) since app.go does not thread a height through yet. Whoever
+// wires the plan-approval prompt into app.go for real should call
+// RenderPlanApproval directly with a real height, or this method should
+// grow a second (width, height int) form once app.go's call site can pass
+// one — flagged in the handback report rather than done silently.
 func (p *PromptState) Render(width int) []string {
 	if p.plan != nil {
 		feedback := ""
 		if p.feedback != nil {
 			feedback = *p.feedback
 		}
-		return RenderPlanApproval(p.plan.plan, width, p.feedback != nil, feedback)
+		return RenderPlanApproval(p.plan.plan, p.plan.path, width, 0, p.plan.selected, p.feedback != nil, feedback)
 	}
 	if p.pending == nil {
 		return nil
@@ -262,5 +309,35 @@ func (p *PromptState) Render(width int) []string {
 	if p.feedback != nil {
 		feedback = *p.feedback
 	}
-	return RenderPermissionPrompt(p.pending.request, p.cwd, width, p.feedback != nil, feedback)
+
+	req := p.pending.request
+	switch strings.ToLower(req.ToolName) {
+	case "bash":
+		cmd, _ := req.Args["command"].(string)
+		if cmd == "" {
+			cmd = req.PrimaryArg
+		}
+		desc, _ := req.Args["description"].(string)
+		if p.feedback != nil {
+			// No reference capture of the Bash prompt's feedback state;
+			// reuse the generic tool-feedback rendering rather than
+			// guessing a Bash-specific one. [chk].
+			return RenderPermissionPrompt(req, p.cwd, width, true, feedback)
+		}
+		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc}, width, 0)
+	case "edit":
+		return RenderEditPermissionPrompt(EditPermissionRequest{
+			Kind:  EditKindEdit,
+			Path:  SummarizeArg(req, p.cwd),
+			Hunks: diffHunksFromEditFile(p.cwd, req.Args),
+		}, width, 0, p.feedback != nil, feedback)
+	case "write":
+		return RenderEditPermissionPrompt(EditPermissionRequest{
+			Kind:  EditKindWrite,
+			Path:  SummarizeArg(req, p.cwd),
+			Hunks: diffHunksFromWriteArgs(req.Args),
+		}, width, 0, p.feedback != nil, feedback)
+	default:
+		return RenderPermissionPrompt(req, p.cwd, width, p.feedback != nil, feedback)
+	}
 }

@@ -37,8 +37,18 @@ type Settings struct {
 	Model       string
 	EffortLevel string
 	Env         map[string]string
+	// StatusLine is the configured status line command, nil when unset.
+	StatusLine *StatusLineConfig
 	// LoadedFrom records which scopes actually contributed, for diagnostics.
 	LoadedFrom []paths.Scope
+}
+
+// StatusLineConfig is Claude Code's settings.json "statusLine" object: a
+// command whose stdout is rendered below the input box. Type is "command".
+type StatusLineConfig struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+	Padding *int   `json:"padding,omitempty"`
 }
 
 type rawPermissions struct {
@@ -53,6 +63,7 @@ type rawSettings struct {
 	Model       string            `json:"model"`
 	EffortLevel string            `json:"effortLevel"`
 	Env         map[string]string `json:"env"`
+	StatusLine  *StatusLineConfig `json:"statusLine"`
 }
 
 // LoadOptions configures LoadSettings.
@@ -127,6 +138,9 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		}
 		if raw.EffortLevel != "" {
 			merged.EffortLevel = raw.EffortLevel
+		}
+		if raw.StatusLine != nil && raw.StatusLine.Command != "" {
+			merged.StatusLine = raw.StatusLine
 		}
 		if raw.Env != nil {
 			if merged.Env == nil {
@@ -266,7 +280,7 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 		}
 		return Deny
 	case ModeAcceptEdits:
-		if toolName == "edit" || toolName == "write" {
+		if toolName == "edit" || toolName == "write" || ReadOnly[toolName] {
 			return Allow
 		}
 		return Ask
@@ -277,6 +291,13 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 		// workspace boundary enforced separately by the gate.
 		return Allow
 	case ModeManual:
+		// Read-only tools never prompt, as Claude Code's Read/Glob/Grep
+		// never do (docs/claude-code-reference.md §3: read-only calls are
+		// grouped into "Read N files" without a permission step). The gate's
+		// workspace boundary still asks about paths outside the roots.
+		if ReadOnly[toolName] {
+			return Allow
+		}
 		return Ask
 	default:
 		return Ask

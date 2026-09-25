@@ -1,14 +1,20 @@
-⏺ harness — faux/faux-1
-  Type / for commands, @ to reference a file, or just ask.
+█ ▄▀  █  █    █▄ █
+█▀▄   █  █    █▀▄█
+█ ▀▄  █  █▄▄  █  █
+dev · coding agent
 
-❯ /model
+<cwd>…
 
-          ╭──────────────────────────────────────────────────────────────────────────────╮
-          │Model                                                                         │
-          │──────────────────────────────────────────────────────────────────────────────│
-          │current    faux/faux-1                                                        │
-          │                                                                              │
-          │▶ faux/faux-1  ←  128.0k · medium · 94.8k usable                              │
-          │                                                                              │
-          │enter select   ↑↓ move   esc close                                            │
-          ╰──────────────────────────────────────────────────────────────────────────────╯
+<cwd>…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔
+   Select model
+   Switch between models. Your pick becomes the default for new sessions. For other names, specify
+   with --model.
+
+   ❯ 1. faux/faux-1 ✔  128.0k context · medium tier
+
+   ◐ Medium effort ←/→ to adjust
+
+   Enter to set as default · s to use this session only · Esc to cancel

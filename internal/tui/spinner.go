@@ -16,6 +16,10 @@ type SpinnerState struct {
 	// label is the turn's current gerund; baseLabel is what it resets to.
 	label     string
 	baseLabel string
+	// thinking and effort drive RenderSpinner's suffix before tokens
+	// start flowing: "(Ns · thinking with <effort> effort)".
+	thinking bool
+	effort   string
 }
 
 // Start begins the spinner for a new turn, picking a gerund from seed.
@@ -26,6 +30,8 @@ func (s *SpinnerState) Start(seed int) {
 	s.startedAt = time.Now()
 	s.label = PickLabel(seed)
 	s.baseLabel = s.label
+	s.thinking = false
+	s.effort = ""
 }
 
 // Stop ends the spinner.
@@ -60,6 +66,18 @@ func (s *SpinnerState) Tokens() int {
 	return s.tokens
 }
 
+// Label returns the spinner's current gerund, for PastTense at turn end.
+func (s *SpinnerState) Label() string {
+	return s.label
+}
+
+// SetThinking marks whether the turn is in a reasoning phase (drives the
+// "thinking with <effort> effort" suffix) and the effort label to show.
+func (s *SpinnerState) SetThinking(thinking bool, effort string) {
+	s.thinking = thinking
+	s.effort = effort
+}
+
 // Busy reports whether a turn is in flight.
 func (s *SpinnerState) Busy() bool {
 	return s.busy
@@ -86,6 +104,8 @@ func (s *SpinnerState) Render(width int, now time.Time) []string {
 		Frame:          s.frame,
 		Label:          s.label,
 		ElapsedSeconds: elapsedSeconds,
+		Thinking:       s.thinking,
+		Effort:         s.effort,
 		Tokens:         tokens,
 	})
 	return []string{FitStatus(line, width)}

@@ -36,9 +36,9 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(tmp)
 
-	harnessBin = filepath.Join(tmp, "harness")
-	if out, err := exec.Command("go", "build", "-o", harnessBin, "github.com/andrepato/harness/cmd/harness").CombinedOutput(); err != nil {
-		panic("harness e2e: build cmd/harness: " + err.Error() + "\n" + string(out))
+	harnessBin = filepath.Join(tmp, "kiln")
+	if out, err := exec.Command("go", "build", "-o", harnessBin, "github.com/andrepato/harness/cmd/kiln").CombinedOutput(); err != nil {
+		panic("kiln e2e: build cmd/kiln: " + err.Error() + "\n" + string(out))
 	}
 
 	fauxBin = filepath.Join(tmp, "faux")
