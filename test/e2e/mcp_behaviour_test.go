@@ -351,72 +351,26 @@ const mcpEchoOnlyScript = `models:
     - text: "ok"
 `
 
-// TestMCP_PostureIndexSizing was specified (this task's item 7) to compare
-// a "compact posture index" Tools-list shape on faux-2 (32k) against "full
-// JSON schemas" on faux-1 (128k). That premise does not hold, verified by
-// reading the source, not assumed -- and the exact same gap is
-// independently documented by test/e2e/budget_behaviour_test.go's
-// TestBudget_ToolStrategyPerWindow, written by a concurrent agent on this
-// same task, which this test does not duplicate:
-//
-//   - budget.StrategyForWindow (internal/budget/tier.go:82-91) picks the
-//     most generous strategy whose measured cost fits 20% of the context
-//     window (tier.go:76 toolBudgetShare=0.2). Measured costs (tier.go:61-67):
-//     posture-index 1,286 tokens, full-index 7,597, full-schemas 31,897.
-//     faux-1's window is 128,000 (internal/provider/faux/faux.go:59):
-//     ceiling 25,600 -- full-schemas' 31,897 does NOT fit, full-index's
-//     7,597 does, so faux-1 resolves to full-index, not full-schemas.
-//     faux-2's window is 32,768 (faux.go:74): ceiling 6,553.6 -- full-index's
-//     7,597 does not fit, posture-index's 1,286 does, so faux-2 resolves to
-//     posture-index. Reaching full-schemas needs a window of at least
-//     31,897/0.2 = 159,485; neither faux model has one.
-//   - internal/mcp/gating.go's ActiveToolNames (gating.go:182-201) only
-//     bypasses gating for StrategyFullSchemas; full-index and
-//     posture-index gate identically (tool_search + resident + admitted).
-//     So the Tools array offered to the model excludes ungated MCP tools
-//     entirely on BOTH faux-1 and faux-2 -- there is no "compact schema"
-//     shape inside the Tools array on either tier; a tool is either absent
-//     (gated) or present with its full schema (admitted).
-//   - The textual posture index (what "compact index" actually means here)
-//     is internal/mcp/gating.go's IndexPromptText/BuildIndex, embedded into
-//     the system prompt by internal/cli/chat.go:439-445's buildMCPExtras,
-//     which always scopes it via scopedMCPTools(mcpTools, activePosture) --
-//     unconditionally, never consulting strategy. So full-index and
-//     posture-index produce the IDENTICAL index text today; the "full-index
-//     indexes every server" behaviour tier.go's own doc comment (tier.go:26-28)
-//     describes is not implemented at this call site. This is a real gap,
-//     not a test bug -- see TestBudget_ToolStrategyPerWindow's doc comment
-//     for the same finding, reached independently.
-//
-// Given that, this test asserts what IS true and adds a check the sibling
-// test explicitly says it could not make (it compares two independent faux
-// servers' Systems as strings; this test reads the raw Tools field via
-// srv.Requests(), which the sibling test's helper does not expose): on
-// both faux-1 and faux-2, with posture "all" (so the fixture server is in
-// scope), the first request's Tools array contains "tool_search" but no
-// "mcp__fixture__*" entry (proving both tiers gate identically), and the
-// system prompt's <available_tools> index lists all 4 fixture tools
-// (echo, slow, fail, big; gating.go's BuildIndex emits one line per tool)
-// -- identically on both tiers, reinforcing the sibling test's finding
-// with a second, independent measurement (exact tool count, not just tool
-// presence as a substring).
+// TestMCP_PostureIndexSizing proves posture-index and full-index differ in
+// what they index. The fixture is registered under the server name
+// "grafana", which the default "coding" posture excludes: faux-1
+// (full-index) lists its four tools in the system prompt and tool_search
+// stays present; faux-2 (posture-index) lists none. Both tiers still gate
+// every MCP tool behind tool_search (no MCP schema in the first request's
+// Tools). Break to verify: make IndexScope return the posture for
+// full-index.
 func TestMCP_PostureIndexSizing(t *testing.T) {
 	fixture := mcpBuildFixture(t)
-	cfg := mcpWriteConfig(t, map[string][]string{"fixture": {fixture}})
+	cfg := mcpWriteConfig(t, map[string][]string{"grafana": {fixture}})
 
-	run := func(model string) (tools []string, system string) {
+	run := func(model string) ([]string, string) {
 		addr, srv := startFaux(t, mcpEchoOnlyScript)
 		home, sessDir := scratchHome(t)
 		proj := scratchProject(t)
 		env := baseEnv(home, sessDir, addr)
 		env["HARNESS_MODEL"] = model
-		env["HARNESS_POSTURE"] = "all"
-		res := runHarness(t, proj, env,
-			"-p", "hello",
-			"--output-format", "text",
-			"--permission-mode", "dontAsk",
-			"--strict-mcp-config", "--mcp-config", cfg,
-		)
+		res := runHarness(t, proj, env, "-p", "hello", "--output-format", "text", "--permission-mode", "dontAsk",
+			"--strict-mcp-config", "--mcp-config", cfg)
 		if res.Code != 0 {
 			t.Fatalf("model %s: exit code %d, stderr=%s", model, res.Code, res.Stderr)
 		}
@@ -424,12 +378,12 @@ func TestMCP_PostureIndexSizing(t *testing.T) {
 		if len(reqs) == 0 {
 			t.Fatalf("model %s: faux recorded no requests", model)
 		}
+		var tools []string
 		for _, ts := range reqs[0].Tools {
 			tools = append(tools, ts.Name)
 		}
 		return tools, reqs[0].System
 	}
-
 	tools1, sys1 := run("faux/faux-1")
 	tools2, sys2 := run("faux/faux-2")
 
@@ -437,31 +391,24 @@ func TestMCP_PostureIndexSizing(t *testing.T) {
 		label string
 		tools []string
 	}{{"faux-1 (full-index)", tools1}, {"faux-2 (posture-index)", tools2}} {
-		var sawToolSearch bool
+		sawSearch := false
 		for _, name := range tc.tools {
-			if name == "tool_search" {
-				sawToolSearch = true
-			}
-			if strings.HasPrefix(name, "mcp__fixture__") {
+			if strings.HasPrefix(name, "mcp__") {
 				t.Errorf("%s: first request's Tools already offers %q; expected it gated behind tool_search on both tiers", tc.label, name)
 			}
+			if name == "tool_search" {
+				sawSearch = true
+			}
 		}
-		if !sawToolSearch {
-			t.Errorf("%s: first request's Tools has no tool_search entry; want it present since MCP tools are gated on both tiers: %v", tc.label, tc.tools)
+		if !sawSearch {
+			t.Errorf("%s: first request's Tools has no tool_search entry: %v", tc.label, tc.tools)
 		}
 	}
-
-	fixtureLineRe := regexp.MustCompile(`mcp__fixture__(echo|slow|fail|big):`)
-	count1 := len(fixtureLineRe.FindAllString(sys1, -1))
-	count2 := len(fixtureLineRe.FindAllString(sys2, -1))
-	if count1 != 4 {
-		t.Errorf("faux-1 system prompt indexes %d of the fixture's 4 tools, want 4:\n%s", count1, sys1)
+	if count := strings.Count(sys1, "mcp__grafana__"); count != 4 {
+		t.Errorf("full-index (faux-1) indexes %d grafana tools, want 4:\n%s", count, sys1)
 	}
-	if count2 != 4 {
-		t.Errorf("faux-2 system prompt indexes %d of the fixture's 4 tools, want 4:\n%s", count2, sys2)
-	}
-	if count1 != count2 {
-		t.Errorf("full-index (faux-1, %d) and posture-index (faux-2, %d) index a different number of fixture tools; if this now differs, the gap documented in this test's doc comment may have been fixed -- update the comment", count1, count2)
+	if count := strings.Count(sys2, "mcp__grafana__"); count != 0 {
+		t.Errorf("posture-index (faux-2) indexes %d grafana tools, want 0 (coding posture excludes grafana):\n%s", count, sys2)
 	}
 }
 

@@ -437,11 +437,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// server tool, the posture index in the prompt) are built from a tool
 	// list so they can be rebuilt once the background connect finishes.
 	buildMCPExtras := func(mcpTools []mcpgate.McpTool) ([]*tool.Tool, string) {
-		extras := []*tool.Tool{tools.ToolSearchTool(mcpTools, activePosture, gateState, onAdmit)}
+		scope := mcpSess.indexScope()
+		extras := []*tool.Tool{tools.ToolSearchTool(mcpTools, scope, gateState, onAdmit)}
 		for _, t := range mcpTools {
 			extras = append(extras, mcpgate.ToHarnessTool(hub, t))
 		}
-		return extras, mcpgate.IndexPromptText(scopedMCPTools(mcpTools, activePosture))
+		return extras, mcpgate.IndexPromptText(scopedMCPTools(mcpTools, scope))
 	}
 	todoWrite := tools.TodoTool(todos.Set)
 

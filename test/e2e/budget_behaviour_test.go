@@ -217,69 +217,35 @@ func TestBudget_MemoryDroppedLeastSpecificFirst(t *testing.T) {
 	}
 }
 
-// TestBudget_ToolStrategyPerWindow checks internal/budget.StrategyForWindow
-// picks full-index for faux-1's 128k window and posture-index for faux-2's
-// 32k window (both fall short of full-schemas' fixed 31,897-token measured
-// cost regardless of how many tools are actually registered -- the cost
-// table is a measurement against the real 165-tool catalog, not a function
-// of this test's tool count).
-//
-// It then documents what that strategy choice actually changes in a
-// request, which is NOT the Tools list's size: internal/mcp/gating.go's
-// ActiveToolNames only diverges from "tool_search plus admitted tools" when
-// the strategy is full-schemas (see its own doc comment: "posture-index and
-// full-index both start gated ... differ in how much of the catalog the
-// index describes, which is handled by IndexPromptText, not here"). So the
-// recorded request's Tools count is asserted equal between faux-1 and
-// faux-2 here, not different -- the difference (if any) lives in the System
-// prompt's <available_tools> index text, which is itself scoped by posture
-// in internal/cli/chat.go regardless of strategy (mcp.go's buildMCPExtras
-// calls scopedMCPTools(mcpTools, activePosture) unconditionally, never
-// consulting full-index vs posture-index). This is a real gap against the
-// plan's assumption, not a test bug: full-index and posture-index are
-// distinct budget.ToolStrategy values with no distinct code path today.
-// Desired behaviour: full-index should list every configured server's tools
-// in the index regardless of posture, and posture-index should list only
-// in-posture servers, per gating.go's own measured-cost comment.
-//
-// Proved able to fail: temporarily changed the faux-1 assertion's wanted
-// strategy from StrategyFullIndex to StrategyPostureIndex -- went red with
-// "faux-1 (128k) tier strategy = full-index, want full-index" -- confirming
-// the assertion is checked at all -- then reverted. (Not touching
-// budget/tier.go itself: this task owns only its own test files.)
+// TestBudget_ToolStrategyPerWindow proves the tool strategy changes what
+// the model is offered. An MCP server named "grafana" (known to the
+// built-in postures and excluded from the default "coding" one) is wired
+// to the fixture binary. On faux-1 (128k, full-index) the system prompt
+// indexes every server, grafana included; on faux-2 (32k, posture-index)
+// the posture keeps grafana out (internal/mcp/gating.go IndexScope). Break
+// to verify: make IndexScope return the posture for every strategy.
 func TestBudget_ToolStrategyPerWindow(t *testing.T) {
-	tier1 := budget.TierForWindow(128000)
-	tier2 := budget.TierForWindow(32768)
+	tier1 := budget.TierForWindow(128_000)
 	if tier1.ToolStrategy != budget.StrategyFullIndex {
 		t.Fatalf("faux-1 (128k) tier strategy = %v, want full-index", tier1.ToolStrategy)
 	}
+	tier2 := budget.TierForWindow(32_768)
 	if tier2.ToolStrategy != budget.StrategyPostureIndex {
 		t.Fatalf("faux-2 (32k) tier strategy = %v, want posture-index", tier2.ToolStrategy)
 	}
 
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
+	mcpConfig := budgetBuildMCPFixtureConfigNamed(t, "grafana")
 
-	mcpConfig := budgetBuildMCPFixtureConfig(t)
+	sys1 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "", nil, "--mcp-config", mcpConfig)
+	sys2 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-2", "", nil, "--mcp-config", mcpConfig)
 
-	sys1 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "",
-		map[string]string{"HARNESS_POSTURE": "all"}, "--mcp-config", mcpConfig)
-	sys2 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-2", "",
-		map[string]string{"HARNESS_POSTURE": "all"}, "--mcp-config", mcpConfig)
-
-	// Documented current behaviour: neither index strategy puts MCP tool
-	// schemas on the wire (only full-schemas does), so tool_search shows up
-	// in the System's residual tool listing/behaviour the same way in both
-	// cases. We can't directly read the Tools list two different ways here
-	// (both runs use fresh faux servers), so the check is: both systems
-	// mention the fixture's index (posture "all" includes the fixture
-	// server), i.e. the gap described above -- full-index and
-	// posture-index produce the SAME index scope today, not a different
-	// one, because scopedMCPTools never looks at strategy.
-	sawFixture1 := strings.Contains(sys1, "mcp__fixture__")
-	sawFixture2 := strings.Contains(sys2, "mcp__fixture__")
-	if sawFixture1 != sawFixture2 {
-		t.Errorf("full-index vs posture-index unexpectedly differ in whether the fixture server is indexed (faux-1=%v faux-2=%v); if this now fails, the gap described in this test's doc comment may have been fixed -- update the comment and this assertion to check the actual index difference instead of equality", sawFixture1, sawFixture2)
+	if !strings.Contains(sys1, "mcp__grafana__") {
+		t.Errorf("full-index (faux-1) system prompt does not index the grafana server:\n%s", sys1)
+	}
+	if strings.Contains(sys2, "mcp__grafana__") {
+		t.Errorf("posture-index (faux-2) system prompt indexes grafana, which the coding posture excludes:\n%s", sys2)
 	}
 }
 
@@ -288,13 +254,19 @@ func TestBudget_ToolStrategyPerWindow(t *testing.T) {
 // as test/e2e/mcp_tui_test.go's own fixture build) as one server, and
 // returns the config file's path.
 func budgetBuildMCPFixtureConfig(t *testing.T) string {
+	return budgetBuildMCPFixtureConfigNamed(t, "fixture")
+}
+
+// budgetBuildMCPFixtureConfigNamed registers the fixture binary under the
+// given server name, so a test can pick a name the built-in postures know.
+func budgetBuildMCPFixtureConfigNamed(t *testing.T, name string) string {
 	t.Helper()
 	fixture := filepath.Join(t.TempDir(), "mcpfixture")
 	if out, err := exec.Command("go", "build", "-o", fixture, "../../cmd/mcpfixture").CombinedOutput(); err != nil {
 		t.Fatalf("build mcpfixture: %v\n%s", err, out)
 	}
 	cfg := filepath.Join(t.TempDir(), "mcp.json")
-	cfgJSON := fmt.Sprintf(`{"mcpServers":{"fixture":{"command":%q}}}`, fixture)
+	cfgJSON := fmt.Sprintf(`{"mcpServers":{%q:{"command":%q}}}`, name, fixture)
 	if err := os.WriteFile(cfg, []byte(cfgJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}

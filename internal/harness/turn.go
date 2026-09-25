@@ -377,6 +377,12 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 	retry := l.h.opts.Retry
 	var lastErr error
 	for attempt := 1; attempt <= retry.MaxAttempts; attempt++ {
+		if attempt > 1 && responseEntryID != "" {
+			// The cut attempt's frames are not this response: a crash-resume
+			// replaying the pending list would otherwise stitch two partial
+			// answers together.
+			_, _ = l.h.opts.Storage.Commit([]session.Write{session.DeleteListWrite(session.PendingAssistantFrames(operationID, responseEntryID))})
+		}
 		events, wait := p.Stream(ctx, m, transcript, opts)
 		for ev := range events {
 			if responseEntryID != "" && ev.Type != msg.EventStart {

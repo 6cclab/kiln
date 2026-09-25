@@ -61,6 +61,22 @@ func PostureByName(name string) (Posture, bool) {
 	return Posture{}, false
 }
 
+// IndexScope is the posture that actually scopes indexing and admission
+// under strategy. The posture is what makes posture-index cheap: it leaves
+// whole servers out of the index. full-index and full-schemas exist for
+// windows that can afford every server, so under them the posture does not
+// narrow anything (docs in internal/budget/tier.go: "full-index indexes
+// every server"). Before this the two strategies indexed the same set.
+func IndexScope(posture Posture, strategy budget.ToolStrategy) Posture {
+	switch strategy {
+	case budget.StrategyFullIndex, budget.StrategyFullSchemas:
+		all, _ := PostureByName("all")
+		return all
+	default:
+		return posture
+	}
+}
+
 // InPosture reports whether tool belongs to active's servers.
 //
 // A server that no built-in posture names at all is in scope for every

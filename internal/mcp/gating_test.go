@@ -244,3 +244,20 @@ func BenchmarkToolIndexRendering(b *testing.B) {
 		_ = mcpgate.BuildIndex(tools)
 	}
 }
+
+// TestIndexScope_FullStrategiesIgnorePosture guards the strategy split:
+// posture-index keeps the posture, full-index and full-schemas widen it to
+// every server. Break to verify: return posture unchanged for full-index.
+func TestIndexScope_FullStrategiesIgnorePosture(t *testing.T) {
+	coding, _ := mcpgate.PostureByName("coding")
+	grafana := mcpgate.McpTool{Server: "grafana", Name: "query"}
+	if mcpgate.InPosture(grafana, mcpgate.IndexScope(coding, budget.StrategyPostureIndex)) {
+		t.Error("posture-index must keep grafana out of the coding posture")
+	}
+	if !mcpgate.InPosture(grafana, mcpgate.IndexScope(coding, budget.StrategyFullIndex)) {
+		t.Error("full-index must index every server")
+	}
+	if !mcpgate.InPosture(grafana, mcpgate.IndexScope(coding, budget.StrategyFullSchemas)) {
+		t.Error("full-schemas must include every server")
+	}
+}

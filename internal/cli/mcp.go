@@ -136,7 +136,18 @@ func (m *mcpSession) activeToolNames() []string {
 	m.mu.Lock()
 	tools, strategy := m.tools, m.tier.ToolStrategy
 	m.mu.Unlock()
-	return mcpgate.ActiveToolNames(tools, m.posture, strategy, m.state, m.resident)
+	return mcpgate.ActiveToolNames(tools, m.indexScope(), strategy, m.state, m.resident)
+}
+
+// indexScope is the posture that scopes the index, tool_search and
+// admission under the current tier's strategy (mcpgate.IndexScope): the
+// configured posture on posture-index, every server on the full
+// strategies. Read fresh each time because /model can change the tier.
+func (m *mcpSession) indexScope() mcpgate.Posture {
+	m.mu.Lock()
+	strategy := m.tier.ToolStrategy
+	m.mu.Unlock()
+	return mcpgate.IndexScope(m.posture, strategy)
 }
 
 // regate recomputes the active tool set and pushes it onto the lane. A nil
