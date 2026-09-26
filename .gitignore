@@ -23,3 +23,4 @@ eval/results/runs/
 # kiln QA campaign: per-run screenshots and screen dumps are local evidence;
 # findings (qa/findings) and scenarios (qa/scenarios) are committed.
 qa/runs/
+__pycache__/
