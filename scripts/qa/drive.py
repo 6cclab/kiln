@@ -228,11 +228,107 @@ class TerminalApp:
             self.tty, str(cols), str(rows))
 
     def text(self):
-        return self._tab("     return contents of t")
+        # Not `contents of t`: inside `repeat with t in ...` that dereferences
+        # the loop variable and returns "tab 1 of window id N". `history` is
+        # the tab's whole buffer (scrollback plus the visible screen).
+        return self._tab("     return history of t")
 
     def close(self):
         try:
             self._tab('     close w saving no\n     return "ok"')
+        except DriveError:
+            pass
+
+
+class Warp:
+    """Warp has no AppleScript dictionary and draws with the GPU, so:
+    windows open through its URL scheme; geometry goes through System
+    Events; the shell commands that size-probe and start kiln are typed into
+    Warp's own command input with Orca before kiln exists; and screen text
+    comes from OCR of a screenshot (approximate, so checks are advisory)."""
+
+    bundle = "dev.warp.Warp-Stable"
+    text_is_rows = False
+
+    def __init__(self, work):
+        self.work = work
+        self.wid = None
+        self.tty = "warp"
+        self.cell = None
+        self.base = None
+
+    def _type(self, text):
+        # Re-activate and pause before each action: right after typing, Warp's
+        # command suggestions can hold focus long enough for an immediate
+        # Return to be refused as window_not_focused.
+        for action, flag, arg in (("type-text", "--text", text), ("press-key", "--key", "Return")):
+            self.activate()
+            time.sleep(0.4)
+            d = orca(action, "--app", self.bundle, "--window-id", str(self.wid), flag, arg)
+            if not d.get("ok"):
+                raise DriveError("warp %s failed: %s" % (action, json.dumps(d.get("error"))[:200]))
+
+    def _set_size(self, w, h):
+        osa('on run argv\n tell application "System Events" to tell process "Warp"\n'
+            '  set size of front window to {(item 1 of argv as integer), (item 2 of argv as integer)}\n'
+            ' end tell\nend run', str(int(w)), str(int(h)))
+        time.sleep(0.6)
+
+    def _probe(self):
+        f = self.work / "warp-size.txt"
+        f.unlink(missing_ok=True)
+        self._type("stty size > %s" % shlex.quote(str(f)))
+        for _ in range(30):
+            if f.exists() and f.read_text().strip():
+                rows, cols = (int(v) for v in f.read_text().split())
+                return cols, rows
+            time.sleep(0.2)
+        raise DriveError("warp size probe produced nothing")
+
+    def launch(self, command, cols, rows):
+        before = set(orca_windows(self.bundle))
+        # The bare warp://action/new_window URL opens nothing; it needs a path.
+        run(["open", "warp://action/new_window?path=%s" % self.work])
+        self.wid = _new_window(self.bundle, before, timeout=15)
+        time.sleep(1.5)
+        self._set_size(1280, 800)
+        c1, r1 = self._probe()
+        self._set_size(1280 + 240, 800 + 160)
+        c2, r2 = self._probe()
+        if c2 == c1 or r2 == r1:
+            raise DriveError("warp calibration failed: %dx%d then %dx%d" % (c1, r1, c2, r2))
+        self.cell = (240.0 / (c2 - c1), 160.0 / (r2 - r1))
+        self.base = (1280, 800, c1, r1)
+        self.resize(cols, rows)
+        got = self._probe()
+        self.actual = got
+        self._type("clear; %s" % shlex.quote(command))
+
+    def activate(self):
+        osa('tell application "Warp" to activate\n'
+            'tell application "System Events" to tell process "Warp" to perform action "AXRaise" of front window')
+
+    def resize(self, cols, rows):
+        w0, h0, c0, r0 = self.base
+        self._set_size(w0 + (cols - c0) * self.cell[0] + 1, h0 + (rows - r0) * self.cell[1] + 1)
+
+    def text(self):
+        d = orca("get-app-state", "--app", self.bundle, "--window-id", str(self.wid))
+        src = (d.get("result") or {}).get("screenshot", {}).get("path")
+        if not src:
+            return ""
+        p = run([str(ROOT / "bin/qa-ocr"), src])
+        return p.stdout
+
+    def close(self):
+        # Orca's Command+W reports window_not_found on Warp; the window's own
+        # close button through System Events is reliable.
+        try:
+            self.activate()
+            time.sleep(0.3)
+            osa('tell application "System Events" to tell process "Warp" to '
+                'click (first button of front window whose subrole is "AXCloseButton")')
+            time.sleep(1)
         except DriveError:
             pass
 
@@ -274,7 +370,7 @@ def ensure_light_profile():
     time.sleep(2)  # iTerm2 picks dynamic profiles up asynchronously
 
 
-def make_terminal(name):
+def make_terminal(name, work):
     if name == "iterm-dark":
         return Iterm()
     if name == "iterm-light":
@@ -283,7 +379,9 @@ def make_terminal(name):
     if name == "terminal":
         return TerminalApp()
     if name == "warp":
-        raise DriveError("warp adapter not implemented yet")
+        if not (ROOT / "bin/qa-ocr").exists():
+            raise DriveError("warp needs bin/qa-ocr: swiftc -O -o bin/qa-ocr scripts/qa/ocr.swift")
+        return Warp(work)
     raise DriveError("unknown terminal %r" % name)
 
 
@@ -402,10 +500,12 @@ class Run:
             shlex.quote(str(proj)), exports, " ".join(shlex.quote(a) for a in kiln + self.directives["args"])))
         launcher.chmod(0o755)
 
-        self.term = make_terminal(self.terminal_name)
+        self.term = make_terminal(self.terminal_name, self.work)
         self.term.launch(str(launcher), self.cols, self.rows)
-        self.log("launched %s window=%s tty=%s size=%dx%d" % (
-            self.terminal_name, self.term.wid, self.term.tty, self.cols, self.rows))
+        actual = getattr(self.term, "actual", None)
+        self.log("launched %s window=%s tty=%s size=%dx%d%s" % (
+            self.terminal_name, self.term.wid, self.term.tty, self.cols, self.rows,
+            (" (measured %dx%d)" % actual) if actual else ""))
 
     def teardown(self):
         if self.term is not None:
@@ -457,7 +557,8 @@ class Run:
         for attempt in (1, 2):
             self.term.activate()
             time.sleep(0.15)
-            d = orca(action, "--app", self.term.bundle, "--window-id", str(self.term.wid), flag, arg)
+            d = orca(action, "--app", self.term.bundle, "--window-id", str(self.term.wid), flag, arg,
+                     *getattr(self.term, "input_flags", ()))
             if d.get("ok"):
                 return
             code = (d.get("error") or {}).get("code")
@@ -475,9 +576,12 @@ class Run:
 
     def screen(self):
         """Only the visible screen: the last `rows` lines of the buffer. Checks
-        must never match scrollback, where stale frames can live."""
-        lines = self.buffer().split("\n")
-        return "\n".join(lines[-self.rows:])
+        must never match scrollback, where stale frames can live. OCR text
+        (Warp) is already just what is visible."""
+        text = self.buffer()
+        if not getattr(self.term, "text_is_rows", True):
+            return text
+        return "\n".join(text.split("\n")[-self.rows:])
 
     def shot(self, name):
         self.shot_n += 1
@@ -546,8 +650,10 @@ class Run:
                 rx, _ = parse_regex(arg)
                 hit = bool(rx.search(self.screen()))
                 ok = hit if verb == "EXPECT" else not hit
-                self.expects.append({"line": lineno, "verb": verb, "pattern": rx.pattern, "ok": ok})
-                self.log("  -> %s" % ("pass" if ok else "FAIL"))
+                advisory = not getattr(self.term, "text_is_rows", True)
+                self.expects.append({"line": lineno, "verb": verb, "pattern": rx.pattern, "ok": ok,
+                                     "advisory": advisory})
+                self.log("  -> %s%s" % ("pass" if ok else "FAIL", " (ocr, advisory)" if advisory else ""))
             elif verb == "NOTE":
                 pass
             else:
@@ -558,7 +664,8 @@ class Run:
             "scenario": str(self.scenario), "terminal": self.terminal_name,
             "size": "%dx%d" % (self.cols, self.rows), "error": error,
             "expects": self.expects, "shots": self.shots,
-            "passed": error is None and all(e["ok"] for e in self.expects),
+            "text_source": "ocr" if not getattr(self.term, "text_is_rows", True) else "terminal",
+            "passed": error is None and all(e["ok"] for e in self.expects if not e.get("advisory")),
         }
         (self.out / "result.json").write_text(json.dumps(result, indent=1))
         (self.out / "run.log").write_text("\n".join(self.log_lines) + "\n")
