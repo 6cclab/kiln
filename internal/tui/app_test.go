@@ -47,10 +47,10 @@ func viewLines(m Model) []string {
 }
 
 // TestView_IdleFrame checks the frame composition order while idle: the
-// hint row above the editor's top rule, the editor frame, then exactly one
-// mode-line row at the end — no status row (docs/claude-code-reference.md
-// §1: "No status row by default. The bottom area is the input box and the
-// mode line only.").
+// editor frame, then exactly one status-line row at the end
+// (docs/kiln-design-handoff/README.md "Screen anatomy": the bottom area is
+// the input box and the one-row status line only — no hint row above it
+// any more).
 func TestView_IdleFrame(t *testing.T) {
 	m := newTestModel()
 	lines := viewLines(m)
@@ -59,35 +59,19 @@ func TestView_IdleFrame(t *testing.T) {
 		t.Fatalf("frame too short: %d lines", len(lines))
 	}
 	last := lines[len(lines)-1]
-	want := m.renderModeLine(m.contentWidth())
+	want := m.renderStatusRow(m.contentWidth())
 	if last != want {
-		t.Errorf("last row = %q, want the mode line %q", last, want)
+		t.Errorf("last row = %q, want the status row %q", last, want)
 	}
 	// Exactly one bottom row: the line above it must be the editor's own
 	// bottom rule, not a second status row.
 	if !isFullRule(lines[len(lines)-2]) {
-		t.Errorf("row above the mode line is not the editor's bottom rule: %q", lines[len(lines)-2])
+		t.Errorf("row above the status row is not the editor's bottom rule: %q", lines[len(lines)-2])
 	}
 
-	// The hint row (right-aligned effort indicator) sits directly above
-	// the editor's top rule.
-	topRuleIdx := -1
-	for i, l := range lines {
-		if isFullRule(l) {
-			topRuleIdx = i
-			break
-		}
-	}
-	if topRuleIdx < 1 {
-		t.Fatalf("could not find the editor's top rule (or nothing precedes it) in:\n%s", strings.Join(lines, "\n"))
-	}
-	if !strings.Contains(lines[topRuleIdx-1], "/effort") {
-		t.Errorf("row above the top rule = %q, want the effort hint", lines[topRuleIdx-1])
-	}
-
-	// No spinner row while idle: the first line is the hint row, not a
-	// spinner line.
-	if strings.Contains(lines[0], "esc to interrupt") {
+	// No spinner row while idle: the first line is the editor's top rule,
+	// not a spinner line.
+	if strings.Contains(lines[0], "esc to stop") {
 		t.Errorf("idle frame carries the busy hint: %q", lines[0])
 	}
 }
@@ -117,93 +101,46 @@ func TestView_SpinnerRowWhileBusy(t *testing.T) {
 	}
 }
 
-// TestView_BottomAreaHasNoStatusRow checks the old model/context/cost
-// status row is gone from the live frame: RenderStatus's own segments
-// (e.g. "ctx)", the git branch marker "⎇") never appear anywhere in a
-// freshly idle frame, even though FooterState/RenderStatus themselves
-// still exist for whatever still constructs a StatusState directly.
-func TestView_BottomAreaHasNoStatusRow(t *testing.T) {
-	m := newTestModel()
-	g := GitStatus{Branch: "main"}
-	m.footer.Apply(StatusPatch{Git: &g})
-	joined := strings.Join(viewLines(m), "\n")
-	if strings.Contains(joined, "ctx)") {
-		t.Errorf("frame still draws the context-window segment:\n%s", joined)
-	}
-	if strings.Contains(joined, "⎇") {
-		t.Errorf("frame still draws the git-branch segment:\n%s", joined)
-	}
-}
-
-// TestModeLine_ExactTextPerMode checks every mode's exact rendered text
-// against docs/kiln-design.md's status-line contract: a "●" lead-in,
+// TestStatusRow_ExactTextPerMode checks every mode's exact rendered label
+// against the kiln design handoff's status-line contract: a "●" lead-in,
 // coloured by mode (ask/manual dim, the auto-edit family green, plan
-// blue), followed by the same wording the mode-line always carried.
-func TestModeLine_ExactTextPerMode(t *testing.T) {
+// blue), followed by the mode label and the mode-cycle key.
+func TestStatusRow_ExactTextPerMode(t *testing.T) {
 	cases := []struct {
 		mode string
 		want string
 	}{
-		{"auto", "● auto mode on (shift+tab to cycle) · ← for agents"},
-		{"manual", "● manual mode on · ← for agents"},
-		{"acceptEdits", "● accept edits on (shift+tab to cycle)"},
-		{"plan", "● plan mode on (shift+tab to cycle)"},
-		{"bypassPermissions", "● bypass permissions on (shift+tab to cycle)"},
-		{"dontAsk", "● don't ask on (shift+tab to cycle)"},
+		{"auto", "auto-edit"},
+		{"manual", "ask before edits"},
+		{"acceptEdits", "auto-edit"},
+		{"plan", "plan only"},
+		{"bypassPermissions", "bypass permissions"},
+		{"dontAsk", "don't ask"},
 	}
 	for _, c := range cases {
 		m := newTestModel()
 		mode := c.mode
 		m.footer.Apply(StatusPatch{Mode: &mode})
-		// Text in the input does not affect the suffix (turn-edit.txt row
-		// 40 carries it with "commit thisd function" typed).
-		m.editor.SetValue("x")
-		got := ansiStrip(m.renderModeLine(200))
-		want := "  " + c.want
-		if got != want {
-			t.Errorf("mode %q: renderModeLine = %q, want %q", c.mode, got, want)
+		got := ansiStrip(m.renderStatusRow(200))
+		if !strings.Contains(got, "●") || !strings.Contains(got, c.want) || !strings.Contains(got, "⇧⇥") {
+			t.Errorf("mode %q: status row = %q, want it to contain %q, the mode dot and the cycle key", c.mode, got, c.want)
 		}
 	}
 }
 
-// TestModeLine_ForAgentsSuffixDroppedWhilePopupOpen checks the reference
-// rule for " · ← for agents": auto and manual carry it (mode-cycle.txt),
-// and it disappears while the autocomplete popup is open
-// (autocomplete-slash.txt row 36).
-func TestModeLine_ForAgentsSuffixDroppedWhilePopupOpen(t *testing.T) {
-	m := newTestModelWithRegistry()
-	mode := "auto"
-	m.footer.Apply(StatusPatch{Mode: &mode})
-
-	if got := ansiStrip(m.renderModeLine(200)); !strings.HasSuffix(got, "for agents") {
-		t.Errorf("idle: renderModeLine = %q, want the for-agents suffix", got)
-	}
-
-	for _, r := range "/mod" {
-		mi, _ := m.handleKey(charKey(r))
-		m = mi.(Model)
-	}
-	if m.popup == nil {
-		t.Fatal("expected a popup after typing /mod")
-	}
-	if got := ansiStrip(m.renderModeLine(200)); strings.HasSuffix(got, "for agents") {
-		t.Errorf("popup open: renderModeLine = %q, want no for-agents suffix", got)
-	}
-}
-
-// TestCtrlC_ReplacesModeLineForOneSecond drives Ctrl+C through handleKey
-// (real wiring, not a synthetic Router) and checks the mode line becomes
+// TestCtrlC_ReplacesStatusRowForOneSecond drives Ctrl+C through handleKey
+// (real wiring, not a synthetic Router) and checks the status row becomes
 // "Press Ctrl-C again to exit" (ctrl-c-hint.txt) until the scheduled
 // msgClearModeHint arrives, then is restored.
-func TestCtrlC_ReplacesModeLineForOneSecond(t *testing.T) {
+func TestCtrlC_ReplacesStatusRowForOneSecond(t *testing.T) {
 	m := newTestModel()
 	mode := "manual"
 	m.footer.Apply(StatusPatch{Mode: &mode})
 
 	mi, cmd := m.handleKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	m = mi.(Model)
-	if got := ansiStrip(m.renderModeLine(200)); got != "  Press Ctrl-C again to exit" {
-		t.Fatalf("mode line after ctrl+c = %q, want the Ctrl-C hint", got)
+	if got := ansiStrip(m.renderStatusRow(200)); got != "  Press Ctrl-C again to exit" {
+		t.Fatalf("status row after ctrl+c = %q, want the Ctrl-C hint", got)
 	}
 	if cmd == nil {
 		t.Fatal("ctrl+c did not return the hint-clearing Cmd")
@@ -216,54 +153,35 @@ func TestCtrlC_ReplacesModeLineForOneSecond(t *testing.T) {
 
 	m2, _ := m.Update(clear)
 	m = m2.(Model)
-	if got := ansiStrip(m.renderModeLine(200)); got == "  Press Ctrl-C again to exit" {
-		t.Fatalf("mode line still shows the Ctrl-C hint after msgClearModeHint: %q", got)
+	if got := ansiStrip(m.renderStatusRow(200)); got == "  Press Ctrl-C again to exit" {
+		t.Fatalf("status row still shows the Ctrl-C hint after msgClearModeHint: %q", got)
 	}
 }
 
-// TestHintRow_CtrlYAfterKillUntilNextKeystroke checks the top hint row
+// TestStatusRow_CtrlYAfterKillUntilNextKeystroke checks the status row
 // switches to "Ctrl+Y to paste deleted text" for exactly the frame right
 // after a Ctrl+K/Ctrl+U kill, and reverts on the very next keystroke
 // (mode-manual.txt row 8: "until the next keystroke").
-func TestHintRow_CtrlYAfterKillUntilNextKeystroke(t *testing.T) {
+func TestStatusRow_CtrlYAfterKillUntilNextKeystroke(t *testing.T) {
 	m := newTestModel()
 	m.width, m.height = 100, 30
 	m.editor.Focus()
 	m.editor.SetValue("hello")
 
-	if got := ansiStrip(m.hintRow(100)); !strings.Contains(got, "/effort") {
-		t.Fatalf("hint row before any kill = %q, want the effort hint", got)
+	if got := ansiStrip(m.renderStatusRow(100)); strings.Contains(got, "Ctrl+Y") {
+		t.Fatalf("status row before any kill = %q, want no Ctrl+Y hint", got)
 	}
 
 	mi, _ := m.handleKey(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
 	m = mi.(Model)
-	if got := strings.TrimSpace(ansiStrip(m.hintRow(100))); got != "Ctrl+Y to paste deleted text" {
-		t.Fatalf("hint row right after ctrl+k = %q, want the Ctrl+Y hint", got)
+	if got := strings.TrimSpace(ansiStrip(m.renderStatusRow(100))); got != "Ctrl+Y to paste deleted text" {
+		t.Fatalf("status row right after ctrl+k = %q, want the Ctrl+Y hint", got)
 	}
 
 	mi, _ = m.handleKey(charKey('!'))
 	m = mi.(Model)
-	if got := ansiStrip(m.hintRow(100)); strings.Contains(got, "Ctrl+Y") {
-		t.Fatalf("hint row survived a keystroke after the kill: %q", got)
-	}
-}
-
-// TestHintRow_OmittedWhenPromptOrPopupActive checks the task's explicit
-// "When the popup or a prompt is showing, the hint row is omitted."
-func TestHintRow_OmittedWhenPromptOrPopupActive(t *testing.T) {
-	m := newTestModelWithRegistry()
-	if got := m.hintRow(100); got == "" {
-		t.Fatalf("expected a hint row with no popup/prompt active")
-	}
-	for _, r := range "/mod" {
-		mi, _ := m.handleKey(charKey(r))
-		m = mi.(Model)
-	}
-	if m.popup == nil {
-		t.Fatal("expected a popup after typing /mod")
-	}
-	if got := m.hintRow(100); got != "" {
-		t.Errorf("hint row with popup active = %q, want empty", got)
+	if got := ansiStrip(m.renderStatusRow(100)); strings.Contains(got, "Ctrl+Y") {
+		t.Fatalf("status row survived a keystroke after the kill: %q", got)
 	}
 }
 
@@ -298,19 +216,21 @@ func TestShiftTab_BypassAndDontAskCycleIntoAuto(t *testing.T) {
 	}
 }
 
-// TestFooter_AlwaysTwoRows checks RenderStatus/FooterState always produce
-// exactly two rows, at a range of widths, busy or not.
-func TestFooter_AlwaysTwoRows(t *testing.T) {
+// TestFooter_AlwaysOneRowFittingWidth checks FooterState.RenderLine always
+// produces exactly one row that fits, at a range of widths, busy or not
+// (RenderLine itself does not vary with SetBusy any more — the busy hint
+// moved to the busy line — but the row must still fit at every width).
+func TestFooter_AlwaysOneRowFittingWidth(t *testing.T) {
 	f := NewFooterState(StatusState{ModelLabel: "m", ContextWindow: 32000, Mode: "manual", StartedAt: time.Unix(0, 0)})
 	for _, width := range []int{20, 40, 80, 117, 118, 144} {
 		for _, busy := range []bool{false, true} {
 			f.SetBusy(busy)
-			rows := f.Render(width)
-			if rows[0] == "" && rows[1] == "" {
-				t.Fatalf("width %d busy %v: both rows empty", width, busy)
+			row := f.RenderLine(width)
+			if row == "" {
+				t.Fatalf("width %d busy %v: row empty", width, busy)
 			}
-			if VisibleWidth(rows[0]) > width || VisibleWidth(rows[1]) > width {
-				t.Fatalf("width %d busy %v: row exceeds width: %q / %q", width, busy, rows[0], rows[1])
+			if VisibleWidth(row) > width {
+				t.Fatalf("width %d busy %v: row exceeds width: %q", width, busy, row)
 			}
 		}
 	}
@@ -543,8 +463,8 @@ func TestFullscreen_AppendFollowsBottom(t *testing.T) {
 		t.Fatalf("frame has %d rows, want 10 (the terminal height):\n%s", len(rows), v.Content)
 	}
 	last := ansiStrip(rows[len(rows)-1])
-	if !strings.Contains(last, "mode on") {
-		t.Errorf("last row = %q, want the mode line", last)
+	if !strings.Contains(last, "ask before edits") {
+		t.Errorf("last row = %q, want the status line", last)
 	}
 	if !v.AltScreen {
 		t.Errorf("AltScreen = false, want true in fullscreen")

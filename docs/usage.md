@@ -75,11 +75,13 @@ Startup shows a banner (KILN wordmark, version, `<cwd> · branch <b> · model
 and system note commits as its own labelled block (`you`, `kiln`, a tool
 name, `edit`, `system`, `error`, ...) under a hairline rule, straight into
 the terminal's own scrollback. Below that, a small live region redraws every
-frame: a spinner while the model is working, the permission/plan prompt when
-one is open, the input box, and one mode line (`● auto mode on (shift+tab to
-cycle)`, etc.) — no separate status row by default, though a configured
-`statusLine` command's output is rendered above it and refreshed every 2s.
-Full visual detail — colours, glyphs, exact block anatomy — is
+frame: a spinner row while the model is working (gerund + elapsed/token
+count, `esc to stop` right-aligned), the permission/plan prompt when one is
+open, the input box, and one status-line row below it — a mode dot and label
+(e.g. `● auto-edit  ⇧⇥`), the cwd/branch, and a context-usage meter plus
+cumulative cost, right-aligned. A configured `statusLine` command's own
+output renders as extra dim rows below that one, refreshed every 2s. Full
+visual detail — colours, glyphs, exact block anatomy — is
 `docs/kiln-design.md`, not this file.
 
 ## 3. Typing

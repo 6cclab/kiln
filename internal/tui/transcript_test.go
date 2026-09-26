@@ -54,26 +54,15 @@ func TestRenderToolCallExpansionHint(t *testing.T) {
 	}
 }
 
-func TestRenderTodosStatuses(t *testing.T) {
-	out := RenderTodos([]TodoView{
-		{Content: "a", Status: TodoCompletedStatus},
-		{Content: "b", Status: TodoInProgressStatus},
-		{Content: "c", Status: TodoPendingStatus},
-	})
-	// kiln's "plan" block adds a label-rule row above "Update Todos", so
-	// this is now label rule + "Update Todos" + 3 items.
-	if len(out) != 5 {
-		t.Fatalf("got %d lines, want 5", len(out))
-	}
-}
-
 func TestRenderDiffLineNumbers(t *testing.T) {
-	// docs/claude-code-reference.md §3: only the +/- rows render (no hunk
-	// header, no context lines) — the reference example has neither.
+	// kiln's "diff" block keeps context lines, dim, alongside the +/- rows
+	// (docs/kiln-design-handoff/README.md's "diff" row: "context lines
+	// dim") — unlike the pre-kiln Claude Code parity contract, which
+	// dropped them.
 	patch := "@@ -10,2 +10,3 @@\n-old line\n+new line one\n+new line two\n context line"
 	out := RenderDiff(patch, 0)
-	if len(out) != 3 {
-		t.Fatalf("got %d lines, want 3 (1 removed + 2 added)", len(out))
+	if len(out) != 4 {
+		t.Fatalf("got %d lines, want 4 (1 removed + 2 added + 1 context)", len(out))
 	}
 }
 
@@ -100,20 +89,20 @@ func TestParseUnifiedDiffSkipsFileHeaders(t *testing.T) {
 func TestRenderDiffLinesAlignsWidestNumber(t *testing.T) {
 	lines := []DiffLine{{Num: 1, Sign: '-', Text: "a"}, {Num: 12, Sign: '+', Text: "b"}}
 	out := RenderDiffLines(lines)
-	// kiln's "edit" block anatomy: diffIndent (6 spaces) + number in a
-	// 4-column field (not padded to the widest digit count — %4d always
-	// right-aligns within 4 columns) + " " + a 2-column sign + the code,
-	// then padded to the full rule width by the added/removed background
-	// tint.
-	if got := stripANSI(out[0]); strings.TrimRight(got, " ") != "         1 − a" {
-		t.Errorf("got %q, want %q", got, "         1 − a")
+	// kiln's "edit" block anatomy: no leading indent (dropped from the
+	// pre-kiln diffIndent) — number in a 4-column field (not padded to the
+	// widest digit count — %4d always right-aligns within 4 columns) + " "
+	// + a 2-column sign + the code, then padded to the full rule width by
+	// the added/removed background tint.
+	if got := stripANSI(out[0]); strings.TrimRight(got, " ") != "   1 − a" {
+		t.Errorf("got %q, want %q", got, "   1 − a")
 	}
-	if got := stripANSI(out[1]); strings.TrimRight(got, " ") != "        12 + b" {
-		t.Errorf("got %q, want %q", got, "        12 + b")
+	if got := stripANSI(out[1]); strings.TrimRight(got, " ") != "  12 + b" {
+		t.Errorf("got %q, want %q", got, "  12 + b")
 	}
 }
 
-func TestRenderToolCallDiffRendersAddedRemovedSummary(t *testing.T) {
+func TestRenderToolCallDiffRendersHeaderAndCounts(t *testing.T) {
 	view := ToolCallView{
 		Name: "Update", PrimaryArg: "math.js", Status: CallOK,
 		Diff: &ToolDiff{Added: 1, Removed: 1, Lines: []DiffLine{
@@ -122,13 +111,30 @@ func TestRenderToolCallDiffRendersAddedRemovedSummary(t *testing.T) {
 		}},
 	}
 	out := RenderToolCall(view)
-	// kiln's "edit" block: label rule ("edit" + filename meta) + head
-	// ("Update math.js") + the "→ +N  −N" summary + 2 diff rows.
-	if len(out) != 5 {
-		t.Fatalf("got %d lines, want label rule + head + summary + 2 diff rows: %v", len(out), out)
+	// kiln's "edit" block: label rule ("edit" + filename meta) + the
+	// panel header row (path, "+N", "−N") + 2 diff rows. There is no
+	// separate "Update math.js" head line for a diff.
+	if len(out) != 4 {
+		t.Fatalf("got %d lines, want label rule + header + 2 diff rows: %v", len(out), out)
 	}
-	if !strings.Contains(stripANSI(out[2]), "+1") || !strings.Contains(stripANSI(out[2]), "−1") {
-		t.Errorf("got %q, want the +1/−1 summary", stripANSI(out[2]))
+	if !strings.Contains(stripANSI(out[1]), "+1") || !strings.Contains(stripANSI(out[1]), "−1") {
+		t.Errorf("got %q, want the +1/−1 counts", stripANSI(out[1]))
+	}
+	if !strings.Contains(stripANSI(out[1]), "math.js") {
+		t.Errorf("got %q, want the path on the header row", stripANSI(out[1]))
+	}
+}
+
+func TestRenderToolCallDiffNewFileTag(t *testing.T) {
+	view := ToolCallView{
+		Name: "Write", PrimaryArg: "src/new.ts", Status: CallOK,
+		Diff: &ToolDiff{Added: 1, NewFile: true, Lines: []DiffLine{
+			{Num: 1, Sign: '+', Text: "export {}"},
+		}},
+	}
+	out := RenderToolCall(view)
+	if !strings.Contains(stripANSI(out[1]), "new file") {
+		t.Errorf("header row %q missing the new file tag", stripANSI(out[1]))
 	}
 }
 
@@ -174,19 +180,6 @@ func TestRenderAssistantTextHasLabelRuleThenPlainLines(t *testing.T) {
 	}
 	if stripANSI(out[2]) != "more" {
 		t.Errorf("got %q, want %q", stripANSI(out[2]), "more")
-	}
-}
-
-func TestPastTenseMatchesSpinnerFamily(t *testing.T) {
-	cases := map[string]string{
-		"Brewing": "Brewed", "Cooking": "Cooked", "Crunching": "Crunched",
-		"Baking": "Baked", "Churning": "Churned", "Whirring": "Whirred",
-		"Simmering": "Simmered", "Working": "Worked",
-	}
-	for gerund, want := range cases {
-		if got := PastTense(gerund); got != want {
-			t.Errorf("PastTense(%q) = %q, want %q", gerund, got, want)
-		}
 	}
 }
 

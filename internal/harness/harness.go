@@ -107,6 +107,15 @@ func (h *Harness) SetSystemPrompt(prompt string) {
 	h.events.Emit(Event{Type: EventConfigUpdate, ConfigProperty: ConfigSystemPrompt})
 }
 
+// SystemPrompt returns the system prompt the next request will be built
+// with — e.g. so /context can measure its actual size instead of relying
+// on the tier's fixed SystemPromptTokens ceiling.
+func (h *Harness) SystemPrompt() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.opts.SystemPrompt
+}
+
 // AddTools registers tools alongside the existing ones, replacing any with
 // the same name, without activating them. The set is rebuilt rather than
 // mutated so a turn already holding the old set keeps a consistent view.
@@ -183,7 +192,7 @@ func (h *Harness) Lane(name string) (*Lane, error) {
 			return nil, fmt.Errorf("harness: failed to create lane %q: %w", name, err)
 		}
 	}
-	l := &Lane{h: h, name: name}
+	l := &Lane{h: h, name: name, retryNow: make(chan struct{}, 1)}
 	h.lanes[name] = l
 	h.events.Emit(Event{Type: EventLaneCreated, Lane: name})
 	return l, nil

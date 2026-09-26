@@ -1,12 +1,7 @@
-     by model:
-       faux/faux-1              input 300      output 150      cost -
-       faux/faux-2              input 100      output 50       cost $0.0010
-subagents ─────────────────────────────────────────────────────────────────────────  0 live · 2 done
- general-purpose  do the fast lookup ✓ done                                          ──────────  150
- general-purpose  look something up ✓ done                                           ──────────  150
-
-                                                                                ◐ medium · /effort
+  by model:
+    faux/faux-1              input 300      output 150      cost -
+    faux/faux-2              input 100      output 50       cost $0.0010
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-› Try "how do I log an error?"
+› describe a task · / for commands · @ to add files
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-  ● don't ask on (shift+tab to cycle)
+● don't ask  ⇧⇥                                                                  ctx ──────────  0%

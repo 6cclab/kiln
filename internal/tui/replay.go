@@ -29,10 +29,17 @@ func groupKindFor(toolName string) (GroupKind, bool) {
 const replayResultLines = 50
 
 // RenderTranscriptEntries renders a session branch the way the live
-// transcript would have committed it at the given width and verbosity:
-// user echoes, grouped or full tool calls with results, assistant text. It
-// is what Ctrl+O and Rewind redraw the screen from.
-func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, cwd string, summary []string) []string {
+// transcript would have committed it at the given width and verbosity: user
+// echoes, grouped or full tool calls with results, assistant text, plus
+// every synthetic (non-entry) block recorded via Bridge.CommitSynthetic —
+// the committed plan checklist, subagent dispatch lines, system notes and
+// the /context block, none of which are session entries and so would
+// otherwise be silently dropped by a replay built purely from the log.
+// synthetics is spliced back in commit order, each one immediately after
+// the entry it was tagged with (empty AfterEntryID means "before the
+// first entry") — see SyntheticCommit's doc comment. It is what Ctrl+O,
+// Ctrl+F and Rewind redraw the screen from.
+func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, cwd string, synthetics []SyntheticCommit) []string {
 	var out []string
 	calls := map[string]msg.ToolCall{}
 	renderer := NewMarkdownRenderer(width, IsPlain())
@@ -40,6 +47,16 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 	// assistant text; verbose mode then places the right-aligned
 	// "HH:MM AM model" row before that text (verbose-ctrl-o.txt row 22).
 	toolsSinceText := false
+
+	bySynthetic := map[string][]SyntheticCommit{}
+	for _, sc := range synthetics {
+		bySynthetic[sc.AfterEntryID] = append(bySynthetic[sc.AfterEntryID], sc)
+	}
+	emitSynthetics := func(afterID string) {
+		for _, sc := range bySynthetic[afterID] {
+			out = append(out, sc.Lines...)
+		}
+	}
 
 	var groupKind GroupKind
 	groupN := 0
@@ -50,6 +67,7 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 		groupN = 0
 	}
 
+	emitSynthetics("")
 	for _, e := range entries {
 		if e.Type != session.EntryMessage || e.Message == nil {
 			continue
@@ -57,11 +75,9 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 		switch m := e.Message.(type) {
 		case msg.UserMessage:
 			flush()
-			text := textOf(m.Content)
-			if strings.TrimSpace(text) == "" {
-				continue
+			if text := textOf(m.Content); strings.TrimSpace(text) != "" {
+				out = append(out, RenderUserMessage(text, width)...)
 			}
-			out = append(out, RenderUserMessage(text, width)...)
 		case msg.AssistantMessage:
 			for _, c := range m.Content {
 				if tc, ok := c.(msg.ToolCall); ok {
@@ -89,20 +105,20 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 				}
 				groupKind = kind
 				groupN++
-				continue
+			} else {
+				flush()
+				toolsSinceText = true
+				view := toolCallViewFor(name, call, &m, verbose, cwd)
+				out = append(out, FitLines(RenderToolCall(view), width, "     ")...)
+				out = append(out, "")
 			}
-			flush()
-			toolsSinceText = true
-			view := toolCallViewFor(name, call, &m, verbose, cwd)
-			out = append(out, FitLines(RenderToolCall(view), width, "     ")...)
-			out = append(out, "")
 		}
+		emitSynthetics(e.ID)
 	}
 	flush()
-	// The turn summary ("✻ Crunched for 4s · done …") is derived at turn
-	// end, not stored as an entry, so a Ctrl+O replay re-appends the last
-	// one the app kept (verbose-ctrl-o.txt row 24) rather than losing it.
-	out = append(out, summary...)
+	// The turn summary row is gone (kiln design: the busy line just
+	// disappears at turn end, docs/kiln-design-handoff/README.md
+	// "Interactions"); a Ctrl+O replay no longer re-appends one.
 	return out
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/andrepato/harness/internal/session"
@@ -13,12 +14,24 @@ import (
 // Storage is the JSONL-file-backed session.Storage implementation. It
 // mirrors JsonlStorage in storage.js: an in-memory session.State replayed
 // from (or written alongside) an append-only file.
+//
+// mu serializes every access to state and to the backing file: Commit
+// (append + apply) and every Get*/Scan* read. The turn loop's own
+// documentation (turn.go's executeConcurrentRun) assumed Commit was only
+// ever called from one goroutine at a time, but Lane.Steer can now be
+// called from a different goroutine (the TUI's input handler) while a
+// turn is in flight on the lane's own goroutine, racing both the map
+// writes inside session.State and AppendTransaction's file write. mu
+// makes both safe; it does not change ordering semantics beyond making
+// concurrent calls linearize in whatever order they arrive.
 type Storage struct {
 	path   string
 	header session.Header
 	state  *session.State
 	now    func() time.Time
 	closed bool
+
+	mu sync.Mutex
 }
 
 // Header returns the storage's line-1 header as currently known in memory.
@@ -130,6 +143,8 @@ func Open(path string, now func() time.Time) (*Storage, error) {
 // It mirrors JsonlStorage.commit/applyCommit in storage.js (minus the
 // legacy-v3-upgrade path, which is not implemented).
 func (s *Storage) Commit(writes []session.Write) (session.CommitResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return session.CommitResult{}, fmt.Errorf("jsonl: storage is closed")
 	}
@@ -148,13 +163,23 @@ func (s *Storage) Commit(writes []session.Write) (session.CommitResult, error) {
 }
 
 // GetEntries returns the entries with the given ids that exist.
-func (s *Storage) GetEntries(ids []string) map[string]session.Entry { return s.state.GetEntries(ids) }
+func (s *Storage) GetEntries(ids []string) map[string]session.Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.GetEntries(ids)
+}
 
 // GetEntry returns one entry by id.
-func (s *Storage) GetEntry(id string) (session.Entry, bool) { return s.state.GetEntry(id) }
+func (s *Storage) GetEntry(id string) (session.Entry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.GetEntry(id)
+}
 
 // GetValue returns the current raw value at (namespace, key).
 func (s *Storage) GetValue(namespace, key string) (json.RawMessage, int64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	v, ok := s.state.GetValue(namespace, key)
 	if !ok {
 		return nil, 0, false
@@ -165,38 +190,58 @@ func (s *Storage) GetValue(namespace, key string) (json.RawMessage, int64, bool)
 // ScanValues returns every current value under namespace whose key has the
 // given prefix, ordered by key.
 func (s *Storage) ScanValues(namespace, keyPrefix string) []session.StoredRaw {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.state.ScanValues(namespace, keyPrefix)
 }
 
 // ReadList returns a list's elements, oldest first.
 func (s *Storage) ReadList(namespace, key string) []session.ListElementRaw {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.state.ReadList(namespace, key)
 }
 
 // ScanBranch walks a branch from an entry to the root.
 func (s *Storage) ScanBranch(query session.BranchScan) ([]session.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.state.ScanBranch(query)
 }
 
 // ScanEntries returns entries in commit order (or reverse).
 func (s *Storage) ScanEntries(query session.EntryScan) []session.Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.state.ScanEntries(query)
 }
 
 // ScanUsage returns usage rows ordered by seq (or reverse).
 func (s *Storage) ScanUsage(query session.UsageScan) []session.UsageRow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.state.ScanUsage(query)
 }
 
 // GetStats returns the current session totals.
-func (s *Storage) GetStats() session.SessionStats { return s.state.GetStats() }
+func (s *Storage) GetStats() session.SessionStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.GetStats()
+}
 
 // NextSeq returns the sequence the next commit will start at. Used by
 // Fork to capture a boundary on an open source without racing its commits.
-func (s *Storage) NextSeq() int64 { return s.state.NextSeq() }
+func (s *Storage) NextSeq() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.NextSeq()
+}
 
 // Close marks the storage closed. Further Commit/Get*/Scan* calls fail.
 func (s *Storage) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.closed = true
 	return nil
 }

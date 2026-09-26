@@ -1,11 +1,8 @@
-█ ▄▀  █  █    █▄ █
-█▀▄   █  █    █▀▄█
-█ ▀▄  █  █▄▄  █  █
-dev · coding agent
+K I L N  dev · coding agent
 
 <cwd>…
 
-<cwd>…
+/ commands   @ add files   ⇧⇥ cycle mode   esc stop
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -23,8 +20,11 @@ dev · coding agent
 
 
 
-                                                                                ◐ medium · /effort
+
+
+
+
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-› Try "how do I log an error?"
+› describe a task · / for commands · @ to add files
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-  ● manual mode on · ← for agents
+● ask before edits  ⇧⇥                                                           ctx ──────────  0%

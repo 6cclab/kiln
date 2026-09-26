@@ -1,0 +1,4 @@
+edit ────────────────────────────────────────────────────────────────  upload.ts
+ src/routes/upload.ts  new file                                              +2 
+   1 + export function upload() {}                                              
+   2 +                                                                          

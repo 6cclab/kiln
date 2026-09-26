@@ -81,15 +81,13 @@ func TestTUI_MCP_BackgroundConnect(t *testing.T) {
 	for _, r := range rows {
 		joined += r + "\n"
 	}
-	// tool_search is a read-only tool now (internal/tui/replay.go's
-	// groupKindFor / app.go's msgCommitToolCall), so it collapses into the
-	// grouped "Read N files" row rather than showing its own
-	// "Tool_search(...)" header — matching the same read-only auto-allow
-	// grouping this task's item 4 describes for Read/Glob/Grep. The MCP
-	// tool's own call renders in kiln's "tool" block anatomy: a
-	// "mcp__fixture__echo" label rule, then "Mcp__fixture__echo" (no
-	// parens — transcript.go's RenderToolCall).
-	for _, want := range []string{"Read 1 file", "Mcp__fixture__echo", "round trip", "Echoed."} {
+	// tool_search is a read-only tool: it groups as "Reading…" only while
+	// live, and commits as its own kiln "tool" block ("tool_search" label
+	// rule, then "Tool_search" + arg) once done, like every other call.
+	// The MCP tool's own call renders the same way: a "mcp__fixture__echo"
+	// label rule, then "Mcp__fixture__echo" (no parens —
+	// transcript.go's RenderToolCall).
+	for _, want := range []string{"Tool_search", "Mcp__fixture__echo", "round trip", "Echoed."} {
 		if !regexp.MustCompile(regexp.QuoteMeta(want)).MatchString(joined) {
 			t.Errorf("screen missing %q:\n%s", want, joined)
 		}

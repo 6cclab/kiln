@@ -24,6 +24,19 @@ type PermissionRequest struct {
 	Args             map[string]any
 }
 
+// declinedNoteText builds the "✕ Declined …" note's text for a denied
+// tool-permission request (docs/kiln-design-handoff/README.md "note" row):
+// bash reads as just the declined command ("✕ Declined npm test -- upload",
+// no "Bash" prefix — the command already reads as an action); every other
+// tool keeps its mapped name ahead of the argument ("✕ Declined Update
+// src/math.js").
+func declinedNoteText(req PermissionRequest) string {
+	if strings.EqualFold(req.ToolName, "bash") {
+		return "✕ Declined " + req.PrimaryArg
+	}
+	return "✕ Declined " + MapToolName(req.ToolName) + " " + req.PrimaryArg
+}
+
 // SummarizeArg truncates a long argument for display without hiding what
 // is being approved.
 //
@@ -55,7 +68,7 @@ func SummarizeArg(req PermissionRequest, cwd string) string {
 // at each line-building site above it: almost everything this prompt
 // shows is content from elsewhere — a bash command, a diff hunk, a line
 // the user is typing — so any of it can be wider than the terminal.
-func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, feedbackMode bool, feedback string) []string {
+func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, selected int, feedbackMode bool, feedback string) []string {
 	amberRule := KilnAmber(strings.Repeat("─", maxInt(width, 1)))
 	lines := []string{
 		"",
@@ -92,9 +105,9 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, feedba
 	}
 
 	lines = append(lines,
-		"  "+permissionOptionRow("1", "Yes", false),
-		"  "+permissionOptionRow("2", "Yes, and don't ask again for this", false),
-		"  "+permissionOptionRow("3", "No, and tell kiln what to do instead", false),
+		"  "+permissionOptionRow("1", "Yes", selected == 0),
+		"  "+permissionOptionRow("2", "Yes, and don't ask again for this", selected == 1),
+		"  "+permissionOptionRow("3", "No, and tell kiln what to do instead", selected == 2),
 		"",
 		"  "+Muted("1-3, y/n, or esc to decline"),
 	)
@@ -149,10 +162,10 @@ func bashDontAskRule(command string) string {
 // transcript rows above it ("⏺ <tool description>" / "  ⎿  $ <command>")
 // belong to the transcript renderer, not this function.
 //
-// Styling (Bold on the selected option, DialogAccent on its "❯") is not
+// Styling (Bold on the selected option, KilnAmber on its "❯") is not
 // independently colour-verified for this screen — permission-bash.txt is
-// a plain-text capture with no SGR — so it is a reuse of the same accent
-// theme.go/theme_dialog.go already document for a selected row elsewhere.
+// a plain-text capture with no SGR — so it is a reuse of the same kiln
+// amber accent theme.go documents for a selected row elsewhere.
 // [chk].
 func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) []string {
 	amberRule := KilnAmber(strings.Repeat("─", maxInt(width, 1)))

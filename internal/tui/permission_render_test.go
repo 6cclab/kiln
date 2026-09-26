@@ -38,7 +38,7 @@ func TestSummarizeArgTruncatesLongArgs(t *testing.T) {
 
 func TestRenderPermissionPromptMenuText(t *testing.T) {
 	req := PermissionRequest{ToolName: "Bash", PrimaryArg: "rm -rf /tmp/x"}
-	out := RenderPermissionPrompt(req, "/", 80, false, "")
+	out := RenderPermissionPrompt(req, "/", 80, 0, false, "")
 	full := strings.Join(out, "\n")
 	for _, want := range []string{"Yes", "Yes, and don't ask again for this", "No, and tell kiln what to do instead", "1-3, y/n, or esc to decline"} {
 		if !strings.Contains(full, want) {
@@ -49,7 +49,7 @@ func TestRenderPermissionPromptMenuText(t *testing.T) {
 
 func TestRenderPermissionPromptFeedbackMode(t *testing.T) {
 	req := PermissionRequest{ToolName: "Bash", PrimaryArg: "rm -rf /"}
-	out := RenderPermissionPrompt(req, "/", 80, true, "do this instead")
+	out := RenderPermissionPrompt(req, "/", 80, 0, true, "do this instead")
 	if !strings.Contains(strings.Join(out, "\n"), "do this instead") {
 		t.Errorf("feedback text missing from %v", out)
 	}

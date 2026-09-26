@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/rand"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -41,11 +42,19 @@ func (p RetryPolicy) normalized() RetryPolicy {
 
 // delay computes the backoff for the given 1-based attempt, with full
 // jitter, capped at MaxAgentDelayMs.
+//
+// HARNESS_RETRY_JITTER=0 disables the jitter entirely (delay = the base
+// backoff, unjittered) — the e2e suite sets this so its countdown/reconnect
+// tests get a deterministic delay instead of racing a random one every run
+// (see startTUI in test/e2e/tui_test.go).
 func (p RetryPolicy) delay(attempt int) time.Duration {
 	p = p.normalized()
 	ms := p.BaseDelayMs * (1 << uint(attempt-1))
 	if ms > p.MaxAgentDelayMs {
 		ms = p.MaxAgentDelayMs
+	}
+	if os.Getenv("HARNESS_RETRY_JITTER") == "0" {
+		return time.Duration(ms) * time.Millisecond
 	}
 	jittered := rand.Intn(ms + 1)
 	return time.Duration(jittered) * time.Millisecond

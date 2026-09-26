@@ -46,6 +46,34 @@ Use for anything that needs a real request/response round trip (streaming,
 tool-call turns, retries, token accounting) without needing a real model or
 real PTY.
 
+## 1a. Render goldens — `internal/tui`
+
+`internal/tui/golden_test.go`'s `assertRenderGolden(t, name, lines)` compares
+a renderer's output lines (no PTY, no Bubbletea program — a direct call into
+a `Render*` function) against two files under
+`internal/tui/testdata/render/<name>{,.styles}.txt`: `<name>.txt` has ANSI
+stripped, for a human-legible layout diff; `<name>.styles.txt` keeps ANSI,
+for a colour/attribute diff. `withRenderEnv(t, width)` forces the renderer's
+global state first (colour on, plain mode off, a fixed width) so results are
+deterministic across machines. `UPDATE=1 go test ./internal/tui -run
+<TestName>` (re)writes both files from the current render; without it, a
+mismatch fails with a diff against each file.
+
+This is the fastest layer that can assert on styled output, but it does not
+drive a PTY, so layout bugs that only show up in a real terminal (wrapping,
+resize, cursor placement) are not covered here — the PTY layer (`test/e2e`)
+stays the source of truth for those.
+
+Files using it today (`grep -rl assertRenderGolden internal/tui/*.go`):
+`golden_test.go` itself, `blocks_golden_test.go`, `status_golden_test.go`,
+`retry_test.go`, `stream_test.go`, `note_behaviour_test.go` and
+`render_extra_golden_test.go`.
+
+`internal/cli/banner_golden_test.go` covers `bannerRows` (package `cli`,
+so it cannot import `internal/tui`'s unexported `assertRenderGolden`) with
+its own copy of the same ~20-line compare helper, golding into
+`internal/cli/testdata/banner/*.txt` instead.
+
 ## 3. Screen — PTY driver + `kiln-drive`
 
 `internal/testkit/screen` (owned separately) drives a real PTY running the
@@ -67,6 +95,15 @@ protocol on its own stdin to control the session and inspect the screen:
 - `RESIZE <cols> <rows>` — resize the PTY, for layout-over-time tests
   (overlays, frames that grow/shrink, scroll).
 - `EXIT` — end the session and terminate the driven process.
+  `Screen.Exit` (`internal/testkit/screen/screen.go`) first gives the
+  process a short grace period to exit on its own (for a script that already
+  sent a quit key just before `EXIT`), then sends it `SIGINT` — the same
+  signal a real terminal's Ctrl+C delivers, and the one
+  `internal/cli/tui.go`'s `RunInteractive` funnels straight to
+  `program.Quit()` regardless of what the TUI's key router is doing (a
+  prompt open, mid-feedback-capture, a dialog up, anything) — then waits up
+  to the screen's own timeout for the process to exit, returning an error
+  if it does not.
 
 Use for anything that must exercise process startup, real PTY resize
 semantics, or real terminal escape-sequence handling — the things the
@@ -114,6 +151,27 @@ found while writing them (a modal panel whose key-hint/status rows get
 silently clipped by an undersized height budget; selecting a model
 hanging the whole program) rather than routing around them — see the
 comments at each call site, and the suite's own report, for the repro.
+
+`assertGoldenStyles(t, s, name, opts)` (`test/e2e/tui_test.go`) is the styled
+counterpart to `assertGoldenTail`/`assertGoldenNormalizedBanner`: it encodes
+`s.Viewport()`/`s.Styles()` per row via `screen.EncodeStyledRow` (same
+encoding as §5 below) and compares against `testdata/golden/<name>.styles.txt`,
+after `opts` normalizes volatile rows (the banner's cwd/branch row, the
+live spinner's cycling frame) the same way the plain-text goldens do, so a
+masked row's *styling* — not just its text — never reaches the golden.
+
+**Determinism knobs.** `startTUI` sets two environment variables on every
+driven process so PTY goldens are reproducible:
+
+- `HARNESS_RETRY_JITTER=0` (`internal/harness/retry.go`) disables retry
+  backoff's random jitter, so a scripted retry's countdown is the
+  deterministic base delay rather than a race against a random near-zero
+  jittered one.
+- `HARNESS_TEST_CLOCK` (RFC3339 timestamp; read by `internal/tui/footer.go`'s
+  `clockOverride`, `internal/tui/app.go`'s `NewModel`, and
+  `internal/tui/bridge.go`'s `toolMeta`) freezes the footer's/model's
+  `StartedAt` and forces every tool call's elapsed-time meta to read a fixed
+  `1.0s`, instead of real wall-clock skew.
 
 `testdata/drive/tui-smoke.txt` reproduces the fix-bug flow by hand through
 `cmd/kiln-drive` instead of a Go test, for a person (or another agent)
@@ -167,18 +225,72 @@ deterministically afterward — including at a different terminal size,
 which is often when layout bugs actually reproduce — without needing the
 original model conversation again.
 
+## Design-scene suite — `test/e2e/tui_design_test.go`
+
+`test/e2e/tui_design_test.go` drives every scene the design handoff
+describes (welcome, plan, agents, streaming, diff, permission, error,
+palette, context, done) from `testdata/faux/design-session.yaml` through
+the real, PTY-attached binary, reusing `tui_test.go`'s own helpers
+(`startTUI`, `waitReady`, `waitTurnSettled`, `assertGoldenTail`,
+`assertGoldenStyles`, `submitSlashCommand`, `loadFauxScript`). Its own
+fixtures live under `testdata/behaviour/design/` (a scratch project:
+`src/routes/upload.ts`, `test/helpers/redisMock.ts`, `package.json`,
+`scripts/npm`, `.claude/agents/scout.md`), copied fresh per test by
+`designProject`/`copyFixtureTree`; goldens are `testdata/golden/design-*.txt`
+and `.styles.txt`.
+
+- `driveDesignTo(t, s, scene)` submits the design task and drives the
+  session up to (and including) the named scene's own anchor text,
+  answering whatever prompts come up along the way (the bash permission
+  prompt with `1`, the mid-stream disconnect with `r` to retry now). Scene
+  anchors are plain substrings unique to each scene's first on-screen
+  signal (e.g. `designAgentsAnchor = "subagents running in parallel"`,
+  `designErrAnchor = "Retrying in"`). It does not wait for every scene
+  independently — some intermediate scenes (`diff1`, the reconnect note)
+  reliably scroll out of the visible viewport before a later scene's own
+  wait would catch them (documented in its own doc comment, confirmed by a
+  timing probe); a test that needs one of those specifically reads
+  `s.Scrollback()` instead of the visible screen.
+- `designSortSubagentPanel` sorts the two design-session scouts' panel row
+  pairs into a fixed order before golden comparison, **because** two `task`
+  dispatches fired from one assistant message really do start on two
+  independent goroutines, so which scout's start event the panel sees
+  first — and therefore which row it occupies — is a genuine, harmless
+  race, not a bug worth pinning down inside `internal/tui` itself.
+  `assertDesignGoldenTailSorted`/`assertDesignGoldenStylesSorted` apply
+  this sort before diffing against the golden.
+- `testdata/drive/design-session.txt` is the hand-driven `kiln-drive`
+  script version of the same full session, for a person (or another
+  agent) to replay interactively the same way `testdata/drive/tui-smoke.txt`
+  does for the fix-bug flow.
+- `TestTUI_Design_ExitAfterFullSession` is a regression test for a real,
+  reproduced shutdown deadlock (a duplicate `SIGINT` handler in
+  `RunInteractive` racing bubbletea's own internal one) found while
+  reproducing this exact script's `kiln-drive EXIT` timing out roughly 1
+  run in 3; it drives the full "done" scene, then asserts `Exit()` returns
+  well under the screen's timeout instead of hanging.
+
 ## 6. Behaviour suite — `test/e2e/*_behaviour_test.go`
 
 `test/e2e/budget_behaviour_test.go`, `compaction_behaviour_test.go`,
 `mcp_behaviour_test.go`, `permission_behaviour_test.go`,
-`subagent_behaviour_test.go` and `tools_behaviour_test.go` drive the real,
-compiled `kiln` binary end to end to prove *wiring*, not the decision
-tables underneath it: each file's header names the package that already
-unit-tests the table itself (e.g. permission's deny/bypass/allow/ask
-ordering is unit-tested in `internal/claude/settings` and
-`internal/claude/permission`; `permission_behaviour_test.go` only proves
-`settings.json`, `--permission-mode`, `--add-dir` and the TUI's
-allow-always prompt reach that table correctly).
+`subagent_behaviour_test.go`, `tools_behaviour_test.go` and
+`tui_behaviour_test.go` drive the real, compiled `kiln` binary end to end
+to prove *wiring*, not the decision tables underneath it: each file's
+header names the package that already unit-tests the table itself (e.g.
+permission's deny/bypass/allow/ask ordering is unit-tested in
+`internal/claude/settings` and `internal/claude/permission`;
+`permission_behaviour_test.go` only proves `settings.json`,
+`--permission-mode`, `--add-dir` and the TUI's allow-always prompt reach
+that table correctly). `tui_behaviour_test.go` covers retry/esc/queue/
+declined behaviour end to end through the PTY, reusing `tui_test.go`'s
+helpers the same way; its goldens carry a `tui-behaviour-` prefix.
+
+`internal/tui` also has its own, package-local behaviour tests
+(`app_behaviour_test.go`, `bridge_behaviour_test.go`,
+`note_behaviour_test.go`) — unit-level, no PTY, driving `Model.Update`/
+`Bridge.handleEvent` directly against a fake commit sink, one layer below
+the PTY suite above.
 
 Fixtures for these tests live under `testdata/behaviour/`: `mcp/` (e.g.
 `rewrite-echo-text.sh`, a hook script) and `subagents/` (`reader.md`,

@@ -643,15 +643,63 @@ func (s *Screen) Resize(cols, rows int) {
 	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)}) //nolint:errcheck,gosec
 }
 
-// Exit sends nothing and waits for the process to exit on its own, up to the
-// screen's timeout. It returns the process's exit code.
+// exitGrace is how long Exit waits for the process to exit on its own —
+// e.g. a quit key sent just before Exit is still being processed — before
+// it escalates to signaling SIGINT itself. Short relative to the screen's
+// overall timeout: it only exists to let an already-in-flight graceful
+// quit finish on its own terms (and report its own real exit code) rather
+// than racing it.
+const exitGrace = 300 * time.Millisecond
+
+// Exit asks the driven process to shut down and waits for it to, up to the
+// screen's timeout, returning its exit code.
+//
+// Real bug this fixes (found while reproducing kiln-drive's own "EXIT
+// timed out" report): this used to send nothing and just wait — its own
+// doc comment said so — even though cmd/kiln-drive's protocol documents
+// EXIT as "end the session and terminate the driven process", an active
+// verb. A driven kiln never exits on its own; nothing here or in
+// cmd/kiln-drive's driver sent it a quit key first, so any script ending
+// in a bare EXIT (both testdata/drive/design-session.txt and
+// testdata/drive/tui-smoke.txt, docs/testing.md's own canonical example)
+// reliably timed out.
+//
+// This now gives the process exitGrace to exit on its own first — a quit
+// key sent just before Exit (SendKey("q") then Exit(), the existing
+// TestExit pattern) needs a moment to actually be processed, and forcing
+// SIGINT in immediately would race that graceful path and change its exit
+// code — then signals SIGINT: the same signal a real terminal's Ctrl+C
+// delivers, and the one internal/cli/tui.go's own SIGINT handler
+// (RunInteractive) funnels straight to program.Quit() unconditionally,
+// regardless of what the TUI's own key router is doing (a committed panel
+// up, a permission prompt open, mid-feedback-capture, anything) — so EXIT
+// now actually terminates the session instead of only ever working when a
+// prior KEY already quit the app.
 func (s *Screen) Exit() (int, error) {
+	select {
+	case <-s.waitDone:
+		return s.waitExit, s.waitErr
+	case <-time.After(exitGrace):
+	}
+	if s.cmd.Process != nil {
+		_ = s.cmd.Process.Signal(os.Interrupt)
+	}
 	select {
 	case <-s.waitDone:
 		return s.waitExit, s.waitErr
 	case <-time.After(s.timeout):
 		return -1, fmt.Errorf("screen.Exit: process did not exit within %s", s.timeout)
 	}
+}
+
+// Pid returns the driven process's OS process id, e.g. so a caller can
+// send it a signal Exit itself does not (SIGQUIT for a goroutine dump when
+// diagnosing a shutdown hang).
+func (s *Screen) Pid() int {
+	if s.cmd.Process == nil {
+		return 0
+	}
+	return s.cmd.Process.Pid
 }
 
 // Close kills the process if it is still running and releases the PTY and

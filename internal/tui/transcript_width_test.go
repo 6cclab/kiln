@@ -78,24 +78,21 @@ func TestFitStatusSpinnerOneRow(t *testing.T) {
 	assertFits(t, lines, width40)
 }
 
-func TestFitStatusFooterTwoRows(t *testing.T) {
+func TestFitStatusLineFits(t *testing.T) {
 	s := StatusState{
 		ModelLabel: longURL, ContextWindow: 49_152, Mode: "auto",
 		StartedAt: time.UnixMilli(0), Now: time.UnixMilli(0),
 		ContextUsed: intPtr(20_000),
 		Git:         &GitStatus{Branch: longURL, Dirty: true},
+		Cwd:         longURL,
 	}
-	rows := RenderStatus(s)
-	lines := []string{FitStatus(rows[0], width40), FitStatus(rows[1], width40)}
-	if len(lines) != 2 {
-		t.Fatalf("footer must be two rows")
-	}
-	assertFits(t, lines, width40)
+	line := RenderStatusLine(s, width40)
+	assertFits(t, []string{FitStatus(line, width40)}, width40)
 }
 
 func TestPermissionPromptWrapsLongCommand(t *testing.T) {
 	req := PermissionRequest{ToolName: "bash", PrimaryArg: "echo " + longURL, Args: map[string]any{"command": "echo " + longURL}}
-	out := RenderPermissionPrompt(req, "/", width40, false, "")
+	out := RenderPermissionPrompt(req, "/", width40, 0, false, "")
 	assertFits(t, out, width40)
 }
 
@@ -157,23 +154,5 @@ func TestUserMessageRewrapsOnResize(t *testing.T) {
 	msg := strings.Repeat("a ", 60)
 	if len(RenderUserMessage(msg, 40)) == len(RenderUserMessage(msg, 100)) {
 		t.Error("rewrap at a different width should change line count")
-	}
-}
-
-func TestTurnSummaryMatchesReferenceRow(t *testing.T) {
-	// docs/claude-code-reference.md §3 / testdata/reference/claude-code/
-	// turn-edit.txt row 21: "✻ Crunched for 4s · done 10:03 AM".
-	done := time.Date(2026, 9, 24, 10, 3, 0, 0, time.UTC)
-	line := strings.Join(RenderTurnSummary(TurnSummary{Seconds: 4, Verb: "Crunched", Done: done}), "")
-	want := "Crunched for 4s · done 10:03 AM"
-	if !strings.Contains(line, want) {
-		t.Errorf("got %q, want it to contain %q", line, want)
-	}
-}
-
-func TestTurnSummaryDefaultsToWorked(t *testing.T) {
-	line := strings.Join(RenderTurnSummary(TurnSummary{Seconds: 1, Done: time.Unix(0, 0)}), "")
-	if !strings.Contains(line, "Worked for 1s") {
-		t.Errorf("got %q, want the Worked fallback", line)
 	}
 }

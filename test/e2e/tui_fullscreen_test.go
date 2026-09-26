@@ -103,14 +103,22 @@ func TestTUI_Fullscreen_FixBug(t *testing.T) {
 	waitTurnSettled(t, s)
 
 	joined := strings.Join(s.Rows(), "\n")
-	if !strings.Contains(joined, "Read 1 file") {
-		t.Errorf("transcript missing the grouped \"Read 1 file\" row:\n%s", joined)
+	// Read-only calls commit their own full "tool" block now instead of
+	// collapsing to "Read N files" (app.go's flushGroup, kiln UI pass
+	// Phase 2.1); the diff block has no separate "Update <path>" head
+	// line any more (Phase 2.2) — see TestTUI_FixBug's identical
+	// assertion in tui_test.go for the full rationale.
+	if !strings.Contains(joined, "read ") || !strings.Contains(joined, "Read src/math.js") {
+		t.Errorf("transcript missing the full \"read\" tool block:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Update src/math.js") {
-		t.Errorf("transcript missing the \"Update src/math.js\" header:\n%s", joined)
+	if !strings.Contains(joined, "src/math.js") || !strings.Contains(joined, "+1") || !strings.Contains(joined, "−1") {
+		t.Errorf("transcript missing the diff header row (path + counts):\n%s", joined)
 	}
-	if !turnSummaryPattern.MatchString(joined) {
-		t.Errorf("transcript missing the turn-summary line:\n%s", joined)
+	// The turn-summary row is gone (kiln design: the busy line just
+	// disappears at turn end, nothing is committed in its place), so
+	// "the turn produced its final text" is now checked directly.
+	if !strings.Contains(joined, "Fixed.") {
+		t.Errorf("transcript missing the assistant's final turn text:\n%s", joined)
 	}
 
 	rows := s.Rows()
@@ -155,11 +163,13 @@ func TestTUI_Fullscreen_ScrollPause(t *testing.T) {
 	s.SendKey("enter")
 	waitTurnSettled(t, s)
 
-	// At the bottom (auto-followed): the turn summary is visible, the
-	// banner (scrolled off the top of the small viewport) is not.
+	// At the bottom (auto-followed): the turn's final text is visible, the
+	// banner (scrolled off the top of the small viewport) is not. (The
+	// turn-summary row this used to check is gone — the busy line just
+	// disappears at turn end, nothing committed in its place.)
 	joined := strings.Join(s.Rows(), "\n")
-	if !turnSummaryPattern.MatchString(joined) {
-		t.Fatalf("turn summary not visible while auto-followed at the bottom:\n%s", joined)
+	if !strings.Contains(joined, "Fixed.") {
+		t.Fatalf("assistant's final turn text not visible while auto-followed at the bottom:\n%s", joined)
 	}
 	if strings.Contains(joined, "/ commands") {
 		t.Fatalf("banner tip row unexpectedly visible in a %d-row terminal after a turn that should have pushed it off-screen:\n%s", 14, joined)
@@ -186,8 +196,8 @@ func TestTUI_Fullscreen_ScrollPause(t *testing.T) {
 	}
 	rows := s.Rows()
 	joined = strings.Join(rows, "\n")
-	if turnSummaryPattern.MatchString(joined) {
-		t.Errorf("turn summary still visible after pgup scrolled to the banner:\n%s", joined)
+	if strings.Contains(joined, "Fixed.") {
+		t.Errorf("first turn's final text still visible after pgup scrolled to the banner:\n%s", joined)
 	}
 	if !modeLinePattern.MatchString(rows[len(rows)-1]) {
 		t.Errorf("last row is not the mode line after pgup: %q", rows[len(rows)-1])
@@ -265,8 +275,8 @@ func TestTUI_Fullscreen_Resize(t *testing.T) {
 		// Rows() itself asserts the per-row width invariant.
 		rows := s.Rows()
 		joined := strings.Join(rows, "\n")
-		if !strings.Contains(joined, "Update src/math.js") {
-			t.Errorf("resize to %dx%d: transcript lost \"Update src/math.js\" after re-wrap:\n%s", w, h, joined)
+		if !strings.Contains(joined, "src/math.js") {
+			t.Errorf("resize to %dx%d: transcript lost the diff block's path after re-wrap:\n%s", w, h, joined)
 		}
 		if !modeLinePattern.MatchString(rows[len(rows)-1]) {
 			t.Errorf("resize to %dx%d: last row is not the mode line: %q", w, h, rows[len(rows)-1])

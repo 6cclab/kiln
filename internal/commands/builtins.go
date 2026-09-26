@@ -38,6 +38,27 @@ type BuiltinDeps struct {
 	CurrentModel func() (providerID, modelID string)
 	// CurrentTier returns the tier currently in effect.
 	CurrentTier func() budget.Tier
+	// ModelLabel is the display label /context's header shows ("<model> ·
+	// Nk of Mk tokens", docs/kiln-design-handoff/README.md "context" row).
+	// Empty falls back to "<providerID>/<modelID>" from CurrentModel.
+	ModelLabel func() string
+	// ContextUsed, if set, reports tokens currently resident — the same
+	// signal AccountDeps.ContextUsed (account_commands.go) reports for
+	// /usage, duplicated here rather than shared because the two Deps
+	// structs are independently constructed by the integrator and neither
+	// imports the other's package.
+	ContextUsed func() (int, bool)
+	// SystemPromptTokens, if set, reports the *actual* assembled system
+	// prompt's token count for /context's "System prompt" segment
+	// (buildContextBreakdown), in place of the tier's fixed
+	// SystemPromptTokens ceiling. false (or a nil func) falls back to
+	// that ceiling.
+	SystemPromptTokens func() (int, bool)
+	// ToolSchemaTokens, if set, reports the actual serialized tool-schema
+	// cost for /context's "Tools" segment, in place of
+	// budget.ToolStrategyCost[tier.ToolStrategy]. false (or a nil func)
+	// falls back to that fixed cost.
+	ToolSchemaTokens func() (int, bool)
 	// SwitchModel applies a model switch: the integrator implements it
 	// with agent.SetModel (which moves the lane's model AND the harness's
 	// compaction settings to the new tier) followed by whatever tool
@@ -78,6 +99,114 @@ func formatTokens(n int) string {
 	default:
 		return strconv.Itoa(n)
 	}
+}
+
+// buildContextBreakdown turns a tier's fixed budgets plus the session's
+// live usage total into /context's structured result (ContextBreakdown,
+// registry.go), for the kiln TUI's RenderContext (internal/tui/context.go)
+// to draw a stacked bar and legend from. -p/print mode ignores this and
+// reads Output instead, so a nil deps.ContextUsed (no usage yet this
+// session) is not an error here — it just reports Used: 0.
+//
+// The four segments and the header are built to be self-consistent by
+// construction, not just individually plausible: system+tools+conversation
+// always equals the header's "used" figure, and all four segments always
+// sum to exactly Window (percentages sum to ~100%, not something over
+// 100). This replaced a version where the header showed the session's
+// real ContextUsed total while the legend's "System prompt"/"Tools" rows
+// showed the tier's fixed *budgets* (big, conservative ceilings, not what
+// was actually spent) — a session that had barely used any tokens yet
+// (say 5k) could still show "System prompt 12.8k · Tools 7.6k" plus a
+// "Free" computed as window-minus-real-used, summing to well over the
+// window and leaving "Conversation" clamped to a lying zero. Deriving
+// Free as the remainder after the other three (rather than independently
+// as window-minus-used) is what makes the totals line up.
+//
+// System and Tools prefer a measured figure (deps.SystemPromptTokens/
+// ToolSchemaTokens) over the tier's fixed budget when the caller has one
+// to give — plumbing an actual measured tool-schema cost end to end is
+// not wired by any integrator yet (nothing in this codebase computes a
+// live per-session tool-schema token count outside the eval suite's own
+// after-the-fact estimate from a recorded request), so Tools falls back
+// to budget.ToolStrategyCost in practice today; the hook exists so that
+// can change without another pass through this function's math.
+func buildContextBreakdown(deps BuiltinDeps, t budget.Tier) *ContextBreakdown {
+	used := 0
+	if deps.ContextUsed != nil {
+		if u, ok := deps.ContextUsed(); ok {
+			used = u
+		}
+	}
+	label := ""
+	if deps.ModelLabel != nil {
+		label = deps.ModelLabel()
+	}
+	if label == "" && deps.CurrentModel != nil {
+		providerID, modelID := deps.CurrentModel()
+		if providerID != "" {
+			label = providerID + "/" + modelID
+		} else {
+			label = modelID
+		}
+	}
+
+	window := t.ContextWindow
+
+	system := t.SystemPromptTokens
+	if deps.SystemPromptTokens != nil {
+		if v, ok := deps.SystemPromptTokens(); ok {
+			system = v
+		}
+	}
+	system = clampRange(system, 0, window)
+
+	tools := budget.ToolStrategyCost[t.ToolStrategy]
+	if deps.ToolSchemaTokens != nil {
+		if v, ok := deps.ToolSchemaTokens(); ok {
+			tools = v
+		}
+	}
+	tools = clampRange(tools, 0, window-system)
+
+	conversation := clampRange(used-system-tools, 0, window-system-tools)
+
+	free := window - system - tools - conversation
+	if free < 0 {
+		free = 0
+	}
+
+	return &ContextBreakdown{
+		ModelLabel: label,
+		// The header reports system+tools+conversation, not the raw
+		// ContextUsed figure: they can otherwise disagree whenever a
+		// segment above got clamped (see the doc comment), and a header
+		// that does not match its own legend is the bug this rewrite
+		// fixes.
+		Used:   system + tools + conversation,
+		Window: window,
+		Segments: []ContextSegment{
+			{Label: "System prompt", Tokens: system},
+			{Label: "Tools", Tokens: tools},
+			{Label: "Conversation", Tokens: conversation},
+			{Label: "Free", Tokens: free},
+		},
+	}
+}
+
+// clampRange clamps v to [lo, hi], treating a hi below lo as lo (an
+// already-exhausted budget clamps everything after it to zero rather than
+// going negative).
+func clampRange(v, lo, hi int) int {
+	if hi < lo {
+		hi = lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // modelCache caches Registry.Available for a few seconds: /model's
@@ -210,14 +339,15 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 			Description: "Show context usage against the active tier",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				t := deps.CurrentTier()
-				return Result{Output: []string{
+				out := []string{
 					fmt.Sprintf("window        %d", t.ContextWindow),
 					fmt.Sprintf("tier          %s", t.Name),
 					fmt.Sprintf("tools         %s (%d tokens)", t.ToolStrategy, budget.ToolStrategyCost[t.ToolStrategy]),
 					fmt.Sprintf("system prompt %d max", t.SystemPromptTokens),
 					fmt.Sprintf("reserved      %d", t.Compaction.ReserveTokens),
 					fmt.Sprintf("available     %d for conversation", budget.UsableTokens(t)),
-				}}, nil
+				}
+				return Result{Output: out, Context: buildContextBreakdown(deps, t)}, nil
 			},
 		},
 		{

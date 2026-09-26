@@ -68,7 +68,7 @@ func TestRenderSpinnerNoSuffixAtZero(t *testing.T) {
 
 func TestRenderSpinnerThinkingSuffix(t *testing.T) {
 	line := stripANSI(RenderSpinner(SpinnerArgs{Frame: 0, Label: "Computing", ElapsedSeconds: 1, Thinking: true, Effort: "medium"}))
-	if line != "◐ Computing… (1s · thinking with medium effort)" {
+	if line != "◐ Computing…  1s · thinking with medium effort" {
 		t.Errorf("got %q", line)
 	}
 }
@@ -76,7 +76,7 @@ func TestRenderSpinnerThinkingSuffix(t *testing.T) {
 func TestRenderSpinnerTokenSuffixOverridesThinking(t *testing.T) {
 	tokens := 1200
 	line := stripANSI(RenderSpinner(SpinnerArgs{Frame: 0, Label: "Crunching", ElapsedSeconds: 4, Thinking: true, Tokens: &tokens}))
-	if line != "◐ Crunching… (4s · ↓ 1.2k tokens)" {
+	if line != "◐ Crunching…  4s · 1.2k tokens" {
 		t.Errorf("got %q", line)
 	}
 }
@@ -91,5 +91,8 @@ func TestSpinnerStateLabelAndThinking(t *testing.T) {
 	out := stripANSI(strings.Join(s.Render(80, time.Time{}), ""))
 	if !strings.Contains(out, "thinking with high effort") {
 		t.Errorf("got %q", out)
+	}
+	if !strings.Contains(out, "esc to stop") {
+		t.Errorf("busy line missing right-aligned hint: %q", out)
 	}
 }

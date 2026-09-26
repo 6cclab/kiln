@@ -49,19 +49,64 @@ func TestBuildPopup_SlashCommandMatching(t *testing.T) {
 	if len(p.Items) == 0 {
 		t.Fatal("expected at least one match")
 	}
-	// fuzzyMatch scores where the query's characters were found, not how
-	// much text follows them, so "model" and "modal-test" score exactly
-	// the same for query "mod" (both match at indices 0,1,2). fuzzyFilter
-	// sorts with a stable sort, so a genuine tie keeps the candidates'
-	// original (registry, i.e. alphabetical-by-qualified-name) order —
-	// "modal-test" before "model" — matching Array.prototype.sort's
-	// documented stability in the oracle.
+	// slashCommandSuggestions filters by prefix, not fuzzy score (finding
+	// 5): "modal-test" and "model" both start with "mod", so both match,
+	// in registry order (alphabetical-by-qualified-name) — "modal-test"
+	// before "model".
 	values := []string{p.Items[0].Value, p.Items[1].Value}
 	if values[0] != "modal-test" || values[1] != "model" {
-		t.Fatalf("order = %v, want [modal-test, model] (a genuine fuzzy-score tie, broken by stable-sort registry order)", values)
+		t.Fatalf("order = %v, want [modal-test, model] (both are prefix matches for \"mod\", in registry order)", values)
 	}
 	if p.Start != 0 || p.End != 4 {
 		t.Fatalf("range = [%d,%d), want [0,4) (the whole \"/mod\", leading slash included)", p.Start, p.End)
+	}
+}
+
+// TestBuildPopup_SlashCommandIsPrefixNotFuzzy is finding 5's regression
+// case: typing "/co" must list only commands whose name actually starts
+// with "co" ("/compact", "/context"), never "/doctor" — under fuzzy
+// matching, "doctor"'s letters happen to contain an out-of-order match
+// for "c"/"o" ("d-o-c-t-o-r"), which is exactly the bug this pins.
+func TestBuildPopup_SlashCommandIsPrefixNotFuzzy(t *testing.T) {
+	reg := commands.NewRegistry()
+	reg.Add(commands.StaticSource(commands.OriginBuiltin, []commands.Command{
+		{Name: "compact", Description: "compact the conversation",
+			Run: func(ctx context.Context, args string) (commands.Result, error) { return commands.Result{}, nil }},
+		{Name: "context", Description: "show context usage",
+			Run: func(ctx context.Context, args string) (commands.Result, error) { return commands.Result{}, nil }},
+		{Name: "doctor", Description: "diagnose the install",
+			Run: func(ctx context.Context, args string) (commands.Result, error) { return commands.Result{}, nil }},
+	}))
+
+	p := BuildPopup(reg, "/tmp", "/co", 3)
+	if p == nil {
+		t.Fatal("expected a popup for /co")
+	}
+	var values []string
+	for _, it := range p.Items {
+		values = append(values, it.Value)
+	}
+	for _, v := range values {
+		if v == "doctor" {
+			t.Fatalf("items = %v, want \"doctor\" excluded — it is not a prefix match for \"co\"", values)
+		}
+	}
+	if len(values) != 2 || values[0] != "compact" || values[1] != "context" {
+		t.Fatalf("items = %v, want exactly [compact, context] (alphabetical, both real prefix matches)", values)
+	}
+}
+
+// TestBuildPopup_SlashCommandPrefixIsCaseInsensitive covers matching
+// "/CO" (or any other casing) the same as "/co".
+func TestBuildPopup_SlashCommandPrefixIsCaseInsensitive(t *testing.T) {
+	reg := commands.NewRegistry()
+	reg.Add(commands.StaticSource(commands.OriginBuiltin, []commands.Command{
+		{Name: "context", Description: "show context usage",
+			Run: func(ctx context.Context, args string) (commands.Result, error) { return commands.Result{}, nil }},
+	}))
+	p := BuildPopup(reg, "/tmp", "/CO", 3)
+	if p == nil || len(p.Items) != 1 || p.Items[0].Value != "context" {
+		t.Fatalf("expected /CO to match \"context\" case-insensitively, got %+v", p)
 	}
 }
 
@@ -295,23 +340,21 @@ func TestPopup_RenderClampsToMaxRows(t *testing.T) {
 	}
 }
 
-// TestPopup_RenderMatchesReferenceColumns pins the slash layout to
-// autocomplete-slash.txt rows 29-30: value at column 2, description at
-// column 42, continuation aligned under it, clipped with "…" on the second
-// row.
+// TestPopup_RenderMatchesReferenceColumns pins the slash layout to the
+// kiln design handoff's palette: two-space indent, command padded to 10
+// columns (%-10s; a longer command overflows by one space), then the
+// description on the same row, truncated (not wrapped) to fit.
 func TestPopup_RenderMatchesReferenceColumns(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
 	p := &Popup{Kind: KindSlashCommand, Items: []AutocompleteItem{
 		{Value: "model", Description: "Set the AI model for Claude Code (currently Opus 5 (1M context))"},
-		{Value: "track-work", Description: "Track work as epics and stories in the self-hosted Task Tracker, streamed live to the mobile dashboard. Use when starting work."},
+		{Value: "track-work", Description: "Track work as epics and stories in the self-hosted Task Tracker."},
 	}}
 	got := p.Render(100, 5)
 	want := []string{
-		"  /model                                  Set the AI model for Claude Code (currently Opus 5 (1M",
-		"                                          context))",
-		"  /track-work                             Track work as epics and stories in the self-hosted Task",
-		"                                          Tracker, streamed live to the mobile dashboard. Use whe…",
+		"  /model    Set the AI model for Claude Code (currently Opus 5 (1M context))",
+		"  /track-work Track work as epics and stories in the self-hosted Task Tracker.",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("rows = %d, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))

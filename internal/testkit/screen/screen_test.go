@@ -211,6 +211,30 @@ func TestExit(t *testing.T) {
 	}
 }
 
+// TestExit_NoQuitKeySent covers the actual bug this suite reproduced live
+// (kiln-drive's own report, and testdata/drive/design-session.txt +
+// tui-smoke.txt, both of which end in a bare EXIT with no quit key sent
+// first): Exit must still terminate the process and return within the
+// screen's timeout even when nothing has told the driven program to quit.
+// Before the fix, Exit only ever waited for the process to exit on its
+// own — a program with no idle self-exit (every real kiln session, and
+// stubtui here) would reliably time out.
+func TestExit_NoQuitKeySent(t *testing.T) {
+	s := screen.Start(t, stubBinary, nil, 40, 10)
+	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+		t.Fatalf("waiting for prompt: %v", err)
+	}
+	// A non-nil err here can legitimately be cmd.Wait()'s own "exit status
+	// N" for a process SIGINT terminated without its own graceful-quit
+	// path (stubtui has no SIGINT handler, so the Go runtime's default
+	// disposition applies) — that is still Exit succeeding at its actual
+	// job. Only the "did not exit within" timeout error means Exit failed
+	// to terminate the process at all, which is the bug this test pins.
+	if _, err := s.Exit(); err != nil && strings.Contains(err.Error(), "did not exit within") {
+		t.Fatalf("Exit: %v (want the process to still terminate via SIGINT, not time out)", err)
+	}
+}
+
 // TestStartupLatency answers phase 0 question (iii): does the stub start
 // cleanly under the emulator, i.e. does the mode 2026 (synchronized output)
 // capability query bubbletea sends on startup get answered promptly rather

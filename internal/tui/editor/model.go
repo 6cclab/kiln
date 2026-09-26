@@ -111,6 +111,10 @@ type Model struct {
 	draft string
 
 	kill killRing
+
+	// placeholder overrides DefaultPlaceholder — the app switches this per
+	// state (idle/busy/waiting on a prompt) via SetPlaceholder.
+	placeholder string
 }
 
 // New builds an unfocused, empty Model. Call Focus (and issue its Cmd) once
@@ -125,7 +129,16 @@ func New(styles Styles) Model {
 	ta.SetVirtualCursor(false) // hardware cursor via Cursor(), not an inline block
 	ta.SetStyles(neutralTextareaStyles())
 	ta.SetHeight(1)
-	return Model{ta: ta, styles: styles, historyIdx: -1}
+	return Model{ta: ta, styles: styles, historyIdx: -1, placeholder: DefaultPlaceholder}
+}
+
+// SetPlaceholder overrides the placeholder text shown in an empty editor.
+// An empty string resets it to DefaultPlaceholder.
+func (m *Model) SetPlaceholder(s string) {
+	if s == "" {
+		s = DefaultPlaceholder
+	}
+	m.placeholder = s
 }
 
 // neutralTextareaStyles strips textarea's own default background/foreground

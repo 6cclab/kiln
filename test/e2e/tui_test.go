@@ -45,6 +45,11 @@ func startTUI(t *testing.T, cols, rows int, proj, home, sessDir, fauxAddr string
 		screen.WithEnv("HARNESS_SESSIONS_DIR", sessDir),
 		screen.WithEnv("HARNESS_MODEL", "faux/faux-1"),
 		screen.WithEnv("HARNESS_TEST_CLOCK", testClock),
+		// Retry backoff jitter is disabled for every e2e run, exactly like
+		// the frozen test clock above: a countdown/reconnect test racing a
+		// random delay is flaky by construction, not by bug (see
+		// internal/harness/retry.go's delay).
+		screen.WithEnv("HARNESS_RETRY_JITTER", "0"),
 	}
 	if fauxAddr != "" {
 		opts = append(opts,
@@ -97,50 +102,62 @@ func waitReady(t *testing.T, s *screen.Screen) {
 	}
 }
 
-// turnSummaryPattern matches the turn-summary line's tail ("<Verb> for
-// <N>s · done <h:mm AM/PM>", transcript.go's RenderTurnSummary) regardless
-// of which of the eight flavour verbs (Brewed, Crunched, Cooked, ...) this
-// turn picked — see PickLabel/PastTense in internal/tui/transcript.go.
-var turnSummaryPattern = regexp.MustCompile(`for \d+s · done`)
+// spinnerFramePattern matches the busy-line's spinner glyph and label,
+// e.g. "◐ Crunching…" or "- Crunching…" in plain mode — reusing
+// spinnerRowPattern's own "glyph, label, ellipsis" shape (rather than a
+// bare leading glyph) so it cannot false-positive on the banner's tips row
+// ("/ commands   @ add files …", which also starts with a single
+// character then a space).
+var spinnerFramePattern = regexp.MustCompile(`(?m)^[◐◓◑◒\-\\|/] \S+…`)
 
-// waitTurnSettled waits for the turn-summary line (the turn is committed)
-// and then for the busy hint to actually clear.
-//
-// Bug found while writing this suite (not routed around): finishTurn
-// (app.go) commits the turn-summary lines to the Bridge and flips
-// m.busy=false/m.spinner.Stop() in the same Update call, but the Bridge
-// writes committed scrollback lines to the terminal on its own goroutine
-// (bridge.go's committer), independent of Bubbletea's own render loop. In
-// a real, repeatable run (`go test -tags e2e -run TestTUI_FixBug -count=6
-// -v`, roughly 1-in-6 on this machine) the turn-summary line lands on
-// screen a frame before the live region redraws without the busy
-// spinner row (its label ends in "…" while busy — spinner.go's Render),
-// i.e. the two are not atomic from the terminal's point of view. A screen
-// assertion that fires the instant the summary appears can therefore
-// observe a screen with both the summary committed *and* a stale busy row
-// still showing above the footer — a real, if narrow, visible glitch (one
-// extra row briefly present, the busy "…" row hanging around for a beat
-// after the turn finished), not a test artifact. Tests that need a
-// settled idle frame (goldens, OccupiedHeight comparisons) call this
-// instead of a bare WaitFor(turnSummaryPattern, ...) so they assert on the
-// state a human would actually see once things stop moving, matching how
-// the fix is described upstream (see this suite's final report) — making
-// the Bridge's commit and the Model's busy flag land in the same frame,
-// which is out of scope here since it's inside internal/tui/bridge.go.
+// idlePlaceholderText is the editor's idle placeholder (editor.DefaultPlaceholder,
+// docs/kiln-design-handoff/README.md "Interactions"): present once the
+// turn-summary row is gone and the busy line has cleared, so its
+// appearance is the "idle" signal replacing the old committed turn-summary
+// line (removed — the busy line just disappears at turn end now).
+const idlePlaceholderText = "describe a task"
+
+// turnSummaryPattern used to match the removed turn-summary row
+// ("✻ Brewed for …s · done h:mmAM", RenderTurnSummary — deleted, the kiln
+// design's busy line just disappears at turn end with nothing committed
+// in its place). Every other e2e file that waited on it (mcp_behaviour_test.go,
+// mcp_tui_test.go, tui_fullscreen_test.go, tui_gap_test.go) is really
+// waiting for "the turn is done": with no summary row left to watch for,
+// this now matches the editor's idle placeholder instead, which appears
+// only once busy is false and the input box shows it again — the same
+// "turn is done" signal, just carried by a different row.
+var turnSummaryPattern = regexp.MustCompile(regexp.QuoteMeta(idlePlaceholderText))
+
+// waitTurnSettled waits until no row on screen carries a spinner frame and
+// the editor's idle placeholder is back, then for the screen to stop
+// changing entirely — the kiln design removed the turn-summary row
+// ("✻ Brewed for …", the old settle signal this test used to wait on), so
+// a turn's end is no longer marked by anything committed to scrollback; the
+// busy line (and its spinner) just disappears (docs/kiln-design-handoff/README.md
+// "Interactions").
 func waitTurnSettled(t *testing.T, s *screen.Screen) {
 	t.Helper()
-	if err := s.WaitFor(turnSummaryPattern, 10*time.Second); err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rows := s.Rows()
+		spinning := false
+		idle := false
+		for _, r := range rows {
+			if spinnerFramePattern.MatchString(r) {
+				spinning = true
+			}
+			if strings.Contains(r, idlePlaceholderText) {
+				idle = true
+			}
+		}
+		if !spinning && idle {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waitTurnSettled: still busy after 10s:\n%s", strings.Join(rows, "\n"))
+		}
+		time.Sleep(15 * time.Millisecond)
 	}
-	// The turn summary ("… for Ns · done") is committed by finishTurn only
-	// once the turn has fully ended and the busy spinner is cleared, so its
-	// appearance already proves the turn settled. We then wait for the
-	// screen to stop changing entirely — the spinner row clearing is itself
-	// a change, so quiescence covers the rare frame where it lingers one
-	// tick past the summary. (An earlier version also spun until no "…"
-	// remained on screen, but "…" legitimately appears in the banner's
-	// truncated cwd/model row and in truncated tool output, so that check
-	// could never clear once the banner stayed on screen.)
 	if err := waitQuiescent(s, 250*time.Millisecond, 3*time.Second); err != nil {
 		t.Fatal(err)
 	}
@@ -304,6 +321,20 @@ const bannerCwdMarker = " · model "
 // (dropping the model/effort tail entirely, since this row's golden
 // coverage is about box-width layout, not banner wording) before writing
 // or comparing against testdata/golden/*.txt.
+// statusRowCwdPattern matches the status line's location segment (and the
+// spacer after it, whose width depends on the path's length) when a
+// terminal is wide enough that the full scratch-project path (a run-
+// varying temp dir, e.g. .../TestFoo1234567890/001, whose length itself
+// varies run to run) survives un-truncated after the mode segment's "⇧⇥"
+// — status.go's RenderStatusLine, "<mode segment>  <cwd>[· branch]
+// <spacer>ctx …". The whole match (path plus its variable-width spacer) is
+// replaced as one unit, or a shorter run's spacer would leave a
+// differently-sized gap than a longer run's and the golden would still
+// flap between otherwise-identical runs. Narrower widths either drop this
+// segment entirely (nothing to mask) or truncate it with "…", which
+// normalizeBannerCwdRow's other cases already stabilize.
+var statusRowCwdPattern = regexp.MustCompile(`⇧⇥ {2}\S+\s+ctx`)
+
 func normalizeBannerCwdRow(rows []string) []string {
 	out := make([]string, len(rows))
 	for i, r := range rows {
@@ -311,12 +342,17 @@ func normalizeBannerCwdRow(rows []string) []string {
 		case strings.Contains(r, bannerCwdMarker):
 			// Wide enough that "<cwd> · [branch B ·] model M" survives.
 			out[i] = "<cwd>" + bannerCwdMarker + "…"
-		case strings.HasPrefix(r, "/") || strings.HasPrefix(r, "~"):
+		case (strings.HasPrefix(r, "/") || strings.HasPrefix(r, "~")) && !strings.Contains(r, "commands"):
 			// The banner's cwd row, truncated so hard that the " · model "
-			// marker itself was cut off — it is the only row that starts
-			// with an absolute or ~ path (a run-varying temp dir), so mask
-			// it whole.
+			// marker itself was cut off — a run-varying temp dir, so mask
+			// it whole. Excludes the banner's tips row ("/ commands   @ add
+			// files …"), which also starts with "/" (the kiln-amber "/"
+			// glyph) but is never a path.
 			out[i] = "<cwd>…"
+		case statusRowCwdPattern.MatchString(r):
+			// The status line's own location segment, wide enough to show
+			// the full scratch path un-truncated.
+			out[i] = statusRowCwdPattern.ReplaceAllString(r, "⇧⇥  <cwd> ctx")
 		default:
 			out[i] = r
 		}
@@ -332,21 +368,21 @@ func assertGoldenNormalizedBanner(t *testing.T, s *screen.Screen, name string) {
 	assertGolden(t, goldenPath(name+".txt"), got+"\n")
 }
 
-// modeLinePattern matches the bottom area's single mode-line row in any of
-// its states: modeLineText's six mode wordings (app.go) — "manual mode
-// on", "auto mode on (shift+tab to cycle)", "accept edits on (...)", "plan
-// mode on (...)", "bypass permissions on (...)", "don't ask on (...)" —
-// all end "<word> on", so `\bon\b` alone covers every one without
-// enumerating them; or the one-second Ctrl+C hint that replaces it
-// ("Press Ctrl-C again to exit").
-var modeLinePattern = regexp.MustCompile(`\bon\b|Press Ctrl-C again to exit`)
+// modeLinePattern matches the bottom area's single status-line row in any
+// of its states: RenderStatusLine's five mode labels (status.go) — "ask
+// before edits", "auto-edit", "bypass permissions", "don't ask", "plan
+// only" — the one-second Ctrl+C hint that replaces it ("Press Ctrl-C again
+// to exit"), the Ctrl+Y paste hint, or the Ctrl+O verbose notice's
+// right-aligned "verbose" label.
+var modeLinePattern = regexp.MustCompile(`ask before edits|auto-edit|bypass permissions|don't ask|plan only|Press Ctrl-C again to exit|Ctrl\+Y to paste deleted text|^\s*verbose\s*$|verbose$`)
 
 // assertFooterInvariant checks the two things every screen in this file
 // that isn't mid-panel/mid-transcript-view should satisfy: the bottom area
-// is exactly one row — the mode line, with no status row above it
-// (docs/claude-code-reference.md §1: the bottom area is the input box and
-// the mode line only, see app.go's View doc comment) — and nothing is
-// drawn below it (OccupiedHeight matches the trimmed row count exactly).
+// is exactly one row — the status line, with no extra row above it
+// (docs/kiln-design-handoff/README.md "Screen anatomy": the bottom area is
+// the input box and the status line only, see app.go's renderStatusRow) —
+// and nothing is drawn below it (OccupiedHeight matches the trimmed row
+// count exactly).
 func assertFooterInvariant(t *testing.T, s *screen.Screen) {
 	t.Helper()
 	rows := s.Rows()
@@ -385,6 +421,112 @@ func loadFauxScript(t *testing.T, name string) string {
 	return string(data)
 }
 
+// stylesOpts controls assertGoldenStyles's normalisation, mirroring the
+// plain-text helpers above: anchor drops every row above the first one
+// containing it (like assertGoldenTail; empty keeps all rows),
+// normalizeBanner masks the startup banner's cwd row (like
+// assertGoldenNormalizedBanner / normalizeBannerCwdRow), and
+// normalizeSpinner masks the live spinner/status row (like
+// assertGoldenNormalizedSpinner).
+type stylesOpts struct {
+	anchor           string
+	normalizeBanner  bool
+	normalizeSpinner bool
+}
+
+// maskStyledRows replaces the text of every row mask matches with the
+// text mask returns, and drops that row's style spans entirely (all
+// cells reset to screen.CellStyle{}, the zero/unstyled value) — masking
+// both the volatile text and its styling the same way the plain-text
+// helpers mask volatile text. Rows mask does not match are returned
+// unchanged, sharing the original styles slice.
+func maskStyledRows(rows []string, styles [][]screen.CellStyle, mask func(string) (string, bool)) ([]string, [][]screen.CellStyle) {
+	outRows := make([]string, len(rows))
+	outStyles := make([][]screen.CellStyle, len(styles))
+	for i, r := range rows {
+		if masked, ok := mask(r); ok {
+			outRows[i] = masked
+			outStyles[i] = make([]screen.CellStyle, len(styles[i]))
+			continue
+		}
+		outRows[i] = r
+		outStyles[i] = styles[i]
+	}
+	return outRows, outStyles
+}
+
+// maskBannerCwdRowStyled is normalizeBannerCwdRow's per-row predicate,
+// reused by assertGoldenStyles via maskStyledRows so the styled encoding
+// masks the same row the same way the plain-text goldens do.
+func maskBannerCwdRowStyled(r string) (string, bool) {
+	switch {
+	case strings.Contains(r, bannerCwdMarker):
+		return "<cwd>" + bannerCwdMarker + "…", true
+	case (strings.HasPrefix(r, "/") || strings.HasPrefix(r, "~")) && !strings.Contains(r, "commands"):
+		return "<cwd>…", true
+	case statusRowCwdPattern.MatchString(r):
+		return statusRowCwdPattern.ReplaceAllString(r, "⇧⇥  <cwd> ctx"), true
+	default:
+		return "", false
+	}
+}
+
+// maskSpinnerRowStyled is assertGoldenNormalizedSpinner's per-row
+// predicate, reused by assertGoldenStyles.
+func maskSpinnerRowStyled(r string) (string, bool) {
+	if spinnerRowPattern.MatchString(r) {
+		return "<spinner> (0s · ↓ 150 tokens)", true
+	}
+	return "", false
+}
+
+// assertGoldenStyles compares the screen's styled encoding
+// (screen.EncodeStyledRow per row, over s.Viewport()/s.Styles()) against
+// testdata/golden/<name>.styles.txt, after applying opts' normalisations.
+// It is the styled counterpart to assertGoldenTail /
+// assertGoldenNormalizedBanner / assertGoldenNormalizedSpinner: masking
+// happens on the plain text + per-row style slice, in the same order the
+// row would be dropped or replaced by those helpers, before the row is
+// encoded — so a masked row's styling (which would otherwise be as
+// volatile as its text: the live spinner glyph cycles colour with its
+// frame, and the banner cwd row's width-dependent truncation point can
+// shift where a style span ends) never reaches the golden file.
+func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts stylesOpts) {
+	t.Helper()
+
+	rows := s.Viewport()
+	styles := s.Styles()
+
+	start := 0
+	if opts.anchor != "" {
+		for i, r := range rows {
+			if strings.Contains(r, opts.anchor) {
+				start = i
+				break
+			}
+		}
+	}
+	rows = rows[start:]
+	styles = styles[start:]
+
+	if opts.normalizeBanner {
+		rows, styles = maskStyledRows(rows, styles, maskBannerCwdRowStyled)
+	}
+	if opts.normalizeSpinner {
+		rows, styles = maskStyledRows(rows, styles, maskSpinnerRowStyled)
+	}
+
+	lines := make([]string, len(rows))
+	for i := range rows {
+		lines[i] = screen.EncodeStyledRow(rows[i], styles[i])
+	}
+	for len(lines) > 0 && strings.TrimRight(lines[len(lines)-1], " ") == "" {
+		lines = lines[:len(lines)-1]
+	}
+	got := strings.Join(lines, "\n")
+	assertGolden(t, goldenPath(name+".styles.txt"), got+"\n")
+}
+
 // --- 1. Empty box goldens across widths -------------------------------
 
 func TestTUI_EmptyBox_Widths(t *testing.T) {
@@ -420,21 +562,26 @@ func TestTUI_FixBug(t *testing.T) {
 	waitTurnSettled(t, s)
 
 	joined := strings.Join(s.Rows(), "\n")
-	// Read is a read-only tool now and collapses into the grouped "Read N
-	// files" row instead of its own header (internal/tui/replay.go's
-	// groupKindFor covers "read" unconditionally, not just in manual
-	// mode — see this suite's report). Edit renders as kiln's "edit"
-	// block: an "edit" label rule (filename meta) above "Update <path>"
-	// (transcript.go's MapToolName / RenderToolCall), not the old
-	// "Update(...)" parenthesized header.
-	if !strings.Contains(joined, "Read 1 file") {
-		t.Errorf("transcript missing the grouped \"Read 1 file\" row:\n%s", joined)
+	// Read-only calls no longer collapse to a summary row in the
+	// committed transcript (internal/tui/app.go's flushGroup, kiln UI
+	// pass Phase 2.1): the live region still shows the collapsed
+	// "Reading N files…" row while the group is in flight, but once it
+	// flushes each call commits its own full "tool" block — so the
+	// committed transcript shows a "read" label rule and a "Read
+	// src/math.js" head line instead of "Read 1 file". Edit renders as
+	// kiln's "edit" block: an "edit" label rule with the filename as meta,
+	// then a panel header row carrying the path and +N/−N counts — there
+	// is no separate "Update <path>" head line any more (Phase 2.2 drops
+	// it; see transcript.go's RenderToolCall doc comment).
+	if !strings.Contains(joined, "read ") || !strings.Contains(joined, "Read src/math.js") {
+		t.Errorf("transcript missing the full \"read\" tool block:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Update src/math.js") {
-		t.Errorf("transcript missing the \"Update src/math.js\" header:\n%s", joined)
+	if !strings.Contains(joined, "src/math.js") || !strings.Contains(joined, "+1") || !strings.Contains(joined, "−1") {
+		t.Errorf("transcript missing the diff header row (path + counts):\n%s", joined)
 	}
 
 	assertGoldenTail(t, s, "tui-fix-bug", "/ commands")
+	assertGoldenStyles(t, s, "tui-fix-bug", stylesOpts{anchor: "/ commands"})
 
 	fixed, err := os.ReadFile(filepath.Join(proj, "src", "math.js"))
 	if err != nil {
@@ -523,38 +670,48 @@ func TestTUI_Permission_DenyWithFeedback(t *testing.T) {
 	// suite's task brief item 4), so the fix-bug script's Read never
 	// prompts; only the Edit that follows it does. The prompt no longer
 	// says "Permission required" — RenderEditPermissionPrompt
-	// (permission_render.go) asks "Allow kiln to edit <path>?", with the
-	// tool-call header ("update" label rule + "Update <path>") committed
-	// to the transcript just above it (app.go's MsgPermissionPrompt
-	// handling).
+	// (permission_render.go) asks "Allow kiln to edit <path>?" — and, per
+	// Phase 3's C item, the "approval needed" block now stands alone: no
+	// tool-call header commits above it any more (docs/kiln-design-handoff/
+	// README.md's "Interactions"; app.go's MsgPermissionPrompt no longer
+	// pre-commits "Update <path>" — the tool's own block commits after the
+	// decision instead, on EventToolEnd).
 	if err := s.WaitFor("Allow kiln to edit", 5*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.WaitFor("Update src/math.js", 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	assertGoldenNormalizedSpinner(t, s, "tui-permission")
 
-	s.SendKey("n")
-	if err := s.WaitFor("What should be done instead?", 2*time.Second); err != nil {
+	// The Edit prompt's rendered options (RenderEditPermissionPrompt) are
+	// "Yes" / "Yes, and switch to accept edits" / "No" — unlike the
+	// generic 3-option prompt, there is no "and tell kiln what to do
+	// instead" wording here, so "3" (its "No") denies outright with no
+	// feedback capture (finding 1: keys map to the rendered label, not a
+	// one-size-fits-all 3-option scheme). Deny-with-feedback's own
+	// mechanics — PromptState entering feedback mode, and permission.Check
+	// turning Feedback into "the user declined and said: …" for the
+	// model — are covered directly by permissionview_test.go's
+	// TestPromptState_ToolDenyWithFeedback and permission_test.go, using a
+	// tool whose rendered prompt actually offers that option.
+	s.SendKey("3")
+
+	// Declining commits a "✕ Declined Update <path>" system note ahead of
+	// the model's own reply (Phase 3's C item).
+	if err := s.WaitFor("Declined Update src/math.js", 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	s.Send("use mul instead")
-	s.SendKey("enter")
-
-	if err := s.WaitFor("declined and said", 5*time.Second); err != nil {
+	if err := s.WaitFor("declined. Ask what they would prefer", 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
 
 	found := false
 	for _, msgs := range requests() {
-		if strings.Contains(string(msgs), "use mul instead") {
+		if strings.Contains(string(msgs), "the user declined") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("faux never received a request whose Messages contained the deny feedback text")
+		t.Error("faux never received a request whose Messages contained the decline reason")
 	}
 }
 
@@ -691,10 +848,10 @@ func TestTUI_ShiftTab_CyclesMode(t *testing.T) {
 
 	// permissionModeRing in app.go: auto -> manual -> acceptEdits -> plan ->
 	// auto; the default start mode is manual, so cycling from there goes
-	// manual -> acceptEdits -> plan -> auto -> manual. Mode-line wording is
-	// modeLineText's (app.go): "manual mode on", "accept edits on", "plan
-	// mode on", "auto mode on" — not "acceptEdits mode".
-	order := []string{"manual mode on", "accept edits on", "plan mode on", "auto mode on", "manual mode on"}
+	// manual -> acceptEdits -> plan -> auto -> manual. Status-line mode
+	// labels are status.go's modeLabel: "ask before edits" (manual),
+	// "auto-edit" (acceptEdits and auto both), "plan only" (plan).
+	order := []string{"ask before edits", "auto-edit", "plan only", "auto-edit", "ask before edits"}
 	if err := s.WaitFor(order[0], 2*time.Second); err != nil {
 		t.Fatalf("did not start in manual mode: %v", err)
 	}
@@ -732,13 +889,13 @@ func TestTUI_CtrlO_Verbose(t *testing.T) {
 	}
 	joined := strings.Join(s.Rows(), "\n")
 	// Verbose mode shows the absolute path, not the cwd-relative one
-	// (RenderToolCall/MapToolName). kiln's "tool"/"edit" block anatomy
-	// has no "Name(arg)" parenthesized header any more — it's a label
-	// rule ("read"/"edit") above a plain "Read"/"Update" line, with the
-	// (possibly wrapped) path as Muted continuation text — see
-	// TestTUI_FixBug's own non-verbose assertion for the relative-path
-	// "Update <path>" form this suite still checks elsewhere.
-	if !strings.Contains(joined, "Read") || !strings.Contains(joined, "Update") || !strings.Contains(joined, "math.js") {
+	// (RenderToolCall/MapToolName). kiln's "tool" block anatomy has no
+	// "Name(arg)" parenthesized header any more — it's a label rule
+	// ("read") above a plain "Read" line, with the (possibly wrapped)
+	// path as Muted continuation text. The "edit" block for a diff has no
+	// "Update <path>" head line at all (Phase 2.2 drops it) — the path
+	// instead shows on the panel header row alongside its +N/−N counts.
+	if !strings.Contains(joined, "Read") || !strings.Contains(joined, "edit ") || !strings.Contains(joined, "math.js") {
 		t.Errorf("verbose transcript missing tool calls:\n%s", joined)
 	}
 	// kiln's result-line marker is "→" (Action glyph), not Claude Code's
@@ -1060,9 +1217,9 @@ func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
 	s.SendKey("enter")
 
 	// Both dispatches are live (running) at once: the header reads "2
-	// live · 0 done" while the 400ms delay on each subagent's reply is
-	// still in flight.
-	if err := s.WaitFor(regexp.MustCompile(`subagents.*2 live`), 3*time.Second); err != nil {
+	// subagents running in parallel" while the 400ms delay on each
+	// subagent's reply is still in flight.
+	if err := s.WaitFor(regexp.MustCompile(`2 subagents running in parallel`), 3*time.Second); err != nil {
 		t.Fatalf("subagents panel never showed two live rows: %v", err)
 	}
 	if err := s.WaitFor("look something up", 500*time.Millisecond); err != nil {
@@ -1079,18 +1236,106 @@ func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
 	// clears at the *next* turn's start, app.go's beginTurn — so this
 	// checks it's still visible with both rows resolved right after the
 	// turn ends)...
-	if err := s.WaitFor(regexp.MustCompile(`subagents.*0 live.*2 done`), 2*time.Second); err != nil {
+	if err := s.WaitFor(regexp.MustCompile(`2 subagents finished`), 2*time.Second); err != nil {
 		t.Fatalf("subagents panel did not settle to two done rows: %v", err)
 	}
 
-	// ...then submitting a new turn clears it, proving the reset actually
-	// happens at the turn boundary rather than lingering forever.
+	// The finished panel committed to scrollback as an ordinary transcript
+	// block (docs/kiln-design-handoff/README.md's "Blocks update in
+	// place": the last update is the one that survives) — it does not
+	// vanish outright, unlike before this phase. What has to be true is
+	// that submitting a NEW turn does not show a second, live "subagents"
+	// header on top of the committed one: the reset happens at the turn
+	// boundary (app.go's beginTurn) rather than the panel lingering live
+	// forever.
+	before := strings.Count(strings.Join(s.Rows(), "\n"), "subagents")
+	if before == 0 {
+		t.Fatalf("expected the finished panel to have committed to scrollback")
+	}
+
 	s.Send("another prompt")
 	s.SendKey("enter")
 	if err := s.WaitFor(turnSummaryPattern, 10*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.Join(s.Rows(), "\n"), "subagents") {
-		t.Errorf("subagents panel from the previous turn was not cleared for the new one:\n%s", strings.Join(s.Rows(), "\n"))
+	if after := strings.Count(strings.Join(s.Rows(), "\n"), "subagents"); after != before {
+		t.Errorf("subagents panel reappeared live for the new turn (before=%d after=%d):\n%s", before, after, strings.Join(s.Rows(), "\n"))
+	}
+}
+
+// --- Phase 1 (bottom chrome): status line and placeholder --------------
+
+// TestTUI_StatusLine_CtxAndCost drives a turn that reports usage and
+// checks the status row's context segment: "ctx", a meter (kiln's ━/─
+// glyphs) and a percentage. faux-1's context window is 128000
+// (internal/provider/faux/faux.go), so usage {input: 5000, output: 200}
+// is 5200/128000 ≈ 4%. faux-1 has no configured price
+// (provider.ModelCost{}, faux.go), so the "$" cost segment must be
+// absent — this test asserts that absence rather than a nonzero value,
+// since faux has nothing to charge.
+func TestTUI_StatusLine_CtxAndCost(t *testing.T) {
+	script := loadFauxScript(t, "status-usage")
+	proj, home, sessDir, addr, _ := tuiFixture(t, script)
+
+	s := startTUI(t, 100, 24, proj, home, sessDir, addr,
+		"--permission-mode", "bypassPermissions",
+	)
+	waitReady(t, s)
+
+	s.Send("go")
+	s.SendKey("enter")
+	waitTurnSettled(t, s)
+
+	rows := s.Rows()
+	var statusRow string
+	for _, r := range rows {
+		if strings.Contains(r, "ctx ") {
+			statusRow = r
+			break
+		}
+	}
+	if statusRow == "" {
+		t.Fatalf("no row shows the context segment (\"ctx \"):\n%s", strings.Join(rows, "\n"))
+	}
+	if !strings.Contains(statusRow, "%") {
+		t.Errorf("status row %q missing a percentage", statusRow)
+	}
+	if !strings.ContainsAny(statusRow, "━─=-") {
+		t.Errorf("status row %q missing the context meter glyphs", statusRow)
+	}
+	if strings.Contains(statusRow, "$") {
+		t.Errorf("status row %q shows a cost segment, but faux-1 has no configured price: %v", statusRow, false)
+	}
+}
+
+// TestTUI_Placeholder_Busy checks the editor's placeholder switches from
+// the idle default to the busy text while a turn is running (SetPlaceholder,
+// app.go's beginTurn/finishTurn — docs/kiln-design-handoff/README.md
+// "Interactions"), then back once the turn settles.
+func TestTUI_Placeholder_Busy(t *testing.T) {
+	script := loadFauxScript(t, "slow")
+	proj, home, sessDir, addr, _ := tuiFixture(t, script)
+
+	s := startTUI(t, 100, 24, proj, home, sessDir, addr,
+		"--permission-mode", "bypassPermissions",
+	)
+	waitReady(t, s)
+	if err := s.WaitFor(idlePlaceholderText, 2*time.Second); err != nil {
+		t.Fatalf("idle placeholder never appeared: %v", err)
+	}
+
+	s.Send("go slow")
+	s.SendKey("enter")
+
+	if err := s.WaitFor("queue a follow-up", 2*time.Second); err != nil {
+		t.Fatalf("busy placeholder never appeared: %v", err)
+	}
+	if anyRowMatches(s, regexp.MustCompile(idlePlaceholderText)) {
+		t.Error("idle placeholder still visible while busy")
+	}
+
+	waitTurnSettled(t, s)
+	if err := s.WaitFor(idlePlaceholderText, 2*time.Second); err != nil {
+		t.Fatalf("idle placeholder did not return after the turn settled: %v", err)
 	}
 }

@@ -2,14 +2,10 @@ package editor
 
 import "charm.land/lipgloss/v2"
 
-// DefaultPlaceholder is the dim example text shown in an empty editor. The
-// harness has no rotating-tip infrastructure of its own yet (nothing else
-// in this package or its caller picks a tip at random or on a timer); this
-// is the one placeholder shown, and it must read exactly as Claude Code's
-// own first tip does (docs/claude-code-reference.md §2,
-// testdata/reference/claude-code/startup-default-home.txt row 9: `❯ Try "how
-// do I log an error?"`).
-const DefaultPlaceholder = `Try "how do I log an error?"`
+// DefaultPlaceholder is the dim example text shown in an empty, idle editor
+// (docs/kiln-design-handoff/README.md "Interactions"). SetPlaceholder
+// overrides it for other states (busy, waiting on a prompt).
+const DefaultPlaceholder = `describe a task · / for commands · @ to add files`
 
 // Styles is the small set of colours and glyphs the app injects into the
 // editor, so this package never has to import the (not-yet-written) theme

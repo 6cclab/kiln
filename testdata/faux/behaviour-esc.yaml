@@ -1,0 +1,3 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "sleep 5"}, id: tc1}

@@ -49,6 +49,17 @@ func (l *Lane) Prompt(ctx context.Context, text string, images []msg.ImageConten
 	}()
 
 	tip, _ := l.GetTipID()
+	// A Steer call between the previous operation ending and this one
+	// starting (the between-turns case TestSteerDelivery exercises) left
+	// its entry parked in the inbox, off the branch. Drain it here, before
+	// this prompt's own entry is parented, so the queued text lands
+	// ahead of the new prompt in the transcript rather than after it or
+	// not at all — the same checkpoint the drive loop applies mid-run,
+	// just reached from a fresh Prompt call instead of a loop iteration.
+	var drainErr error
+	if tip, _, drainErr = l.drainInbox(tip); drainErr != nil {
+		return RunResult{}, drainErr
+	}
 	var parent *string
 	if tip != "" {
 		parent = &tip
@@ -170,6 +181,18 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 
 		l.h.events.Emit(Event{Type: EventTurnStart, Lane: l.name, OperationID: operationID})
 
+		// Checkpoint: drain any follow-ups Lane.Steer queued while the
+		// previous iteration's request was in flight, before this
+		// iteration reads the branch for its own transcript. This is the
+		// "after a message end / before the next p.Stream" checkpoint —
+		// a Steer call racing the in-flight request lands in the inbox,
+		// not on the tip (see Steer's doc comment), so it must be
+		// re-parented onto the tip here or the model never sees it.
+		var drainErr error
+		if tip, _, drainErr = l.drainInbox(tip); drainErr != nil {
+			return l.finishFailed(operationID, tip, drainErr)
+		}
+
 		_, cfg, err := l.resolveModel()
 		if err != nil {
 			return l.finishFailed(operationID, tip, err)
@@ -251,6 +274,21 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 
 		if len(toolCalls) == 0 {
 			l.h.events.Emit(Event{Type: EventTurnEnd, Lane: l.name, OperationID: operationID})
+			// The model finished before the next loop iteration's own
+			// checkpoint got a chance to drain the inbox. A queued
+			// follow-up that only ever lands on the branch, with no
+			// model turn of its own, is the same bug as one that never
+			// reached the branch at all — so if anything was queued,
+			// keep the operation running for one more model call
+			// instead of finishing it.
+			var drained bool
+			var drainErr error
+			if tip, drained, drainErr = l.drainInbox(tip); drainErr != nil {
+				return l.finishFailed(operationID, tip, drainErr)
+			}
+			if drained {
+				continue
+			}
 			return l.finishCompleted(operationID, tip)
 		}
 
@@ -288,6 +326,68 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		tip = l.autoCompact(ctx, tip)
 		// loop back for the next assistant turn.
 	}
+}
+
+// drainInbox re-parents every entry queued via Lane.Steer since the last
+// drain onto tip and clears pi.lane.state.inbox. A queued entry cannot be
+// re-parented in place — commit.go's ValidateCommittedWrites rejects a
+// duplicate entry id, and nothing in this codebase rewrites a committed
+// entry's ParentID — so each item becomes a fresh entry that copies the
+// queued message, parented onto the current tip, and the branch tip is
+// advanced to it. It reports the resulting tip and whether anything was
+// drained: a turn that ended with no tool calls must not finish the
+// operation if drainInbox drained something, because a queued follow-up
+// that lands on the branch but never gets its own model turn is exactly
+// as broken as one that fell off the branch entirely.
+func (l *Lane) drainInbox(tip string) (string, bool, error) {
+	st, err := l.laneState()
+	if err != nil {
+		return tip, false, err
+	}
+	if len(st.Inbox) == 0 {
+		return tip, false, nil
+	}
+	ids := make([]string, len(st.Inbox))
+	for i, item := range st.Inbox {
+		ids[i] = item.EntryID
+	}
+	queuedEntries := l.h.opts.Storage.GetEntries(ids)
+	drained := false
+	for _, item := range st.Inbox {
+		queued, ok := queuedEntries[item.EntryID]
+		if !ok {
+			continue
+		}
+		newID := l.newID()
+		var parent *string
+		if tip != "" {
+			p := tip
+			parent = &p
+		}
+		entryWrite := session.EntryWrite{Entry: session.Entry{
+			ID: newID, ParentID: parent, Type: queued.Type, CustomType: queued.CustomType, Message: queued.Message,
+		}}
+		tipWrite, err := session.SetValue(session.BranchTip(l.name), &newID)
+		if err != nil {
+			return tip, drained, err
+		}
+		if _, err := l.h.opts.Storage.Commit([]session.Write{entryWrite, tipWrite}); err != nil {
+			return tip, drained, err
+		}
+		l.h.events.Emit(Event{Type: EventEntryAdded, Lane: l.name, EntryID: newID, ParentID: derefOr(parent, "")})
+		tip = newID
+		drained = true
+	}
+	st.Inbox = nil
+	w, err := session.SetValue(session.LaneStateValue(l.name), st)
+	if err != nil {
+		return tip, drained, err
+	}
+	if _, err := l.h.opts.Storage.Commit([]session.Write{w}); err != nil {
+		return tip, drained, err
+	}
+	l.h.events.Emit(Event{Type: EventQueueUpdate, Lane: l.name, QueueLen: 0})
+	return tip, drained, nil
 }
 
 func (l *Lane) commitOpState(operationID string, st OpState) error {
@@ -405,7 +505,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 		}
 		delay := retry.delay(attempt)
 		l.h.events.Emit(Event{Type: EventRetryScheduled, Lane: l.name, OperationID: operationID, Attempt: attempt, MaxAttempts: retry.MaxAttempts, DelayMs: delay.Milliseconds(), RetryError: err.Error()})
-		if sleepErr := sleepCtx(ctx, delay); sleepErr != nil {
+		if sleepErr := sleepCtx(ctx, delay, l.retryNow); sleepErr != nil {
 			return nil, sleepErr
 		}
 		l.h.events.Emit(Event{Type: EventRetryStart, Lane: l.name, OperationID: operationID, Attempt: attempt + 1})
@@ -459,11 +559,11 @@ func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEn
 	if err := l.commitToolPending(operationID, assistantEntryID, call, sourceIndex, batch); err != nil {
 		return tip, err
 	}
-	result, err := l.beginTool(ctx, operationID, call)
+	result, permOutcome, err := l.beginTool(ctx, operationID, call)
 	if err != nil {
 		return tip, err
 	}
-	return l.commitToolResult(ctx, operationID, tip, assistantEntryID, call, sourceIndex, result, batch)
+	return l.commitToolResult(ctx, operationID, tip, assistantEntryID, call, sourceIndex, result, permOutcome, batch)
 }
 
 // executeConcurrentRun runs toolCalls[start:end] — a maximal run of
@@ -489,13 +589,14 @@ func (l *Lane) executeConcurrentRun(ctx context.Context, operationID, tip, assis
 
 	n := end - start
 	results := make([]msg.ToolResultMessage, n)
+	permOutcomes := make([]string, n)
 	beginErrs := make([]error, n)
 	var wg sync.WaitGroup
 	wg.Add(n)
 	for k := 0; k < n; k++ {
 		go func(k int) {
 			defer wg.Done()
-			results[k], beginErrs[k] = l.beginTool(ctx, operationID, toolCalls[start+k])
+			results[k], permOutcomes[k], beginErrs[k] = l.beginTool(ctx, operationID, toolCalls[start+k])
 		}(k)
 	}
 	wg.Wait()
@@ -506,7 +607,7 @@ func (l *Lane) executeConcurrentRun(ctx context.Context, operationID, tip, assis
 		}
 		idx := start + k
 		var err error
-		tip, err = l.commitToolResult(ctx, operationID, tip, assistantEntryID, toolCalls[idx], idx, results[k], batch)
+		tip, err = l.commitToolResult(ctx, operationID, tip, assistantEntryID, toolCalls[idx], idx, results[k], permOutcomes[k], batch)
 		if err != nil {
 			return tip, err
 		}
@@ -536,9 +637,9 @@ func (l *Lane) commitToolPending(operationID, assistantEntryID string, call msg.
 // It performs no Storage.Commit, which is what makes it safe to run on a
 // goroutine of its own for a Concurrent run: every write for this call
 // happens later, back on the driving goroutine, in commitToolResult.
-func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolCall) (msg.ToolResultMessage, error) {
+func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolCall) (msg.ToolResultMessage, string, error) {
 	if err := ctx.Err(); err != nil {
-		return msg.ToolResultMessage{}, err
+		return msg.ToolResultMessage{}, "", err
 	}
 	l.h.events.Emit(Event{Type: EventToolStart, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
 
@@ -588,7 +689,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		Timestamp:  l.now(),
 		ToolCallID: call.ID,
 		ToolName:   call.Name,
-	}, nil
+	}, before.PermissionOutcome, nil
 }
 
 // commitToolResult writes a tool call's remaining two transactions: the
@@ -597,7 +698,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 // commit. Both commits carry the whole-batch []ToolCallState snapshot with
 // this call's entry updated. It emits entry_added, runs after_tool, emits
 // tool_end, and returns the branch's new tip (the toolResult entry's id).
-func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, toolResultMsg msg.ToolResultMessage, batch []ToolCallState) (string, error) {
+func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, toolResultMsg msg.ToolResultMessage, permOutcome string, batch []ToolCallState) (string, error) {
 	resultEntryID := batch[sourceIndex].ResultEntryID
 
 	pendingRaw, err := json.Marshal(PendingToolResultPayload{Payload: toolResultMsg})
@@ -641,7 +742,7 @@ func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistant
 	}
 	l.h.events.Emit(Event{Type: EventEntryAdded, Lane: l.name, EntryID: resultEntryID, ParentID: parentTip})
 	l.invokeAfterTool(ctx, call, &toolResultMsg)
-	l.h.events.Emit(Event{Type: EventToolEnd, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments, ToolResult: &toolResultMsg})
+	l.h.events.Emit(Event{Type: EventToolEnd, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments, ToolResult: &toolResultMsg, PermissionOutcome: permOutcome})
 
 	// The toolResult commit above already carries op.state=checkpoint as
 	// its last item (matching the reference session's line 35); the

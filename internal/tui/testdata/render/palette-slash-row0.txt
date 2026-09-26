@@ -1,0 +1,3 @@
+  /model    Set the AI model                                                    
+  /track-work Track work as epics and stories                                   
+  /cost     Show cumulative session cost                                        

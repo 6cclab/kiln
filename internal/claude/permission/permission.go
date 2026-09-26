@@ -45,6 +45,26 @@ type BlockResult struct {
 	Reason string
 }
 
+// Outcome describes how a Check decision was reached, for a caller that
+// wants to render it (the kiln TUI's tool-block meta: "approved" /
+// "auto-approved"). It carries no information Check did not already use to
+// decide — it is a report of which branch fired, not a new policy.
+type Outcome string
+
+const (
+	// OutcomeNone means no gate decision applies to this call worth
+	// surfacing: a read-only tool, or a call that was blocked/denied.
+	OutcomeNone Outcome = ""
+	// OutcomeApproved means the call reached a human prompt and was
+	// answered Yes or Yes-always, this time.
+	OutcomeApproved Outcome = "approved"
+	// OutcomeAuto means the call proceeded without asking: an existing
+	// session "always allow" grant, a permission-rules allow, or a mode
+	// that skips prompting (bypassPermissions, dontAsk, auto, acceptEdits
+	// for edit/write).
+	OutcomeAuto Outcome = "auto-approved"
+)
+
 // GateOptions configures a Gate.
 type GateOptions struct {
 	Permissions settings.Permissions
@@ -330,9 +350,18 @@ func PrimaryArgOf(args map[string]any) (string, bool) {
 // grant the first waiter just won is honored for the second without asking
 // again. mu is never held while the prompter runs.
 func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
+	r, _, err := g.CheckWithOutcome(ctx, req)
+	return r, err
+}
+
+// CheckWithOutcome is Check plus the Outcome that produced the decision,
+// for a caller (the kiln TUI, via the gate-wrapper hook in
+// internal/cli/chat.go) that wants to report "approved"/"auto-approved" on
+// the tool block that follows.
+func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult, Outcome, error) {
 	k := key(req.ToolName, req.PrimaryArg)
 	if g.sessionAllowed(k) {
-		return nil, nil
+		return nil, OutcomeAuto, nil
 	}
 
 	g.mu.Lock()
@@ -348,31 +377,38 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 	if escaped && verdict == settings.Allow && mode != settings.ModeBypassPermissions {
 		if g.prompter == nil {
 			r := g.record(req, fmt.Sprintf("%s is outside the workspace and cannot be confirmed.", path))
-			return &r, nil
+			return &r, OutcomeNone, nil
 		}
 		g.promptMu.Lock()
 		defer g.promptMu.Unlock()
 		if g.sessionAllowed(k) {
-			return nil, nil
+			return nil, OutcomeAuto, nil
 		}
 		promptReq := req
 		promptReq.OutsideWorkspace = true
 		choice, err := g.prompter(ctx, promptReq)
 		if err != nil {
-			return nil, err
+			return nil, OutcomeNone, err
 		}
 		if choice.Kind == PromptDeny {
 			r := g.record(req, "the user declined access to a path outside the workspace.")
-			return &r, nil
+			return &r, OutcomeNone, nil
 		}
 		if choice.Kind == PromptAllowAlways {
 			g.grantSession(k)
 		}
-		return nil, nil
+		return nil, OutcomeApproved, nil
 	}
 
 	if verdict == settings.Allow {
-		return nil, nil
+		// Read-only tools (settings.ReadOnly) are never gated in any mode —
+		// nothing to report. Anything else that reached Allow without
+		// asking got there via a rule, bypass mode, or a mode that skips
+		// prompting: auto-approved.
+		if settings.ReadOnly[strings.ToLower(req.ToolName)] {
+			return nil, OutcomeNone, nil
+		}
+		return nil, OutcomeAuto, nil
 	}
 	if verdict == settings.Deny {
 		reason := "blocked by permission rules."
@@ -380,7 +416,7 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 			reason = fmt.Sprintf("plan mode is read-only, so %s is not available. Describe the change instead of making it.", req.ToolName)
 		}
 		r := g.record(req, reason)
-		return &r, nil
+		return &r, OutcomeNone, nil
 	}
 
 	// verdict == ask
@@ -389,24 +425,24 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 		// unattended run must not silently take an action the policy said
 		// required confirmation.
 		r := g.record(req, "requires confirmation and no prompt is available.")
-		return &r, nil
+		return &r, OutcomeNone, nil
 	}
 
 	g.promptMu.Lock()
 	defer g.promptMu.Unlock()
 	if g.sessionAllowed(k) {
-		return nil, nil
+		return nil, OutcomeAuto, nil
 	}
 	choice, err := g.prompter(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, OutcomeNone, err
 	}
 	if choice.Kind == PromptAllow {
-		return nil, nil
+		return nil, OutcomeApproved, nil
 	}
 	if choice.Kind == PromptAllowAlways {
 		g.grantSession(k)
-		return nil, nil
+		return nil, OutcomeApproved, nil
 	}
 
 	reason := "the user declined. Ask what they would prefer before trying again."
@@ -414,5 +450,5 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 		reason = fmt.Sprintf("the user declined and said: %s", choice.Feedback)
 	}
 	r := g.record(req, reason)
-	return &r, nil
+	return &r, OutcomeNone, nil
 }

@@ -10,10 +10,16 @@ import (
 // permissionview.go's doc comment); these tests exercise that contract
 // directly against PromptState, without a PTY.
 
+// genericToolName is any tool name promptOptionsFor does not special-case
+// (not "bash", "edit" or "write"), so it renders/handles as the 3-option
+// generic prompt (Yes / don't-ask-again / No-and-tell-kiln) these tests
+// exercise.
+const genericToolName = "grep"
+
 func TestPromptState_ToolAllow(t *testing.T) {
 	for _, k := range []string{"1", "y", "enter"} {
 		p := NewPromptState("/tmp")
-		reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+		reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
 		if !p.HandleKey(key(k)) {
 			t.Fatalf("key %q not consumed", k)
 		}
@@ -27,7 +33,7 @@ func TestPromptState_ToolAllow(t *testing.T) {
 func TestPromptState_ToolAllowAlways(t *testing.T) {
 	for _, k := range []string{"2", "a"} {
 		p := NewPromptState("/tmp")
-		reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+		reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
 		p.HandleKey(key(k))
 		if choice := <-reply; choice.Kind != ChoiceAllowAlways {
 			t.Errorf("key %q: kind = %q, want allow-always", k, choice.Kind)
@@ -37,7 +43,7 @@ func TestPromptState_ToolAllowAlways(t *testing.T) {
 
 func TestPromptState_ToolDenyWithFeedback(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
 
 	p.HandleKey(key("3")) // enters feedback mode
 	if !p.Active() {
@@ -56,7 +62,7 @@ func TestPromptState_ToolDenyWithFeedback(t *testing.T) {
 
 func TestPromptState_ToolEscDeniesOutright(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
 	p.HandleKey(key("esc"))
 	choice := <-reply
 	if choice.Kind != ChoiceDeny || choice.Feedback != "" {
@@ -66,7 +72,7 @@ func TestPromptState_ToolEscDeniesOutright(t *testing.T) {
 
 func TestPromptState_FeedbackBackspace(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
 	p.HandleKey(key("3"))
 	p.HandleKey(key("x"))
 	p.HandleKey(backspaceKey())
@@ -79,12 +85,101 @@ func TestPromptState_FeedbackBackspace(t *testing.T) {
 
 func TestPromptState_UnknownKeySwallowedWhileActive(t *testing.T) {
 	p := NewPromptState("/tmp")
-	p.AskTool(PermissionRequest{ToolName: "bash"})
+	p.AskTool(PermissionRequest{ToolName: genericToolName})
 	if !p.HandleKey(key("z")) {
 		t.Error("unknown key not swallowed while a prompt is active")
 	}
 	if !p.Active() {
 		t.Error("prompt closed by an unrelated key")
+	}
+}
+
+// --- Bash's 4-option variant -------------------------------------------
+
+func TestPromptState_BashAllow(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	p.HandleKey(key("1"))
+	if choice := <-reply; choice.Kind != ChoiceAllow {
+		t.Errorf("choice = %+v, want allow", choice)
+	}
+}
+
+func TestPromptState_BashAllowAlways(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	p.HandleKey(key("2"))
+	if choice := <-reply; choice.Kind != ChoiceAllowAlways {
+		t.Errorf("choice = %+v, want allow-always", choice)
+	}
+}
+
+// TestPromptState_BashSwitchToAutoThenAllow presses "3" ("Yes, and switch
+// to auto mode") and checks both halves of what that option promises: the
+// pending call is allowed, and PromptState leaves the requested mode on
+// switchMode for app.go to apply to the real gate (permissionview.go does
+// not have a gate reference itself).
+func TestPromptState_BashSwitchToAutoThenAllow(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	p.HandleKey(key("3"))
+	if choice := <-reply; choice.Kind != ChoiceAllow {
+		t.Errorf("choice = %+v, want allow", choice)
+	}
+	if p.switchMode != "auto" {
+		t.Errorf("switchMode = %q, want %q", p.switchMode, "auto")
+	}
+}
+
+func TestPromptState_BashNoDeniesOutright(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	p.HandleKey(key("4"))
+	choice := <-reply
+	if choice.Kind != ChoiceDeny || choice.Feedback != "" {
+		t.Errorf("choice = %+v, want a bare deny (no feedback capture)", choice)
+	}
+	if p.Active() {
+		t.Error("bash prompt stayed active after key 4; want it to deny outright")
+	}
+}
+
+func TestPromptState_BashArrowNavigation(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	p.HandleKey(key("down"))
+	p.HandleKey(key("down"))
+	if p.pending.selected != 2 {
+		t.Fatalf("selected = %d, want 2 after two downs", p.pending.selected)
+	}
+	p.HandleKey(key("enter"))
+	choice := <-reply
+	if choice.Kind != ChoiceAllow || p.switchMode != "auto" {
+		t.Errorf("choice = %+v, switchMode = %q, want allow + switch to auto (option index 2)", choice, p.switchMode)
+	}
+}
+
+// --- Edit/Write's 3-option variant ---------------------------------------
+
+func TestPromptState_EditSwitchToAcceptEditsThenAllow(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "edit"})
+	p.HandleKey(key("2"))
+	if choice := <-reply; choice.Kind != ChoiceAllow {
+		t.Errorf("choice = %+v, want allow", choice)
+	}
+	if p.switchMode != "acceptEdits" {
+		t.Errorf("switchMode = %q, want %q", p.switchMode, "acceptEdits")
+	}
+}
+
+func TestPromptState_EditNoDeniesOutright(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "write"})
+	p.HandleKey(key("3"))
+	choice := <-reply
+	if choice.Kind != ChoiceDeny || choice.Feedback != "" {
+		t.Errorf("choice = %+v, want a bare deny (Edit/Write has no feedback option)", choice)
 	}
 }
 

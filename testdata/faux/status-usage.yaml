@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "Done."
+    usage: {input: 5000, output: 200}

@@ -26,11 +26,63 @@ type PromptState struct {
 	feedback *string
 	// cwd relativizes a path argument in the permission summary line.
 	cwd string
+	// lastDenied is set by finishTool when a tool-permission prompt is
+	// answered with ChoiceDeny (Esc, or "n"/"3" then Enter on a — possibly
+	// empty — feedback string), and cleared by the caller once it has
+	// committed the "✕ Declined …" note (app.go's handleKey, right after
+	// routing the key that closed the prompt). It carries the denied
+	// request rather than a pre-rendered string so app.go can format the
+	// note the same way RenderToolCall would name the call ("bash npm
+	// test -- upload", "Update src/math.js").
+	lastDenied *PermissionRequest
+	// switchMode is set by chooseOption when the option picked is "switch
+	// to <mode> then allow" (Bash's "switch to auto mode", Edit/Write's
+	// "switch to accept edits"). app.go's handleKey reads it right after
+	// routing the key that set it (same pattern as lastDenied), applies
+	// it to the real permission gate (which PromptState has no reference
+	// to), and clears it.
+	switchMode string
+}
+
+// promptOptionKind names what pressing one option row does, independent of
+// its rendered label or position — the same four actions
+// permission_render.go's option lists are built from (allow / allow-always
+// / switch-mode-then-allow / deny), just per-variant which ones exist and
+// in what order.
+type promptOptionKind int
+
+const (
+	optAllow promptOptionKind = iota
+	optAllowAlways
+	optSwitchAutoAllow
+	optSwitchAcceptEditsAllow
+	optDenyFeedback
+	optDenyOutright
+)
+
+// promptOptionsFor returns the option list for a tool-permission prompt,
+// in the exact order RenderBashPermissionPrompt/RenderEditPermissionPrompt/
+// RenderPermissionPrompt render them, so a key index (1..N), ↑/↓, and Esc
+// all resolve to the same action the rendered row promises.
+func promptOptionsFor(toolName string) []promptOptionKind {
+	switch strings.ToLower(toolName) {
+	case "bash":
+		// RenderBashPermissionPrompt: Yes / don't-ask-again / switch to
+		// auto mode / No.
+		return []promptOptionKind{optAllow, optAllowAlways, optSwitchAutoAllow, optDenyOutright}
+	case "edit", "write":
+		// RenderEditPermissionPrompt: Yes / switch to accept edits / No.
+		return []promptOptionKind{optAllow, optSwitchAcceptEditsAllow, optDenyOutright}
+	default:
+		// RenderPermissionPrompt: Yes / don't-ask-again / No-and-tell-kiln.
+		return []promptOptionKind{optAllow, optAllowAlways, optDenyFeedback}
+	}
 }
 
 type pendingPermission struct {
-	request PermissionRequest
-	reply   chan PromptChoice
+	request  PermissionRequest
+	reply    chan PromptChoice
+	selected int // 0..len(promptOptionsFor(request.ToolName))-1
 }
 
 type pendingPlan struct {
@@ -107,6 +159,10 @@ func (p *PromptState) finishTool(choice PromptChoice) {
 	p.pending = nil
 	p.feedback = nil
 	if pending != nil {
+		if choice.Kind == ChoiceDeny {
+			req := pending.request
+			p.lastDenied = &req
+		}
 		pending.reply <- choice
 	}
 }
@@ -149,23 +205,91 @@ func (p *PromptState) HandleKey(msg tea.KeyPressMsg) bool {
 		return p.handleToolFeedbackKey(msg)
 	}
 
+	opts := promptOptionsFor(p.pending.request.ToolName)
+
 	switch strings.ToLower(msg.String()) {
-	case "1", "y", "enter":
-		p.finishTool(PromptChoice{Kind: ChoiceAllow})
+	case "up", "k":
+		if p.pending.selected > 0 {
+			p.pending.selected--
+		}
 		return true
-	case "2", "a":
-		p.finishTool(PromptChoice{Kind: ChoiceAllowAlways})
+	case "down", "j":
+		if p.pending.selected < len(opts)-1 {
+			p.pending.selected++
+		}
 		return true
-	case "3", "n":
-		f := ""
-		p.feedback = &f
+	case "enter":
+		p.chooseOption(opts[p.pending.selected])
 		return true
 	case "esc":
 		p.finishTool(PromptChoice{Kind: ChoiceDeny})
 		return true
+	case "y":
+		p.chooseOption(optAllow)
+		return true
+	case "a":
+		if idx := indexOfOption(opts, optAllowAlways); idx >= 0 {
+			p.chooseOption(opts[idx])
+			return true
+		}
+		return true
+	case "n":
+		if idx := indexOfOption(opts, optDenyFeedback); idx >= 0 {
+			p.chooseOption(opts[idx])
+			return true
+		}
+		p.finishTool(PromptChoice{Kind: ChoiceDeny})
+		return true
 	default:
+		if idx := digitIndex(msg.String()); idx >= 1 && idx <= len(opts) {
+			p.chooseOption(opts[idx-1])
+			return true
+		}
 		return true
 	}
+}
+
+// chooseOption applies whichever option kind a key resolved to: it always
+// ends the prompt (finishTool) except for optDenyFeedback, which opens the
+// feedback field instead, matching every rendered option's actual effect
+// (permission_render.go's option lists).
+func (p *PromptState) chooseOption(opt promptOptionKind) {
+	switch opt {
+	case optAllow:
+		p.finishTool(PromptChoice{Kind: ChoiceAllow})
+	case optAllowAlways:
+		p.finishTool(PromptChoice{Kind: ChoiceAllowAlways})
+	case optSwitchAutoAllow:
+		p.switchMode = "auto"
+		p.finishTool(PromptChoice{Kind: ChoiceAllow})
+	case optSwitchAcceptEditsAllow:
+		p.switchMode = "acceptEdits"
+		p.finishTool(PromptChoice{Kind: ChoiceAllow})
+	case optDenyFeedback:
+		f := ""
+		p.feedback = &f
+	case optDenyOutright:
+		p.finishTool(PromptChoice{Kind: ChoiceDeny})
+	}
+}
+
+func indexOfOption(opts []promptOptionKind, want promptOptionKind) int {
+	for i, o := range opts {
+		if o == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// digitIndex parses a single-digit key ("1".."9") into its 1-based index,
+// or -1 for anything else — msg.String() for a digit key is exactly that
+// digit, so no need for strconv's full error handling.
+func digitIndex(s string) int {
+	if len(s) != 1 || s[0] < '1' || s[0] > '9' {
+		return -1
+	}
+	return int(s[0] - '0')
 }
 
 func (p *PromptState) handleToolFeedbackKey(msg tea.KeyPressMsg) bool {
@@ -322,22 +446,22 @@ func (p *PromptState) Render(width int) []string {
 			// No reference capture of the Bash prompt's feedback state;
 			// reuse the generic tool-feedback rendering rather than
 			// guessing a Bash-specific one. [chk].
-			return RenderPermissionPrompt(req, p.cwd, width, true, feedback)
+			return RenderPermissionPrompt(req, p.cwd, width, p.pending.selected, true, feedback)
 		}
-		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc}, width, 0)
+		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc}, width, p.pending.selected)
 	case "edit":
 		return RenderEditPermissionPrompt(EditPermissionRequest{
 			Kind:  EditKindEdit,
 			Path:  SummarizeArg(req, p.cwd),
 			Hunks: diffHunksFromEditFile(p.cwd, req.Args),
-		}, width, 0, p.feedback != nil, feedback)
+		}, width, p.pending.selected, p.feedback != nil, feedback)
 	case "write":
 		return RenderEditPermissionPrompt(EditPermissionRequest{
 			Kind:  EditKindWrite,
 			Path:  SummarizeArg(req, p.cwd),
 			Hunks: diffHunksFromWriteArgs(req.Args),
-		}, width, 0, p.feedback != nil, feedback)
+		}, width, p.pending.selected, p.feedback != nil, feedback)
 	default:
-		return RenderPermissionPrompt(req, p.cwd, width, p.feedback != nil, feedback)
+		return RenderPermissionPrompt(req, p.cwd, width, p.pending.selected, p.feedback != nil, feedback)
 	}
 }

@@ -1,0 +1,21 @@
+WAIT ›
+SEND Add rate limiting to POST /api/upload: 10 requests per minute per user, backed by Redis.
+KEY enter
+WAIT Find the upload route and its middleware chain
+SCREEN --styles
+WAIT subagents running in parallel
+SCREEN --styles
+WAIT 10s rateLimit, upload.single('file')
+SCREEN --styles
+WAIT Allow kiln to run this command?
+SCREEN --styles
+SEND 1
+WAIT Retrying in
+SCREEN --styles
+SEND r
+WAIT Allow kiln to run this command?
+SCREEN --styles
+SEND 1
+WAIT Done. POST /api/upload now allows
+SCREEN --styles
+EXIT

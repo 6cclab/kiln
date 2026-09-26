@@ -1,0 +1,9 @@
+[38;2;163;151;129mkiln[m [38;2;47;41;32m───────────────────────────────────[m
+line e
+line f
+line g
+line h
+line i
+line j
+line k
+line l[38;2;233;166;75m▍[m

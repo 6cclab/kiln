@@ -9,8 +9,10 @@ import (
 // TestStatusLine_RunsCommandAndRenders drives the configured statusLine
 // command through the model the way the event loop would (refreshStatusLine
 // returns a tea.Cmd; its message is applied by Update) and checks the row is
-// rendered below the input box, above the mode line, indented two spaces —
-// matching Claude Code's "│ ⎇ …" row (docs/claude-code-reference.md §1).
+// rendered below the input box, below the kiln status row, indented two
+// spaces — matching Claude Code's "│ ⎇ …" row (docs/claude-code-reference.md
+// §1); the kiln status row sits between the input box and it now (app.go
+// liveLines: renderStatusRow, then any configured statusLine rows).
 func TestStatusLine_RunsCommandAndRenders(t *testing.T) {
 	m := NewModel(Config{
 		Cwd:               "/tmp",
@@ -39,15 +41,15 @@ func TestStatusLine_RunsCommandAndRenders(t *testing.T) {
 		if strings.Contains(l, "branch main | ready") {
 			statusIdx = i
 		}
-		if strings.Contains(ansiStrip(l), "manual mode on") {
+		if strings.Contains(ansiStrip(l), "ask before edits") {
 			modeIdx = i
 		}
 	}
 	if statusIdx == -1 {
 		t.Fatalf("statusLine row not rendered:\n%s", strings.Join(lines, "\n"))
 	}
-	if modeIdx == -1 || statusIdx >= modeIdx {
-		t.Errorf("statusLine (row %d) must sit above the mode line (row %d)", statusIdx, modeIdx)
+	if modeIdx == -1 || statusIdx <= modeIdx {
+		t.Errorf("statusLine (row %d) must sit below the kiln status row (row %d)", statusIdx, modeIdx)
 	}
 	if !strings.HasPrefix(lines[statusIdx], "  ") {
 		t.Errorf("statusLine row not indented two spaces: %q", lines[statusIdx])

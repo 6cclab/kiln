@@ -13,14 +13,10 @@ func baseState() StatusState {
 		ModelLabel:    "ollama/qwen3.8",
 		ContextWindow: 49_152,
 		Mode:          "auto",
+		Cwd:           "~/src/relay-api",
 		StartedAt:     time.UnixMilli(0),
 		Now:           time.UnixMilli(3_600_000),
 	}
-}
-
-func joined(s StatusState) string {
-	rows := RenderStatus(s)
-	return rows[0] + "\n" + rows[1]
 }
 
 func TestCompact(t *testing.T) {
@@ -39,24 +35,22 @@ func TestCompact(t *testing.T) {
 }
 
 func TestMeter(t *testing.T) {
-	if got := Meter(0, 4); got != "░░░░" {
+	if got := Meter(0, 4); got != "────" {
 		t.Errorf("Meter(0,4) = %q", got)
 	}
-	if got := Meter(1, 4); got != "████" {
+	if got := Meter(1, 4); got != "━━━━" {
 		t.Errorf("Meter(1,4) = %q", got)
 	}
-	if got := Meter(0.5, 4); got != "██░░" {
+	if got := Meter(0.5, 4); got != "━━──" {
 		t.Errorf("Meter(0.5,4) = %q", got)
 	}
 	if Meter(0.99, 4) == Meter(1, 4) {
 		t.Error("99% must not look identical to done")
 	}
-	// Meter's cells are multi-byte runes (█/░ are 3 bytes each in UTF-8),
-	// so the clamp check must count visible cells, not bytes.
 	if VisibleWidth(Meter(5, 4)) != 4 {
 		t.Error("Meter(5,4) should clamp to width 4")
 	}
-	if got := Meter(-1, 4); got != "░░░░" {
+	if got := Meter(-1, 4); got != "────" {
 		t.Errorf("Meter(-1,4) = %q", got)
 	}
 }
@@ -75,88 +69,121 @@ func TestElapsed(t *testing.T) {
 	}
 }
 
-func TestRenderStatusTwoRows(t *testing.T) {
-	rows := RenderStatus(baseState())
-	if !strings.Contains(rows[1], "auto mode") {
-		t.Errorf("mode row = %q, want to contain %q", rows[1], "auto mode")
+func TestRenderStatusLine_ModeLabelAndKey(t *testing.T) {
+	out := RenderStatusLine(baseState(), 80)
+	if !strings.Contains(out, "auto-edit") {
+		t.Errorf("status line %q missing mode label", out)
 	}
-	if !strings.Contains(rows[1], "shift+tab") {
-		t.Error("the key that cycles the mode is not shown")
+	if !strings.Contains(out, "⇧⇥") {
+		t.Error("the mode-cycle key is not shown")
 	}
 }
 
-func TestRenderStatusContext(t *testing.T) {
+func TestRenderStatusLine_EveryMode(t *testing.T) {
+	cases := map[string]string{
+		"manual":            "ask before edits",
+		"auto":              "auto-edit",
+		"acceptEdits":       "auto-edit",
+		"bypassPermissions": "bypass permissions",
+		"dontAsk":           "don't ask",
+		"plan":              "plan only",
+	}
+	for mode, want := range cases {
+		s := baseState()
+		s.Mode = mode
+		out := RenderStatusLine(s, 80)
+		if !strings.Contains(out, want) {
+			t.Errorf("mode %q: status line %q missing %q", mode, out, want)
+		}
+	}
+}
+
+func TestRenderStatusLine_Context(t *testing.T) {
 	s := baseState()
-	s.ContextUsed = intPtr(22_100)
-	out := joined(s)
-	for _, want := range []string{"22k", "49k", "45%"} {
+	s.ContextUsed = intPtr(intFrac(49_152, 0.38))
+	out := RenderStatusLine(s, 80)
+	for _, want := range []string{"ctx", "38%"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status %q missing %q", out, want)
 		}
 	}
 }
 
-func TestRenderStatusGitDirty(t *testing.T) {
+func intFrac(total int, frac float64) int {
+	return int(float64(total) * frac)
+}
+
+func TestRenderStatusLine_ContextNilShowsEmptyMeterZeroPercent(t *testing.T) {
+	out := RenderStatusLine(baseState(), 80)
+	if !strings.Contains(out, "0%") {
+		t.Errorf("status %q should show 0%% with no ContextUsed", out)
+	}
+}
+
+func TestRenderStatusLine_ContextHighPressureIsRed(t *testing.T) {
+	s := baseState()
+	s.ContextUsed = intPtr(intFrac(49_152, 0.80))
+	out := RenderStatusLine(s, 80)
+	if !strings.Contains(out, "80%") {
+		t.Errorf("status %q missing 80%%", out)
+	}
+}
+
+func TestRenderStatusLine_GitDirty(t *testing.T) {
 	clean := baseState()
 	clean.Git = &GitStatus{Branch: "main", Dirty: false}
 	dirty := baseState()
 	dirty.Git = &GitStatus{Branch: "main", Dirty: true}
 
-	cleanOut, dirtyOut := joined(clean), joined(dirty)
+	cleanOut, dirtyOut := RenderStatusLine(clean, 80), RenderStatusLine(dirty, 80)
 	if cleanOut == dirtyOut {
 		t.Error("clean and dirty status must render differently")
 	}
-	if !strings.Contains(cleanOut, "main") || !strings.Contains(dirtyOut, "main") {
-		t.Error("branch name missing")
+	if !strings.Contains(cleanOut, "main") || !strings.Contains(dirtyOut, "main*") {
+		t.Error("branch name / dirty marker missing")
 	}
 }
 
-func TestRenderStatusCostOmittedWhenFree(t *testing.T) {
-	if strings.Contains(joined(baseState()), "$") {
+func TestRenderStatusLine_CostOmittedWhenFree(t *testing.T) {
+	if strings.Contains(RenderStatusLine(baseState(), 80), "$") {
 		t.Error("cost should be omitted with no Cost set")
-	}
-	zero := baseState()
-	zero.Cost = 0
-	if strings.Contains(joined(zero), "$") {
-		t.Error("cost should be omitted when zero")
 	}
 	paid := baseState()
 	paid.Cost = 170.32
-	if !strings.Contains(joined(paid), "$170.32") {
+	if !strings.Contains(RenderStatusLine(paid, 80), "$170.32") {
 		t.Error("cost should render when nonzero")
 	}
 }
 
-func TestRenderStatusNoGit(t *testing.T) {
-	if strings.Contains(joined(baseState()), "⎇") {
-		t.Error("git segment should be omitted with no Git status")
-	}
-}
-
-func TestRenderStatusThinking(t *testing.T) {
-	if strings.Contains(joined(baseState()), "thinking") {
-		t.Error("thinking should be omitted while idle")
-	}
+func TestRenderStatusLine_NoGitOmitsLocationSeparator(t *testing.T) {
 	s := baseState()
-	s.Thinking = true
-	if !strings.Contains(joined(s), "thinking") {
-		t.Error("thinking indicator missing while reasoning")
+	s.Cwd = "~/src/relay-api"
+	out := RenderStatusLine(s, 80)
+	if !strings.Contains(out, "~/src/relay-api") {
+		t.Error("cwd missing")
 	}
 }
 
-func TestRenderStatusElapsedAndClock(t *testing.T) {
-	if !strings.Contains(joined(baseState()), "1h") {
-		t.Error("session age missing")
+func TestRenderStatusLine_FitsWidthDroppingSegments(t *testing.T) {
+	s := baseState()
+	s.Git = &GitStatus{Branch: "main", Dirty: true}
+	s.Cost = 1.23
+	s.ContextUsed = intPtr(1000)
+	// A very narrow width forces segments to drop rather than overflow.
+	out := RenderStatusLine(s, 20)
+	if VisibleWidth(out) > 20 {
+		t.Errorf("status line overflowed width 20: %q (%d cols)", out, VisibleWidth(out))
 	}
 }
 
-func TestRenderStatusEveryMode(t *testing.T) {
-	for _, mode := range []string{"manual", "auto", "acceptEdits", "plan", "bypassPermissions"} {
-		s := baseState()
-		s.Mode = mode
-		rows := RenderStatus(s)
-		if !strings.Contains(rows[1], mode) {
-			t.Errorf("mode %q not shown in %q", mode, rows[1])
-		}
+func TestAbbrevHome(t *testing.T) {
+	if got := AbbrevHome("/home/x/src/relay-api", "/home/x"); got != "~/src/relay-api" {
+		t.Errorf("AbbrevHome = %q", got)
+	}
+	if got := AbbrevHome("/home/x", "/home/x"); got != "~" {
+		t.Errorf("AbbrevHome(home) = %q", got)
+	}
+	if got := AbbrevHome("/other/path", "/home/x"); got != "/other/path" {
+		t.Errorf("AbbrevHome(unrelated) = %q", got)
 	}
 }

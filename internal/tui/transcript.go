@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,15 +19,14 @@ import (
 
 // Two spaces, glyph, two spaces -> content starts at column 5.
 const resultIndent = "  "
-const continuationIndent = "     "
 
-// diffIndent is the six-space indent for a diff's numbered rows
-// (docs/claude-code-reference.md §3: "diff rows indented six spaces").
-const diffIndent = "      "
+// continuationIndent is the 2-column indent of tool-output lines after the
+// "→ " first line (design "tool" row).
+const continuationIndent = "  "
 
 // fallbackRuleWidth is the label-rule width used by Render* functions that
 // have no width parameter of their own (RenderToolCall, RenderTodos,
-// RenderThinking, RenderTurnSummary, RenderAssistantText, RenderDiffLines,
+// RenderThinking, RenderAssistantText, RenderDiffLines,
 // RenderToolGroupRunning/Done). Their signatures are load-bearing — app.go
 // and bridge.go call them without a width — so this package cannot ask the
 // caller's terminal width without changing every call site. A fixed
@@ -104,7 +104,7 @@ const (
 // DiffLine is one numbered row of an Edit's rendered diff.
 type DiffLine struct {
 	Num  int
-	Sign byte // '-' or '+'
+	Sign byte // '-', '+', or ' ' for an unchanged context line
 	Text string
 }
 
@@ -116,6 +116,11 @@ type ToolDiff struct {
 	Added   int
 	Removed int
 	Lines   []DiffLine
+	// NewFile marks a write call that created a file that did not exist
+	// before (internal/tools/write.go's writeDetails.NewFile) — the kiln
+	// diff block's "new file" tag (docs/kiln-design-handoff/README.md
+	// block table, "diff" row).
+	NewFile bool
 }
 
 // ToolCallView is the data RenderToolCall needs.
@@ -138,10 +143,6 @@ type ToolCallView struct {
 	// HasTotalLines distinguishes "0 total lines" (never happens in
 	// practice) from "not tracked".
 	HasTotalLines bool
-	// HeadCommitted is set when the "⏺ Name(arg)" row was already committed
-	// while the call awaited permission (permission-edit.txt row 15: the
-	// header sits above the prompt); only the result rows render then.
-	HeadCommitted bool
 	// Meta is the label-rule's right-aligned status/timing text, e.g.
 	// "approved · 4.1s" (kiln block anatomy). Optional; empty renders no
 	// meta. New field — existing callers that build a ToolCallView by name
@@ -173,28 +174,18 @@ func toolStatusColor(status CallStatus) func(string) string {
 	}
 }
 
-// diffSummaryLine renders the kiln "+N/−N" summary counts, coloured green
-// and red, omitting a zero side.
-func diffSummaryLine(d *ToolDiff) string {
-	switch {
-	case d.Added > 0 && d.Removed > 0:
-		return fmt.Sprintf("%s  %s", KilnGreen("+"+strconv.Itoa(d.Added)), KilnRed("−"+strconv.Itoa(d.Removed)))
-	case d.Added > 0:
-		return KilnGreen("+" + strconv.Itoa(d.Added))
-	case d.Removed > 0:
-		return KilnRed("−" + strconv.Itoa(d.Removed))
-	default:
-		return Muted("No changes")
-	}
-}
-
 // RenderDiffLines renders a diff's numbered rows in the kiln "edit" block
-// anatomy: line number (4 columns, right-aligned, Faint), sign (2 columns;
-// "+" green, "−" red), then the code (Ink; context lines Muted). Added
-// rows get the OnDiffAdd background, removed rows OnDiffDel, padded to
-// fallbackRuleWidth so the tint spans a full row (RenderDiffLines has no
-// width parameter of its own — see fallbackRuleWidth's doc comment).
+// anatomy (docs/kiln-design-handoff/README.md block table, "diff" row):
+// line number (4 columns, right-aligned, Faint), sign (2 columns; "+"
+// green, "−" red, context two spaces), then the code (Ink; context lines
+// Muted). Added rows get the OnDiffAdd background, removed rows OnDiffDel,
+// padded to ruleWidth() so the tint spans a full row (RenderDiffLines has
+// no width parameter of its own — see fallbackRuleWidth's doc comment). A
+// line too long for the row is truncated with FitStatus, never wrapped —
+// the design is explicit that diff lines truncate, unlike every other
+// block, because a wrapped diff line loses its line-number alignment.
 func RenderDiffLines(lines []DiffLine) []string {
+	width := ruleWidth()
 	out := make([]string, 0, len(lines))
 	for _, l := range lines {
 		numStr := fmt.Sprintf("%4d", l.Num)
@@ -204,49 +195,90 @@ func RenderDiffLines(lines []DiffLine) []string {
 		case '+':
 			sign = KilnGreen("+ ")
 			bg = OnDiffAdd
-			row = diffIndent + Faint(numStr) + " " + sign + Ink(l.Text)
+			row = Faint(numStr) + " " + sign + Ink(l.Text)
 		case '-':
 			sign = KilnRed("− ")
 			bg = OnDiffDel
-			row = diffIndent + Faint(numStr) + " " + sign + Ink(l.Text)
+			row = Faint(numStr) + " " + sign + Ink(l.Text)
 		default:
 			bg = func(s string) string { return s }
-			row = diffIndent + Faint(numStr) + "   " + Muted(l.Text)
+			row = Faint(numStr) + "   " + Muted(l.Text)
 		}
-		out = append(out, bg(padToWidth(row, ruleWidth())))
+		out = append(out, bg(padToWidth(FitStatus(row, width), width)))
 	}
 	return out
 }
 
-// RenderToolCall renders a mutating tool call and its result in the kiln
-// "tool"/"edit" block anatomy:
+// diffHeaderRow renders the diff block's header row on the panel
+// background (docs/kiln-design-handoff/README.md block table, "diff" row):
+// path, a "new file" tag when set, a flexible spacer, then "+N" green and
+// "−N" red, padded to width so the panel tint spans the full row.
+func diffHeaderRow(path string, d *ToolDiff, width int) string {
+	tag := ""
+	if d.NewFile {
+		tag = Muted("new file")
+	}
+	counts := diffCountsRow(d)
+	left := " " + Ink(path)
+	if tag != "" {
+		left += "  " + tag
+	}
+	pad := width - VisibleWidth(left) - VisibleWidth(counts) - 1
+	if pad < 1 {
+		pad = 1
+	}
+	row := left + strings.Repeat(" ", pad) + counts + " "
+	return OnPanel(padToWidth(row, width))
+}
+
+// diffCountsRow renders "+N  −N", omitting a zero side, for the diff
+// header row.
+func diffCountsRow(d *ToolDiff) string {
+	switch {
+	case d.Added > 0 && d.Removed > 0:
+		return fmt.Sprintf("%s  %s", KilnGreen("+"+strconv.Itoa(d.Added)), KilnRed("−"+strconv.Itoa(d.Removed)))
+	case d.Added > 0:
+		return KilnGreen("+" + strconv.Itoa(d.Added))
+	case d.Removed > 0:
+		return KilnRed("−" + strconv.Itoa(d.Removed))
+	default:
+		return Muted("no changes")
+	}
+}
+
+// RenderToolCall renders a tool call and its result in the kiln "tool"/
+// "edit" block anatomy (docs/kiln-design-handoff/README.md "Block anatomy"
+// and its table):
 //
-//	edit────────────────────────────────  math.js
-//	Update math.js
-//	→ +1  −1
-//	      1 − function add(a,b){ return a - b }
-//	      1 + function add(a,b){ return a + b }
+//	edit ─────────────────────────────────────────────────  math.js
+//	 math.js  new file                              +2  −0
+//	   1 + function add(a,b){ return a + b }
+//	   2 + module.exports = { add }
 //
-// The label rule is "edit" (blue) with the filename as meta when the call
-// carries a Diff, otherwise the tool name lowercased in the status colour
-// (running amber, ok green, err red) with Meta (e.g. "4.1s") as the rule's
-// meta. HeadCommitted drops the header entirely — the call was already
-// announced above a permission prompt, so only the result rows render now.
+//	bash ──────────────────────────────────  approved · 4.1s
+//	bash npm test -- upload
+//	→ 12 passed
+//
+// A call with a Diff renders the "edit" label rule (blue, filename meta)
+// and the panel header row instead of the "Name arg" line and result rows.
+// Otherwise the label rule is the tool name lowercased in the status
+// colour (running amber, ok green, err red) with Meta (e.g.
+// "approved · 4.1s") as the rule's own meta, and the body is "Name arg"
+// followed by the result.
 func RenderToolCall(view ToolCallView) []string {
 	gl := G()
 	statusColor := toolStatusColor(view.Status)
+	width := ruleWidth()
 	var lines []string
-	if !view.HeadCommitted {
-		if view.Diff != nil {
-			lines = append(lines, labelRule("edit", KilnBlue, view.PrimaryArg, ruleWidth()))
-		} else {
-			lines = append(lines, labelRule(strings.ToLower(view.Name), statusColor, view.Meta, ruleWidth()))
-		}
+	if view.Diff != nil {
+		lines = append(lines, labelRule("edit", KilnBlue, path.Base(view.PrimaryArg), width))
+	} else {
+		lines = append(lines, labelRule(strings.ToLower(view.Name), statusColor, view.Meta, width))
 		lines = append(lines, fmt.Sprintf("%s %s", statusColor(view.Name), Muted(view.PrimaryArg)))
 	}
 
 	if view.Diff != nil {
-		lines = append(lines, fmt.Sprintf("%s %s", Muted(gl.Action), diffSummaryLine(view.Diff)))
+		lines = append(lines, diffHeaderRow(view.PrimaryArg, view.Diff, width))
 		lines = append(lines, RenderDiffLines(view.Diff.Lines)...)
 		return lines
 	}
@@ -339,35 +371,12 @@ const (
 	TodoCompletedStatus  TodoStatus = "completed"
 )
 
-// TodoView is one todo list entry.
+// TodoView is one todo list entry. RenderTodos moved to plan.go as
+// RenderPlan — kept here only as the shared data shape bridge.go and
+// plan.go both use.
 type TodoView struct {
 	Content string
 	Status  TodoStatus
-}
-
-// RenderTodos renders the kiln "plan" block: a label rule, "Update Todos",
-// then one row per item. Completed items are green-checked and struck
-// through/muted; the in-progress item is amber with ink text; a pending
-// item is a faint circle with muted text — "which one is happening now" is
-// the only question the list has to answer at a glance.
-func RenderTodos(todos []TodoView) []string {
-	gl := G()
-	lines := []string{
-		labelRule("plan", Muted, "", ruleWidth()),
-		Bold(Ink("Update Todos")),
-	}
-
-	for _, todo := range todos {
-		switch todo.Status {
-		case TodoCompletedStatus:
-			lines = append(lines, fmt.Sprintf("%s %s", KilnGreen(gl.OK), Muted(Strike(todo.Content))))
-		case TodoInProgressStatus:
-			lines = append(lines, fmt.Sprintf("%s %s", KilnAmber(gl.PlanCurrent), Ink(todo.Content)))
-		default:
-			lines = append(lines, fmt.Sprintf("%s %s", Faint(gl.PlanTodo), Muted(todo.Content)))
-		}
-	}
-	return lines
 }
 
 var hunkHeaderRe = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
@@ -411,7 +420,20 @@ func ParseUnifiedDiff(patch string, startLine int) *ToolDiff {
 			d.Lines = append(d.Lines, DiffLine{Num: oldNo, Sign: '-', Text: line[1:]})
 			d.Removed++
 			oldNo++
+		case strings.HasPrefix(line, " "):
+			// Context line: kept (dim) so a reader has surrounding lines to
+			// orient against (docs/kiln-design-handoff/README.md's diff row:
+			// "context lines dim"), numbered against the new file like an
+			// addition since it exists at that line in both versions.
+			d.Lines = append(d.Lines, DiffLine{Num: newNo, Sign: ' ', Text: line[1:]})
+			oldNo++
+			newNo++
 		default:
+			// A blank hunk line (bare "" with no leading space, which
+			// go-udiff can emit for a genuinely empty context line) still
+			// advances both counters without adding a text line to avoid
+			// misnumbering what follows, but is otherwise skipped rather
+			// than rendered as a phantom context row.
 			oldNo++
 			newNo++
 		}
@@ -440,45 +462,64 @@ type SpinnerArgs struct {
 	// takes priority over Thinking, matching a turn that has moved past
 	// reasoning into streaming its answer.
 	Tokens *int
+	// QueueLen is the number of follow-ups queued via Lane.Steer while this
+	// turn runs; 0 shows no suffix (docs/kiln-design-handoff/README.md's
+	// "Queued follow-up": the busy line's status suffix " · 1 queued").
+	QueueLen int
 }
 
-// RenderSpinner renders the working indicator:
+// RenderSpinner renders the busy line (docs/kiln-design-handoff/README.md
+// "Interactions"):
 //
-//	✳ Whirring…
-//	✻ Crunching… (4s · ↓ 1.2k tokens)
-//	· Computing… (1s · thinking with medium effort)
+//	◐ Whirring…  4s · 1.2k tokens                              esc to stop
+//	◐ Computing…  1s · thinking with medium effort              esc to stop
+//	◐ Waiting for approval…                                     esc to stop
 //
-// docs/claude-code-reference.md §3: frames `·✢✳✶✻✽`, suffix
-// "(1s · thinking with medium effort)" while thinking, "(4s · ↓ 1.2k
-// tokens)" once tokens flow, no "esc to interrupt" text. The captured
-// spinner*.txt screens show no suffix at all at their first frame (0s,
-// before thinking or tokens); the suffix is omitted here in that same
-// state (ElapsedSeconds == 0, not thinking, no tokens yet) to match those
-// captures, which is an inference from three t=0 samples rather than a
-// captured "elapsed but still nothing to report" frame.
+// Left side (spinner+label KilnAmber, the elapsed/tokens/thinking segment
+// Muted) is built by RenderSpinnerLeft; "esc to stop" is right-aligned at
+// the caller's width by SpinnerState.Render (app.go/spinner.go own the
+// width, RenderSpinner itself is width-agnostic on the right side callers
+// that only need the left segment (e.g. a golden of the busy text alone)
+// can call RenderSpinnerLeft directly).
 func RenderSpinner(args SpinnerArgs) string {
+	return RenderSpinnerLeft(args)
+}
+
+// RenderSpinnerLeft renders the busy line's left segment only: spinner,
+// label, and the elapsed/tokens/thinking suffix. No parentheses, no
+// leading "↓" on the token count — the design drops both.
+func RenderSpinnerLeft(args SpinnerArgs) string {
 	gl := G()
 	spin := gl.Spinner[args.Frame%len(gl.Spinner)]
-	label := TranscriptOrangeLight(args.Label + "…")
+	label := KilnAmber(args.Label + "…")
 
 	var suffix string
 	switch {
 	case args.Tokens != nil:
-		suffix = fmt.Sprintf("(%ds · ↓ %s tokens)", args.ElapsedSeconds, FormatTokens(*args.Tokens))
+		suffix = fmt.Sprintf("%ds · %s tokens", args.ElapsedSeconds, FormatTokens(*args.Tokens))
 	case args.Thinking:
 		effort := args.Effort
 		if effort == "" {
 			effort = "medium"
 		}
-		suffix = fmt.Sprintf("(%ds · thinking with %s effort)", args.ElapsedSeconds, effort)
+		suffix = fmt.Sprintf("%ds · thinking with %s effort", args.ElapsedSeconds, effort)
 	case args.ElapsedSeconds > 0:
-		suffix = fmt.Sprintf("(%ds)", args.ElapsedSeconds)
+		suffix = fmt.Sprintf("%ds", args.ElapsedSeconds)
+	}
+
+	if args.QueueLen > 0 {
+		queued := fmt.Sprintf("%d queued", args.QueueLen)
+		if suffix == "" {
+			suffix = queued
+		} else {
+			suffix += " · " + queued
+		}
 	}
 
 	if suffix == "" {
-		return fmt.Sprintf("%s %s", TranscriptOrange(spin), label)
+		return fmt.Sprintf("%s %s", KilnAmber(spin), label)
 	}
-	return fmt.Sprintf("%s %s %s", TranscriptOrange(spin), label, TranscriptDim(suffix))
+	return fmt.Sprintf("%s %s  %s", KilnAmber(spin), label, Muted(suffix))
 }
 
 // FormatTokens renders a token count compactly: 450, 3.4k, 1.0m.
@@ -544,26 +585,13 @@ func PickLabel(seed int) string {
 	return spinnerVerbs[n].gerund
 }
 
-// PastTense returns the turn-summary verb for a spinner gerund label
-// (Brewing -> Brewed). Falls back to "Worked" for any label outside the
-// eight-word family (defensive: should not happen since PickLabel only
-// returns members of it).
-func PastTense(gerund string) string {
-	for _, v := range spinnerVerbs {
-		if v.gerund == gerund {
-			return v.past
-		}
-	}
-	return "Worked"
-}
-
 // RenderError renders an error message: red, visually distinct from
 // ordinary tool output.
 func RenderError(message string) []string {
 	lines := strings.Split(message, "\n")
 	out := make([]string, len(lines))
 	for i, line := range lines {
-		out[i] = TranscriptRed(line)
+		out[i] = KilnRed(line)
 	}
 	return out
 }
@@ -612,6 +640,14 @@ func RenderThinking(view ThinkingView) []string {
 // and a slash-command echo ("you" / "/model") — CommitCommandResult
 // (bridge.go) renders the result row that follows a command's echo.
 func RenderUserMessage(text string, width int) []string {
+	return RenderUserMessageMeta(text, "", width)
+}
+
+// RenderUserMessageMeta is RenderUserMessage with an optional label-rule
+// meta, e.g. "queued" for a follow-up submitted while a turn is still
+// running (docs/kiln-design-handoff/README.md's "Queued follow-up" —
+// app.go's handleSubmit commits it this way instead of the plain form).
+func RenderUserMessageMeta(text, meta string, width int) []string {
 	inner := width - 2
 	if inner < 1 {
 		inner = 1
@@ -623,42 +659,11 @@ func RenderUserMessage(text string, width int) []string {
 
 	out := make([]string, 0, len(body)+2)
 	out = append(out, "")
-	out = append(out, labelRule("you", KilnAmber, "", width))
+	out = append(out, labelRule("you", KilnAmber, meta, width))
 	for _, wl := range body {
 		out = append(out, OnRaise(padToWidth(Ink(wl), width)))
 	}
 	return out
-}
-
-// TurnSummary is the data RenderTurnSummary needs.
-type TurnSummary struct {
-	Seconds int
-	// Verb is the past-tense spinner verb this turn picked (PastTense of
-	// the same label the spinner used), e.g. "Crunched".
-	Verb string
-	// Done is the wall-clock time the turn finished, honouring
-	// HARNESS_TEST_CLOCK (the caller is responsible for reading that env
-	// var; this just formats whatever time it is given).
-	Done time.Time
-}
-
-// RenderTurnSummary renders the line that closes a turn, a single muted
-// row (kiln has no per-turn "⏺" marker; the ✻ glyph is kept but dimmed
-// either way, matching a settled — not currently animating — state):
-//
-//	✻ Crunched for 4s · done 10:03 AM
-func RenderTurnSummary(summary TurnSummary) []string {
-	gl := G()
-	verb := summary.Verb
-	if verb == "" {
-		verb = "Worked"
-	}
-	done := summary.Done
-	if done.IsZero() {
-		done = time.Now()
-	}
-	line := fmt.Sprintf("%s for %ds · done %s", verb, summary.Seconds, done.Format("3:04 PM"))
-	return []string{Muted(fmt.Sprintf("%s %s", gl.Summary, line))}
 }
 
 // PrimaryArg is the one identifying argument for a call line. Claude Code
@@ -803,5 +808,5 @@ func RenderVerboseModelRow(done time.Time, modelID string, width int) string {
 	if pad < 0 {
 		pad = 0
 	}
-	return strings.Repeat(" ", pad) + TranscriptDim(text)
+	return strings.Repeat(" ", pad) + Muted(text)
 }

@@ -97,6 +97,12 @@ type Event struct {
 	ToolName   string
 	ToolArgs   map[string]any
 	ToolResult *msg.ToolResultMessage
+	// PermissionOutcome is set on tool_end only (not tool_start: the gate
+	// has not run yet when tool_start fires — see beginTool in turn.go),
+	// mirroring permission.Outcome as a plain string: "approved",
+	// "auto-approved", or "" when no gate decision applies (a read-only
+	// tool) or the call was blocked/denied.
+	PermissionOutcome string
 
 	// retry_*
 	Attempt     int

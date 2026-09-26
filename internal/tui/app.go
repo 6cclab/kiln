@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -135,8 +137,27 @@ type Model struct {
 	// subagents panel (subagents.go); reset at the start of every turn in
 	// beginTurn.
 	subagents *SubagentPanelState
-	dialog    Dialog
-	thinking  *ThinkingView
+	// todos is the live "plan" block's items (plan.go's RenderPlan),
+	// driven by MsgTodos on every todo_write call; nil when no plan is
+	// active. Reset at the start of every turn in beginTurn, same as
+	// subagents, and committed once in its final state by finishTurn.
+	todos []TodoView
+	// retry is the live "error" retry block's state (retry.go), non-nil
+	// while a retry is pending after a retryable stream failure; cleared on
+	// MsgRetryStart (the delayed attempt is starting) or at turn end.
+	retry *RetryView
+	// reconnectedAttempt is set by MsgRetryStart (1-based attempt about to
+	// run) and consumed by the next thing that would otherwise commit
+	// first — a streamed message's first delta or its EventMessageEnd
+	// commit — which commits "↺ Reconnected on attempt N" just ahead of it.
+	// Zero means no reconnect note is owed.
+	reconnectedAttempt int
+	// streamText is the assistant text streamed so far in the live region
+	// (stream.go's RenderStreamLive), cleared once the full markdown block
+	// commits (msgCommitMarkdown) or the turn ends.
+	streamText string
+	dialog     Dialog
+	thinking   *ThinkingView
 	// popup is the `/` or `@` autocomplete list, non-nil while one of the
 	// two triggers matches the editor's current line/cursor. Rebuilt from
 	// scratch on every keystroke by refreshPopup — see autocomplete.go.
@@ -156,14 +177,6 @@ type Model struct {
 	// statusLine is the rendered rows of the configured statusLine command,
 	// refreshed on turn boundaries, model changes and a periodic tick.
 	statusLine []string
-	// lastSummary is the turn-summary lines the last finishTurn committed,
-	// re-appended by a Ctrl+O replay (the summary is derived at turn end,
-	// not a session entry, so replayTranscript cannot rebuild it).
-	lastSummary []string
-	// pendingHead is the "Name(arg)" of a mutating tool call whose header
-	// row was committed when its permission prompt opened; the matching
-	// result then renders without the header (ToolCallView.HeadCommitted).
-	pendingHead string
 	// dialogEcho is the slash command line whose dialog is open; Claude
 	// Code echoes the command (and its result row) only once the dialog
 	// closes (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
@@ -244,6 +257,17 @@ type Model struct {
 	resizeGen int
 }
 
+// abbrevHomeEnv home-abbreviates path against os.UserHomeDir(), falling
+// back to path unchanged when the home directory cannot be read — the
+// status line's location segment (status.go RenderStatusLine, AbbrevHome).
+func abbrevHomeEnv(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return AbbrevHome(path, home)
+}
+
 // NewModel builds the interactive shell's model, already focused. Init
 // still needs to be called (the standard Bubbletea contract) so its
 // returned Cmd — the editor's cursor-blink command — actually runs.
@@ -272,7 +296,7 @@ func NewModel(cfg Config) Model {
 	m := Model{
 		cfg:            cfg,
 		editor:         ed,
-		footer:         NewFooterState(StatusState{ModelLabel: cfg.ModelLabel, ContextWindow: cfg.Tier.ContextWindow, Mode: cfg.InitialMode, StartedAt: cfg.StartedAt}),
+		footer:         NewFooterState(StatusState{ModelLabel: cfg.ModelLabel, ContextWindow: cfg.Tier.ContextWindow, Mode: cfg.InitialMode, StartedAt: cfg.StartedAt, Cwd: abbrevHomeEnv(cfg.Cwd)}),
 		prompt:         NewPromptState(cfg.Cwd),
 		subagents:      NewSubagentPanelState(),
 		startupContext: append([]string(nil), cfg.StartupContext...),
@@ -336,10 +360,17 @@ type msgClearModeHint struct{ gen int }
 // describe.
 const modeHintDuration = time.Second
 
-// toolGroup counts consecutive grouped tool calls of one kind.
+// toolGroup accumulates consecutive grouped read-only tool calls of one
+// kind: the live region still shows one collapsed "Reading N files…" row
+// (RenderToolGroupRunning, keyed off len(views)) while they are in flight,
+// but each call's own view is kept so flushGroup can commit a full tool
+// block per call once the group ends — read-only calls no longer collapse
+// to "  Read N files" in the committed transcript (docs/kiln-design-
+// handoff/README.md's "tool" row applies to every call, not just
+// mutating ones).
 type toolGroup struct {
-	kind GroupKind
-	n    int
+	kind  GroupKind
+	views []ToolCallView
 }
 
 // msgFullscreenRewrap follows a debounced width change in fullscreen mode:
@@ -529,11 +560,44 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgCommitMarkdown:
 		m = m.flushGroup()
+		m.streamText = ""
 		if m.cfg.Bridge != nil {
+			m = m.commitReconnectNote()
 			renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
 			lines := append([]string{""}, RenderAssistantText(renderer.Render(msg.Text))...)
 			m.cfg.Bridge.Commit(lines)
 		}
+		return m, nil
+
+	case MsgStreamText:
+		if IsPlain() {
+			// A screen reader would re-read the live region every tick;
+			// the streaming caret never renders in plain mode (D's spec).
+			return m, nil
+		}
+		m = m.commitReconnectNote()
+		m.streamText = msg.Text
+		return m, nil
+
+	case MsgRetry:
+		until := time.Now().Add(msg.Delay)
+		if t, ok := clockOverride(); ok {
+			until = t.Add(msg.Delay)
+		}
+		m.retry = &RetryView{Message: msg.Message, Attempt: msg.Attempt, Max: msg.MaxAttempts, Until: until}
+		return m, nil
+
+	case MsgQueue:
+		m.spinner.SetQueueLen(msg.Len)
+		return m, nil
+
+	case MsgRetryStart:
+		// ev.Attempt (harness/turn.go's EventRetryStart) is already the
+		// 1-based attempt about to run ("attempt+1" at the emit site), so
+		// it is exactly the N the reconnect note reports — no further
+		// adjustment.
+		m.retry = nil
+		m.reconnectedAttempt = msg.Attempt
 		return m, nil
 
 	case msgCommitToolCall:
@@ -547,19 +611,12 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			if m.group == nil {
 				m.group = &toolGroup{kind: kind}
 			}
-			m.group.n++
+			m.group.views = append(m.group.views, msg.View)
 			return m, nil
 		}
 		m = m.flushGroup()
 		view := msg.View
-		if m.pendingHead != "" && m.pendingHead == view.Name+"("+view.PrimaryArg+")" {
-			view.HeadCommitted = true
-			m.pendingHead = ""
-		}
-		lines := FitLines(RenderToolCall(view), m.contentWidth(), "     ")
-		if !view.HeadCommitted {
-			lines = append([]string{""}, lines...)
-		}
+		lines := append([]string{""}, FitLines(RenderToolCall(view), m.contentWidth(), "     ")...)
 		m.cfg.Bridge.Commit(lines)
 		return m, nil
 
@@ -568,6 +625,10 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgSubagentEvent:
 		m.subagents.Apply(msg.Event)
+		return m, nil
+
+	case MsgTodos:
+		m.todos = msg.Items
 		return m, nil
 
 	case MsgFooterNote:
@@ -636,25 +697,32 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgPermissionPrompt:
 		m = m.flushGroup()
-		// A mutating call's header goes into the transcript above the
-		// prompt (permission-edit.txt row 15, "⏺ Update(math.js)"); the
-		// result rows follow once it has run.
-		if name := strings.ToLower(msg.Request.ToolName); (name == "edit" || name == "write") && m.cfg.Bridge != nil {
-			view := ToolCallView{Name: MapToolName(msg.Request.ToolName), PrimaryArg: msg.Request.PrimaryArg, Status: CallOK}
-			m.pendingHead = view.Name + "(" + view.PrimaryArg + ")"
-			m.cfg.Bridge.Commit(append([]string{""}, RenderToolCall(view)...))
-		}
+		// The design's "approval needed" block stands alone: no pre-prompt
+		// tool header commits above it (docs/kiln-design-handoff/README.md
+		// "Interactions"). The tool's own block commits after the decision,
+		// on EventToolEnd, exactly like any other call — with the outcome
+		// (approved/auto-approved) in its meta.
 		p := m.prompt
 		p.pending = &pendingPermission{request: msg.Request, reply: msg.Reply}
 		p.feedback = nil
 		p.plan = nil
-		return m, nil
+		m.spinner.SetLabel("Waiting for approval")
+		return m.syncPromptPlaceholder(), nil
 
 	case MsgPlanPrompt:
 		p := m.prompt
 		p.plan = &pendingPlan{plan: msg.Plan, reply: msg.Reply}
 		p.feedback = nil
 		p.pending = nil
+		m.spinner.SetLabel("Waiting for approval")
+		return m.syncPromptPlaceholder(), nil
+
+	case MsgSpinnerLabel:
+		m.spinner.SetLabel(msg.Text)
+		return m, nil
+
+	case MsgSpinnerReset:
+		m.spinner.ResetLabel()
 		return m, nil
 
 	case msgTurnResult:
@@ -710,12 +778,33 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 	m.busy = false
 	m.spinner.Stop()
 	m.footer.SetBusy(false)
+	// Any live retry countdown and in-flight streaming text are dropped,
+	// not committed, on every path through finishTurn (B's spec): a
+	// completed/failed turn already replaces them with its own commit
+	// (the assistant's text, or RenderError below); an aborted one commits
+	// the interrupted-tool/plan/subagents/note sequence instead, with no
+	// role for either live block.
+	m.retry = nil
+	m.streamText = ""
+	m.reconnectedAttempt = 0
 
-	if msg.err != nil {
+	if msg.result.Status == harness.StatusAborted {
+		// Esc while busy (B's spec): each tool call that started but never
+		// reached EventToolEnd commits as a red CallError block, then the
+		// live plan/subagents panels commit their final state (already
+		// below), then the "■ Interrupted" note — in that order, so the
+		// note reads as the last thing that happened.
+		if m.cfg.Bridge != nil {
+			width := m.contentWidth()
+			for _, view := range m.cfg.Bridge.InFlightTools() {
+				m.cfg.Bridge.Commit(append([]string{""}, FitLines(RenderToolCall(view), width, "     ")...))
+			}
+		}
+	} else if msg.err != nil {
 		if m.cfg.Bridge != nil {
 			m.cfg.Bridge.Commit(RenderError(msg.err.Error()))
 		}
-	} else if msg.result.Status != harness.StatusCompleted && msg.result.Status != harness.StatusAborted {
+	} else if msg.result.Status != harness.StatusCompleted {
 		if m.cfg.Bridge != nil {
 			m.cfg.Bridge.Commit(RenderError(msg.result.Status))
 		}
@@ -725,26 +814,34 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 	if m.cfg.Bridge != nil {
 		toolCalls = m.cfg.Bridge.ToolCallsInTurn()
 	}
-	if m.cfg.Bridge != nil {
+	if m.cfg.Bridge != nil && toolCalls > 0 && m.cfg.Bridge.Verbose() {
 		done := time.Now()
 		if t, ok := clockOverride(); ok {
 			done = t
 		}
-		var lines []string
-		if toolCalls > 0 && m.cfg.Bridge.Verbose() {
-			lines = append(lines, RenderVerboseModelRow(done, m.modelID(), m.contentWidth()))
-		}
-		lines = append(lines, "")
-		summary := RenderTurnSummary(TurnSummary{
-			Seconds: msg.seconds,
-			Verb:    PastTense(m.spinner.Label()),
-			Done:    done,
-		})
-		m.lastSummary = summary
-		lines = append(lines, summary...)
-		m.cfg.Bridge.Commit(lines)
+		m.cfg.Bridge.Commit([]string{RenderVerboseModelRow(done, m.modelID(), m.contentWidth()), ""})
+	}
+	width := m.contentWidth()
+	// The live "plan" checklist and subagents panel both commit their
+	// final state once, as ordinary transcript blocks, instead of just
+	// vanishing from the live region when the turn ends (docs/kiln-design-
+	// handoff/README.md: "Blocks update in place" — the last update is the
+	// one that has to survive into scrollback).
+	if len(m.todos) > 0 && m.cfg.Bridge != nil {
+		m.cfg.Bridge.CommitSynthetic(append([]string{""}, RenderPlan(m.todos, width)...))
+	}
+	m.todos = nil
+	if rows := m.subagents.Render(width); len(rows) > 0 && m.cfg.Bridge != nil {
+		m.cfg.Bridge.CommitSynthetic(append([]string{""}, rows...))
+	}
+	m.subagents.Reset()
+	if msg.result.Status == harness.StatusAborted && m.cfg.Bridge != nil {
+		// Last, so it reads as the final word on what happened
+		// (docs/kiln-design-handoff/README.md's "note" row).
+		m.cfg.Bridge.CommitNote("■ Interrupted. Tell kiln what to do instead.")
 	}
 	m.footer.SetNote("")
+	m.editor.SetPlaceholder(editor.DefaultPlaceholder)
 	return m.refreshMode()
 }
 
@@ -774,21 +871,33 @@ func (m Model) closeDialog() Model {
 	if m.dialogEcho != "" && m.cfg.Bridge != nil {
 		m.cfg.Bridge.Commit(RenderUserMessage(m.dialogEcho, m.contentWidth()))
 		if outcome != "" {
-			m.cfg.Bridge.CommitCommandResult([]string{outcome})
+			// A dialog's outcome is always one line ("Kept model as …",
+			// "Compacted history · context 38% → 8%") — the kiln "note"
+			// form, same as the single-line command results below.
+			m.cfg.Bridge.CommitNote(outcome)
 		}
 	}
 	m.dialogEcho = ""
 	return m
 }
 
-// flushGroup commits the in-flight collapsed tool-group row, if any, as
-// its settled form ("  Read N files" / "  Ran N shell commands").
+// flushGroup commits every call the in-flight group accumulated, one full
+// tool block each (RenderToolCall), once the group ends. The live region
+// still showed one collapsed "Reading N files…" row while they were in
+// flight (RenderToolGroupRunning, liveLines); the committed transcript
+// gets the real per-call blocks instead of a collapsed summary, so a
+// read-only call's status, argument and output are never lost to
+// scrollback.
 func (m Model) flushGroup() Model {
 	if m.group == nil {
 		return m
 	}
 	if m.cfg.Bridge != nil {
-		m.cfg.Bridge.Commit([]string{"", RenderToolGroupDone(m.group.kind, m.group.n)})
+		width := m.contentWidth()
+		for _, view := range m.group.views {
+			lines := append([]string{""}, FitLines(RenderToolCall(view), width, "     ")...)
+			m.cfg.Bridge.Commit(lines)
+		}
 	}
 	m.group = nil
 	return m
@@ -967,6 +1076,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// `r` cuts a pending retry's countdown short (docs/kiln-design-handoff/
+	// README.md's "error" row: "r to retry now") — only while the live
+	// retry block is up and the input is empty; otherwise `r` types
+	// normally (a queued follow-up starting with the letter r must not be
+	// eaten).
+	if msg.String() == "r" && m.retry != nil && strings.TrimSpace(m.editor.Value()) == "" {
+		if m.cfg.Lane != nil {
+			m.cfg.Lane.RetryNow()
+		}
+		return m, nil
+	}
+
 	// `?` on an empty input shows the shortcuts panel
 	// (docs/claude-code-reference.md §6, shortcuts.txt).
 	if msg.String() == "?" && !m.busy && !m.prompt.Active() && strings.TrimSpace(m.editor.Value()) == "" {
@@ -1061,6 +1182,33 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	consumed := router.Route(msg)
 	m.lastCtrlC = router.lastCtrlC
 	m.lastEsc = router.lastEsc
+	// A tool-permission prompt answered "no" (Esc, or feedback then Enter)
+	// leaves its denied request on m.prompt.lastDenied (permissionview.go's
+	// finishTool) — commit the "✕ Declined …" note now, before whatever
+	// comes next (the feedback continuing the turn, or the turn simply
+	// ending), matching docs/kiln-design-handoff/README.md's "note" row.
+	if denied := m.prompt.lastDenied; denied != nil {
+		m.prompt.lastDenied = nil
+		if m.cfg.Bridge != nil {
+			m.cfg.Bridge.CommitNote(declinedNoteText(*denied))
+		}
+	}
+	// "Yes, and switch to auto mode" (Bash) / "Yes, and switch to accept
+	// edits" (Edit/Write) both allow the pending call AND change the
+	// permission mode going forward — PromptState has no reference to the
+	// gate, so it leaves the requested mode on switchMode (same
+	// leave-it-for-the-caller pattern as lastDenied above) for this
+	// handler to apply.
+	if mode := m.prompt.switchMode; mode != "" {
+		m.prompt.switchMode = ""
+		if m.cfg.Gate != nil {
+			m.cfg.Gate.SetMode(claudesettings.PermissionMode(mode))
+			m.footer.SetNote("")
+			modeStr := mode
+			m.footer.Apply(StatusPatch{Mode: &modeStr})
+		}
+	}
+	m = m.syncPromptPlaceholder()
 	if consumed {
 		var hintCmd tea.Cmd
 		if hintMessage != "" {
@@ -1115,6 +1263,47 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// syncPromptPlaceholder sets the editor's placeholder for the current
+// prompt/busy state (docs/kiln-design-handoff/README.md "Interactions"):
+// "press 1, 2 or 3" while a tool-permission or plan prompt is up (4 options
+// for the Bash prompt's extra "switch to auto mode" choice), the busy text
+// while a turn is running, otherwise the idle default. Called after every
+// keystroke the router may have changed prompt state on, and on prompt
+// open (MsgPermissionPrompt/MsgPlanPrompt).
+func (m Model) syncPromptPlaceholder() Model {
+	switch {
+	case m.prompt.pending != nil:
+		if m.prompt.feedback == nil {
+			m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request.ToolName))))
+		} else {
+			m.editor.SetPlaceholder("press 1, 2 or 3")
+		}
+	case m.prompt.plan != nil:
+		m.editor.SetPlaceholder("press 1, 2 or 3")
+	case m.busy:
+		m.editor.SetPlaceholder("queue a follow-up, or esc to stop")
+	default:
+		m.editor.SetPlaceholder(editor.DefaultPlaceholder)
+	}
+	return m
+}
+
+// placeholderForOptionCount renders the "press 1, 2[, 3] or N" hint for a
+// prompt's actual option count (3 for generic/edit/write, 4 for Bash's
+// extra "switch to auto mode" choice) rather than a hardcoded tool-name
+// check, so any future variant with a different count is covered for
+// free.
+func placeholderForOptionCount(n int) string {
+	if n <= 1 {
+		return "press 1"
+	}
+	digits := make([]string, n)
+	for i := range digits {
+		digits[i] = fmt.Sprintf("%d", i+1)
+	}
+	return "press " + strings.Join(digits[:n-1], ", ") + " or " + digits[n-1]
+}
+
 // refreshPopup rebuilds the autocomplete popup from the editor's current
 // line and cursor column, called after every keystroke that could have
 // changed either — editor.js's own updateAutocomplete/tryTriggerAutocomplete
@@ -1161,6 +1350,29 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		editor.Append(m.cfg.HistoryPath, line)
 	}
 
+	// A follow-up typed while a turn is running (and no prompt is waiting
+	// on an answer — that keystroke belongs to the prompt, never to a new
+	// message) queues instead of starting a second turn
+	// (docs/kiln-design-handoff/README.md's "Queued follow-up"): the `you`
+	// block commits right away with a "queued" meta, and Lane.Steer queues
+	// the raw text for the harness's own next-turn injection
+	// (harness/lane.go's pi.lane.state.inbox) rather than going through
+	// this function's own command/mention/hook pipeline, which only
+	// applies to a message starting a turn right now.
+	if m.busy && !m.prompt.Active() {
+		width := m.contentWidth()
+		if m.cfg.Bridge != nil {
+			m.cfg.Bridge.Commit(RenderUserMessageMeta(line, "queued", width))
+		}
+		if m.cfg.Lane != nil {
+			if err := m.cfg.Lane.Steer(line); err != nil && m.cfg.Bridge != nil {
+				m.cfg.Bridge.Commit(RenderError(err.Error()))
+			}
+		}
+		m.editor.SetValue("")
+		return m, nil
+	}
+
 	width := m.contentWidth()
 	echo := func() {
 		if m.cfg.Bridge != nil {
@@ -1197,8 +1409,25 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		echo()
-		if len(handled.Output) > 0 && m.cfg.Bridge != nil {
-			m.cfg.Bridge.CommitCommandResult(handled.Output)
+		if m.cfg.Bridge != nil {
+			switch {
+			case handled.Context != nil:
+				// /context gets the structured "context" block
+				// (context.go) instead of its plain Output rows — the
+				// stacked bar and legend are the whole point of the
+				// command in the kiln design (docs/kiln-design-handoff/
+				// README.md, "context" row).
+				m.cfg.Bridge.CommitSynthetic(append([]string{""}, RenderContext(*handled.Context, width)...))
+			case len(handled.Output) == 1:
+				// A single-line result reads as a system note in the kiln
+				// design ("/cost", "/compact", "/model", "/agents",
+				// "/help" info form — docs/kiln-design-handoff/README.md's
+				// "note" row example copy), not a "⎿ " continuation under
+				// the echo.
+				m.cfg.Bridge.CommitNote(handled.Output[0])
+			case len(handled.Output) > 0:
+				m.cfg.Bridge.CommitCommandResult(handled.Output)
+			}
 		}
 		if handled.Prompt == "" {
 			return m, nil
@@ -1280,9 +1509,11 @@ func (m Model) beginTurn(prompt string, images []msg.ImageContent) (tea.Model, t
 	m.spinner.Start(m.turn)
 	m.turn++
 	m.footer.SetBusy(true)
+	m.editor.SetPlaceholder("queue a follow-up, or esc to stop")
 	// A fresh turn starts with no dispatches: the previous turn's
 	// subagents panel (if any) does not linger into this one.
 	m.subagents.Reset()
+	m.todos = nil
 
 	lane := m.cfg.Lane
 	bridge := m.cfg.Bridge
@@ -1397,6 +1628,64 @@ func (m Model) View() tea.View {
 	return v
 }
 
+// commitReconnectNote commits "↺ Reconnected on attempt N" the first time
+// anything is about to commit after a retry succeeded (MsgRetryStart set
+// reconnectedAttempt), then clears it so it fires exactly once per retry —
+// ahead of the streamed message's first live delta or, if the message never
+// streamed a delta before completing, ahead of its committed markdown block
+// (both call sites go through this helper: the MsgStreamText and
+// msgCommitMarkdown cases in update).
+func (m Model) commitReconnectNote() Model {
+	if m.reconnectedAttempt == 0 {
+		return m
+	}
+	attempt := m.reconnectedAttempt
+	m.reconnectedAttempt = 0
+	if m.cfg.Bridge != nil {
+		m.cfg.Bridge.CommitNote(fmt.Sprintf("↺ Reconnected on attempt %d", attempt))
+	}
+	return m
+}
+
+// renderRetryLive draws the live "error" retry block (retry.go's
+// RenderRetry) plus a trailing blank row, or nil when no retry is pending —
+// same append-unconditionally contract as renderPlanLive/subagents.Render.
+// now is HARNESS_TEST_CLOCK's override when set, so a PTY golden's
+// countdown is deterministic instead of racing real wall-clock time.
+func (m Model) renderRetryLive(width int) []string {
+	if m.retry == nil {
+		return nil
+	}
+	now := time.Now()
+	if t, ok := clockOverride(); ok {
+		now = t
+	}
+	return append(RenderRetry(*m.retry, now, width), "")
+}
+
+// renderStreamLive draws the live streaming "kiln" block (stream.go's
+// RenderStreamLive) plus a trailing blank row, or nil when nothing has
+// streamed yet (before the first delta, or after msgCommitMarkdown/turn end
+// cleared it) or in plain (screen-reader) mode, which never shows it (D's
+// spec: a screen reader would re-read the live region every tick).
+func (m Model) renderStreamLive(width int) []string {
+	if m.streamText == "" || IsPlain() {
+		return nil
+	}
+	return append(RenderStreamLive(m.streamText, width, maxStreamRows), "")
+}
+
+// renderPlanLive draws the live "plan" checklist (plan.go's RenderPlan)
+// plus a trailing blank row, or nil when no plan is active — so callers can
+// append its result unconditionally, matching m.subagents.Render's own
+// contract.
+func (m Model) renderPlanLive(width int) []string {
+	if len(m.todos) == 0 {
+		return nil
+	}
+	return append(RenderPlan(m.todos, width), "")
+}
+
 // liveLines builds the live-region rows (everything below the committed
 // transcript: spinner, dialog/prompt, input box, statusLine, mode line) and
 // the index of the editor's first row (editorTop, -1 when the editor is not
@@ -1406,7 +1695,7 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 	editorTop = -1
 
 	if m.group != nil {
-		lines = append(lines, "", RenderToolGroupRunning(m.group.kind, m.group.n))
+		lines = append(lines, "", RenderToolGroupRunning(m.group.kind, len(m.group.views)))
 	}
 	// No spinner while a permission or plan prompt is up: Claude Code shows
 	// the question alone (permission-edit.txt, plan-approval.txt).
@@ -1440,39 +1729,55 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 		// The detailed transcript view (verbose-ctrl-o.txt rows 38-39): a
 		// rule and the notice row take the input box's place until Ctrl+O
 		// toggles back.
-		lines = append(lines, RuleColour(strings.Repeat("─", width)), m.renderModeLine(width))
+		lines = append(lines, RuleColour(strings.Repeat("─", width)), m.renderStatusRow(width))
 	default:
 		if m.popup != nil {
 			// Claude Code draws the suggestions directly above the input
 			// box's top rule (autocomplete-slash.txt rows 29-32).
 			lines = append(lines, m.renderPopup(width, len(lines))...)
 		}
-		// The subagents panel sits above the hint row/input box, live for
-		// the turn that dispatched at least one `task` call; empty
-		// otherwise, so it costs no rows when nothing is running.
+		// The live streaming "kiln" block sits above the retry/plan/
+		// subagents rows (docs/kiln-design-handoff/README.md's "Streaming"
+		// section).
+		if rows := m.renderStreamLive(width); len(rows) > 0 {
+			lines = append(lines, rows...)
+		}
+		// The live "error" retry block sits directly above the plan/
+		// subagents rows while a retry is pending.
+		if rows := m.renderRetryLive(width); len(rows) > 0 {
+			lines = append(lines, rows...)
+		}
+		// The live "plan" checklist sits above the subagents panel, live
+		// for the turn that has called todo_write at least once; empty
+		// otherwise.
+		if rows := m.renderPlanLive(width); len(rows) > 0 {
+			lines = append(lines, rows...)
+		}
+		// The subagents panel sits above the input box, live for the turn
+		// that dispatched at least one `task` call; empty otherwise, so it
+		// costs no rows when nothing is running.
 		if rows := m.subagents.Render(width); len(rows) > 0 {
 			lines = append(lines, rows...)
 			lines = append(lines, "")
 		}
-		if hint := m.hintRow(width); hint != "" {
-			lines = append(lines, hint)
-		}
 		editorTop = len(lines)
 		lines = append(lines, m.editor.View(width)...)
 		if m.shortcuts {
-			// The shortcuts panel takes the mode line's place
+			// The shortcuts panel takes the status row's place
 			// (shortcuts.txt rows 32-39).
 			lines = append(lines, RenderShortcuts(width)...)
 		} else {
-			// The configured statusLine sits between the input box and the
-			// mode line (docs/claude-code-reference.md §1: the "│ ⎇ …" row).
+			// The one-row status line sits directly below the input box
+			// (docs/kiln-design-handoff/README.md "Screen anatomy"); a
+			// configured statusLine command still renders as extra dim rows
+			// after it (docs/claude-code-reference.md §1: the "│ ⎇ …" row).
 			// The statusLine command emits its own (non-kiln) colours, so
 			// strip them and re-tint the row in the kiln dim tone: it keeps
 			// its text/segments and layout, just in the kiln palette.
+			lines = append(lines, m.renderStatusRow(width))
 			for _, sl := range m.statusLine {
 				lines = append(lines, FitStatus("  "+Muted(ansi.Strip(sl)), width))
 			}
-			lines = append(lines, m.renderModeLine(width))
 		}
 	}
 
@@ -1552,7 +1857,7 @@ func (m Model) replayTranscript() {
 		m.cfg.Bridge.Commit(RenderError(err.Error()))
 		return
 	}
-	m.cfg.Bridge.Commit(RenderTranscriptEntries(oldestFirst(entries), m.contentWidth(), m.cfg.Bridge.Verbose(), m.cfg.Cwd, m.lastSummary))
+	m.cfg.Bridge.Commit(RenderTranscriptEntries(oldestFirst(entries), m.contentWidth(), m.cfg.Bridge.Verbose(), m.cfg.Cwd, m.cfg.Bridge.Synthetics()))
 }
 
 // openRewind opens the Rewind dialog over the lane's user messages
@@ -1629,44 +1934,45 @@ func (m Model) renderPopup(width, linesAbove int) []string {
 	return m.popup.Render(width, maxRows)
 }
 
-// --- hint row and mode line -------------------------------------------------
+// --- status row ---------------------------------------------------------
 
-// hintRow renders the right-aligned row above the input box's top rule:
-// "Ctrl+Y to paste deleted text" for exactly one frame after a kill,
-// otherwise the effort indicator "◐ medium · /effort"
-// (docs/claude-code-reference.md §2). Empty while a permission/plan prompt
-// or the autocomplete popup owns the area below — "the hint row is
-// omitted" per the task's explicit instruction — matching startup.txt's
-// own layout where the effort row sits directly above the rule with
-// nothing else competing for it.
-func (m Model) hintRow(width int) string {
-	if m.prompt.Active() || m.popup != nil {
-		return ""
+// renderStatusRow draws the bottom area's one row, in priority order:
+// the modeHintText override for modeHintDuration after a Ctrl+C ("Press
+// Ctrl-C again to exit", ctrl-c-hint.txt); the "Ctrl+Y to paste deleted
+// text" hint for exactly one frame after a kill (docs/claude-code-reference.md
+// §2: "until the next keystroke" — this replaces the old hintRow's slot
+// above the input box, since the design has no row there); the verbose
+// notice while Ctrl+O's detailed transcript view is active; otherwise the
+// one-row status line (status.go RenderStatusLine).
+func (m Model) renderStatusRow(width int) string {
+	if m.modeHintText != "" {
+		return FitStatus("  "+Muted(m.modeHintText), width)
 	}
-	// Two trailing columns after the indicator (startup.txt row 26 ends at
-	// column 98 of 100).
 	if m.justKilled {
 		return rightAlign(Muted("Ctrl+Y to paste deleted text"), width-2)
 	}
-	effort := m.cfg.Effort
-	if effort == "" {
-		effort = "medium"
-	}
-	// Kiln restyle: the effort glyph+label is the accent (amber), the
-	// "· /effort" hint stays dim.
-	right := KilnAmber(effortGlyph(effort)+" "+effort) + Muted(" · /effort")
-	// A transient footer note ("mcp: connecting 11 servers…") takes the
-	// left of the same row; the harness's own addition, Claude Code has no
-	// equivalent row.
-	left := ""
+	// A transient footer note ("mcp: connecting 2 servers…") takes this
+	// row's slot until the next Update clears it (MsgFooterNote) — the
+	// harness's own addition, with no Claude Code equivalent; it used to
+	// share the old hint row above the input box, which the design
+	// removed, so it surfaces here instead.
 	if note := m.footer.Note(); note != "" {
-		left = "  " + Muted(note)
+		return FitStatus("  "+Muted(note), width)
 	}
-	pad := width - 2 - VisibleWidth(left) - VisibleWidth(right)
-	if pad < 1 {
-		return FitStatus(left, width)
+	if m.cfg.Bridge != nil && m.cfg.Bridge.Verbose() {
+		// docs/claude-code-reference.md §3 (verbose-ctrl-o.txt): the status
+		// row gives way to the verbose notice with "verbose" right-aligned.
+		left := "  " + Muted("Showing detailed transcript · ctrl+o to toggle · ? for shortcuts")
+		right := Muted("verbose")
+		// One trailing column, matching verbose-ctrl-o.txt row 40 (the
+		// "verbose" label ends at column 99 of 100, not flush right).
+		pad := width - 1 - VisibleWidth(left) - VisibleWidth(right)
+		if pad < 1 {
+			return FitStatus(left, width)
+		}
+		return left + strings.Repeat(" ", pad) + right
 	}
-	return left + strings.Repeat(" ", pad) + right
+	return m.footer.RenderLine(width)
 }
 
 // effortGlyph maps a reasoning-effort label to its indicator glyph
@@ -1698,82 +2004,6 @@ func rightAlign(s string, width int) string {
 	return strings.Repeat(" ", width-w) + s
 }
 
-// modeLineText returns the mode line's lead-in glyph and remaining text
-// for mode, verbatim from docs/claude-code-reference.md §2 (verified
-// against mode-cycle.txt): a non-cycling mode still gets the glyph, just
-// no "(shift+tab to cycle)" suffix.
-func modeLineText(mode string) (glyph, rest string, ok bool) {
-	switch mode {
-	case "auto":
-		return "⏵⏵", "auto mode on (shift+tab to cycle)", true
-	case "manual":
-		return "⏸", "manual mode on", true
-	case "acceptEdits":
-		return "⏵⏵", "accept edits on (shift+tab to cycle)", true
-	case "plan":
-		return "⏸", "plan mode on (shift+tab to cycle)", true
-	case "bypassPermissions":
-		return "⏵⏵", "bypass permissions on (shift+tab to cycle)", true
-	case "dontAsk":
-		return "⏵⏵", "don't ask on (shift+tab to cycle)", true
-	default:
-		return "", "", false
-	}
-}
-
-// renderModeLine draws the bottom area's one row: the mode line, indented
-// two spaces, glyph in Amber and the rest in Muted — or, for
-// modeHintDuration after a Ctrl+C, "Press Ctrl-C again to exit" in its
-// place (docs/claude-code-reference.md §2, ctrl-c-hint.txt). " · ← for
-// agents" follows the auto and manual modes only (mode-cycle.txt: accept
-// edits and plan never carry it; turn-edit.txt row 40 carries it with text
-// in the input) and is dropped while the autocomplete popup is open
-// (autocomplete-slash.txt row 36). The harness has no agents view yet, so
-// the suffix is parity-only and Left on an empty input does nothing.
-func (m Model) renderModeLine(width int) string {
-	if m.modeHintText != "" {
-		return FitStatus("  "+Muted(m.modeHintText), width)
-	}
-	if m.cfg.Bridge != nil && m.cfg.Bridge.Verbose() {
-		// docs/claude-code-reference.md §3 (verbose-ctrl-o.txt): the mode
-		// line gives way to the verbose notice with "verbose" right-aligned.
-		left := "  " + Muted("Showing detailed transcript · ctrl+o to toggle · ? for shortcuts")
-		right := Muted("verbose")
-		// One trailing column, matching verbose-ctrl-o.txt row 40 (the
-		// "verbose" label ends at column 99 of 100, not flush right).
-		pad := width - 1 - VisibleWidth(left) - VisibleWidth(right)
-		if pad < 1 {
-			return FitStatus(left, width)
-		}
-		return left + strings.Repeat(" ", pad) + right
-	}
-	_, rest, ok := modeLineText(m.footer.State().Mode)
-	if !ok {
-		return FitStatus("", width)
-	}
-	mode := m.footer.State().Mode
-	if (mode == "auto" || mode == "manual") && m.popup == nil {
-		rest += " · ← for agents"
-	}
-	// Kiln restyle: a filled dot "●" leads the line instead of the
-	// Claude Code ⏵⏵/⏸ glyph, coloured by mode (ask/manual dim, the
-	// auto-edit family green, plan blue); the wording itself is
-	// unchanged. See design_handoff_kiln_tui/README.md's status-line
-	// mode colours.
-	return FitStatus("  "+modeDotColor(mode)("●")+" "+Muted(rest), width)
-}
-
-// modeDotColor picks the kiln colour for the mode line's lead-in "●",
-// mapping the harness's permission-mode names onto the design's three
-// mode colours: ask/manual (dim), the auto-edit family — auto,
-// acceptEdits, bypassPermissions, dontAsk — (green), and plan (blue).
-func modeDotColor(mode string) func(string) string {
-	switch mode {
-	case "plan":
-		return KilnBlue
-	case "auto", "acceptEdits", "bypassPermissions", "dontAsk":
-		return KilnGreen
-	default:
-		return Muted
-	}
-}
+// The mode dot/label colour mapping now lives in status.go's modeLabel
+// (RenderStatusLine's mode segment), which app.go's renderStatusRow above
+// reaches through m.footer.RenderLine.

@@ -1,0 +1,8 @@
+  /compact  Summarize and compact the current context
+  /config   Show settings and where they came from
+  /context  Show context usage against the active tier
+  /cost     Show token usage and cost for this session
+────────────────────────────────────────────────────────────────────────────────────────────────────
+› /co
+────────────────────────────────────────────────────────────────────────────────────────────────────
+● ask before edits  ⇧⇥                                                           ctx ──────────  0%

@@ -99,6 +99,7 @@ const (
 	hexRaise      = "#241f18" // user message / $cmd / selected-row background
 	hexDiffAddBg  = "#232619" // diff "+" line background
 	hexDiffDelBg  = "#2f1c15" // diff "−" line background
+	hexBarEmpty   = "#3f372c" // subagents panel: progress bar empty cell
 )
 
 // Kiln foreground helpers.
@@ -114,6 +115,12 @@ var (
 	Rule = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexRule)))
 	// RuleStrong is the input box's rules (brighter than Rule).
 	RuleStrong = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexRuleStrong)))
+	// BarEmpty is the subagents panel's progress-bar empty-cell colour
+	// (docs/kiln-design-handoff/README.md "agents" row: "empty #3f372c") —
+	// a design token distinct from Rule (the general hairline/empty-meter
+	// colour) because the handoff calls out a lighter shade for this one
+	// bar specifically.
+	BarEmpty = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexBarEmpty)))
 )
 
 // Kiln background helpers. Callers pad the text to the intended width

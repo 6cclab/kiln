@@ -93,33 +93,16 @@ func clockOverride() (time.Time, bool) {
 	return t, true
 }
 
-// Render renders the footer's two status rows, then appends the transient
-// hint / "esc to interrupt" suffix to the first row exactly as
-// FooterView.render (app.ts:437-447) does, and fits both rows to width.
-func (f *FooterState) Render(width int) [2]string {
+// RenderLine renders the one-row status line (status.go's
+// RenderStatusLine) from the current state, honoring HARNESS_TEST_CLOCK.
+// The transient note and "esc to interrupt"/busy suffix that the old
+// two-row Render used to append are gone: the note now surfaces via
+// Note() in the status row's own slot (app.go renderStatusRow), and the
+// busy hint moved to the busy line ("esc to stop", spinner.go).
+func (f *FooterState) RenderLine(width int) string {
 	s := f.state
 	if t, ok := clockOverride(); ok {
 		s.Now = t
 	}
-	rows := RenderStatus(s)
-
-	var bits []string
-	if f.busy {
-		bits = append(bits, "esc to interrupt")
-	}
-	if f.note != "" {
-		bits = append(bits, f.note)
-	}
-	first := rows[0]
-	if len(bits) > 0 {
-		suffix := Dim("  ·  ")
-		for i, b := range bits {
-			if i > 0 {
-				suffix += Dim(" · ")
-			}
-			suffix += Dim(b)
-		}
-		first = first + suffix
-	}
-	return [2]string{FitStatus(first, width), FitStatus(rows[1], width)}
+	return FitStatus(RenderStatusLine(s, width), width)
 }

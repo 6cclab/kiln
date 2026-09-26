@@ -69,13 +69,13 @@ func TestPlaceholderPresentWhenEmptyGoneAfterTyping(t *testing.T) {
 	m.Focus()
 
 	empty := strings.Join(m.View(80), "\n")
-	if !strings.Contains(empty, "how do I log an error") {
+	if !strings.Contains(empty, "describe a task") {
 		t.Fatalf("expected placeholder text in empty view, got:\n%s", empty)
 	}
 
 	m.SetValue("go")
 	typed := strings.Join(m.View(80), "\n")
-	if strings.Contains(typed, "how do I log an error") {
+	if strings.Contains(typed, "describe a task") {
 		t.Fatalf("placeholder should be gone once text exists, got:\n%s", typed)
 	}
 	if !strings.Contains(typed, "go") {

@@ -1,0 +1,6 @@
+model: faux-1
+steps:
+  - text: "Working on it."
+    disconnect_after: 200ms
+  - text: "Reconnected, continuing."
+    usage: {input: 50, output: 10}

@@ -7,18 +7,15 @@ import (
 	"time"
 )
 
-// The status line, ported from status.ts:102-138.
+// The status line — one row, ported from the kiln design handoff's "Status
+// line" section (docs/kiln-design-handoff/README.md "Screen anatomy"):
 //
-// Claude Code's is a dashboard, not a label: context used against the
-// window with a meter, git branch and whether the tree is dirty, spend so
-// far, session age, and the permission mode on its own line with the key
-// that changes it. Reading it answers "can I keep going, and what will it
-// do if I do" without running a command.
+//	● auto-edit  ⇧⇥                      ~/src/relay-api · main*   ctx ━━━━──────  38%  $0.42
 //
-// Every segment here either changes as you work or tells you something you
-// cannot otherwise see. A segment with nothing to say is omitted rather
-// than shown empty, because a dashboard of blanks is worse than a short
-// one.
+// mode segment (dot + label + the mode-cycle key) on the left, cwd/branch
+// next to it, a flexible spacer, then the context meter and cumulative
+// spend on the right — a dashboard read left-to-right: what mode am I in,
+// where am I, how much room and spend is left.
 
 // GitStatus is the git segment of the status line.
 type GitStatus struct {
@@ -26,35 +23,42 @@ type GitStatus struct {
 	Dirty  bool
 }
 
-// StatusState is everything RenderStatus needs.
+// StatusState is everything RenderStatusLine needs.
 type StatusState struct {
 	ModelLabel    string
 	ContextWindow int
-	// ContextUsed is nil when there is nothing to report yet.
+	// ContextUsed is nil when there is nothing to report yet — the meter
+	// still renders, empty, at 0%.
 	ContextUsed *int
-	// Cost is cumulative spend, in dollars. Omitted (rendered as nothing)
-	// when zero, matching status.ts.
+	// Cost is cumulative spend, in dollars. Omitted entirely when zero.
 	Cost float64
 	Git  *GitStatus
-	// Mode is the permission mode, shown on the second line with the key
-	// that cycles it.
+	// Cwd is the working directory shown in the location segment,
+	// home-abbreviated by the caller's choosing (RenderStatusLine does not
+	// abbreviate it itself, so a caller that wants "~/…" passes it already
+	// abbreviated — see AbbrevHome).
+	Cwd string
+	// Mode is the permission mode driving the dot/label colour and text.
 	Mode string
-	// Thinking is set while the model is reasoning.
+	// Thinking is set while the model is reasoning. RenderStatusLine does
+	// not use this itself (the busy line owns "thinking" now); kept on the
+	// state because callers (MsgThinking) still set it and other code may
+	// read it back via FooterState.State().
 	Thinking bool
-	// StartedAt is session start, for the elapsed clock.
+	// StartedAt is session start; RenderStatusLine no longer shows an
+	// elapsed clock (kept for callers that still read it).
 	StartedAt time.Time
 	// Now is injected for tests; the zero value means "use time.Now()".
 	Now time.Time
 }
 
-const (
-	filledCell        = "█"
-	emptyCell         = "░"
-	meterWidthDefault = 6
-)
+// meterWidthDefault is Meter's width when the caller does not specify one.
+const meterWidthDefault = 6
 
-// Meter renders a small bar. Fractional fills round down, so a full bar
-// means genuinely full.
+// Meter renders a small bar using the active glyph table's fill/empty
+// cells (G().MeterFull/MeterEmpty: "━"/"─", ASCII "="/"-" in plain mode) —
+// unstyled; callers colour the filled and empty runs separately. Fractional
+// fills round down, so a full bar means genuinely full.
 func Meter(fraction float64, width ...int) string {
 	w := meterWidthDefault
 	if len(width) > 0 {
@@ -62,7 +66,8 @@ func Meter(fraction float64, width ...int) string {
 	}
 	clamped := math.Max(0, math.Min(1, fraction))
 	filled := int(math.Floor(clamped * float64(w)))
-	return strings.Repeat(filledCell, filled) + strings.Repeat(emptyCell, w-filled)
+	gl := G()
+	return strings.Repeat(gl.MeterFull, filled) + strings.Repeat(gl.MeterEmpty, w-filled)
 }
 
 // Compact renders 450k, 1.0m, 21.1k — the compact forms the meter sits
@@ -88,7 +93,8 @@ func Compact(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// Elapsed renders a duration the way the status line's session clock does.
+// Elapsed renders a duration the way the status line's session clock used
+// to; kept for callers that still measure session age.
 func Elapsed(d time.Duration) string {
 	seconds := int(d / time.Second)
 	if seconds < 60 {
@@ -108,108 +114,130 @@ func Elapsed(d time.Duration) string {
 	return fmt.Sprintf("%dd", hours/24)
 }
 
-// pressure colours by how much room is left, not by an absolute number.
-// 80% of a 1M window and 80% of a 32k window are the same problem to the
-// person reading it, and the point of the colour is to say "start thinking
-// about compaction" at the moment that becomes true.
-func pressure(fraction float64) func(string) string {
-	if fraction >= 0.9 {
-		return Red
-	}
-	if fraction >= 0.7 {
-		return Yellow
-	}
-	return Green
-}
-
-func clock(at time.Time) string {
-	h := at.Hour()
-	m := fmt.Sprintf("%02d", at.Minute())
-	suffix := "am"
-	if h >= 12 {
-		suffix = "pm"
-	}
-	hour12 := h % 12
-	if hour12 == 0 {
-		hour12 = 12
-	}
-	return fmt.Sprintf("%d:%s%s", hour12, m, suffix)
-}
-
-// RenderStatus renders the status line as two rows: segments, then the
-// mode row. The mode goes on its own row because it is the one thing here
-// that changes what the agent will *do* rather than reporting what it has
-// done, and it is the one thing with a key that changes it.
-func RenderStatus(s StatusState) [2]string {
-	now := s.Now
-	if now.IsZero() {
-		now = time.Now()
-	}
-	p := IsPlain()
-	sep := Dim(" │ ")
-	var segments []string
-
-	segments = append(segments, fmt.Sprintf("%s %s", Bold(s.ModelLabel), Dim(fmt.Sprintf("(%s ctx)", Compact(s.ContextWindow)))))
-
-	if s.Git != nil {
-		// A dirty tree is the thing you forget and then discover during a
-		// rebase, so it gets a glyph rather than being implied by
-		// absence.
-		mark := Green("✓")
-		if s.Git.Dirty {
-			mark = Yellow("●")
-		}
-		label := "⎇"
-		if p {
-			label = "git"
-		}
-		segments = append(segments, fmt.Sprintf("%s %s %s", Dim(label), Cyan(s.Git.Branch), mark))
-	}
-
-	if s.ContextUsed != nil && s.ContextWindow > 0 {
-		fraction := float64(*s.ContextUsed) / float64(s.ContextWindow)
-		colour := pressure(fraction)
-		percent := int(math.Round(fraction * 100))
-		segments = append(segments, fmt.Sprintf("%s %s%s%s %s",
-			colour(Meter(fraction)),
-			Compact(*s.ContextUsed), Dim("/"), Compact(s.ContextWindow),
-			Dim(fmt.Sprintf("%d%%", percent)),
-		))
-	}
-
-	if s.Thinking {
-		label := "◇ thinking"
-		if p {
-			label = "thinking"
-		}
-		segments = append(segments, Dim(label))
-	}
-
-	// Omitted rather than shown as $0.00: a self-hosted model has no
-	// marginal cost, and a permanent zero is a segment that never earns
-	// its width.
-	if s.Cost > 0 {
-		segments = append(segments, fmt.Sprintf("$%.2f", s.Cost))
-	}
-
-	dot := "· "
-	if p {
-		dot = ""
-	}
-	segments = append(segments, Dim(fmt.Sprintf("%s %s%s", Elapsed(now.Sub(s.StartedAt)), dot, clock(now))))
-
-	modeColour := Green
-	switch s.Mode {
+// modeLabel returns the status line's mode label text for the dot+label
+// segment, and its colour — manual/default/ask before edits (dim), the
+// auto-edit family (green), plan (blue). Unrecognised modes fall back to
+// "ask before edits" dim, the safest default.
+func modeLabel(mode string) (label string, colour func(string) string) {
+	switch mode {
+	case "acceptEdits", "auto":
+		return "auto-edit", KilnGreen
 	case "bypassPermissions":
-		modeColour = Red
+		return "bypass permissions", KilnGreen
+	case "dontAsk":
+		return "don't ask", KilnGreen
 	case "plan":
-		modeColour = Cyan
+		return "plan only", KilnBlue
+	default: // "manual", "", any unrecognised mode
+		return "ask before edits", Muted
 	}
-	arrow := "▶▶"
-	if p {
-		arrow = ">>"
-	}
-	modeLine := fmt.Sprintf("%s %s %s", Dim(arrow), modeColour(fmt.Sprintf("%s mode", s.Mode)), Dim("(shift+tab to cycle)"))
+}
 
-	return [2]string{strings.Join(segments, sep), modeLine}
+// contextPressure colours the context meter's filled cells: amber below
+// 70% used, red above — the point at which "start thinking about
+// compaction" becomes true.
+func contextPressure(fraction float64) func(string) string {
+	if fraction > 0.70 {
+		return KilnRed
+	}
+	return KilnAmber
+}
+
+// AbbrevHome replaces the user's home directory prefix in path with "~".
+func AbbrevHome(path, home string) string {
+	if home == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	if strings.HasPrefix(path, home+"/") {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
+// RenderStatusLine renders the one-row status line: mode segment, location
+// segment, a flexible spacer, then the context meter and cost — fitted so
+// the right side ends at width-1. When the row does not fit, segments drop
+// in order: location first, then cost, then the row is truncated outright
+// with FitStatus.
+func RenderStatusLine(s StatusState, width int) string {
+	p := IsPlain()
+
+	// --- mode segment ---
+	label, colour := modeLabel(s.Mode)
+	dot := "●"
+	shiftTab := "⇧⇥"
+	if p {
+		dot = "*"
+		shiftTab = "shift+tab"
+	}
+	modeSeg := colour(dot) + " " + colour(label) + "  " + Muted(shiftTab)
+
+	// --- location segment ---
+	var locSeg string
+	if s.Cwd != "" {
+		locSeg = Muted(s.Cwd)
+		if s.Git != nil {
+			branch := s.Git.Branch
+			if s.Git.Dirty {
+				branch += "*"
+			}
+			locSeg += Muted(" · " + branch)
+		}
+	}
+
+	// --- right side: ctx meter + cost ---
+	fraction := 0.0
+	percent := 0
+	if s.ContextUsed != nil && s.ContextWindow > 0 {
+		fraction = float64(*s.ContextUsed) / float64(s.ContextWindow)
+		percent = int(math.Round(fraction * 100))
+	}
+	meter := Meter(fraction, 10)
+	filledN := int(math.Floor(math.Max(0, math.Min(1, fraction)) * 10))
+	// Meter emits filled cells then empty cells with no separator, so split
+	// by rune count rather than byte offset since glyphs may be multi-byte.
+	runes := []rune(meter)
+	if filledN > len(runes) {
+		filledN = len(runes)
+	}
+	filledRun := string(runes[:filledN])
+	emptyRun := string(runes[filledN:])
+	ctxSeg := "ctx " + contextPressure(fraction)(filledRun) + Rule(emptyRun) + Muted(fmt.Sprintf("  %d%%", percent))
+
+	var costSeg string
+	if s.Cost > 0 {
+		costSeg = Muted(fmt.Sprintf("$%.2f", s.Cost))
+	}
+
+	build := func(includeLoc, includeCost bool) string {
+		r := ctxSeg
+		if includeCost && costSeg != "" {
+			r += "  " + costSeg
+		}
+		left := modeSeg
+		if includeLoc && locSeg != "" {
+			left += "  " + locSeg
+		}
+		lw := VisibleWidth(left)
+		rw := VisibleWidth(r)
+		spacer := width - 1 - lw - rw
+		if spacer < 1 {
+			return ""
+		}
+		return left + strings.Repeat(" ", spacer) + r
+	}
+
+	if out := build(true, true); out != "" {
+		return out
+	}
+	if out := build(false, true); out != "" {
+		return out
+	}
+	if out := build(false, false); out != "" {
+		return out
+	}
+	return FitStatus(modeSeg, width)
 }

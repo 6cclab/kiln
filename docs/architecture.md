@@ -459,6 +459,28 @@ goroutines) onto one background goroutine that owns `Program.Println`, so
 commit order matches enqueue order regardless of which goroutine produced
 each item.
 
+Every frame splits into two regions with different lifetimes. The
+committed transcript (native scrollback, written once via `Program.Println`
+and never redrawn) holds everything finished: user echoes, completed tool
+calls, assistant text, notes. The live region (`app.go`'s `liveLines`,
+rebuilt from scratch on every `Update`) holds only what is still in
+flight: the spinner, a streaming reply's last few rows with its trailing
+caret, a pending permission/plan prompt, the live "plan" checklist and
+subagents panel, the input box and the status line. A block that finishes
+(a completed plan, a subagents dispatch, a fully streamed reply) commits
+once as an ordinary transcript block and then drops out of the live
+region entirely, rather than the live region growing without bound.
+Ctrl+O, Ctrl+F and Rewind all redraw the transcript from the session log
+rather than from anything the live region held, so
+`internal/tui/replay.go`'s `RenderTranscriptEntries` reconstructs it: it
+walks the session's logged entries and, in the same pass, splices back in
+every synthetic (non-entry) block that was recorded via
+`Bridge.CommitSynthetic` — the committed plan checklist, subagent dispatch
+lines, system notes, the `/context` block — immediately after the entry
+it was originally committed alongside, since none of those exist in the
+session log itself and a replay built purely from the log would silently
+drop them.
+
 Design language, per-row layout and style details are covered in
 `docs/kiln-design.md`; the terminal-emulation test methodology (every
 screen assertion runs against an emulated terminal, never raw bytes) is

@@ -1,0 +1,17 @@
+▸ Find the upload route and its middleware chain
+○ Check how Redis is configured
+○ Write a rateLimit middleware
+○ Wire it into POST /api/upload
+○ Add tests and run the suite
+
+subagents ────────────────────────────────────────────────────────────────────────────────  0/2 done
+2 subagents running in parallel
+ scout     Check the Redis config and survey the upload tests                     ──────────
+          → starting…
+ scout     Map the middleware chain in src/server                                 ──────────
+          → starting…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+› queue a follow-up, or esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+● ask before edits  ⇧⇥                                                           ctx ──────────  0%

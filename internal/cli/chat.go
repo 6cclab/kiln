@@ -771,6 +771,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// will actually execute (a hook may have rewritten it) rather than what
 	// the model proposed. GuardToolCall already encodes this ordering.
 	started.Harness.Hooks().OnBeforeTool(func(ctx context.Context, call msg.ToolCall) (harness.BeforeToolResult, error) {
+		// outcome is set by the Check closure below, which GuardToolCall
+		// always calls (unless a PreToolUse hook already blocked the
+		// call) — it is how the kiln TUI's tool block learns whether this
+		// call was "approved" (answered at a prompt) or "auto-approved"
+		// (a rule/mode let it through without asking). See
+		// permission.Outcome's doc comment.
+		var outcome permission.Outcome
 		guard, err := claudehooks.GuardToolCall(claudehooks.GuardOptions{
 			Config:         hookConfig,
 			ToolName:       call.Name,
@@ -779,7 +786,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			TranscriptPath: transcriptPath,
 			Cwd:            cwd,
 			Check: func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any) (*claudehooks.Blocked, error) {
-				blocked, err := gate.Check(ctx, permission.Request{ToolName: toolName, PrimaryArg: primaryArg, Args: args})
+				blocked, out, err := gate.CheckWithOutcome(ctx, permission.Request{ToolName: toolName, PrimaryArg: primaryArg, Args: args})
+				outcome = out
 				if err != nil {
 					return nil, err
 				}
@@ -804,9 +812,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			if err != nil {
 				return harness.BeforeToolResult{}, err
 			}
-			return harness.BeforeToolResult{RewrittenArgs: raw}, nil
+			return harness.BeforeToolResult{RewrittenArgs: raw, PermissionOutcome: string(outcome)}, nil
 		}
-		return harness.BeforeToolResult{}, nil
+		return harness.BeforeToolResult{PermissionOutcome: string(outcome)}, nil
 	})
 
 	// postToolCtxQueue carries PostToolUse additionalContext into the
@@ -946,6 +954,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			SessionStart:    sessionStart,
 			ScreenReader:    args.ScreenReader,
 			Fullscreen:      args.Fullscreen,
+			IsResume:        args.ResumeSet,
 		}, stdout, stderr, stdin)
 
 		shells.KillAll()

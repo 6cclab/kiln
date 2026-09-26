@@ -116,6 +116,33 @@ type Result struct {
 	// Exit signals the interactive shell to quit after this command (e.g.
 	// /exit, /quit). Print mode ignores it.
 	Exit bool
+	// Context is /context's structured breakdown, for a renderer that
+	// wants more than the plain Output text (the kiln TUI's
+	// tui.RenderContext, via internal/tui/context.go). nil for every
+	// other command. -p/print mode ignores it and uses Output, same as
+	// every other command's plain-text form.
+	Context *ContextBreakdown
+}
+
+// ContextBreakdown is /context's structured result: how many tokens are
+// used against the active tier's window, broken into the sources that
+// consumed them. Built from budget.Tier (system prompt and tool-strategy
+// budgets, which are fixed costs of the tier, not measured per turn) and
+// the session's live usage total (docs/kiln-design-handoff/README.md
+// "context" row and "Context segment colors").
+type ContextBreakdown struct {
+	ModelLabel string
+	Used       int
+	Window     int
+	Segments   []ContextSegment
+}
+
+// ContextSegment is one source of context-window usage: system prompt,
+// tools, conversation, or free. Label is the legend text; Tokens is
+// clamped to zero or more by the builder, never negative.
+type ContextSegment struct {
+	Label  string
+	Tokens int
 }
 
 // Command is one slash command.

@@ -1,6 +1,9 @@
 package tui
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // The working indicator, rendered above the input box.
 //
@@ -20,6 +23,9 @@ type SpinnerState struct {
 	// start flowing: "(Ns · thinking with <effort> effort)".
 	thinking bool
 	effort   string
+	// queueLen is Lane.Steer's queue length (EventQueueUpdate via
+	// MsgQueue), shown as the busy line's " · N queued" suffix.
+	queueLen int
 }
 
 // Start begins the spinner for a new turn, picking a gerund from seed.
@@ -32,6 +38,12 @@ func (s *SpinnerState) Start(seed int) {
 	s.baseLabel = s.label
 	s.thinking = false
 	s.effort = ""
+	s.queueLen = 0
+}
+
+// SetQueueLen sets the busy line's " · N queued" suffix (0 hides it).
+func (s *SpinnerState) SetQueueLen(n int) {
+	s.queueLen = n
 }
 
 // Stop ends the spinner.
@@ -84,9 +96,11 @@ func (s *SpinnerState) Busy() bool {
 }
 
 // Render renders zero or exactly one line: nothing while idle, one
-// truncated (not wrapped) row while busy. The spinner is one row by
-// definition, and a two-row spinner makes the whole transcript above it
-// jump on each tick.
+// truncated (not wrapped) row while busy — the busy line: spinner+label+
+// elapsed/tokens on the left, "esc to stop" right-aligned at width-1
+// (docs/kiln-design-handoff/README.md "Interactions"). The spinner is one
+// row by definition, and a two-row spinner makes the whole transcript
+// above it jump on each tick.
 func (s *SpinnerState) Render(width int, now time.Time) []string {
 	if !s.busy {
 		return []string{}
@@ -100,13 +114,19 @@ func (s *SpinnerState) Render(width int, now time.Time) []string {
 		t := s.tokens
 		tokens = &t
 	}
-	line := RenderSpinner(SpinnerArgs{
+	left := RenderSpinnerLeft(SpinnerArgs{
 		Frame:          s.frame,
 		Label:          s.label,
 		ElapsedSeconds: elapsedSeconds,
 		Thinking:       s.thinking,
 		Effort:         s.effort,
 		Tokens:         tokens,
+		QueueLen:       s.queueLen,
 	})
-	return []string{FitStatus(line, width)}
+	right := Muted("esc to stop")
+	pad := width - 1 - VisibleWidth(left) - VisibleWidth(right)
+	if pad < 1 {
+		return []string{FitStatus(left, width)}
+	}
+	return []string{left + strings.Repeat(" ", pad) + right}
 }

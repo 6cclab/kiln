@@ -1,0 +1,22 @@
+#!/bin/sh
+# Fixture stand-in for `npm test -- upload` (see test/e2e/tui_design_test.go
+# and testdata/faux/design-session.yaml): a real `npm` isn't available in
+# the sandboxed fixture project, so the faux script's bash tool call runs
+# this instead, keeping the design's displayed command text
+# ("npm test -- upload") as close as possible by naming the wrapper
+# itself "npm" and invoking it as "./scripts/npm test -- upload".
+#
+# First run (no marker file yet): prints the design's failing output and
+# exits 1. Second run (marker present, from the retried/fixed turn):
+# prints a passing summary and exits 0.
+marker="$(dirname "$0")/.ran-once"
+if [ -f "$marker" ]; then
+  echo "PASS test/upload.test.ts"
+  echo "Tests: 16 passed, 16 total"
+  exit 0
+fi
+touch "$marker"
+echo "FAIL test/upload.test.ts"
+echo "  TypeError: redis.zremrangebyscore is not a function"
+echo "Tests: 2 failed, 14 passed"
+exit 1

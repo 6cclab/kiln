@@ -20,8 +20,11 @@ func TestSubagentsPanel_TwoLiveRows(t *testing.T) {
 	rows := p.Render(100)
 	joined := strings.Join(rows, "\n")
 
-	if !strings.Contains(joined, "2 live") {
-		t.Fatalf("header missing live count: %q", rows[0])
+	if !strings.Contains(rows[1], "2 subagents running in parallel") {
+		t.Fatalf("header missing running count: %q", rows[1])
+	}
+	if !strings.Contains(rows[0], "0/2 done") {
+		t.Fatalf("label rule missing d/n done meta: %q", rows[0])
 	}
 	if !strings.Contains(joined, "find the bug") || !strings.Contains(joined, "write the fix") {
 		t.Fatalf("both dispatches not shown:\n%s", joined)
@@ -64,8 +67,11 @@ func TestSubagentsPanel_DoneRowShowsTokens(t *testing.T) {
 
 	rows := p.Render(100)
 	joined := strings.Join(rows, "\n")
-	if !strings.Contains(rows[0], "0 live") || !strings.Contains(rows[0], "1 done") {
-		t.Fatalf("header did not move the row to done: %q", rows[0])
+	if !strings.Contains(rows[1], "1 subagents finished") {
+		t.Fatalf("header did not move the row to done: %q", rows[1])
+	}
+	if !strings.Contains(rows[0], "1/1 done") {
+		t.Fatalf("label rule missing d/n done meta: %q", rows[0])
 	}
 	if !strings.Contains(joined, "1.2k") {
 		t.Fatalf("done row missing its token total:\n%s", joined)
@@ -81,8 +87,11 @@ func TestSubagentsPanel_ErrorRowShowsMessage(t *testing.T) {
 
 	rows := p.Render(100)
 	joined := strings.Join(rows, "\n")
-	if !strings.Contains(rows[0], "0 live") || !strings.Contains(rows[0], "1 done") {
-		t.Fatalf("header did not move the errored row out of live: %q", rows[0])
+	if !strings.Contains(rows[1], "1 subagents finished") {
+		t.Fatalf("header did not move the errored row out of live: %q", rows[1])
+	}
+	if !strings.Contains(rows[0], "1/1 done") {
+		t.Fatalf("label rule missing d/n done meta: %q", rows[0])
 	}
 	if !strings.Contains(joined, "boom") {
 		t.Fatalf("error row missing its message:\n%s", joined)
@@ -97,9 +106,11 @@ func TestSubagentsPanel_CapsAtSixRows(t *testing.T) {
 		p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventStart, ID: string(rune('a' + i)), Agent: "general-purpose", Description: "task"})
 	}
 	rows := p.Render(100)
-	// header + maxSubagentRows rows + the "+K more" row.
-	if len(rows) != 1+maxSubagentRows+1 {
-		t.Fatalf("got %d rows, want %d (header + %d rows + more row)", len(rows), 1+maxSubagentRows+1, maxSubagentRows)
+	// label rule + header + 2 rows per dispatch (name/task, then the
+	// indented last-action row) + the "+K more" row.
+	want := 2 + maxSubagentRows*2 + 1
+	if len(rows) != want {
+		t.Fatalf("got %d rows, want %d (rule + header + %d rows*2 + more row)", len(rows), want, maxSubagentRows)
 	}
 	if !strings.Contains(rows[len(rows)-1], "+2 more") {
 		t.Fatalf("last row should read '+2 more': %q", rows[len(rows)-1])
@@ -130,7 +141,7 @@ func TestModel_SubagentsPanel_VisibleInLiveLines(t *testing.T) {
 	m.subagents.Apply(agent.SubagentEvent{Kind: agent.SubagentEventStart, ID: "tc2", Agent: "general-purpose", Description: "write the fix"})
 
 	got := strings.Join(viewLines(m), "\n")
-	if !strings.Contains(got, "subagents") || !strings.Contains(got, "2 live") {
+	if !strings.Contains(got, "subagents") || !strings.Contains(got, "2 subagents running in parallel") {
 		t.Fatalf("subagents panel should show two live rows:\n%s", got)
 	}
 }

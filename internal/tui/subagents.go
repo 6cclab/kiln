@@ -124,16 +124,41 @@ func (p *SubagentPanelState) counts() (live, done int) {
 	return live, done
 }
 
-// Render draws the panel: a labelled hairline rule, then up to
-// maxSubagentRows rows in arrival order, then a "+K more" row when there
-// are more. Returns nil when the panel is empty, so callers can append its
-// result unconditionally.
+// subagentNameWidth is the name column's fixed width
+// (docs/kiln-design-handoff/README.md "agents" row: "name (8 columns)").
+const subagentNameWidth = 8
+
+// subagentNameMax is where a long agent name is truncated with an
+// ellipsis so the task column keeps its alignment.
+const subagentNameMax = 16
+
+// meterCells is the progress bar's width in cells.
+const meterCells = 10
+
+// tokensColWidth is the right-aligned tokens column's width
+// (docs/kiln-design-handoff/README.md "agents" row: "tokens, right-aligned").
+const tokensColWidth = 6
+
+// Render draws the panel: a labelled hairline rule with "d/n done" meta,
+// a header row ("N subagents running in parallel"/"N subagents
+// finished"), then up to maxSubagentRows dispatches (two rows each:
+// name+task, then the indented last-action row), then a "+K more" row when
+// there are more. Returns nil when the panel is empty, so callers can
+// append its result unconditionally.
 func (p *SubagentPanelState) Render(width int) []string {
 	if p.Empty() {
 		return nil
 	}
 	live, done := p.counts()
-	lines := []string{labelRule("subagents", Muted, fmt.Sprintf("%d live · %d done", live, done), width)}
+	total := live + done
+	header := fmt.Sprintf("%d subagents running in parallel", total)
+	if live == 0 {
+		header = fmt.Sprintf("%d subagents finished", total)
+	}
+	lines := []string{
+		labelRule("subagents", Muted, fmt.Sprintf("%d/%d done", done, total), width),
+		Muted(header),
+	}
 
 	shown := p.order
 	more := 0
@@ -142,7 +167,7 @@ func (p *SubagentPanelState) Render(width int) []string {
 		shown = shown[:maxSubagentRows]
 	}
 	for _, id := range shown {
-		lines = append(lines, renderSubagentRow(p.rows[id], width))
+		lines = append(lines, renderSubagentRow(p.rows[id], width)...)
 	}
 	if more > 0 {
 		lines = append(lines, FitStatus("  "+Muted(fmt.Sprintf("+%d more", more)), width))
@@ -150,22 +175,30 @@ func (p *SubagentPanelState) Render(width int) []string {
 	return lines
 }
 
-// renderSubagentRow draws one row: name (coloured by status), description
-// + last action (dim), a 10-cell progress meter, and — once done — the
-// token total, right-aligned.
-func renderSubagentRow(r *subagentRow, width int) string {
+// renderSubagentRow draws one dispatch's two rows: name (padded to
+// subagentNameWidth, coloured by status) + task (Ink, truncated), a
+// 10-cell progress bar and the token total (once done) right-aligned; then
+// an indented row with the latest action ("→ " while running, "✓ " once
+// done/errored), dim.
+func renderSubagentRow(r *subagentRow, width int) []string {
 	nameColor := KilnAmber
+	actionGlyph := G().Action
 	action := "starting…"
 	switch r.status {
 	case "done":
 		nameColor = KilnGreen
-		action = G().OK + " done"
+		actionGlyph = G().OK
+		action = "finished"
+		if r.lastTool != "" {
+			action = r.lastTool
+		}
 	case "error":
 		nameColor = KilnRed
-		action = G().Fail + " " + r.message
+		actionGlyph = G().Fail
+		action = r.message
 	default:
 		if r.lastTool != "" {
-			action = G().Action + " " + r.lastTool
+			action = r.lastTool
 		}
 	}
 	name := r.agent
@@ -176,27 +209,49 @@ func renderSubagentRow(r *subagentRow, width int) string {
 	if r.depth > 1 {
 		indent = strings.Repeat("  ", r.depth-1)
 	}
-	left := fmt.Sprintf(" %s%s  %s %s", indent, nameColor(name), Dim(r.description), Dim(action))
+	namePadded := FitStatus(name, subagentNameMax)
+	if pad := subagentNameWidth - VisibleWidth(namePadded); pad > 0 {
+		namePadded += strings.Repeat(" ", pad)
+	}
+	left := fmt.Sprintf(" %s%s  %s", indent, nameColor(namePadded), Ink(r.description))
 
+	// A finished dispatch reads as complete: the bar fills entirely
+	// (design: "filled cells amber/green"); while running it tracks
+	// tool calls.
 	right := meterBar(r.toolCalls, nameColor)
 	if r.status == "done" {
-		right += "  " + Dim(FormatTokens(r.tokens))
+		right = meterBar(meterCells, nameColor)
 	}
+	tokens := ""
+	if r.status == "done" {
+		tokens = FormatTokens(r.tokens)
+	}
+	styledTokens := Muted(tokens)
+	if pad := tokensColWidth - VisibleWidth(tokens); pad > 0 {
+		styledTokens = strings.Repeat(" ", pad) + styledTokens
+	}
+	right += "  " + styledTokens
 
 	pad := width - VisibleWidth(left) - VisibleWidth(right)
-	if pad < 1 {
-		return FitStatus(left, width)
+	nameRow := left
+	if pad >= 1 {
+		nameRow = left + strings.Repeat(" ", pad) + right
+	} else {
+		nameRow = FitStatus(left, width)
 	}
-	return left + strings.Repeat(" ", pad) + right
+
+	actionRow := FitStatus(strings.Repeat(" ", 10+len(indent))+Dim(actionGlyph+" "+action), width)
+	return []string{nameRow, actionRow}
 }
 
 // meterBar draws a 10-cell progress meter: filled cells (coloured, capped
 // at 10) track the dispatch's tool-call count as a simple, real activity
 // signal — there is no task-completion percentage to show, so the meter
 // reads as "how much work has this subagent done" rather than "how close
-// is it to finishing".
+// is it to finishing". Empty cells use BarEmpty (#3f372c), the design's
+// dedicated token for this one bar (theme.go).
 func meterBar(toolCalls int, color func(string) string) string {
-	const cells = 10
+	const cells = meterCells
 	filled := toolCalls
 	if filled > cells {
 		filled = cells
@@ -206,5 +261,5 @@ func meterBar(toolCalls int, color func(string) string) string {
 	}
 	full := strings.Repeat(G().MeterFull, filled)
 	empty := strings.Repeat(G().MeterEmpty, cells-filled)
-	return color(full) + Rule(empty)
+	return color(full) + BarEmpty(empty)
 }

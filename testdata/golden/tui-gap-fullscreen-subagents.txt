@@ -1,30 +1,30 @@
-<cwd>…
-
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 you ────────────────────────────────────────────────────────────────────────────────────────────────
 dispatch two tasks
+⏺ general-purpose do the fast lookup on faux/faux-2 [role]
+⏺ general-purpose look something up on faux/faux-1 [inherited] (inherited; the requested model is no
   general-purpose finished - 0 tool calls, 20 chars returned, 150 tokens
   general-purpose finished - 0 tool calls, 25 chars returned, 150 tokens
 
-task ───────────────────────────────────────────────────────────────────────────────────────────────
+task ─────────────────────────────────────────────────────────────────────────  auto-approved · 1.0s
 Task
 → inherited subagent report
 
-task ───────────────────────────────────────────────────────────────────────────────────────────────
+task ─────────────────────────────────────────────────────────────────────────  auto-approved · 1.0s
 Task
 → fast subagent report
 
 kiln ───────────────────────────────────────────────────────────────────────────────────────────────
 Both done.
 
-✻ Brewed for 1s · done 12:00 PM
-subagents ─────────────────────────────────────────────────────────────────────────  0 live · 2 done
- general-purpose  do the fast lookup ✓ done                                          ──────────  150
- general-purpose  look something up ✓ done                                           ──────────  150
-
-                                                                                ◐ medium · /effort
+subagents ────────────────────────────────────────────────────────────────────────────────  2/2 done
+2 subagents finished
+ general-purpose  do the fast lookup                                              ━━━━━━━━━━     150
+          ✓ finished
+ general-purpose  look something up                                               ━━━━━━━━━━     150
+          ✓ finished
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-› Try "how do I log an error?"
+› describe a task · / for commands · @ to add files
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-  ● don't ask on (shift+tab to cycle)
+● don't ask  ⇧⇥                                                                  ctx ──────────  0%

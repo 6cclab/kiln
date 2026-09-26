@@ -37,6 +37,14 @@ type Lane struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	running bool
+
+	// retryNow is signalled by RetryNow to cut a pending retry backoff
+	// short (the TUI's `r` key, docs/kiln-design-handoff/README.md's error
+	// block: "r to retry now"). Buffered 1 so a signal sent while no retry
+	// is pending is not lost as a blocking send, and so a second signal
+	// before the first is drained does not block RetryNow's caller either
+	// — sleepCtx only ever needs to observe one pending signal.
+	retryNow chan struct{}
 }
 
 func (l *Lane) newID() string { return uuid.NewString() }
@@ -184,6 +192,18 @@ func (l *Lane) Abort() error {
 // of pi's steering (which can interrupt an in-flight generation
 // mid-stream); this phase only supports queuing between turns, via
 // pi.lane.state.inbox.
+//
+// Steer deliberately does NOT move the branch tip: the entry it commits is
+// parented to nothing and sits off the branch until drive()'s inbox drain
+// (turn.go's drainInbox) re-parents a copy of it onto the tip current at
+// the next checkpoint. Writing straight to the tip here raced the running
+// turn's own end-of-message tip write (turn.go's `SetValue(BranchTip(...),
+// &responseEntryID)`) and always lost — whichever commit landed last threw
+// the other's tip update away, so the queued entry silently fell off the
+// branch and the next Prompt's transcript never saw it. Recording it in
+// the inbox instead means the drain is the only thing that ever moves the
+// tip on the queued entry's behalf, from the same goroutine that is
+// already serializing every other tip write for this lane.
 func (l *Lane) Steer(text string) error {
 	st, err := l.laneState()
 	if err != nil {
@@ -191,11 +211,10 @@ func (l *Lane) Steer(text string) error {
 	}
 	entryID := l.newID()
 	entryWrite := session.EntryWrite{Entry: session.Entry{
-		ParentID: nil, // resolved to current tip by commitEntry below
-		Type:     session.EntryMessage,
-		Message:  msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(text)}, Timestamp: l.now()},
+		ID:      entryID,
+		Type:    session.EntryMessage,
+		Message: msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(text)}, Timestamp: l.now()},
 	}}
-	_ = entryID
 	st.Inbox = append(st.Inbox, session.InboxItem{EntryID: entryID, Kind: "steer"})
 	w, err := session.SetValue(session.LaneStateValue(l.name), st)
 	if err != nil {
@@ -291,8 +310,11 @@ func (l *Lane) resolveModel() (provider.Model, session.LaneConfiguration, error)
 	return model, cfg, nil
 }
 
-// sleepCtx sleeps for d or returns early if ctx is cancelled.
-func sleepCtx(ctx context.Context, d time.Duration) error {
+// sleepCtx sleeps for d, or returns early if ctx is cancelled or retryNow
+// fires (nil retryNow behaves as before: no early-retry path). retryNow
+// firing is not an error — the caller reads it the same as the delay having
+// simply elapsed, and proceeds straight to the next attempt.
+func sleepCtx(ctx context.Context, d time.Duration, retryNow <-chan struct{}) error {
 	if d <= 0 {
 		return nil
 	}
@@ -303,5 +325,26 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-retryNow:
+		return nil
+	}
+}
+
+// RetryNow cuts a pending retry backoff short: the next sleepCtx call inside
+// the lane's retry loop (if any is currently waiting) returns immediately
+// instead of waiting out the rest of its delay. Non-blocking and safe to
+// call when no retry is pending — the signal is simply buffered (and
+// harmlessly drained, unused, by the next retry's sleepCtx call) or dropped
+// if the buffer is already full.
+func (l *Lane) RetryNow() {
+	l.mu.Lock()
+	ch := l.retryNow
+	l.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
 	}
 }

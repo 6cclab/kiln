@@ -26,6 +26,15 @@ import (
 	"time"
 )
 
+// tuiStartLinePattern matches bridge.go's SubagentSink "Start" commit line
+// ("⏺ <agent> <description> on <model> [...]"). Now that CommitSynthetic
+// (bridge.go) preserves it across a fullscreen/inline replay instead of
+// silently dropping it, its position is subject to the exact same
+// dispatch-order race tuiFinishedLinePattern's doc comment describes for
+// the "Done" line and the panel rows below — two independent goroutines
+// each committing their own Start line as soon as their dispatch begins.
+var tuiStartLinePattern = regexp.MustCompile(`^⏺ \S`)
+
 // tuiFinishedLinePattern matches bridge.go's SubagentSink "Done" commit
 // line ("  <agent> finished - N tool calls, N chars returned, N tokens").
 var tuiFinishedLinePattern = regexp.MustCompile(`^\s+\S.* finished - \d+ tool calls`)
@@ -67,8 +76,9 @@ var tuiSubagentPanelRowPattern = regexp.MustCompile(`^ general-purpose  `)
 // and unrelated (if correlated) underlying races.
 func tuiSortSubagentFinishLines(rows []string) []string {
 	out := append([]string{}, rows...)
+	tuiSortBlock(out, tuiStartLinePattern)
 	tuiSortBlock(out, tuiFinishedLinePattern)
-	tuiSortBlock(out, tuiSubagentPanelRowPattern)
+	tuiSortPanelPairs(out, tuiSubagentPanelRowPattern)
 	return out
 }
 
@@ -92,6 +102,51 @@ func tuiSortBlock(rows []string, pattern *regexp.Regexp) {
 	block := append([]string{}, rows[start:end]...)
 	sort.Strings(block)
 	copy(rows[start:end], block)
+}
+
+// tuiSortPanelPairs sorts the subagents panel's two-line rows — a header
+// row matching headerPattern (subagents.go's renderSubagentRow: name/task/
+// meter/tokens) immediately followed by its own indented status
+// continuation row ("→ ..." or "✓ finished") — as whole two-line units,
+// keyed by the header row's text.
+//
+// tuiSortBlock cannot do this: it only sorts the single lines matching
+// pattern within one contiguous run, and here every other line (the
+// continuation row) does NOT match headerPattern, so a naive contiguous
+// scan sees a "block" of length one per pair and never actually reorders
+// anything — confirmed by driving this test `-count=12` with only
+// tuiSortBlock wired in, which still showed the two panel rows swapped in
+// roughly 1 run in 4, silently unfixed. This walks header/continuation
+// pairs explicitly instead.
+func tuiSortPanelPairs(rows []string, headerPattern *regexp.Regexp) {
+	start := -1
+	for i := 0; i+1 < len(rows); i++ {
+		if headerPattern.MatchString(rows[i]) {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return
+	}
+	end := start
+	for end+1 < len(rows) && headerPattern.MatchString(rows[end]) {
+		end += 2
+	}
+	n := (end - start) / 2
+	if n < 2 {
+		return
+	}
+	type pair struct{ header, cont string }
+	pairs := make([]pair, n)
+	for i := 0; i < n; i++ {
+		pairs[i] = pair{rows[start+2*i], rows[start+2*i+1]}
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].header < pairs[j].header })
+	for i, p := range pairs {
+		rows[start+2*i] = p.header
+		rows[start+2*i+1] = p.cont
+	}
 }
 
 // --- 10. /cost by-model breakdown ------------------------------------------
@@ -257,14 +312,14 @@ func TestTUI_FullscreenWithSubagentsPanel(t *testing.T) {
 	s.Send("dispatch two tasks")
 	s.SendKey("enter")
 
-	if err := s.WaitFor(regexp.MustCompile(`subagents.*2 live`), 3*time.Second); err != nil {
+	if err := s.WaitFor(regexp.MustCompile(`2 subagents running in parallel`), 3*time.Second); err != nil {
 		t.Fatalf("subagents panel never showed two live rows before entering fullscreen: %v", err)
 	}
 
 	// Enter fullscreen while the panel is (or, worst case, just finished
 	// being) live.
 	s.SendKey("ctrl+f")
-	subagentsAnyState := regexp.MustCompile(`subagents.*(live|done)`)
+	subagentsAnyState := regexp.MustCompile(`subagents running in parallel|subagents finished`)
 	if err := s.WaitFor(subagentsAnyState, 3*time.Second); err != nil {
 		t.Fatalf("subagents panel not visible after Ctrl+F entered fullscreen mid-dispatch: %v", err)
 	}
@@ -274,13 +329,23 @@ func TestTUI_FullscreenWithSubagentsPanel(t *testing.T) {
 	}
 
 	waitTurnSettled(t, s)
-	if err := s.WaitFor(regexp.MustCompile(`subagents.*0 live.*2 done`), 3*time.Second); err != nil {
+	if err := s.WaitFor(regexp.MustCompile(`2 subagents finished`), 3*time.Second); err != nil {
 		t.Fatalf("subagents panel did not settle to two done rows in fullscreen: %v", err)
 	}
 	got := strings.Join(tuiSortSubagentFinishLines(normalizeBannerCwdRow(s.Rows())), "\n") + "\n"
 	assertGolden(t, goldenPath("tui-gap-fullscreen-subagents.txt"), got)
 
-	// Toggle back to inline: the resolved panel is still there.
+	// Toggle back to inline. Going fullscreen -> inline rebuilds the
+	// transcript from the session log (replayTranscript/
+	// RenderTranscriptEntries, replay.go), which reconstructs blocks
+	// backed by a session.Entry (user/assistant/tool messages — the
+	// individual "task" tool call blocks below are entries) directly, and
+	// every other committed block via Bridge.CommitSynthetic's recorded
+	// splice list (bridge.go's SyntheticCommit) — including the
+	// subagents PANEL itself (the aggregate name/task/tokens table,
+	// finishTurn's commit in app.go, now routed through CommitSynthetic
+	// precisely so this survives). Both must still be on screen after the
+	// round trip.
 	s.SendKey("ctrl+f")
 	if err := s.WaitFor(tuiUserMark, 3*time.Second); err != nil {
 		t.Fatal(err)
@@ -288,8 +353,12 @@ func TestTUI_FullscreenWithSubagentsPanel(t *testing.T) {
 	if err := waitQuiescent(s, 150*time.Millisecond, 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(s.Rows(), "\n"), "subagents") {
-		t.Error("subagents panel gone after toggling back to inline")
+	joined := strings.Join(s.Rows(), "\n")
+	if !strings.Contains(joined, "task ") {
+		t.Error("task blocks gone after toggling back to inline")
+	}
+	if !strings.Contains(joined, "2 subagents finished") {
+		t.Errorf("subagents panel text gone after toggling back to inline:\n%s", joined)
 	}
 }
 
@@ -322,7 +391,7 @@ func TestTUI_ResizeDuringLiveSubagentRow(t *testing.T) {
 	s.Send("dispatch two tasks")
 	s.SendKey("enter")
 
-	if err := s.WaitFor(regexp.MustCompile(`subagents.*2 live`), 3*time.Second); err != nil {
+	if err := s.WaitFor(regexp.MustCompile(`2 subagents running in parallel`), 3*time.Second); err != nil {
 		t.Fatalf("subagents panel never showed two live rows before resize: %v", err)
 	}
 

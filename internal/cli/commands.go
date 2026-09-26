@@ -140,6 +140,20 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 			return started.Model.Provider, started.Model.ID
 		},
 		CurrentTier: func() budget.Tier { return started.Tier },
+		ModelLabel:  func() string { return deps.ModelLabel },
+		ContextUsed: deps.ContextUsed,
+		// The tier's SystemPromptTokens is a fixed ceiling, not what this
+		// session's system prompt actually assembled to — measure the
+		// real one instead so /context's "System prompt" segment (and
+		// the header built from it, buildContextBreakdown) reports the
+		// real figure rather than a budget that can be far from it.
+		SystemPromptTokens: func() (int, bool) {
+			sp := started.Harness.SystemPrompt()
+			if sp == "" {
+				return 0, false
+			}
+			return (len(sp) + 3) / 4, true
+		},
 		SwitchModel: func(ctx context.Context, providerID, modelID string) (budget.Tier, error) {
 			return switchModel(ctx, reg, started, mcpSess, providerID, modelID)
 		},

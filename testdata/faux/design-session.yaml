@@ -1,0 +1,163 @@
+# The kiln-design-handoff scripted session (docs/kiln-design-handoff/
+# README.md "State model": user -> text -> plan -> agents -> text ->
+# diff x2 -> perm -> tool(err) -> text -> error/retry -> diff -> tool(ok)
+# -> text -> idle), as one faux script driving the real binary end to
+# end. Used by test/e2e/tui_design_test.go and testdata/drive/
+# design-session.txt.
+#
+# faux-1 is the "main" model throughout (including scout-1's inherited
+# subagent turn, which shares faux-1's cursor — see the comment at that
+# step below for why its position in this list matters). faux-2 backs
+# scout-2, routed to it via the "fast" modelRoles entry (test/e2e/
+# task_test.go's writeModelRolesSettings), copying testdata/faux/
+# task_concurrent_tui.yaml's inherited/"fast" split.
+#
+# The design handoff's own SCRIPT dispatches three scouts; this script
+# dispatches two instead (scout-1 folds in the middleware-chain survey,
+# scout-2 folds in the Redis-config-and-tests survey). Tried with three
+# first: two of the three necessarily end up sharing one faux model's
+# turn queue (only two models exist), and under real concurrent dispatch
+# that produced a genuine, intermittent double-consumption — one
+# subagent's request occasionally retried (a transient localhost
+# connection hiccup between two goroutines racing the same faux HTTP
+# server, not a script bug) and ate both of that model's queued turns,
+# leaving the other subagent's own request to see "(faux: script
+# exhausted)". Two concurrent subagents, each on its own model, has no
+# shared queue to race over — this is the same shape task_concurrent_tui.yaml
+# already proves reliable. See this suite's handback report.
+models:
+  faux-1:
+    # Turn 1 (the user's initial task): a short lead-in, then the plan
+    # (todo_write ends the turn, like plan-live.yaml).
+    - text: "I'll start by mapping the middleware chain and checking the Redis config, then write the rate limiter."
+    - tool_call:
+        name: todo_write
+        args:
+          todos:
+            - {content: "Find the upload route and its middleware chain", status: in_progress}
+            - {content: "Check how Redis is configured", status: pending}
+            - {content: "Write a rateLimit middleware", status: pending}
+            - {content: "Wire it into POST /api/upload", status: pending}
+            - {content: "Add tests and run the suite", status: pending}
+        id: tc_plan
+
+    # Turn 2 (on the plan's tool result): dispatch the two scouts in one
+    # assistant message (the "agents" scene) — see this file's header
+    # comment for why two, not the design's three.
+    - on_tool_result: tc_plan
+      then:
+        - tool_calls:
+            - {name: task, args: {subagent_type: "scout", description: "Map the middleware chain in src/server", prompt: "Map the middleware chain in src/server"}, id: tc_scout1}
+            - {name: task, args: {subagent_type: "scout", description: "Check the Redis config and survey the upload tests", prompt: "Check the Redis config and survey the upload tests", model: "fast"}, id: tc_scout2}
+
+    # Turn 3: scout-1's own inherited turn (its task call also targets
+    # faux-1, the same model the parent conversation uses — matching
+    # task_concurrent_tui.yaml's tc1). This step's position in the list
+    # matters: the harness always sends scout-1's own request before the
+    # parent's next on_tool_results-gated turn below, because the parent
+    # is blocked waiting on both task results and scout-1's dispatch
+    # goroutine issues its request as soon as it starts, well before that
+    # gate can be satisfied.
+    - text: "Found it: src/routes/upload.ts wires auth then multer then the handler; no rate limiting yet."
+      delay: 400ms
+
+    # Turn 4 (on both scouts' results): the "text" step between agents and
+    # the first diff, then the first diff (new file) ends the turn.
+    - on_tool_results: [tc_scout1, tc_scout2]
+      then:
+        - text: "Redis is already configured for caching, and the upload tests use a jest mock. I'll add a rateLimit middleware and wire it in."
+          delay: 300ms
+        - tool_call:
+            name: write
+            args:
+              path: src/middleware/rateLimit.ts
+              content: |
+                import { redis } from '../redis';
+
+                const WINDOW_SECONDS = 60;
+                const MAX_REQUESTS = 10;
+
+                export async function rateLimit(req: any, res: any, next: any) {
+                  const key = `ratelimit:upload:${req.user?.id ?? 'anonymous'}`;
+                  await redis.zremrangebyscore(key, 0, Date.now() - WINDOW_SECONDS * 1000);
+                  const count = await redis.zcard(key);
+                  if (count >= MAX_REQUESTS) return res.status(429).json({ error: 'rate limit exceeded' });
+                  await redis.zadd(key, Date.now(), `${Date.now()}`);
+                  next();
+                }
+            id: tc_write1
+
+    # Turn 5 (on the write's result): the second diff (edit upload.ts to
+    # wire the new middleware in). Delayed so a PTY-driven test polling
+    # the screen has a real dwell frame with diff1 (the new file) still
+    # showing before diff2 replaces it (test/e2e/tui_design_test.go's
+    # TestTUI_Design_Streaming/Diff scenes).
+    - on_tool_result: tc_write1
+      then:
+        - tool_call:
+            name: edit
+            args:
+              path: src/routes/upload.ts
+              edits:
+                - oldText: "import { handleUpload } from '../handlers/upload';"
+                  newText: "import { handleUpload } from '../handlers/upload';\nimport { rateLimit } from '../middleware/rateLimit';"
+                - oldText: "router.post('/upload', requireAuth, upload.single('file'), handleUpload);"
+                  newText: "router.post('/upload', requireAuth, rateLimit, upload.single('file'), handleUpload);"
+            id: tc_edit1
+          delay: 500ms
+
+    # Turn 6 (on the edit's result): run the test suite — the permission
+    # prompt scene, then (once approved) the tool(err) scene: the fixture
+    # `scripts/npm` wrapper fails the first time (missing
+    # zremrangebyscore on the redis mock).
+    - on_tool_result: tc_edit1
+      then:
+        - tool_call:
+            name: bash
+            args: {command: "./scripts/npm test -- upload", description: "Run the upload route's test suite"}
+            id: tc_bash1
+          delay: 500ms
+
+    # Turn 7 (on the failed test run's result): the "text" discussing the
+    # failure, cut short by disconnect_after — the "error/retry" scene.
+    - on_tool_result: tc_bash1
+      then:
+        - text: "The redis mock is missing zremrangebyscore, so the rate limiter's cleanup call throws. I'll add it to the mock and fix the middleware's usage."
+          disconnect_after: 200ms
+
+    # Turn 8 (the client's retry of the same request, after the
+    # disconnect above — this is the *next* faux-1 step, consumed once
+    # the harness's retry logic resends): the same text, uninterrupted
+    # this time, plus the diff that fixes the mock.
+    - text: "The redis mock is missing zremrangebyscore, so the rate limiter's cleanup call throws. I'll add it to the mock and fix the middleware's usage."
+    - tool_call:
+        name: edit
+        args:
+          path: test/helpers/redisMock.ts
+          edits:
+            - oldText: "  del: jest.fn(),"
+              newText: "  del: jest.fn(),\n  zremrangebyscore: jest.fn().mockResolvedValue(0),\n  zcard: jest.fn().mockResolvedValue(0),\n  zadd: jest.fn().mockResolvedValue(1),"
+        id: tc_edit2
+
+    # Turn 9 (on the fix's result): run the suite again — tool(ok). Delayed
+    # so the redisMock.ts diff has a real dwell frame before the second
+    # bash permission prompt replaces it.
+    - on_tool_result: tc_edit2
+      then:
+        - tool_call:
+            name: bash
+            args: {command: "./scripts/npm test -- upload", description: "Run the upload route's test suite"}
+            id: tc_bash2
+          delay: 500ms
+
+    # Turn 10 (on the passing run's result): the final text, then idle.
+    - on_tool_result: tc_bash2
+      then:
+        - text: "Done. POST /api/upload now allows 10 requests per minute per user, backed by Redis, with tests covering the limit and the reset window."
+          usage: {input: 4200, output: 620}
+
+  faux-2:
+    # scout-2's own turn (the only subagent routed to faux-2 — see this
+    # file's header comment on why there are two scouts, not three).
+    - text: "Redis is configured in src/redis.ts, a thin ioredis wrapper already used elsewhere for caching. test/helpers/redisMock.ts backs the upload tests today; it only stubs get/set/del."
+      delay: 400ms

@@ -1,0 +1,30 @@
+model: faux-1
+steps:
+  - tool_call:
+      name: todo_write
+      args:
+        todos:
+          - {content: "read the upload handler", status: in_progress}
+          - {content: "add the retry loop", status: pending}
+          - {content: "wire the retry loop into the route", status: pending}
+          - {content: "add a test", status: pending}
+          - {content: "update the docs", status: pending}
+      id: tc1
+  - on_tool_result: tc1
+    then:
+      - tool_call:
+          name: todo_write
+          args:
+            todos:
+              - {content: "read the upload handler", status: completed}
+              - {content: "add the retry loop", status: completed}
+              - {content: "wire the retry loop into the route", status: in_progress}
+              - {content: "add a test", status: pending}
+              - {content: "update the docs", status: pending}
+          id: tc2
+        delay: 600ms
+  - on_tool_result: tc2
+    then:
+      - text: "Plan updated."
+        delay: 600ms
+        usage: {input: 100, output: 10}

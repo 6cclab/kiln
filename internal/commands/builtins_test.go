@@ -309,3 +309,168 @@ func TestCostCommandShowsByModelTable(t *testing.T) {
 		t.Fatalf("output = %q, want the free model's cost shown as \"-\"", out)
 	}
 }
+
+// TestContextCommand_BuildsBreakdown checks /context's Result carries a
+// ContextBreakdown (registry.go) built from the tier's fixed budgets and
+// the live usage total, for the kiln TUI's RenderContext
+// (internal/tui/context.go) — not just the plain-text Output rows -p mode
+// still uses.
+func TestContextCommand_BuildsBreakdown(t *testing.T) {
+	tier := budget.Tier{
+		Name:               "medium",
+		ContextWindow:      200_000,
+		SystemPromptTokens: 8_000,
+		ToolStrategy:       budget.StrategyFullSchemas,
+	}
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     testRegistry(t),
+		CurrentModel: func() (string, string) { return "anthropic", "claude-opus-5" },
+		CurrentTier:  func() budget.Tier { return tier },
+		ModelLabel:   func() string { return "kiln-large" },
+		ContextUsed:  func() (int, bool) { return 76_000, true },
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ctxCmd *Command
+	for i := range cmds {
+		if cmds[i].Name == "context" {
+			ctxCmd = &cmds[i]
+		}
+	}
+	if ctxCmd == nil {
+		t.Fatal("no context command registered")
+	}
+	res, err := ctxCmd.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("context.Run: %v", err)
+	}
+	if res.Context == nil {
+		t.Fatal("Result.Context is nil, want a ContextBreakdown")
+	}
+	if res.Context.ModelLabel != "kiln-large" {
+		t.Errorf("ModelLabel = %q, want kiln-large", res.Context.ModelLabel)
+	}
+	if res.Context.Used != 76_000 || res.Context.Window != 200_000 {
+		t.Errorf("got Used=%d Window=%d, want 76000/200000", res.Context.Used, res.Context.Window)
+	}
+	var conversation, free int
+	for _, seg := range res.Context.Segments {
+		switch seg.Label {
+		case "Conversation":
+			conversation = seg.Tokens
+		case "Free":
+			free = seg.Tokens
+		}
+	}
+	toolsCost := budget.ToolStrategyCost[tier.ToolStrategy]
+	wantConversation := 76_000 - 8_000 - toolsCost
+	if conversation != wantConversation {
+		t.Errorf("Conversation segment = %d, want %d", conversation, wantConversation)
+	}
+	if free != 200_000-76_000 {
+		t.Errorf("Free segment = %d, want %d", free, 200_000-76_000)
+	}
+}
+
+// TestContextCommand_SelfConsistentWhenUsedIsSmall covers finding 4's
+// actual repro: a session that has barely used any tokens yet, well under
+// the tier's fixed System+Tools budgets. Before the fix, the header
+// showed the real (small) ContextUsed while the legend's System/Tools
+// rows showed the tier's big fixed budgets and Free was computed
+// independently as window-minus-used, so the four segments summed to
+// well over Window and Conversation clamped to a lying zero. The fixed
+// version must have all four segments sum to exactly Window, and the
+// header must equal System+Tools+Conversation (not the raw ContextUsed).
+func TestContextCommand_SelfConsistentWhenUsedIsSmall(t *testing.T) {
+	tier := budget.Tier{
+		Name:               "small",
+		ContextWindow:      128_000,
+		SystemPromptTokens: 12_800,
+		ToolStrategy:       budget.StrategyFullIndex, // ToolStrategyCost = 7,597
+	}
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     testRegistry(t),
+		CurrentModel: func() (string, string) { return "faux", "faux-1" },
+		CurrentTier:  func() budget.Tier { return tier },
+		ContextUsed:  func() (int, bool) { return 5_000, true },
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ctxCmd *Command
+	for i := range cmds {
+		if cmds[i].Name == "context" {
+			ctxCmd = &cmds[i]
+		}
+	}
+	if ctxCmd == nil {
+		t.Fatal("no context command registered")
+	}
+	res, err := ctxCmd.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("context.Run: %v", err)
+	}
+	if res.Context == nil {
+		t.Fatal("Result.Context is nil")
+	}
+
+	sum := 0
+	segByLabel := map[string]int{}
+	for _, seg := range res.Context.Segments {
+		sum += seg.Tokens
+		segByLabel[seg.Label] = seg.Tokens
+	}
+	if sum != tier.ContextWindow {
+		t.Errorf("segments sum to %d, want exactly Window %d", sum, tier.ContextWindow)
+	}
+	wantUsed := segByLabel["System prompt"] + segByLabel["Tools"] + segByLabel["Conversation"]
+	if res.Context.Used != wantUsed {
+		t.Errorf("Used = %d, want System+Tools+Conversation = %d", res.Context.Used, wantUsed)
+	}
+	// The real scenario this test pins: used(5000) < system+tools(20397),
+	// so Conversation clamps to 0 and System+Tools themselves must clamp
+	// so the total still comes out to exactly Window.
+	if segByLabel["Conversation"] != 0 {
+		t.Errorf("Conversation = %d, want 0 (used is well under System+Tools)", segByLabel["Conversation"])
+	}
+}
+
+// TestContextCommand_MeasuredSystemPromptOverridesTierBudget covers
+// deps.SystemPromptTokens taking priority over the tier's fixed ceiling.
+func TestContextCommand_MeasuredSystemPromptOverridesTierBudget(t *testing.T) {
+	tier := budget.Tier{
+		Name:               "small",
+		ContextWindow:      128_000,
+		SystemPromptTokens: 12_800,
+		ToolStrategy:       budget.StrategyFullIndex,
+	}
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:           testRegistry(t),
+		CurrentModel:       func() (string, string) { return "faux", "faux-1" },
+		CurrentTier:        func() budget.Tier { return tier },
+		ContextUsed:        func() (int, bool) { return 20_000, true },
+		SystemPromptTokens: func() (int, bool) { return 900, true },
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ctxCmd *Command
+	for i := range cmds {
+		if cmds[i].Name == "context" {
+			ctxCmd = &cmds[i]
+		}
+	}
+	res, err := ctxCmd.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("context.Run: %v", err)
+	}
+	for _, seg := range res.Context.Segments {
+		if seg.Label == "System prompt" && seg.Tokens != 900 {
+			t.Errorf("System prompt = %d, want the measured 900, not the tier's 12800 budget", seg.Tokens)
+		}
+	}
+}

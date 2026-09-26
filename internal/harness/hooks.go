@@ -21,6 +21,14 @@ type ToolBlock struct {
 type BeforeToolResult struct {
 	Block         *ToolBlock
 	RewrittenArgs json.RawMessage
+	// PermissionOutcome is the gate wrapper's report of how its decision
+	// was reached ("approved" / "auto-approved" / "", mirroring
+	// permission.Outcome as a plain string so this package does not need
+	// to import internal/claude/permission). Set by the OnBeforeTool
+	// handler that owns the permission gate (internal/cli/chat.go); other
+	// hooks leave it empty. Read back out of the turn loop's EventToolEnd
+	// so the TUI can render it as the tool block's meta.
+	PermissionOutcome string
 }
 
 // Hooks holds typed, ordered registrations for every lifecycle hook the
@@ -214,6 +222,9 @@ func (l *Lane) invokeBeforeTool(ctx context.Context, call msg.ToolCall) BeforeTo
 		}
 		if r.RewrittenArgs != nil {
 			result.RewrittenArgs = r.RewrittenArgs
+		}
+		if r.PermissionOutcome != "" {
+			result.PermissionOutcome = r.PermissionOutcome
 		}
 	}
 	return result

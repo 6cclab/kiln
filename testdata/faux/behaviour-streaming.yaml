@@ -1,0 +1,5 @@
+model: faux-1
+steps:
+  - text: "This is a long streamed reply meant to stay visible on screen for a little while so a PTY-driven test polling the live region has a real chance of observing the trailing caret before the block commits as plain markdown. It keeps going for a bit longer to give the poll loop more than one frame to land on."
+    delay: 150ms
+    usage: {input: 40, output: 60}

@@ -177,6 +177,9 @@ func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, wid
 	if kind == KindFile {
 		return []string{"  " + paintValue("+ "+truncateMiddle(displayValue(item), width-4))}
 	}
+	if kind == KindSlashCommand {
+		return renderSlashCommandItem(item, selected, width, paintValue, paintDesc)
+	}
 
 	value := displayValue(item)
 	if kind == KindSlashCommand && !strings.HasPrefix(value, "/") {
@@ -204,6 +207,41 @@ func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, wid
 		rows = append(rows, strings.Repeat(" ", popupValueColumn)+paintDesc(d))
 	}
 	return rows
+}
+
+// slashCommandColumn is where a slash command's description starts: two
+// columns of indent plus a 10-column command column
+// (docs/kiln-design-handoff/README.md "Palette": command padded to 10
+// columns, `%-10s`; a longer command overflows by one space instead of
+// pushing the description off a fixed column).
+const slashCommandColumn = 10
+
+// renderSlashCommandItem renders one `/` popup row: two-space indent, the
+// command padded to slashCommandColumn (amber when selected, ink
+// otherwise), then the description (dim), truncated — never wrapped — to
+// fit width. The selected row's raised background is applied by the
+// caller (Popup.Render), not here.
+func renderSlashCommandItem(item AutocompleteItem, selected bool, width int, paintValue, paintDesc func(string) string) []string {
+	value := displayValue(item)
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	padded := value
+	if w := VisibleWidth(value); w < slashCommandColumn {
+		padded += strings.Repeat(" ", slashCommandColumn-w)
+	} else {
+		padded += " " // overflow: one space before the description
+	}
+	line := "  " + paintValue(padded)
+	desc := normalizeToSingleLine(item.Description)
+	if desc == "" {
+		return []string{line}
+	}
+	descWidth := width - 2 - VisibleWidth(padded)
+	if descWidth < 1 {
+		return []string{line}
+	}
+	return []string{line + paintDesc(truncateToWidth(desc, descWidth))}
 }
 
 // truncateMiddle keeps the last path segment and clips the front with "…"
@@ -391,32 +429,21 @@ func BuildPopup(reg *commands.Registry, cwd string, line string, col int) *Popup
 // fuzzyFilter getText callback (autocomplete.js).
 var slashCommandRe = regexp.MustCompile(`^skill:`)
 
-// slashCommandSuggestions is CombinedAutocompleteProvider's command-name
-// branch of getSuggestions: build one AutocompleteItem per command (label
+// slashCommandSuggestions builds one AutocompleteItem per command (label
 // is "/name argHint", description is "argHint — description" or just
-// whichever half exists), then fuzzy-filter by prefix.
+// whichever half exists), then filters by prefix on the typed text,
+// case-insensitively.
+//
+// Unlike the "@" file and argument popups (fuzzy — see fuzzyMatch
+// below), the slash palette filters by prefix: fuzzy matching let "/co"
+// surface "/doctor" (its letters "d-o-c-t-o-r" happen to contain a subject
+// out-of-order match for "c"/"o" against pi-tui's fuzzy.js scoring) ahead
+// of, or alongside, the commands a user typing "/co" actually means
+// ("/context", "/compact") — a slash command's whole point is that the
+// user knows its name and is typing it left to right, so prefix is both
+// the correct match semantics and the simpler one.
 func slashCommandSuggestions(reg *commands.Registry, prefix string) []AutocompleteItem {
 	list := reg.List()
-	type candidate struct {
-		name string
-		item AutocompleteItem
-	}
-	candidates := make([]candidate, 0, len(list))
-	for _, c := range list {
-		name := commands.QualifiedName(c)
-		desc := c.Description
-		if c.ArgumentHint != "" {
-			if desc != "" {
-				desc = c.ArgumentHint + " — " + desc
-			} else {
-				desc = c.ArgumentHint
-			}
-		}
-		candidates = append(candidates, candidate{
-			name: name,
-			item: AutocompleteItem{Value: name, Label: name, Description: desc},
-		})
-	}
 
 	getText := func(name string) string {
 		if !strings.HasPrefix(prefix, "skill:") && slashCommandRe.MatchString(name) {
@@ -425,24 +452,22 @@ func slashCommandSuggestions(reg *commands.Registry, prefix string) []Autocomple
 		return name
 	}
 
-	type scored struct {
-		item  AutocompleteItem
-		score float64
-	}
-	var matched []scored
-	for _, c := range candidates {
-		if prefix == "" {
-			matched = append(matched, scored{c.item, 0})
+	lowerPrefix := strings.ToLower(prefix)
+	out := make([]AutocompleteItem, 0, len(list))
+	for _, c := range list {
+		name := commands.QualifiedName(c)
+		if prefix != "" && !strings.HasPrefix(strings.ToLower(getText(name)), lowerPrefix) {
 			continue
 		}
-		if score, ok := fuzzyFilterOne(prefix, getText(c.name)); ok {
-			matched = append(matched, scored{c.item, score})
+		desc := c.Description
+		if c.ArgumentHint != "" {
+			if desc != "" {
+				desc = c.ArgumentHint + " — " + desc
+			} else {
+				desc = c.ArgumentHint
+			}
 		}
-	}
-	sort.SliceStable(matched, func(i, j int) bool { return matched[i].score < matched[j].score })
-	out := make([]AutocompleteItem, len(matched))
-	for i, m := range matched {
-		out[i] = m.item
+		out = append(out, AutocompleteItem{Value: name, Label: name, Description: desc})
 	}
 	return out
 }
@@ -547,42 +572,6 @@ func indexOfRune(rs []rune, target rune, from int) int {
 		}
 	}
 	return -1
-}
-
-// fuzzyFilterOne applies fuzzyFilter's whitespace/slash tokenization to a
-// single (query, text) pair: every token must match text, and the total
-// score is their sum.
-func fuzzyFilterOne(query, text string) (score float64, ok bool) {
-	tokens := tokenizeFuzzyQuery(query)
-	if len(tokens) == 0 {
-		return 0, true
-	}
-	var total float64
-	for _, tok := range tokens {
-		s, matched := fuzzyMatch(tok, text)
-		if !matched {
-			return 0, false
-		}
-		total += s
-	}
-	return total, true
-}
-
-var fuzzyTokenRe = regexp.MustCompile(`[\s/]+`)
-
-func tokenizeFuzzyQuery(query string) []string {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return nil
-	}
-	parts := fuzzyTokenRe.Split(query, -1)
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // --- `@` file completion -----------------------------------------------------

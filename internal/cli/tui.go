@@ -10,13 +10,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
+	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -32,6 +32,7 @@ import (
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/session/jsonl"
 	"github.com/andrepato/harness/internal/tools"
 	"github.com/andrepato/harness/internal/tui"
 	"github.com/andrepato/harness/internal/tui/editor"
@@ -57,6 +58,10 @@ type InteractiveDeps struct {
 	// Fullscreen selects kiln's alt-screen TUI mode (--fullscreen). Falls
 	// back to inline when ScreenReader is set — see RunInteractive.
 	Fullscreen bool
+	// IsResume is set when this run resumed an existing session
+	// (--resume/--continue): the banner's "Recent sessions" list is
+	// skipped then, since the person is already inside one.
+	IsResume bool
 	// MCPServerCount is how many servers ConnectMCP will attempt; 0 skips
 	// the connect entirely. ConnectMCP connects them all, registers their
 	// tools with the session and returns every server's outcome. It runs
@@ -297,18 +302,34 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		}
 	}()
 
-	// SIGINT and a key-driven exit converge on program.Quit; the OS signal
-	// path exists for a terminal that delivers SIGINT directly rather
-	// than as a Ctrl+C keypress bubbletea can see (e.g. a detached
-	// controlling terminal).
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT)
-	defer signal.Stop(sigCh)
-	go func() {
-		if _, ok := <-sigCh; ok {
-			program.Quit()
-		}
-	}()
+	// A terminal that delivers SIGINT directly rather than as a Ctrl+C
+	// keypress bubbletea can see (e.g. a detached controlling terminal, or
+	// a signal sent to the process directly rather than typed) does not
+	// need its own handler here: bubbletea's Program already installs one
+	// (tea.go's handleSignals, active unless WithoutSignalHandler is
+	// passed, which this package never does) and turns that exact signal
+	// into an InterruptMsg its own event loop returns from Run() as
+	// ErrInterrupted.
+	//
+	// A second, independent signal.Notify(..., syscall.SIGINT) here used
+	// to duplicate that handling — go's os/signal fans one incoming
+	// signal out to every channel registered via Notify, so both this
+	// package's own goroutine (calling program.Quit(), i.e. p.Send(Quit()))
+	// and bubbletea's internal handleSignals() (sending InterruptMsg on
+	// the same p.msgs channel) raced to send into that channel. Once
+	// whichever one the event loop read first began shutdown (cancelling
+	// its context and no longer draining p.msgs), the loser's send blocked
+	// forever, its own handler channel never closed, and
+	// channelHandlers.shutdown()'s wg.Wait() — which Program.Quit/Kill
+	// both call unconditionally before anything else — hung forever.
+	// Reproduced directly: a SIGINT sent to a real kiln session that had
+	// run a design-sized turn (subagents, tool calls, a retry) hung on
+	// exit roughly 1 run in 3 (`internal/testkit/screen`'s Exit, driving
+	// testdata/drive/design-session.txt through cmd/kiln-drive); a
+	// goroutine dump captured mid-hang (SIGQUIT) showed goroutine 1
+	// parked in exactly that WaitGroup.Wait, called from
+	// Program.shutdown via this function's line (then) 321. Removing the
+	// duplicate handler removes the race.
 
 	diag.L().Info("phase tui run", "elapsed", diag.Since())
 	_, err := program.Run()
@@ -375,10 +396,11 @@ func mcpFailureNotice(statuses []mcpgate.ServerStatus) string {
 }
 
 // bannerRows is the startup banner, row for row per the kiln design handoff
-// (design_handoff_kiln_tui/README.md "Banner"): the KILN wordmark and
-// version, the cwd/model line, then a shortcut tip row. No label rule above
-// it (it is the one block the design exempts) and no "Recent sessions" list
-// (no data source wired for it yet).
+// (design_handoff_kiln_tui/README.md "Banner"): row 0 "K I L N  v… ·
+// coding agent", row 1 "<cwd> · branch <b> · model <m>" (exactly once), row
+// 2 the shortcut tips, then — unless this run resumed an existing session —
+// a "Recent sessions" block listing up to 3 past sessions in this cwd. No
+// label rule above it (it is the one block the design exempts).
 func bannerRows(deps InteractiveDeps) []string {
 	// Version label: "v1.2.3" for a real semver, the bare string otherwise
 	// (so a "dev" build reads "dev · coding agent", never "vdev").
@@ -387,7 +409,7 @@ func bannerRows(deps InteractiveDeps) []string {
 		verLabel = "v" + Version
 	}
 
-	// Row 2 per the design: "<cwd> · branch <b> · model <m>", cwd with the
+	// Row 1 per the design: "<cwd> · branch <b> · model <m>", cwd with the
 	// home dir abbreviated to ~.
 	loc := abbrevHome(deps.Cwd)
 	if st, ok := readGitStatus(context.Background()); ok && st.Branch != "" {
@@ -400,32 +422,175 @@ func bannerRows(deps InteractiveDeps) []string {
 		tui.KilnAmber("⇧⇥") + " " + tui.Muted("cycle mode") + "   " +
 		tui.KilnAmber("esc") + " " + tui.Muted("stop")
 
-	// The KILN wordmark as scaled block-letter art (the design's 22px
-	// wordmark; a single spaced line cannot convey that size in a
-	// terminal). Amber, per the design.
-	rows := make([]string, 0, len(kilnLogo)+5)
-	for _, r := range kilnLogo {
-		rows = append(rows, tui.KilnAmber(r))
-	}
-	// One blank row between rows for the design's spacing; the caller
-	// (app.go) appends a full-width `─` divider after these and pins the
-	// input box below.
-	rows = append(rows,
-		tui.Muted(verLabel+" · coding agent"),
+	// Row 0: "K I L N" spaced letters (the design's wordmark, one line
+	// rather than the old figlet block art) amber bold, then the version
+	// and tagline dim.
+	rows := []string{
+		tui.KilnAmber(tui.Bold("K I L N")) + "  " + tui.Muted(verLabel+" · coding agent"),
 		"",
 		tui.Muted(loc),
 		"",
 		tips,
-		"",
-	)
+	}
+
+	if !deps.IsResume {
+		if recent := recentSessionRows(deps.Cwd); len(recent) > 0 {
+			rows = append(rows, "", tui.Muted("Recent sessions"))
+			rows = append(rows, recent...)
+		}
+	}
+	// One blank row of spacing; the caller (app.go) appends a full-width
+	// `─` divider after these and pins the input box below.
+	rows = append(rows, "")
 	return rows
 }
 
-// kilnLogo is the KILN wordmark in 5-row block letters (K, I, L, N).
-var kilnLogo = []string{
-	"█ ▄▀  █  █    █▄ █",
-	"█▀▄   █  █    █▀▄█",
-	"█ ▀▄  █  █▄▄  █  █",
+// recentSessionRowLimit is how many past sessions the banner lists.
+const recentSessionRowLimit = 3
+
+// recentSessionsTimeout bounds the disk read so a slow or huge session
+// store never delays startup; on timeout the block is omitted silently.
+const recentSessionsTimeout = 300 * time.Millisecond
+
+// recentSessionRows renders up to recentSessionRowLimit "<when>  <title>"
+// rows for the most recently modified sessions under cwd, sourced from
+// internal/session/jsonl.Repo.List — the only data this run has for past
+// sessions in this folder. Returns nil (silently, logged via diag) on any
+// error, on timeout, or when there are no sessions.
+func recentSessionRows(cwd string) []string {
+	type result struct {
+		rows []string
+	}
+	done := make(chan result, 1)
+	go func() {
+		rows := buildRecentSessionRows(cwd)
+		done <- result{rows: rows}
+	}()
+	select {
+	case r := <-done:
+		return r.rows
+	case <-time.After(recentSessionsTimeout):
+		diag.L().Warn("banner: recent sessions timed out", "timeout", recentSessionsTimeout)
+		return nil
+	}
+}
+
+func buildRecentSessionRows(cwd string) []string {
+	repo, err := jsonl.NewRepo("")
+	if err != nil {
+		diag.L().Warn("banner: recent sessions repo", "err", err)
+		return nil
+	}
+	metas, err := repo.List(cwd)
+	if err != nil {
+		diag.L().Warn("banner: recent sessions list", "err", err)
+		return nil
+	}
+	if len(metas) == 0 {
+		return nil
+	}
+	sort.Slice(metas, func(i, j int) bool { return metas[i].ModifiedAt > metas[j].ModifiedAt })
+	if len(metas) > recentSessionRowLimit {
+		metas = metas[:recentSessionRowLimit]
+	}
+	now := time.Now()
+	var rows []string
+	for _, meta := range metas {
+		title := firstUserMessageTitle(meta.Path)
+		if title == "" {
+			continue
+		}
+		when := humaneAge(now, time.UnixMilli(meta.ModifiedAt))
+		rows = append(rows, "  "+tui.Muted(padTo(when, 10))+tui.Ink(title))
+	}
+	return rows
+}
+
+// padTo right-pads s with spaces to at least width columns (byte length —
+// the "when" column is plain ASCII, so this is exact).
+func padTo(s string, width int) string {
+	if len(s) >= width {
+		return s + " "
+	}
+	return s + strings.Repeat(" ", width-len(s))
+}
+
+// firstSessionReadCap bounds how much of a session's jsonl file
+// firstUserMessageTitle reads looking for the first user message, so a
+// huge session never slows the banner down reading to its end.
+const firstSessionReadCap = 64 * 1024
+
+// firstUserMessageTitle returns the session's first user message, single
+// line, truncated to fit, or "" if it cannot find one within
+// firstSessionReadCap bytes of the file. This is a cheap heuristic scan,
+// not a full jsonl parse (a real parse would need session.Entry's whole
+// decode+replay path, jsonl.Open, which reads to the end of the file
+// regardless of where the answer sits): a user message entry encodes as
+// `{"message":{"content":[{"text":"…","type":"text"}],"role":"user",…}}`
+// (verified against testdata/sessions/*.jsonl), so this finds the first
+// `"role":"user"` and takes the nearest preceding `"text":"..."` field —
+// true for every session this repo's own writer produces, not a general
+// JSON scan.
+func firstUserMessageTitle(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, firstSessionReadCap)
+	n, _ := io.ReadFull(f, buf)
+	data := string(buf[:n])
+
+	idx := strings.Index(data, `"role":"user"`)
+	if idx < 0 {
+		return ""
+	}
+	textKey := `"text":"`
+	ti := strings.LastIndex(data[:idx], textKey)
+	if ti < 0 {
+		return ""
+	}
+	start := ti + len(textKey)
+	end := start
+	for end < idx {
+		if data[end] == '"' && data[end-1] != '\\' {
+			break
+		}
+		end++
+	}
+	if end >= idx {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal([]byte(`"`+data[start:end]+`"`), &text); err != nil {
+		text = data[start:end]
+	}
+	text = strings.TrimSpace(strings.SplitN(text, "\n", 2)[0])
+	const maxTitle = 60
+	if len(text) > maxTitle {
+		text = text[:maxTitle-1] + "…"
+	}
+	return text
+}
+
+// humaneAge renders how long ago t was, Claude-Code style: "2h ago",
+// "yesterday", the weekday name within the last week, else "3d ago".
+func humaneAge(now, t time.Time) string {
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d/time.Minute))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d/time.Hour))
+	case d < 48*time.Hour:
+		return "yesterday"
+	case d < 7*24*time.Hour:
+		return t.Format("Mon")
+	default:
+		return fmt.Sprintf("%dd ago", int(d/(24*time.Hour)))
+	}
 }
 
 // abbrevHome replaces the user's home directory prefix in path with "~".

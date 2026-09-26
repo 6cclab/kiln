@@ -144,7 +144,11 @@ func (m Model) splicePlaceholder(line string, inner int) string {
 	if room < 0 {
 		room = 0
 	}
-	text := []rune(DefaultPlaceholder)
+	ph := m.placeholder
+	if ph == "" {
+		ph = DefaultPlaceholder
+	}
+	text := []rune(ph)
 	if room < len(text) {
 		text = text[:room]
 	}

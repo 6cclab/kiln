@@ -30,6 +30,43 @@ func TestIsRetriable_StreamInterrupted(t *testing.T) {
 	}
 }
 
+// TestRetryPolicy_DelayJitterEnv_Zero covers HARNESS_RETRY_JITTER=0: with
+// it set, delay must return exactly the base backoff for a given attempt
+// (deterministic), not a random draw in [0, backoff] — the e2e suite
+// relies on this to make its countdown/reconnect tests non-flaky (see
+// test/e2e/tui_test.go's startTUI).
+func TestRetryPolicy_DelayJitterEnv_Zero(t *testing.T) {
+	t.Setenv("HARNESS_RETRY_JITTER", "0")
+	p := DefaultRetryPolicy()
+	for attempt, want := range map[int]int{1: 1000, 2: 2000, 3: 4000} {
+		for i := 0; i < 5; i++ {
+			got := p.delay(attempt)
+			if got.Milliseconds() != int64(want) {
+				t.Fatalf("delay(%d) = %v, want exactly %dms with jitter disabled", attempt, got, want)
+			}
+		}
+	}
+}
+
+// TestRetryPolicy_DelayJitter_DefaultIsRandom covers the default (no env
+// var): delay must still land in [0, backoff] and, over enough draws,
+// actually vary -- otherwise a future change could accidentally disable
+// jitter unconditionally without this suite noticing.
+func TestRetryPolicy_DelayJitter_DefaultIsRandom(t *testing.T) {
+	p := DefaultRetryPolicy()
+	seen := map[int64]bool{}
+	for i := 0; i < 50; i++ {
+		got := p.delay(3) // base 4000ms cap
+		if got < 0 || got.Milliseconds() > 4000 {
+			t.Fatalf("delay(3) = %v, want in [0, 4000ms]", got)
+		}
+		seen[got.Milliseconds()] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("delay(3) returned the same value in every one of 50 draws (%v); jitter looks disabled", seen)
+	}
+}
+
 func TestIsRetriable_PlainUnexpectedEOFIsNotEnough(t *testing.T) {
 	// A bare io.ErrUnexpectedEOF, not wrapped in StreamInterrupted, isn't
 	// recognized by isRetriable's existing net.Error / string-sniffing
