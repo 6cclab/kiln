@@ -614,6 +614,11 @@ class Run:
                     self.key(name)
                     time.sleep(0.12)
             elif verb == "SCROLL":
+                # Orca's scroll reports ok but delivers no wheel event to the
+                # terminal (probed with SGR mouse reporting on: clicks arrive,
+                # scrolls never do), so a SCROLL step would silently test
+                # nothing. Fail it until a real wheel path exists.
+                raise DriveError("SCROLL blocked: orca scroll delivers no wheel event to the terminal")
                 direction, n = arg.split()[:2]
                 for _ in range(int(n)):
                     self.term.activate()
@@ -675,7 +680,7 @@ class Run:
 VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE"}
 FAUX_TOP = {"model", "steps", "models"}
 FAUX_STEP = {"text", "thinking", "tool_call", "tool_calls", "on_tool_result", "on_tool_results",
-             "then", "usage", "error", "delay", "disconnect_after"}
+             "then", "usage", "error", "delay", "disconnect_after", "end_turn", "chunk_delay"}
 FAUX_CALL = {"name", "args", "raw_args", "id"}
 
 

@@ -1,0 +1,16 @@
+# Assistant content: inline code. internal/tui/markdown.go's Code style
+# colours the token (yellow) but glamour strips the surrounding backticks
+# from the rendered text, so the source markup itself must not survive
+# onto the screen.
+@faux testdata/faux/qa/content-inline-code.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /limited\(count\)/ 20
+SHOT reply
+EXPECT /Call the limited\(count\) helper/
+EXPECT_NOT /`/
+EXPECT_NOT /panic|goroutine/

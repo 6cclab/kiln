@@ -1,0 +1,35 @@
+# Shift+Tab cycles the whole permission-mode ring from the default launch
+# mode (manual): internal/tui/app.go's permissionModeRing is
+# [auto, manual, acceptEdits, plan], so starting at manual (index 1) the
+# ring visits acceptEdits -> plan -> auto -> back to manual. Labels come
+# from internal/tui/status.go's modeLabel; every ring stop has its own
+# label, so this checks each press shows the next stop's label.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT idle-manual
+# design: Terminal.dc.html:222 (MODES[0] "ask before edits")
+EXPECT /ask before edits/
+KEY shift+tab
+SHOT press-1-acceptedits
+# design: Terminal.dc.html:222 (MODES[1] "auto-edit")
+EXPECT /auto-edit/
+EXPECT_NOT /ask before edits/
+KEY shift+tab
+SHOT press-2-plan
+# design: Terminal.dc.html:222 (MODES[2] "plan only")
+EXPECT /plan only/
+EXPECT_NOT /auto-edit/
+KEY shift+tab
+SHOT press-3-auto
+# auto has its own label, distinct from acceptEdits' "auto-edit"
+# (finding mode-ring-duplicate-label)
+EXPECT /● auto mode/
+EXPECT_NOT /auto-edit/
+EXPECT_NOT /plan only/
+KEY shift+tab
+SHOT press-4-back-to-manual
+EXPECT /ask before edits/
+EXPECT_NOT /auto-edit/
+EXPECT_NOT /panic|goroutine/

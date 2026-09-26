@@ -1,0 +1,28 @@
+# Queue: two follow-ups submitted back to back while a turn is busy. Each
+# Lane.Steer call emits its own EventQueueUpdate with the inbox's current
+# length (internal/harness/lane.go's Steer), so the busy line's suffix
+# goes from " · 1 queued" to " · 2 queued" rather than staying at 1.
+@faux testdata/faux/qa/queue-busy.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE start the rate limiter work
+KEY enter
+WAITFOR /esc to stop/ 10
+SHOT busy
+TYPE also check the login route
+KEY enter
+SHOT queued-one
+EXPECT /1 queued/
+TYPE and update the tests too
+KEY enter
+SHOT queued-two
+EXPECT /2 queued/
+EXPECT_NOT /1 queued/
+EXPECT /also check the login route/
+EXPECT /and update the tests too/
+EXPECT_NOT /panic|goroutine/
+WAITFOR /updated the tests/ 30
+SHOT drained
+EXPECT_NOT /\d queued/

@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "Changed files:\n\n- src/middleware\n  - rateLimit.ts\n  - rateLimit.test.ts\n- src/routes\n  - upload.ts"
+    usage: {input: 20, output: 24}

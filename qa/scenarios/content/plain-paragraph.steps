@@ -1,0 +1,12 @@
+# Assistant content: a plain prose paragraph, no markdown syntax at all.
+@faux testdata/faux/qa/content-plain.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /rate limiter middleware/ 20
+SHOT reply
+EXPECT /wraps every upload route/
+EXPECT_NOT /panic|goroutine/

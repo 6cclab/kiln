@@ -232,6 +232,7 @@ func (s *Server) streamOpenAI(w http.ResponseWriter, model, chatID string, t tur
 		case c.text != nil:
 			for _, chunk := range chunkString(*c.text, chunkSize) {
 				sw.sendChunk(base(map[string]any{"content": chunk}, nil))
+				time.Sleep(c.chunkDelay)
 			}
 		case c.thinking != nil:
 			for _, chunk := range chunkString(*c.thinking, chunkSize) {

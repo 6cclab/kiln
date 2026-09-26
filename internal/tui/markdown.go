@@ -3,6 +3,9 @@ package tui
 import (
 	"strings"
 	"sync"
+	"unicode/utf8"
+
+	"charm.land/lipgloss/v2"
 
 	"charm.land/glamour/v2"
 	glansi "charm.land/glamour/v2/ansi"
@@ -251,9 +254,6 @@ func (m *MarkdownRenderer) render(text string) []string {
 	if err != nil {
 		return strings.Split(text, "\n")
 	}
-	// glamour pads a trailing blank line onto every document; trimmed so a
-	// rendered block doesn't leave an extra empty row in the transcript.
-	out = strings.TrimRight(out, "\n")
 	if out == "" {
 		return []string{}
 	}
@@ -268,5 +268,168 @@ func (m *MarkdownRenderer) render(text string) []string {
 	for i, l := range lines {
 		lines[i] = strings.TrimRight(l, " ")
 	}
+	// glamour pads a trailing blank line onto every document, and a leading
+	// one whenever the first block is not a paragraph or heading (its
+	// NewElement hardcodes Entering "\n" for blockquotes, lists, tables, code
+	// blocks and rules without checking for a first child). Trimming blank
+	// edges covers every block kind; the body then starts on the row under
+	// the block label.
+	lines = trimBlankLines(lines)
+	return compactTables(lines, m.plain)
+}
+
+// trimBlankLines drops leading and trailing empty lines.
+func trimBlankLines(lines []string) []string {
+	start, end := 0, len(lines)
+	for start < end && lines[start] == "" {
+		start++
+	}
+	for end > start && lines[end-1] == "" {
+		end--
+	}
+	return lines[start:end]
+}
+
+// Table glyphs glamour draws with its default table style.
+const (
+	tableColSep  = "│"
+	tableRuleRun = "─"
+	tableCross   = "┼"
+)
+
+// compactTables shrinks every table glamour rendered to its content width
+// and draws its rules in the hairline Rule colour. glamour sizes a table to
+// the full word-wrap width, spreading the columns across the screen, and
+// leaves the rules in the terminal's default foreground, the loudest line
+// on screen. Cells are kept as glamour styled them (inline code, bold,
+// links); only the padding glamour added around them is removed.
+func compactTables(lines []string, plain bool) []string {
+	for i := 0; i < len(lines); i++ {
+		cols := tableRuleColumns(lines[i])
+		if cols < 2 {
+			continue
+		}
+		start := i
+		for start > 0 && strings.Count(lines[start-1], tableColSep) == cols-1 {
+			start--
+		}
+		end := i + 1
+		for end < len(lines) && strings.Count(lines[end], tableColSep) == cols-1 {
+			end++
+		}
+		compactTable(lines[start:end], i-start, cols, plain)
+		i = end - 1
+	}
 	return lines
+}
+
+// tableRuleColumns reports the column count of a table's header rule
+// ("────┼────"), or 0 when line is not one.
+func tableRuleColumns(line string) int {
+	if !strings.Contains(line, tableCross) {
+		return 0
+	}
+	rest := strings.ReplaceAll(strings.ReplaceAll(line, tableRuleRun, ""), tableCross, "")
+	if strings.TrimSpace(rest) != "" {
+		return 0
+	}
+	return strings.Count(line, tableCross) + 1
+}
+
+// compactTable rewrites one table's rows in place. rule is the index of the
+// header rule within rows.
+func compactTable(rows []string, rule, cols int, plain bool) {
+	cells := make([][]string, len(rows))
+	for r, row := range rows {
+		if r == rule {
+			cells[r] = strings.Split(row, tableCross)
+		} else {
+			cells[r] = strings.Split(row, tableColSep)
+		}
+	}
+	// Per column, the padding every row shares on each side, less the one
+	// space kept between a cell and a divider.
+	trimL := make([]int, cols)
+	trimR := make([]int, cols)
+	for c := 0; c < cols; c++ {
+		trimL[c], trimR[c] = -1, -1
+		for r := range rows {
+			if r == rule {
+				continue
+			}
+			cell := cells[r][c]
+			if strings.TrimSpace(cell) == "" {
+				continue
+			}
+			l := len(cell) - len(strings.TrimLeft(cell, " "))
+			rt := len(cell) - len(strings.TrimRight(cell, " "))
+			if c == cols-1 {
+				rt = 1 << 30 // trailing spaces were trimmed; nothing to align against
+			}
+			if trimL[c] < 0 || l < trimL[c] {
+				trimL[c] = l
+			}
+			if trimR[c] < 0 || rt < trimR[c] {
+				trimR[c] = rt
+			}
+		}
+		if trimL[c] < 0 {
+			trimL[c], trimR[c] = 0, 0
+		}
+		trimL[c] = max(trimL[c]-1, 0)
+		if c == cols-1 {
+			trimR[c] = 0
+		} else {
+			trimR[c] = max(trimR[c]-1, 0)
+		}
+	}
+	colour := func(s string) string {
+		if plain {
+			return s
+		}
+		return Rule(s)
+	}
+	for r := range rows {
+		var b strings.Builder
+		for c, cell := range cells[r] {
+			if r == rule {
+				n := utf8.RuneCountInString(cell) - trimL[c] - trimR[c]
+				if c == cols-1 {
+					n = maxCellWidth(cells, rule, c, trimL[c])
+				}
+				if c > 0 {
+					b.WriteString(colour(tableCross))
+				}
+				b.WriteString(colour(strings.Repeat(tableRuleRun, max(n, 1))))
+				continue
+			}
+			if c > 0 {
+				b.WriteString(colour(tableColSep))
+			}
+			cut := cell
+			if strings.TrimSpace(cut) != "" {
+				cut = cut[min(trimL[c], len(cut)):]
+				cut = cut[:len(cut)-min(trimR[c], len(cut))]
+			} else {
+				w := len(cut) - trimL[c] - trimR[c]
+				cut = strings.Repeat(" ", max(w, 0))
+			}
+			b.WriteString(cut)
+		}
+		rows[r] = strings.TrimRight(b.String(), " ")
+	}
+}
+
+// maxCellWidth is the widest visible cell in column c after compaction,
+// plus one space of padding, sizing the last column's stretch of rule.
+func maxCellWidth(cells [][]string, rule, c, trimL int) int {
+	w := 0
+	for r := range cells {
+		if r == rule || c >= len(cells[r]) {
+			continue
+		}
+		cell := strings.TrimRight(cells[r][c], " ")
+		w = max(w, lipgloss.Width(cell[min(trimL, len(cell)):]))
+	}
+	return w + 1
 }

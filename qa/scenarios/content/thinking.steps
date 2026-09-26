@@ -1,0 +1,29 @@
+# Assistant content: a thinking (reasoning) step. internal/tui/
+# transcript.go's RenderThinking is only ever committed with
+# Expanded: false (internal/tui/app.go's handleThinking never sets it
+# true, and the live view at app.go:1778 hardcodes view.Expanded = false
+# too), so per its own doc comment ("collapsed... shows nothing") the
+# committed block renders as nothing at all, not a folded placeholder —
+# there is no on-screen affordance this scenario found that ctrl+o
+# expands into the "∴ Thinking" row RenderThinking can otherwise produce.
+# The EXPECT_NOT lines below record that as a real behaviour, not a typo:
+# if a future change wires Expanded through, these two would start
+# failing and that's the signal.
+@faux testdata/faux/qa/content-thinking.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /I'll use a fixed window counter/ 20
+SHOT reply-collapsed
+EXPECT /I'll use a fixed window counter/
+EXPECT_NOT /fixed window, not a sliding one/
+EXPECT_NOT /∴/
+KEY ctrl+o
+SHOT after-ctrl-o-expand
+EXPECT_NOT /fixed window, not a sliding one/
+KEY ctrl+o
+SHOT after-ctrl-o-collapse
+EXPECT_NOT /panic|goroutine/

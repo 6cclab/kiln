@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "The rate limiter middleware wraps every upload route and rejects a request once a client crosses ten calls per minute."
+    usage: {input: 20, output: 24}

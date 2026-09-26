@@ -1,0 +1,16 @@
+# --permission-mode bypassPermissions: not a ring member (see
+# dont-ask.steps), so cycleMode also lands on auto. The design
+# (Terminal.dc.html:222) has no "bypass permissions" entry either.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@args --permission-mode bypassPermissions
+
+WAITFOR /describe a task/ 20
+SHOT idle
+EXPECT /bypass permissions/
+KEY shift+tab
+SHOT after-shift-tab
+# bypassPermissions -> auto (not in the ring, so cycleMode goes to ring[0])
+EXPECT /auto-edit/
+EXPECT_NOT /bypass permissions/
+EXPECT_NOT /panic|goroutine/

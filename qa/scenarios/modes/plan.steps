@@ -1,0 +1,16 @@
+# --permission-mode plan: idle label, then one shift+tab.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@args --permission-mode plan
+
+WAITFOR /describe a task/ 20
+SHOT idle
+# design: Terminal.dc.html:222 (MODES[2] "plan only")
+EXPECT /plan only/
+KEY shift+tab
+SHOT after-shift-tab
+# plan -> auto, wrapping to the ring's first entry (permissionModeRing in
+# internal/tui/app.go)
+EXPECT /auto-edit/
+EXPECT_NOT /plan only/
+EXPECT_NOT /panic|goroutine/

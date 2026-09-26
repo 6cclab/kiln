@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "Here is the check:\n\n```javascript\nfunction limited(count) {\n  return count > 10;\n}\n```"
+    usage: {input: 20, output: 24}

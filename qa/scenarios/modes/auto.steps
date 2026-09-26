@@ -1,0 +1,16 @@
+# --permission-mode auto: idle label, then one shift+tab.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@args --permission-mode auto
+
+WAITFOR /describe a task/ 20
+SHOT idle
+# auto reads "auto mode", distinct from acceptEdits' "auto-edit"
+# (internal/tui/status.go modeLabel).
+EXPECT /● auto mode/
+KEY shift+tab
+SHOT after-shift-tab
+# auto -> manual (permissionModeRing in internal/tui/app.go)
+EXPECT /ask before edits/
+EXPECT_NOT /auto mode/
+EXPECT_NOT /panic|goroutine/

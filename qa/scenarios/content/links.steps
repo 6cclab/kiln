@@ -1,0 +1,16 @@
+# Assistant content: a markdown link. internal/tui/markdown.go's Link
+# style colours the link cyan and LinkText is Faint — this checks the
+# link text and URL both survive onto the screen, not the exact
+# decoration glamour wraps them in.
+@faux testdata/faux/qa/content-links.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /rate limiting RFC/ 20
+SHOT reply
+EXPECT /rate limiting RFC/
+EXPECT /example\.invalid\/rfc-6585/
+EXPECT_NOT /panic|goroutine/

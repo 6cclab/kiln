@@ -438,12 +438,7 @@ func bannerContentWidth(stdout io.Writer) int {
 // always survives; only if that suffix alone does not fit does the row
 // fall through to app.go's tail-truncation.
 func bannerRows(deps InteractiveDeps, width int) []string {
-	// Version label: "v1.2.3" for a real semver, the bare string otherwise
-	// (so a "dev" build reads "dev · coding agent", never "vdev").
-	verLabel := Version
-	if len(Version) > 0 && Version[0] >= '0' && Version[0] <= '9' {
-		verLabel = "v" + Version
-	}
+	verLabel := versionLabel(Version)
 
 	// Row 1 per the design: "<cwd> · branch <b> · model <m>", cwd with the
 	// home dir abbreviated to ~ and, when the row is tight, left-truncated

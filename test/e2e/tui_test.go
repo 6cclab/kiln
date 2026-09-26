@@ -1061,8 +1061,10 @@ func TestTUI_ShiftTab_CyclesMode(t *testing.T) {
 	// auto; the default start mode is manual, so cycling from there goes
 	// manual -> acceptEdits -> plan -> auto -> manual. Status-line mode
 	// labels are status.go's modeLabel: "ask before edits" (manual),
-	// "auto-edit" (acceptEdits and auto both), "plan only" (plan).
-	order := []string{"ask before edits", "auto-edit", "plan only", "auto-edit", "ask before edits"}
+	// "auto-edit" (acceptEdits), "plan only" (plan), "auto mode" (auto) —
+	// acceptEdits and auto are distinct ring stops with distinct labels
+	// (qa/findings/20260926T231105Z-mode-ring-duplicate-label.json).
+	order := []string{"ask before edits", "auto-edit", "plan only", "auto mode", "ask before edits"}
 	if err := s.WaitFor(order[0], 2*time.Second); err != nil {
 		t.Fatalf("did not start in manual mode: %v", err)
 	}

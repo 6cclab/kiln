@@ -103,14 +103,16 @@ func TestView_SpinnerRowWhileBusy(t *testing.T) {
 
 // TestStatusRow_ExactTextPerMode checks every mode's exact rendered label
 // against the kiln design handoff's status-line contract: a "●" lead-in,
-// coloured by mode (ask/manual dim, the auto-edit family green, plan
-// blue), followed by the mode label and the mode-cycle key.
+// coloured by mode (ask/manual dim, acceptEdits/auto/bypassPermissions/
+// dontAsk green, plan blue), followed by the mode label and the
+// mode-cycle key. acceptEdits and auto are distinct modes (see
+// modeLabel's doc comment) and must render distinct labels.
 func TestStatusRow_ExactTextPerMode(t *testing.T) {
 	cases := []struct {
 		mode string
 		want string
 	}{
-		{"auto", "auto-edit"},
+		{"auto", "auto mode"},
 		{"manual", "ask before edits"},
 		{"acceptEdits", "auto-edit"},
 		{"plan", "plan only"},

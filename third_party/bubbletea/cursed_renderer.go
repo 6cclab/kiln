@@ -522,7 +522,17 @@ func (s *cursedRenderer) flushLocked(closing bool) error {
 	// screen still emits nothing. The live region is small (spinner, input
 	// box, footer, an open prompt/dialog), so a full repaint per change is
 	// cheap, and synchronized-output mode makes it flicker-free.
-	s.scr.Redraw(s.cellbuf.RenderBuffer)
+	//
+	// On the alternate screen the diff is kept: insertAbove never runs
+	// there (a fullscreen app keeps its own transcript), so the model
+	// cannot desync, and a full redraw starts by clearing the screen,
+	// which iTerm2 archives into its scrollback even on the alternate
+	// screen — every changed frame left a stale copy in the history.
+	if view.AltScreen {
+		s.scr.Render(s.cellbuf.RenderBuffer)
+	} else {
+		s.scr.Redraw(s.cellbuf.RenderBuffer)
+	}
 
 	if cur := view.Cursor; cur != nil {
 		// MoveTo must come after [uv.TerminalRenderer.Render] because the

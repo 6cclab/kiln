@@ -1,0 +1,16 @@
+# Assistant content: a fenced code block. internal/tui/markdown.go's
+# CodeBlock style indents the body two spaces and leaves body text in the
+# terminal's own colour (chroma only lights up recognised tokens).
+@faux testdata/faux/qa/content-code.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /function limited/ 20
+SHOT reply
+EXPECT /function limited\(count\)/
+EXPECT /return count > 10;/
+EXPECT_NOT /```/
+EXPECT_NOT /panic|goroutine/

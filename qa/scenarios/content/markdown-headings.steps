@@ -1,0 +1,17 @@
+# Assistant content: markdown headings render bold (internal/tui/
+# markdown.go's Heading style: Bold + a trailing blank line).
+@faux testdata/faux/qa/content-headings.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /Middleware/ 20
+SHOT reply
+EXPECT /Overview/
+EXPECT /Middleware/
+EXPECT /Rate limiting happens here/
+EXPECT_NOT /# Overview/
+EXPECT_NOT /## Middleware/
+EXPECT_NOT /panic|goroutine/

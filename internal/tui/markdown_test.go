@@ -90,3 +90,70 @@ func TestMarkdownTrimsTrailingPadding(t *testing.T) {
 		}
 	}
 }
+
+const qaTable = "| Route | Limit |\n|---|---|\n| `/api/upload` | 10/min |\n| /api/login | 5/min |"
+
+// TestMarkdownTableSizesToContent: glamour spreads a table across the whole
+// word-wrap width; kiln shrinks it to its content (2-column table at 120
+// columns stayed ~120 wide with "Limit" at column ~60).
+func TestMarkdownTableSizesToContent(t *testing.T) {
+	lines := NewMarkdownRenderer(120, false).Render(qaTable)
+	for _, l := range lines {
+		if w := ansi.StringWidth(l); w > 30 {
+			t.Errorf("table row %q is %d columns wide, want <= 30", ansi.Strip(l), w)
+		}
+	}
+	if i := strings.Index(ansi.Strip(lines[0]), "Limit"); i < 0 || i > 20 {
+		t.Errorf("header %q: Limit at %d, want within 20 columns", ansi.Strip(lines[0]), i)
+	}
+	for _, want := range []string{"/api/upload", "10/min", "/api/login", "5/min"} {
+		if !strings.Contains(ansi.Strip(strings.Join(lines, "\n")), want) {
+			t.Errorf("cell %q lost:\n%s", want, ansi.Strip(strings.Join(lines, "\n")))
+		}
+	}
+}
+
+// TestMarkdownTableKeepsInlineCellStyling: cells stay glamour-rendered, so
+// inline code shows as code, not as literal backticks.
+func TestMarkdownTableKeepsInlineCellStyling(t *testing.T) {
+	out := ansi.Strip(strings.Join(NewMarkdownRenderer(120, false).Render(qaTable), "\n"))
+	if strings.Contains(out, "`") {
+		t.Errorf("inline code rendered with literal backticks:\n%s", out)
+	}
+}
+
+// TestMarkdownTableRulesUseRuleColour: the header rule and column dividers
+// draw in the hairline Rule token, not the terminal's default foreground.
+func TestMarkdownTableRulesUseRuleColour(t *testing.T) {
+	prev := enabled
+	t.Cleanup(func() { SetColorEnabled(prev) })
+	SetColorEnabled(true)
+	lines := NewMarkdownRenderer(120, false).Render(qaTable)
+	joined := strings.Join(lines, "\n")
+	for _, glyph := range []string{"│", "┼"} {
+		if !strings.Contains(joined, Rule(glyph)) {
+			t.Errorf("%s is not drawn in the Rule colour:\n%q", glyph, joined)
+		}
+	}
+}
+
+// TestMarkdownNoLeadingBlankRow: whatever block a reply opens with, its
+// first rendered row carries content, so the body sits right under the
+// block label (a blockquote or table used to open with an empty row).
+func TestMarkdownNoLeadingBlankRow(t *testing.T) {
+	for name, text := range map[string]string{
+		"blockquote": "> A 429 response should carry Retry-After.\n\nThat's the gap.",
+		"table":      qaTable,
+		"list":       "- one\n- two",
+		"code":       "```\nx := 1\n```",
+		"paragraph":  "Plain text.",
+	} {
+		lines := NewMarkdownRenderer(80, false).Render(text)
+		if len(lines) == 0 || strings.TrimSpace(ansi.Strip(lines[0])) == "" {
+			t.Errorf("%s: first row is blank: %q", name, lines)
+		}
+		if strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+			t.Errorf("%s: last row is blank: %q", name, lines)
+		}
+	}
+}

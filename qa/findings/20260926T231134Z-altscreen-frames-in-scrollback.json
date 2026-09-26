@@ -1,0 +1,32 @@
+{
+ "id": "20260926T231134Z-altscreen-frames-in-scrollback",
+ "found_at": "2026-09-26T23:11:34Z",
+ "scenario": "modes/ring-full",
+ "step": "01..05",
+ "terminals": [
+  "iterm-dark",
+  "iterm-light"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Each redraw pushes a full 40-row frame into terminal scrollback",
+ "observed": "kiln runs with AltScreen=true (app.go:1053), yet iTerm2 scrollback grows by exactly one full screen per state change: 40→80→120→160→200→240 rows after four shift+tab presses; each saved frame is a complete kiln screen. Scrolling up in the terminal shows a stack of stale kiln frames.",
+ "expected": "Redraws on the alternate screen leave terminal scrollback untouched; only the diffed cells are rewritten.",
+ "design_ref": "n/a (renderer behaviour)",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/modes-ring-full-120x40/05-press-4-back-to-manual.buffer.txt",
+  "qa/runs/adapter-check/iterm-light/startup-smoke-120x40/result.json"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "third_party/bubbletea/cursed_renderer.go"
+  ],
+  "regression_test": "TestCursedRenderer_altScreenFramesDoNotClear",
+  "after_evidence": [
+   "qa/runs/c2/iterm-dark/verify-scrollback-120x40/result.json"
+  ],
+  "note": "Root cause: the vendored full-redraw patch cleared the screen on every changed frame; iTerm2 archives any clear from home. Alt screen now uses the incremental diff. Scrollback 0 after two mode changes (was +40 rows each). Other terminals still to verify.",
+  "updated_at": "2026-09-26T23:58:22Z"
+ }
+}

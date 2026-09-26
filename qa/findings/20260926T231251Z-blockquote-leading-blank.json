@@ -1,0 +1,29 @@
+{
+ "id": "20260926T231251Z-blockquote-leading-blank",
+ "found_at": "2026-09-26T23:12:51Z",
+ "scenario": "content/blockquote",
+ "step": "02-reply",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "low",
+ "title": "Reply that opens with a blockquote gets a blank row under the kiln label",
+ "observed": "Faux text begins with '> A 429 response…'; the screen shows 'kiln ───', an empty row, then '│ A 429 response…'. Other replies start on the row right under the label.",
+ "expected": "Body starts on the row under the label regardless of the first markdown element.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html assistant block",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/content-blockquote-120x40/02-reply.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/markdown.go"
+  ],
+  "regression_test": "TestMarkdownNoLeadingBlankRow",
+  "after_evidence": [
+   "qa/runs/c2/iterm-dark/content-blockquote-120x40/02-reply.png"
+  ],
+  "updated_at": "2026-09-26T23:58:22Z"
+ }
+}

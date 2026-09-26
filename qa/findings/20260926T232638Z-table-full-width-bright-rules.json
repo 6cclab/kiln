@@ -1,0 +1,29 @@
+{
+ "id": "20260926T232638Z-table-full-width-bright-rules",
+ "found_at": "2026-09-26T23:26:38Z",
+ "scenario": "content/table",
+ "step": "02-reply",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "medium",
+ "title": "Markdown table stretches to full width with bright white rules and a leading blank row",
+ "observed": "A two-column table (Route | Limit) is spread across all 120 columns so 'Limit' starts at column 60, far from its values' labels; the header rule and column divider draw in bright white, louder than any other line on screen; an empty row separates it from the kiln label.",
+ "expected": "Tables size to their content, rules use the design's hairline colour (#3a3228 / #2f2920 family), and the body starts on the row under the label.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html (rule tokens)",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/content-table-120x40/02-reply.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/markdown.go"
+  ],
+  "regression_test": "TestMarkdownTableSizesToContent,TestMarkdownTableRulesUseRuleColour,TestMarkdownTableKeepsInlineCellStyling,TestMarkdownNoLeadingBlankRow",
+  "after_evidence": [
+   "qa/runs/c2/iterm-dark/content-table-120x40/02-reply.png"
+  ],
+  "updated_at": "2026-09-26T23:58:22Z"
+ }
+}

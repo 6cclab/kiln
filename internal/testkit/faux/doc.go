@@ -120,6 +120,18 @@
 // A delay step sleeps for the given duration before the turn's response
 // is written.
 //
+// Consecutive text, thinking and delay steps merge into one turn. A step
+// carrying end_turn: true closes its turn, so the next step answers the
+// following request:
+//
+//	steps:
+//	  - text: "first reply"
+//	    end_turn: true
+//	  - text: "second reply"
+//
+// A text step may carry chunk_delay (a duration) to sleep between its
+// streamed chunks, holding a partly arrived reply on screen.
+//
 // # Fault injection
 //
 // A text or thinking step may also carry disconnect_after, a mid-stream

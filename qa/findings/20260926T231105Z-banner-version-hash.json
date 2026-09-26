@@ -1,0 +1,34 @@
+{
+ "id": "20260926T231105Z-banner-version-hash",
+ "found_at": "2026-09-26T23:11:05Z",
+ "scenario": "startup/smoke",
+ "step": "01-welcome",
+ "terminals": [
+  "iterm-dark",
+  "iterm-light",
+  "terminal",
+  "warp"
+ ],
+ "category": "style",
+ "severity": "low",
+ "title": "Banner shows 'v61bae41' (v prefixed to a git hash)",
+ "observed": "Dev build banner reads 'K I L N  v61bae41 · coding agent'.",
+ "expected": "A version like 'v0.x.y', or the bare hash without the 'v' prefix for dev builds.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html banner",
+ "evidence": [
+  "qa/runs/adapter-check/iterm-light/startup-smoke-120x40/01-welcome.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/subcommands.go",
+   "internal/cli/tui.go"
+  ],
+  "regression_test": "TestVersionLabel",
+  "after_evidence": [
+   "qa/runs/c2/iterm-dark/content-table-120x40/01-welcome.png"
+  ],
+  "note": "Banner now reads '2f74412-dirty · coding agent'.",
+  "updated_at": "2026-09-26T23:58:22Z"
+ }
+}

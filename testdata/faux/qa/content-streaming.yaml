@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  # chunk_delay paces the 8-byte chunks (~6s for this reply) so the live
+  # region, its trailing caret, and the busy line can be captured mid-stream.
+  - text: "The limiter now sits in front of the upload route. Each request takes a token from a per-user bucket that refills at ten tokens per minute, and a request that finds the bucket empty gets a 429 with a Retry-After header that says when the next token lands. The redis mock in the tests keeps the bucket state between calls, so the suite can walk a user through eleven uploads and check that the eleventh is the one refused. Nothing else in the upload path changed."
+    chunk_delay: 60ms
+    usage: {input: 40, output: 110}

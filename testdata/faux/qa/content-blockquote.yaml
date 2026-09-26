@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "> A 429 response should always carry a Retry-After header.\n\nThat's the part the tests were missing."
+    usage: {input: 20, output: 24}

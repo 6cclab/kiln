@@ -457,6 +457,37 @@ steps:
 	}
 }
 
+// --- end_turn ----------------------------------------------------------------
+
+// TestEndTurnSplitsConsecutiveTextSteps: without end_turn, adjacent text
+// steps merge into one reply; with it, each answers its own request.
+func TestEndTurnSplitsConsecutiveTextSteps(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - text: "first"
+    end_turn: true
+  - text: "second"
+`)
+	for _, want := range []string{"first", "second"} {
+		resp := postJSON(t, base+"/v1/messages", map[string]any{
+			"model": "faux-1", "messages": []map[string]any{{"role": "user", "content": "hi"}},
+		})
+		var payload map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		resp.Body.Close()
+		content := payload["content"].([]any)
+		if len(content) != 1 || content[0].(map[string]any)["text"] != want {
+			t.Errorf("reply = %v, want one %q block", content, want)
+		}
+		if payload["stop_reason"] != "end_turn" {
+			t.Errorf("stop_reason = %v", payload["stop_reason"])
+		}
+	}
+}
+
 // --- error step --------------------------------------------------------------
 
 func TestErrorStepFiresOnce(t *testing.T) {
@@ -595,6 +626,40 @@ steps:
 	resp.Body.Close()
 	if elapsed < 25*time.Millisecond {
 		t.Errorf("elapsed = %v, want >= ~30ms", elapsed)
+	}
+}
+
+// TestChunkDelayPacesStream: 24 characters stream as three 8-byte chunks
+// with a sleep after each, so the whole stream takes at least 3 delays,
+// and every chunk still arrives in order.
+func TestChunkDelayPacesStream(t *testing.T) {
+	_, base := startTestServer(t, `
+model: faux-1
+steps:
+  - text: "abcdefghijklmnopqrstuvwx"
+    chunk_delay: 40ms
+`)
+	start := time.Now()
+	resp := postJSON(t, base+"/v1/messages", map[string]any{
+		"model": "faux-1", "stream": true, "messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	defer resp.Body.Close()
+	var got strings.Builder
+	for _, ev := range readSSE(t, resp.Body) {
+		var payload struct {
+			Delta struct {
+				Text string `json:"text"`
+			} `json:"delta"`
+		}
+		if ev.event == "content_block_delta" && json.Unmarshal([]byte(ev.data), &payload) == nil {
+			got.WriteString(payload.Delta.Text)
+		}
+	}
+	if elapsed := time.Since(start); elapsed < 110*time.Millisecond {
+		t.Errorf("elapsed = %v, want >= ~120ms", elapsed)
+	}
+	if got.String() != "abcdefghijklmnopqrstuvwx" {
+		t.Errorf("streamed text = %q", got.String())
 	}
 }
 

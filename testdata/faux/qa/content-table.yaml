@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "| Route | Limit |\n| --- | --- |\n| /api/upload | 10/min |\n| /api/login | 5/min |"
+    usage: {input: 20, output: 24}

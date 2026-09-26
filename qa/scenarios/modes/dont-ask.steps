@@ -1,0 +1,21 @@
+# --permission-mode dontAsk: not a ring member (internal/tui/app.go's
+# permissionModeRing has only auto/manual/acceptEdits/plan), so
+# cycleMode sends it straight to the ring's first entry, auto, rather
+# than the next ring position after wherever dontAsk would sit. The
+# design (Terminal.dc.html:222) only names three modes and has no
+# "don't ask" entry at all — kiln's modeLabel (internal/tui/status.go)
+# adds it for this CLI-only mode, so there is no design line to match
+# it against here.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@args --permission-mode dontAsk
+
+WAITFOR /describe a task/ 20
+SHOT idle
+EXPECT /don't ask/
+KEY shift+tab
+SHOT after-shift-tab
+# dontAsk -> auto (not in the ring, so cycleMode goes to ring[0])
+EXPECT /auto-edit/
+EXPECT_NOT /don't ask/
+EXPECT_NOT /panic|goroutine/

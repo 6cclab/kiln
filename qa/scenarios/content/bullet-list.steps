@@ -1,0 +1,15 @@
+# Assistant content: a bullet list. internal/tui/markdown.go's Item style
+# gives every bullet a "• " prefix (buildStyle's listBullet mapping).
+@faux testdata/faux/qa/content-bullets.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /redis mock/ 20
+SHOT reply
+EXPECT /• Added the rate limiter middleware/
+EXPECT /• Wired it into the upload route/
+EXPECT /• Added a redis mock for tests/
+EXPECT_NOT /panic|goroutine/

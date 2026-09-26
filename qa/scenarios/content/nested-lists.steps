@@ -1,0 +1,18 @@
+# Assistant content: a nested bullet list. internal/tui/markdown.go's List
+# style sets LevelIndent: 2, so a nested item's "• " sits two columns
+# further right than its parent's.
+@faux testdata/faux/qa/content-nested.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /upload\.ts/ 20
+SHOT reply
+EXPECT /• src\/middleware/
+EXPECT /  • rateLimit\.ts/
+EXPECT /  • rateLimit\.test\.ts/
+EXPECT /• src\/routes/
+EXPECT /  • upload\.ts/
+EXPECT_NOT /panic|goroutine/

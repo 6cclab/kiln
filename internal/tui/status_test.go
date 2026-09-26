@@ -71,7 +71,7 @@ func TestElapsed(t *testing.T) {
 
 func TestRenderStatusLine_ModeLabelAndKey(t *testing.T) {
 	out := RenderStatusLine(baseState(), 80)
-	if !strings.Contains(out, "auto-edit") {
+	if !strings.Contains(out, "auto mode") {
 		t.Errorf("status line %q missing mode label", out)
 	}
 	if !strings.Contains(out, "⇧⇥") {
@@ -82,7 +82,7 @@ func TestRenderStatusLine_ModeLabelAndKey(t *testing.T) {
 func TestRenderStatusLine_EveryMode(t *testing.T) {
 	cases := map[string]string{
 		"manual":            "ask before edits",
-		"auto":              "auto-edit",
+		"auto":              "auto mode",
 		"acceptEdits":       "auto-edit",
 		"bypassPermissions": "bypass permissions",
 		"dontAsk":           "don't ask",
@@ -95,6 +95,25 @@ func TestRenderStatusLine_EveryMode(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("mode %q: status line %q missing %q", mode, out, want)
 		}
+	}
+}
+
+// TestModeLabel_AutoDistinctFromAcceptEdits pins the fix for
+// qa/findings/20260926T231105Z-mode-ring-duplicate-label.json: acceptEdits
+// and auto are different permission-mode ring stops (settings.Decide
+// auto-allows only edit/write for acceptEdits, but everything for auto)
+// and must render distinguishable labels.
+func TestModeLabel_AutoDistinctFromAcceptEdits(t *testing.T) {
+	acceptEditsLabel, _ := modeLabel("acceptEdits")
+	autoLabel, _ := modeLabel("auto")
+	if acceptEditsLabel == autoLabel {
+		t.Fatalf("acceptEdits and auto must have distinct labels, both got %q", acceptEditsLabel)
+	}
+	if acceptEditsLabel != "auto-edit" {
+		t.Errorf("acceptEdits label = %q, want %q", acceptEditsLabel, "auto-edit")
+	}
+	if autoLabel != "auto mode" {
+		t.Errorf("auto label = %q, want %q", autoLabel, "auto mode")
 	}
 }
 

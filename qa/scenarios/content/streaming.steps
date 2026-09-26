@@ -1,0 +1,19 @@
+# Assistant content: streaming. internal/tui/stream.go's RenderStreamLive
+# shows the last 8 wrapped rows of in-flight text with a trailing amber
+# caret (theme.go's StreamCaret, "▍" in the fancy theme) while the turn is
+# still arriving; a delay holds the turn open long enough to capture it,
+# faux's chunk_delay paces the reply so it is still arriving when captured.
+@faux testdata/faux/qa/content-streaming.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /per-user bucket/ 10
+SHOT mid-stream
+EXPECT /▍/
+WAITFOR /Nothing else in the upload path changed/ 20
+SHOT reply-committed
+EXPECT_NOT /▍/
+EXPECT_NOT /panic|goroutine/

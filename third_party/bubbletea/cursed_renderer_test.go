@@ -201,3 +201,38 @@ func TestCursedRenderer_updatesKittyKeyboardFlagsInPlace(t *testing.T) {
 		t.Fatalf("expected kitty keyboard protocol to be pushed once, got %d pushes in %q", n, got)
 	}
 }
+
+// TestCursedRenderer_altScreenFramesDoNotClear: once the first alt-screen
+// frame is painted, a changed frame rewrites only the changed cells.
+// Clearing the screen first (the inline path's full redraw) makes iTerm2
+// archive the whole alternate screen into its scrollback on every change.
+func TestCursedRenderer_altScreenFramesDoNotClear(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	r := newCursedRenderer(&out, []string{"TERM=xterm-256color"}, 80, 24)
+	r.start()
+
+	render := func(content string) string {
+		t.Helper()
+		out.Reset()
+		v := NewView(content)
+		v.AltScreen = true
+		r.render(v)
+		if err := r.flush(false); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+
+	render("ask before edits\nsecond row")
+	got := render("auto-edit\nsecond row")
+	for _, clear := range []string{ansi.EraseEntireScreen, ansi.CursorHomePosition + ansi.EraseScreenBelow} {
+		if strings.Contains(got, clear) {
+			t.Errorf("changed alt-screen frame clears the screen (%q):\n%q", clear, got)
+		}
+	}
+	if !strings.Contains(got, "auto-edit") {
+		t.Errorf("changed text not written:\n%q", got)
+	}
+}

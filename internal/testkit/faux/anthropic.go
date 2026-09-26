@@ -350,6 +350,7 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, model, msgID string, t t
 						"text": chunk,
 					},
 				})
+				time.Sleep(c.chunkDelay)
 			}
 			sw.send("content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
 			index++

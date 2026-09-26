@@ -115,13 +115,25 @@ func Elapsed(d time.Duration) string {
 }
 
 // modeLabel returns the status line's mode label text for the dot+label
-// segment, and its colour — manual/default/ask before edits (dim), the
-// auto-edit family (green), plan (blue). Unrecognised modes fall back to
-// "ask before edits" dim, the safest default.
+// segment, and its colour — manual/default/ask before edits (dim),
+// acceptEdits/auto (green, but with distinct labels — see below), plan
+// (blue). Unrecognised modes fall back to "ask before edits" dim, the
+// safest default.
+//
+// acceptEdits and auto are both green but are NOT the same mode
+// (settings.Decide, internal/claude/settings/settings.go): acceptEdits
+// only auto-allows edit/write and read-only calls, asking for everything
+// else, while auto is a blanket allow for every call not already denied —
+// the same "auto mode" the Bash/plan permission prompts already offer to
+// switch into (internal/tui/permission_render.go's "switch to auto mode").
+// So they get distinct labels: "auto-edit" for acceptEdits, "auto mode"
+// for auto, reusing that established name rather than inventing a new one.
 func modeLabel(mode string) (label string, colour func(string) string) {
 	switch mode {
-	case "acceptEdits", "auto":
+	case "acceptEdits":
 		return "auto-edit", KilnGreen
+	case "auto":
+		return "auto mode", KilnGreen
 	case "bypassPermissions":
 		return "bypass permissions", KilnGreen
 	case "dontAsk":
