@@ -38,6 +38,7 @@ import (
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/skills"
 	slashcommands "github.com/andrepato/harness/internal/commands"
+	"github.com/andrepato/harness/internal/compaction"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/harness"
@@ -257,6 +258,45 @@ func subagentEventSink(stderr io.Writer) func(agent.SubagentEvent) {
 			fmt.Fprintf(stderr, "%s: %s\n", e.Agent, e.Message)
 		}
 	}
+}
+
+// usageRowContextTokens is /context's and /usage's context-occupancy
+// figure: a single request's input+output tokens — the same figure the
+// TUI's pinned status meter computes from its own EventUsage.UsageRow
+// (internal/tui/bridge.go: "ContextUsed comes from the LAST request's
+// input+output, never the running total"). row is nil until the first
+// EventUsage arrives.
+//
+// This deliberately does NOT read row.TotalTokens: for the anthropic
+// provider (internal/provider/api/anthropic_messages.go),
+// TotalTokens = Input+Output+CacheRead+CacheWrite for THAT ONE request,
+// so even TotalTokens on a single row would already differ from the
+// status meter's Input+Output. The defect this fixes was one level worse
+// than that, though: chat.go used to read ev.UsageTotals (the session's
+// running SUM across every turn so far, session.SessionStats.Usage,
+// accumulated turn by turn via msg.Usage.Add in
+// internal/harness/turn.go), not a single row at all — a figure that
+// only grows and was observed at 959.6k/1000k (96%) in a session whose
+// pinned status meter simultaneously and correctly read 2%.
+func usageRowContextTokens(row *msg.Usage) (int, bool) {
+	if row == nil {
+		return 0, false
+	}
+	return row.Input + row.Output, true
+}
+
+// fileReadTokensFromToolEnd reports the tokens attributable to one
+// EventToolEnd, for /context's "Files read" segment
+// (docs/kiln-design-handoff/Terminal.dc.html line 227): only the "read"
+// tool's (internal/tools/read.go) successful results count as file
+// content read into the conversation. ok is false for every other tool,
+// a nil result, or an error result — none of those actually added file
+// content to the transcript.
+func fileReadTokensFromToolEnd(toolName string, result *msg.ToolResultMessage) (int, bool) {
+	if toolName != "read" || result == nil || result.IsError {
+		return 0, false
+	}
+	return compaction.EstimateTokens(*result), true
 }
 
 // Run implements cli.ts's chat(): registry, settings, model resolution,
@@ -607,26 +647,62 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	hookNotice := &rebindable[func(string)]{fn: hookNoticeSink(stderr)}
 	notice := func(message string) { hookNotice.get()(message) }
 
-	// ContextUsed (for /usage) tracks the last usage event's total token
-	// count; nil until the first one arrives.
+	// ContextUsed (for /usage and /context) tracks the LAST request's
+	// input+output tokens — never UsageTotals, which is the session's
+	// running sum across every turn (session.SessionStats.Usage, added
+	// turn by turn via msg.Usage.Add in internal/harness/turn.go) and so
+	// grows far past the context window's actual size in any multi-turn
+	// session. That mismatch was defect 1: /context's header derived
+	// contextUsed from UsageTotals.TotalTokens (a cumulative, multi-turn
+	// sum), while the TUI's pinned status meter derives its percentage
+	// from UsageRow.Input+UsageRow.Output — the most recent single
+	// request's tokens, i.e. what is actually resident in the context
+	// window right now (internal/tui/bridge.go's EventUsage case,
+	// "ContextUsed comes from the LAST request's input+output, never the
+	// running total"). The two disagreed because they read different
+	// fields; this reads the same one the status meter does, so /context
+	// and the pinned meter now always agree.
 	var usageMu sync.Mutex
-	var lastUsage *msg.Usage
+	var lastUsageRow *msg.Usage
 	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
 		usageMu.Lock()
 		defer usageMu.Unlock()
-		if ev.UsageTotals != nil {
-			lastUsage = ev.UsageTotals
-		} else if ev.UsageRow != nil {
-			lastUsage = ev.UsageRow
+		if ev.UsageRow != nil {
+			lastUsageRow = ev.UsageRow
 		}
 	})
 	contextUsed := func() (int, bool) {
 		usageMu.Lock()
 		defer usageMu.Unlock()
-		if lastUsage == nil {
-			return 0, false
+		return usageRowContextTokens(lastUsageRow)
+	}
+
+	// fileReadTokens accumulates the tokens attributable to file contents
+	// read into the conversation this session, for /context's "Files
+	// read" segment (defect 2: docs/kiln-design-handoff/Terminal.dc.html
+	// line 227 specifies a fifth segment the breakdown never produced).
+	// There is no existing per-tool token ledger anywhere in the session
+	// storage (session.SessionStats only totals MessageCount and overall
+	// Usage — internal/session/types.go), so this is sourced live from
+	// the read tool's own results as they land: every EventToolEnd for
+	// the "read" tool (internal/tools/read.go's Name) is estimated with
+	// compaction.EstimateTokens, the same char/4 heuristic the compactor
+	// uses for every other message in the transcript.
+	var fileReadMu sync.Mutex
+	var fileReadTokens int
+	started.Harness.Events().On(harness.EventToolEnd, func(ev harness.Event) {
+		n, ok := fileReadTokensFromToolEnd(ev.ToolName, ev.ToolResult)
+		if !ok {
+			return
 		}
-		return lastUsage.TotalTokens, true
+		fileReadMu.Lock()
+		fileReadTokens += n
+		fileReadMu.Unlock()
+	})
+	getFileReadTokens := func() (int, bool) {
+		fileReadMu.Lock()
+		defer fileReadMu.Unlock()
+		return fileReadTokens, true
 	}
 
 	// usageByModel accumulates this session's usage per "provider/model",
@@ -748,6 +824,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		SessionRepo:        sessionRepo,
 		SessionsDir:        sessionRepo.Root,
 		ContextUsed:        contextUsed,
+		FileReadTokens:     getFileReadTokens,
 		UsageByModel:       getUsageByModel,
 		MCPConfigPath:      mcpgate.ConfigPath(args.MCPConfig),
 	}, hub)

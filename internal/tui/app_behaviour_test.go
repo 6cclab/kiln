@@ -6,6 +6,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/andrepato/harness/internal/harness"
 )
 
 // newTestModelWithBridge is newTestModel with a real Bridge wired to a
@@ -111,4 +113,99 @@ func TestRetryKey_ConsumedOnlyWithPendingRetryAndEmptyInput(t *testing.T) {
 			t.Errorf("editor.Value() = %q, want %q", got, "r")
 		}
 	})
+}
+
+// TestDeclinedPrompt_CommitsFollowupText pins defect 3: declining a
+// tool-permission prompt through its explicit "No" option must, in
+// addition to the existing "✕ Declined …" note, commit an assistant text
+// block reading exactly declinedFollowupText (Terminal.dc.html line 303's
+// pick(2): the note plus "Okay, I won't run it. What should I do
+// instead?").
+func TestDeclinedPrompt_CommitsFollowupText(t *testing.T) {
+	m, f := newTestModelWithBridge(t)
+	m.prompt.pending = &pendingPermission{
+		request: PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload"},
+		reply:   make(chan PromptChoice, 1),
+	}
+
+	// "4" is the Bash prompt's "No" option (promptOptionsFor("bash"):
+	// Yes / don't-ask-again / switch-to-auto / No) — an outright decline,
+	// not the feedback-then-Enter path, so this also checks the plain
+	// "No" option commits the follow-up, not just Esc.
+	next, _ := m.handleKey(charKey('4'))
+	_ = next.(Model)
+
+	declineNote := waitForPrinted(t, f, "Declined npm test -- upload")
+	if !strings.Contains(declineNote, "✕") {
+		t.Errorf("decline note = %q, want the ✕ marker", declineNote)
+	}
+	waitForPrinted(t, f, declinedFollowupText)
+}
+
+// TestEscInterruptsBusyPrompt_SuppressesFollowupText pins defect 5 (Esc
+// must decline AND interrupt the turn while a tool-permission prompt is
+// queued behind concurrent work) together with defect 3's caveat: an
+// Esc-driven interrupt supersedes the "what should I do instead" text —
+// finishTurn's own "■ Interrupted…" note is about to answer that same
+// question once the abort actually lands, so showing both would read as
+// two different answers to the same moment. cfg.Lane is a zero-value
+// *harness.Lane (no running operation), so Abort() finds nothing to
+// cancel and returns an error that handleKey discards — enough to prove
+// the interrupt path runs without panicking; whether a real Lane's
+// context actually gets cancelled is exercised at the harness level, not
+// here (see internal/harness's own Abort tests).
+func TestEscInterruptsBusyPrompt_SuppressesFollowupText(t *testing.T) {
+	m, f := newTestModelWithBridge(t)
+	m.busy = true
+	m.cfg.Lane = &harness.Lane{}
+	m.prompt.pending = &pendingPermission{
+		request: PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload"},
+		reply:   make(chan PromptChoice, 1),
+	}
+
+	next, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	nm := next.(Model)
+
+	waitForPrinted(t, f, "Declined npm test -- upload")
+	// Force the commit queue to drain past this point before asserting
+	// an absence — Bridge.Commit lands on its own goroutine.
+	nm.commitNote("sentinel-after-esc-interrupt")
+	waitForPrinted(t, f, "sentinel-after-esc-interrupt")
+
+	printed, _ := f.snapshot()
+	for _, p := range printed {
+		if strings.Contains(p, declinedFollowupText) {
+			t.Errorf("committed %q; an Esc-driven interrupt must not also show the decline follow-up text", p)
+		}
+	}
+}
+
+// TestLiveTail_HidesToolGroupRowWhileBusy pins defect 4: the tool-group's
+// own live "● Running N shell commands…" row must not render alongside
+// the busy line, which is up for exactly as long as m.group can be
+// non-nil (flushGroup always empties it before a turn's busy flag clears
+// or a prompt opens — see liveTail's doc comment). The row is still
+// produced once idle, so accumulation into the group itself is
+// untouched — only the redundant live rendering is suppressed.
+func TestLiveTail_HidesToolGroupRowWhileBusy(t *testing.T) {
+	m := newTestModel()
+	m.group = &toolGroup{kind: GroupBash, views: []ToolCallView{{Name: "Bash"}, {Name: "Bash"}}}
+
+	m.busy = true
+	for _, l := range m.liveTail(100) {
+		if strings.Contains(l, "shell command") {
+			t.Errorf("busy liveTail contains the group row %q; defect 4 requires it be suppressed while the busy line is also up", l)
+		}
+	}
+
+	m.busy = false
+	found := false
+	for _, l := range m.liveTail(100) {
+		if strings.Contains(l, "shell command") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("idle liveTail dropped the group row entirely; want it still rendered when not busy")
+	}
 }

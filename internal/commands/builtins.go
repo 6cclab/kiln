@@ -59,6 +59,14 @@ type BuiltinDeps struct {
 	// budget.ToolStrategyCost[tier.ToolStrategy]. false (or a nil func)
 	// falls back to that fixed cost.
 	ToolSchemaTokens func() (int, bool)
+	// FileReadTokens, if set, reports the tokens attributable to file
+	// contents read into the conversation this session (the "read" tool's
+	// results), for /context's "Files read" segment
+	// (docs/kiln-design-handoff/Terminal.dc.html line 227). A nil func (or
+	// one that returns false) leaves the segment at zero rather than
+	// inventing a figure — there is no fixed-budget fallback for this one,
+	// unlike System/Tools, since nothing about it is a tier constant.
+	FileReadTokens func() (int, bool)
 	// SwitchModel applies a model switch: the integrator implements it
 	// with agent.SetModel (which moves the lane's model AND the harness's
 	// compaction settings to the new tier) followed by whatever tool
@@ -108,11 +116,12 @@ func formatTokens(n int) string {
 // reads Output instead, so a nil deps.ContextUsed (no usage yet this
 // session) is not an error here — it just reports Used: 0.
 //
-// The four segments and the header are built to be self-consistent by
-// construction, not just individually plausible: system+tools+conversation
-// always equals the header's "used" figure, and all four segments always
-// sum to exactly Window (percentages sum to ~100%, not something over
-// 100). This replaced a version where the header showed the session's
+// The five segments and the header are built to be self-consistent by
+// construction, not just individually plausible:
+// system+tools+filesRead+conversation always equals the header's "used"
+// figure, and all five segments always sum to exactly Window (percentages
+// sum to ~100%, not something over 100). This replaced a version where the
+// header showed the session's
 // real ContextUsed total while the legend's "System prompt"/"Tools" rows
 // showed the tier's fixed *budgets* (big, conservative ceilings, not what
 // was actually spent) — a session that had barely used any tokens yet
@@ -168,25 +177,58 @@ func buildContextBreakdown(deps BuiltinDeps, t budget.Tier) *ContextBreakdown {
 	}
 	tools = clampRange(tools, 0, window-system)
 
-	conversation := clampRange(used-system-tools, 0, window-system-tools)
+	filesRead := 0
+	if deps.FileReadTokens != nil {
+		if v, ok := deps.FileReadTokens(); ok {
+			filesRead = v
+		}
+	}
+	filesRead = clampRange(filesRead, 0, window-system-tools)
 
-	free := window - system - tools - conversation
+	// The measured context (used) is ground truth: it is the same figure
+	// the pinned status meter reports. System is measured, but Tools is a
+	// static per-strategy budget estimate (budget.ToolStrategyCost) and
+	// can overshoot what a given provider actually bills — in a real
+	// ollama session the estimates summed to 16.3k against a measured
+	// 10.7k, which drove Conversation to zero and made the header
+	// contradict the meter. Never report more occupancy than was
+	// measured: give back the overshoot, estimates first.
+	if used > 0 {
+		if over := system + tools + filesRead - used; over > 0 {
+			give := min(over, tools)
+			tools -= give
+			over -= give
+			if over > 0 {
+				give = min(over, filesRead)
+				filesRead -= give
+				over -= give
+			}
+			if over > 0 {
+				system = max(system-over, 0)
+			}
+		}
+	}
+
+	conversation := clampRange(used-system-tools-filesRead, 0, window-system-tools-filesRead)
+
+	free := window - system - tools - filesRead - conversation
 	if free < 0 {
 		free = 0
 	}
 
 	return &ContextBreakdown{
 		ModelLabel: label,
-		// The header reports system+tools+conversation, not the raw
-		// ContextUsed figure: they can otherwise disagree whenever a
+		// The header reports system+tools+filesRead+conversation, not the
+		// raw ContextUsed figure: they can otherwise disagree whenever a
 		// segment above got clamped (see the doc comment), and a header
 		// that does not match its own legend is the bug this rewrite
 		// fixes.
-		Used:   system + tools + conversation,
+		Used:   system + tools + filesRead + conversation,
 		Window: window,
 		Segments: []ContextSegment{
 			{Label: "System prompt", Tokens: system},
 			{Label: "Tools", Tokens: tools},
+			{Label: "Files read", Tokens: filesRead},
 			{Label: "Conversation", Tokens: conversation},
 			{Label: "Free", Tokens: free},
 		},

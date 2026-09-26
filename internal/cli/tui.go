@@ -20,6 +20,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	term "github.com/charmbracelet/x/term"
 
 	"github.com/andrepato/harness/internal/agent"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
@@ -204,7 +205,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		SessionName:    "kiln", // the terminal title, as Claude Code sets "Claude Code"
 		Effort:         deps.Effort,
 		ModelID:        deps.Resolved.Model.ID,
-		Banner:         bannerRows(deps),
+		Banner:         bannerRows(deps, bannerContentWidth(stdout)),
 		SessionID:      deps.Started.SessionID,
 		TranscriptPath: deps.Started.TranscriptPath,
 		Version:        Version,
@@ -400,13 +401,43 @@ func mcpFailureNotice(statuses []mcpgate.ServerStatus) string {
 	return fmt.Sprintf("%d MCP servers unavailable · run /mcp", failed)
 }
 
+// bannerContentWidth is the terminal width bannerRows should fit row 1
+// into. It reads the same stdout the eventual Bubbletea program will get
+// its first WindowSizeMsg from, so the width matches what app.go's
+// contentWidth() (== m.width, no margin) will use when it later re-fits
+// every banner row with FitStatus — falling back to 80 (contentWidth's own
+// fallback) when stdout is not a real terminal (a test, a pipe) or the size
+// can't be read, so a long cwd is only pre-shortened when there is an
+// actual width to shorten it against.
+func bannerContentWidth(stdout io.Writer) int {
+	f, ok := stdout.(*os.File)
+	if !ok {
+		return 80
+	}
+	w, _, err := term.GetSize(f.Fd())
+	if err != nil || w <= 0 {
+		return 80
+	}
+	return w
+}
+
 // bannerRows is the startup banner, row for row per the kiln design handoff
 // (design_handoff_kiln_tui/README.md "Banner"): row 0 "K I L N  v… ·
 // coding agent", row 1 "<cwd> · branch <b> · model <m>" (exactly once), row
 // 2 the shortcut tips, then — unless this run resumed an existing session —
 // a "Recent sessions" block listing up to 3 past sessions in this cwd. No
 // label rule above it (it is the one block the design exempts).
-func bannerRows(deps InteractiveDeps) []string {
+//
+// width is bannerContentWidth's reading of the real terminal: row 1 needs
+// it up front because app.go's later re-fit (FitStatus, tail-truncation)
+// would otherwise cut the branch and model off a long cwd instead of
+// shortening the cwd first — defect: at 120 columns a long cwd rendered as
+// "/private/tmp/.../real-proj · b…", losing the branch name and the whole
+// model segment. The fix shortens the cwd from the left (ShortenPathLeft,
+// leading "…", trailing components kept) so " · branch <b> · model <m>"
+// always survives; only if that suffix alone does not fit does the row
+// fall through to app.go's tail-truncation.
+func bannerRows(deps InteractiveDeps, width int) []string {
 	// Version label: "v1.2.3" for a real semver, the bare string otherwise
 	// (so a "dev" build reads "dev · coding agent", never "vdev").
 	verLabel := Version
@@ -415,12 +446,23 @@ func bannerRows(deps InteractiveDeps) []string {
 	}
 
 	// Row 1 per the design: "<cwd> · branch <b> · model <m>", cwd with the
-	// home dir abbreviated to ~.
-	loc := abbrevHome(deps.Cwd)
+	// home dir abbreviated to ~ and, when the row is tight, left-truncated
+	// so the branch/model suffix survives intact.
+	cwd := abbrevHome(deps.Cwd)
+	suffix := ""
 	if st, ok := readGitStatus(context.Background()); ok && st.Branch != "" {
-		loc += " · branch " + st.Branch
+		suffix += " · branch " + st.Branch
 	}
-	loc += " · model " + deps.ModelLabel
+	suffix += " · model " + deps.ModelLabel
+
+	maxCwd := width - tui.VisibleWidth(suffix)
+	if maxCwd < 1 {
+		maxCwd = 1
+	}
+	if tui.VisibleWidth(cwd) > maxCwd {
+		cwd = tui.ShortenPathLeft(cwd, maxCwd)
+	}
+	loc := cwd + suffix
 
 	tips := tui.KilnAmber("/") + " " + tui.Muted("commands") + "   " +
 		tui.KilnAmber("@") + " " + tui.Muted("add files") + "   " +

@@ -52,14 +52,17 @@ func buildStyle(plain bool) glansi.StyleConfig {
 		// Flat text, no colour, no decoration — mirrors SetPlainMode's
 		// screen-reader contract for the rest of the package.
 		return glansi.StyleConfig{
-			Document:  glansi.StyleBlock{},
-			List:      glansi.StyleList{StyleBlock: glansi.StyleBlock{}, LevelIndent: 2},
-			Item:      glansi.StylePrimitive{BlockPrefix: "- "},
-			Heading:   glansi.StyleBlock{StylePrimitive: glansi.StylePrimitive{Bold: boolPtr(true), BlockSuffix: "\n"}},
-			Link:      glansi.StylePrimitive{Underline: boolPtr(true)},
-			LinkText:  glansi.StylePrimitive{},
-			Code:      glansi.StyleBlock{},
-			CodeBlock: glansi.StyleCodeBlock{StyleBlock: glansi.StyleBlock{Indent: uintPtr(2)}},
+			Document: glansi.StyleBlock{},
+			List:     glansi.StyleList{StyleBlock: glansi.StyleBlock{}, LevelIndent: 2},
+			Item:     glansi.StylePrimitive{BlockPrefix: "- "},
+			// See the non-plain branch below: with no Enumeration set,
+			// glamour glues the numeral straight onto the item text.
+			Enumeration: glansi.StylePrimitive{Suffix: ". "},
+			Heading:     glansi.StyleBlock{StylePrimitive: glansi.StylePrimitive{Bold: boolPtr(true), BlockSuffix: "\n"}},
+			Link:        glansi.StylePrimitive{Underline: boolPtr(true)},
+			LinkText:    glansi.StylePrimitive{},
+			Code:        glansi.StyleBlock{},
+			CodeBlock:   glansi.StyleCodeBlock{StyleBlock: glansi.StyleBlock{Indent: uintPtr(2)}},
 			BlockQuote: glansi.StyleBlock{
 				Indent:      uintPtr(1),
 				IndentToken: strPtr("| "),
@@ -81,6 +84,18 @@ func buildStyle(plain bool) glansi.StyleConfig {
 		Item: glansi.StylePrimitive{
 			BlockPrefix: "• ",
 			Color:       strPtr(colorGreen),
+		},
+		// Ordered list marker: glamour renders the numeral itself as the
+		// ItemElement's own Prefix (ansi/listitem.go), unstyled and with no
+		// separator, so with no Enumeration style configured the number is
+		// glued straight onto the item text ("1Point me..."). Suffix runs
+		// right after that numeral (ansi/baseelement.go's doRender renders
+		// Style.Suffix immediately after the token, before BlockSuffix), so
+		// ". " here reproduces the bullet's "marker + space" shape as
+		// "1. ". Colour matches the bullet's listBullet mapping above.
+		Enumeration: glansi.StylePrimitive{
+			Suffix: ". ",
+			Color:  strPtr(colorGreen),
 		},
 		// heading: (t) => bold(t)
 		Heading: glansi.StyleBlock{

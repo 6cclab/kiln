@@ -20,6 +20,22 @@ func TestFormatTokens(t *testing.T) {
 	}
 }
 
+// TestRenderSpinnerLeftSingleEllipsisWithTruncatedLabel is the regression
+// for a real-session frame that showed a double ellipsis on a long bash
+// command: "Running cd /private/tmp/-Us……  43s". RenderSpinnerLeft always
+// appends its own trailing "…" to args.Label (the design's sim.status +
+// '…'), so a label that already carries a truncation-marker "…" (as
+// bridge.go's truncateBusyArg used to add) produced two in a row. The fix
+// is in bridge.go's truncateBusyArg, which no longer appends one; this
+// asserts the composed line still shows exactly one.
+func TestRenderSpinnerLeftSingleEllipsisWithTruncatedLabel(t *testing.T) {
+	label := "Running " + strings.Repeat("x", 30) // truncated, no trailing marker of its own
+	line := stripANSI(RenderSpinnerLeft(SpinnerArgs{Frame: 0, Label: label, ElapsedSeconds: 43}))
+	if strings.Count(line, "…") != 1 {
+		t.Errorf("RenderSpinnerLeft produced %d ellipses, want exactly 1: %q", strings.Count(line, "…"), line)
+	}
+}
+
 func TestPickLabelDeterministic(t *testing.T) {
 	if PickLabel(0) != Labels[0] {
 		t.Errorf("PickLabel(0) = %q, want %q", PickLabel(0), Labels[0])

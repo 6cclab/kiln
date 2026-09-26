@@ -58,6 +58,26 @@ func TestMarkdownFencedCodeBlock(t *testing.T) {
 	}
 }
 
+// Regression for the ordered-list marker bug: glamour's ItemElement.Render
+// (ansi/listitem.go) writes the numeral as its own unstyled Prefix and, with
+// no Enumeration style configured, nothing separates it from the item text
+// — "1Point me at the real repo." buildStyle now sets Enumeration.Suffix so
+// the marker reads "1. " like the design's bullet items.
+func TestMarkdownOrderedListHasSeparator(t *testing.T) {
+	r := NewMarkdownRenderer(80, true) // plain: assert on stable text, not ANSI codes
+	out := r.Render("1. Point me at the real repo.\n2. Second item.")
+	joined := strings.Join(out, "\n")
+	if strings.Contains(joined, "1Point") || strings.Contains(joined, "2Second") {
+		t.Errorf("ordered list marker glued to text: %q", joined)
+	}
+	if !strings.Contains(joined, "1. Point me at the real repo.") {
+		t.Errorf("expected numbered marker with separator: %q", joined)
+	}
+	if !strings.Contains(joined, "2. Second item.") {
+		t.Errorf("expected second numbered marker with separator: %q", joined)
+	}
+}
+
 // glamour pads every rendered line to the word-wrap width (a code block's
 // background/margin box, even unstyled); pi-tui's Markdown component never
 // did this, only wrapping, so Render trims that trailing padding to match.

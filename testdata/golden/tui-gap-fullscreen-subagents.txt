@@ -1,5 +1,5 @@
 K I L N  dev · coding agent
-<cwd>…
+<cwd> · model …
 / commands   @ add files   ⇧⇥ cycle mode   esc stop
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -9,9 +9,9 @@ dispatch two tasks
 
 subagents ────────────────────────────────────────────────────────────────────────────────  2/2 done
 2 subagents finished
- general-purpose  do the fast lookup                                              ━━━━━━━━━━     150
+ general…  do the fast lookup                                                     ━━━━━━━━━━     150
            ✓ finished
- general-purpose  look something up                                               ━━━━━━━━━━     150
+ general…  look something up                                                      ━━━━━━━━━━     150
            ✓ finished
 
 task ─────────────────────────────────────────────────────────────────────────  auto-approved · 1.0s
@@ -27,4 +27,4 @@ Both done.
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ›  describe a task · / for commands · @ to add files
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-● don't ask  ⇧⇥                                                           ctx ──────────  0%  $0.00
+● don't ask  ⇧⇥  <cwd> ctx ──────────  0%  $0.00

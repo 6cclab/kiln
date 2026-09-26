@@ -299,7 +299,12 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 		}
 		return Deny
 	case ModeAcceptEdits:
-		if toolName == "edit" || toolName == "write" || ReadOnly[toolName] {
+		// task is also auto-approved: dispatching a subagent is not itself
+		// a mutation, and the subagent inherits the parent's permission
+		// mode, so its own tool calls are still gated normally. Without
+		// this, a parallel task dispatch prompts for approval even though
+		// the user already chose to auto-approve edits.
+		if toolName == "edit" || toolName == "write" || toolName == "task" || ReadOnly[toolName] {
 			return Allow
 		}
 		return Ask

@@ -65,6 +65,11 @@ type registryDeps struct {
 	// ContextUsed reports the last usage event's total token count, for
 	// /usage. Nil is treated as "no usage yet".
 	ContextUsed func() (int, bool)
+	// FileReadTokens reports the tokens attributable to file contents
+	// read into this session, for /context's "Files read" segment
+	// (docs/kiln-design-handoff/Terminal.dc.html line 227). Nil is
+	// treated as "not tracked", and the segment reports zero.
+	FileReadTokens func() (int, bool)
 	// UsageByModel reports this session's accumulated usage keyed by
 	// "provider/model", for /cost's by-model table. Nil when not tracked.
 	UsageByModel func() map[string]msg.Usage
@@ -139,9 +144,10 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		CurrentModel: func() (string, string) {
 			return started.Model.Provider, started.Model.ID
 		},
-		CurrentTier: func() budget.Tier { return started.Tier },
-		ModelLabel:  func() string { return deps.ModelLabel },
-		ContextUsed: deps.ContextUsed,
+		CurrentTier:    func() budget.Tier { return started.Tier },
+		ModelLabel:     func() string { return deps.ModelLabel },
+		ContextUsed:    deps.ContextUsed,
+		FileReadTokens: deps.FileReadTokens,
 		// The tier's SystemPromptTokens is a fixed ceiling, not what this
 		// session's system prompt actually assembled to — measure the
 		// real one instead so /context's "System prompt" segment (and
@@ -153,6 +159,21 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 				return 0, false
 			}
 			return (len(sp) + 3) / 4, true
+		},
+		// Measured from the lane's own active tool schemas rather than
+		// budget.ToolStrategyCost, which is a planning ceiling per
+		// strategy: in a real session that estimate overshot the whole
+		// measured context and drove /context's Conversation segment to
+		// zero.
+		ToolSchemaTokens: func() (int, bool) {
+			if started.Lane == nil {
+				return 0, false
+			}
+			n, err := started.Lane.ToolSchemaTokens()
+			if err != nil || n <= 0 {
+				return 0, false
+			}
+			return n, true
 		},
 		SwitchModel: func(ctx context.Context, providerID, modelID string) (budget.Tier, error) {
 			return switchModel(ctx, reg, started, mcpSess, providerID, modelID)

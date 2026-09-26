@@ -211,12 +211,24 @@ const (
 )
 
 // DiffHunk is one changed line shown in the edit-permission prompt's diff,
-// as " {num} -{old}" / " {num} +{new}" rows. Old is empty for a pure
-// addition (used by the Write prompt, which mirrors Edit).
+// as " {num} -{old}" / " {num} +{new}" rows.
+//
+// Old/New == "" means that side is a genuine blank line and still renders
+// (as " {num} -" / " {num} +" with no trailing text) — otherwise a
+// written file with blank lines renders with its line numbers skipping,
+// which disagrees with how the committed diff block renders the same
+// file afterward (defect 2). OldAbsent/NewAbsent is the actual "this
+// side does not exist at all" signal: true for every hunk the Write
+// prompt builds (a pure addition has no old side, ever) and for the
+// tail of whichever side is shorter in an Edit's file-based diff. Both
+// default to false so a hunk literal that only sets Old/New (the common,
+// symmetric case) renders exactly as before.
 type DiffHunk struct {
-	LineNum int
-	Old     string
-	New     string
+	LineNum   int
+	Old       string
+	New       string
+	OldAbsent bool
+	NewAbsent bool
 }
 
 // EditPermissionRequest describes an Edit or Write call awaiting approval.
@@ -261,14 +273,35 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 		" " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to %s %s?", verb, req.Path))),
 		dashedRule,
 	}
+	var hunkLines []string
 	for _, h := range req.Hunks {
-		if h.Old != "" {
-			lines = append(lines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnRed("-"+h.Old))
+		if !h.OldAbsent {
+			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnRed("-"+h.Old))
 		}
-		if h.New != "" {
-			lines = append(lines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnGreen("+"+h.New))
+		if !h.NewAbsent {
+			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnGreen("+"+h.New))
 		}
 	}
+	// Cap the rows actually shown so the question, the path and the
+	// options always stay on one screen (defect 1): an uncapped diff (a
+	// real 90-line file write observed live) pushes the "approval
+	// needed" label, the amber rule and the question clean off the top,
+	// leaving only the options visible — the opposite of what an
+	// approval prompt is for. 12 is chosen the same way
+	// bridge.go's collapsedResultLines=3 caps a committed tool result:
+	// short enough that the fixed rows around it (header, dashed rules,
+	// three options — one of which wraps to two lines — the hint and
+	// the closing amber rule, ~13 rows) plus 12 hunk rows comfortably
+	// fit inside even a minimal 24-row terminal, while still showing
+	// more actual diff than the 3-line collapsed case, since this is
+	// the one screen where the user is deciding whether to approve.
+	const maxEditPromptDiffRows = 12
+	if len(hunkLines) > maxEditPromptDiffRows {
+		hidden := len(hunkLines) - maxEditPromptDiffRows
+		hunkLines = hunkLines[:maxEditPromptDiffRows]
+		hunkLines = append(hunkLines, " "+Muted(fmt.Sprintf("… +%d more lines", hidden)))
+	}
+	lines = append(lines, hunkLines...)
 	lines = append(lines, dashedRule)
 
 	if feedbackMode {
@@ -351,9 +384,13 @@ func diffHunksFromEditFile(cwd string, args map[string]any) []DiffHunk {
 			h := DiffHunk{LineNum: firstNum + i}
 			if i < len(oldLines) {
 				h.Old = oldLines[i]
+			} else {
+				h.OldAbsent = true
 			}
 			if i < len(newLines) {
 				h.New = newLines[i]
+			} else {
+				h.NewAbsent = true
 			}
 			hunks = append(hunks, h)
 		}
@@ -381,14 +418,18 @@ func diffHunksFromEditArgs(args map[string]any) []DiffHunk {
 }
 
 // diffHunksFromWriteArgs builds DiffHunk rows for a Write call: every
-// line of the pending content as a "+" row, sequentially numbered. There
-// is no reference capture of the Write prompt, so this shape is [chk].
+// line of the pending content as a "+" row, sequentially numbered,
+// including blank lines (OldAbsent is always set — a Write never has an
+// old side — but New == "" still renders as a numbered blank "+" row
+// rather than being skipped, so a written file's line numbers stay
+// continuous; see the DiffHunk doc comment and defect 2). There is no
+// reference capture of the Write prompt, so this shape is [chk].
 func diffHunksFromWriteArgs(args map[string]any) []DiffHunk {
 	content, _ := args["content"].(string)
 	lines := strings.Split(content, "\n")
 	hunks := make([]DiffHunk, 0, len(lines))
 	for i, l := range lines {
-		hunks = append(hunks, DiffHunk{LineNum: i + 1, New: l})
+		hunks = append(hunks, DiffHunk{LineNum: i + 1, New: l, OldAbsent: true})
 	}
 	return hunks
 }

@@ -783,7 +783,7 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 		m.cfg.Bridge.CommitSynthetic(lines)
 	}
 	m.plan.Reset()
-	if lines := m.subagents.Freeze(width); len(lines) > 0 && m.cfg.Bridge != nil {
+	if lines := m.subagents.FreezeFinal(width); len(lines) > 0 && m.cfg.Bridge != nil {
 		m.cfg.Bridge.CommitSynthetic(lines)
 	}
 	m.subagents.Reset()
@@ -843,6 +843,27 @@ func (m Model) commitNote(text string) {
 	}
 	m.cfg.Bridge.FreezeBefore()
 	m.cfg.Bridge.CommitNote(text)
+}
+
+// declinedFollowupText is the assistant text block that follows a
+// declined tool call (Terminal.dc.html line 303's pick(2): the note
+// "✕ Declined …" plus this exact sentence, copied literally from the
+// design source — a plain ASCII apostrophe in "won't", not a typographic
+// one).
+const declinedFollowupText = "Okay, I won't run it. What should I do instead?"
+
+// commitAssistantText commits text as an ordinary "kiln" assistant text
+// block (RenderAssistantText), the same rendering msgCommitMarkdown uses
+// for a real streamed reply — used for declinedFollowupText, which is
+// synthesized locally rather than streamed from the model, but must read
+// the same as one that was.
+func (m Model) commitAssistantText(text string) {
+	if m.cfg.Bridge == nil {
+		return
+	}
+	renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
+	lines := append([]string{""}, RenderAssistantText(renderer.Render(text))...)
+	m.commit(lines)
 }
 
 // commitCommandResult is commit's CommitCommandResult counterpart.
@@ -1170,11 +1191,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		didRewind     bool
 		didFullscreen bool
 		hintMessage   string
+		// promptEscInterrupt is set when Esc both declines the open
+		// tool-permission prompt and must end the turn (defect 5): the
+		// router's PermissionKey binding owns Esc ahead of everything
+		// else while a prompt is up (keys.go's Route), so the router's
+		// own "esc while busy -> Interrupt" case below never runs in
+		// that case — without this, a busy turn with a prompt queued
+		// behind it (concurrent subagents each raising their own bash
+		// approval) can never be stopped by Esc, only Ctrl+C, which
+		// disagrees with the design's stop() (Terminal.dc.html
+		// lines 310-313: Esc clears the pending permission block AND
+		// ends the turn). Scoped to a tool-permission prompt
+		// (m.prompt.pending, not m.prompt.plan) — a plan prompt's own
+		// Esc means "tell kiln what to change", not "decline and stop".
+		promptEscInterrupt bool
 	)
 	router := NewRouter(KeyActions{
 		PermissionKey: func(msg tea.KeyPressMsg) bool {
 			if !m.prompt.Active() {
 				return false
+			}
+			if m.busy && m.prompt.pending != nil && strings.EqualFold(msg.String(), "esc") {
+				promptEscInterrupt = true
 			}
 			return m.prompt.HandleKey(msg)
 		},
@@ -1209,6 +1247,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if denied := m.prompt.lastDenied; denied != nil {
 		m.prompt.lastDenied = nil
 		m.commitNote(declinedNoteText(*denied))
+		// The design's decline-only path (Terminal.dc.html line 303)
+		// also commits an assistant text block asking what to do
+		// instead — but not when this decline is really an Esc-driven
+		// interrupt (promptEscInterrupt, defect 5): the user is
+		// stopping the whole turn, not redirecting the one declined
+		// call, and finishTurn's own "■ Interrupted…" note is about to
+		// answer that same "what now" beat once the abort actually
+		// lands. Showing both would read as two different, competing
+		// answers to the same moment, so the interrupt note wins.
+		if !promptEscInterrupt {
+			m.commitAssistantText(declinedFollowupText)
+		}
 	}
 	// "Yes, and switch to auto mode" (Bash) / "Yes, and switch to accept
 	// edits" (Edit/Write) both allow the pending call AND change the
@@ -1234,7 +1284,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.modeHintText = hintMessage
 			hintCmd = tea.Tick(modeHintDuration, func(time.Time) tea.Msg { return msgClearModeHint{gen: gen} })
 		}
-		if didAbort && m.cfg.Lane != nil {
+		if (didAbort || promptEscInterrupt) && m.cfg.Lane != nil {
 			_ = m.cfg.Lane.Abort()
 		}
 		if didClear {
@@ -1706,7 +1756,21 @@ func (m Model) renderPlanLive(width int) []string {
 func (m Model) liveTail(width int) []string {
 	var lines []string
 
-	if m.group != nil {
+	// The tool-group's own live row (RenderToolGroupRunning, "● Running N
+	// shell commands…") only exists while m.group is accumulating, which
+	// is only ever true while a turn is running (flushGroup empties it
+	// before finishTurn clears m.busy, and MsgPermissionPrompt/
+	// MsgPlanPrompt both flush it before a prompt can open) — so any time
+	// this row would show, the busy line below it is already up and
+	// naming the same in-flight work (defect 4: a real 120x40 session
+	// showed both "● Running 2 shell commands…" and "◐ Running cd
+	// /private/tmp/…  43s · 7.1k tokens   esc to stop" at once; the
+	// design has only the busy line, Terminal.dc.html line 125). Suppress
+	// the live group row while busy rather than dropping the
+	// accumulation itself — flushGroup still commits every call's full
+	// block once the group ends, so nothing is lost from scrollback,
+	// only the redundant live summary.
+	if m.group != nil && !m.busy {
 		lines = append(lines, "", RenderToolGroupRunning(m.group.kind, len(m.group.views)))
 	}
 	if m.thinking != nil {

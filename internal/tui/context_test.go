@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -8,6 +9,15 @@ import (
 	"github.com/andrepato/harness/internal/commands"
 	"github.com/charmbracelet/x/ansi"
 )
+
+// funcPointer returns f's entry point, for comparing that two
+// func(string) string values are literally the same package-level style
+// (lipgloss disables color in a non-tty test process, so comparing
+// RENDERED strings would pass for any two styles — this compares
+// identity instead).
+func funcPointer(f func(string) string) uintptr {
+	return reflect.ValueOf(f).Pointer()
+}
 
 // TestRenderContextBar_GapsBetweenSegments covers finding 4's bar half:
 // docs/kiln-design-handoff/README.md's stacked bar has a genuine 1-column
@@ -52,6 +62,48 @@ func TestRenderContextBar_SkipsZeroSegments(t *testing.T) {
 	plain := ansi.Strip(renderContextBar(b, 80))
 	if gaps := strings.Count(plain, " "); gaps != 1 {
 		t.Errorf("bar has %d gap columns, want exactly 1 (only 2 non-zero segments): %q", gaps, plain)
+	}
+}
+
+// TestContextSegmentColor_FilesReadIsAmber covers defect 2's colour half:
+// docs/kiln-design-handoff/Terminal.dc.html line 227 specifies "Files
+// read" as amber (C.amber); before this fix, contextSegmentColor had no
+// case for that label, so it fell through to the "Free" default (Rule).
+func TestContextSegmentColor_FilesReadIsAmber(t *testing.T) {
+	got := funcPointer(contextSegmentColor("Files read"))
+	if want := funcPointer(KilnAmber); got != want {
+		t.Errorf("contextSegmentColor(%q) is not KilnAmber", "Files read")
+	}
+	// Sanity: it must not be the "Free"-segment fallback colour.
+	if free := funcPointer(Rule); got == free {
+		t.Errorf("contextSegmentColor(%q) resolves to the Free/default colour (Rule), want it distinct", "Files read")
+	}
+}
+
+// TestRenderContext_FilesReadSegmentRenders covers the full five-segment
+// legend (System prompt, Tools, Files read, Conversation, Free) drawing
+// its own coloured swatch and row rather than being silently absorbed.
+func TestRenderContext_FilesReadSegmentRenders(t *testing.T) {
+	b := commands.ContextBreakdown{
+		ModelLabel: "kiln-large",
+		Used:       76_000,
+		Window:     200_000,
+		Segments: []commands.ContextSegment{
+			{Label: "System prompt", Tokens: 8_000},
+			{Label: "Tools", Tokens: 32_000},
+			{Label: "Files read", Tokens: 20_000},
+			{Label: "Conversation", Tokens: 16_000},
+			{Label: "Free", Tokens: 124_000},
+		},
+	}
+	lines := RenderContext(b, 80)
+	joined := strings.Join(lines, "\n")
+	plain := ansi.Strip(joined)
+	if !strings.Contains(plain, "Files read") {
+		t.Fatalf("RenderContext output has no \"Files read\" row:\n%s", plain)
+	}
+	if gaps := strings.Count(ansi.Strip(renderContextBar(b, 80)), " "); gaps != 4 {
+		t.Errorf("bar has %d gap columns, want 4 (one between each of the 5 non-zero segments)", gaps)
 	}
 }
 

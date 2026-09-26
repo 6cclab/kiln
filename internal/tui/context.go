@@ -14,14 +14,17 @@ import (
 
 // contextSegmentColor maps a ContextBreakdown segment's label to its kiln
 // colour (docs/kiln-design-handoff/README.md "Context segment colors"):
-// system prompt blue, tools violet, conversation green, free the rule
-// colour (an "empty" tone, matching the meter's own empty-cell colour).
+// system prompt blue, tools violet, files read amber, conversation green,
+// free the rule colour (an "empty" tone, matching the meter's own
+// empty-cell colour).
 func contextSegmentColor(label string) func(string) string {
 	switch label {
 	case "System prompt":
 		return KilnBlue
 	case "Tools":
 		return Violet
+	case "Files read":
+		return KilnAmber
 	case "Conversation":
 		return KilnGreen
 	default: // "Free"

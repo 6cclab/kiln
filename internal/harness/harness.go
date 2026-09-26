@@ -224,3 +224,11 @@ func initialLaneWrites(lane string, model session.ModelRef, thinkingLevel string
 	}
 	return []session.Write{tip, cfg, st}, nil
 }
+
+// toolSet returns the tool set the next request will resolve active tool
+// names against, read under the same lock SetTools/AddTools write it with.
+func (h *Harness) toolSet() *tool.Set {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.opts.Tools
+}

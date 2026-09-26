@@ -476,6 +476,10 @@ func assertDesignGoldenTailSorted(t *testing.T, s *screen.Screen, name, anchor s
 	}
 	rows = rows[start:]
 	rows, _ = designSortSubagentPanel(rows, nil)
+	// The status row now always carries the working directory, which is a
+	// fresh t.TempDir() on every run — mask it, as tui_test.go's own
+	// assertions do, or no golden containing that row can be stable.
+	rows = normalizeSpinnerGlyph(normalizeStatusRowCwd(rows))
 	assertGolden(t, goldenPath(name+".txt"), strings.Join(rows, "\n")+"\n")
 }
 
@@ -498,6 +502,8 @@ func assertDesignGoldenStylesSorted(t *testing.T, s *screen.Screen, name, anchor
 	rows = rows[start:]
 	styles = styles[start:]
 	rows, styles = designSortSubagentPanel(rows, styles)
+	rows, styles = maskStyledRows(rows, styles, maskStatusRowCwd)
+	rows = normalizeSpinnerGlyph(rows)
 
 	lines := make([]string, len(rows))
 	for i := range rows {
@@ -858,7 +864,7 @@ func TestTUI_Design_Fullscreen_Plan(t *testing.T) {
 	}
 
 	rows, _ = designSortSubagentPanel(rows, nil)
-	rows = normalizeDesignSpinnerGlyph(rows)
+	rows = normalizeStatusRowCwd(normalizeDesignSpinnerGlyph(rows))
 	assertGolden(t, goldenPath("design-fs-plan.txt"), strings.Join(rows, "\n")+"\n")
 }
 
@@ -929,7 +935,7 @@ func TestTUI_Design_Fullscreen_Permission(t *testing.T) {
 		t.Errorf("last row is not the mode line: %q", last)
 	}
 
-	rows = normalizeDesignSpinnerGlyph(rows)
+	rows = normalizeStatusRowCwd(normalizeDesignSpinnerGlyph(rows))
 	assertGolden(t, goldenPath("design-fs-permission.txt"), strings.Join(rows, "\n")+"\n")
 }
 
@@ -971,6 +977,7 @@ func TestTUI_Design_Fullscreen_Done(t *testing.T) {
 	}
 
 	rows, _ = designSortSubagentPanel(rows, nil)
+	rows = normalizeStatusRowCwd(rows)
 	assertGolden(t, goldenPath("design-fs-done.txt"), strings.Join(rows, "\n")+"\n")
 }
 

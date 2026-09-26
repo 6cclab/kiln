@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -208,12 +209,20 @@ func TestBusyLabelForToolStart_Verbs(t *testing.T) {
 	}
 }
 
+// truncateBusyArg's own output carries no "…" marker: RenderSpinnerLeft
+// (transcript.go) always appends exactly one trailing "…" to the whole
+// busy-line label, truncated or not, so a marker added here too produced a
+// double ellipsis in the real busy line ("Running cd /private/tmp/-Us……
+// 43s"). See truncateBusyArg's doc comment.
 func TestBusyLabelForToolStart_Bash_TruncatesLongCommand(t *testing.T) {
 	cmd := "find . -name '*.go' -exec grep -l TODO {} ; # a very long trailing comment"
 	got := busyLabelForToolStart(&turnState{}, harness.Event{ToolName: "bash", ToolArgs: map[string]any{"command": cmd}})
-	want := "Running " + string([]rune(cmd)[:30]) + "…"
+	want := "Running " + string([]rune(cmd)[:30])
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "…") {
+		t.Errorf("busyLabelForToolStart truncation added its own ellipsis: %q (RenderSpinnerLeft adds the single trailing one)", got)
 	}
 }
 

@@ -438,6 +438,114 @@ func TestContextCommand_SelfConsistentWhenUsedIsSmall(t *testing.T) {
 	}
 }
 
+// TestContextCommand_FilesReadSegment covers defect 2:
+// docs/kiln-design-handoff/Terminal.dc.html line 227 specifies a fifth
+// "Files read" segment that buildContextBreakdown never produced. With
+// FileReadTokens wired, the segment must appear, must be carved OUT of
+// Conversation (not double-counted on top of it), and the five segments
+// must still sum to exactly Window with the header equal to their sum.
+func TestContextCommand_FilesReadSegment(t *testing.T) {
+	tier := budget.Tier{
+		Name:               "medium",
+		ContextWindow:      200_000,
+		SystemPromptTokens: 8_000,
+		ToolStrategy:       budget.StrategyFullSchemas,
+	}
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:       testRegistry(t),
+		CurrentModel:   func() (string, string) { return "anthropic", "claude-opus-5" },
+		CurrentTier:    func() budget.Tier { return tier },
+		ModelLabel:     func() string { return "kiln-large" },
+		ContextUsed:    func() (int, bool) { return 76_000, true },
+		FileReadTokens: func() (int, bool) { return 20_000, true },
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ctxCmd *Command
+	for i := range cmds {
+		if cmds[i].Name == "context" {
+			ctxCmd = &cmds[i]
+		}
+	}
+	if ctxCmd == nil {
+		t.Fatal("no context command registered")
+	}
+	res, err := ctxCmd.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("context.Run: %v", err)
+	}
+	if res.Context == nil {
+		t.Fatal("Result.Context is nil")
+	}
+
+	sum := 0
+	segByLabel := map[string]int{}
+	for _, seg := range res.Context.Segments {
+		sum += seg.Tokens
+		segByLabel[seg.Label] = seg.Tokens
+	}
+	if sum != tier.ContextWindow {
+		t.Errorf("segments sum to %d, want exactly Window %d", sum, tier.ContextWindow)
+	}
+	if segByLabel["Files read"] != 20_000 {
+		t.Errorf("Files read = %d, want 20000", segByLabel["Files read"])
+	}
+	toolsCost := budget.ToolStrategyCost[tier.ToolStrategy]
+	wantConversation := 76_000 - 8_000 - toolsCost - 20_000
+	if segByLabel["Conversation"] != wantConversation {
+		t.Errorf("Conversation = %d, want %d (used minus system, tools AND files read — not double-counted)", segByLabel["Conversation"], wantConversation)
+	}
+	wantUsed := segByLabel["System prompt"] + segByLabel["Tools"] + segByLabel["Files read"] + segByLabel["Conversation"]
+	if res.Context.Used != wantUsed {
+		t.Errorf("Used = %d, want System+Tools+FilesRead+Conversation = %d", res.Context.Used, wantUsed)
+	}
+}
+
+// TestContextCommand_NoFileReadTokensOmitsSegmentValue covers the "don't
+// fabricate" requirement: a nil FileReadTokens (no caller has wired real
+// data) must leave the segment at zero rather than showing a guessed
+// number, while every other segment behaves exactly as before this
+// change.
+func TestContextCommand_NoFileReadTokensOmitsSegmentValue(t *testing.T) {
+	tier := budget.Tier{
+		Name:               "medium",
+		ContextWindow:      200_000,
+		SystemPromptTokens: 8_000,
+		ToolStrategy:       budget.StrategyFullSchemas,
+	}
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     testRegistry(t),
+		CurrentModel: func() (string, string) { return "anthropic", "claude-opus-5" },
+		CurrentTier:  func() budget.Tier { return tier },
+		ModelLabel:   func() string { return "kiln-large" },
+		ContextUsed:  func() (int, bool) { return 76_000, true },
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ctxCmd *Command
+	for i := range cmds {
+		if cmds[i].Name == "context" {
+			ctxCmd = &cmds[i]
+		}
+	}
+	if ctxCmd == nil {
+		t.Fatal("no context command registered")
+	}
+	res, err := ctxCmd.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("context.Run: %v", err)
+	}
+	for _, seg := range res.Context.Segments {
+		if seg.Label == "Files read" && seg.Tokens != 0 {
+			t.Errorf("Files read = %d with no FileReadTokens source, want 0 (never fabricated)", seg.Tokens)
+		}
+	}
+}
+
 // TestContextCommand_MeasuredSystemPromptOverridesTierBudget covers
 // deps.SystemPromptTokens taking priority over the tier's fixed ceiling.
 func TestContextCommand_MeasuredSystemPromptOverridesTierBudget(t *testing.T) {
@@ -472,5 +580,49 @@ func TestContextCommand_MeasuredSystemPromptOverridesTierBudget(t *testing.T) {
 		if seg.Label == "System prompt" && seg.Tokens != 900 {
 			t.Errorf("System prompt = %d, want the measured 900, not the tier's 12800 budget", seg.Tokens)
 		}
+	}
+}
+
+// TestContextBreakdown_NeverExceedsMeasuredUsed pins the invariant that
+// /context cannot claim more context occupancy than was actually
+// measured. The static per-strategy Tools estimate can overshoot what a
+// provider really bills: a real ollama session measured 10,677 tokens
+// while the estimates alone summed to 16.3k, which drove Conversation to
+// zero and made the header contradict the pinned status meter.
+func TestContextBreakdown_NeverExceedsMeasuredUsed(t *testing.T) {
+	const used = 10677
+	deps := BuiltinDeps{
+		CurrentModel:       func() (string, string) { return "ollama", "qwen3.8" },
+		ContextUsed:        func() (int, bool) { return used, true },
+		SystemPromptTokens: func() (int, bool) { return 8500, true },
+		FileReadTokens:     func() (int, bool) { return 173, true },
+	}
+	tier := budget.Tier{ContextWindow: 49000, ToolStrategy: budget.StrategyFullSchemas}
+
+	b := buildContextBreakdown(deps, tier)
+	if b == nil {
+		t.Fatal("buildContextBreakdown returned nil")
+	}
+	if b.Used != used {
+		t.Errorf("Used = %d, want the measured figure %d (the status meter reports this)", b.Used, used)
+	}
+
+	sum := 0
+	var free int
+	for _, seg := range b.Segments {
+		if seg.Label == "Free" {
+			free = seg.Tokens
+			continue
+		}
+		sum += seg.Tokens
+		if seg.Tokens < 0 {
+			t.Errorf("segment %q has negative tokens %d", seg.Label, seg.Tokens)
+		}
+	}
+	if sum != used {
+		t.Errorf("occupied segments sum to %d, want %d", sum, used)
+	}
+	if sum+free != tier.ContextWindow {
+		t.Errorf("segments sum to %d, want the full window %d", sum+free, tier.ContextWindow)
 	}
 }

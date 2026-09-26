@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><meta name="design_doc_mode" content="canvas"><link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet"><style>body{margin:0;background:#0d0b09}a{color:#e9a64b}a:hover{color:#f3c27f}</style></helmet>
+<section style="padding:64px;display:flex;flex-direction:column;gap:56px;font-family:'Fira Code',ui-monospace,monospace;color:#ece4d4;background:#0d0b09">
+  <div style="display:flex;flex-direction:column;gap:8px;max-width:900px">
+    <div style="font-size:28px;font-weight:600;letter-spacing:.02em"><span style="color:#e9a64b">kiln</span> · terminal UI for a coding agent</div>
+    <div style="color:#a39781;font-size:15px;line-height:1.6;text-wrap:pretty">Layout 1b, ruled: labelled hairlines separate transcript blocks. Interactive prototype and key states.</div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:20px">
+    <div style="font-size:13px;color:#a39781;letter-spacing:.12em">INTERACTIVE PROTOTYPE</div>
+    <div style="color:#a39781;font-size:14px;line-height:1.7;max-width:1180px">Click into the terminal, type any task and press enter to run the scripted session. At the approval prompt use 1 / 2 / 3 or ↑↓ enter. Type / for commands (/context, /cost, /clear). ⇧⇥ cycles mode, esc stops.</div>
+    <dc-import name="Terminal" layout="ruled" scene="live" hint-size="1180px,780px" style="width:1180px;height:780px"></dc-import>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:20px">
+    <div style="font-size:13px;color:#a39781;letter-spacing:.12em">KEY STATES</div>
+    <div style="display:grid;grid-template-columns:repeat(3,620px);gap:40px 32px">
+      <sc-for list="{{ states }}" as="s" hint-placeholder-count="9">
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;gap:12px;align-items:baseline"><span style="color:#e9a64b">{{ s.n }}</span><span>{{ s.title }}</span></div>
+          <dc-import name="Terminal" layout="ruled" scene="{{ s.scene }}" hint-size="620px,480px" style="width:620px;height:480px"></dc-import>
+          <div style="color:#a39781;font-size:13px;line-height:1.6;text-wrap:pretty">{{ s.note }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      states: [
+        { n:'01', scene:'welcome', title:'Welcome', note:'Version, repo, model, four shortcuts and recent sessions. Recents disappear once the first message is sent.' },
+        { n:'02', scene:'plan', title:'Plan', note:'The agent states intent, then posts a checklist that updates in place as work progresses.' },
+        { n:'03', scene:'agents', title:'Parallel subagents', note:'One row per subagent: task, latest action, progress and token use.' },
+        { n:'04', scene:'streaming', title:'Streaming response', note:'Text arrives with a block cursor. The line above the input shows elapsed time and tokens.' },
+        { n:'05', scene:'diff', title:'Tool calls and diffs', note:'Edits render as numbered diffs with added and removed counts in the file header.' },
+        { n:'06', scene:'permission', title:'Permission prompt', note:'Shell commands wait for approval. Option 2 allows this command without asking again.' },
+        { n:'07', scene:'error', title:'Error and retry', note:'A failed tool call stays in the transcript in red. API errors count down to an automatic retry.' },
+        { n:'08', scene:'palette', title:'Slash-command palette', note:'Typing / opens a filtered list above the input. Use ↑↓ to move and enter or tab to run.' },
+        { n:'09', scene:'context', title:'Context and cost', note:'The status bar always shows context used and cost. /context breaks tokens down by source.' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

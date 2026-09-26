@@ -287,6 +287,52 @@ func submitSlashCommand(s *screen.Screen, name string) {
 // from a stable anchor (a line far enough from the top that it never
 // scrolls off in either variant) makes the golden assert on content
 // instead of on this open row-count race.
+// maskStatusRowCwd rewrites the status line's location segment, which now
+// always carries the working directory: RenderStatusLine shortens a long
+// path with a leading ellipsis instead of dropping it (the real-terminal
+// bug where cwd and branch vanished entirely). Every e2e run works in a
+// fresh t.TempDir(), so that path differs on every run and would make any
+// golden containing the status row non-deterministic. Masking it keeps the
+// rest of the row — mode label, ctx meter, cost — compared exactly.
+// busySpinnerGlyphPattern matches the animated glyph that opens the busy
+// line. The frame advances every 140ms (internal/tui/app.go
+// spinnerInterval), so whichever of the four frames a capture happens to
+// land on is a coin toss — the long-standing source of flakes in this
+// suite. Pinning it to one frame keeps the rest of the busy row (status
+// phrase, elapsed, tokens, "esc to stop") compared exactly. All four
+// glyphs in each set are one cell wide, so the substitution preserves
+// column alignment and the per-cell styles stay paired with their text.
+var busySpinnerGlyphPattern = regexp.MustCompile(`(?m)^([◐◓◑◒]|[-\\|/]) `)
+
+// normalizeSpinnerGlyph pins the busy line's animated glyph to one frame.
+func normalizeSpinnerGlyph(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = busySpinnerGlyphPattern.ReplaceAllString(r, "◐ ")
+	}
+	return out
+}
+
+func maskStatusRowCwd(r string) (string, bool) {
+	if statusRowCwdPattern.MatchString(r) {
+		return statusRowCwdPattern.ReplaceAllString(r, "⇧⇥  <cwd> ctx"), true
+	}
+	return "", false
+}
+
+// normalizeStatusRowCwd applies maskStatusRowCwd to a plain-text screen.
+func normalizeStatusRowCwd(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		if masked, ok := maskStatusRowCwd(r); ok {
+			out[i] = masked
+			continue
+		}
+		out[i] = r
+	}
+	return out
+}
+
 func assertGoldenTail(t *testing.T, s *screen.Screen, name, anchor string) {
 	t.Helper()
 	rows := s.Rows()
@@ -297,7 +343,7 @@ func assertGoldenTail(t *testing.T, s *screen.Screen, name, anchor string) {
 			break
 		}
 	}
-	got := strings.Join(rows[start:], "\n")
+	got := strings.Join(normalizeSpinnerGlyph(normalizeStatusRowCwd(rows[start:])), "\n")
 	assertGolden(t, goldenPath(name+".txt"), got+"\n")
 }
 
@@ -579,6 +625,8 @@ func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts styles
 	if opts.normalizeSpinner {
 		rows, styles = maskStyledRows(rows, styles, maskSpinnerRowStyled)
 	}
+	rows, styles = maskStyledRows(rows, styles, maskStatusRowCwd)
+	rows = normalizeSpinnerGlyph(rows)
 
 	lines := make([]string, len(rows))
 	for i := range rows {
@@ -743,7 +791,7 @@ func TestTUI_FixBug(t *testing.T) {
 	// see TestTUI_Startup_NoDuplicateRows) would no longer be silently
 	// invisible here just because it happened to land above whatever row
 	// the anchor matched.
-	assertGolden(t, goldenPath("tui-fix-bug.txt"), strings.Join(s.Rows(), "\n")+"\n")
+	assertGolden(t, goldenPath("tui-fix-bug.txt"), strings.Join(normalizeSpinnerGlyph(normalizeStatusRowCwd(s.Rows())), "\n")+"\n")
 	assertGoldenStyles(t, s, "tui-fix-bug", stylesOpts{})
 
 	fixed, err := os.ReadFile(filepath.Join(proj, "src", "math.js"))

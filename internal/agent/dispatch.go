@@ -326,6 +326,25 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	})
 	defer unsubTool()
 
+	// The subagent's own harness emits EventUsage once per model turn with
+	// the session's running totals (internal/harness/turn.go). Forwarding
+	// it lets the panel show a live token figure for a running row, which
+	// the design requires; without it a row's tokens column stays empty
+	// until Done.
+	unsubUsage := started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
+		if ev.UsageTotals == nil || d.OnEvent == nil {
+			return
+		}
+		d.OnEvent(SubagentEvent{
+			Kind:  SubagentEventUsage,
+			Agent: def.Name,
+			ID:    req.ToolCallID,
+			Depth: depth,
+			Usage: *ev.UsageTotals,
+		})
+	})
+	defer unsubUsage()
+
 	unsubMsg := started.Harness.Events().On(harness.EventMessageEnd, func(ev harness.Event) {
 		if ev.Message == nil {
 			return

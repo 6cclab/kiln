@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -214,7 +215,7 @@ func TestRenderEditPermissionPrompt_WriteKindUsesWriteHeader(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
 
-	req := EditPermissionRequest{Kind: EditKindWrite, Path: "new.txt", Hunks: []DiffHunk{{LineNum: 1, New: "hello"}}}
+	req := EditPermissionRequest{Kind: EditKindWrite, Path: "new.txt", Hunks: []DiffHunk{{LineNum: 1, New: "hello", OldAbsent: true}}}
 	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
 	if got[2] != " Allow kiln to write to new.txt?" {
 		t.Errorf("row 2 = %q, want the write-header row", got[2])
@@ -244,6 +245,110 @@ func TestRenderEditPermissionPrompt_NumberWidthFromDiff(t *testing.T) {
 	}
 	if got[6] != " 12 -b" {
 		t.Errorf("row 6 = %q", got[6])
+	}
+}
+
+// TestRenderEditPermissionPrompt_CapsLongDiff pins defect 1: an uncapped
+// diff (a real 90-line file write, observed live) pushed the "approval
+// needed" label, the amber rule and the question clean off the top of a
+// real terminal, leaving only the options visible. A diff wider than the
+// cap must still leave the question, the path and the options visible,
+// with a dim "… +N more lines" row standing in for what got elided.
+func TestRenderEditPermissionPrompt_CapsLongDiff(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+
+	hunks := make([]DiffHunk, 90)
+	for i := range hunks {
+		hunks[i] = DiffHunk{LineNum: i + 1, New: fmt.Sprintf("line %d", i+1), OldAbsent: true}
+	}
+	req := EditPermissionRequest{Kind: EditKindWrite, Path: "big.txt", Hunks: hunks}
+	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
+
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "Allow kiln to write to big.txt?") {
+		t.Errorf("question row missing from output:\n%s", joined)
+	}
+	if !strings.Contains(joined, "big.txt") {
+		t.Errorf("path missing from output")
+	}
+	if !strings.Contains(joined, " 1  Yes") {
+		t.Errorf("Yes option missing from output")
+	}
+	if !strings.Contains(joined, " 3  No") {
+		t.Errorf("No option missing from output")
+	}
+
+	wantElision := " " + "… +78 more lines"
+	found := false
+	plusRows := 0
+	for _, l := range got {
+		if l == wantElision {
+			found = true
+		}
+		if strings.Contains(l, "+line ") {
+			plusRows++
+		}
+	}
+	if !found {
+		t.Errorf("elision row %q not found in:\n%s", wantElision, joined)
+	}
+	if plusRows != 12 {
+		t.Errorf("visible diff rows = %d, want 12 (the cap)", plusRows)
+	}
+}
+
+// TestRenderEditPermissionPrompt_BlankLinesStayNumbered pins defect 2: a
+// written file with blank lines must render every line, including blank
+// ones, as a numbered row with no text — not skip the row — so the line
+// numbers shown stay continuous instead of jumping.
+func TestRenderEditPermissionPrompt_BlankLinesStayNumbered(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+
+	req := EditPermissionRequest{
+		Kind: EditKindWrite,
+		Path: "f.txt",
+		Hunks: []DiffHunk{
+			{LineNum: 1, New: "one", OldAbsent: true},
+			{LineNum: 2, New: "", OldAbsent: true},
+			{LineNum: 3, New: "three", OldAbsent: true},
+		},
+	}
+	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
+
+	want := []string{" 1 +one", " 2 +", " 3 +three"}
+	// The three diff rows sit right after the dashed rule (row 3, index
+	// 3) that follows the label rule/amber rule/question rows.
+	for i, w := range want {
+		if got[4+i] != w {
+			t.Errorf("row %d = %q, want %q (numbering must not skip the blank line)", 4+i, got[4+i], w)
+		}
+	}
+}
+
+// TestRenderEditPermissionPrompt_AbsentSideNoSpuriousRow checks that a
+// hunk with no old side at all (OldAbsent, the normal Write shape) never
+// renders a "-" row, even though Old == "" — the same zero value a
+// legitimate blank old *line* would carry — matching the DiffHunk doc
+// comment's distinction.
+func TestRenderEditPermissionPrompt_AbsentSideNoSpuriousRow(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+
+	req := EditPermissionRequest{
+		Kind:  EditKindWrite,
+		Path:  "f.txt",
+		Hunks: []DiffHunk{{LineNum: 1, New: "hi", OldAbsent: true}},
+	}
+	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
+	for _, l := range got {
+		if strings.Contains(l, "-") && strings.Contains(l, "1") && !strings.Contains(l, "+hi") {
+			t.Errorf("unexpected '-' row for an OldAbsent hunk: %q", l)
+		}
+	}
+	if got[4] != " 1 +hi" {
+		t.Errorf("row 4 = %q, want %q", got[4], " 1 +hi")
 	}
 }
 

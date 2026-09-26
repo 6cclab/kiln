@@ -87,13 +87,22 @@ func (p *SubagentPanelState) Reset() {
 // Apply folds one agent.SubagentEvent into the panel's row state, and
 // makes the panel live again (frozen = false) — see the frozen field's
 // doc comment.
+//
+// A usage event is the one exception: it carries only a token total, and
+// unfreezing on it would resurrect an already-committed panel on every
+// model turn of every running subagent, so the next unrelated commit
+// would freeze and commit a near-identical copy (see live_freeze.go's
+// "live while last" rule). Tokens still land in the row state here, so a
+// panel that is *already* live picks them up on its next frame.
 func (p *SubagentPanelState) Apply(e agent.SubagentEvent) {
 	if p == nil || e.ID == "" {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.frozen = false
+	if e.Kind != agent.SubagentEventUsage {
+		p.frozen = false
+	}
 	if p.rows == nil {
 		p.rows = map[string]*subagentRow{}
 	}
@@ -116,6 +125,10 @@ func (p *SubagentPanelState) Apply(e agent.SubagentEvent) {
 	case agent.SubagentEventTool:
 		r.toolCalls++
 		r.lastTool = e.ToolName
+	case agent.SubagentEventUsage:
+		// Running total for a row that has not finished yet; Done
+		// overwrites it with the final figure.
+		r.tokens = e.Usage.TotalTokens
 	case agent.SubagentEventDone:
 		r.status = "done"
 		r.toolCalls = e.ToolCalls
@@ -155,12 +168,13 @@ func (p *SubagentPanelState) countsLocked() (live, done int) {
 }
 
 // subagentNameWidth is the name column's fixed width
-// (docs/kiln-design-handoff/README.md "agents" row: "name (8 columns)").
+// (docs/kiln-design-handoff/Terminal.dc.html lines 91-102: the agents row
+// is a 4-column grid, `8ch minmax(0,1fr) 11ch 6ch`, so the name column is
+// held to 8 columns exactly). Names longer than this are truncated to fit
+// so the task column always starts at the same place; there is no separate
+// "max before ellipsis" width (see subagentNameMax's old doc comment) —
+// that only let long names overflow the grid and shift the task column.
 const subagentNameWidth = 8
-
-// subagentNameMax is where a long agent name is truncated with an
-// ellipsis so the task column keeps its alignment.
-const subagentNameMax = 16
 
 // meterCells is the progress bar's width in cells.
 const meterCells = 10
@@ -194,12 +208,44 @@ func (p *SubagentPanelState) Render(width int) []string {
 // commit-ready lines (a leading blank row, matching every other commit
 // call site in app.go), or nil if the panel is already frozen or empty —
 // see live_freeze.go.
+//
+// While any dispatch is still running this returns nil and leaves the
+// panel live. The design has exactly one agents block that "updates in
+// place" (docs/kiln-design-handoff/Terminal.dc.html line 91-102), but the
+// generic "live while last" rule would freeze and commit a snapshot every
+// time anything else commits, and the next subagent event makes the panel
+// live again — so a dispatch that outlives a few tool blocks or notes
+// wrote a near-identical copy of itself into the transcript each time. A
+// running panel therefore stays in the live region, where it is still
+// fully visible and updating, and commits exactly once: through
+// FreezeFinal, when the dispatch is over.
 func (p *SubagentPanelState) Freeze(width int) []string {
 	if p == nil {
 		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if live, _ := p.countsLocked(); live > 0 {
+		return nil
+	}
+	return p.freezeLocked(width)
+}
+
+// FreezeFinal is Freeze without the still-running check: the panel's one
+// commit, called from finishTurn once the turn (and so every dispatch in
+// it, however it ended) is over. Idempotent with Freeze — whichever runs
+// first commits, the other returns nil.
+func (p *SubagentPanelState) FreezeFinal(width int) []string {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.freezeLocked(width)
+}
+
+// freezeLocked is Freeze's body, callable with mu already held.
+func (p *SubagentPanelState) freezeLocked(width int) []string {
 	if p.frozen || p.emptyLocked() {
 		return nil
 	}
@@ -238,9 +284,9 @@ func (p *SubagentPanelState) renderLocked(width int) []string {
 
 // renderSubagentRow draws one dispatch's two rows: name (padded to
 // subagentNameWidth, coloured by status) + task (Ink, truncated), a
-// 10-cell progress bar and the token total (once done) right-aligned; then
-// an indented row with the latest action ("→ " while running, "✓ " once
-// done/errored), dim.
+// 10-cell progress bar and the token total (once known, i.e. greater than
+// zero — see r.tokens) right-aligned; then an indented row with the latest
+// action ("→ " while running, "✓ " once done/errored), dim.
 func renderSubagentRow(r *subagentRow, width int) []string {
 	nameColor := KilnAmber
 	actionGlyph := G().Action
@@ -270,8 +316,22 @@ func renderSubagentRow(r *subagentRow, width int) []string {
 	if r.depth > 1 {
 		indent = strings.Repeat("  ", r.depth-1)
 	}
-	namePadded := FitStatus(name, subagentNameMax)
-	if pad := subagentNameWidth - VisibleWidth(namePadded); pad > 0 {
+	// The 8-column name is a visual constraint from the design's grid
+	// (docs/kiln-design-handoff/Terminal.dc.html line 95,
+	// "grid-template-columns: 8ch …"). A screen reader has no columns to
+	// keep, and truncating there would drop the agent's identity from the
+	// only transcript record of a dispatch, so plain mode keeps the name
+	// whole and the row's own columns widen to match.
+	nameWidth := subagentNameWidth
+	namePadded := name
+	if IsPlain() {
+		if w := VisibleWidth(name); w > nameWidth {
+			nameWidth = w
+		}
+	} else {
+		namePadded = FitStatus(name, subagentNameWidth)
+	}
+	if pad := nameWidth - VisibleWidth(namePadded); pad > 0 {
 		namePadded += strings.Repeat(" ", pad)
 	}
 	// taskCol is where the task text (and so the action row's glyph below
@@ -279,7 +339,7 @@ func renderSubagentRow(r *subagentRow, width int) []string {
 	// 2-space gap before the task — "name column + 2", not a fixed 10
 	// columns, so a nested (depth > 1) row's action glyph still lines up
 	// under its own task text.
-	taskCol := 1 + len(indent) + subagentNameWidth + 2
+	taskCol := 1 + len(indent) + nameWidth + 2
 	left := fmt.Sprintf(" %s%s  %s", indent, nameColor(namePadded), Ink(r.description))
 
 	// A finished dispatch reads as complete: the bar fills entirely
@@ -290,7 +350,7 @@ func renderSubagentRow(r *subagentRow, width int) []string {
 		right = meterBar(meterCells, nameColor)
 	}
 	tokens := ""
-	if r.status == "done" {
+	if r.status == "done" || r.tokens > 0 {
 		tokens = FormatTokens(r.tokens)
 	}
 	styledTokens := Muted(tokens)
@@ -315,8 +375,13 @@ func renderSubagentRow(r *subagentRow, width int) []string {
 // at 10) track the dispatch's tool-call count as a simple, real activity
 // signal — there is no task-completion percentage to show, so the meter
 // reads as "how much work has this subagent done" rather than "how close
-// is it to finishing". Empty cells use BarEmpty (#3f372c), the design's
-// dedicated token for this one bar (theme.go).
+// is it to finishing". Empty cells use the same heavy glyph as filled
+// cells (Terminal.dc.html line 378: `on:'━'.repeat(k), off:'━'.repeat(10-k)`
+// — both runs are '━', distinguished only by colour), coloured with
+// BarEmpty (#3f372c), the design's dedicated token for this one bar
+// (theme.go). G().MeterEmpty ('─' in the real-terminal glyph set) is not
+// used here — it reads as a different, thinner glyph than the filled
+// cells, which is the bug this fixes.
 func meterBar(toolCalls int, color func(string) string) string {
 	const cells = meterCells
 	filled := toolCalls
@@ -327,6 +392,6 @@ func meterBar(toolCalls int, color func(string) string) string {
 		filled = 0
 	}
 	full := strings.Repeat(G().MeterFull, filled)
-	empty := strings.Repeat(G().MeterEmpty, cells-filled)
+	empty := strings.Repeat(G().MeterFull, cells-filled)
 	return color(full) + BarEmpty(empty)
 }

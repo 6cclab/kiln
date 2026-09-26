@@ -95,12 +95,14 @@ type Bridge struct {
 	synthetics  []SyntheticCommit
 	lastEntryID string
 
-	// freezeHookMu guards freezeHook: set once by app.go (NewModel, via
-	// SetFreezeHook) and read from any goroutine that commits — see
-	// live_freeze.go's doc comment for the whole mechanism this is one half
-	// of.
-	freezeHookMu sync.Mutex
-	freezeHook   func() []string
+	// freezeHookMu guards freezeHook and lastFreezeCommit: freezeHook is set
+	// once by app.go (NewModel, via SetFreezeHook) and read from any
+	// goroutine that commits — see live_freeze.go's doc comment for the
+	// whole mechanism this is one half of. lastFreezeCommit is
+	// FreezeBefore's own de-duplication guard; see its doc comment.
+	freezeHookMu     sync.Mutex
+	freezeHook       func() []string
+	lastFreezeCommit string
 }
 
 // bridgeItem is one entry on the commit queue: either a block of text to
@@ -310,6 +312,22 @@ func (b *Bridge) SetFreezeHook(hook func() []string) {
 // helper) call it directly. finishTurn is the one call site that
 // deliberately does NOT call this ahead of its InFlightTools abort loop —
 // see live_freeze.go's doc comment for why.
+//
+// De-duplication: SubagentPanelState.Apply (subagents.go) clears the
+// panel's frozen flag on every agent.SubagentEvent, by design, so a still-
+// running dispatch makes an already-frozen panel live again — see its doc
+// comment. A live turn commits constantly (tool calls, notes, a permission
+// decline), and every one of those calls FreezeBefore first, so the panel
+// can be frozen, unfrozen by an unrelated in-flight subagent tick, and
+// frozen again — and committed a second time — before its visible content
+// (the header's "N/M done", the row summaries) has actually changed. A
+// real session showed exactly this: the subagents panel committed, then a
+// "✕ Declined …" note, then the identical panel content committed again,
+// while the busy line kept running live underneath. Comparing this call's
+// hook() output against the last one actually committed catches that: an
+// unfrozen-then-refrozen panel whose rendered lines haven't moved produces
+// no second block, while a panel that genuinely changed (a row finished, a
+// count moved) still commits normally.
 func (b *Bridge) FreezeBefore() {
 	b.freezeHookMu.Lock()
 	hook := b.freezeHook
@@ -317,9 +335,21 @@ func (b *Bridge) FreezeBefore() {
 	if hook == nil {
 		return
 	}
-	if lines := hook(); len(lines) > 0 {
-		b.CommitSynthetic(lines)
+	lines := hook()
+	if len(lines) == 0 {
+		return
 	}
+	joined := strings.Join(lines, "\n")
+	b.freezeHookMu.Lock()
+	dup := joined == b.lastFreezeCommit
+	if !dup {
+		b.lastFreezeCommit = joined
+	}
+	b.freezeHookMu.Unlock()
+	if dup {
+		return
+	}
+	b.CommitSynthetic(lines)
 }
 
 // SetVerbose sets the bridge's verbose-transcript flag. Called by the app
@@ -555,12 +585,21 @@ func busyArgDisplay(arg string) string {
 // command (design: "first 30 chars of cmd"), preferring the head — same
 // reasoning as SummarizeArg in permission_render.go: the part of a command
 // that matters is almost always at the front.
+//
+// It does not append its own "…" marker. transcript.go's RenderSpinnerLeft
+// always appends exactly one trailing "…" to the whole busy-line label
+// (design: sim.status + '…', Terminal.dc.html line 398) whether or not the
+// label was truncated, so a marker added here as well produced a double
+// ellipsis ("Running cd /private/tmp/-Us……  43s"). Composing the two
+// unconditionally — one truncation cut with no marker of its own, one
+// trailing ellipsis always drawn by the renderer — leaves exactly one "…"
+// on screen either way.
 func truncateBusyArg(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
 		return s
 	}
-	return string(r[:n]) + "…"
+	return string(r[:n])
 }
 
 // MsgSpinnerReset returns the busy-line label to the turn's own gerund
@@ -697,6 +736,14 @@ func (b *Bridge) ResetTurnCounters() {
 		b.ts.tasksInFlight = 0
 		b.ts.lastStreamSend = time.Time{}
 	}
+	// A new turn's plan/subagents state starts fresh (app.go's beginTurn
+	// resets both), so FreezeBefore's de-duplication guard must not compare
+	// this turn's first freeze against whatever the previous turn last
+	// froze — otherwise a coincidentally identical first block (e.g. the
+	// same single "Running a subagent" summary) would be silently dropped.
+	b.freezeHookMu.Lock()
+	b.lastFreezeCommit = ""
+	b.freezeHookMu.Unlock()
 }
 
 // ToolCallsInTurn reports how many tool_start events fired since the last
@@ -722,6 +769,20 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		b.synthMu.Lock()
 		b.lastEntryID = ev.EntryID
 		b.synthMu.Unlock()
+
+	case harness.EventMessageStart:
+		// A turn can run several assistant messages back to back, each
+		// separated by its own tool calls (turn.go emits one
+		// EventMessageStart/EventMessageEnd pair per call to
+		// requestWithRetry). ts.streamed used to be reset only on
+		// EventThinkingStart and once per turn (ResetTurnCounters), so text
+		// deltas from every message after the first kept appending onto the
+		// same builder and the live region showed them all run together
+		// with no separation. Resetting here means each message's live
+		// stream starts from empty; the committed block for a finished
+		// message never reads ts.streamed (EventMessageEnd uses
+		// assistantText(ev.Message) instead), so no partial text is lost.
+		ts.streamed.Reset()
 
 	case harness.EventMessageUpdate:
 		b.handleStreamEvent(ev.StreamEvent, ts)

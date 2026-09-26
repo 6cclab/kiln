@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -103,7 +104,7 @@ func TestRenderGolden_BannerNoSessions(t *testing.T) {
 
 	Version = "0.9.2"
 	deps := InteractiveDeps{Cwd: "/home/dev/relay-api", ModelLabel: "kiln-large", IsResume: false}
-	assertBannerGolden(t, "banner-no-sessions", bannerRows(deps))
+	assertBannerGolden(t, "banner-no-sessions", bannerRows(deps, 80))
 }
 
 func TestRenderGolden_BannerWithSessions(t *testing.T) {
@@ -176,11 +177,73 @@ func TestRenderGolden_BannerWithSessions(t *testing.T) {
 
 	Version = "0.9.2"
 	deps := InteractiveDeps{Cwd: testCwd, ModelLabel: "kiln-large", IsResume: false}
-	rows := bannerRows(deps)
+	rows := bannerRows(deps, 80)
 	for _, row := range rows {
 		if strings.Contains(row, "Redis") {
 			t.Fatalf("banner listed a subagent (child) session: %q\nrows: %v", row, rows)
 		}
 	}
 	assertBannerGolden(t, "banner-with-sessions", rows)
+}
+
+// initGitRepoWithBranch creates a fresh git repo at dir on the named
+// branch with one empty commit — readGitStatus needs at least one commit
+// before "git rev-parse --abbrev-ref HEAD" resolves to the branch name
+// rather than erroring on an unborn HEAD.
+func initGitRepoWithBranch(t *testing.T, dir, branch string) {
+	t.Helper()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	run("checkout", "-q", "-b", branch)
+	run("commit", "-q", "--allow-empty", "-m", "init")
+}
+
+// TestBannerRow1_LongCwdKeepsBranchAndModelAt120And80 is defect 2: at 120
+// columns a long cwd used to render row 1 as
+// "/private/tmp/.../real-proj · b…", truncating away the branch name and
+// the whole model segment. bannerRows must now shorten the cwd first (a
+// left-truncated "…/…" form) so " · branch <b> · model <m>" always
+// survives, at both a realistic wide (120) and narrow (80) terminal.
+func TestBannerRow1_LongCwdKeepsBranchAndModelAt120And80(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	const branch = "main"
+	initGitRepoWithBranch(t, dir, branch)
+
+	Version = "0.9.2"
+	// The real repro's cwd (docs/kiln-design-handoff/Terminal.dc.html's own
+	// example is "~/src/relay-api"; this is the long-cwd shape the real
+	// 120-column session actually hit): a deep temp/scratchpad path, with
+	// realistic (short) branch and model names — the defect was never
+	// about a long branch/model, only a long cwd crowding them out.
+	longCwd := "/private/tmp/very/deeply/nested/scratchpad/directory/for/a/realistic-project-name"
+	const model = "kiln-large"
+	deps := InteractiveDeps{Cwd: longCwd, ModelLabel: model, IsResume: false}
+
+	for _, width := range []int{120, 80} {
+		rows := bannerRows(deps, width)
+		if len(rows) < 2 {
+			t.Fatalf("width %d: expected at least 2 banner rows, got %d", width, len(rows))
+		}
+		row1 := rows[1]
+		plain := ansi.Strip(row1)
+		if tui.VisibleWidth(row1) > width {
+			t.Errorf("width %d: banner row 1 overflowed: %q (%d cols)", width, plain, tui.VisibleWidth(row1))
+		}
+		if !strings.Contains(plain, "· branch "+branch) {
+			t.Errorf("width %d: branch missing from row 1: %q", width, plain)
+		}
+		if !strings.Contains(plain, "· model "+model) {
+			t.Errorf("width %d: model missing from row 1: %q", width, plain)
+		}
+	}
 }
