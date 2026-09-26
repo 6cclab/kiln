@@ -1,0 +1,28 @@
+# The design handoff's scripted session, as scenes for scripts/visual-drive.sh.
+WAIT 2
+SHOT 01-welcome
+SEND Add rate limiting to POST /api/upload: 10 requests per minute per user, backed by Redis.
+WAIT 1.5
+SHOT 02-plan
+TYPE 1
+WAIT 1
+TYPE 1
+WAIT 3
+SHOT 03-agents
+TYPE 1
+WAIT 3
+SHOT 04-diff
+TYPE 1
+WAIT 3
+SHOT 05-permission
+TYPE 1
+WAIT 3
+SHOT 06-error
+TYPE r
+WAIT 3
+SHOT 07-permission-2
+TYPE 1
+WAIT 1
+TYPE 1
+WAIT 5
+SHOT 08-done

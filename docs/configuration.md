@@ -434,3 +434,9 @@ Confirms the README's claim that `coding` excludes `grafana`/`proxmox`/`unifi-mc
 ### `tool_search`
 
 A real tool (`internal/tools/toolsearch.go`), present under `posture-index` and `full-index` tool strategies but **absent** under `full-schemas` (large-context tier, ≥ ~200k-token window), where every in-posture tool's full schema is loaded directly instead. It scores posture-scoped tools by keyword (name weighted over description), admits matches permanently for the session, and returns their full JSON schemas — schemas load on demand, not up front. Its searchable pool is filtered by the posture active when the tool was built (`ToolSearchTool`); `/posture` re-gates the lane's active set (`switchPosture` in `internal/cli/mcp.go`) but does not rebuild that pool.
+
+## `HARNESS_OFFLINE`
+
+`HARNESS_OFFLINE=1` makes kiln refuse every provider except `faux` and
+`ollama` before any request is made. Scripted and visual test runs set it so
+a settings-file model override can never route a test to a paid endpoint.

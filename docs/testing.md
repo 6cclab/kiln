@@ -215,6 +215,26 @@ no upstream reference recordings of its own; the ones this project used to
 diff against, captured from Claude Code, were retired along with the
 visual-parity suite below).
 
+## Visual drive — `scripts/visual-drive.sh`
+
+Emulator goldens cannot show what a real terminal does with the palette,
+the font, or the user's background. `scripts/visual-drive.sh` runs the real
+`bin/kiln` in a new iTerm2 window (the default profile, so the user's own
+colours and font), drives it from a step file, and screenshots named scenes:
+
+    scripts/visual-drive.sh --faux testdata/faux/design-session.yaml \
+        --fixture testdata/behaviour/design \
+        --steps testdata/drive/design-visual.txt --out /tmp/shots
+
+It is safe by construction: kiln runs with an empty `HOME` (no
+`~/.claude/settings.json`, nothing written to `~/.harness`), `HARNESS_OFFLINE=1`
+(any provider other than faux or ollama is refused), `--model faux/faux-1`,
+and the deterministic `HARNESS_TEST_CLOCK` / `HARNESS_RETRY_JITTER=0` knobs.
+The step file takes `SEND`, `TYPE`, `KEY`, `WAIT` and `SHOT` lines;
+`testdata/drive/design-visual.txt` walks the design handoff's session. The
+script closes its window and stops faux when done. It needs macOS with
+iTerm2 and Screen Recording permission for the terminal that runs it.
+
 ## Record/replay via `kiln-drive --record`
 
 Like the TypeScript layer's `HARNESS_RECORD_TTY`/`npm run replay`,

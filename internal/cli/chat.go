@@ -311,6 +311,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		fmt.Fprintf(stderr, "kiln: invalid model %q: expected provider/model\n", wanted)
 		return 1
 	}
+	if err := offlineGuard(providerID); err != nil {
+		fmt.Fprintln(stderr, "kiln:", err)
+		return 1
+	}
 
 	reg := buildRegistry()
 	if p, ok := reg.Provider(providerID); ok {
