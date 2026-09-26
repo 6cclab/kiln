@@ -1,0 +1,13 @@
+# Driver smoke test: launch, type a prompt, submit with a real Enter, capture.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE say hello
+SHOT typed
+KEY enter
+WAITFOR /you[\s\S]*kiln/ 20
+SHOT reply
+EXPECT /say hello/
+EXPECT_NOT /panic|goroutine/
