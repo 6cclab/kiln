@@ -144,9 +144,13 @@ func TestRenderStatusLine_GitDirty(t *testing.T) {
 	}
 }
 
-func TestRenderStatusLine_CostOmittedWhenFree(t *testing.T) {
-	if strings.Contains(RenderStatusLine(baseState(), 80), "$") {
-		t.Error("cost should be omitted with no Cost set")
+// TestRenderStatusLine_CostAlwaysShown: the cost segment always renders,
+// as "$0.00" when nothing has been spent yet — design scene 01 shows
+// "$0.00" from the very first frame, not an omitted segment (docs/
+// kiln-design-handoff/README.md "Screen anatomy").
+func TestRenderStatusLine_CostAlwaysShown(t *testing.T) {
+	if !strings.Contains(RenderStatusLine(baseState(), 80), "$0.00") {
+		t.Error("cost should render as $0.00 with no Cost set")
 	}
 	paid := baseState()
 	paid.Cost = 170.32

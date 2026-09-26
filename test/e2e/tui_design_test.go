@@ -152,8 +152,18 @@ func designFixture(t *testing.T) (proj, home, sessDir, addr string) {
 // error/retry -> diff -> tool(ok) -> text -> idle.
 
 const (
-	designPlanAnchor   = "Find the upload route and its middleware chain"
-	designAgentsAnchor = "subagents running in parallel"
+	designPlanAnchor = "Find the upload route and its middleware chain"
+	// "2 subagents running in parallel", not the bare "subagents running
+	// in parallel" substring: the fixture always dispatches exactly two
+	// scouts, but they start on two independent goroutines
+	// (designSortSubagentPanel's own doc comment), so there is a real,
+	// if narrow, window where the panel has only applied the first
+	// scout's Start event and reads "1 subagents running in parallel" —
+	// a bare substring match can catch that transient frame and return
+	// before the second scout has shown up at all. Anchoring on the
+	// literal "2" avoids racing that window instead of just hoping to
+	// win it.
+	designAgentsAnchor = "2 subagents running in parallel"
 	designDiff1Anchor  = "rateLimit.ts"
 	// designDiff2Anchor must not collide with scout-1's own report text
 	// ("Found it: src/routes/upload.ts wires auth ...", committed well
@@ -278,6 +288,122 @@ func mustSee(t *testing.T, s *screen.Screen, needle string, timeout time.Duratio
 // it) — see designSortSubagentPanel.
 var designScoutRowPattern = regexp.MustCompile(`^ scout\s`)
 
+// designDispatchLinePattern matches bridge.go's SubagentSink "Start"
+// commit line (the "⏺ scout <description> on <model> [...]" row
+// committed directly to the transcript, independent of the panel).
+// Committing this line races the exact same way the panel's own rows do
+// (designSortSubagentPanel's own doc comment) — two independent dispatch
+// goroutines, each committing its own Start line as soon as it begins —
+// so it needs the same sort-before-compare treatment, one row per entry
+// rather than a pair.
+var designDispatchLinePattern = regexp.MustCompile(`^⏺ \S`)
+
+// designSortDispatchLines sorts a contiguous run of designDispatchLinePattern
+// rows (and their styles, kept in lockstep) among themselves.
+func designSortDispatchLines(rows []string, styles [][]screen.CellStyle) ([]string, [][]screen.CellStyle) {
+	start := -1
+	for i, r := range rows {
+		if designDispatchLinePattern.MatchString(r) {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return rows, styles
+	}
+	end := start
+	for end < len(rows) && designDispatchLinePattern.MatchString(rows[end]) {
+		end++
+	}
+	if end-start < 2 {
+		return rows, styles
+	}
+	outRows := append([]string(nil), rows...)
+	var outStyles [][]screen.CellStyle
+	if styles != nil {
+		outStyles = append([][]screen.CellStyle(nil), styles...)
+	}
+	type entry struct {
+		row   string
+		style []screen.CellStyle
+	}
+	entries := make([]entry, end-start)
+	for i := start; i < end; i++ {
+		e := entry{row: rows[i]}
+		if styles != nil {
+			e.style = styles[i]
+		}
+		entries[i-start] = e
+	}
+	sort.Slice(entries, func(a, b int) bool { return entries[a].row < entries[b].row })
+	for i, e := range entries {
+		outRows[start+i] = e.row
+		if styles != nil {
+			outStyles[start+i] = e.style
+		}
+	}
+	return outRows, outStyles
+}
+
+// designSubagentsBlockLabel matches the subagents panel's own label-rule
+// row (subagents.go's labelRule("subagents", ...)).
+var designSubagentsBlockLabel = regexp.MustCompile(`^subagents `)
+
+// designDropIntermediateSubagentsBlocks removes every committed
+// subagents-panel block except the last, keeping styles in lockstep.
+//
+// Under the "live while last" freeze rule (internal/tui/live_freeze.go),
+// the panel can commit more than once during a turn — once ahead of each
+// task call's own tool-result commit (or, for the "plan" scene, ahead of
+// the todo_write commit that follows dispatch), while the panel is still
+// "running" with whatever partial-completion state (including how many of
+// the two scouts have even started yet — a real, independent goroutine
+// race, same as designSortSubagentPanel's own doc comment) it happened to
+// have at that instant. A scene captured right after its own anchor
+// (driveDesignTo deliberately does not wait for full quiescence) can catch
+// zero, one, or two such transient snapshots ahead of the final one; only
+// the last reflects a scene's actual settled state, so this drops every
+// earlier one rather than trying to pin down which transient snapshot a
+// given run happened to produce.
+func designDropIntermediateSubagentsBlocks(rows []string, styles [][]screen.CellStyle) ([]string, [][]screen.CellStyle) {
+	var labelIdx []int
+	for i, r := range rows {
+		if designSubagentsBlockLabel.MatchString(r) {
+			labelIdx = append(labelIdx, i)
+		}
+	}
+	if len(labelIdx) < 2 {
+		return rows, styles
+	}
+	outRows := append([]string(nil), rows...)
+	var outStyles [][]screen.CellStyle
+	if styles != nil {
+		outStyles = append([][]screen.CellStyle(nil), styles...)
+	}
+	for k := len(labelIdx) - 2; k >= 0; k-- {
+		start := labelIdx[k]
+		if start > 0 && strings.TrimRight(outRows[start-1], " ") == "" {
+			start-- // the block's own leading blank separator row.
+		}
+		end := labelIdx[k] + 1
+		for end < len(outRows) && !designSubagentsBlockLabel.MatchString(outRows[end]) {
+			// The block itself never contains a blank row; stop at the
+			// next block's own leading blank, or a non-panel row that
+			// clearly isn't part of it (a new label-rule row, matched
+			// above, or the end of the slice).
+			if strings.TrimRight(outRows[end], " ") == "" {
+				break
+			}
+			end++
+		}
+		outRows = append(outRows[:start], outRows[end:]...)
+		if outStyles != nil {
+			outStyles = append(outStyles[:start], outStyles[end:]...)
+		}
+	}
+	return outRows, outStyles
+}
+
 // designSortSubagentPanel sorts the two design-session scouts' panel rows
 // into a fixed order (by the pair's own first-row text), in a copy of
 // rows/styles kept in lockstep. Two subagents dispatched in one assistant
@@ -291,6 +417,8 @@ var designScoutRowPattern = regexp.MustCompile(`^ scout\s`)
 // moved together or the name row and its own action row would end up
 // mismatched.
 func designSortSubagentPanel(rows []string, styles [][]screen.CellStyle) ([]string, [][]screen.CellStyle) {
+	rows, styles = designDropIntermediateSubagentsBlocks(rows, styles)
+	rows, styles = designSortDispatchLines(rows, styles)
 	start := -1
 	for i, r := range rows {
 		if designScoutRowPattern.MatchString(r) {
@@ -444,9 +572,16 @@ func TestTUI_Design_Streaming(t *testing.T) {
 	// mustSee's own match can land on a still mid-render frame (tool-call
 	// arguments stream in incrementally; matching this test's anchor text
 	// while diff2's second hunk hasn't rendered yet was observed while
-	// writing this test) — wait for the screen to settle before reading
-	// the full history back.
-	if err := waitQuiescent(s, 150*time.Millisecond, 3*time.Second); err != nil {
+	// writing this test) — wait for scrollback to settle before reading
+	// the full history back. This waits on scrollback specifically, not
+	// the visible viewport (waitQuiescent's usual s.Rows()): since the
+	// busy line now keeps rendering (and its spinner/elapsed-seconds
+	// ticking) while a permission prompt is up (this pass's change — see
+	// TestTUI_Design_Permission), the viewport never actually goes still
+	// once the session has raced ahead to the bash permission prompt that
+	// follows diff2, even though the scrollback content this test actually
+	// asserts on has long since settled.
+	if err := waitScrollbackQuiescent(s, 150*time.Millisecond, 3*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	// Asserted against the full scrollback, not the visible viewport —

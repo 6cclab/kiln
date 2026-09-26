@@ -23,6 +23,7 @@ func RenderNote(text string, width int) []string {
 // separated by exactly one row, matching every other Commit call site in
 // this file).
 func (b *Bridge) CommitNote(text string) {
+	b.FreezeBefore()
 	width := ruleWidth()
 	lines := append([]string{""}, RenderNote(text, width)...)
 	b.CommitSynthetic(lines)

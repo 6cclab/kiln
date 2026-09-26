@@ -1,11 +1,18 @@
+<cwd>…
+
+/ commands   @ add files   ⇧⇥ cycle mode   esc stop
+
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 you ────────────────────────────────────────────────────────────────────────────────────────────────
 dispatch two tasks
-⏺ general-purpose do the fast lookup on faux/faux-2 [role]
-⏺ general-purpose look something up on faux/faux-1 [inherited] (inherited; the requested model is no
-  general-purpose finished - 0 tool calls, 20 chars returned, 150 tokens
-  general-purpose finished - 0 tool calls, 25 chars returned, 150 tokens
+
+subagents ────────────────────────────────────────────────────────────────────────────────  2/2 done
+2 subagents finished
+ general-purpose  do the fast lookup                                              ━━━━━━━━━━     150
+           ✓ finished
+ general-purpose  look something up                                               ━━━━━━━━━━     150
+           ✓ finished
 
 task ─────────────────────────────────────────────────────────────────────────  auto-approved · 1.0s
 Task
@@ -17,14 +24,7 @@ Task
 
 kiln ───────────────────────────────────────────────────────────────────────────────────────────────
 Both done.
-
-subagents ────────────────────────────────────────────────────────────────────────────────  2/2 done
-2 subagents finished
- general-purpose  do the fast lookup                                              ━━━━━━━━━━     150
-          ✓ finished
- general-purpose  look something up                                               ━━━━━━━━━━     150
-          ✓ finished
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 › describe a task · / for commands · @ to add files
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-● don't ask  ⇧⇥                                                                  ctx ──────────  0%
+● don't ask  ⇧⇥                                                           ctx ──────────  0%  $0.00

@@ -3,10 +3,16 @@
  $ ./scripts/npm test -- upload
    Run the upload route's test suite
 
-────────────────────────────────────────────────────────────────────────────────────────────────────
  1  Yes
  2  Yes, and don’t ask again for: ./scripts/npm test *
  3  Yes, and switch to auto mode · auto mode handles these prompts for you
  4  No
 
  ↑↓ select · enter confirm · esc decline · tab to amend
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+◐ Waiting for approval…  2s · 750 tokens                                                esc to stop
+────────────────────────────────────────────────────────────────────────────────────────────────────
+› press 1, 2, 3 or 4
+────────────────────────────────────────────────────────────────────────────────────────────────────
+● ask before edits  ⇧⇥                                                    ctx ──────────  0%  $0.00

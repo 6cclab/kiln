@@ -338,10 +338,25 @@ func TestApp_SlashOpensPopupAboveEditor(t *testing.T) {
 
 	// Claude Code draws the suggestions directly above the input box's
 	// top rule (docs/claude-code-reference.md §4, autocomplete-slash.txt),
-	// so a popup row naming "model" must precede the first full-width rule.
-	topRuleIdx := -1
+	// so a popup row naming "model" must precede the editor's own top
+	// rule. The popup now draws its own `─` rule directly above its rows
+	// too (docs/kiln-design-handoff/README.md "Screen anatomy"), so the
+	// frame has two full-width rules here — the editor's own top rule is
+	// the one immediately above the prompt glyph row, not necessarily the
+	// first rule in the frame.
+	markerIdx := -1
 	for i, l := range lines {
-		if isFullRule(l) {
+		if strings.Contains(l, "›") {
+			markerIdx = i
+			break
+		}
+	}
+	if markerIdx == -1 {
+		t.Fatalf("could not find the editor's prompt row in the frame:\n%s", strings.Join(lines, "\n"))
+	}
+	topRuleIdx := -1
+	for i := markerIdx - 1; i >= 0; i-- {
+		if isFullRule(lines[i]) {
 			topRuleIdx = i
 			break
 		}
@@ -563,4 +578,68 @@ func TestRouter_CtrlF_ToggleFullscreen(t *testing.T) {
 	if router2.Route(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl}) {
 		t.Fatalf("ctrl+f consumed with ToggleFullscreen nil")
 	}
+}
+
+// TestApp_PromptLayout_BusyLineInputStatusBelowPrompt checks this pass's
+// layout change to liveLines: a tool-permission prompt used to replace the
+// input box and mode line outright (permission-edit.txt); now it renders
+// in that same transcript position, but the busy line, the editor and the
+// status row all keep rendering below it too (docs/kiln-design-handoff/
+// README.md scene 06: "approval needed" block, then "◐ Waiting for
+// approval…", then the input with "press 1, 2 or 3", then the status
+// line). This checks the frame contains, in that exact order: the prompt
+// block, then a busy row ("esc to stop"), then the editor's own prompt
+// glyph row, then the status row (the last line in the frame).
+func TestApp_PromptLayout_BusyLineInputStatusBelowPrompt(t *testing.T) {
+	m := newTestModel()
+	m.busy = true
+	m.spinner.Start(0)
+	m.spinner.SetLabel("Waiting for approval")
+	m.prompt.pending = &pendingPermission{
+		request: PermissionRequest{ToolName: "grep", PrimaryArg: "TODO"},
+	}
+	m = m.syncPromptPlaceholder()
+
+	lines := viewLines(m)
+
+	promptIdx := indexContaining(lines, "Allow kiln to use grep?")
+	busyIdx := indexContaining(lines, "esc to stop")
+	editorIdx := indexContaining(lines, "›")
+	statusIdx := -1
+	for i, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			statusIdx = i
+		}
+	}
+
+	if promptIdx == -1 {
+		t.Fatalf("prompt block missing from the frame:\n%s", strings.Join(lines, "\n"))
+	}
+	if busyIdx == -1 {
+		t.Fatalf("busy row (\"esc to stop\") missing while a prompt is active:\n%s", strings.Join(lines, "\n"))
+	}
+	if editorIdx == -1 {
+		t.Fatalf("editor row missing while a prompt is active:\n%s", strings.Join(lines, "\n"))
+	}
+	if statusIdx == -1 {
+		t.Fatalf("status row missing while a prompt is active:\n%s", strings.Join(lines, "\n"))
+	}
+	if !(promptIdx < busyIdx && busyIdx < editorIdx && editorIdx < statusIdx) {
+		t.Errorf("wrong order: prompt=%d busy=%d editor=%d status=%d (want strictly increasing):\n%s",
+			promptIdx, busyIdx, editorIdx, statusIdx, strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[editorIdx], "press 1, 2 or 3") {
+		t.Errorf("editor row %q missing the \"press 1, 2 or 3\" placeholder", lines[editorIdx])
+	}
+}
+
+// indexContaining returns the index of the first row containing needle, or
+// -1.
+func indexContaining(lines []string, needle string) int {
+	for i, l := range lines {
+		if strings.Contains(l, needle) {
+			return i
+		}
+	}
+	return -1
 }

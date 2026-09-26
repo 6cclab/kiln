@@ -283,12 +283,12 @@ approval needed ─────────────────────�
   Allow kiln to use <tool>?
   $ <arg, on raise bg>
 
-──────────────────────────────────────────────────────────
   1  Yes
   2  Yes, and don't ask again for this
   3  No, and tell kiln what to do instead
 
-  1-3, y/n, or esc to decline
+  ↑↓ select · enter confirm · esc decline
+────────────────────────────────────────────────────────────────
 ```
 
 Selected row: raised background (`#241f18`) + amber key + ink label; the

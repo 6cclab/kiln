@@ -40,7 +40,7 @@ func TestRenderPermissionPromptMenuText(t *testing.T) {
 	req := PermissionRequest{ToolName: "Bash", PrimaryArg: "rm -rf /tmp/x"}
 	out := RenderPermissionPrompt(req, "/", 80, 0, false, "")
 	full := strings.Join(out, "\n")
-	for _, want := range []string{"Yes", "Yes, and don't ask again for this", "No, and tell kiln what to do instead", "1-3, y/n, or esc to decline"} {
+	for _, want := range []string{"Yes", "Yes, and don't ask again for this", "No, and tell kiln what to do instead", "↑↓ select · enter confirm · esc decline"} {
 		if !strings.Contains(full, want) {
 			t.Errorf("menu missing %q in %v", want, out)
 		}
@@ -92,13 +92,13 @@ func TestRenderBashPermissionPrompt_MatchesReference(t *testing.T) {
 		" $ openssl rand -hex 4",
 		"   Generate 4 random hex bytes",
 		"",
-		strings.Repeat("─", 100),
 		" 1  Yes",
 		" 2  Yes, and don\u2019t ask again for: openssl rand *",
 		" 3  Yes, and switch to auto mode \u00b7 auto mode handles these prompts for you",
 		" 4  No",
 		"",
 		" \u2191\u2193 select \u00b7 enter confirm \u00b7 esc decline \u00b7 tab to amend",
+		strings.Repeat("─", 100),
 	}
 
 	if len(got) != len(want) {
@@ -197,6 +197,7 @@ func TestRenderEditPermissionPrompt_MatchesReference(t *testing.T) {
 		" 3  No",
 		"",
 		" \u2191\u2193 select \u00b7 enter confirm \u00b7 esc decline \u00b7 tab to amend",
+		strings.Repeat("─", 100),
 	}
 
 	if len(got) != len(want) {

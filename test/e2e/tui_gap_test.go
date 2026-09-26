@@ -44,6 +44,56 @@ var tuiFinishedLinePattern = regexp.MustCompile(`^\s+\S.* finished - \d+ tool ca
 // script produces (" general-purpose  <description> ... <meter> <tokens>").
 var tuiSubagentPanelRowPattern = regexp.MustCompile(`^ general-purpose  `)
 
+// tuiSubagentsBlockLabel matches the subagents panel's own label-rule row
+// (subagents.go's labelRule("subagents", ...)), the fixed marker every
+// committed panel snapshot starts with.
+var tuiSubagentsBlockLabel = regexp.MustCompile(`^subagents `)
+
+// dropIntermediateSubagentsBlocks removes every committed subagents-panel
+// block except the last, given a copy of rows.
+//
+// Under the "live while last" freeze rule (internal/tui/live_freeze.go),
+// the panel can now commit more than once during a single turn — once
+// ahead of each task call's own tool-result commit, while the panel is
+// still "running" (frozen with whatever partial-completion state it
+// happened to be in at that instant), and again at finishTurn with the
+// final state. Two concurrent dispatches racing on their own goroutines
+// (the same race tuiSortSubagentFinishLines's own doc comment documents
+// for the panel's row order) means an intermediate snapshot's actual
+// content — not just its rows' order — is genuinely non-deterministic
+// (which dispatch, if any, has finished by the time the other one's tool
+// result commits). This test's own invariant (the panel survives a
+// mid-dispatch fullscreen toggle) does not depend on which intermediate
+// snapshot happened to land, only on the final one, so this drops every
+// earlier one before the golden compare rather than trying to make their
+// content deterministic.
+func dropIntermediateSubagentsBlocks(rows []string) []string {
+	var labelIdx []int
+	for i, r := range rows {
+		if tuiSubagentsBlockLabel.MatchString(r) {
+			labelIdx = append(labelIdx, i)
+		}
+	}
+	out := append([]string(nil), rows...)
+	if len(labelIdx) < 2 {
+		return out
+	}
+	// Remove every block but the last, from the last-to-remove backward,
+	// so earlier (not-yet-processed) indices stay valid.
+	for k := len(labelIdx) - 2; k >= 0; k-- {
+		start := labelIdx[k]
+		if start > 0 && out[start-1] == "" {
+			start-- // the block's own leading blank separator row.
+		}
+		end := labelIdx[k] + 1
+		for end < len(out) && out[end] != "" {
+			end++
+		}
+		out = append(out[:start], out[end:]...)
+	}
+	return out
+}
+
 // tuiSortSubagentFinishLines sorts two independent contiguous blocks of
 // rows — the transcript's "finished" lines and the subagents panel's own
 // rows — each among themselves, in a copy of rows, before a golden
@@ -75,7 +125,7 @@ var tuiSubagentPanelRowPattern = regexp.MustCompile(`^ general-purpose  `)
 // Both blocks are sorted independently since they have unrelated formats
 // and unrelated (if correlated) underlying races.
 func tuiSortSubagentFinishLines(rows []string) []string {
-	out := append([]string{}, rows...)
+	out := dropIntermediateSubagentsBlocks(rows)
 	tuiSortBlock(out, tuiStartLinePattern)
 	tuiSortBlock(out, tuiFinishedLinePattern)
 	tuiSortPanelPairs(out, tuiSubagentPanelRowPattern)
@@ -118,34 +168,39 @@ func tuiSortBlock(rows []string, pattern *regexp.Regexp) {
 // tuiSortBlock wired in, which still showed the two panel rows swapped in
 // roughly 1 run in 4, silently unfixed. This walks header/continuation
 // pairs explicitly instead.
+//
+// It sorts EVERY such contiguous block it finds in rows, not just the
+// first: the "live while last" freeze rule (internal/tui/live_freeze.go)
+// can commit the subagents panel more than once in a single turn — once
+// mid-turn (frozen ahead of a task call's own tool-result commit, while
+// still "running") and again at finishTurn (the final "finished" state)
+// — and each commit is its own independent instance of the same
+// goroutine race, so each needs sorting on its own.
 func tuiSortPanelPairs(rows []string, headerPattern *regexp.Regexp) {
-	start := -1
-	for i := 0; i+1 < len(rows); i++ {
-		if headerPattern.MatchString(rows[i]) {
-			start = i
-			break
+	for i := 0; i+1 < len(rows); {
+		if !headerPattern.MatchString(rows[i]) {
+			i++
+			continue
 		}
-	}
-	if start == -1 {
-		return
-	}
-	end := start
-	for end+1 < len(rows) && headerPattern.MatchString(rows[end]) {
-		end += 2
-	}
-	n := (end - start) / 2
-	if n < 2 {
-		return
-	}
-	type pair struct{ header, cont string }
-	pairs := make([]pair, n)
-	for i := 0; i < n; i++ {
-		pairs[i] = pair{rows[start+2*i], rows[start+2*i+1]}
-	}
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].header < pairs[j].header })
-	for i, p := range pairs {
-		rows[start+2*i] = p.header
-		rows[start+2*i+1] = p.cont
+		start := i
+		end := start
+		for end+1 < len(rows) && headerPattern.MatchString(rows[end]) {
+			end += 2
+		}
+		n := (end - start) / 2
+		if n >= 2 {
+			type pair struct{ header, cont string }
+			pairs := make([]pair, n)
+			for j := 0; j < n; j++ {
+				pairs[j] = pair{rows[start+2*j], rows[start+2*j+1]}
+			}
+			sort.Slice(pairs, func(a, b int) bool { return pairs[a].header < pairs[b].header })
+			for j, p := range pairs {
+				rows[start+2*j] = p.header
+				rows[start+2*j+1] = p.cont
+			}
+		}
+		i = end
 	}
 }
 
@@ -452,19 +507,17 @@ func TestTUI_AxScreenReaderSubagentEvents(t *testing.T) {
 	waitTurnSettled(t, s)
 
 	joined := strings.Join(s.Rows(), "\n")
-	// The start event's committed line: "<Call> <Agent> <Description> on
-	// <model>" (bridge.go's SubagentSink) — under ASCIIGlyphs the call
-	// marker is "*".
-	if !strings.Contains(joined, "* general-purpose") {
-		t.Errorf("ax-screen-reader transcript missing the subagent start line (\"* general-purpose\"):\n%s", joined)
+	// The subagents panel (subagents.go) is the one transcript record of
+	// a dispatch: its name, its description and its finished state, in
+	// ASCII under --ax-screen-reader.
+	if !strings.Contains(joined, "general-purpose") {
+		t.Errorf("ax-screen-reader transcript missing the subagent name:\n%s", joined)
 	}
 	if !strings.Contains(joined, "look something up") {
 		t.Errorf("ax-screen-reader transcript missing the dispatch's description:\n%s", joined)
 	}
-	// The done event's committed line: "  <Agent> finished - N tool
-	// calls, N chars returned, N tokens".
-	if !strings.Contains(joined, "finished") {
-		t.Errorf("ax-screen-reader transcript missing the subagent done line:\n%s", joined)
+	if !strings.Contains(joined, "subagents finished") {
+		t.Errorf("ax-screen-reader transcript missing the finished panel header:\n%s", joined)
 	}
 	for _, glyph := range []string{"⏺", "›", "✻", "∴"} {
 		if strings.Contains(joined, glyph) {

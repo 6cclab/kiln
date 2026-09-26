@@ -207,14 +207,14 @@ func RenderStatusLine(s StatusState, width int) string {
 	emptyRun := string(runes[filledN:])
 	ctxSeg := "ctx " + contextPressure(fraction)(filledRun) + Rule(emptyRun) + Muted(fmt.Sprintf("  %d%%", percent))
 
-	var costSeg string
-	if s.Cost > 0 {
-		costSeg = Muted(fmt.Sprintf("$%.2f", s.Cost))
-	}
+	// Always shown, including $0.00 (design scene 01) — cost is part of the
+	// dashboard even before anything has been spent, not hidden until it
+	// is nonzero.
+	costSeg := Muted(fmt.Sprintf("$%.2f", s.Cost))
 
 	build := func(includeLoc, includeCost bool) string {
 		r := ctxSeg
-		if includeCost && costSeg != "" {
+		if includeCost {
 			r += "  " + costSeg
 		}
 		left := modeSeg

@@ -12,6 +12,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/andrepato/harness/internal/agent"
 )
@@ -49,8 +50,20 @@ type subagentRow struct {
 // until Reset is called at the next turn's start — see app.go's
 // beginTurn, the same turn-boundary signal the footer's busy flag uses.
 type SubagentPanelState struct {
+	// mu guards every field below: Apply/Reset run on the Update goroutine
+	// (MsgSubagentEvent's handler, beginTurn), but Render/Freeze/Empty are
+	// also called from Bridge's freeze hook (live_freeze.go), which can run
+	// on any goroutine that calls a commit method — the harness event bus,
+	// a subagent dispatcher, or Update itself. See live_freeze.go's doc
+	// comment for the full freeze mechanism this guards.
+	mu    sync.Mutex
 	rows  map[string]*subagentRow
 	order []string
+	// frozen is true once the panel's current state has been committed to
+	// the transcript as a synthetic block (see Freeze) and it has dropped
+	// out of the live region; Apply clears it, so a new subagent event
+	// makes the panel live again with its (now updated) full state.
+	frozen bool
 }
 
 // NewSubagentPanelState returns an empty panel.
@@ -64,15 +77,23 @@ func (p *SubagentPanelState) Reset() {
 	if p == nil {
 		return
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.rows = map[string]*subagentRow{}
 	p.order = nil
+	p.frozen = false
 }
 
-// Apply folds one agent.SubagentEvent into the panel's row state.
+// Apply folds one agent.SubagentEvent into the panel's row state, and
+// makes the panel live again (frozen = false) — see the frozen field's
+// doc comment.
 func (p *SubagentPanelState) Apply(e agent.SubagentEvent) {
 	if p == nil || e.ID == "" {
 		return
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.frozen = false
 	if p.rows == nil {
 		p.rows = map[string]*subagentRow{}
 	}
@@ -108,12 +129,21 @@ func (p *SubagentPanelState) Apply(e agent.SubagentEvent) {
 // Empty reports whether the panel has nothing to show (no dispatch has
 // fired this turn).
 func (p *SubagentPanelState) Empty() bool {
-	return p == nil || len(p.order) == 0
+	if p == nil {
+		return true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.emptyLocked()
+}
+
+func (p *SubagentPanelState) emptyLocked() bool {
+	return len(p.order) == 0
 }
 
 // counts returns how many rows are still running vs. finished (done or
-// errored), for the header's "N live · M done" meta.
-func (p *SubagentPanelState) counts() (live, done int) {
+// errored), for the header's "N live · M done" meta. Caller must hold mu.
+func (p *SubagentPanelState) countsLocked() (live, done int) {
 	for _, id := range p.order {
 		if p.rows[id].status == "running" {
 			live++
@@ -139,17 +169,48 @@ const meterCells = 10
 // (docs/kiln-design-handoff/README.md "agents" row: "tokens, right-aligned").
 const tokensColWidth = 6
 
-// Render draws the panel: a labelled hairline rule with "d/n done" meta,
-// a header row ("N subagents running in parallel"/"N subagents
-// finished"), then up to maxSubagentRows dispatches (two rows each:
-// name+task, then the indented last-action row), then a "+K more" row when
-// there are more. Returns nil when the panel is empty, so callers can
-// append its result unconditionally.
+// Render draws the panel for the live region: a labelled hairline rule
+// with "d/n done" meta, a header row ("N subagents running in
+// parallel"/"N subagents finished"), then up to maxSubagentRows dispatches
+// (two rows each: name+task, then the indented last-action row), then a
+// "+K more" row when there are more. Returns nil when the panel is empty
+// or frozen (see the frozen field's doc comment — a frozen panel has
+// already committed its current state and drops out of the live region
+// until Apply makes it live again), so callers can append its result
+// unconditionally.
 func (p *SubagentPanelState) Render(width int) []string {
-	if p.Empty() {
+	if p == nil {
 		return nil
 	}
-	live, done := p.counts()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.frozen || p.emptyLocked() {
+		return nil
+	}
+	return p.renderLocked(width)
+}
+
+// Freeze marks the panel frozen and returns its current state as
+// commit-ready lines (a leading blank row, matching every other commit
+// call site in app.go), or nil if the panel is already frozen or empty —
+// see live_freeze.go.
+func (p *SubagentPanelState) Freeze(width int) []string {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.frozen || p.emptyLocked() {
+		return nil
+	}
+	p.frozen = true
+	return append([]string{""}, p.renderLocked(width)...)
+}
+
+// renderLocked is Render's body, callable with mu already held (by Render
+// or Freeze).
+func (p *SubagentPanelState) renderLocked(width int) []string {
+	live, done := p.countsLocked()
 	total := live + done
 	header := fmt.Sprintf("%d subagents running in parallel", total)
 	if live == 0 {
@@ -213,6 +274,12 @@ func renderSubagentRow(r *subagentRow, width int) []string {
 	if pad := subagentNameWidth - VisibleWidth(namePadded); pad > 0 {
 		namePadded += strings.Repeat(" ", pad)
 	}
+	// taskCol is where the task text (and so the action row's glyph below
+	// it) starts: 1 (leading space) + indent + the name column + the
+	// 2-space gap before the task — "name column + 2", not a fixed 10
+	// columns, so a nested (depth > 1) row's action glyph still lines up
+	// under its own task text.
+	taskCol := 1 + len(indent) + subagentNameWidth + 2
 	left := fmt.Sprintf(" %s%s  %s", indent, nameColor(namePadded), Ink(r.description))
 
 	// A finished dispatch reads as complete: the bar fills entirely
@@ -240,7 +307,7 @@ func renderSubagentRow(r *subagentRow, width int) []string {
 		nameRow = FitStatus(left, width)
 	}
 
-	actionRow := FitStatus(strings.Repeat(" ", 10+len(indent))+Dim(actionGlyph+" "+action), width)
+	actionRow := FitStatus(strings.Repeat(" ", taskCol)+Dim(actionGlyph+" "+action), width)
 	return []string{nameRow, actionRow}
 }
 

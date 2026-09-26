@@ -184,6 +184,34 @@ func waitQuiescent(s *screen.Screen, quiet, timeout time.Duration) error {
 	}
 }
 
+// waitScrollbackQuiescent is waitQuiescent's scrollback-only counterpart:
+// it waits for s.Scrollback() (committed rows that have scrolled off the
+// visible viewport) to stop changing, ignoring the live viewport entirely.
+// Unlike the visible screen, scrollback never contains the busy line, so
+// this succeeds even while a spinner or a permission prompt's elapsed
+// clock keeps ticking in the viewport (which now happens throughout a
+// tool-permission wait — see app.go's liveLines) — exactly the case
+// TestTUI_Design_Streaming needs, since it only asserts on already-
+// committed scrollback content.
+func waitScrollbackQuiescent(s *screen.Screen, quiet, timeout time.Duration) error {
+	last := strings.Join(s.Scrollback(), "\n")
+	deadline := time.Now().Add(timeout)
+	stableSince := time.Now()
+	for {
+		time.Sleep(15 * time.Millisecond)
+		cur := strings.Join(s.Scrollback(), "\n")
+		if cur != last {
+			last = cur
+			stableSince = time.Now()
+		} else if time.Since(stableSince) >= quiet {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("waitScrollbackQuiescent: scrollback still changing after %s", timeout)
+		}
+	}
+}
+
 // submitSlashCommand types "/<name>" and submits it as a slash command.
 //
 // This needs two Enters, not one: internal/tui's `/`-autocomplete popup
@@ -1243,12 +1271,18 @@ func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
 	// The finished panel committed to scrollback as an ordinary transcript
 	// block (docs/kiln-design-handoff/README.md's "Blocks update in
 	// place": the last update is the one that survives) — it does not
-	// vanish outright, unlike before this phase. What has to be true is
-	// that submitting a NEW turn does not show a second, live "subagents"
-	// header on top of the committed one: the reset happens at the turn
-	// boundary (app.go's beginTurn) rather than the panel lingering live
-	// forever.
-	before := strings.Count(strings.Join(s.Rows(), "\n"), "subagents")
+	// vanish outright, unlike before this phase. Under the "live while
+	// last" freeze rule (live_freeze.go), the panel may in fact have
+	// committed more than once during the turn (each time something else
+	// committed while it was still live, e.g. each task call's own tool
+	// result), so this checks scrollback (not the visible viewport, which
+	// a later turn's own output can scroll) for how many committed
+	// snapshots exist, not a fragile raw substring count.
+	countCommitted := func() int {
+		all := append(append([]string(nil), s.Scrollback()...), s.Rows()...)
+		return strings.Count(strings.Join(all, "\n"), "subagents finished")
+	}
+	before := countCommitted()
 	if before == 0 {
 		t.Fatalf("expected the finished panel to have committed to scrollback")
 	}
@@ -1258,8 +1292,16 @@ func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
 	if err := s.WaitFor(turnSummaryPattern, 10*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if after := strings.Count(strings.Join(s.Rows(), "\n"), "subagents"); after != before {
-		t.Errorf("subagents panel reappeared live for the new turn (before=%d after=%d):\n%s", before, after, strings.Join(s.Rows(), "\n"))
+	// What has to be true is that submitting a new turn — one that
+	// dispatches no subagents — never shows a second, live "N subagents
+	// running in parallel" header (the reset happens at the turn boundary,
+	// app.go's beginTurn, so the panel starts empty and stays empty) and
+	// never commits an additional finished snapshot either.
+	if strings.Contains(strings.Join(s.Rows(), "\n"), "running in parallel") {
+		t.Errorf("subagents panel reappeared live for the new turn:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+	if after := countCommitted(); after != before {
+		t.Errorf("subagents panel committed again for a turn with no dispatches (before=%d after=%d)", before, after)
 	}
 }
 
@@ -1270,9 +1312,9 @@ func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
 // glyphs) and a percentage. faux-1's context window is 128000
 // (internal/provider/faux/faux.go), so usage {input: 5000, output: 200}
 // is 5200/128000 ≈ 4%. faux-1 has no configured price
-// (provider.ModelCost{}, faux.go), so the "$" cost segment must be
-// absent — this test asserts that absence rather than a nonzero value,
-// since faux has nothing to charge.
+// (provider.ModelCost{}, faux.go), so the cost segment reads "$0.00" —
+// the cost segment always renders now (design scene 01), so this checks
+// for that literal zero value rather than the segment's absence.
 func TestTUI_StatusLine_CtxAndCost(t *testing.T) {
 	script := loadFauxScript(t, "status-usage")
 	proj, home, sessDir, addr, _ := tuiFixture(t, script)
@@ -1303,8 +1345,8 @@ func TestTUI_StatusLine_CtxAndCost(t *testing.T) {
 	if !strings.ContainsAny(statusRow, "━─=-") {
 		t.Errorf("status row %q missing the context meter glyphs", statusRow)
 	}
-	if strings.Contains(statusRow, "$") {
-		t.Errorf("status row %q shows a cost segment, but faux-1 has no configured price: %v", statusRow, false)
+	if !strings.Contains(statusRow, "$0.00") {
+		t.Errorf("status row %q should show the cost segment as $0.00 (faux-1 has no configured price)", statusRow)
 	}
 }
 

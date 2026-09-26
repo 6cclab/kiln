@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
@@ -137,11 +138,21 @@ type Model struct {
 	// subagents panel (subagents.go); reset at the start of every turn in
 	// beginTurn.
 	subagents *SubagentPanelState
-	// todos is the live "plan" block's items (plan.go's RenderPlan),
-	// driven by MsgTodos on every todo_write call; nil when no plan is
+	// plan is the live "plan" block's state (plan.go's RenderPlan),
+	// driven by MsgTodos on every todo_write call; empty when no plan is
 	// active. Reset at the start of every turn in beginTurn, same as
-	// subagents, and committed once in its final state by finishTurn.
-	todos []TodoView
+	// subagents, and frozen (committed) once in its final state — either
+	// by finishTurn, or earlier, the moment anything else commits while it
+	// is still live (see live_freeze.go). A pointer, like subagents,
+	// shared across every Model value: Bridge's freeze hook
+	// (NewModel's SetFreezeHook call) reads and freezes it from whichever
+	// goroutine is committing, not just Update's.
+	plan *planLiveState
+	// liveWidth mirrors contentWidth() for the freeze hook, which runs on
+	// whatever goroutine calls a commit method — not necessarily Update's,
+	// which is the only place m.width itself is safe to read. Updated on
+	// every WindowSizeMsg.
+	liveWidth *atomic.Int32
 	// retry is the live "error" retry block's state (retry.go), non-nil
 	// while a retry is pending after a retryable stream failure; cleared on
 	// MsgRetryStart (the delayed attempt is starting) or at turn end.
@@ -299,9 +310,15 @@ func NewModel(cfg Config) Model {
 		footer:         NewFooterState(StatusState{ModelLabel: cfg.ModelLabel, ContextWindow: cfg.Tier.ContextWindow, Mode: cfg.InitialMode, StartedAt: cfg.StartedAt, Cwd: abbrevHomeEnv(cfg.Cwd)}),
 		prompt:         NewPromptState(cfg.Cwd),
 		subagents:      NewSubagentPanelState(),
+		plan:           &planLiveState{},
+		liveWidth:      &atomic.Int32{},
 		startupContext: append([]string(nil), cfg.StartupContext...),
 		fullscreen:     cfg.Fullscreen && !cfg.Plain,
 		viewport:       viewport.New(),
+	}
+	if cfg.Bridge != nil {
+		liveWidth := m.liveWidth
+		cfg.Bridge.SetFreezeHook(newFreezeHook(m.plan, m.subagents, func() int { return int(liveWidth.Load()) }))
 	}
 	// The viewport must never handle a key or wheel event on its own: every
 	// scroll it makes has to go through handleKey/Update explicitly (PgUp/
@@ -515,6 +532,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		prevWidth := m.width
 		m.width, m.height = msg.Width, msg.Height
+		if m.liveWidth != nil {
+			m.liveWidth.Store(int32(m.contentWidth()))
+		}
 		m.editor.SetWidth(m.liveEditorWidth())
 		// Kiln label rules and full-row tints size to the live content
 		// width (transcript.go's width-less Render* helpers read this).
@@ -565,7 +585,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.commitReconnectNote()
 			renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
 			lines := append([]string{""}, RenderAssistantText(renderer.Render(msg.Text))...)
-			m.cfg.Bridge.Commit(lines)
+			m.commit(lines)
 		}
 		return m, nil
 
@@ -617,7 +637,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.flushGroup()
 		view := msg.View
 		lines := append([]string{""}, FitLines(RenderToolCall(view), m.contentWidth(), "     ")...)
-		m.cfg.Bridge.Commit(lines)
+		m.commit(lines)
 		return m, nil
 
 	case MsgRefreshMode:
@@ -628,7 +648,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgTodos:
-		m.todos = msg.Items
+		m.plan.Set(msg.Items)
 		return m, nil
 
 	case MsgFooterNote:
@@ -752,9 +772,7 @@ func (m Model) handleThinking(msg MsgThinking) Model {
 			view := *m.thinking
 			view.Active = false
 			lines := append([]string{""}, RenderThinking(view)...)
-			if m.cfg.Bridge != nil {
-				m.cfg.Bridge.Commit(lines)
-			}
+			m.commit(lines)
 		}
 		m.thinking = nil
 		m.spinner.ResetLabel()
@@ -801,13 +819,9 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 			}
 		}
 	} else if msg.err != nil {
-		if m.cfg.Bridge != nil {
-			m.cfg.Bridge.Commit(RenderError(msg.err.Error()))
-		}
+		m.commit(RenderError(msg.err.Error()))
 	} else if msg.result.Status != harness.StatusCompleted {
-		if m.cfg.Bridge != nil {
-			m.cfg.Bridge.Commit(RenderError(msg.result.Status))
-		}
+		m.commit(RenderError(msg.result.Status))
 	}
 
 	toolCalls := msg.toolCalls
@@ -819,20 +833,23 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 		if t, ok := clockOverride(); ok {
 			done = t
 		}
-		m.cfg.Bridge.Commit([]string{RenderVerboseModelRow(done, m.modelID(), m.contentWidth()), ""})
+		m.commit([]string{RenderVerboseModelRow(done, m.modelID(), m.contentWidth()), ""})
 	}
 	width := m.contentWidth()
 	// The live "plan" checklist and subagents panel both commit their
 	// final state once, as ordinary transcript blocks, instead of just
 	// vanishing from the live region when the turn ends (docs/kiln-design-
 	// handoff/README.md: "Blocks update in place" — the last update is the
-	// one that has to survive into scrollback).
-	if len(m.todos) > 0 && m.cfg.Bridge != nil {
-		m.cfg.Bridge.CommitSynthetic(append([]string{""}, RenderPlan(m.todos, width)...))
+	// one that has to survive into scrollback). freeze is idempotent: if
+	// the "live while last" rule (live_freeze.go) already froze either one
+	// mid-turn (because something else committed after it), this is a
+	// no-op for that one.
+	if lines := m.plan.freeze(width); len(lines) > 0 && m.cfg.Bridge != nil {
+		m.cfg.Bridge.CommitSynthetic(lines)
 	}
-	m.todos = nil
-	if rows := m.subagents.Render(width); len(rows) > 0 && m.cfg.Bridge != nil {
-		m.cfg.Bridge.CommitSynthetic(append([]string{""}, rows...))
+	m.plan.Reset()
+	if lines := m.subagents.Freeze(width); len(lines) > 0 && m.cfg.Bridge != nil {
+		m.cfg.Bridge.CommitSynthetic(lines)
 	}
 	m.subagents.Reset()
 	if msg.result.Status == harness.StatusAborted && m.cfg.Bridge != nil {
@@ -856,6 +873,52 @@ func (m Model) refreshMode() Model {
 	return m
 }
 
+// commit freezes any live plan/subagents block ahead of lines — the "live
+// while last" rule (live_freeze.go): the moment something else commits, a
+// live block is frozen in place, above the newer block, and drops out of
+// the live region until a later update makes it live again — then commits
+// lines exactly like Bridge.Commit. Every ordinary transcript commit in
+// this file goes through this (or commitSynthetic/commitNote/
+// commitCommandResult below) instead of calling m.cfg.Bridge.Commit
+// directly, with two deliberate exceptions: the WindowSizeMsg banner
+// commit (nothing can be live yet) and finishTurn's InFlightTools abort
+// loop (which must land before the plan/subagents freeze that follows it,
+// not trigger it early — see live_freeze.go's doc comment).
+func (m Model) commit(lines []string) {
+	if m.cfg.Bridge == nil {
+		return
+	}
+	m.cfg.Bridge.FreezeBefore()
+	m.cfg.Bridge.Commit(lines)
+}
+
+// commitSynthetic is commit's CommitSynthetic counterpart.
+func (m Model) commitSynthetic(lines []string) {
+	if m.cfg.Bridge == nil {
+		return
+	}
+	m.cfg.Bridge.FreezeBefore()
+	m.cfg.Bridge.CommitSynthetic(lines)
+}
+
+// commitNote is commit's CommitNote counterpart.
+func (m Model) commitNote(text string) {
+	if m.cfg.Bridge == nil {
+		return
+	}
+	m.cfg.Bridge.FreezeBefore()
+	m.cfg.Bridge.CommitNote(text)
+}
+
+// commitCommandResult is commit's CommitCommandResult counterpart.
+func (m Model) commitCommandResult(lines []string) {
+	if m.cfg.Bridge == nil {
+		return
+	}
+	m.cfg.Bridge.FreezeBefore()
+	m.cfg.Bridge.CommitCommandResult(lines)
+}
+
 // dialogOutcome is implemented by dialogs that leave a result row in the
 // transcript when they close ("Kept model as …").
 type dialogOutcome interface{ Outcome() string }
@@ -869,7 +932,7 @@ func (m Model) closeDialog() Model {
 	}
 	m.dialog = nil
 	if m.dialogEcho != "" && m.cfg.Bridge != nil {
-		m.cfg.Bridge.Commit(RenderUserMessage(m.dialogEcho, m.contentWidth()))
+		m.commit(RenderUserMessage(m.dialogEcho, m.contentWidth()))
 		if outcome != "" {
 			// A dialog's outcome is always one line ("Kept model as …",
 			// "Compacted history · context 38% → 8%") — the kiln "note"
@@ -894,6 +957,7 @@ func (m Model) flushGroup() Model {
 	}
 	if m.cfg.Bridge != nil {
 		width := m.contentWidth()
+		m.cfg.Bridge.FreezeBefore()
 		for _, view := range m.group.views {
 			lines := append([]string{""}, FitLines(RenderToolCall(view), width, "     ")...)
 			m.cfg.Bridge.Commit(lines)
@@ -1189,9 +1253,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// ending), matching docs/kiln-design-handoff/README.md's "note" row.
 	if denied := m.prompt.lastDenied; denied != nil {
 		m.prompt.lastDenied = nil
-		if m.cfg.Bridge != nil {
-			m.cfg.Bridge.CommitNote(declinedNoteText(*denied))
-		}
+		m.commitNote(declinedNoteText(*denied))
 	}
 	// "Yes, and switch to auto mode" (Bash) / "Yes, and switch to accept
 	// edits" (Edit/Write) both allow the pending call AND change the
@@ -1361,12 +1423,10 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	// applies to a message starting a turn right now.
 	if m.busy && !m.prompt.Active() {
 		width := m.contentWidth()
-		if m.cfg.Bridge != nil {
-			m.cfg.Bridge.Commit(RenderUserMessageMeta(line, "queued", width))
-		}
+		m.commit(RenderUserMessageMeta(line, "queued", width))
 		if m.cfg.Lane != nil {
-			if err := m.cfg.Lane.Steer(line); err != nil && m.cfg.Bridge != nil {
-				m.cfg.Bridge.Commit(RenderError(err.Error()))
+			if err := m.cfg.Lane.Steer(line); err != nil {
+				m.commit(RenderError(err.Error()))
 			}
 		}
 		m.editor.SetValue("")
@@ -1375,9 +1435,7 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 
 	width := m.contentWidth()
 	echo := func() {
-		if m.cfg.Bridge != nil {
-			m.cfg.Bridge.Commit(RenderUserMessage(line, width))
-		}
+		m.commit(RenderUserMessage(line, width))
 	}
 
 	if classified, ok := ClassifyInput(line); ok {
@@ -1390,9 +1448,7 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	if m.cfg.Registry != nil {
 		result, err := m.cfg.Registry.Execute(ctx, line)
 		if err != nil {
-			if m.cfg.Bridge != nil {
-				m.cfg.Bridge.Commit(RenderError(err.Error()))
-			}
+			m.commit(RenderError(err.Error()))
 			return m, nil
 		}
 		handled = result
@@ -1409,25 +1465,23 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		echo()
-		if m.cfg.Bridge != nil {
-			switch {
-			case handled.Context != nil:
-				// /context gets the structured "context" block
-				// (context.go) instead of its plain Output rows — the
-				// stacked bar and legend are the whole point of the
-				// command in the kiln design (docs/kiln-design-handoff/
-				// README.md, "context" row).
-				m.cfg.Bridge.CommitSynthetic(append([]string{""}, RenderContext(*handled.Context, width)...))
-			case len(handled.Output) == 1:
-				// A single-line result reads as a system note in the kiln
-				// design ("/cost", "/compact", "/model", "/agents",
-				// "/help" info form — docs/kiln-design-handoff/README.md's
-				// "note" row example copy), not a "⎿ " continuation under
-				// the echo.
-				m.cfg.Bridge.CommitNote(handled.Output[0])
-			case len(handled.Output) > 0:
-				m.cfg.Bridge.CommitCommandResult(handled.Output)
-			}
+		switch {
+		case handled.Context != nil:
+			// /context gets the structured "context" block
+			// (context.go) instead of its plain Output rows — the
+			// stacked bar and legend are the whole point of the
+			// command in the kiln design (docs/kiln-design-handoff/
+			// README.md, "context" row).
+			m.commitSynthetic(append([]string{""}, RenderContext(*handled.Context, width)...))
+		case len(handled.Output) == 1:
+			// A single-line result reads as a system note in the kiln
+			// design ("/cost", "/compact", "/model", "/agents",
+			// "/help" info form — docs/kiln-design-handoff/README.md's
+			// "note" row example copy), not a "⎿ " continuation under
+			// the echo.
+			m.commitNote(handled.Output[0])
+		case len(handled.Output) > 0:
+			m.commitCommandResult(handled.Output)
 		}
 		if handled.Prompt == "" {
 			return m, nil
@@ -1446,8 +1500,8 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			prompt = resolvedPrompt
 		}
 		images = resolvedImages
-		if len(describe) > 0 && m.cfg.Bridge != nil {
-			m.cfg.Bridge.Commit(append(describe, ""))
+		if len(describe) > 0 {
+			m.commit(append(describe, ""))
 		}
 	}
 
@@ -1455,9 +1509,7 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	if m.cfg.RunPromptHooks != nil {
 		blocked, hctx := m.cfg.RunPromptHooks(ctx, line)
 		if blocked != "" {
-			if m.cfg.Bridge != nil {
-				m.cfg.Bridge.Commit(RenderError("blocked by hook: " + blocked))
-			}
+			m.commit(RenderError("blocked by hook: " + blocked))
 			return m, nil
 		}
 		hookContext = hctx
@@ -1487,6 +1539,10 @@ func (m Model) runMode(c Classified) tea.Cmd {
 		return func() tea.Msg {
 			lines := RunBang(context.Background(), c.Body, env)
 			if bridge != nil {
+				// Runs on its own Cmd goroutine, not Update's — Bridge's
+				// own freeze helper (not the Model one, which needs the
+				// Update goroutine's m) is the one safe to call here.
+				bridge.FreezeBefore()
 				bridge.Commit(lines)
 			}
 			_ = cwd
@@ -1494,9 +1550,7 @@ func (m Model) runMode(c Classified) tea.Cmd {
 		}
 	case ModeMemory:
 		lines := AddMemory(c.Body, m.cfg.Cwd)
-		if m.cfg.Bridge != nil {
-			m.cfg.Bridge.Commit(lines)
-		}
+		m.commit(lines)
 	}
 	return nil
 }
@@ -1513,7 +1567,7 @@ func (m Model) beginTurn(prompt string, images []msg.ImageContent) (tea.Model, t
 	// A fresh turn starts with no dispatches: the previous turn's
 	// subagents panel (if any) does not linger into this one.
 	m.subagents.Reset()
-	m.todos = nil
+	m.plan.Reset()
 
 	lane := m.cfg.Lane
 	bridge := m.cfg.Bridge
@@ -1641,9 +1695,7 @@ func (m Model) commitReconnectNote() Model {
 	}
 	attempt := m.reconnectedAttempt
 	m.reconnectedAttempt = 0
-	if m.cfg.Bridge != nil {
-		m.cfg.Bridge.CommitNote(fmt.Sprintf("↺ Reconnected on attempt %d", attempt))
-	}
+	m.commitNote(fmt.Sprintf("↺ Reconnected on attempt %d", attempt))
 	return m
 }
 
@@ -1680,10 +1732,11 @@ func (m Model) renderStreamLive(width int) []string {
 // append its result unconditionally, matching m.subagents.Render's own
 // contract.
 func (m Model) renderPlanLive(width int) []string {
-	if len(m.todos) == 0 {
+	items := m.plan.Live()
+	if len(items) == 0 {
 		return nil
 	}
-	return append(RenderPlan(m.todos, width), "")
+	return append(RenderPlan(items, width), "")
 }
 
 // liveLines builds the live-region rows (everything below the committed
@@ -1697,13 +1750,6 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 	if m.group != nil {
 		lines = append(lines, "", RenderToolGroupRunning(m.group.kind, len(m.group.views)))
 	}
-	// No spinner while a permission or plan prompt is up: Claude Code shows
-	// the question alone (permission-edit.txt, plan-approval.txt).
-	if !m.prompt.Active() {
-		if s := m.spinner.Render(width, time.Time{}); len(s) > 0 {
-			lines = append(lines, s...)
-		}
-	}
 	if m.thinking != nil {
 		view := *m.thinking
 		view.Expanded = false
@@ -1715,51 +1761,72 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 	case m.dialog != nil:
 		// A dialog replaces the input box and mode line under a `▔` rule
 		// carrying the effort indicator (docs/claude-code-reference.md §5).
-		lines = append(lines, m.dialogRows(width, len(lines))...)
-	case m.prompt.Active():
-		// Permission and plan prompts render inline in place of the input
-		// box, with no hint row or mode line (§5, permission-edit.txt). Plan
-		// approval sits under a full `▔` rule and a blank row
-		// (plan-approval.txt rows 3-4).
-		if m.prompt.plan != nil {
-			lines = append(lines, Rule(strings.Repeat("▔", width)), "")
+		if s := m.spinner.Render(width, time.Time{}); len(s) > 0 {
+			lines = append(lines, s...)
 		}
-		lines = append(lines, m.prompt.Render(width)...)
+		lines = append(lines, m.dialogRows(width, len(lines))...)
 	case m.cfg.Bridge != nil && m.cfg.Bridge.Verbose():
 		// The detailed transcript view (verbose-ctrl-o.txt rows 38-39): a
 		// rule and the notice row take the input box's place until Ctrl+O
 		// toggles back.
+		if s := m.spinner.Render(width, time.Time{}); len(s) > 0 {
+			lines = append(lines, s...)
+		}
 		lines = append(lines, RuleColour(strings.Repeat("─", width)), m.renderStatusRow(width))
 	default:
-		if m.popup != nil {
-			// Claude Code draws the suggestions directly above the input
-			// box's top rule (autocomplete-slash.txt rows 29-32).
-			lines = append(lines, m.renderPopup(width, len(lines))...)
+		// The live-while-last blocks (live_freeze.go): streaming text and
+		// the retry countdown only show while nothing is waiting on the
+		// user (a permission/plan prompt pauses the turn); the plan
+		// checklist and the subagents panel keep showing during a prompt
+		// too — the design's permission scene (docs/kiln-design-handoff/
+		// README.md scene 06) keeps them visible, in the transcript
+		// position, directly above the "approval needed" block and the
+		// busy line.
+		if !m.prompt.Active() {
+			if rows := m.renderStreamLive(width); len(rows) > 0 {
+				lines = append(lines, rows...)
+			}
+			if rows := m.renderRetryLive(width); len(rows) > 0 {
+				lines = append(lines, rows...)
+			}
 		}
-		// The live streaming "kiln" block sits above the retry/plan/
-		// subagents rows (docs/kiln-design-handoff/README.md's "Streaming"
-		// section).
-		if rows := m.renderStreamLive(width); len(rows) > 0 {
-			lines = append(lines, rows...)
-		}
-		// The live "error" retry block sits directly above the plan/
-		// subagents rows while a retry is pending.
-		if rows := m.renderRetryLive(width); len(rows) > 0 {
-			lines = append(lines, rows...)
-		}
-		// The live "plan" checklist sits above the subagents panel, live
-		// for the turn that has called todo_write at least once; empty
-		// otherwise.
 		if rows := m.renderPlanLive(width); len(rows) > 0 {
 			lines = append(lines, rows...)
 		}
-		// The subagents panel sits above the input box, live for the turn
-		// that dispatched at least one `task` call; empty otherwise, so it
-		// costs no rows when nothing is running.
 		if rows := m.subagents.Render(width); len(rows) > 0 {
 			lines = append(lines, rows...)
 			lines = append(lines, "")
 		}
+
+		if m.prompt.Active() {
+			// The prompt renders where the input box normally sits, but —
+			// unlike before this pass — the busy line, editor and status
+			// row below it all keep rendering too (docs/kiln-design-
+			// handoff/README.md scene 06): "approval needed" block, then
+			// "◐ Waiting for approval…", then the input with "press 1, 2
+			// or 3", then the status line. Plan approval keeps its own
+			// full `▔` rule and blank row above the block.
+			if m.prompt.plan != nil {
+				lines = append(lines, Rule(strings.Repeat("▔", width)), "")
+			}
+			lines = append(lines, m.prompt.Render(width)...)
+			lines = append(lines, "")
+		}
+
+		// The busy line always sits directly above the input box — the
+		// last thing before it, whatever else is showing above (streaming
+		// text, a retry, the plan/subagents blocks, or the permission/plan
+		// prompt itself).
+		if s := m.spinner.Render(width, time.Time{}); len(s) > 0 {
+			lines = append(lines, s...)
+		}
+
+		if !m.prompt.Active() && m.popup != nil {
+			// Claude Code draws the suggestions directly above the input
+			// box's top rule (autocomplete-slash.txt rows 29-32).
+			lines = append(lines, m.renderPopup(width, len(lines))...)
+		}
+
 		editorTop = len(lines)
 		lines = append(lines, m.editor.View(width)...)
 		if m.shortcuts {
@@ -1923,7 +1990,11 @@ func (m Model) renderPopup(width, linesAbove int) []string {
 	// The bottom area is one row now (the mode line only — no status row,
 	// docs/claude-code-reference.md §1).
 	const footerRows = 1
-	room := height - linesAbove - footerRows
+	// A `─` rule in the rule colour sits directly above the popup rows
+	// (docs/kiln-design-handoff/README.md "Screen anatomy": "a list
+	// directly above the input with a `─` rule above it"), so it counts
+	// against the same room budget as the rows themselves.
+	room := height - linesAbove - footerRows - 1
 	if room < 1 {
 		return nil
 	}
@@ -1931,7 +2002,8 @@ func (m Model) renderPopup(width, linesAbove int) []string {
 	if maxRows > room {
 		maxRows = room
 	}
-	return m.popup.Render(width, maxRows)
+	rule := RuleColour(strings.Repeat("─", width))
+	return append([]string{rule}, m.popup.Render(width, maxRows)...)
 }
 
 // --- status row ---------------------------------------------------------

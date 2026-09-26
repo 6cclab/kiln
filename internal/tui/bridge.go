@@ -91,6 +91,13 @@ type Bridge struct {
 	synthMu     sync.Mutex
 	synthetics  []SyntheticCommit
 	lastEntryID string
+
+	// freezeHookMu guards freezeHook: set once by app.go (NewModel, via
+	// SetFreezeHook) and read from any goroutine that commits — see
+	// live_freeze.go's doc comment for the whole mechanism this is one half
+	// of.
+	freezeHookMu sync.Mutex
+	freezeHook   func() []string
 }
 
 // bridgeItem is one entry on the commit queue: either a block of text to
@@ -274,6 +281,42 @@ func (b *Bridge) Synthetics() []SyntheticCommit {
 	b.synthMu.Lock()
 	defer b.synthMu.Unlock()
 	return append([]SyntheticCommit(nil), b.synthetics...)
+}
+
+// SetFreezeHook registers the "live while last" freeze hook (live_freeze.go):
+// a func that freezes whichever of the plan checklist / subagents panel is
+// still live and returns its commit-ready lines (nil if neither is live).
+// Called once by app.go's NewModel. Safe to call from any goroutine that
+// later calls FreezeBefore.
+func (b *Bridge) SetFreezeHook(hook func() []string) {
+	b.freezeHookMu.Lock()
+	b.freezeHook = hook
+	b.freezeHookMu.Unlock()
+}
+
+// FreezeBefore commits whatever the freeze hook reports is still live —
+// the plan checklist and/or the subagents panel — ahead of a commit the
+// caller is about to make of its own. A no-op when no hook is registered
+// or nothing is live. Safe to call from any goroutine (it only ever calls
+// CommitSynthetic, exactly like any other commit call site).
+//
+// app.go's m.commit/m.commitSynthetic/m.commitNote helpers call this
+// before every ordinary transcript commit; this file's own event-driven
+// commits (EventFault, SubagentSink, HookNotice, ModelSwitch — the ones
+// that do not run on the Update goroutine and so cannot call an app.go
+// helper) call it directly. finishTurn is the one call site that
+// deliberately does NOT call this ahead of its InFlightTools abort loop —
+// see live_freeze.go's doc comment for why.
+func (b *Bridge) FreezeBefore() {
+	b.freezeHookMu.Lock()
+	hook := b.freezeHook
+	b.freezeHookMu.Unlock()
+	if hook == nil {
+		return
+	}
+	if lines := hook(); len(lines) > 0 {
+		b.CommitSynthetic(lines)
+	}
 }
 
 // SetVerbose sets the bridge's verbose-transcript flag. Called by the app
@@ -836,6 +879,7 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		if ev.Err != nil {
 			msg = ev.Err.Error()
 		}
+		b.FreezeBefore()
 		b.Commit(RenderError(msg))
 	}
 }
@@ -1160,38 +1204,27 @@ func (b *Bridge) SubagentPanelSink() func(agent.SubagentEvent) {
 // the result size are.
 func (b *Bridge) SubagentSink() func(agent.SubagentEvent) {
 	return func(e agent.SubagentEvent) {
-		switch e.Kind {
-		case agent.SubagentEventStart:
-			note := ""
-			if e.Inherited {
-				note = " " + Dim("(inherited; the requested model is not on this provider)")
-			}
-			model := e.ModelID
-			if e.ProviderID != "" {
-				model = e.ProviderID + "/" + e.ModelID
-			}
-			if e.ModelKind != "" {
-				model += Dim(" [" + e.ModelKind + "]")
-			}
-			b.CommitSynthetic([]string{fmt.Sprintf("%s %s %s %s %s%s", Dim(G().Call), Bold(e.Agent), Dim(e.Description), Dim("on"), model, note)})
-		case agent.SubagentEventDone:
-			b.CommitSynthetic([]string{Dim(fmt.Sprintf("  %s finished - %d tool calls, %d chars returned, %d tokens", e.Agent, e.ToolCalls, e.Chars, e.Usage.TotalTokens))})
-		case agent.SubagentEventError:
-			b.CommitSynthetic(RenderError(fmt.Sprintf("%s: %s", e.Agent, e.Message)))
+		// The subagents panel (subagents.go) is the design's one record of
+		// a dispatch: name, task, last action, progress and tokens. Only a
+		// failure gets its own transcript block.
+		if e.Kind != agent.SubagentEventError {
+			return
 		}
+		b.FreezeBefore()
+		b.CommitSynthetic(RenderError(fmt.Sprintf("%s: %s", e.Agent, e.Message)))
 	}
 }
 
 // HookNotice renders a hook activity line, matching app.ts's onHookNotices
 // (app.ts:634-637): a dim aside the user needs to see; the model does not.
 func (b *Bridge) HookNotice(message string) {
-	b.Commit([]string{Dim("  hook: " + message)})
+	b.CommitNote("hook: " + message)
 }
 
 // ModelSwitch renders the model-switch transcript line, matching app.ts's
 // onModelChanges (app.ts:619-632).
 func (b *Bridge) ModelSwitch(label string, tierName string, usable int) {
-	b.Commit([]string{fmt.Sprintf("%s %s %s %s %s", Dim(G().Call), Bold("model"), Dim("→"), label, Dim(fmt.Sprintf("(%s tier, %s usable)", tierName, FormatTokens(usable))))})
+	b.CommitNote(fmt.Sprintf("Model: %s · %s tier · %s usable", label, tierName, FormatTokens(usable)))
 	b.Send(MsgModelInfo{Label: label})
 }
 

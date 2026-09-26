@@ -11,3 +11,4 @@ approval needed ─────────────────────�
  3  No
 
  ↑↓ select · enter confirm · esc decline · tab to amend
+────────────────────────────────────────────────────────────────────────────────

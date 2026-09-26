@@ -93,13 +93,14 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 		lines = append(lines, "")
 		lines = append(lines, preview...)
 	}
-	lines = append(lines, "", amberRule)
+	lines = append(lines, "")
 
 	if feedbackMode {
 		lines = append(lines,
 			"  "+Muted("What should be done instead?"),
 			fmt.Sprintf("  %s %s%s", KilnAmber(">"), feedback, Faint("▌")),
 			"  "+Muted("enter to send · esc to decline without a reason"),
+			amberRule,
 		)
 		return FitLines(lines, width, "    ")
 	}
@@ -109,7 +110,8 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 		"  "+permissionOptionRow("2", "Yes, and don't ask again for this", selected == 1),
 		"  "+permissionOptionRow("3", "No, and tell kiln what to do instead", selected == 2),
 		"",
-		"  "+Muted("1-3, y/n, or esc to decline"),
+		"  "+Muted("↑↓ select · enter confirm · esc decline"),
+		amberRule,
 	)
 	return FitLines(lines, width, "    ")
 }
@@ -179,7 +181,7 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 	if req.Description != "" {
 		lines = append(lines, "   "+Muted(req.Description))
 	}
-	lines = append(lines, "", amberRule)
+	lines = append(lines, "")
 
 	options := []string{
 		"Yes",
@@ -192,7 +194,7 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected))
 	}
 
-	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · esc decline · tab to amend"))
+	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · esc decline · tab to amend"), amberRule)
 	return lines
 }
 
@@ -296,7 +298,7 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 		}
 	}
 
-	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · esc decline · tab to amend"))
+	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · esc decline · tab to amend"), amberRule)
 	return lines
 }
 
