@@ -60,6 +60,37 @@ Verified through internal/testkit/screen: `/mcp` open→Esc leaves the cursor on
 grows, never shrinks).
 
 
+## Patch: flush the pending frame before the very first insertAbove too (cursed_renderer.go)
+
+The first patch above ("flush a pending frame before inserting lines above it") only
+pre-flushed when `!s.starting` — the theory being that at true startup there is nothing on
+the glass yet to desync from. But `s.cellbuf` (whose `Width()`/`Height()` size every
+scroll-offset computation in `insertAbove`) is only resized to the live region's actual
+content height inside `flushLocked` (`frameArea.Max.Y = content.Height()` for a non-alt-
+screen frame); before the renderer's first flush ever runs, `s.cellbuf` is still sized from
+`newCursedRenderer`'s construction — the full terminal height, not the small live region.
+
+kiln's startup banner is committed via `Bridge.Commit` -> `tea.Println`, off the model's own
+goroutine (`internal/tui/bridge.go`'s committer). That is a genuine race against the
+renderer's own fps-ticker-driven first flush: if the committed banner's `printLineMessage`
+reaches `insertAbove` before that first flush has ever happened, `s.starting` is still true,
+the pre-flush guard skipped it, and `h := s.cellbuf.Height()` read the full terminal height
+instead of the live region's few rows. The down/up scroll math then operated over the wrong
+span, inserting the banner at the wrong row and leaving a stray duplicate of its last
+committed line sitting in real scrollback once the next (correctly small) flush repainted
+the live region at its actual position — reproduced as a duplicate copy of the banner's tips
+row appearing above the wordmark on startup, only under real scheduling (a real PTY/real
+terminal), never in the synchronous, low-latency `internal/testkit/screen` driver used by
+this repo's own e2e suite, which is why the goldens never caught it.
+
+The fix drops the `!s.starting` condition entirely: `insertAbove` now always flushes a
+pending view-content change first, including on the very first call. By the time
+`printLineMessage`'s `insertAbove` runs, `Update` has already produced and rendered the
+live region's own (small) first view (bubbletea's own event loop renders after every
+processed message, before dequeuing the next one, and `Bridge.Commit`'s message is
+necessarily a later message in that same loop) — so the pre-flush is never a wasted
+first-frame paint, only ever the correctly-sized one `insertAbove`'s own math depends on.
+
 ## Patch: don't lose the last cell of a full-width committed line (cursed_renderer.go)
 
 insertAbove wrote each committed line as `line + EraseLineRight + "\r\n"` with no

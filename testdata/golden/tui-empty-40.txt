@@ -1,11 +1,9 @@
 K I L N  dev · coding agent
-
 <cwd>…
-
 / commands   @ add files   ⇧⇥ cycle mod…
 
 ────────────────────────────────────────
 ────────────────────────────────────────
-› describe a task · / for commands · @ t
+›  describe a task · / for commands · @
 ────────────────────────────────────────
 ● ask before edits  ⇧⇥

@@ -13,6 +13,7 @@ import (
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/session/jsonl"
 )
 
 // fakePaidProvider is a second, distinct provider.Provider — faux-1 and
@@ -116,6 +117,56 @@ func TestDispatchCreatesASecondSessionFileBesideTheParents(t *testing.T) {
 	}
 	if !sawSubagentFile {
 		t.Fatal("subagent shares the parent's transcript file")
+	}
+}
+
+// TestDispatchSetsParentSessionIDOnTheSubagentsHeader checks the header a
+// dispatched subagent's own session file carries: ParentSessionID must be
+// the dispatching (parent) session's SessionID, not empty — the field
+// internal/cli/tui.go's buildRecentSessionRows filters the banner's
+// recent-sessions list on, so a subagent's session must be distinguishable
+// from a top-level one purely from its own header, without any other
+// heuristic.
+func TestDispatchSetsParentSessionIDOnTheSubagentsHeader(t *testing.T) {
+	d, parent, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - text: \"the answer\"\n", nil)
+
+	if _, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "general-purpose", Description: "look something up", Prompt: "find X"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	dir := filepath.Dir(parent.TranscriptPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var subagentPath string
+	for _, e := range entries {
+		if full := filepath.Join(dir, e.Name()); full != parent.TranscriptPath {
+			subagentPath = full
+		}
+	}
+	if subagentPath == "" {
+		t.Fatalf("no subagent session file found beside %s under %s", parent.TranscriptPath, dir)
+	}
+
+	st, err := jsonl.Open(subagentPath, nil)
+	if err != nil {
+		t.Fatalf("jsonl.Open(%s): %v", subagentPath, err)
+	}
+	defer st.Close()
+
+	hdr := st.Header()
+	if hdr.ParentSessionID != parent.SessionID {
+		t.Errorf("subagent header ParentSessionID = %q, want the parent's SessionID %q", hdr.ParentSessionID, parent.SessionID)
+	}
+
+	parentHdr, err := jsonl.Open(parent.TranscriptPath, nil)
+	if err != nil {
+		t.Fatalf("jsonl.Open(parent %s): %v", parent.TranscriptPath, err)
+	}
+	defer parentHdr.Close()
+	if got := parentHdr.Header().ParentSessionID; got != "" {
+		t.Errorf("parent (top-level) header ParentSessionID = %q, want empty", got)
 	}
 }
 

@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,13 @@ import (
 
 	"github.com/andrepato/harness/internal/testkit/screen"
 )
+
+// tuiDesignBackground is the kiln design's own background (#14110d, docs/
+// kiln-design-handoff/README.md's palette), passed to every PTY test via
+// screen.WithBackgroundColor so internal/tui.SetTerminalBackground's "near
+// design bg keeps the exact design hexes" rule holds and every existing
+// golden stays byte-for-byte identical.
+var tuiDesignBackground = color.RGBA{R: 0x14, G: 0x11, B: 0x0d, A: 0xff}
 
 // This file drives the real, PTY-attached harness TUI (as opposed to
 // print/session/hooks_test.go, which drive print/one-shot mode). Every
@@ -37,8 +45,28 @@ const tuiUserMark = "›"
 // to a faux server at fauxAddr (empty to omit faux env entirely — the
 // empty-box goldens don't need a model), with proj as the child's working
 // directory.
+//
+// Fullscreen (alt-screen) is the binary's own default now
+// (internal/cli/args.go), but this suite's fixtures/goldens are almost all
+// inline scrollback behaviour — so, unless a test's own args already opt
+// into fullscreen with "--fullscreen", startTUI passes "--inline" to keep
+// them running against the mode they were written for. The
+// TestTUI_Fullscreen* tests in tui_fullscreen_test.go are the fullscreen
+// coverage; they pass "--fullscreen" explicitly (or, for
+// TestTUI_Fullscreen_ToggleKey, deliberately start with neither flag to get
+// this same inline default, then toggle at runtime with ctrl+f).
 func startTUI(t *testing.T, cols, rows int, proj, home, sessDir, fauxAddr string, args ...string) *screen.Screen {
 	t.Helper()
+	wantsFullscreen := false
+	for _, a := range args {
+		if a == "--fullscreen" {
+			wantsFullscreen = true
+			break
+		}
+	}
+	if !wantsFullscreen {
+		args = append([]string{"--inline"}, args...)
+	}
 	opts := []screen.Option{
 		screen.WithDir(proj),
 		screen.WithEnv("HOME", home),
@@ -50,6 +78,14 @@ func startTUI(t *testing.T, cols, rows int, proj, home, sessDir, fauxAddr string
 		// random delay is flaky by construction, not by bug (see
 		// internal/harness/retry.go's delay).
 		screen.WithEnv("HARNESS_RETRY_JITTER", "0"),
+		// Answer kiln's startup tea.RequestBackgroundColor query with the
+		// kiln design's own background (internal/tui/theme.go's designBg)
+		// so internal/tui.SetTerminalBackground's "near design bg keeps the
+		// exact design hexes" rule keeps every PTY golden byte-for-byte
+		// identical to what it was before background-aware tokens existed,
+		// rather than depending on whatever default background
+		// github.com/charmbracelet/x/vt's emulator happens to start with.
+		screen.WithBackgroundColor(tuiDesignBackground),
 	}
 	if fauxAddr != "" {
 		opts = append(opts,
@@ -555,6 +591,95 @@ func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts styles
 	assertGolden(t, goldenPath(name+".styles.txt"), got+"\n")
 }
 
+// TestTUI_Startup_NoDuplicateRows guards the real bug a screenshot of kiln
+// idle in a real terminal caught that this suite's own goldens hid two ways:
+// assertGoldenTail drops every row above its anchor (the banner, sitting
+// above "/ commands", was never even compared), and normalizeBannerCwdRow
+// masks the banner's cwd row before comparing. This test does neither: it
+// reads the raw, unanchored, unnormalized viewport right after waitReady and
+// checks every non-blank row is unique — a startup banner row (or the tips
+// row right after it) printed twice would show up as a duplicate here, the
+// way it did in the real terminal. Rule rows (the full-width "─" divider,
+// which legitimately repeats: the banner's own divider, the input box's top
+// and bottom rules) are the one expected exception.
+//
+// It also pins the row *order* the fixed banner spacing (internal/cli/tui.go
+// bannerRows) produces: the banner's own rows (wordmark, cwd/branch/model,
+// tips — consecutive, no blank rows between them per the design), then one
+// blank row, then the banner's closing rule, then the input box's own
+// [rule, input, rule], then the one status row.
+func TestTUI_Startup_NoDuplicateRows(t *testing.T) {
+	for _, sz := range []struct{ w, h int }{{80, 24}, {120, 40}, {200, 50}} {
+		t.Run(fmt.Sprintf("%dx%d", sz.w, sz.h), func(t *testing.T) {
+			proj := scratchProject(t)
+			home, sessDir := scratchHome(t)
+			addr, _ := startFaux(t, fixBugScript)
+			s := startTUI(t, sz.w, sz.h, proj, home, sessDir, addr)
+			waitReady(t, s)
+
+			rows := s.Rows()
+			isRule := func(r string) bool {
+				trimmed := strings.TrimRight(r, " ")
+				return trimmed != "" && strings.Count(trimmed, "─") == len([]rune(trimmed))
+			}
+
+			seen := map[string]int{}
+			for _, r := range rows {
+				tr := strings.TrimRight(r, " ")
+				if tr == "" || isRule(tr) {
+					continue
+				}
+				seen[tr]++
+			}
+			for text, n := range seen {
+				if n > 1 {
+					t.Errorf("row %q appears %d times (want 1):\nfull screen:\n%s", text, n, strings.Join(rows, "\n"))
+				}
+			}
+
+			// Order: banner rows (wordmark, cwd/branch/model, tips —
+			// consecutive, no blank rows between them per the design), one
+			// blank row, the banner's own closing rule, the input box's own
+			// [rule, input, rule], then the one status row. Every screen
+			// here is the empty-box startup screen (no "Recent sessions"
+			// block: a fresh scratchProject/scratchHome has no prior
+			// sessions).
+			var got []string
+			for _, r := range rows {
+				got = append(got, strings.TrimRight(r, " "))
+			}
+			wantNonBlank := []int{0, 1, 2}
+			for _, i := range wantNonBlank {
+				if i >= len(got) || got[i] == "" {
+					t.Errorf("row %d = %q, want banner content (wordmark/cwd/tips must be consecutive, no blanks between them)", i, safeRow(got, i))
+				}
+			}
+			if safeRow(got, 3) != "" {
+				t.Errorf("row 3 = %q, want blank (one blank row after the banner's tips row)", safeRow(got, 3))
+			}
+			wantRule := []int{4, 5, 7}
+			for _, i := range wantRule {
+				if i >= len(got) || !isRule(got[i]) {
+					t.Errorf("row %d = %q, want a full-width rule row", i, safeRow(got, i))
+				}
+			}
+			if last := got[len(got)-1]; !modeLinePattern.MatchString(last) {
+				t.Errorf("last row = %q, want the status/mode line", last)
+			}
+		})
+	}
+}
+
+// safeRow returns rows[i], or "<out of range>" if i is past the end —
+// TestTUI_Startup_NoDuplicateRows's own error-message helper so an
+// out-of-range index reports cleanly instead of panicking mid-test.
+func safeRow(rows []string, i int) string {
+	if i < 0 || i >= len(rows) {
+		return "<out of range>"
+	}
+	return rows[i]
+}
+
 // --- 1. Empty box goldens across widths -------------------------------
 
 func TestTUI_EmptyBox_Widths(t *testing.T) {
@@ -608,8 +733,18 @@ func TestTUI_FixBug(t *testing.T) {
 		t.Errorf("transcript missing the diff header row (path + counts):\n%s", joined)
 	}
 
-	assertGoldenTail(t, s, "tui-fix-bug", "/ commands")
-	assertGoldenStyles(t, s, "tui-fix-bug", stylesOpts{anchor: "/ commands"})
+	// Golden the whole viewport rather than anchoring past the banner
+	// (assertGoldenTail's own doc comment explains the anchor's original
+	// purpose: hiding a genuine off-by-one scrollback-length race). By the
+	// time this turn has settled at 100x30, the banner and its "/ commands"
+	// anchor text have long since scrolled out of the visible viewport on
+	// every run, so this is not expected to change the golden's content —
+	// but a real duplicated banner/tips row (this suite's own regression,
+	// see TestTUI_Startup_NoDuplicateRows) would no longer be silently
+	// invisible here just because it happened to land above whatever row
+	// the anchor matched.
+	assertGolden(t, goldenPath("tui-fix-bug.txt"), strings.Join(s.Rows(), "\n")+"\n")
+	assertGoldenStyles(t, s, "tui-fix-bug", stylesOpts{})
 
 	fixed, err := os.ReadFile(filepath.Join(proj, "src", "math.js"))
 	if err != nil {

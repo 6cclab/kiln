@@ -4,10 +4,14 @@ This is kiln's own rendering contract — the "Ruled" layout (Layout 1b) from
 the design handoff (`docs/kiln-design-handoff/README.md`, copied into this
 repo for reference; the original bundle also has an interactive HTML
 prototype and screenshots that aren't reproduced here). Kiln has its own
-palette, glyphs and block layout, applied on top of an inline-scrollback
-renderer (blocks commit to native terminal scrollback via `Bridge.Commit`
-→ `Program.Println`; a small live region — spinner, prompts, input box,
-status line — redraws at the bottom every frame).
+palette, glyphs and block layout, applied on top of a renderer whose
+default mode is full-screen (alt-screen): blocks commit into a scrolling
+`viewport` transcript, banner at the top, growing down until it fills the
+screen and then scrolling, with a small live region — spinner, prompts,
+input box, status line — pinned to the bottom every frame. `--inline` opts
+out, committing the same blocks straight into native terminal scrollback
+instead (`Bridge.Commit` → `Program.Println`), with the same live region
+redrawing below it.
 
 Where this doc and the code (`internal/tui/theme.go`, `internal/tui/status.go`,
 `internal/tui/spinner.go`, `internal/tui/transcript.go`, `internal/tui/note.go`,
@@ -45,9 +49,10 @@ Every hex value below is read directly from `internal/tui/theme.go`'s
 | diff del bg | `#2f1c15` | diff `−` line background |
 | bar-empty | `#3f372c` | subagents panel: progress-bar empty cell |
 
-kiln does **not** set a global terminal background: inline mode does not own
-the whole screen. Only the `raise`/`panel`/diff-line/bar-empty background
-tints apply, as per-span SGR, where the design uses them.
+kiln does **not** set a global terminal background: even in full-screen
+(alt-screen) mode it never paints the whole frame one flat background —
+only the `raise`/`panel`/diff-line/bar-empty background tints apply, as
+per-span SGR, where the design uses them.
 
 ## Glyphs
 

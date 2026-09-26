@@ -3,6 +3,6 @@
   25   export default router;
 ◓ Editing upload.ts…  1s · 600 tokens                                                   esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-› queue a follow-up, or esc to stop
+›  queue a follow-up, or esc to stop
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ● ask before edits  ⇧⇥                                                    ctx ──────────  0%  $0.00

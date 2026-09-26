@@ -269,8 +269,18 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		SessionsRoot: d.SessionsRoot,
 		// The definition's body IS the system prompt. That is the whole
 		// point of a subagent, and the reason for a separate harness.
-		SystemPrompt:    def.Prompt,
-		Env:             d.Env,
+		SystemPrompt: def.Prompt,
+		Env:          d.Env,
+		// d.Parent is the session dispatching this one — set so the new
+		// session's own header records it as a subagent's, not a
+		// top-level one (internal/cli/tui.go's buildRecentSessionRows
+		// filters the banner's recent-sessions list on exactly this
+		// field). d.Parent is always non-nil here: Dispatch is only ever
+		// reached through a Dispatcher a caller built with one (cli.go's
+		// process-level dispatcher, or a child Dispatcher this same
+		// function assigns Parent to just below, once this call
+		// succeeds).
+		ParentSessionID: d.Parent.SessionID,
 		ExtraTools:      extraTools,
 		ActiveToolNames: activeToolNames,
 	})

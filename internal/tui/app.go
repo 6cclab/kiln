@@ -11,13 +11,11 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
-	"github.com/andrepato/harness/internal/claude/statusline"
 	"github.com/andrepato/harness/internal/commands"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/harness"
@@ -110,16 +108,11 @@ type Config struct {
 	// NeedsTrust opens the folder-trust dialog before the first prompt
 	// (docs/claude-code-reference.md §5, dialog-trust.txt). OnTrust receives
 	// the answer; "No, exit" quits the program.
-	NeedsTrust bool
-	OnTrust    func(trusted bool)
-	// StatusLineCommand is Claude Code's settings.json "statusLine" command
-	// (empty = none). It is run with the session status payload on stdin and
-	// its stdout is rendered below the input box, exactly as Claude Code
-	// does (docs/claude-code-reference.md §1, the "│ ⎇ …" row).
-	StatusLineCommand string
-	SessionID         string
-	TranscriptPath    string
-	Version           string
+	NeedsTrust     bool
+	OnTrust        func(trusted bool)
+	SessionID      string
+	TranscriptPath string
+	Version        string
 }
 
 // Model is the interactive shell's Bubbletea v2 model — the Go port of
@@ -185,9 +178,6 @@ type Model struct {
 	// dialog/prompt opening and closing (a shrinking live region desyncs it
 	// and the cursor lands above the box).
 	committedRows int
-	// statusLine is the rendered rows of the configured statusLine command,
-	// refreshed on turn boundaries, model changes and a periodic tick.
-	statusLine []string
 	// dialogEcho is the slash command line whose dialog is open; Claude
 	// Code echoes the command (and its result row) only once the dialog
 	// closes (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
@@ -353,10 +343,15 @@ func NewModel(cfg Config) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	if m.cfg.StatusLineCommand == "" {
-		return m.initCmd
-	}
-	return tea.Batch(m.initCmd, statusLineTickCmd(), m.refreshStatusLine())
+	// Ask the terminal for its background color so SetTerminalBackground can
+	// make the hairline/tint surface tokens visible against it instead of
+	// assuming the design's own #14110d (theme.go's doc comment on Rule).
+	// tea.RequestBackgroundColor's OSC 11 query is answered as a
+	// tea.BackgroundColorMsg (handled in update below) — never, on a
+	// terminal that doesn't support it, in which case the design's tokens
+	// stand as they always have (theme.go's SetTerminalBackground is simply
+	// never called, no 300ms timer needed to "give up" and fall back).
+	return tea.Batch(m.initCmd, tea.RequestBackgroundColor)
 }
 
 // --- messages owned by app.go itself ------------------------------------
@@ -405,62 +400,6 @@ type msgReplayTranscript struct{}
 
 // MsgTrustAnswered carries the trust dialog's answer; "No, exit" quits.
 type MsgTrustAnswered struct{ Trusted bool }
-
-// msgStatusLine carries the statusLine command's freshly-rendered rows.
-type msgStatusLine struct{ lines []string }
-
-// msgStatusLineTick drives the periodic statusLine refresh so time-based
-// fields (the 5-hour reset clock, elapsed cost) stay current between turns.
-type msgStatusLineTick struct{}
-
-// statusLineInterval is how often the statusLine command re-runs while
-// idle. Claude Code refreshes on a ~300ms render throttle; a 2s cadence
-// keeps a 700-line shell script from dominating CPU while staying live.
-const statusLineInterval = 2 * time.Second
-
-func statusLineTickCmd() tea.Cmd {
-	return tea.Tick(statusLineInterval, func(time.Time) tea.Msg { return msgStatusLineTick{} })
-}
-
-// refreshStatusLine runs the configured statusLine command off the Update
-// loop (a tea.Cmd runs on its own goroutine) with the current session
-// status, and returns its rows as msgStatusLine. It is a no-op when no
-// command is configured.
-func (m Model) refreshStatusLine() tea.Cmd {
-	cmd := m.cfg.StatusLineCommand
-	if cmd == "" {
-		return nil
-	}
-	st := m.footer.State()
-	used := 0
-	if st.ContextUsed != nil {
-		used = *st.ContextUsed
-	}
-	in := statusline.Input{
-		SessionID:      m.cfg.SessionID,
-		TranscriptPath: m.cfg.TranscriptPath,
-		Cwd:            m.cfg.Cwd,
-		Version:        m.cfg.Version,
-		Model: statusline.Model{
-			ID:          m.cfg.ModelID,
-			DisplayName: st.ModelLabel,
-		},
-		Workspace: statusline.Workspace{CurrentDir: m.cfg.Cwd, ProjectDir: m.cfg.Cwd},
-		ContextWindow: statusline.ContextWindow{
-			ContextWindowSize: st.ContextWindow,
-			TotalInputTokens:  used,
-			CurrentUsage:      statusline.Usage{InputTokens: used},
-		},
-		Cost: statusline.Cost{TotalCostUSD: st.Cost},
-	}
-	if st.ContextWindow > 0 {
-		in.ContextWindow.UsedPercentage = float64(used) / float64(st.ContextWindow) * 100
-	}
-	return func() tea.Msg {
-		lines, _ := statusline.Run(context.Background(), cmd, in, 5*time.Second)
-		return msgStatusLine{lines: lines}
-	}
-}
 
 // msgTurnResult carries what a turn cost, once lane.Prompt returns, so
 // Update can commit the turn summary/error and clear busy state. Built by
@@ -665,16 +604,6 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.replayTranscript()
 		return m, nil
 
-	case msgStatusLine:
-		m.statusLine = msg.lines
-		return m, nil
-
-	case msgStatusLineTick:
-		if m.cfg.StatusLineCommand == "" {
-			return m, nil
-		}
-		return m, tea.Batch(m.refreshStatusLine(), statusLineTickCmd())
-
 	case MsgTrustAnswered:
 		if !msg.Trusted {
 			return m, tea.Quit
@@ -708,11 +637,15 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.footer.Apply(StatusPatch{ModelLabel: &label, ContextWindow: nonZeroOr(window, m.footer.State().ContextWindow)})
 		var nilInt *int
 		m.footer.Apply(StatusPatch{ContextUsed: nilInt})
-		return m, m.refreshStatusLine()
+		return m, nil
 
 	case MsgGitStatus:
 		g := msg.Status
 		m.footer.Apply(StatusPatch{Git: &g})
+		return m, nil
+
+	case tea.BackgroundColorMsg:
+		SetTerminalBackground(msg.Color)
 		return m, nil
 
 	case MsgPermissionPrompt:
@@ -746,7 +679,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msgTurnResult:
-		return m.finishTurn(msg), m.refreshStatusLine()
+		return m.finishTurn(msg), nil
 
 	case msgClearModeHint:
 		if msg.gen == m.modeHintGen {
@@ -819,7 +752,9 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 			}
 		}
 	} else if msg.err != nil {
-		m.commit(RenderError(msg.err.Error()))
+		if m.cfg.Bridge == nil || !m.cfg.Bridge.FaultCommitted(msg.err.Error()) {
+			m.commit(RenderError(msg.err.Error()))
+		}
 	} else if msg.result.Status != harness.StatusCompleted {
 		m.commit(RenderError(msg.result.Status))
 	}
@@ -985,15 +920,19 @@ func (m Model) appendTranscript(newLines []string) Model {
 }
 
 // layoutViewport sizes the viewport to whatever room is left below the
-// bottom region (spinner/dialog/prompt/editor/statusline/mode line),
-// following the viewport to the bottom if it was already there before the
-// resize — the same scroll-to-pause rule appendTranscript applies to new
-// content applies to a height change too, since a shrinking viewport can
-// otherwise leave the offset pointing past the bottom until it corrects.
+// pinned bottom chrome (spinner/dialog/editor/statusline/mode line) — the
+// live tail (tool-group/stream/retry/plan/subagents/prompt) is folded into
+// the viewport's own content by fullscreenView, not held out of its
+// height — following the viewport to the bottom if it was already there
+// before the resize — the same scroll-to-pause rule appendTranscript
+// applies to new content applies to a height change too, since a shrinking
+// viewport can otherwise leave the offset pointing past the bottom until
+// it corrects.
 func (m Model) layoutViewport() Model {
 	width := m.contentWidth()
-	bottom, _ := m.liveLines(width)
-	h := m.height - len(bottom)
+	tail := m.liveTail(width)
+	chrome, _ := m.chromeLines(width, len(tail))
+	h := m.height - len(chrome)
 	if h < 1 {
 		h = 1
 	}
@@ -1026,9 +965,11 @@ func (m Model) toggleFullscreen() (tea.Model, tea.Cmd) {
 	return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
 }
 
-// fullscreenView composes the alt-screen frame: the transcript viewport on
-// top, the same bottom region liveLines already builds (spinner/dialog/
-// prompt/editor/statusline/mode line) pinned to the last rows.
+// fullscreenView composes the alt-screen frame: the transcript viewport —
+// committed transcript followed by the live tail (tool-group/stream/retry/
+// plan/subagents/prompt), so those blocks scroll with the transcript
+// instead of floating above a gap — then the pinned bottom chrome
+// (spinner/dialog/editor/statusline/mode line) on the last rows.
 func (m Model) fullscreenView() tea.View {
 	if m.height <= 0 {
 		// No WindowSizeMsg yet to size the viewport against; the inline
@@ -1049,10 +990,11 @@ func (m Model) fullscreenView() tea.View {
 	}
 
 	width := m.contentWidth()
-	bottom, editorTop := m.liveLines(width)
-	if len(bottom) > m.height-1 {
-		overflow := len(bottom) - (m.height - 1)
-		bottom = bottom[overflow:]
+	tail := m.liveTail(width)
+	chrome, editorTop := m.chromeLines(width, len(tail))
+	if len(chrome) > m.height-1 {
+		overflow := len(chrome) - (m.height - 1)
+		chrome = chrome[overflow:]
 		if editorTop >= 0 {
 			editorTop -= overflow
 			if editorTop < 0 {
@@ -1061,15 +1003,28 @@ func (m Model) fullscreenView() tea.View {
 		}
 	}
 
-	vpRows := strings.Split(m.viewport.View(), "\n")
+	// A local copy: the persistent m.viewport only ever holds the
+	// committed transcript (appendTranscript/layoutViewport keep it that
+	// way), so folding the live tail in here — for display only — cannot
+	// leak into state other code depends on. Same scroll-to-pause rule as
+	// appendTranscript: a user scrolled up is not yanked back down by a
+	// growing live tail.
+	vp := m.viewport
+	wasBottom := m.viewport.AtBottom()
+	vp.SetContent(strings.Join(append(append([]string{}, m.transcript...), tail...), "\n"))
+	if wasBottom {
+		vp.GotoBottom()
+	}
+
+	vpRows := strings.Split(vp.View(), "\n")
 	// viewport.View pads to its own Height; guard the invariant explicitly
 	// rather than trust it silently, since a short content string is the
 	// one case that could violate it.
-	for len(vpRows) < m.viewport.Height() {
+	for len(vpRows) < vp.Height() {
 		vpRows = append(vpRows, "")
 	}
 
-	content := append(append([]string{}, vpRows...), bottom...)
+	content := append(append([]string{}, vpRows...), chrome...)
 	v := tea.NewView(strings.Join(content, "\n"))
 	if m.cfg.SessionName != "" {
 		v.WindowTitle = m.cfg.SessionName
@@ -1712,7 +1667,7 @@ func (m Model) renderRetryLive(width int) []string {
 	if t, ok := clockOverride(); ok {
 		now = t
 	}
-	return append(RenderRetry(*m.retry, now, width), "")
+	return append([]string{""}, RenderRetry(*m.retry, now, width)...)
 }
 
 // renderStreamLive draws the live streaming "kiln" block (stream.go's
@@ -1724,7 +1679,7 @@ func (m Model) renderStreamLive(width int) []string {
 	if m.streamText == "" || IsPlain() {
 		return nil
 	}
-	return append(RenderStreamLive(m.streamText, width, maxStreamRows), "")
+	return append([]string{""}, RenderStreamLive(m.streamText, width, maxStreamRows)...)
 }
 
 // renderPlanLive draws the live "plan" checklist (plan.go's RenderPlan)
@@ -1736,16 +1691,20 @@ func (m Model) renderPlanLive(width int) []string {
 	if len(items) == 0 {
 		return nil
 	}
-	return append(RenderPlan(items, width), "")
+	return append([]string{""}, RenderPlan(items, width)...)
 }
 
-// liveLines builds the live-region rows (everything below the committed
-// transcript: spinner, dialog/prompt, input box, statusLine, mode line) and
-// the index of the editor's first row (editorTop, -1 when the editor is not
-// shown). Split out of View so WindowSizeMsg can measure the live region's
-// height to size the startup filler.
-func (m Model) liveLines(width int) (lines []string, editorTop int) {
-	editorTop = -1
+// liveTail builds the rows that are "the newest part of the transcript":
+// the in-flight tool-group row, streaming text, the retry countdown, the
+// live plan checklist, the subagents panel and the permission/plan prompt.
+// In fullscreen these scroll with the transcript (they sit in the viewport,
+// directly after the last committed block) rather than pinning above the
+// bottom chrome; in inline mode they still render immediately above it,
+// via liveLines. A dialog or the verbose bridge view replace everything
+// from the prompt onward, so only the tool-group/thinking rows lead in
+// that case.
+func (m Model) liveTail(width int) []string {
+	var lines []string
 
 	if m.group != nil {
 		lines = append(lines, "", RenderToolGroupRunning(m.group.kind, len(m.group.views)))
@@ -1757,6 +1716,67 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 			lines = append(lines, FitStatus(collapsed[0], width))
 		}
 	}
+
+	if m.dialog != nil || (m.cfg.Bridge != nil && m.cfg.Bridge.Verbose()) {
+		return lines
+	}
+
+	// The live-while-last blocks (live_freeze.go): streaming text and
+	// the retry countdown only show while nothing is waiting on the
+	// user (a permission/plan prompt pauses the turn); the plan
+	// checklist and the subagents panel keep showing during a prompt
+	// too — the design's permission scene (docs/kiln-design-handoff/
+	// README.md scene 06) keeps them visible, in the transcript
+	// position, directly above the "approval needed" block and the
+	// busy line.
+	if !m.prompt.Active() {
+		if rows := m.renderStreamLive(width); len(rows) > 0 {
+			lines = append(lines, rows...)
+		}
+		if rows := m.renderRetryLive(width); len(rows) > 0 {
+			lines = append(lines, rows...)
+		}
+	}
+	if rows := m.renderPlanLive(width); len(rows) > 0 {
+		lines = append(lines, rows...)
+	}
+	if rows := m.subagents.Render(width); len(rows) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, rows...)
+	}
+
+	if m.prompt.Active() {
+		// Every live block leads with a blank row, like a committed one.
+		lines = append(lines, "")
+		// The prompt renders where the input box normally sits, but —
+		// unlike before this pass — the busy line, editor and status
+		// row below it all keep rendering too (docs/kiln-design-
+		// handoff/README.md scene 06): "approval needed" block, then
+		// "◐ Waiting for approval…", then the input with "press 1, 2
+		// or 3", then the status line. Plan approval keeps its own
+		// full `▔` rule and blank row above the block.
+		if m.prompt.plan != nil {
+			lines = append(lines, Rule(strings.Repeat("▔", width)), "")
+		}
+		lines = append(lines, m.prompt.Render(width)...)
+		lines = append(lines, "")
+	}
+
+	return lines
+}
+
+// chromeLines builds the bottom chrome that stays pinned regardless of
+// scroll position — busy line, popup, input box and status line (or, in
+// their place, a dialog or the verbose bridge's notice row) — and the
+// index of the editor's first row within this slice (editorTop, -1 when
+// the editor is not shown). tailLen is the number of rows liveTail
+// produced immediately above this chrome (in inline mode, and previously
+// always) and is only used to size a dialog's remaining room and to
+// position a popup relative to the input box's top rule, exactly as
+// liveLines used to when tail and chrome were one slice.
+func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
+	editorTop = -1
+
 	switch {
 	case m.dialog != nil:
 		// A dialog replaces the input box and mode line under a `▔` rule
@@ -1764,7 +1784,7 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 		if s := m.spinner.Render(width, time.Time{}); len(s) > 0 {
 			lines = append(lines, s...)
 		}
-		lines = append(lines, m.dialogRows(width, len(lines))...)
+		lines = append(lines, m.dialogRows(width, tailLen+len(lines))...)
 	case m.cfg.Bridge != nil && m.cfg.Bridge.Verbose():
 		// The detailed transcript view (verbose-ctrl-o.txt rows 38-39): a
 		// rule and the notice row take the input box's place until Ctrl+O
@@ -1774,45 +1794,6 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 		}
 		lines = append(lines, RuleColour(strings.Repeat("─", width)), m.renderStatusRow(width))
 	default:
-		// The live-while-last blocks (live_freeze.go): streaming text and
-		// the retry countdown only show while nothing is waiting on the
-		// user (a permission/plan prompt pauses the turn); the plan
-		// checklist and the subagents panel keep showing during a prompt
-		// too — the design's permission scene (docs/kiln-design-handoff/
-		// README.md scene 06) keeps them visible, in the transcript
-		// position, directly above the "approval needed" block and the
-		// busy line.
-		if !m.prompt.Active() {
-			if rows := m.renderStreamLive(width); len(rows) > 0 {
-				lines = append(lines, rows...)
-			}
-			if rows := m.renderRetryLive(width); len(rows) > 0 {
-				lines = append(lines, rows...)
-			}
-		}
-		if rows := m.renderPlanLive(width); len(rows) > 0 {
-			lines = append(lines, rows...)
-		}
-		if rows := m.subagents.Render(width); len(rows) > 0 {
-			lines = append(lines, rows...)
-			lines = append(lines, "")
-		}
-
-		if m.prompt.Active() {
-			// The prompt renders where the input box normally sits, but —
-			// unlike before this pass — the busy line, editor and status
-			// row below it all keep rendering too (docs/kiln-design-
-			// handoff/README.md scene 06): "approval needed" block, then
-			// "◐ Waiting for approval…", then the input with "press 1, 2
-			// or 3", then the status line. Plan approval keeps its own
-			// full `▔` rule and blank row above the block.
-			if m.prompt.plan != nil {
-				lines = append(lines, Rule(strings.Repeat("▔", width)), "")
-			}
-			lines = append(lines, m.prompt.Render(width)...)
-			lines = append(lines, "")
-		}
-
 		// The busy line always sits directly above the input box — the
 		// last thing before it, whatever else is showing above (streaming
 		// text, a retry, the plan/subagents blocks, or the permission/plan
@@ -1824,7 +1805,7 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 		if !m.prompt.Active() && m.popup != nil {
 			// Claude Code draws the suggestions directly above the input
 			// box's top rule (autocomplete-slash.txt rows 29-32).
-			lines = append(lines, m.renderPopup(width, len(lines))...)
+			lines = append(lines, m.renderPopup(width, tailLen+len(lines))...)
 		}
 
 		editorTop = len(lines)
@@ -1835,19 +1816,41 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 			lines = append(lines, RenderShortcuts(width)...)
 		} else {
 			// The one-row status line sits directly below the input box
-			// (docs/kiln-design-handoff/README.md "Screen anatomy"); a
-			// configured statusLine command still renders as extra dim rows
-			// after it (docs/claude-code-reference.md §1: the "│ ⎇ …" row).
-			// The statusLine command emits its own (non-kiln) colours, so
-			// strip them and re-tint the row in the kiln dim tone: it keeps
-			// its text/segments and layout, just in the kiln palette.
+			// (docs/kiln-design-handoff/README.md "Screen anatomy") and is
+			// the whole bottom area — kiln's own status line is the design.
+			// A configured Claude Code settings.json "statusLine" command
+			// used to render as extra dim rows underneath it; that plumbing
+			// (Config.StatusLineCommand, Model.statusLine,
+			// refreshStatusLine, msgStatusLine/msgStatusLineTick) has been
+			// removed entirely — there is no opt-in setting yet to bring it
+			// back, so a configured command is now silently unused.
 			lines = append(lines, m.renderStatusRow(width))
-			for _, sl := range m.statusLine {
-				lines = append(lines, FitStatus("  "+Muted(ansi.Strip(sl)), width))
-			}
 		}
 	}
 
+	return lines, editorTop
+}
+
+// liveLines builds the live-region rows (everything below the committed
+// transcript: spinner, dialog/prompt, input box, statusLine, mode line) and
+// the index of the editor's first row (editorTop, -1 when the editor is not
+// shown). Split out of View so WindowSizeMsg can measure the live region's
+// height to size the startup filler. This is liveTail followed by
+// chromeLines — in inline mode the two always render together, back to
+// back; fullscreen instead folds liveTail into the scrolling viewport (see
+// fullscreenView) and keeps only chromeLines pinned to the bottom.
+func (m Model) liveLines(width int) (lines []string, editorTop int) {
+	tail := m.liveTail(width)
+	chrome, chromeEditorTop := m.chromeLines(width, len(tail))
+
+	lines = make([]string, 0, len(tail)+len(chrome))
+	lines = append(lines, tail...)
+	lines = append(lines, chrome...)
+
+	editorTop = -1
+	if chromeEditorTop >= 0 {
+		editorTop = len(tail) + chromeEditorTop
+	}
 	return lines, editorTop
 }
 

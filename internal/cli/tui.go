@@ -210,9 +210,12 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		Version:        Version,
 		Keymap:         bindings.Keymap(),
 	}
-	if deps.StatusLine != nil {
-		cfg.StatusLineCommand = deps.StatusLine.Command
-	}
+	// deps.StatusLine (settings.json's "statusLine" command) is
+	// intentionally not wired into cfg any more: kiln's own status line is
+	// the design (docs/kiln-design-handoff/README.md "Screen anatomy"), and
+	// there is no opt-in setting yet to render the configured Claude Code
+	// command underneath it. See internal/tui.Model's renderStatusRow call
+	// site (liveLines) for what this used to feed.
 
 	// Folder trust, once per new folder (docs/claude-code-reference.md §5,
 	// dialog-trust.txt): the harness reads the project's .claude settings
@@ -280,7 +283,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			})
 			bridge.Send(tui.MsgFooterNote{Text: ""})
 			if notice := mcpFailureNotice(statuses); notice != "" {
-				bridge.Commit([]string{tui.Amber("⚠") + " " + tui.Muted(notice)})
+				bridge.CommitNote(notice)
 			}
 		}()
 	}
@@ -375,10 +378,12 @@ func runGit(ctx context.Context, cwd string, args ...string) (string, error) {
 
 // mcpFailureNotice is the one-line, dim aside for servers that did not
 // connect: the session degrades to the servers that did, and /mcp has the
-// details. Empty when everything connected.
-// mcpFailureNotice is Claude Code's startup warning row for servers that did
-// not connect (claude-code-reference.md section 1: "⚠ 1 MCP server needs
-// authentication · run /mcp"). Empty when everything connected.
+// details. Empty when everything connected. Committed via Bridge.CommitNote
+// (a plain "system" design-system note, "<notice>" — the text already says
+// "MCP", so no separate "MCP: " prefix is added) rather than a
+// standalone "⚠"-prefixed row — kiln's note block already carries the
+// "system" label rule, so a second glyph in the text itself was redundant
+// chrome the design doesn't call for.
 func mcpFailureNotice(statuses []mcpgate.ServerStatus) string {
 	failed := 0
 	for _, s := range statuses {
@@ -427,14 +432,16 @@ func bannerRows(deps InteractiveDeps) []string {
 	// and tagline dim.
 	rows := []string{
 		tui.KilnAmber(tui.Bold("K I L N")) + "  " + tui.Muted(verLabel+" · coding agent"),
-		"",
 		tui.Muted(loc),
-		"",
 		tips,
 	}
 
+	var currentSessionID string
+	if deps.Started != nil {
+		currentSessionID = deps.Started.SessionID
+	}
 	if !deps.IsResume {
-		if recent := recentSessionRows(deps.Cwd); len(recent) > 0 {
+		if recent := recentSessionRows(deps.Cwd, currentSessionID); len(recent) > 0 {
 			rows = append(rows, "", tui.Muted("Recent sessions"))
 			rows = append(rows, recent...)
 		}
@@ -453,17 +460,18 @@ const recentSessionRowLimit = 3
 const recentSessionsTimeout = 300 * time.Millisecond
 
 // recentSessionRows renders up to recentSessionRowLimit "<when>  <title>"
-// rows for the most recently modified sessions under cwd, sourced from
-// internal/session/jsonl.Repo.List — the only data this run has for past
-// sessions in this folder. Returns nil (silently, logged via diag) on any
-// error, on timeout, or when there are no sessions.
-func recentSessionRows(cwd string) []string {
+// rows for the most recently modified TOP-LEVEL sessions under cwd, sourced
+// from internal/session/jsonl.Repo.List — the only data this run has for
+// past sessions in this folder. excludeID (the session being resumed, or
+// this run's own freshly-created id) is never listed. Returns nil (silently,
+// logged via diag) on any error, on timeout, or when there are no sessions.
+func recentSessionRows(cwd, excludeID string) []string {
 	type result struct {
 		rows []string
 	}
 	done := make(chan result, 1)
 	go func() {
-		rows := buildRecentSessionRows(cwd)
+		rows := buildRecentSessionRows(cwd, excludeID)
 		done <- result{rows: rows}
 	}()
 	select {
@@ -475,7 +483,7 @@ func recentSessionRows(cwd string) []string {
 	}
 }
 
-func buildRecentSessionRows(cwd string) []string {
+func buildRecentSessionRows(cwd, excludeID string) []string {
 	repo, err := jsonl.NewRepo("")
 	if err != nil {
 		diag.L().Warn("banner: recent sessions repo", "err", err)
@@ -486,6 +494,22 @@ func buildRecentSessionRows(cwd string) []string {
 		diag.L().Warn("banner: recent sessions list", "err", err)
 		return nil
 	}
+	// Top-level sessions only: a subagent's session is a child (jsonl's
+	// ParentSessionID, or the legacy v3 equivalent LegacyParentSessionPath),
+	// and its first user message is the subagent's own task prompt, not
+	// something the person typed — listing it here would show tasks like
+	// "Check the Redis config" as if they were past sessions of this cwd.
+	toplevel := metas[:0]
+	for _, meta := range metas {
+		if meta.ParentSessionID != "" || meta.LegacyParentSessionPath != "" {
+			continue
+		}
+		if meta.ID == excludeID {
+			continue
+		}
+		toplevel = append(toplevel, meta)
+	}
+	metas = toplevel
 	if len(metas) == 0 {
 		return nil
 	}

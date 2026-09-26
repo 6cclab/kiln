@@ -5,6 +5,6 @@ faux/faux-1 · 7k of 128k tokens
 ■ Conversation                                                                               0    0%
 ■ Free                                                                                  120.4k   94%
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-› describe a task · / for commands · @ to add files
+›  describe a task · / for commands · @ to add files
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ● ask before edits  ⇧⇥                                                    ctx ──────────  4%  $0.00

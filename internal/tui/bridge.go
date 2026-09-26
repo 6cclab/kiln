@@ -56,8 +56,11 @@ type sink interface {
 }
 
 type Bridge struct {
-	mu       sync.Mutex
-	progSink sink
+	// lastFault is the last EventFault message committed as an error
+	// block; see FaultCommitted.
+	lastFault string
+	mu        sync.Mutex
+	progSink  sink
 
 	queue chan bridgeItem
 	quit  chan struct{}
@@ -881,7 +884,19 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		}
 		b.FreezeBefore()
 		b.Commit(RenderError(msg))
+		b.mu.Lock()
+		b.lastFault = msg
+		b.mu.Unlock()
 	}
+}
+
+// FaultCommitted reports whether the bridge already committed an error
+// block for this exact message (EventFault), so finishTurn does not
+// commit the same failure a second time.
+func (b *Bridge) FaultCommitted(msg string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastFault == msg
 }
 
 // msgCommitMarkdown asks the app to render assistant markdown at the

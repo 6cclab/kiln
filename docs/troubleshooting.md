@@ -365,15 +365,15 @@ overridable per-hook via `timeout` in settings.json.
   non-truecolor terminal (`internal/tui/theme.go`) — colors are
   approximated by the terminal, not by kiln.
 
-- **`--ax-screen-reader`**: forces plain, linear output and disables fullscreen
-  even if `--fullscreen` was also passed (`internal/cli/tui.go`).
+- **`--ax-screen-reader`**: forces plain, linear, always-inline output —
+  full-screen is unavailable and `Ctrl+F` is a no-op (`internal/cli/tui.go`).
 
-- **Fullscreen** (`--fullscreen` / `Ctrl+F`): scrolls via `PgUp`/`PgDn`,
-  `Shift+Up/Down`, or the mouse wheel. Toggling either way redraws the
-  transcript from the session log, so shell (`!`) output and hook notices not
-  in that log don't survive the switch. Mouse text selection needs the
-  terminal's own passthrough modifier (Shift or Option) since the app owns
-  mouse events otherwise.
+- **Full-screen** (the default; `--inline` / `Ctrl+F` toggle it): scrolls via
+  `PgUp`/`PgDn`, `Shift+Up/Down`, or the mouse wheel. Toggling either way
+  redraws the transcript from the session log, so shell (`!`) output and
+  hook notices not in that log don't survive the switch. Mouse text
+  selection needs the terminal's own passthrough modifier (Shift or Option)
+  since the app owns mouse events otherwise.
 
 - **`/bashes`** lists background shells; reports `no background shells` if none
   are running or none are wired in (`internal/commands/inline.go`).

@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	fauxprovider "github.com/andrepato/harness/internal/provider/faux"
 )
@@ -529,5 +530,82 @@ func TestSubagent_RoleFallbackWarnsInLog(t *testing.T) {
 	}
 	if model := subagentLogField(t, line, "model"); model != fauxprovider.ModelID {
 		t.Errorf("model = %q, want %s (fallback keeps the parent's model)", model, fauxprovider.ModelID)
+	}
+}
+
+// --- recent-sessions banner excludes subagent sessions ----------------
+//
+// TestTUI_RecentSessions_ExcludesSubagents drives the real TUI (not
+// runHarness's print mode, unlike this file's other tests) through one
+// full `task` dispatch, then starts kiln again in the very same project
+// and $HOME and checks the startup banner's "Recent sessions" block: it
+// must list the first run's own prompt and must not list the subagent's
+// dispatch description, proving internal/cli/tui.go's
+// buildRecentSessionRows actually excludes the dispatched session rather
+// than just having a filter that never fires — it only fires now that
+// internal/agent/dispatch.go's Dispatch sets Options.ParentSessionID to
+// the dispatching session's own SessionID, which agent.Start threads into
+// the header repo.Create writes (internal/agent/session.go).
+//
+// buildRecentSessionRows keys off $HOME (jsonl.NewRepo("")'s own default,
+// deliberately not HARNESS_SESSIONS_DIR — see internal/cli/banner_golden_test.go's
+// own doc comment on this), so sessDir here is pinned to exactly
+// $HOME/.harness/sessions rather than an unrelated scratchHome temp dir:
+// the CLI's own session repo (chat.go, HARNESS_SESSIONS_DIR-driven) and
+// the banner's recent-sessions repo (tui.go, $HOME-driven) must agree on
+// where the session files live, or the second run would never see the
+// first run's sessions at all, task-dispatch history or not.
+func TestTUI_RecentSessions_ExcludesSubagents(t *testing.T) {
+	script := loadFauxScript(t, "task")
+	addr, _ := startFaux(t, script)
+	proj := scratchProject(t)
+	home := t.TempDir()
+	sessDir := filepath.Join(home, ".harness", "sessions")
+
+	const mainPrompt = "look something up for me"
+	// subagentPrompt is task.yaml's own dispatch prompt (`prompt: "find
+	// X"`) — the text firstUserMessageTitle (internal/cli/tui.go) would
+	// read as the subagent session's own title, were it not excluded.
+	// Checked instead of the dispatch's `description` ("look something
+	// up"), which is a substring of mainPrompt itself and so cannot tell
+	// "excluded" apart from "coincidentally not shown".
+	const subagentPrompt = "find X"
+
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	waitReady(t, s)
+	s.Send(mainPrompt)
+	s.SendKey("enter")
+	waitTurnSettled(t, s)
+
+	s.SendKey("ctrl+c")
+	if err := s.WaitFor("Press Ctrl-C again to exit", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	s.SendKey("ctrl+c")
+	if _, err := s.Exit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second, freshly started process, same project and $HOME, same
+	// faux server (still needed so the model resolves at startup even
+	// though nothing is submitted — HARNESS_MODEL is set unconditionally
+	// by startTUI, and the faux provider is dynamic: without
+	// HARNESS_FAUX_ADDR its model list is never populated, and startup
+	// fails with "unknown model ... run a refresh first").
+	s2 := startTUI(t, 100, 30, proj, home, sessDir, addr)
+	waitReady(t, s2)
+
+	joined := strings.Join(s2.Rows(), "\n")
+	if !strings.Contains(joined, "Recent sessions") {
+		t.Fatalf("banner has no \"Recent sessions\" block on the second run:\n%s", joined)
+	}
+	if !strings.Contains(joined, mainPrompt) {
+		t.Errorf("banner's recent sessions do not list the first run's own prompt %q:\n%s", mainPrompt, joined)
+	}
+	if strings.Contains(joined, subagentPrompt) {
+		t.Errorf("banner's recent sessions list the subagent's own prompt %q — the subagent session was not excluded:\n%s", subagentPrompt, joined)
+	}
+	if got := strings.Count(joined, "just now"); got != 1 {
+		t.Errorf("banner's recent-sessions block has %d row(s) (\"just now\"), want exactly 1 — parent only, subagent excluded:\n%s", got, joined)
 	}
 }

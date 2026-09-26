@@ -121,12 +121,16 @@ func TestRenderGolden_BannerWithSessions(t *testing.T) {
 		t.Fatalf("jsonl.NewRepo: %v", err)
 	}
 	now := time.Now()
+	var parentID string
 	for i, prompt := range []string{"add the retry loop", "fix the upload timeout"} {
 		st, meta, err := repo.Create(jsonl.CreateOptions{Cwd: testCwd})
 		if err != nil {
 			t.Fatalf("repo.Create: %v", err)
 		}
 		st.Close()
+		if i == 0 {
+			parentID = meta.ID
+		}
 		// firstUserMessageTitle scans for `"role":"user"` and then looks
 		// BACKWARD for the last `"text":"` before it — so the text field
 		// must appear before the role field in this raw line.
@@ -147,7 +151,36 @@ func TestRenderGolden_BannerWithSessions(t *testing.T) {
 		}
 	}
 
+	// A subagent's session: a child of the first session above
+	// (ParentSessionID set), with the most recent mtime of all three and a
+	// prompt that would sort first and read out of place if the banner ever
+	// listed it — it must be excluded, not just outranked.
+	childSt, childMeta, err := repo.Create(jsonl.CreateOptions{Cwd: testCwd, ParentSessionID: parentID})
+	if err != nil {
+		t.Fatalf("repo.Create (child): %v", err)
+	}
+	childSt.Close()
+	childLine := `{"type":"message","text":"Check the Redis config and survey the upload tests","role":"user"}` + "\n"
+	cf, err := os.OpenFile(childMeta.Path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open child session file: %v", err)
+	}
+	if _, err := cf.WriteString(childLine); err != nil {
+		t.Fatalf("write child session line: %v", err)
+	}
+	cf.Close()
+	childMt := now.Add(10 * time.Minute)
+	if err := os.Chtimes(childMeta.Path, childMt, childMt); err != nil {
+		t.Fatalf("chtimes (child): %v", err)
+	}
+
 	Version = "0.9.2"
 	deps := InteractiveDeps{Cwd: testCwd, ModelLabel: "kiln-large", IsResume: false}
-	assertBannerGolden(t, "banner-with-sessions", bannerRows(deps))
+	rows := bannerRows(deps)
+	for _, row := range rows {
+		if strings.Contains(row, "Redis") {
+			t.Fatalf("banner listed a subagent (child) session: %q\nrows: %v", row, rows)
+		}
+	}
+	assertBannerGolden(t, "banner-with-sessions", rows)
 }

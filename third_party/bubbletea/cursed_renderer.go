@@ -782,7 +782,26 @@ func (s *cursedRenderer) insertAbove(str string) error {
 	// spinner row gone at turn end) that has not been flushed yet, paint it
 	// first, or the inserted lines scroll the terminal by the old, taller
 	// height and the shrink then leaves a blank row at the bottom.
-	if !s.starting && (s.lastView == nil || !viewEquals(s.lastView, &s.view)) {
+	//
+	// This pre-flush used to be skipped while s.starting was still true (the
+	// renderer's very first flush had not happened yet), on the theory that
+	// there was nothing on the glass yet to desync from. But s.cellbuf is
+	// still sized from newCursedRenderer's construction at that point — the
+	// full terminal height/width, not the live region's actual (small)
+	// content height, which flushLocked only computes once it has run at
+	// least once (frameArea.Max.Y = content.Height() below). If the
+	// program's very first committed line (kiln's startup banner, printed
+	// via Bridge.Commit -> tea.Println on its own goroutine, racing the
+	// renderer's own fps ticker) reaches insertAbove before that first
+	// flush, h := s.cellbuf.Height() reads the full terminal height instead
+	// of the live region's, and the down/up scroll math below operates over
+	// the wrong span — inserting the banner at the wrong row and leaving a
+	// stray duplicate of its last line in real scrollback once the
+	// following (correctly small) flush repaints the live region. Skipping
+	// the guard here (rather than gating it on s.starting) means the first
+	// insertAbove call always flushes the pending small view first, so
+	// s.cellbuf is sized correctly before the scroll math ever runs.
+	if s.lastView == nil || !viewEquals(s.lastView, &s.view) {
 		if err := s.flushLocked(false); err != nil {
 			return err
 		}

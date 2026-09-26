@@ -67,6 +67,18 @@ type Options struct {
 	// SessionID creates the session with this id (ignored when Resume or
 	// ResumeLatest actually finds a session to open or fork).
 	SessionID string
+	// ParentSessionID, when set, is written into a freshly created
+	// session's header (jsonl.CreateOptions.ParentSessionID) so a
+	// subagent's own session file is distinguishable from a top-level one
+	// (internal/cli/tui.go's buildRecentSessionRows filters the banner's
+	// recent-sessions list on exactly this field). Left empty for the
+	// top-level CLI session; dispatch.go sets it to the dispatching
+	// session's own SessionID. Ignored when Resume/ResumeLatest actually
+	// opens or forks an existing session — Fork already sets a forked
+	// session's ParentSessionID to its *source* session's id
+	// (jsonl/fork.go), which is a different relationship than "dispatched
+	// by".
+	ParentSessionID string
 	// ForkSession branches the resumed session into a new file instead of
 	// continuing in place. Only takes effect together with Resume or
 	// ResumeLatest, matching session.ts's `fork` option.
@@ -336,7 +348,7 @@ func resolveSession(repo *jsonl.Repo, opts Options, cwd string, now func() time.
 		// "a stale id from a deleted session does not block startup".
 	}
 
-	storage, meta, err := repo.Create(jsonl.CreateOptions{Cwd: cwd, ID: opts.SessionID})
+	storage, meta, err := repo.Create(jsonl.CreateOptions{Cwd: cwd, ID: opts.SessionID, ParentSessionID: opts.ParentSessionID})
 	if err != nil {
 		return nil, jsonl.Metadata{}, false, fmt.Errorf("agent: create session: %w", err)
 	}

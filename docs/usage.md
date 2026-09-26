@@ -47,9 +47,10 @@ is `0` on completion, `1` on an empty prompt, a bad slash command, a
 Source: `internal/cli/print.go`.
 
 `--effort low|medium|high|xhigh|max` sets the reasoning effort sent to the
-model on every turn of the session (`internal/harness/turn.go`). `--fullscreen`
-starts directly in alt-screen mode (§10); `--ax-screen-reader` starts in plain
-mode (§11).
+model on every turn of the session (`internal/harness/turn.go`). Full-screen
+(alt-screen) is the default (§10); `--inline` opts out, keeping the
+transcript in native scrollback (`--fullscreen` is still accepted, as a
+no-op, for compatibility). `--ax-screen-reader` always runs inline (§11).
 
 `kiln session inspect <path>` is the only `session` subcommand: it opens a
 session file directly and prints a JSON report (entry counts, branch tips,
@@ -73,8 +74,11 @@ covers its worktrees. Recorded in `~/.harness/trusted.json`; set
 Startup shows a banner (KILN wordmark, version, `<cwd> · branch <b> · model
 <m>`, a shortcut tips row), then the transcript: each turn, tool call, diff
 and system note commits as its own labelled block (`you`, `kiln`, a tool
-name, `edit`, `system`, `error`, ...) under a hairline rule, straight into
-the terminal's own scrollback. Below that, a small live region redraws every
+name, `edit`, `system`, `error`, ...) under a hairline rule. By default
+(full-screen/alt-screen, §10) that transcript scrolls in its own viewport,
+banner at the top, growing down until it fills the screen and then
+scrolling; under `--inline` it goes straight into the terminal's own
+scrollback instead. Below that, a small live region redraws every
 frame: a spinner row while the model is working (gerund + elapsed/token
 count, `esc to stop` right-aligned), the permission/plan prompt when one is
 open, the input box, and one status-line row below it — a mode dot and label
@@ -359,19 +363,24 @@ Source: `internal/agent/session.go`, `internal/session/jsonl`, `internal/command
 
 ## 10. Full-screen mode
 
-`--fullscreen`, or `Ctrl+F` at any time, switches to an alt-screen layout:
-the transcript scrolls in its own viewport with the input pinned at the
-bottom, navigable with `PgUp`/`PgDn`, `Shift+↑`/`↓`, or the mouse wheel; new
-output only auto-follows while you're already at the bottom, and history
-re-wraps on a terminal resize. Toggling either direction redraws the
-transcript from the session log, so anything not part of that log —
-`!`-command output, hook notices — doesn't survive the switch. Inline mode
-is the default. Source: `internal/tui/app.go`, `internal/cli/tui.go`.
+Full-screen (alt-screen) is the default layout: the transcript scrolls in
+its own viewport, banner at the top, with the input pinned at the bottom,
+navigable with `PgUp`/`PgDn`, `Shift+↑`/`↓`, or the mouse wheel; new output
+only auto-follows while you're already at the bottom, and history re-wraps
+on a terminal resize. `--inline` opts out at startup, keeping the transcript
+in native scrollback instead; `Ctrl+F` toggles either direction at any time.
+Toggling redraws the transcript from the session log, so anything not part
+of that log — `!`-command output, hook notices — doesn't survive the
+switch. `--fullscreen` is still accepted (a no-op — full-screen is already
+the default) for compatibility with scripts/muscle memory from before it
+was. Source: `internal/tui/app.go`, `internal/cli/tui.go`,
+`internal/cli/args.go`.
 
 ## 11. Screen reader / plain mode
 
-`--ax-screen-reader` runs inline only (full-screen is unavailable and
-`Ctrl+F` is a no-op) and switches every glyph to a plain-ASCII equivalent —
-no box-drawing rules, no animated spinner frames — so the transcript reads
-as flat text end to end. It cannot be combined with `--fullscreen`.
+`--ax-screen-reader` always runs inline (full-screen is unavailable and
+`Ctrl+F` is a no-op — screen readers read scrollback, not a redrawn
+viewport) and switches every glyph to a plain-ASCII equivalent — no
+box-drawing rules, no animated spinner frames — so the transcript reads as
+flat text end to end.
 Source: `internal/cli/args.go`, `internal/cli/tui.go`, `internal/tui/doc.go`.

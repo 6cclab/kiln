@@ -73,8 +73,9 @@ Both tool-list flags accept `Read,Write,Edit` (commas) and `Bash(git *) Edit` (w
 | `--output-format <fmt>` | `text \| json \| stream-json`; invalid values are dropped, falling back to `text` (`args.go`, `print.go`) |
 | `--verbose` | echoes each tool call (`name(arg)`) to stderr as it starts |
 | `--debug` | debug-level run log; path is printed under `-p` (`chat.go`) and always reported by `kiln doctor` |
-| `--ax-screen-reader` | flat text, no borders/animation; forces inline mode even with `--fullscreen` |
-| `--fullscreen` | alt-screen TUI, toggled at runtime with `ctrl+f` |
+| `--ax-screen-reader` | flat text, no borders/animation; always inline, never full-screen |
+| `--inline` | opt out of the default full-screen (alt-screen) TUI, keeping native scrollback; toggled either way at runtime with `ctrl+f` |
+| `--fullscreen` | accepted for compatibility; full-screen is already the default |
 
 `-v`/`--version` and `-h`/`--help` take no value. An unrecognized flag is collected into `Unknown` and the whole run refuses with `unknown flag(s): ...` rather than being silently ignored (`args.go`, `main.go`).
 

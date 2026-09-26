@@ -152,7 +152,16 @@ func (m Model) splicePlaceholder(line string, inner int) string {
 	if room < len(text) {
 		text = text[:room]
 	}
-	withPlaceholder := trimmed + m.styles.Placeholder.Render(string(text))
+	// One blank cell first: the terminal cursor sits there, so the
+	// placeholder reads "› ▍ describe a task…" (design), not with the
+	// cursor drawn over its first letter.
+	if room > 0 {
+		room--
+		if room < len(text) {
+			text = text[:room]
+		}
+	}
+	withPlaceholder := trimmed + " " + m.styles.Placeholder.Render(string(text))
 	pad := inner - ansi.StringWidth(withPlaceholder)
 	if pad < 0 {
 		pad = 0

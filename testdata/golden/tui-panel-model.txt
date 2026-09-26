@@ -1,7 +1,5 @@
 K I L N  dev · coding agent
-
 <cwd>…
-
 / commands   @ add files   ⇧⇥ cycle mode   esc stop
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────

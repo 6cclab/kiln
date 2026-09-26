@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	fauxprovider "github.com/andrepato/harness/internal/provider/faux"
+	"github.com/andrepato/harness/internal/session/jsonl"
 )
 
 // TestPrint_StreamJSON_Task drives testdata/faux/task.yaml through the real
@@ -52,8 +53,33 @@ func TestPrint_StreamJSON_Task(t *testing.T) {
 	// Two session files: the parent's and the subagent's, both under the
 	// same project bucket (the dispatcher shares SessionsRoot with the
 	// parent — internal/cli/chat.go's dispatcher construction).
-	if files := sessionFiles(t, sessDir, proj); len(files) != 2 {
-		t.Errorf("session files = %v, want 2 (parent + subagent)", files)
+	files := sessionFiles(t, sessDir, proj)
+	if len(files) != 2 {
+		t.Fatalf("session files = %v, want 2 (parent + subagent)", files)
+	}
+	// Exactly one file (the parent's) has an empty ParentSessionID; the
+	// other (the subagent's) has it set — internal/agent/dispatch.go now
+	// passes the dispatching session's own SessionID through
+	// agent.Options.ParentSessionID, so a subagent's session file is
+	// distinguishable from a top-level one by its own header alone
+	// (internal/cli/tui.go's buildRecentSessionRows filters the banner's
+	// recent-sessions list on exactly this field).
+	var topLevel, withParent int
+	for _, f := range files {
+		st, err := jsonl.Open(f, nil)
+		if err != nil {
+			t.Fatalf("jsonl.Open(%s): %v", f, err)
+		}
+		hdr := st.Header()
+		st.Close()
+		if hdr.ParentSessionID == "" {
+			topLevel++
+		} else {
+			withParent++
+		}
+	}
+	if topLevel != 1 || withParent != 1 {
+		t.Errorf("session files with empty/set ParentSessionID = %d/%d, want 1/1 (parent/subagent) among %v", topLevel, withParent, files)
 	}
 }
 

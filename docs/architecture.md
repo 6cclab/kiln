@@ -443,13 +443,14 @@ parent only ever receives the subagent's final assistant text
 
 `internal/tui` is the pure rendering layer (`theme.go`, `width.go`,
 `transcript.go`, `markdown.go`, `changepreview.go`, `permission_render.go`)
-plus the Bubble Tea model in `app.go`. Inline mode (the default) commits
-finished output to the terminal's own scrollback via `Program.Println`, and
-repaints only the live region below it. `--fullscreen`/`Ctrl+F` switches to
-an alt-screen mode: a scrolling `viewport` transcript with the input pinned
-at the bottom, re-wrapped on resize; toggling either way redraws the
-transcript from the session log, so unlogged output (`!` shell output, hook
-notices) does not survive the switch (`README.md`).
+plus the Bubble Tea model in `app.go`. Full-screen (alt-screen) is the
+default: a scrolling `viewport` transcript, banner at the top, with the
+input pinned at the bottom, re-wrapped on resize. `--inline`/`Ctrl+F`
+switches to inline mode, which commits finished output to the terminal's
+own scrollback via `Program.Println` instead and repaints only the live
+region below it; toggling either way redraws the transcript from the
+session log, so unlogged output (`!` shell output, hook notices) does not
+survive the switch (`README.md`). `--ax-screen-reader` always runs inline.
 
 `internal/tui/bridge.go`'s `Bridge` is the agent side of the TUI: it
 serializes every commit-worthy event — harness events, user echo, `!`/`#`

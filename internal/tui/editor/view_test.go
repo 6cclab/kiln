@@ -123,7 +123,8 @@ func TestPlaceholderOneSpaceAfterMarker(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("expected at least 2 lines, got %d", len(lines))
 	}
-	want := "❯ " + DefaultPlaceholder
+	// One blank cell for the cursor, then the placeholder (design: "› ▍ describe…").
+	want := "❯  " + DefaultPlaceholder
 	got := strings.TrimRight(lines[1], " ")
 	if got != want {
 		t.Fatalf("empty-input content row = %q, want %q", got, want)

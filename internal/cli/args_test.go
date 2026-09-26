@@ -225,3 +225,27 @@ func TestParseValuedFlagDoesNotSwallowFollowingFlag(t *testing.T) {
 		t.Error("expected -v to still be parsed")
 	}
 }
+
+// TestParseFullscreenIsDefault covers the fullscreen-by-default switch:
+// no flags at all means Fullscreen=true; --inline opts out; --fullscreen is
+// accepted as a no-op (still true, and not collected into Unknown).
+func TestParseFullscreenIsDefault(t *testing.T) {
+	if a := Parse(nil); !a.Fullscreen {
+		t.Error("Fullscreen should default to true with no flags")
+	}
+	if a := Parse([]string{"--inline"}); a.Fullscreen || !a.Inline {
+		t.Errorf("--inline should set Inline and clear Fullscreen, got Fullscreen=%v Inline=%v", a.Fullscreen, a.Inline)
+	}
+	a := Parse([]string{"--fullscreen"})
+	if !a.Fullscreen {
+		t.Error("--fullscreen should leave Fullscreen true")
+	}
+	if len(a.Unknown) != 0 {
+		t.Errorf("--fullscreen should not be collected as unknown, got %v", a.Unknown)
+	}
+	// --fullscreen after --inline does not re-enable it: --inline is the
+	// explicit opt-out, not just "the last flag wins".
+	if a := Parse([]string{"--inline", "--fullscreen"}); a.Fullscreen {
+		t.Error("--inline then --fullscreen should still be inline (Fullscreen=false)")
+	}
+}

@@ -696,6 +696,284 @@ func TestTUI_Design_Done(t *testing.T) {
 	assertDesignGoldenStylesSorted(t, s, "design-done", designDoneAnchor)
 }
 
+// --- fullscreen: welcome and done -------------------------------------------
+//
+// Fullscreen coverage for the design scenes (fullscreen is now the
+// binary's default — internal/cli/args.go — but this suite's own fixtures
+// are inline by default via startTUI's own "--inline" default; these two
+// tests opt back into "--fullscreen" explicitly). "welcome" checks the
+// startup frame: banner at the top, input/status pinned to the bottom,
+// same as tui_fullscreen_test.go's own TestTUI_Fullscreen_Startup but
+// against the design fixture's own richer banner. "done" checks the full
+// scripted session's final frame: the assistant's closing text sits
+// directly above the bottom (busy/palette/rule/input/rule/status) region,
+// with no extra blank row between them, matching the inline design-done
+// golden's own tail.
+
+// TestTUI_Design_Fullscreen_Welcome checks the fullscreen startup frame at
+// both terminal sizes docs/kiln-design-handoff/README.md's welcome scene
+// is goldened at inline: the banner (wordmark/cwd/tips) at the top of the
+// viewport, the input box and status line pinned to the last rows, and
+// nothing pinned-to-bottom that pads the space between them (padding is
+// blank rows below the banner, at the top of the alt-screen viewport, not
+// blank rows pushing the banner down from the top).
+func TestTUI_Design_Fullscreen_Welcome(t *testing.T) {
+	for _, sz := range []struct {
+		name string
+		w, h int
+	}{
+		{"100x30", 100, 30},
+		{"80x24", 80, 24},
+	} {
+		t.Run(sz.name, func(t *testing.T) {
+			proj, home, sessDir, addr := designFixture(t)
+			s := startTUI(t, sz.w, sz.h, proj, home, sessDir, addr, "--fullscreen")
+			waitReady(t, s)
+
+			rows := s.Rows()
+			if len(rows) != sz.h {
+				t.Fatalf("Rows() returned %d rows, want %d", len(rows), sz.h)
+			}
+			if !strings.Contains(rows[0], "K I L N") {
+				t.Errorf("row 0 = %q, want the banner wordmark at the very top", rows[0])
+			}
+			last := rows[len(rows)-1]
+			if !modeLinePattern.MatchString(last) {
+				t.Errorf("last row is not the mode line: %q", last)
+			}
+			editorRow := -1
+			for i, r := range rows {
+				if strings.Contains(r, tuiUserMark) {
+					editorRow = i
+					break
+				}
+			}
+			if editorRow < 0 {
+				t.Fatalf("editor marker %q not found on screen:\n%s", tuiUserMark, strings.Join(rows, "\n"))
+			}
+			if editorRow < len(rows)-6 {
+				t.Errorf("editor marker on row %d of %d, want it pinned near the bottom", editorRow, len(rows))
+			}
+			if sb := s.Scrollback(); len(sb) != 0 {
+				t.Errorf("Scrollback() = %d lines, want 0 in fullscreen mode:\n%s", len(sb), strings.Join(sb, "\n"))
+			}
+
+			name := "design-fs-welcome-" + sz.name
+			assertGoldenNormalizedBanner(t, s, name)
+			assertGoldenStyles(t, s, name, stylesOpts{normalizeBanner: true})
+		})
+	}
+}
+
+// designPlanLabelPattern matches the live plan checklist's own label-rule
+// row (plan.go's labelRule("plan", ...), e.g. "plan ────── 0/3").
+var designPlanLabelPattern = regexp.MustCompile(`^plan `)
+
+// designApprovalLabelPattern matches the bash permission prompt's own
+// label-rule row (permission_render.go's RenderBashPermissionPrompt,
+// labelRule("approval needed", ...)).
+var designApprovalLabelPattern = regexp.MustCompile(`^approval needed`)
+
+// countBlanksAbove walks upward from rows[before-1] counting a leading run
+// of blank rows, returning that count and the index of the first non-blank
+// row above them (-1 if the whole prefix is blank).
+func countBlanksAbove(rows []string, before int) (blanks, nonBlank int) {
+	i := before - 1
+	for i >= 0 && strings.TrimSpace(rows[i]) == "" {
+		blanks++
+		i--
+	}
+	return blanks, i
+}
+
+// designSpinnerGlyphPattern matches the leading glyph of any busy-line row
+// (SpinnerState.Render's own left-hand glyph, spinner.go), independent of
+// what follows it (a plain gerund like "Working…" that
+// tui_test.go's own spinnerRowPattern already recognizes, or a longer
+// multi-word label like "Waiting for approval…" / "Running 2 subagents…"
+// that pattern does not, since it requires "…" immediately after one
+// \S+ token).
+var designSpinnerGlyphPattern = regexp.MustCompile(`^[◐◓◑◒]`)
+
+// normalizeDesignSpinnerGlyph replaces the leading glyph of every busy-line
+// row with a fixed placeholder before a golden compare — the frame it
+// picks depends on a real 80ms tea.Tick (spinner.go's own Tick, driven by
+// wall-clock ticks rather than the fixed test clock), so it is a genuine
+// race against how many ticks land before the screen is captured, not
+// something a fixed elapsed-seconds/token count stabilizes (confirmed by
+// design-permission.txt vs design-permission-60.txt: same "2s · 750
+// tokens", different glyph). Same shape as tui_test.go's own
+// assertGoldenNormalizedSpinner, but glyph-only rather than whole-row,
+// since the elapsed/tokens text here is otherwise stable and worth
+// keeping in the golden.
+func normalizeDesignSpinnerGlyph(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		if designSpinnerGlyphPattern.MatchString(r) {
+			out[i] = designSpinnerGlyphPattern.ReplaceAllString(r, "◐")
+			continue
+		}
+		out[i] = r
+	}
+	return out
+}
+
+// TestTUI_Design_Fullscreen_Plan is issue 1's regression test: in a real
+// fullscreen window the live plan checklist used to sit pinned just above
+// the busy line at the bottom, with a large blank gap between it and the
+// transcript above — internal/tui/app.go's liveTail/chromeLines split
+// (app.go's liveLines doc comment) instead folds the checklist into the
+// scrolling viewport, directly after the last committed block ("kiln" text
+// block, stream.go/transcript.go's own "kiln" label rule), same as inline.
+// This asserts that adjacency (at most one blank separator row, never a
+// gap that pads out to the bottom chrome) plus the golden frame.
+func TestTUI_Design_Fullscreen_Plan(t *testing.T) {
+	proj, home, sessDir, addr := designFixture(t)
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--fullscreen", "--permission-mode", "manual")
+	waitReady(t, s)
+	driveDesignTo(t, s, "plan")
+
+	rows := s.Rows()
+	if len(rows) != 30 {
+		t.Fatalf("Rows() returned %d rows, want 30", len(rows))
+	}
+
+	planRow := -1
+	for i, r := range rows {
+		if designPlanLabelPattern.MatchString(r) {
+			planRow = i
+			break
+		}
+	}
+	if planRow <= 0 {
+		t.Fatalf("plan checklist label row not found on screen:\n%s", strings.Join(rows, "\n"))
+	}
+	blanks, prev := countBlanksAbove(rows, planRow)
+	if blanks > 1 {
+		t.Errorf("%d blank rows between the preceding block and the plan checklist (rows %d-%d), want at most 1:\n%s",
+			blanks, prev+1, planRow-1, strings.Join(rows, "\n"))
+	}
+	if prev < 0 {
+		t.Fatalf("no committed block found above the plan checklist on row %d:\n%s", planRow, strings.Join(rows, "\n"))
+	}
+
+	rows, _ = designSortSubagentPanel(rows, nil)
+	rows = normalizeDesignSpinnerGlyph(rows)
+	assertGolden(t, goldenPath("design-fs-plan.txt"), strings.Join(rows, "\n")+"\n")
+}
+
+// TestTUI_Design_Fullscreen_Permission is issue 1's other regression test:
+// the bash permission prompt used to sit pinned above the busy line with a
+// blank gap between it and the transcript row above ("⏺ <tool
+// description>"/"  ⎿  $ <command>", committed by the transcript renderer —
+// permission_render.go's own doc comment on RenderBashPermissionPrompt).
+// It now sits directly after that block, and the busy line/input/status
+// still pin to the terminal's last rows below it.
+func TestTUI_Design_Fullscreen_Permission(t *testing.T) {
+	proj, home, sessDir, addr := designFixture(t)
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--fullscreen", "--permission-mode", "manual")
+	waitReady(t, s)
+	driveDesignTo(t, s, "permission")
+
+	rows := s.Rows()
+	if len(rows) != 30 {
+		t.Fatalf("Rows() returned %d rows, want 30", len(rows))
+	}
+
+	promptRow := -1
+	for i, r := range rows {
+		if designApprovalLabelPattern.MatchString(r) {
+			promptRow = i
+			break
+		}
+	}
+	if promptRow <= 0 {
+		t.Fatalf("permission prompt label row not found on screen:\n%s", strings.Join(rows, "\n"))
+	}
+	blanks, prev := countBlanksAbove(rows, promptRow)
+	if blanks > 1 {
+		t.Errorf("%d blank rows between the preceding block and the permission prompt (rows %d-%d), want at most 1:\n%s",
+			blanks, prev+1, promptRow-1, strings.Join(rows, "\n"))
+	}
+	if prev < 0 {
+		t.Fatalf("no committed block found above the permission prompt on row %d:\n%s", promptRow, strings.Join(rows, "\n"))
+	}
+
+	// The busy line ("Waiting for approval"), input box and status line
+	// all still pin to the terminal's last rows, below the prompt.
+	waitingRow := -1
+	for i, r := range rows {
+		if strings.Contains(r, "Waiting for approval") {
+			waitingRow = i
+			break
+		}
+	}
+	if waitingRow < promptRow {
+		t.Errorf("busy line (%q, row %d) not found below the prompt (row %d):\n%s", "Waiting for approval", waitingRow, promptRow, strings.Join(rows, "\n"))
+	}
+	editorRow := -1
+	for i, r := range rows {
+		if strings.Contains(r, tuiUserMark) {
+			editorRow = i
+			break
+		}
+	}
+	if editorRow < 0 {
+		t.Fatalf("editor marker %q not found on screen:\n%s", tuiUserMark, strings.Join(rows, "\n"))
+	}
+	if editorRow < len(rows)-6 {
+		t.Errorf("editor marker on row %d of %d, want it pinned near the bottom", editorRow, len(rows))
+	}
+	last := rows[len(rows)-1]
+	if !modeLinePattern.MatchString(last) {
+		t.Errorf("last row is not the mode line: %q", last)
+	}
+
+	rows = normalizeDesignSpinnerGlyph(rows)
+	assertGolden(t, goldenPath("design-fs-permission.txt"), strings.Join(rows, "\n")+"\n")
+}
+
+// TestTUI_Design_Fullscreen_Done drives the whole scripted session in
+// fullscreen mode and checks the final frame: the assistant's closing
+// text is the row directly above the bottom region's own top rule (no
+// blank row between them, exactly like the inline design-done golden's
+// tail — see TestTUI_Design_Done), and the bottom region itself
+// (rule/input/rule/status) is pinned to the last four rows.
+func TestTUI_Design_Fullscreen_Done(t *testing.T) {
+	proj, home, sessDir, addr := designFixture(t)
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--fullscreen", "--permission-mode", "manual")
+	waitReady(t, s)
+	driveDesignTo(t, s, "done")
+
+	rows := s.Rows()
+	if len(rows) != 30 {
+		t.Fatalf("Rows() returned %d rows, want 30", len(rows))
+	}
+	last := rows[len(rows)-1]
+	if !modeLinePattern.MatchString(last) {
+		t.Errorf("last row is not the mode line: %q", last)
+	}
+	if !isRuleRow(rows[len(rows)-2]) {
+		t.Errorf("row %d (bottom input rule) = %q, want a full-width rule", len(rows)-2, rows[len(rows)-2])
+	}
+	if !isRuleRow(rows[len(rows)-4]) {
+		t.Errorf("row %d (top input rule) = %q, want a full-width rule", len(rows)-4, rows[len(rows)-4])
+	}
+	finalTextRow := rows[len(rows)-5]
+	if strings.TrimSpace(finalTextRow) == "" {
+		t.Errorf("row %d, directly above the input box, is blank — want the assistant's final text with no gap", len(rows)-5)
+	}
+	if !strings.Contains(finalTextRow, "reset window") {
+		t.Errorf("row %d = %q, want the design session's closing line (\"...reset window.\") directly above the input box", len(rows)-5, finalTextRow)
+	}
+	if sb := s.Scrollback(); len(sb) != 0 {
+		t.Errorf("Scrollback() = %d lines, want 0 in fullscreen mode:\n%s", len(sb), strings.Join(sb, "\n"))
+	}
+
+	rows, _ = designSortSubagentPanel(rows, nil)
+	assertGolden(t, goldenPath("design-fs-done.txt"), strings.Join(rows, "\n")+"\n")
+}
+
 // TestTUI_Design_ExitAfterFullSession is a regression test for a real,
 // reproduced deadlock in RunInteractive's shutdown (internal/cli/tui.go):
 // after a design-sized session (subagents, several tool calls, a retry —

@@ -588,10 +588,13 @@ func PickLabel(seed int) string {
 // RenderError renders an error message: red, visually distinct from
 // ordinary tool output.
 func RenderError(message string) []string {
-	lines := strings.Split(message, "\n")
-	out := make([]string, len(lines))
-	for i, line := range lines {
-		out[i] = KilnRed(line)
+	lines := strings.Split(strings.TrimRight(message, "\n"), "\n")
+	out := make([]string, 0, len(lines)+2)
+	// The design's "error" block: a red label rule, then the message in
+	// red, one blank row above like every other block.
+	out = append(out, "", labelRule("error", KilnRed, "", ruleWidth()))
+	for _, line := range lines {
+		out = append(out, KilnRed(line))
 	}
 	return out
 }

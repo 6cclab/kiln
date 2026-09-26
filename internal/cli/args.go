@@ -66,9 +66,15 @@ type Args struct {
 	Help         bool
 	// Fullscreen selects kiln's alt-screen TUI mode: a scrolling transcript
 	// viewport with the input pinned at the bottom, toggled at runtime with
-	// ctrl+f. Falls back to inline under --ax-screen-reader (see
-	// internal/cli/tui.go's RunInteractive).
+	// ctrl+f. This is the default now — set true unless --inline was given
+	// (see Parse's post-processing below). Falls back to inline under
+	// --ax-screen-reader (see internal/cli/tui.go's RunInteractive).
 	Fullscreen bool
+	// Inline opts out of the fullscreen (alt-screen) default, keeping the
+	// transcript in native scrollback. --fullscreen is still accepted (as a
+	// no-op) for compatibility with scripts/muscle memory from before
+	// fullscreen became the default.
+	Inline bool
 
 	// Unknown is flags that look like flags but are not recognized.
 	Unknown []string
@@ -292,7 +298,11 @@ func Parse(argv []string) Args {
 		case "--ax-screen-reader":
 			args.ScreenReader = true
 		case "--fullscreen":
-			args.Fullscreen = true
+			// Accepted as a no-op: fullscreen is already the default (see
+			// the post-processing below). Kept for compatibility with
+			// scripts/muscle memory from before it was.
+		case "--inline":
+			args.Inline = true
 		case "--verbose":
 			args.Verbose = true
 		case "--debug":
@@ -312,6 +322,9 @@ func Parse(argv []string) Args {
 	if args.Print && len(args.Positional) > 0 {
 		args.PrintPrompt = strings.Join(args.Positional, " ")
 	}
+
+	// Fullscreen is the default; --inline opts out.
+	args.Fullscreen = !args.Inline
 
 	return args
 }
@@ -362,8 +375,9 @@ output:
       --output-format <fmt>          text | json | stream-json
       --verbose                      report tool calls on stderr
       --debug                        debug-level run log; prints its path (see kiln doctor)
-      --ax-screen-reader             flat text, no borders or animation
-      --fullscreen                   alt-screen TUI: scrolling transcript, input pinned at the bottom (ctrl+f toggles)
+      --ax-screen-reader             flat text, no borders or animation (always inline: screen readers read scrollback)
+      --inline                       native scrollback instead of the alt-screen TUI (default fullscreen; ctrl+f toggles)
+      --fullscreen                   accepted for compatibility; fullscreen is already the default
 
   -v, --version
   -h, --help`

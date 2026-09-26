@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"fmt"
+	"image/color"
+	"math"
 	"os"
 	"strings"
 
@@ -102,7 +105,9 @@ const (
 	hexBarEmpty   = "#3f372c" // subagents panel: progress bar empty cell
 )
 
-// Kiln foreground helpers.
+// Kiln foreground helpers. Ink, Faint and the named accents are the design's
+// own fixed hexes — only the *surface* tokens (hairlines, raised/panel
+// backgrounds, diff tints) are background-aware; see SetTerminalBackground.
 var (
 	Ink       = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexInk)))
 	Faint     = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexFaint)))
@@ -111,31 +116,193 @@ var (
 	KilnRed   = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexRed)))
 	KilnBlue  = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexBlue)))
 	Violet    = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexViolet)))
-	// Rule is the hairline colour for block label rules and diff borders.
-	Rule = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexRule)))
-	// RuleStrong is the input box's rules (brighter than Rule).
-	RuleStrong = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexRuleStrong)))
-	// BarEmpty is the subagents panel's progress-bar empty-cell colour
-	// (docs/kiln-design-handoff/README.md "agents" row: "empty #3f372c") —
-	// a design token distinct from Rule (the general hairline/empty-meter
-	// colour) because the handoff calls out a lighter shade for this one
-	// bar specifically.
-	BarEmpty = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexBarEmpty)))
+)
+
+// Rule is the hairline colour for block label rules and diff borders.
+// RuleStrong is the input box's rules (brighter than Rule). BarEmpty is the
+// subagents panel's progress-bar empty-cell colour (docs/kiln-design-
+// handoff/README.md "agents" row: "empty #3f372c") — a design token distinct
+// from Rule (the general hairline/empty-meter colour) because the handoff
+// calls out a lighter shade for this one bar specifically.
+//
+// These, and the background helpers just below, are surface tokens: they
+// assume the design's own background (#14110d) by default, but every real
+// terminal has its own background, and a hairline/tint tuned only for
+// #14110d can be invisible against a lighter or differently-hued one (empty
+// meter cells, input/banner rules disappearing entirely). SetTerminalBackground
+// recomputes all of them, and RuleColour below, as blends between the
+// terminal's actual background and the design's ink/accent colours, so they
+// stay visibly a "surface" against whatever background the terminal really
+// has. They are package-level func vars (not consts wrapped in style() at
+// var-init time) precisely so SetTerminalBackground can rebuild them.
+var (
+	Rule       func(string) string
+	RuleStrong func(string) string
+	BarEmpty   func(string) string
 )
 
 // Kiln background helpers. Callers pad the text to the intended width
 // before wrapping so the tint spans the whole row (inline mode does not
 // own the terminal's global background, so only these local tints apply).
+// See Rule's doc comment above: these are surface tokens too.
 var (
 	// OnRaise tints a span with the raised surface (user message, $cmd,
 	// selected rows).
-	OnRaise = style(lipgloss.NewStyle().Background(lipgloss.Color(hexRaise)))
+	OnRaise func(string) string
 	// OnPanel tints a span with the panel surface (diff header).
-	OnPanel = style(lipgloss.NewStyle().Background(lipgloss.Color(hexPanel)))
+	OnPanel func(string) string
 	// OnDiffAdd / OnDiffDel tint added / removed diff line backgrounds.
-	OnDiffAdd = style(lipgloss.NewStyle().Background(lipgloss.Color(hexDiffAddBg)))
-	OnDiffDel = style(lipgloss.NewStyle().Background(lipgloss.Color(hexDiffDelBg)))
+	OnDiffAdd func(string) string
+	OnDiffDel func(string) string
 )
+
+// hexDesignBg is the kiln design's own background (docs/kiln-design-
+// handoff/README.md's palette, "#14110d") — the reference every surface
+// token above is defined relative to, and the value SetTerminalBackground
+// compares an actual terminal background against to decide whether to keep
+// the design's exact hexes unchanged.
+const hexDesignBg = "#14110d"
+
+// designBgNearThreshold bounds how far a detected terminal background may
+// be (per RGB channel's simple Euclidean distance, 0-441.7 range) from
+// hexDesignBg and still count as "the design background" — small enough to
+// absorb a terminal's own gamma/rounding on that exact colour, far enough
+// that an actually different (if also dark) background still gets
+// recomputed tokens. 24 is roughly a 10% per-channel tolerance.
+const designBgNearThreshold = 24.0
+
+func init() {
+	resetSurfaceTokensToDesign()
+}
+
+// resetSurfaceTokensToDesign rebuilds every surface token (Rule, RuleStrong,
+// BarEmpty, OnRaise, OnPanel, OnDiffAdd, OnDiffDel) from the design's own
+// fixed hexes, the state at startup before any SetTerminalBackground call
+// and the state SetTerminalBackground restores when the reported background
+// is within designBgNearThreshold of hexDesignBg.
+func resetSurfaceTokensToDesign() {
+	setSurfaceTokens(hexRule, hexRuleStrong, hexBarEmpty, hexRaise, hexPanel, hexDiffAddBg, hexDiffDelBg)
+}
+
+func setSurfaceTokens(rule, ruleStrong, barEmpty, raise, panel, diffAdd, diffDel string) {
+	Rule = style(lipgloss.NewStyle().Foreground(lipgloss.Color(rule)))
+	RuleStrong = style(lipgloss.NewStyle().Foreground(lipgloss.Color(ruleStrong)))
+	BarEmpty = style(lipgloss.NewStyle().Foreground(lipgloss.Color(barEmpty)))
+	OnRaise = style(lipgloss.NewStyle().Background(lipgloss.Color(raise)))
+	OnPanel = style(lipgloss.NewStyle().Background(lipgloss.Color(panel)))
+	OnDiffAdd = style(lipgloss.NewStyle().Background(lipgloss.Color(diffAdd)))
+	OnDiffDel = style(lipgloss.NewStyle().Background(lipgloss.Color(diffDel)))
+}
+
+// rgb8 is an 8-bit-per-channel colour, the precision every hex token and
+// every blend computation here works in (the design's own palette is
+// specified as 8-bit hex, and terminal background reports are effectively
+// the same precision once truncated from whatever backing depth the
+// terminal answers with).
+type rgb8 struct{ r, g, b uint8 }
+
+// parseHex parses a "#rrggbb" string. Panics on malformed input — every
+// caller in this file passes one of this package's own hex consts, never
+// unvalidated input, so a malformed one is a programming error to catch at
+// build/test time, not a runtime condition to handle gracefully.
+func parseHex(s string) rgb8 {
+	s = strings.TrimPrefix(s, "#")
+	var r, g, b uint8
+	if _, err := fmt.Sscanf(s, "%02x%02x%02x", &r, &g, &b); err != nil {
+		panic(fmt.Sprintf("theme: malformed hex color %q: %v", s, err))
+	}
+	return rgb8{r, g, b}
+}
+
+// toRGB8 downsamples an arbitrary image/color.Color (bubbletea's
+// tea.BackgroundColorMsg reports one, typically at 16 bits/channel from an
+// OSC 11 reply) to this package's 8-bit precision.
+func toRGB8(c color.Color) rgb8 {
+	r, g, b, _ := c.RGBA()
+	return rgb8{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)} //nolint:gosec
+}
+
+func (c rgb8) hex() string {
+	return fmt.Sprintf("#%02x%02x%02x", c.r, c.g, c.b)
+}
+
+// distance is the Euclidean distance between two colours' RGB channels
+// (0-441.67 range), used only to decide "close enough to the design
+// background to keep its exact hexes" — not a perceptual colour-difference
+// metric, just a cheap, deterministic proximity check.
+func (c rgb8) distance(o rgb8) float64 {
+	dr := float64(c.r) - float64(o.r)
+	dg := float64(c.g) - float64(o.g)
+	db := float64(c.b) - float64(o.b)
+	return math.Sqrt(dr*dr + dg*dg + db*db)
+}
+
+// mix blends from bg toward fg by t (0 = bg, 1 = fg), per channel, rounded
+// to the nearest 8-bit value. This is a plain linear RGB blend (not a
+// perceptual colour space) — the design handoff specifies each surface
+// token as "mix(bg, x, t)" in exactly these terms.
+func mix(bg, fg rgb8, t float64) rgb8 {
+	blend := func(a, b uint8) uint8 {
+		v := float64(a) + (float64(b)-float64(a))*t
+		if v < 0 {
+			v = 0
+		}
+		if v > 255 {
+			v = 255
+		}
+		return uint8(math.Round(v))
+	}
+	return rgb8{blend(bg.r, fg.r), blend(bg.g, fg.g), blend(bg.b, fg.b)}
+}
+
+// SetTerminalBackground recomputes every surface token (Rule, RuleStrong,
+// BarEmpty, OnRaise, OnPanel, OnDiffAdd, OnDiffDel and RuleColour, its
+// legacy alias) as blends between the terminal's actual background and
+// ink/green/red, so hairlines and empty-meter cells stay visible against a
+// real terminal background instead of assuming the design's own #14110d
+// (docs/kiln-design-handoff/README.md's palette) — see Rule's doc comment
+// above for why. Blend weights, straight from the design handoff:
+//
+//	rule        = mix(bg, ink, 0.16)
+//	rule-strong = mix(bg, ink, 0.24)
+//	raise       = mix(bg, ink, 0.09)
+//	panel       = mix(bg, ink, 0.06)
+//	bar-empty   = mix(bg, ink, 0.22)
+//	diff-add    = mix(bg, green, 0.12)
+//	diff-del    = mix(bg, red, 0.14)
+//
+// When bg is within designBgNearThreshold of the design's own background,
+// this instead restores the design's exact hexes unchanged (so a terminal
+// that happens to already run near the design palette, and every PTY golden
+// pinned to it, sees no difference at all).
+//
+// A no-op when colour is disabled (NO_COLOR, --ax-screen-reader, a
+// non-TTY): style()'s own enabled check already makes every helper here an
+// identity function in that case, so recomputing their hexes would be dead
+// work masking nothing.
+func SetTerminalBackground(c color.Color) {
+	if !enabled || c == nil {
+		return
+	}
+	bg := toRGB8(c)
+	design := parseHex(hexDesignBg)
+	if bg.distance(design) <= designBgNearThreshold {
+		resetSurfaceTokensToDesign()
+		return
+	}
+	ink := parseHex(hexInk)
+	green := parseHex(hexGreen)
+	red := parseHex(hexRed)
+	setSurfaceTokens(
+		mix(bg, ink, 0.16).hex(),
+		mix(bg, ink, 0.24).hex(),
+		mix(bg, ink, 0.22).hex(),
+		mix(bg, ink, 0.09).hex(),
+		mix(bg, ink, 0.06).hex(),
+		mix(bg, green, 0.12).hex(),
+		mix(bg, red, 0.14).hex(),
+	)
+}
 
 // Suggestion is the accent for a selected autocomplete/dialog row. Kiln
 // marks selection with the raised background and an amber key rather than
@@ -152,8 +319,6 @@ var (
 	// Muted (secondary/dim text: version, model/effort, cwd, tips, `⎿`
 	// rows) → kiln dim.
 	Muted = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexDim)))
-	// RuleColour (block/label hairlines) → kiln rule.
-	RuleColour = Rule
 	// Amber (mode-line lead-in, `⚠`) → kiln amber.
 	Amber = KilnAmber
 	// CallGreen (successful tool marker) → kiln green.
@@ -161,6 +326,11 @@ var (
 	// CallRed (failed / disconnected) → kiln red.
 	CallRed = KilnRed
 )
+
+// RuleColour (block/label hairlines) → kiln rule. A wrapper function
+// (rather than a var alias snapshotting Rule once) so it always reflects
+// whatever SetTerminalBackground last set Rule to.
+func RuleColour(s string) string { return Rule(s) }
 
 // Glyphs is the table of decorative characters the transcript uses.
 //

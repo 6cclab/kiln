@@ -25,6 +25,7 @@ package screen
 
 import (
 	"fmt"
+	"image/color"
 	"io"
 	"os"
 	"os/exec"
@@ -52,6 +53,7 @@ type config struct {
 	unsetEnv   map[string]bool
 	timeout    time.Duration
 	recordPath string
+	bgColor    color.Color
 }
 
 // Option configures a Screen at Start/StartDetached time.
@@ -96,6 +98,18 @@ func WithTimeout(d time.Duration) Option {
 // project (see docs/testing.md there).
 func WithRecord(path string) Option {
 	return func(c *config) { c.recordPath = path }
+}
+
+// WithBackgroundColor sets the emulator's own background color (answered
+// back to the process's OSC 11 "what's your background color" query, e.g.
+// bubbletea's tea.RequestBackgroundColor/tea.BackgroundColorMsg) so a PTY
+// golden's background-aware styling (internal/tui.SetTerminalBackground) is
+// deterministic instead of depending on whatever default background
+// github.com/charmbracelet/x/vt's emulator happens to start with. Tests
+// that want the design palette's own goldens unchanged pass the design
+// background (kiln's #14110d) here explicitly.
+func WithBackgroundColor(c color.Color) Option {
+	return func(cfg *config) { cfg.bgColor = c }
 }
 
 func newConfig(opts []Option) *config {
@@ -200,6 +214,9 @@ func start(tb testing.TB, binary string, args []string, cols, rows int, opts ...
 		copyDone: make(chan struct{}),
 	}
 	s.emu.SetScrollbackSize(vt.DefaultScrollbackSize)
+	if cfg.bgColor != nil {
+		s.emu.SetBackgroundColor(cfg.bgColor)
+	}
 
 	if cfg.recordPath != "" {
 		f, err := os.Create(cfg.recordPath) //nolint:gosec
