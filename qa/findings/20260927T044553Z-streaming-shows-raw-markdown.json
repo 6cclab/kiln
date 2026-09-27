@@ -15,6 +15,9 @@
  "evidence": [
   "qa/runs/real-model/iterm-dark/04-stream-01.png"
  ],
- "status": "open",
- "fix": null
+ "status": "wontfix",
+ "fix": {
+  "note": "Andre, 2026-09-27: keep raw streaming as is (stream.go's documented choice).",
+  "updated_at": "2026-09-27T04:48:58Z"
+ }
 }
