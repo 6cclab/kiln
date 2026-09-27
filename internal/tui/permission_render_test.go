@@ -538,3 +538,21 @@ func TestRaisedCommandRows_WrapsNeverClips(t *testing.T) {
 		t.Errorf("long command: %d rows, last %q; want %d rows ending in a marked summary", len(rows), rows[len(rows)-1], maxCommandRows)
 	}
 }
+
+// TestRenderPlanApproval_RendersMarkdown: the plan is the model's markdown
+// and renders like its replies, not as raw source (qa/findings
+// *plan-approval-raw-markdown).
+func TestRenderPlanApproval_RendersMarkdown(t *testing.T) {
+	plan := "### Backend\n\n**api/store.go** - add `List(q, limit, offset)`\n\n- first step\n- second step"
+	out := stripANSI(strings.Join(RenderPlanApproval(plan, "", 80, 0, 0, false, ""), "\n"))
+	for _, raw := range []string{"###", "**", "`", "- first"} {
+		if strings.Contains(out, raw) {
+			t.Errorf("plan shows raw markdown %q:\n%s", raw, out)
+		}
+	}
+	for _, text := range []string{"Backend", "api/store.go", "List(q, limit, offset)", "first step"} {
+		if !strings.Contains(out, text) {
+			t.Errorf("plan lost %q:\n%s", text, out)
+		}
+	}
+}

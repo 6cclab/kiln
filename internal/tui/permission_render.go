@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 )
@@ -559,15 +560,14 @@ func RenderPlanApproval(plan, planPath string, width, height, selected int, feed
 	if wrapWidth < 10 {
 		wrapWidth = 10
 	}
+	// The plan is the model's markdown, rendered like its replies; raw, it
+	// showed literal **, ### and backticks.
 	var planRows []string
-	for _, raw := range strings.Split(plan, "\n") {
-		if raw == "" {
-			planRows = append(planRows, "")
-			continue
+	for _, l := range planRenderer(wrapWidth).Render(plan) {
+		if l != "" {
+			l = " " + l
 		}
-		for _, wl := range wrapHard(raw, wrapWidth) {
-			planRows = append(planRows, " "+Ink(wl))
-		}
+		planRows = append(planRows, l)
 	}
 
 	visible := planRows
@@ -629,6 +629,20 @@ func RenderPlanApproval(plan, planPath string, width, height, selected int, feed
 		}
 	}
 	return FitLines(lines, width, " ")
+}
+
+// planRenderers holds one markdown renderer per width, so the plan prompt,
+// redrawn every frame, renders its markdown once per width rather than on
+// every View (the renderer caches by text).
+var planRenderers sync.Map // [width, plain] -> *MarkdownRenderer
+
+func planRenderer(width int) *MarkdownRenderer {
+	key := [2]any{width, IsPlain()}
+	if r, ok := planRenderers.Load(key); ok {
+		return r.(*MarkdownRenderer)
+	}
+	r, _ := planRenderers.LoadOrStore(key, NewMarkdownRenderer(width, IsPlain()))
+	return r.(*MarkdownRenderer)
 }
 
 // wrapHard word-wraps like wrapPlain, then splits any word longer than
