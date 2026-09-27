@@ -277,16 +277,23 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 		return false
 	}
 
-	if hits(permissions.Deny) {
+	denyHit, askHit, allowHit := hits(permissions.Deny), hits(permissions.Ask), hits(permissions.Allow)
+	if strings.EqualFold(toolName, "bash") {
+		// A command line is several commands; judge each one
+		// (bashRuleVerdicts).
+		denyHit, askHit, allowHit = bashRuleVerdicts(permissions, toolName, primaryArg)
+	}
+
+	if denyHit {
 		return Deny
 	}
 	if mode == ModeBypassPermissions {
 		return Allow
 	}
-	if hits(permissions.Allow) {
+	if allowHit {
 		return Allow
 	}
-	if hits(permissions.Ask) {
+	if askHit {
 		return Ask
 	}
 

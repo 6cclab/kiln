@@ -1,5 +1,5 @@
   [fg=#a39781]Retrying in 1s · attempt 2 of 4 · r to retry now[/]                                                  
-  [fg=#e9a64b]◐[/] [fg=#e9a64b]Reconnecting…[/]  [fg=#a39781]2s · 750 tokens[/]                                                    [fg=#a39781]esc to stop[/]   
+  [fg=#e9a64b]◐[/] [fg=#e9a64b]Reconnecting…[/]  [fg=#a39781]2s · 150 tokens[/]                                                    [fg=#a39781]esc to stop[/]   
   [fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────[/]  
   [fg=#e9a64b]›[/]  [fg=#7d7262]queue a follow-up, or esc to stop[/]                                                              
   [fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────[/]  

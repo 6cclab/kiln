@@ -261,3 +261,37 @@ func contains(s, sub string) bool {
 		return false
 	})()
 }
+
+// TestGateBashDontAskGrantsThePrefixItNames: "Yes, and don't ask again for:
+// npm test *" used to grant only the exact command string, so the next
+// "npm test -- other" asked again despite the label. It now grants the
+// named prefix, judged per segment, so it never covers a command it did
+// not name (qa/findings *bash-dont-ask-grants-exact-command).
+func TestGateBashDontAskGrantsThePrefixItNames(t *testing.T) {
+	g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{work(t)}})
+	var asked []string
+	g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) {
+		asked = append(asked, req.PrimaryArg)
+		if len(asked) == 1 {
+			return PromptChoice{Kind: PromptAllowAlways}, nil
+		}
+		return PromptChoice{Kind: PromptDeny}, nil
+	})
+	ctx := context.Background()
+	check := func(cmd string) bool {
+		r, err := g.Check(ctx, Request{ToolName: "bash", PrimaryArg: cmd})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r == nil
+	}
+	if !check("cd api && npm test -- upload") {
+		t.Fatal("first call: allow-always should approve it")
+	}
+	if !check("npm test -- download") || len(asked) != 1 {
+		t.Errorf("same prefix should be approved without asking; asked=%q", asked)
+	}
+	if check("npm test && rm -rf build") || len(asked) != 2 {
+		t.Errorf("a line with an unnamed command must still ask; asked=%q", asked)
+	}
+}

@@ -96,6 +96,10 @@ type Gate struct {
 	// in a hurry to unblock one task should not silently become permanent
 	// policy.
 	sessionAllows map[string]bool
+	// sessionRules are bash allow rules granted by "yes, don't ask again"
+	// (settings.BashDontAskRule: the prefix the prompt names), judged per
+	// command segment with the configured allow rules.
+	sessionRules []string
 
 	// blockLog is everything refused this session, for diagnostics.
 	blockLog []string
@@ -366,6 +370,9 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 
 	g.mu.Lock()
 	permissions, mode := g.permissions, g.mode
+	if len(g.sessionRules) > 0 {
+		permissions.Allow = append(append([]string(nil), permissions.Allow...), g.sessionRules...)
+	}
 	g.mu.Unlock()
 
 	verdict := settings.Decide(permissions, req.ToolName, req.PrimaryArg, mode)
@@ -442,6 +449,11 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	if choice.Kind == PromptAllowAlways {
 		g.grantSession(k)
+		if strings.EqualFold(req.ToolName, "bash") {
+			g.mu.Lock()
+			g.sessionRules = append(g.sessionRules, "Bash("+settings.BashDontAskRule(req.PrimaryArg)+")")
+			g.mu.Unlock()
+		}
 		return nil, OutcomeApproved, nil
 	}
 

@@ -509,3 +509,32 @@ func TestBashPromptFeedbackKeepsFrame(t *testing.T) {
 		t.Errorf("options still shown in feedback view:\n%s", joined)
 	}
 }
+
+// TestRaisedCommandRows_WrapsNeverClips: a multi-line command's second line
+// was clipped mid-token ("-w \"%{h") with no marker
+// (qa/findings *prompt-command-clipped). Every character now survives,
+// wrapped within width, and a very long command ends in a marked summary.
+func TestRaisedCommandRows_WrapsNeverClips(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+	cmd := `echo "=== dev server serves index ==="; curl -s http://localhost:5173/ | head -20` + "\n" +
+		`echo "=== main.tsx ==="; rtk curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/src/main.tsx`
+	rows := raisedCommandRows(cmd, 60)
+	var joined string
+	for _, r := range rows {
+		if w := VisibleWidth(r); w != 60 {
+			t.Errorf("row width %d, want 60: %q", w, r)
+		}
+		joined += strings.TrimSpace(r) + " "
+	}
+	for _, want := range []string{`-w "%{http_code}"`, "src/main.tsx", "head -20"} {
+		if !strings.Contains(strings.ReplaceAll(joined, " ", ""), strings.ReplaceAll(want, " ", "")) {
+			t.Errorf("command text %q lost:\n%s", want, strings.Join(rows, "\n"))
+		}
+	}
+	long := strings.Repeat("echo line\n", 20)
+	rows = raisedCommandRows(long, 60)
+	if len(rows) != maxCommandRows || !strings.Contains(rows[len(rows)-1], "… +13 more lines") {
+		t.Errorf("long command: %d rows, last %q; want %d rows ending in a marked summary", len(rows), rows[len(rows)-1], maxCommandRows)
+	}
+}

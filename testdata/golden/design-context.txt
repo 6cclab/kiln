@@ -1,9 +1,9 @@
   faux/faux-1 · 4k of 128k tokens
   ━ ━ ━━ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ■ System prompt                                                                         13    0%
+  ■ System prompt                                                                          N    0%
   ■ Tools                                                                               1.8k    1%
   ■ Files read                                                                             0    0%
-  ■ Conversation                                                                        3.0k    2%
+  ■ Conversation                                                                           N    2%
   ■ Free                                                                              123.2k   96%
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ›  describe a task · / for commands · @ to add files

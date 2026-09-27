@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -580,12 +581,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// System prompt assembly order, matching cli.ts exactly: base persona,
 	// --append-system-prompt, the plan-mode prompt (only in plan mode),
 	// memory, the skills index, the MCP tool index.
+	envBlock := environmentPrompt(ctx, cwd, time.Now())
 	buildSystemPrompt := func(mcpIndexText string) string {
 		systemPromptBase := args.SystemPrompt
 		if systemPromptBase == "" {
 			systemPromptBase = defaultSystemPrompt
 		}
-		promptParts := []string{systemPromptBase, args.AppendSystemPrompt}
+		promptParts := []string{systemPromptBase, envBlock, args.AppendSystemPrompt}
 		if permissionMode == claudesettings.ModePlan {
 			promptParts = append(promptParts, agent.PlanModePrompt)
 		}
@@ -1341,6 +1343,49 @@ func logHarnessEvents(h *harness.Harness) {
 	on(harness.EventCompactionEnd, none)
 	on(harness.EventFault, func(ev harness.Event) []any { return []any{"err", ev.Err} })
 	on(harness.EventHandlerError, func(ev harness.Event) []any { return []any{"hook", ev.HookName, "err", ev.Err} })
+	logRequestTiming(h)
+}
+
+// logRequestTiming logs one "request_timing" line per model response: time
+// to the first streamed event, total time, and how many stream events
+// arrived. A slow turn is otherwise indistinguishable between a slow
+// provider (long ttft) and a slow client (short ttft, long stream).
+func logRequestTiming(h *harness.Harness) {
+	type timing struct {
+		start, first time.Time
+		events       int
+	}
+	var mu sync.Mutex
+	open := map[string]*timing{}
+	h.Events().On(harness.EventMessageStart, func(ev harness.Event) {
+		mu.Lock()
+		open[ev.EntryID] = &timing{start: time.Now()}
+		mu.Unlock()
+	})
+	h.Events().On(harness.EventMessageUpdate, func(ev harness.Event) {
+		mu.Lock()
+		if t := open[ev.EntryID]; t != nil {
+			if t.events == 0 {
+				t.first = time.Now()
+			}
+			t.events++
+		}
+		mu.Unlock()
+	})
+	h.Events().On(harness.EventMessageEnd, func(ev harness.Event) {
+		mu.Lock()
+		t := open[ev.EntryID]
+		delete(open, ev.EntryID)
+		mu.Unlock()
+		if t == nil {
+			return
+		}
+		ttft := int64(-1)
+		if !t.first.IsZero() {
+			ttft = t.first.Sub(t.start).Milliseconds()
+		}
+		diag.L().Info("request_timing", "lane", ev.Lane, "ttft_ms", ttft, "total_ms", time.Since(t.start).Milliseconds(), "events", t.events)
+	})
 }
 
 // authKindLabel is the banner's auth description for the active provider,
@@ -1375,4 +1420,23 @@ func authKindLabel(ctx context.Context, reg *provider.Registry, providerID strin
 		}
 	}
 	return ""
+}
+
+// environmentPrompt tells the model where it is: the working directory, the
+// repository, the platform and the date. Without it the model guesses paths
+// (a live Opus 4.8 session read /Users/<user>/dev/api/handlers.go for a
+// project elsewhere, and hit the outside-workspace prompt). Built once per
+// session, so it never invalidates the prompt cache mid-session.
+func environmentPrompt(ctx context.Context, cwd string, now time.Time) string {
+	repo := "no"
+	if st, ok := readGitStatusAt(ctx, cwd); ok {
+		repo = "yes"
+		if st.Branch != "" {
+			repo += " (branch " + st.Branch + ")"
+		}
+	} else if out, err := runGit(ctx, cwd, "rev-parse", "--is-inside-work-tree"); err == nil && strings.TrimSpace(out) == "true" {
+		repo = "yes (no commits yet)"
+	}
+	return fmt.Sprintf("<env>\nWorking directory: %s\nIs a git repository: %s\nPlatform: %s/%s\nToday's date: %s\n</env>",
+		cwd, repo, runtime.GOOS, runtime.GOARCH, now.Format("2006-01-02"))
 }

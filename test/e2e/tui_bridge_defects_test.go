@@ -37,6 +37,7 @@ package e2e
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -206,5 +207,37 @@ func TestTUI_FaultCommitsAfterPrecedingToolCall(t *testing.T) {
 	fault := strings.Index(joined, "status=400")
 	if tool < 0 || fault < 0 || tool > fault {
 		t.Fatalf("want the bash block (at %d) above the error (at %d):\n%s", tool, fault, joined)
+	}
+}
+
+// TestTUI_PromptDigitDoesNotLeakIntoEditor: answering a permission prompt
+// with a digit must not also type that digit into the input box. A live
+// run ended with "› 2" in the editor right after "2" answered an
+// outside-workspace read prompt.
+func TestTUI_PromptDigitDoesNotLeakIntoEditor(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := "model: faux-1\nsteps:\n  - tool_call: {name: read, args: {path: \"" + outside + "\"}, id: r1}\n  - on_tool_result: r1\n    then:\n      - text: \"read it\"\n"
+	proj, home, sessDir, addr, _ := tuiFixture(t, script)
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr)
+	waitReady(t, s)
+	s.Send("read the outside file")
+	s.SendKey("enter")
+	if err := s.WaitFor("outside the workspace", 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	s.Send("2")
+	if err := s.WaitFor("read it", 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WaitFor(turnSummaryPattern, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range s.Rows() {
+		if strings.Contains(row, "›") && strings.Contains(row, "2") && !strings.Contains(row, "describe a task") {
+			t.Fatalf("the prompt's answer leaked into the editor: %q\n%s", row, strings.Join(s.Rows(), "\n"))
+		}
 	}
 }

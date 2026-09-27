@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 )
 
 // Inline permission prompt rendering, ported from the render half of
@@ -78,7 +80,9 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 		"  " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to use %s?", req.ToolName))),
 	}
 	if req.PrimaryArg != "" {
-		lines = append(lines, "  "+raisedCommand(SummarizeArg(req, cwd), maxInt(width-4, 1)))
+		for _, row := range raisedCommandRows(SummarizeArg(req, cwd), maxInt(width-4, 1)) {
+			lines = append(lines, "  "+row)
+		}
 	}
 
 	// The reason for the prompt changes what the answer should be, so say
@@ -174,18 +178,10 @@ type BashPermissionRequest struct {
 	Feedback *string
 }
 
-// bashDontAskRule is the gate expression option 2 offers: the first two
-// words of the command plus " *", matching Bash(<prefix> *) semantics —
-// e.g. "openssl rand -hex 4" -> "openssl rand *".
+// bashDontAskRule is the rule option 2 grants and names; the gate grants
+// exactly this (claudesettings.BashDontAskRule).
 func bashDontAskRule(command string) string {
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return "*"
-	}
-	if len(fields) == 1 {
-		return fields[0] + " *"
-	}
-	return fields[0] + " " + fields[1] + " *"
+	return claudesettings.BashDontAskRule(command)
 }
 
 // RenderBashPermissionPrompt renders the Bash command permission prompt
@@ -208,7 +204,9 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 		amberRule,
 		" " + KilnAmber(Bold("Allow kiln to run this command?")),
 		"",
-		" " + raisedCommand(req.Command, maxInt(width-2, 1)),
+	}
+	for _, row := range raisedCommandRows(req.Command, maxInt(width-2, 1)) {
+		lines = append(lines, " "+row)
 	}
 	if req.Description != "" {
 		lines = append(lines, "   "+Muted(req.Description))
@@ -655,6 +653,54 @@ func wrapHard(s string, limit int) []string {
 // width columns. Each span carries the background itself: wrapping
 // already-coloured text in OnRaise loses the background at the first
 // colour reset, which left only "$ " raised.
+// maxCommandRows caps the command box so the options stay on screen; the
+// rest is summarised, never silently cut.
+const maxCommandRows = 8
+
+// raisedCommandRows renders a command as raised "$ <command>" rows: each of
+// its lines hard-wrapped to width (continuations indented under the
+// command, not clipped), at most maxCommandRows, then a "… +N more lines"
+// row. A multi-line command used to go through raisedCommand as one
+// string, and its second line was clipped mid-token with no marker.
+func raisedCommandRows(cmd string, width int) []string {
+	var rows []string
+	for i, line := range strings.Split(strings.TrimRight(cmd, "\n"), "\n") {
+		for j, part := range wrapHard(line, maxInt(width-2, 1)) {
+			if i == 0 && j == 0 {
+				rows = append(rows, part)
+			} else {
+				rows = append(rows, "\x00"+part) // continuation marker
+			}
+		}
+	}
+	hidden := 0
+	if len(rows) > maxCommandRows {
+		hidden = len(rows) - (maxCommandRows - 1)
+		rows = rows[:maxCommandRows-1]
+	}
+	out := make([]string, 0, len(rows)+1)
+	for _, r := range rows {
+		if strings.HasPrefix(r, "\x00") {
+			out = append(out, raisedContinuation(r[1:], width))
+		} else {
+			out = append(out, raisedCommand(r, width))
+		}
+	}
+	if hidden > 0 {
+		out = append(out, raisedContinuation(fmt.Sprintf("… +%d more lines", hidden), width))
+	}
+	return out
+}
+
+// raisedContinuation is a raised row indented under the command text.
+func raisedContinuation(text string, width int) string {
+	plain := padTo("  "+text, width)
+	if !IsColorEnabled() {
+		return plain
+	}
+	return onRaiseSpan(CurrentTextHex().Ink, plain)
+}
+
 func raisedCommand(cmd string, width int) string {
 	plain := padTo("$ "+cmd, width)
 	if !IsColorEnabled() || VisibleWidth(plain) < 2 {

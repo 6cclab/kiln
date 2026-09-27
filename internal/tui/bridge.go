@@ -626,6 +626,9 @@ func busyArgDisplay(arg string) string {
 // trailing ellipsis always drawn by the renderer — leaves exactly one "…"
 // on screen either way.
 func truncateBusyArg(s string, n int) string {
+	// One line: a multi-line command (a variable assignment, then curl)
+	// otherwise broke the busy row and started its second line at column 0.
+	s = strings.Join(strings.Fields(s), " ")
 	r := []rune(s)
 	if len(r) <= n {
 		return s
@@ -668,7 +671,11 @@ type MsgQueue struct{ Len int }
 // counters); the bridge keeps the same state itself since it, not app.go,
 // owns the handler that mutates it.
 type turnState struct {
-	streamed        strings.Builder
+	streamed strings.Builder
+	// lastContext is the context the latest request carried (cached or
+	// not), the base the busy line's token figure grows from while the
+	// next reply streams.
+	lastContext     int
 	toolCallsInTurn int
 	// toolStarts records EventToolStart's wall-clock time and identity per
 	// call id, so EventToolEnd can report the call's elapsed time in the
@@ -965,10 +972,14 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 			u := ev.UsageRow
 			v := u.Input + u.CacheRead + u.CacheWrite + u.Output
 			contextUsed = &v
+			// The busy line's figure is the same quantity (design: "58k
+			// tokens" beside a 29% meter), so both read one number. It
+			// used to be the session's Input+Output, which collapses to
+			// tens of tokens once the conversation is cached.
+			ts.lastContext = v
+			tokens = &v
 		}
 		if ev.UsageTotals != nil {
-			t := ev.UsageTotals.Input + ev.UsageTotals.Output
-			tokens = &t
 			c := ev.UsageTotals.Cost.Total
 			cost = &c
 		}
@@ -1230,7 +1241,7 @@ func (b *Bridge) handleStreamEvent(se *msg.StreamEvent, ts *turnState) {
 			return
 		}
 		ts.streamed.WriteString(se.Delta)
-		tokens := compaction.EstimateTokens(msg.AssistantMessage{
+		tokens := ts.lastContext + compaction.EstimateTokens(msg.AssistantMessage{
 			Role:    msg.RoleAssistant,
 			Content: msg.Blocks{msg.Text(ts.streamed.String())},
 		})

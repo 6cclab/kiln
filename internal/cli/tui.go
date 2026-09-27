@@ -359,6 +359,11 @@ func readGitStatus(ctx context.Context) (tui.GitStatus, bool) {
 	if err != nil {
 		return tui.GitStatus{}, false
 	}
+	return readGitStatusAt(ctx, cwd)
+}
+
+// readGitStatusAt is readGitStatus for an explicit directory.
+func readGitStatusAt(ctx context.Context, cwd string) (tui.GitStatus, bool) {
 	tctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 

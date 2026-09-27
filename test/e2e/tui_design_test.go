@@ -720,8 +720,19 @@ func TestTUI_Design_Context(t *testing.T) {
 	if err := waitQuiescent(s, 150*time.Millisecond, 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	assertGoldenTail(t, s, "design-context", "faux/faux-1 ·")
-	assertGoldenStyles(t, s, "design-context", stylesOpts{anchor: "faux/faux-1 ·"})
+	// The system prompt's environment block includes the random project
+	// path, so the two rows derived from its size are masked.
+	rows := s.Rows()
+	start := 0
+	for i, r := range rows {
+		if strings.Contains(r, "faux/faux-1 ·") {
+			start = i
+			break
+		}
+	}
+	got := strings.Join(normalizeCwdTokenRows(normalizeSpinnerGlyph(normalizeStatusRowCwd(rows[start:]))), "\n")
+	assertGolden(t, goldenPath("design-context.txt"), got+"\n")
+	assertGoldenStyles(t, s, "design-context", stylesOpts{anchor: "faux/faux-1 ·", normalizeCwdTokens: true})
 }
 
 // --- done ------------------------------------------------------------------

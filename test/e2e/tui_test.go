@@ -552,6 +552,31 @@ type stylesOpts struct {
 	anchor           string
 	normalizeBanner  bool
 	normalizeSpinner bool
+	// normalizeCwdTokens masks the /context rows whose token counts depend
+	// on the length of the (random) project path, which the system prompt's
+	// environment block includes.
+	normalizeCwdTokens bool
+}
+
+// cwdTokenRow matches /context's "System prompt" and "Conversation" rows,
+// capturing the label and the token count before the percentage.
+var cwdTokenRow = regexp.MustCompile(`^(\s*■ (?:System prompt|Conversation)\s+)(\S+)(\s+\d+%.*)$`)
+
+// maskCwdTokens replaces those rows' token counts with "N".
+func maskCwdTokens(row string) (string, bool) {
+	m := cwdTokenRow.FindStringSubmatch(row)
+	if m == nil {
+		return row, false
+	}
+	return m[1] + strings.Repeat(" ", len([]rune(m[2]))-1) + "N" + m[3], true
+}
+
+func normalizeCwdTokenRows(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i], _ = maskCwdTokens(r)
+	}
+	return out
 }
 
 // maskStyledRows replaces the text of every row mask matches with the
@@ -631,6 +656,9 @@ func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts styles
 
 	if opts.normalizeBanner {
 		rows, styles = maskStyledRows(rows, styles, maskBannerCwdRowStyled)
+	}
+	if opts.normalizeCwdTokens {
+		rows, styles = maskStyledRows(rows, styles, maskCwdTokens)
 	}
 	if opts.normalizeSpinner {
 		rows, styles = maskStyledRows(rows, styles, maskSpinnerRowStyled)

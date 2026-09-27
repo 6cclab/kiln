@@ -355,4 +355,27 @@ func TestBridge_UsageContextCountsCachedTokens(t *testing.T) {
 	if want := 2 + 47336 + 346 + 281; *got.ContextUsed != want {
 		t.Errorf("ContextUsed = %d, want %d (cached tokens are in context too)", *got.ContextUsed, want)
 	}
+	// The busy line reads the same figure; it showed "30 tokens" six
+	// minutes into a cached session (qa/findings *busy-line-token-figure).
+	if got.Tokens == nil || *got.Tokens != *got.ContextUsed {
+		t.Errorf("Tokens = %v, want the context figure %d", got.Tokens, *got.ContextUsed)
+	}
+	if ts.lastContext != *got.ContextUsed {
+		t.Errorf("lastContext = %d, want %d so streaming grows from it", ts.lastContext, *got.ContextUsed)
+	}
+}
+
+// TestBusyLabel_MultiLineBashStaysOneLine: a multi-line command put its
+// newline into the busy label, breaking the row and starting the rest at
+// column 0 (qa/findings *busy-line-multiline-command).
+func TestBusyLabel_MultiLineBashStaysOneLine(t *testing.T) {
+	label := busyLabelForToolStart(nil, harness.Event{ToolName: "bash", ToolArgs: map[string]any{
+		"command": "H='http://localhost:8080'\ncurl -s $H/api/tasks",
+	}})
+	if strings.ContainsAny(label, "\n\r\t") {
+		t.Fatalf("busy label %q contains a line break or tab", label)
+	}
+	if !strings.HasPrefix(label, "Running H='http://localhost:8080' curl") {
+		t.Errorf("busy label = %q, want the command joined onto one line", label)
+	}
 }
