@@ -959,7 +959,11 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		var cost *float64
 		var tokens *int
 		if ev.UsageRow != nil {
-			v := ev.UsageRow.Input + ev.UsageRow.Output
+			// Everything the request carried is in context, cached or not.
+			// Counting only uncached input read ~0% once the conversation
+			// is served from the prompt cache.
+			u := ev.UsageRow
+			v := u.Input + u.CacheRead + u.CacheWrite + u.Output
 			contextUsed = &v
 		}
 		if ev.UsageTotals != nil {

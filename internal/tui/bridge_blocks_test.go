@@ -333,3 +333,26 @@ func TestBridge_CommitCommandResult_NoElbowGlyph(t *testing.T) {
 		t.Fatalf("CommitCommandResult should record exactly one synthetic (for Ctrl+O replay), got %d", len(syn))
 	}
 }
+
+// TestBridge_UsageContextCountsCachedTokens: the context meter counts every
+// token the request carried. It summed only uncached input and output, so
+// once the conversation was served from the prompt cache (2 uncached input
+// tokens, 47k cache-read) the footer read 0%
+// (qa/findings *context-meter-ignores-cache).
+func TestBridge_UsageContextCountsCachedTokens(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	ts := &turnState{toolStarts: map[string]toolStart{}}
+
+	b.handleEvent(harness.Event{Type: harness.EventUsage, UsageRow: &msg.Usage{Input: 2, CacheRead: 47336, CacheWrite: 346, Output: 281}}, ts, 4000)
+
+	got, ok := waitForOneSent(t, f).(MsgUsage)
+	if !ok || got.ContextUsed == nil {
+		t.Fatalf("sent %#v, want MsgUsage with ContextUsed", got)
+	}
+	if want := 2 + 47336 + 346 + 281; *got.ContextUsed != want {
+		t.Errorf("ContextUsed = %d, want %d (cached tokens are in context too)", *got.ContextUsed, want)
+	}
+}
