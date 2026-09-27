@@ -1,0 +1,31 @@
+{
+ "id": "20260927T010412Z-clear-does-nothing",
+ "found_at": "2026-09-27T01:04:12Z",
+ "scenario": "commands/clear",
+ "step": "02-cleared",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "/clear reports 'Conversation cleared.' but clears nothing",
+ "observed": "After /clear the screen keeps every earlier turn, and the next request to the model still carries the whole prior conversation (PTY test TestTUI_ClearStartsFresh: the request after /clear contains 'remember the word pelican'). internal/cli/commands.go wires OnClear to a no-op func(){}.",
+ "expected": "Design copy for /clear: 'Start a fresh session'. After /clear the model sees no earlier turns and the transcript starts empty under the banner, with the 'Conversation cleared.' note.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:219",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/commands-clear-120x40/02-cleared.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/commands.go",
+   "internal/commands/builtins.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_ClearStartsFresh",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/commands-clear-120x40"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
+}

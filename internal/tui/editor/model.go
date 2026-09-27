@@ -148,6 +148,20 @@ func (m *Model) SetPlaceholder(s string) {
 	m.placeholder = s
 }
 
+// SetStyles replaces the marker/rule/placeholder colours (and the cursor
+// colour neutralTextareaStyles derives from MarkerStyle) after construction
+// — needed because New's caller (app.go's NewModel) builds Styles from
+// fixed hexes before the terminal's background colour is known;
+// SetTerminalBackground runs later, on the first tea.BackgroundColorMsg, and
+// without a way to push its adapted tokens back into an already-built
+// editor, the input box's rules and marker stayed the unadjusted dark-design
+// colours forever — heavy black on a light profile (defect
+// *light-bg-you-text-invisible).
+func (m *Model) SetStyles(styles Styles) {
+	m.styles = styles
+	m.ta.SetStyles(neutralTextareaStyles(styles))
+}
+
 // neutralTextareaStyles strips textarea's own default background/foreground
 // (DefaultDarkStyles paints a black background) so the editor renders in
 // the terminal's own colours, matching Claude Code's plain input line —

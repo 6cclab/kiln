@@ -142,14 +142,38 @@ func (p *Popup) Render(width, maxRows int) []string {
 	for i := start; i < end; i++ {
 		selected := i == p.Selected
 		for _, row := range renderItem(p.Kind, p.Items[i], selected, width) {
-			row = padTo(row, width)
-			if selected {
-				row = OnRaise(row)
+			if !selected {
+				lines = append(lines, padTo(row, width))
+				continue
+			}
+			// renderItem already raises every span of a selected row (see
+			// its doc comment); pad the remainder the same way instead of
+			// padTo-then-OnRaise, which would wrap a background around a
+			// string whose own inner spans already ended in their own
+			// resets, losing the background at the first one — the same
+			// bug RenderUserMessageMeta and permissionOptionRow had.
+			if pad := width - VisibleWidth(row); pad > 0 {
+				row += onRaiseSpan("", strings.Repeat(" ", pad))
 			}
 			lines = append(lines, row)
 		}
 	}
 	return lines
+}
+
+// raiseGap renders n literal spaces, on the raised background when
+// selected — the bare indent/fill spans in renderItem/renderSlashCommandItem
+// that sit between (or before) a coloured value/description need the same
+// background as those spans do, or the raised row reads with gaps in it.
+func raiseGap(selected bool, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	sp := strings.Repeat(" ", n)
+	if selected {
+		return onRaiseSpan("", sp)
+	}
+	return sp
 }
 
 // popupValueColumn is where a slash command's description starts: two
@@ -161,21 +185,27 @@ const popupValueColumn = 42
 const popupDescRows = 2
 
 // renderItem renders one item as one or more rows, per kiln's selection
-// model: the selected row's command/value is amber (the raised background
-// is applied by the caller, Popup.Render), unselected rows show the
-// command in ink and the description dimmed.
+// model: the selected row's command/value is amber and the whole row sits
+// on the raised background (built with onRaiseSpan — see its doc comment —
+// since the value and the description are two different foreground
+// colours over that background); unselected rows show the command in ink
+// and the description dimmed, no background.
 func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, width int) []string {
 	paintValue := func(s string) string {
 		if selected {
-			return KilnAmber(s)
+			return onRaiseSpan(textHex.Amber, s)
 		}
 		return Ink(s)
 	}
 	paintDesc := func(s string) string {
+		if selected {
+			return onRaiseSpan(textHex.Dim, s)
+		}
 		return Muted(s)
 	}
+	lead := raiseGap(selected, 2)
 	if kind == KindFile {
-		return []string{"  " + paintValue("+ "+truncateMiddle(displayValue(item), width-4))}
+		return []string{lead + paintValue("+ "+truncateMiddle(displayValue(item), width-4))}
 	}
 	if kind == KindSlashCommand {
 		return renderSlashCommandItem(item, selected, width, paintValue, paintDesc)
@@ -188,10 +218,10 @@ func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, wid
 	desc := normalizeToSingleLine(item.Description)
 	descWidth := width - popupValueColumn - 2
 	if desc == "" || descWidth < minDescriptionWidth {
-		return []string{"  " + paintValue(truncateToWidth(value, width-2))}
+		return []string{lead + paintValue(truncateToWidth(value, width-2))}
 	}
 	value = truncateToWidth(value, popupValueColumn-2-1)
-	first := "  " + paintValue(value) + strings.Repeat(" ", popupValueColumn-2-VisibleWidth(value))
+	first := lead + paintValue(value) + raiseGap(selected, popupValueColumn-2-VisibleWidth(value))
 	descRows := wrapPlain(desc, descWidth)
 	if len(descRows) > popupDescRows {
 		descRows = descRows[:popupDescRows]
@@ -204,7 +234,7 @@ func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, wid
 			rows = append(rows, first+paintDesc(d))
 			continue
 		}
-		rows = append(rows, strings.Repeat(" ", popupValueColumn)+paintDesc(d))
+		rows = append(rows, raiseGap(selected, popupValueColumn)+paintDesc(d))
 	}
 	return rows
 }
@@ -219,8 +249,8 @@ const slashCommandColumn = 10
 // renderSlashCommandItem renders one `/` popup row: two-space indent, the
 // command padded to slashCommandColumn (amber when selected, ink
 // otherwise), then the description (dim), truncated — never wrapped — to
-// fit width. The selected row's raised background is applied by the
-// caller (Popup.Render), not here.
+// fit width. When selected, paintValue/paintDesc (renderItem) already carry
+// the raised background themselves.
 func renderSlashCommandItem(item AutocompleteItem, selected bool, width int, paintValue, paintDesc func(string) string) []string {
 	value := displayValue(item)
 	if !strings.HasPrefix(value, "/") {
@@ -232,7 +262,7 @@ func renderSlashCommandItem(item AutocompleteItem, selected bool, width int, pai
 	} else {
 		padded += " " // overflow: one space before the description
 	}
-	line := "  " + paintValue(padded)
+	line := raiseGap(selected, 2) + paintValue(padded)
 	desc := normalizeToSingleLine(item.Description)
 	if desc == "" {
 		return []string{line}

@@ -1,6 +1,6 @@
 subagents ────────────────────────────────────────────────────────────  0/2 done
 2 subagents running in parallel
  scout     survey the auth module                             ━━━━━━━━━━        
-           → grep
+           → Grep
  scout     survey the billing module                          ━━━━━━━━━━        
            → starting…

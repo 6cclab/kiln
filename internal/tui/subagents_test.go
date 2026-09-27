@@ -31,9 +31,12 @@ func TestSubagentsPanel_TwoLiveRows(t *testing.T) {
 	}
 }
 
-// TestSubagentsPanel_ToolEventUpdatesLastAction checks that a tool_start
-// event for a running dispatch replaces its "starting…" placeholder with
-// the tool name, prefixed by the action glyph.
+// TestSubagentsPanel_ToolEventUpdatesLastAction checks that a finished tool
+// call (SubagentEventTool, reported on the subagent's own EventToolEnd —
+// see dispatch.go) replaces its "starting…" placeholder with a formatted
+// action line: the tool's title-cased name, its primary argument quoted,
+// and a " · <first result line>" summary (design: '→ Grep "app.use(" · 14
+// matches'). *qa/findings/20260927T000638Z-subagent-row-no-action.json*.
 func TestSubagentsPanel_ToolEventUpdatesLastAction(t *testing.T) {
 	p := NewSubagentPanelState()
 	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventStart, ID: "tc1", Agent: "general-purpose", Description: "find the bug"})
@@ -43,13 +46,59 @@ func TestSubagentsPanel_ToolEventUpdatesLastAction(t *testing.T) {
 		t.Fatalf("row should start with the placeholder action:\n%s", before)
 	}
 
-	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventTool, ID: "tc1", ToolName: "grep"})
+	p.Apply(agent.SubagentEvent{
+		Kind:     agent.SubagentEventTool,
+		ID:       "tc1",
+		ToolName: "grep",
+		ToolArgs: map[string]any{"pattern": "app.use("},
+		ToolResult: &msg.ToolResultMessage{
+			Content: msg.Blocks{msg.Text("14 matches\nsrc/app.js:12")},
+		},
+	})
 	after := strings.Join(p.Render(100), "\n")
-	if !strings.Contains(after, "grep") {
-		t.Fatalf("row did not pick up the tool name:\n%s", after)
+	if !strings.Contains(after, `Grep "app.use(" · 14 matches`) {
+		t.Fatalf("row did not pick up the formatted action line:\n%s", after)
 	}
 	if strings.Contains(after, "starting") {
 		t.Fatalf("placeholder action should be gone once a tool ran:\n%s", after)
+	}
+}
+
+// TestSubagentsPanel_ToolEventWithNoResultShowsNameAndArg checks a tool
+// call whose result carries no summarizable text still shows the tool name
+// and argument (no dangling " · ").
+func TestSubagentsPanel_ToolEventWithNoResultShowsNameAndArg(t *testing.T) {
+	p := NewSubagentPanelState()
+	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventStart, ID: "tc1", Agent: "general-purpose", Description: "find the bug"})
+	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventTool, ID: "tc1", ToolName: "bash_background", ToolArgs: map[string]any{"command": "sleep 30"}})
+	after := strings.Join(p.Render(100), "\n")
+	if !strings.Contains(after, `Bash background "sleep 30"`) {
+		t.Fatalf("row missing name+arg action line:\n%s", after)
+	}
+	if strings.Contains(after, " · ") {
+		t.Fatalf("row should not show a dangling summary separator:\n%s", after)
+	}
+}
+
+// TestSubagentsPanel_DoneRowShowsFinalResultLine checks the design's "done"
+// action line: the subagent's final answer's first line, not the last tool
+// it happened to call. *qa/findings/20260927T000638Z-subagent-row-no-
+// action.json*.
+func TestSubagentsPanel_DoneRowShowsFinalResultLine(t *testing.T) {
+	p := NewSubagentPanelState()
+	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventStart, ID: "tc1", Agent: "general-purpose", Description: "find the bug"})
+	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventTool, ID: "tc1", ToolName: "read", ToolArgs: map[string]any{"file_path": "src/routes/upload.ts"}})
+	p.Apply(agent.SubagentEvent{
+		Kind: agent.SubagentEventDone,
+		ID:   "tc1",
+		Text: "Upload route mounts at src/routes/upload.ts:22\n\nMore detail the row has no room for.",
+	})
+	after := strings.Join(p.Render(100), "\n")
+	if !strings.Contains(after, "✓ Upload route mounts at src/routes/upload.ts:22") {
+		t.Fatalf("done row did not show the final result's first line:\n%s", after)
+	}
+	if strings.Contains(after, "More detail") {
+		t.Fatalf("done row should only show the first line:\n%s", after)
 	}
 }
 

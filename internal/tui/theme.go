@@ -206,6 +206,36 @@ func setSurfaceTokens(rule, ruleStrong, barEmpty, raise, panel, diffAdd, diffDel
 	OnDiffDel = style(lipgloss.NewStyle().Background(lipgloss.Color(diffDel)))
 }
 
+// onRaiseSpan renders one span of a raised (OnRaise) row with its own
+// foreground baked into the same style call ("" keeps the terminal's
+// default foreground for a span that carries no text of its own, e.g. a
+// row's trailing fill). A raised row that mixes more than one foreground
+// colour — a permission option's amber key next to its ink label, the
+// command palette's amber value next to its dim description — cannot be
+// built by wrapping OnRaise around content that already went through its
+// own independent style call: an ANSI reset (the code every lipgloss
+// Render() ends its span with) clears every SGR attribute, not just the
+// one that Render() call set, so the raised background dies at the first
+// inner reset and every span after it (the gap, the second colour, the
+// trailing pad) reverts to the terminal's own background. Composing
+// background+foreground in one style per span sidesteps it: each span's
+// own reset only ever lands after its own content, and the next span
+// re-asserts the background itself. permissionOptionRow, Popup.Render and
+// RenderUserMessageMeta all had this bug before this helper (RenderUserMessageMeta's
+// case had only one foreground colour, so reordering — pad the plain text,
+// then colour it, then raise the whole already-single-span result — was
+// enough there instead).
+func onRaiseSpan(fg, text string) string {
+	if !enabled {
+		return text
+	}
+	st := lipgloss.NewStyle().Background(lipgloss.Color(surfaceHex.raise))
+	if fg != "" {
+		st = st.Foreground(lipgloss.Color(fg))
+	}
+	return st.Render(text)
+}
+
 // resetTextTokensToDesign rebuilds every text token (Ink, Faint, Muted,
 // KilnAmber, KilnGreen, KilnRed, KilnBlue, Violet) from the design's own
 // fixed hexes — the state at startup before any SetTerminalBackground call,
@@ -243,6 +273,23 @@ var textHex TextHex
 
 // CurrentTextHex returns the active text tokens' hex strings.
 func CurrentTextHex() TextHex { return textHex }
+
+// SurfaceHex is the current surface tokens' raw hex strings — what
+// setSurfaceTokens last built Rule/RuleStrong/OnRaise from. Consumers that
+// bake one of these into a colour they build once and keep across repaints
+// (app.go's editor styles: the input box's rules are lipgloss.Style values
+// captured at construction, not re-read every frame the way a Rule(...)
+// call would be) read this instead of the package's own hexRule/
+// hexRuleStrong/... consts, which are only ever the unadjusted dark-design
+// values — see CurrentTextHex's own doc comment for the parallel case.
+type SurfaceHex struct {
+	Rule, RuleStrong, Raise string
+}
+
+// CurrentSurfaceHex returns the active surface tokens' hex strings.
+func CurrentSurfaceHex() SurfaceHex {
+	return SurfaceHex{Rule: surfaceHex.rule, RuleStrong: surfaceHex.ruleStrong, Raise: surfaceHex.raise}
+}
 
 // rgb8 is an 8-bit-per-channel colour, the precision every hex token and
 // every blend computation here works in (the design's own palette is
@@ -669,6 +716,21 @@ func IsPlain() bool {
 	return plain
 }
 
+// RuleFillChar is the horizontal rule's fill character: the box-drawing
+// "─" normally, ASCII "-" in plain mode (--ax-screen-reader). Every call
+// site that draws a rule directly with strings.Repeat — rather than
+// through labelRule, which already branches on IsPlain itself — reads this
+// instead of hardcoding "─", so plain mode never leaks a box-drawing glyph
+// through one of them (defect *screen-reader-mode-leaves-box-drawing-
+// rules: permission_render.go's amberRule and the input box's own rule
+// were doing exactly that).
+func RuleFillChar() string {
+	if IsPlain() {
+		return "-"
+	}
+	return "─"
+}
+
 // labelRule renders kiln's block header (Layout 1b "Ruled"): a label in
 // labelColor, a hairline `─` fill in the rule colour, and right-aligned
 // dim meta, fitted to width:
@@ -682,10 +744,7 @@ func labelRule(label string, labelColor func(string) string, meta string, width 
 	if width <= 0 {
 		return label
 	}
-	fillCh := "─"
-	if IsPlain() {
-		fillCh = "-"
-	}
+	fillCh := RuleFillChar()
 	// Visible widths of the fixed parts. Layout: label + " " + fill + meta,
 	// with two spaces before meta when meta is present.
 	lw := VisibleWidth(label)

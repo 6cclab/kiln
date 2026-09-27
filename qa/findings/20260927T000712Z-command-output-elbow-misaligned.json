@@ -15,6 +15,16 @@
  "evidence": [
   "qa/runs/c1/iterm-dark/commands-status-120x40/01-status.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go",
+   "internal/commands/registry.go"
+  ],
+  "regression_test": "TestRenderCommandResult_RowsAlignUniformly",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/commands-status-120x40"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
 }

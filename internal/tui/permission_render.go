@@ -69,7 +69,7 @@ func SummarizeArg(req PermissionRequest, cwd string) string {
 // shows is content from elsewhere — a bash command, a diff hunk, a line
 // the user is typing — so any of it can be wider than the terminal.
 func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, selected int, feedbackMode bool, feedback string) []string {
-	amberRule := KilnAmber(strings.Repeat("─", maxInt(width, 1)))
+	amberRule := KilnAmber(strings.Repeat(RuleFillChar(), maxInt(width, 1)))
 	lines := []string{
 		"",
 		labelRule("approval needed", KilnAmber, "", width),
@@ -78,7 +78,7 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 		"  " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to use %s?", req.ToolName))),
 	}
 	if req.PrimaryArg != "" {
-		lines = append(lines, "  "+OnRaise(padTo(Muted("$ ")+SummarizeArg(req, cwd), maxInt(width-4, 1))))
+		lines = append(lines, "  "+raisedCommand(SummarizeArg(req, cwd), maxInt(width-4, 1)))
 	}
 
 	// The reason for the prompt changes what the answer should be, so say
@@ -106,9 +106,9 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 	}
 
 	lines = append(lines,
-		"  "+permissionOptionRow("1", "Yes", selected == 0),
-		"  "+permissionOptionRow("2", "Yes, and don't ask again for this", selected == 1),
-		"  "+permissionOptionRow("3", "No, and tell kiln what to do instead", selected == 2),
+		"  "+permissionOptionRow("1", "Yes", selected == 0, maxInt(width-2, 1)),
+		"  "+permissionOptionRow("2", "Yes, and don't ask again for this", selected == 1, maxInt(width-2, 1)),
+		"  "+permissionOptionRow("3", "No, and tell kiln what to do instead", selected == 2, maxInt(width-2, 1)),
 		"",
 		"  "+Muted("↑↓ select · enter confirm · esc decline"),
 		amberRule,
@@ -117,13 +117,42 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 }
 
 // permissionOptionRow renders one numbered permission option per kiln's
-// selection model: a raised-background row with an amber key when
-// selected, or a plain row with a faint key and dim text otherwise.
-func permissionOptionRow(key, label string, selected bool) string {
-	if selected {
-		return OnRaise(KilnAmber(key) + "  " + Ink(label))
+// selection model: when selected, the *whole* row — not just the key — sits
+// on the raised background, amber key next to an ink label (Terminal.dc.
+// html:80's `<div>` on `{{o.bg}}`, the whole row, not a per-token tint);
+// otherwise a plain row with a faint key and dim text. Neither branch adds
+// its own leading indent — every call site already puts a fixed " " or "  "
+// ahead of it, matching that block's sibling lines (the question, the
+// hint), and width is the row's own available width with that indent
+// already subtracted, so the raised span reaches the same right edge every
+// other full-width block does without shifting the row's left column.
+//
+// Built from onRaiseSpan (see its doc comment): the key and the label are
+// two different foreground colours over the same background, so wrapping
+// OnRaise around content that already went through KilnAmber/Ink's own
+// Render() calls would lose the background at each of those inner resets —
+// exactly the bug this row had before (raising only the key: the key's own
+// OnRaise+colour wrap ended, in ANSI terms, before the label and the rest
+// of the row began).
+func permissionOptionRow(key, label string, selected bool, width int) string {
+	if !selected {
+		return Faint(key) + "  " + Muted(label)
 	}
-	return Faint(key) + "  " + Muted(label)
+	content := key + "  " + label
+	if !IsColorEnabled() {
+		// No background to justify a right-hand fill when colour is off
+		// (screen-reader/plain mode, or a plain-text reference capture) —
+		// only the key+label, exactly as before this row raised full
+		// width.
+		return content
+	}
+	trailing := width - VisibleWidth(content)
+	if trailing < 0 {
+		trailing = 0
+	}
+	return onRaiseSpan(textHex.Amber, key) +
+		onRaiseSpan(textHex.Ink, "  "+label) +
+		onRaiseSpan("", strings.Repeat(" ", trailing))
 }
 
 // maxInt returns the larger of a and b, used to keep rule/pad widths from
@@ -170,13 +199,13 @@ func bashDontAskRule(command string) string {
 // amber accent theme.go documents for a selected row elsewhere.
 // [chk].
 func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) []string {
-	amberRule := KilnAmber(strings.Repeat("─", maxInt(width, 1)))
+	amberRule := KilnAmber(strings.Repeat(RuleFillChar(), maxInt(width, 1)))
 	lines := []string{
 		labelRule("approval needed", KilnAmber, "", width),
 		amberRule,
 		" " + KilnAmber(Bold("Allow kiln to run this command?")),
 		"",
-		" " + OnRaise(padTo(Muted("$ ")+req.Command, maxInt(width-2, 1))),
+		" " + raisedCommand(req.Command, maxInt(width-2, 1)),
 	}
 	if req.Description != "" {
 		lines = append(lines, "   "+Muted(req.Description))
@@ -191,7 +220,7 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 	}
 	for i, opt := range options {
 		key := fmt.Sprintf("%d", i+1)
-		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected))
+		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected, maxInt(width-1, 1)))
 	}
 
 	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · esc decline · tab to amend"), amberRule)
@@ -264,7 +293,7 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 		verb = "write to"
 	}
 
-	amberRule := KilnAmber(strings.Repeat("─", maxInt(width, 1)))
+	amberRule := KilnAmber(strings.Repeat(RuleFillChar(), maxInt(width, 1)))
 	dashedRule := Rule(strings.Repeat("╌", maxInt(width, 1)))
 
 	numWidth := 1
@@ -336,7 +365,7 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 	for i, opt := range opts {
 		parts := strings.SplitN(opt, "\n", 2)
 		key := fmt.Sprintf("%d", i+1)
-		lines = append(lines, " "+permissionOptionRow(key, parts[0], i == selected))
+		lines = append(lines, " "+permissionOptionRow(key, parts[0], i == selected, maxInt(width-1, 1)))
 		if len(parts) == 2 {
 			if i == selected {
 				lines = append(lines, OnRaise(padTo(parts[1], maxInt(width, 1))))
@@ -504,7 +533,7 @@ func firstLine(s string) string {
 // exercised only by the unit test, not by any live key path — see the
 // handback report.
 func RenderPlanApproval(plan, planPath string, width, height, selected int, feedbackMode bool, feedback string) []string {
-	amberRule := KilnAmber(strings.Repeat("─", maxInt(width, 1)))
+	amberRule := KilnAmber(strings.Repeat(RuleFillChar(), maxInt(width, 1)))
 
 	lines := []string{
 		labelRule("plan", KilnAmber, "", width),
@@ -576,7 +605,7 @@ func RenderPlanApproval(plan, planPath string, width, height, selected int, feed
 	}
 	for i, opt := range opts {
 		key := fmt.Sprintf("%d", i+1)
-		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected))
+		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected, maxInt(width-1, 1)))
 	}
 
 	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · shift+tab to tell kiln what to change"), amberRule)
@@ -606,4 +635,17 @@ func wrapHard(s string, limit int) []string {
 		out = append(out, string(r))
 	}
 	return out
+}
+
+// raisedCommand renders the "$ <command>" box on the raise surface across
+// width columns. Each span carries the background itself: wrapping
+// already-coloured text in OnRaise loses the background at the first
+// colour reset, which left only "$ " raised.
+func raisedCommand(cmd string, width int) string {
+	plain := padTo("$ "+cmd, width)
+	if !IsColorEnabled() || VisibleWidth(plain) < 2 {
+		return plain
+	}
+	tx := CurrentTextHex()
+	return onRaiseSpan(tx.Dim, plain[:2]) + onRaiseSpan(tx.Ink, plain[2:])
 }

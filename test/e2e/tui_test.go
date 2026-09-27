@@ -143,8 +143,11 @@ func waitReady(t *testing.T, s *screen.Screen) {
 // spinnerRowPattern's own "glyph, label, ellipsis" shape (rather than a
 // bare leading glyph) so it cannot false-positive on the banner's tips row
 // ("/ commands   @ add files …", which also starts with a single
-// character then a space).
-var spinnerFramePattern = regexp.MustCompile(`(?m)^[◐◓◑◒\-\\|/] \S+…`)
+// character then a space — that row never contains the literal "…" this
+// pattern requires right after the glyph+label, margin or not). `^\s*`,
+// not a bare `^`: the busy line now sits inside the 2-column side margin
+// (internal/tui/layout_margin.go).
+var spinnerFramePattern = regexp.MustCompile(`(?m)^\s*[◐◓◑◒\-\\|/] \S+…`)
 
 // idlePlaceholderText is the editor's idle placeholder (editor.DefaultPlaceholder,
 // docs/kiln-design-handoff/README.md "Interactions"): present once the
@@ -302,13 +305,18 @@ func submitSlashCommand(s *screen.Screen, name string) {
 // phrase, elapsed, tokens, "esc to stop") compared exactly. All four
 // glyphs in each set are one cell wide, so the substitution preserves
 // column alignment and the per-cell styles stay paired with their text.
-var busySpinnerGlyphPattern = regexp.MustCompile(`(?m)^([◐◓◑◒]|[-\\|/]) `)
+// `^(\s*)`, not a bare `^`: the busy line now sits inside the 2-column side
+// margin (internal/tui/layout_margin.go), so the glyph is no longer
+// necessarily column 0 — the leading-space group is captured so the
+// replacement below can keep it, rather than silently failing to match (and
+// so never normalizing the glyph) on any margined row.
+var busySpinnerGlyphPattern = regexp.MustCompile(`(?m)^(\s*)([◐◓◑◒]|[-\\|/]) `)
 
 // normalizeSpinnerGlyph pins the busy line's animated glyph to one frame.
 func normalizeSpinnerGlyph(rows []string) []string {
 	out := make([]string, len(rows))
 	for i, r := range rows {
-		out[i] = busySpinnerGlyphPattern.ReplaceAllString(r, "◐ ")
+		out[i] = busySpinnerGlyphPattern.ReplaceAllString(r, "${1}◐ ")
 	}
 	return out
 }
@@ -349,8 +357,10 @@ func assertGoldenTail(t *testing.T, s *screen.Screen, name, anchor string) {
 
 // spinnerRowPattern matches the live spinner/status row rendered above a
 // pending permission prompt, e.g. "· working (0s · ↓ 150 tokens)" or
-// "✶ thinking (0s · ↓ 150 tokens)".
-var spinnerRowPattern = regexp.MustCompile(`(?m)^[◐◓◑◒] \S+…`)
+// "✶ thinking (0s · ↓ 150 tokens)". `^\s*`, not a bare `^`: the busy line
+// now sits inside the 2-column side margin (internal/tui/layout_margin.go),
+// so the glyph is no longer necessarily column 0.
+var spinnerRowPattern = regexp.MustCompile(`(?m)^\s*[◐◓◑◒] \S+…`)
 
 // anyRowMatches reports whether any current screen row matches re.
 func anyRowMatches(s *screen.Screen, re *regexp.Regexp) bool {
@@ -666,8 +676,11 @@ func TestTUI_Startup_NoDuplicateRows(t *testing.T) {
 			waitReady(t, s)
 
 			rows := s.Rows()
+			// TrimSpace, not TrimRight: a full-width rule row now carries
+			// the 2-column side margin (internal/tui/layout_margin.go) as
+			// leading spaces too.
 			isRule := func(r string) bool {
-				trimmed := strings.TrimRight(r, " ")
+				trimmed := strings.TrimSpace(r)
 				return trimmed != "" && strings.Count(trimmed, "─") == len([]rune(trimmed))
 			}
 
@@ -1194,9 +1207,12 @@ func TestTUI_ResizeSweep(t *testing.T) {
 }
 
 // isRuleRow reports whether row looks like the editor's horizontal rule
-// (all box-drawing dashes, or blank).
+// (all box-drawing dashes, or blank). TrimSpace, not TrimRight: every
+// full-width rule now sits inside the 2-column side margin
+// (internal/tui/layout_margin.go), so a real rule row has leading spaces
+// too on any terminal wide enough to carry one, not just trailing ones.
 func isRuleRow(row string) bool {
-	trimmed := strings.TrimRight(row, " ")
+	trimmed := strings.TrimSpace(row)
 	if trimmed == "" {
 		return false
 	}
@@ -1206,6 +1222,25 @@ func isRuleRow(row string) bool {
 		}
 	}
 	return true
+}
+
+// contentWidthForTest mirrors internal/tui/layout_margin.go's ContentWidth
+// for e2e tests, which drive kiln as a black box over a PTY rather than
+// importing the tui package directly: a hairline rule or any other
+// full-width row spans this many columns, not the raw terminal width w,
+// once the 2-column side margin (finding no-side-margin) is subtracted —
+// dropped to 0 below 40 columns, the same narrow-terminal case
+// ContentWidth documents.
+func contentWidthForTest(w int) int {
+	margin := 2
+	if w < 40 {
+		margin = 0
+	}
+	cw := w - 2*margin
+	if cw < 1 {
+		cw = 1
+	}
+	return cw
 }
 
 // --- 9. --ax-screen-reader -----------------------------------------------

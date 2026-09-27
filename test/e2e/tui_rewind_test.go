@@ -35,8 +35,11 @@ steps:
 	if err := s.WaitFor("Restore the code", 3*time.Second); err != nil {
 		t.Fatalf("rewind dialog did not open:\n%s", strings.Join(s.Rows(), "\n"))
 	}
+	// Selection is colour-only (no marker glyph), so there is no text to
+	// wait on between the two keys; give the dialog time to take "up".
+	time.Sleep(500 * time.Millisecond)
 	s.SendKey("up")
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	s.SendKey("enter")
 	if err := s.WaitFor("Rewound to before: turn two", 3*time.Second); err != nil {
 		t.Fatalf("enter did not apply the rewind:\n%s", strings.Join(s.Rows(), "\n"))

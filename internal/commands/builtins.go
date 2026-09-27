@@ -90,7 +90,9 @@ type BuiltinDeps struct {
 	// SessionsDir is shown by /status.
 	SessionsDir string
 
-	OnClear func()
+	// OnClear starts the conversation over: the model sees no earlier
+	// turns afterwards.
+	OnClear func(ctx context.Context) error
 	OnExit  func()
 }
 
@@ -348,24 +350,26 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 	cmds := []Command{
 		{
 			Name:        "help",
-			Description: "Show available commands",
+			Description: "Shortcuts and commands",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				return Result{}, nil // filled in by BindHelp
 			},
 		},
 		{
 			Name:        "clear",
-			Description: "Clear conversation history",
+			Description: "Start a fresh session",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.OnClear != nil {
-					deps.OnClear()
+					if err := deps.OnClear(ctx); err != nil {
+						return Result{}, err
+					}
 				}
-				return Result{Output: []string{"Conversation cleared."}}, nil
+				return Result{Output: []string{"Conversation cleared."}, Clear: true}, nil
 			},
 		},
 		{
 			Name:        "compact",
-			Description: "Summarize and compact the current context",
+			Description: "Summarize history to free context",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.Lane == nil {
 					return Result{Output: []string{"No active lane to compact."}}, nil
@@ -378,7 +382,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "context",
-			Description: "Show context usage against the active tier",
+			Description: "Show context window usage",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				t := deps.CurrentTier()
 				out := []string{
@@ -394,7 +398,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "cost",
-			Description: "Show token usage and cost for this session",
+			Description: "Tokens and spend this session",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				providerID, modelID := deps.CurrentModel()
 				m, ok := deps.Registry.GetModel(providerID, modelID)
@@ -436,7 +440,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:         "model",
-			Description:  "Show or change the active model",
+			Description:  "Switch model",
 			ArgumentHint: "<provider/model>",
 			ArgumentCompletions: func(prefix string) []Completion {
 				models, err := cache.get(context.Background(), deps.Registry)
@@ -554,7 +558,18 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						if err := writesettings.SetUserModel(label); err != nil {
 							return "", fmt.Errorf("switched but could not persist default: %w", err)
 						}
-						return fmt.Sprintf("⎿  Model set to %s (default for new sessions)", label), nil
+						// No leading "⎿ " glyph: this package cannot import
+						// internal/tui to route it through the plain-mode
+						// glyph table (BuiltinDeps's own doc comment: no
+						// cli/tui import, only callbacks), and every other
+						// status string this file returns is plain text —
+						// dialog_model.go's Render already colours and
+						// places this as the dialog's status line, so the
+						// glyph was redundant decoration, and a hardcoded
+						// one leaked a box-drawing character into plain/
+						// screen-reader mode (defect *screen-reader-mode-
+						// leaves-box-drawing-rules).
+						return fmt.Sprintf("Model set to %s (default for new sessions)", label), nil
 					},
 				}
 				return Result{Output: lines, Modal: modal}, nil
@@ -580,7 +595,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "agents",
-			Description: "Show the subagents available for dispatch",
+			Description: "Manage subagents",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if len(deps.Agents) == 0 {
 					return Result{Output: []string{"No subagents. Define them in .claude/agents/*.md"}}, nil

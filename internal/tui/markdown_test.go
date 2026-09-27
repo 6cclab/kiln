@@ -190,6 +190,29 @@ func TestMarkdownTableRulesUseRuleColour(t *testing.T) {
 	}
 }
 
+// TestMarkdownTablePlainModeUsesASCIIRules covers defect
+// *screen-reader-mode-leaves-box-drawing-rules' one gap in buildStyle's own
+// plain branch: glamour has no Table entry in ansi.StyleConfig to override,
+// so its raw table output always uses box-drawing characters regardless of
+// plain mode — compactTable used to pass tableColSep/tableRuleRun/
+// tableCross straight through unchanged (only dropping their colour, via
+// its own colour() closure) rather than swapping in the ASCII replacements
+// the way every other rule in the package does.
+func TestMarkdownTablePlainModeUsesASCIIRules(t *testing.T) {
+	lines := NewMarkdownRenderer(120, true).Render(qaTable)
+	joined := strings.Join(lines, "\n")
+	for _, glyph := range []string{"│", "─", "┼"} {
+		if strings.Contains(joined, glyph) {
+			t.Errorf("plain-mode table still contains box-drawing glyph %q:\n%s", glyph, joined)
+		}
+	}
+	for _, want := range []string{"|", "-", "+", "/api/upload", "10/min"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("plain-mode table missing %q:\n%s", want, joined)
+		}
+	}
+}
+
 // TestMarkdownNoLeadingBlankRow: whatever block a reply opens with, its
 // first rendered row carries content, so the body sits right under the
 // block label (a blockquote or table used to open with an empty row).

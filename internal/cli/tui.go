@@ -210,6 +210,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		TranscriptPath: deps.Started.TranscriptPath,
 		Version:        Version,
 		Keymap:         bindings.Keymap(),
+		IsResume:       deps.IsResume,
 	}
 	// deps.StatusLine (settings.json's "statusLine" command) is
 	// intentionally not wired into cfg any more: kiln's own status line is
@@ -404,11 +405,21 @@ func mcpFailureNotice(statuses []mcpgate.ServerStatus) string {
 // bannerContentWidth is the terminal width bannerRows should fit row 1
 // into. It reads the same stdout the eventual Bubbletea program will get
 // its first WindowSizeMsg from, so the width matches what app.go's
-// contentWidth() (== m.width, no margin) will use when it later re-fits
-// every banner row with FitStatus — falling back to 80 (contentWidth's own
-// fallback) when stdout is not a real terminal (a test, a pipe) or the size
-// can't be read, so a long cwd is only pre-shortened when there is an
-// actual width to shorten it against.
+// contentWidth() will use when it later re-fits every banner row with
+// FitStatus — falling back to 80 (contentWidth's own fallback) when stdout
+// is not a real terminal (a test, a pipe) or the size can't be read, so a
+// long cwd is only pre-shortened when there is an actual width to shorten
+// it against.
+//
+// tui.ContentWidth, not the raw terminal width: contentWidth() now
+// subtracts the 2-column side margin (internal/tui/layout_margin.go,
+// finding no-side-margin), so pre-shortening row 1 against the unreduced
+// width left 4 columns of slack app.go's later re-fit would then have to
+// cut on its own — reintroducing a shape of the defect
+// TestBannerRow1_LongCwdKeepsBranchAndModelAt120And80 guards against (a
+// long cwd at 120 columns, pre-shortened against the raw width, had its
+// model segment clipped to "kiln-…" once the margin-aware re-fit ran at
+// 116).
 func bannerContentWidth(stdout io.Writer) int {
 	f, ok := stdout.(*os.File)
 	if !ok {
@@ -418,7 +429,7 @@ func bannerContentWidth(stdout io.Writer) int {
 	if err != nil || w <= 0 {
 		return 80
 	}
-	return w
+	return tui.ContentWidth(w)
 }
 
 // bannerRows is the startup banner, row for row per the kiln design handoff

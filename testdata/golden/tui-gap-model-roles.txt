@@ -1,8 +1,10 @@
-/model roles
-  ⎿    role         provider/model                     tier     usable
-    fast         faux/faux-2                       small      24.9k
-    heavy        faux/faux-1                      medium      94.8k
-────────────────────────────────────────────────────────────────────────────────────────────────────
-›  describe a task · / for commands · @ to add files
-────────────────────────────────────────────────────────────────────────────────────────────────────
-● ask before edits  ⇧⇥  <cwd> ctx ──────────  0%  $0.00
+   /model roles
+
+  model ──────────────────────────────────────────────────────────────────────────────────────────
+      role         provider/model                     tier     usable
+      fast         faux/faux-2                       small      24.9k
+      heavy        faux/faux-1                      medium      94.8k
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ›  describe a task · / for commands · @ to add files
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ● ask before edits  ⇧⇥  <cwd> ctx ──────────  0%  $0.00

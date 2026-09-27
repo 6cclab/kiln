@@ -376,7 +376,7 @@ func ManageCommands(deps ManageDeps) Source {
 			}
 			return mcpStatusesText(statuses)
 		}},
-		{"agents", "View the subagents available for dispatch", func() *ModalSpec { return agentsModal(deps) }, func() []string {
+		{"agents", "Manage subagents", func() *ModalSpec { return agentsModal(deps) }, func() []string {
 			if len(deps.Agents) == 0 {
 				return []string{"No subagents. Define them in .claude/agents/*.md"}
 			}

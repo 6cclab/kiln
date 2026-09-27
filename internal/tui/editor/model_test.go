@@ -358,6 +358,60 @@ func TestCursorColourMatchesMarker(t *testing.T) {
 	}
 }
 
+// TestSetStyles_ReplacesMarkerRuleAndCursor covers defect
+// *light-bg-you-text-invisible's editor half: app.go's NewModel builds
+// Styles once, before the terminal's background colour is known, so the
+// caller needs a way to push adapted colours (and, for plain mode, a
+// different rule fill character) back in after construction — this is
+// SetStyles's whole job. Marker/Rule/Placeholder are lipgloss.Style values
+// this package cannot compare for equality directly (an unexported style
+// tree), so this checks the two externally observable effects a caller can
+// actually verify: the rendered rule line picks up a new RuleChar
+// (standing in for "the rule's colours also changed" — same call,
+// same struct), and Cursor() picks up the new MarkerStyle's colour,
+// matching TestCursorColourMatchesMarker's own check just above.
+func TestSetStyles_ReplacesMarkerRuleAndCursor(t *testing.T) {
+	initial := Styles{
+		Marker:      "❯",
+		MarkerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("#111111")),
+		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color("#222222")),
+		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("#333333")),
+		RuleChar:    "─",
+	}
+	m := New(initial)
+	m.Focus()
+
+	before := strings.Join(m.View(20), "\n")
+	if !strings.Contains(before, "─") {
+		t.Fatalf("initial rule line missing the unicode fill character: %q", before)
+	}
+
+	updated := Styles{
+		Marker:      "❯",
+		MarkerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("#e9a64b")),
+		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color("#d4d2cb")),
+		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("#7d7262")),
+		RuleChar:    "-",
+	}
+	m.SetStyles(updated)
+
+	after := strings.Join(m.View(20), "\n")
+	if strings.Contains(after, "─") {
+		t.Errorf("rule line still draws the unicode fill character after SetStyles set RuleChar to \"-\": %q", after)
+	}
+	if !strings.Contains(after, "-") {
+		t.Errorf("rule line missing the ASCII fill character SetStyles set: %q", after)
+	}
+
+	c := m.Cursor()
+	if c == nil {
+		t.Fatal("Cursor() = nil while focused, want a hardware cursor")
+	}
+	if got, want := c.Color, updated.MarkerStyle.GetForeground(); got != want {
+		t.Errorf("Cursor().Color after SetStyles = %v, want %v (the new MarkerStyle's foreground)", got, want)
+	}
+}
+
 // TestAltLeftRightMoveByWord covers
 // qa/findings/20260927T001302Z-option-word-motion-default-profile.json:
 // Alt+Left/Alt+Right arrive as the ESC[1;3D / ESC[1;3C sequences iTerm2's

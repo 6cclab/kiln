@@ -1,0 +1,20 @@
+{
+ "id": "20260927T022144Z-inline-stacked-rules",
+ "found_at": "2026-09-27T02:21:44Z",
+ "scenario": "startup/inline-mode",
+ "step": "welcome",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "low",
+ "title": "Inline mode with an empty transcript shows two rules stacked above the input",
+ "observed": "With nothing in the transcript yet (fresh start, resumed session before any turn), the banner's closing rule sits directly on the input box's top rule: two hairlines on consecutive rows.",
+ "expected": "One rule between banner and input when nothing separates them (design welcome scene shows the banner's rule and the input's rule separated by the transcript area).",
+ "design_ref": "qa/reference/welcome.png",
+ "evidence": [
+  "testdata/golden/tui-ax-empty-80.txt"
+ ],
+ "status": "open",
+ "fix": null
+}

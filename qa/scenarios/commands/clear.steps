@@ -10,4 +10,5 @@ KEY enter
 WAITFOR /Conversation cleared\./ 20
 SHOT cleared
 EXPECT /Conversation cleared\./
+EXPECT_NOT /hello there/
 EXPECT_NOT /panic|goroutine/

@@ -1,19 +1,19 @@
- [fg=#e9a64b b]Allow kiln to run this command?[/]                            
+   [fg=#e9a64b b]Allow kiln to run this command?[/]                          
                                                             
- [fg=#a39781 bg=#241f18]$ [/]./scripts/npm test -- upload                             
-   [fg=#a39781]Run the upload route's test suite[/]                        
+   [fg=#a39781 bg=#241f18]$ [/][fg=#ece4d4 bg=#241f18]./scripts/npm test -- upload[/][bg=#241f18]                        [/]   
+     [fg=#a39781]Run the upload route's test suite[/]                      
                                                             
- [fg=#e9a64b bg=#241f18]1[/]  [fg=#ece4d4]Yes[/]                                                     
- [fg=#7d7262]2[/]  [fg=#a39781]Yes, and don’t ask again for: ./scripts/npm test *[/]      
- [fg=#7d7262]3[/]  [fg=#a39781]Yes, and switch to auto mode · auto mode handles[/]        
-[fg=#a39781]    these prompts for you[/]                                   
- [fg=#7d7262]4[/]  [fg=#a39781]No[/]                                                      
+   [fg=#e9a64b bg=#241f18]1[/][fg=#ece4d4 bg=#241f18]  Yes[/][bg=#241f18]                                                 [/]  
+   [fg=#7d7262]2[/]  [fg=#a39781]Yes, and don’t ask again for: ./scripts/npm test *[/]    
+   [fg=#7d7262]3[/]  [fg=#a39781]Yes, and switch to auto mode · auto mode handles[/]      
+     [fg=#a39781] these prompts for you[/]                                 
+   [fg=#7d7262]4[/]  [fg=#a39781]No[/]                                                    
                                                             
- [fg=#a39781]↑↓ select · enter confirm · esc decline · tab to amend[/]     
-[fg=#e9a64b]────────────────────────────────────────────────────────────[/]
+   [fg=#a39781]↑↓ select · enter confirm · esc decline · tab to amend[/]   
+  [fg=#e9a64b]────────────────────────────────────────────────────────[/]  
                                                             
-[fg=#e9a64b]◐[/] [fg=#e9a64b]Waiting for approval…[/]  [fg=#a39781]2s · 750 tokens[/]        [fg=#a39781]esc to stop[/] 
-[fg=#3a3228]────────────────────────────────────────────────────────────[/]
-[fg=#e9a64b]›[/]  [fg=#7d7262]press 1, 2, 3 or 4[/]                                       
-[fg=#3a3228]────────────────────────────────────────────────────────────[/]
-● ask before edits  ⇧⇥  <cwd> ctx ──────────  0%  $0.00     
+  [fg=#e9a64b]◐[/] [fg=#e9a64b]Waiting for approval…[/]  [fg=#a39781]2s · 750 tokens[/]    [fg=#a39781]esc to stop[/]   
+  [fg=#3a3228]────────────────────────────────────────────────────────[/]  
+  [fg=#e9a64b]›[/]  [fg=#7d7262]press 1, 2, 3 or 4[/]                                     
+  [fg=#3a3228]────────────────────────────────────────────────────────[/]  
+  ● ask before edits  ⇧⇥  <cwd> ctx ──────────  0%  $0.00   

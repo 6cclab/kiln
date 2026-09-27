@@ -29,14 +29,23 @@ func RenderPlan(items []TodoView, width int) []string {
 		labelRule("plan", Muted, fmt.Sprintf("%d/%d", done, len(items)), width),
 		Muted(fmt.Sprintf("Plan · %d of %d", done, len(items))),
 	}
+	// Two spaces between glyph and text, not one: the design puts the glyph
+	// in its own 2ch box plus a 10px gap (Terminal.dc.html:88), which at
+	// 14px Fira Code (~8.4px/col) reads as glyph + 2 columns before the
+	// text starts (finding plan-glyph-spacing) — not glyph + 1 this used
+	// to render. Subagent rows (subagents.go) use a distinct grid-column
+	// layout instead of a glyph+gap pair (design's "agents" block, line 95,
+	// is `grid-template-columns` with its own 14px gaps, not a 2ch glyph
+	// box), so this convention doesn't carry over there — no change needed
+	// on that side.
 	for _, it := range items {
 		switch it.Status {
 		case TodoCompletedStatus:
-			lines = append(lines, fmt.Sprintf("%s %s", KilnGreen(gl.OK), Muted(Strike(it.Content))))
+			lines = append(lines, fmt.Sprintf("%s  %s", KilnGreen(gl.OK), Muted(Strike(it.Content))))
 		case TodoInProgressStatus:
-			lines = append(lines, fmt.Sprintf("%s %s", KilnAmber(gl.PlanCurrent), Ink(it.Content)))
+			lines = append(lines, fmt.Sprintf("%s  %s", KilnAmber(gl.PlanCurrent), Ink(it.Content)))
 		default:
-			lines = append(lines, fmt.Sprintf("%s %s", Faint(gl.PlanTodo), Muted(it.Content)))
+			lines = append(lines, fmt.Sprintf("%s  %s", Faint(gl.PlanTodo), Muted(it.Content)))
 		}
 	}
 	return lines

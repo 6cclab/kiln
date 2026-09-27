@@ -59,7 +59,7 @@ func TestView_IdleFrame(t *testing.T) {
 		t.Fatalf("frame too short: %d lines", len(lines))
 	}
 	last := lines[len(lines)-1]
-	want := m.renderStatusRow(m.contentWidth())
+	want := padMargin([]string{m.renderStatusRow(m.contentWidth())}, m.margin())[0]
 	if last != want {
 		t.Errorf("last row = %q, want the status row %q", last, want)
 	}
@@ -296,7 +296,10 @@ func newTestModelWithRegistry() Model {
 // or bottom border), ignoring ANSI styling.
 func isFullRule(l string) bool {
 	stripped := ansiStrip(l)
-	stripped = strings.TrimRight(stripped, " ")
+	// TrimSpace, not TrimRight: every full-width rule now sits inside the
+	// 2-column side margin (layout_margin.go), so a real rule row has
+	// leading spaces too, not just trailing ones.
+	stripped = strings.TrimSpace(stripped)
 	return len(stripped) > 0 && strings.Count(stripped, "─") == len([]rune(stripped))
 }
 
@@ -377,9 +380,12 @@ func TestApp_SlashOpensPopupAboveEditor(t *testing.T) {
 		t.Fatalf("expected a popup row naming \"/model\" above the editor's top rule (index %d), got:\n%s", topRuleIdx, strings.Join(lines, "\n"))
 	}
 
+	// Every row's ceiling is the real terminal width (m.width), not
+	// m.contentWidth() — rows now carry the 2-column side margin
+	// (layout_margin.go) on top of the content width they wrap to.
 	for _, l := range lines {
-		if w := VisibleWidth(l); w > m.contentWidth() {
-			t.Errorf("row %q has width %d, want at most %d", l, w, m.contentWidth())
+		if w := VisibleWidth(l); w > m.width {
+			t.Errorf("row %q has width %d, want at most %d", l, w, m.width)
 		}
 	}
 }

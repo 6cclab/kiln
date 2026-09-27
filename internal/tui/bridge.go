@@ -237,10 +237,24 @@ func (b *Bridge) prog() sink {
 // from Bubbletea's Update itself — unlike calling Program.Println
 // directly, this never blocks waiting for the event loop, so it cannot
 // deadlock it.
+//
+// This is the transcript's one true sink: every commit path in this
+// package — app.go's m.commit/m.commitSynthetic, CommitNote,
+// CommitCommandResult, the freeze hook (live_freeze.go), this file's own
+// event-driven commits (EventFault, SubagentSink, HookNotice, ModelSwitch)
+// — reaches a terminal row only through here or through CommitSynthetic,
+// which itself calls this. That makes it the one place to apply the left
+// margin (layout_margin.go's padMargin, finding no-side-margin) rather than
+// each of those padding its own lines: CommitSynthetic also stores its
+// lines (unpadded) for RenderTranscriptEntries to splice back into a later
+// Ctrl+O/Ctrl+F/Rewind replay, and that replay commits the whole redrawn
+// transcript through this same Commit — padding anywhere upstream of here
+// would double the margin on every synthetic block once replayed.
 func (b *Bridge) Commit(lines []string) {
 	if len(lines) == 0 {
 		return
 	}
+	lines = padMargin(lines, ruleMargin())
 	select {
 	case b.queue <- bridgeItem{text: strings.Join(lines, "\n")}:
 	case <-b.quit:
@@ -403,25 +417,42 @@ type MsgClearAndReplay struct{}
 // on "\n" before appending.
 type MsgTranscriptAppend struct{ Text string }
 
-// CommitCommandResult commits a slash command's result row(s) under its
-// own echo: "  ⎿  <line>" for the first line, two-space continuation for
-// the rest (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
-// model as Opus 5 (1M context)"). The echo itself is committed separately
-// via RenderUserMessage, same as a typed prompt — this only adds the
-// result row(s) that follow it.
-func (b *Bridge) CommitCommandResult(lines []string) {
+// RenderCommandResult renders a slash command's multi-line result as a
+// labelled block named after the command ("status ───", "cost ───", …),
+// each row indented by the same continuationIndent so the key/value
+// columns the command itself already aligned (e.g. /status's
+// "model     faux/faux-1", "auth      configured") stay aligned instead of
+// zig-zagging (qa/findings/20260927T000712Z-command-output-elbow-
+// misaligned.json: the old "⎿ " form only ever prefixed the first row, not
+// the rest, which pushed everything after it one glyph-and-two-spaces
+// narrower). There is no "⎿" anywhere in kiln's block set — a one-line
+// result is a "system" note instead (app.go's handleSubmit, commitNote),
+// which this function does not handle.
+func RenderCommandResult(name string, lines []string, width int) []string {
+	label := name
+	if label == "" {
+		label = "result"
+	}
+	out := make([]string, 0, len(lines)+1)
+	out = append(out, labelRule(label, Muted, "", width))
+	for _, l := range lines {
+		out = append(out, FitStatus(continuationIndent+l, width))
+	}
+	return out
+}
+
+// CommitCommandResult commits a slash command's multi-line result as its
+// own labelled block (RenderCommandResult), named after the command that
+// produced it. The echo itself is committed separately via
+// RenderUserMessage, same as a typed prompt — this only adds the block
+// that follows it, with the same leading blank row every other commit
+// call site in this file uses to separate blocks.
+func (b *Bridge) CommitCommandResult(name string, lines []string) {
 	if len(lines) == 0 {
 		return
 	}
-	gl := G()
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		if i == 0 {
-			out[i] = fmt.Sprintf("%s%s  %s", resultIndent, Muted(gl.Result), l)
-		} else {
-			out[i] = continuationIndent + l
-		}
-	}
+	width := ruleWidth()
+	out := append([]string{""}, RenderCommandResult(name, lines, width)...)
 	b.CommitSynthetic(out)
 }
 
@@ -1279,17 +1310,24 @@ func (b *Bridge) SubagentPanelSink() func(agent.SubagentEvent) {
 // echoed — that would undo their context isolation visually even though
 // it is real underneath — only the dispatch, the model it landed on, and
 // the result size are.
+//
+// A subagent failure (SubagentEventError) is deliberately NOT committed
+// here as its own transcript block: it already renders twice on its own —
+// once in the subagents panel's row (subagents.go's renderSubagentRow,
+// the "✕ <message>" action line, the design's one record of a dispatch)
+// and once in the parent's own "task" tool-call result text
+// (internal/tools/task.go turns a Dispatch error into the call's result,
+// "Subagent %q failed: %s", rendered by the ordinary EventToolEnd path
+// below). A bare "error" block committed here as well was a third,
+// context-free copy of the identical message with no visible tie to
+// either of those (qa/findings/20260927T000350Z-subagent-error-
+// triplicated.json) — removed rather than suppressed elsewhere, since the
+// panel row and the task result already say everything a failed dispatch
+// needs to say. A genuine top-level fault (the parent turn's own, not a
+// subagent's) still renders via handleEvent's EventFault case above,
+// which this function has no bearing on.
 func (b *Bridge) SubagentSink() func(agent.SubagentEvent) {
-	return func(e agent.SubagentEvent) {
-		// The subagents panel (subagents.go) is the design's one record of
-		// a dispatch: name, task, last action, progress and tokens. Only a
-		// failure gets its own transcript block.
-		if e.Kind != agent.SubagentEventError {
-			return
-		}
-		b.FreezeBefore()
-		b.CommitSynthetic(RenderError(fmt.Sprintf("%s: %s", e.Agent, e.Message)))
-	}
+	return func(e agent.SubagentEvent) {}
 }
 
 // HookNotice renders a hook activity line, matching app.ts's onHookNotices
@@ -1307,11 +1345,29 @@ func (b *Bridge) ModelSwitch(label string, tierName string, usable int) {
 
 // --- helpers -------------------------------------------------------------
 
+// titleCase turns a snake_case tool name into a readable phrase: split on
+// "_" (dropping empty segments, so an MCP tool's "mcp__server__tool"
+// double-underscore does not leave a double space), join with a single
+// space, and capitalize only the very first letter of the whole phrase —
+// "bash_background" -> "Bash background", "exit_plan_mode" -> "Exit plan
+// mode", "mcp__fixture__echo" -> "Mcp fixture echo" — not per-word title
+// case, which would read as shouting for a multi-word tool name.
 func titleCase(name string) string {
 	if name == "" {
 		return name
 	}
-	r := []rune(name)
+	parts := strings.Split(name, "_")
+	words := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			words = append(words, p)
+		}
+	}
+	joined := strings.Join(words, " ")
+	if joined == "" {
+		return name
+	}
+	r := []rune(joined)
 	if r[0] >= 'a' && r[0] <= 'z' {
 		r[0] -= 'a' - 'A'
 	}

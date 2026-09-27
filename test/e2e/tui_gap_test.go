@@ -33,7 +33,7 @@ import (
 // dispatch-order race tuiFinishedLinePattern's doc comment describes for
 // the "Done" line and the panel rows below — two independent goroutines
 // each committing their own Start line as soon as their dispatch begins.
-var tuiStartLinePattern = regexp.MustCompile(`^⏺ \S`)
+var tuiStartLinePattern = regexp.MustCompile(`^\s*⏺ \S`)
 
 // tuiFinishedLinePattern matches bridge.go's SubagentSink "Done" commit
 // line ("  <agent> finished - N tool calls, N chars returned, N tokens").
@@ -42,12 +42,12 @@ var tuiFinishedLinePattern = regexp.MustCompile(`^\s+\S.* finished - \d+ tool ca
 // tuiSubagentPanelRowPattern matches subagents.go's renderSubagentRow
 // output for the two "general-purpose" rows task_concurrent_tui.yaml's
 // script produces (" general-purpose  <description> ... <meter> <tokens>").
-var tuiSubagentPanelRowPattern = regexp.MustCompile(`^ general-purpose  `)
+var tuiSubagentPanelRowPattern = regexp.MustCompile(`^\s* general-purpose  `)
 
 // tuiSubagentsBlockLabel matches the subagents panel's own label-rule row
 // (subagents.go's labelRule("subagents", ...)), the fixed marker every
 // committed panel snapshot starts with.
-var tuiSubagentsBlockLabel = regexp.MustCompile(`^subagents `)
+var tuiSubagentsBlockLabel = regexp.MustCompile(`^\s*subagents `)
 
 // dropIntermediateSubagentsBlocks removes every committed subagents-panel
 // block except the last, given a copy of rows.

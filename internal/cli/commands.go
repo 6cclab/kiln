@@ -181,8 +181,16 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		Agents:       deps.Agents,
 		SessionsDir:  deps.SessionsDir,
 		UsageByModel: deps.UsageByModel,
-		OnClear:      func() {},
-		OnExit:       func() {},
+		// /clear moves the lane's branch tip back to the root, so the next
+		// turn starts from an empty conversation; the session log keeps
+		// the earlier turns (reachable again through /rewind).
+		OnClear: func(ctx context.Context) error {
+			if started.Lane == nil {
+				return nil
+			}
+			return started.Lane.NavigateTree(ctx, nil)
+		},
+		OnExit: func() {},
 	})
 	registry.Add(slashcommands.BindHelp(builtinSource, registry.List))
 

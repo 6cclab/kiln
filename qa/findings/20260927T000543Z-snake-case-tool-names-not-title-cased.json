@@ -15,6 +15,15 @@
  "evidence": [
   "qa/runs/c1/iterm-dark/tools-background-shell-120x40/02-bashes-list.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestMapToolNameSnakeCaseTitleCased",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/tools-background-shell-120x40"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
 }

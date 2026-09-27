@@ -16,6 +16,15 @@
   "qa/runs/c1/iterm-dark/tools-plan-progress-120x40/02-plan-second-step.png",
   "qa/reference/plan.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/plan.go"
+  ],
+  "regression_test": "TestTUI_PlanBlock_Live",
+  "after_evidence": [
+   "qa/runs/c8/iterm-dark/tools-plan-progress-120x40"
+  ],
+  "updated_at": "2026-09-27T02:31:26Z"
+ }
 }

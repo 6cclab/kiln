@@ -37,12 +37,20 @@ type subagentRow struct {
 	// status is "running", "done" or "error". A row starts "running" on
 	// its start event and never reverts once it reaches "done"/"error".
 	status string
-	// lastTool is the most recent tool_start event's tool name, shown as
-	// the row's "last action" until the row finishes.
-	lastTool  string
-	toolCalls int
-	tokens    int
-	message   string
+	// lastAction is the most recent finished tool call's formatted action
+	// line ("Grep \"app.use(\" · 14 matches", formatSubagentAction), shown
+	// under the row while it is still running. Empty until the first tool
+	// call finishes, in which case the row shows the "starting…"
+	// placeholder instead.
+	lastAction string
+	// resultText is the subagent's final answer (SubagentEventDone's
+	// Text), shown as the done row's action line (its first line, design:
+	// "✓ Upload route mounts at src/routes/upload.ts:22") in place of
+	// "finished".
+	resultText string
+	toolCalls  int
+	tokens     int
+	message    string
 }
 
 // SubagentPanelState tracks live/done subagent rows for the turn in
@@ -124,7 +132,7 @@ func (p *SubagentPanelState) Apply(e agent.SubagentEvent) {
 		r.status = "running"
 	case agent.SubagentEventTool:
 		r.toolCalls++
-		r.lastTool = e.ToolName
+		r.lastAction = formatSubagentAction(e)
 	case agent.SubagentEventUsage:
 		// Running total for a row that has not finished yet; Done
 		// overwrites it with the final figure.
@@ -133,6 +141,7 @@ func (p *SubagentPanelState) Apply(e agent.SubagentEvent) {
 		r.status = "done"
 		r.toolCalls = e.ToolCalls
 		r.tokens = e.Usage.TotalTokens
+		r.resultText = firstNonEmptyLine(e.Text)
 	case agent.SubagentEventError:
 		r.status = "error"
 		r.message = e.Message
@@ -296,16 +305,16 @@ func renderSubagentRow(r *subagentRow, width int) []string {
 		nameColor = KilnGreen
 		actionGlyph = G().OK
 		action = "finished"
-		if r.lastTool != "" {
-			action = r.lastTool
+		if r.resultText != "" {
+			action = r.resultText
 		}
 	case "error":
 		nameColor = KilnRed
 		actionGlyph = G().Fail
 		action = r.message
 	default:
-		if r.lastTool != "" {
-			action = r.lastTool
+		if r.lastAction != "" {
+			action = r.lastAction
 		}
 	}
 	name := r.agent
@@ -369,6 +378,42 @@ func renderSubagentRow(r *subagentRow, width int) []string {
 
 	actionRow := FitStatus(strings.Repeat(" ", taskCol)+Dim(actionGlyph+" "+action), width)
 	return []string{nameRow, actionRow}
+}
+
+// formatSubagentAction builds a subagent row's live "last action" line from
+// a finished tool call (SubagentEventTool, now reported on EventToolEnd —
+// see dispatch.go): "<ToolName> \"<primary arg>\" · <first result line>",
+// each part included only when there is something to show, matching the
+// design's own example ('→ Grep "app.use(" · 14 matches'). Reuses the same
+// PrimaryArg/summarizeToolResult helpers the parent transcript's own tool
+// blocks use (bridge.go), so a subagent's action line reads the same way a
+// top-level tool call's collapsed summary does.
+func formatSubagentAction(e agent.SubagentEvent) string {
+	line := MapToolName(e.ToolName)
+	if arg := PrimaryArg(e.ToolArgs); arg != "" {
+		line += fmt.Sprintf(" %q", arg)
+	}
+	if summary := summarizeToolResult(e.ToolResult); len(summary) > 0 {
+		if first := firstNonEmptyLine(strings.Join(summary, "\n")); first != "" {
+			line += " · " + first
+		}
+	}
+	return line
+}
+
+// firstNonEmptyLine returns s's first non-blank line, trimmed — used for a
+// subagent's final answer (SubagentEventDone.Text) and a finished tool
+// call's result summary, neither of which the row has room to show in
+// full. permission_render.go's own firstLine (a plan's first line for the
+// approval prompt) does not skip a leading blank line, which the plan text
+// it reads never has; this one does, since a subagent's streamed text can.
+func firstNonEmptyLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // meterBar draws a 10-cell progress meter: filled cells (coloured, capped

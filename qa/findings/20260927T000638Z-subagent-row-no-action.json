@@ -17,6 +17,17 @@
   "qa/runs/c1/iterm-dark/tools-task-concurrent-120x40/02-three-done.png",
   "qa/reference/agents.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/subagents.go",
+   "internal/agent/dispatch.go",
+   "internal/agent/subagent.go"
+  ],
+  "regression_test": "TestTUI_SubagentPanel_ShowsToolActionThenFinalAnswer",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/tools-task-concurrent-120x40/01-three-live.png"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
 }

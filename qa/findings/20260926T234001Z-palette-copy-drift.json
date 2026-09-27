@@ -15,6 +15,16 @@
  "evidence": [
   "qa/runs/c1/iterm-dark/commands-help-120x40"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/builtins.go",
+   "internal/commands/manage_commands.go"
+  ],
+  "regression_test": "TestTUI_Design_Palette",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/commands-help-120x40"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
 }

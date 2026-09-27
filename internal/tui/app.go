@@ -113,6 +113,13 @@ type Config struct {
 	SessionID      string
 	TranscriptPath string
 	Version        string
+	// IsResume is set when this run resumed an existing session
+	// (--resume/--continue): NewModel's first WindowSizeMsg handler
+	// replays Lane's prior entries into the transcript, right after the
+	// banner, exactly once — the same rendering replayTranscript uses for
+	// Ctrl+O/resize, so a resumed session never opens on an empty
+	// transcript (defect *resumed-session-no-transcript-replay).
+	IsResume bool
 }
 
 // Model is the interactive shell's Bubbletea v2 model — the Go port of
@@ -188,6 +195,10 @@ type Model struct {
 	shortcuts bool
 	// bannerDone is set once Banner has been committed.
 	bannerDone bool
+	// bannerScheduled guards msgCommitBanner's grace-period tick (see
+	// bannerBackgroundGrace) so the first WindowSizeMsg schedules it
+	// exactly once, not once per resize before the banner has committed.
+	bannerScheduled bool
 	// committedRows counts rows printed above the live region since the last
 	// clear (tea.PrintedLines). View pads the live region so the input box
 	// sits at the bottom of the terminal; a constant-height live region is
@@ -275,6 +286,32 @@ type Model struct {
 	resizeGen int
 }
 
+// editorStyles builds the input box's editor.Styles from the theme
+// package's *current* adaptive tokens (CurrentTextHex/CurrentSurfaceHex) —
+// never the design's fixed hexAmber/hexRuleStrong/hexFaint consts directly,
+// or a rebuild after SetTerminalBackground adjusts those tokens for a
+// non-design terminal background would just reapply the same stale dark
+// colours (defect *light-bg-you-text-invisible). Called once in NewModel
+// (before any background reply, so it still reads the design defaults
+// resetTextTokensToDesign/resetSurfaceTokensToDesign seeded at init) and
+// again from the tea.BackgroundColorMsg handler, once SetTerminalBackground
+// has recomputed them for the real terminal.
+func editorStyles(marker string) editor.Styles {
+	text, surface := CurrentTextHex(), CurrentSurfaceHex()
+	return editor.Styles{
+		Marker: marker,
+		// Kiln: prompt glyph amber, rules in rule-strong, placeholder in
+		// kiln faint — see theme.go's hexAmber/hexRuleStrong/hexFaint doc
+		// comments for what those tokens mean on the design background;
+		// CurrentTextHex/CurrentSurfaceHex give whatever they currently
+		// resolve to for the detected terminal background.
+		MarkerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color(text.Amber)),
+		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color(surface.RuleStrong)),
+		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color(text.Faint)),
+		RuleChar:    RuleFillChar(),
+	}
+}
+
 // abbrevHomeEnv home-abbreviates path against os.UserHomeDir(), falling
 // back to path unchanged when the home directory cannot be read — the
 // status line's location segment (status.go RenderStatusLine, AbbrevHome).
@@ -303,14 +340,7 @@ func NewModel(cfg Config) Model {
 		cfg.Effort = "medium"
 	}
 	marker := G().UserMark
-	ed := editor.New(editor.Styles{
-		Marker: marker,
-		// Kiln: prompt glyph amber, rules in rule-strong (#3a3228),
-		// placeholder in kiln faint (#7d7262).
-		MarkerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color(hexAmber)),
-		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color(hexRuleStrong)),
-		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color(hexFaint)),
-	})
+	ed := editor.New(editorStyles(marker))
 	m := Model{
 		cfg:            cfg,
 		editor:         ed,
@@ -415,6 +445,21 @@ type msgFullscreenRewrap struct{ gen int }
 // the new verbosity (see replayTranscript and Bridge.MsgClearAndReplay).
 type msgReplayTranscript struct{}
 
+// bannerBackgroundGrace is how long the first WindowSizeMsg's handler waits
+// for tea.BackgroundColorMsg before committing the banner (and, for a
+// resumed session, replaying the transcript) with whatever theme tokens are
+// live at that point — see the WindowSizeMsg case's own comment for why
+// committing inline there instead always loses that race. Local PTY round
+// trips land in low single-digit milliseconds; a terminal that never
+// answers the OSC 11 query still gets its banner once this fires.
+const bannerBackgroundGrace = 30 * time.Millisecond
+
+// msgCommitBanner fires bannerBackgroundGrace after the first WindowSizeMsg,
+// unless tea.BackgroundColorMsg's own handler already committed the banner
+// first — see commitBanner, which either call reaches, guarded by
+// bannerDone so it never double-commits.
+type msgCommitBanner struct{}
+
 // MsgTrustAnswered carries the trust dialog's answer; "No, exit" quits.
 type MsgTrustAnswered struct{ Trusted bool }
 
@@ -493,28 +538,46 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.editor.SetWidth(m.liveEditorWidth())
 		// Kiln label rules and full-row tints size to the live content
 		// width (transcript.go's width-less Render* helpers read this).
+		// SetRenderMargin feeds Bridge.Commit's own central margin pad
+		// (bridge.go), which runs off arbitrary goroutines the same way
+		// ruleWidth()'s renderWidth does.
 		SetRenderWidth(m.contentWidth())
-		if !m.bannerDone && m.cfg.Bridge != nil && len(m.cfg.Banner) > 0 {
-			rows := m.bannerRows()
-			// The input box sits directly below the banner in inline mode.
-			// (No bottom-pinning filler: on a tall terminal it opens a huge
-			// void and, as the statusline loads and notices commit, scrolls
-			// the banner off the top.) In fullscreen the banner is the
-			// transcript's first content instead — appendTranscript (via
-			// the bridge's fullscreen sink) puts it at the top of the
-			// viewport, not scrollback.
-			m.cfg.Bridge.Commit(rows)
+		SetRenderMargin(m.margin())
+		var bannerCmd tea.Cmd
+		if !m.bannerDone && !m.bannerScheduled {
+			// The banner (and, for a resumed session, the transcript
+			// replay right after it — see commitBanner) is deferred by
+			// bannerBackgroundGrace rather than committed here inline:
+			// bubbletea's own Run() sends this WindowSizeMsg (tty.go,
+			// `go p.Send(resizeMsg)`) before Init()'s Cmd even starts
+			// executing, so tea.RequestBackgroundColor's OSC 11 query (sent
+			// from that Cmd) can never win this race — committing straight
+			// from this handler always bakes in the pre-detection
+			// dark-design hexRuleStrong for the banner's closing rule,
+			// wrong on a light terminal (confirmed against qa/runs/c3/
+			// iterm-light/content-verbose-toggle-120x40/02-reply-non-
+			// verbose.png: that rule's pixels are RGB(41,37,29), the
+			// unadjusted design token, while every rule committed after
+			// SetTerminalBackground runs reads RGB(212,210,203) instead —
+			// defect *light-bg-you-text-invisible). The grace period gives
+			// a real terminal's OSC 11 round trip a chance to land first
+			// (tea.BackgroundColorMsg's own handler below commits
+			// immediately and cancels this tick's effect via bannerDone);
+			// a terminal that never answers still gets its banner once the
+			// tick fires — no indefinite wait, matching Init's own "no
+			// timer needed to give up" default for everything else.
+			m.bannerScheduled = true
+			bannerCmd = tea.Tick(bannerBackgroundGrace, func(time.Time) tea.Msg { return msgCommitBanner{} })
 		}
-		m.bannerDone = true
 		if m.fullscreen {
 			m = m.layoutViewport()
 			if prevWidth != 0 && prevWidth != m.width {
 				m.resizeGen++
 				gen := m.resizeGen
-				return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return msgFullscreenRewrap{gen: gen} })
+				return m, tea.Batch(bannerCmd, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return msgFullscreenRewrap{gen: gen} }))
 			}
 		}
-		return m, nil
+		return m, bannerCmd
 
 	case tea.QuitMsg:
 		m.quitting = true
@@ -651,6 +714,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.replayTranscript()
 		return m, nil
 
+	case msgCommitBanner:
+		return m.commitBanner(), nil
+
 	case MsgTrustAnswered:
 		if !msg.Trusted {
 			return m, tea.Quit
@@ -693,6 +759,25 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.BackgroundColorMsg:
 		SetTerminalBackground(msg.Color)
+		// The banner divider and every other Rule/RuleStrong/Muted/...
+		// call site re-reads the theme package's adaptive tokens on its
+		// next render, but the editor's own Styles were captured by value
+		// in NewModel (marker/rule/placeholder colours, plus the cursor
+		// colour neutralTextareaStyles derives from MarkerStyle) — they
+		// need pushing back in explicitly or the input box stays on the
+		// pre-detection dark-design hexes forever (defect
+		// *light-bg-you-text-invisible).
+		m.editor.SetStyles(editorStyles(G().UserMark))
+		if m.bannerScheduled && !m.bannerDone {
+			// The background reply beat msgCommitBanner's grace-period
+			// tick: commit the banner now, with the just-adapted tokens,
+			// instead of waiting out the rest of bannerBackgroundGrace for
+			// no reason. bannerScheduled guards this on the first
+			// WindowSizeMsg having already run (m.width/height known); if
+			// it somehow hasn't yet, the later tick still commits once it
+			// does.
+			m = m.commitBanner()
+		}
 		return m, nil
 
 	case MsgPermissionPrompt:
@@ -867,6 +952,15 @@ func (m Model) refreshMode() Model {
 // commit (nothing can be live yet) and finishTurn's InFlightTools abort
 // loop (which must land before the plan/subagents freeze that follows it,
 // not trigger it early — see live_freeze.go's doc comment).
+// The left margin (layout_margin.go's padMargin) is deliberately not
+// applied here: it is applied once, centrally, inside Bridge.Commit itself
+// (bridge.go), which every one of these paths — and CommitSynthetic, which
+// calls Commit internally — ends up going through. Padding here too would
+// double it for anything that also gets stored for replay
+// (CommitSynthetic's own Lines field, spliced back in by
+// RenderTranscriptEntries on a Ctrl+O/Ctrl+F/Rewind redraw): the stored
+// copy has to stay unpadded so a later replay, which pads the whole
+// redrawn transcript once itself, doesn't pad twice.
 func (m Model) commit(lines []string) {
 	if m.cfg.Bridge == nil {
 		return
@@ -915,12 +1009,12 @@ func (m Model) commitAssistantText(text string) {
 }
 
 // commitCommandResult is commit's CommitCommandResult counterpart.
-func (m Model) commitCommandResult(lines []string) {
+func (m Model) commitCommandResult(name string, lines []string) {
 	if m.cfg.Bridge == nil {
 		return
 	}
 	m.cfg.Bridge.FreezeBefore()
-	m.cfg.Bridge.CommitCommandResult(lines)
+	m.cfg.Bridge.CommitCommandResult(name, lines)
 }
 
 // dialogOutcome is implemented by dialogs that leave a result row in the
@@ -1006,7 +1100,20 @@ func (m Model) layoutViewport() Model {
 		h = 1
 	}
 	wasBottom := m.viewport.AtBottom()
-	m.viewport.SetWidth(width)
+	// The viewport's own width is the raw terminal width (m.width), not
+	// contentWidth: every row it holds — appendTranscript's committed
+	// content, which already carries the left margin from Bridge.Commit's
+	// central pad (bridge.go's own doc comment), and the tail/chrome rows
+	// below, also margin-padded (layout_margin.go) — is already m.width
+	// columns wide by the time it reaches the viewport. Sizing the
+	// viewport to the narrower contentWidth clipped exactly the margin's
+	// own width back off the right edge of every row (observed: a
+	// fullscreen diff header's trailing "+1  −1" truncated to "+1  −").
+	rawWidth := m.width
+	if rawWidth <= 0 {
+		rawWidth = 80
+	}
+	m.viewport.SetWidth(rawWidth)
 	m.viewport.SetHeight(h)
 	if wasBottom {
 		m.viewport.GotoBottom()
@@ -1051,6 +1158,7 @@ func (m Model) fullscreenView() tea.View {
 		}
 		if editorTop >= 0 {
 			if c := m.editor.Cursor(); c != nil {
+				c.Position.X += m.margin()
 				c.Position.Y += editorTop
 				v.Cursor = c
 			}
@@ -1102,6 +1210,7 @@ func (m Model) fullscreenView() tea.View {
 	v.MouseMode = tea.MouseModeCellMotion
 	if editorTop >= 0 {
 		if c := m.editor.Cursor(); c != nil {
+			c.Position.X += m.margin()
 			c.Position.Y += len(vpRows) + editorTop
 			v.Cursor = c
 		}
@@ -1514,6 +1623,17 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			echo()
 			return m, tea.Quit
 		}
+		if handled.Clear {
+			// The conversation was reset: redraw the (now empty)
+			// transcript, then show the command's note under it.
+			note := strings.Join(handled.Output, " ")
+			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} }, func() tea.Msg {
+				if m.cfg.Bridge != nil && note != "" {
+					m.cfg.Bridge.CommitNote(note)
+				}
+				return nil
+			})
+		}
 		if handled.Modal != nil {
 			// Echoed when the dialog closes — see dialogEcho.
 			m.dialogEcho = line
@@ -1537,7 +1657,7 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			// the echo.
 			m.commitNote(handled.Output[0])
 		case len(handled.Output) > 0:
-			m.commitCommandResult(handled.Output)
+			m.commitCommandResult(handled.Name, handled.Output)
 		}
 		if handled.Prompt == "" {
 			return m, nil
@@ -1655,11 +1775,19 @@ func (m Model) beginTurn(prompt string, images []msg.ImageContent) (tea.Model, t
 
 // --- layout -----------------------------------------------------------------
 
+// contentWidth is ContentWidth(m.width) — the 2-column side margin
+// (layout_margin.go) already subtracted, so every caller that wraps or
+// fits to it draws inside the margin without knowing the margin exists.
 func (m Model) contentWidth() int {
-	if m.width <= 0 {
-		return 80
-	}
-	return m.width
+	return ContentWidth(m.width)
+}
+
+// margin is marginFor(m.width): the left-pad every rendered row needs
+// (layout_margin.go's padMargin), applied at the points content leaves this
+// package for the terminal — see layout_margin.go's doc comment for the
+// full list.
+func (m Model) margin() int {
+	return marginFor(m.width)
 }
 
 func (m Model) liveEditorWidth() int {
@@ -1697,6 +1825,10 @@ func (m Model) bannerRows() []string {
 		ruleCh = "-"
 	}
 	rows = append(rows, Rule(strings.Repeat(ruleCh, m.contentWidth())))
+	// Not margin-padded here: every caller commits this through
+	// m.cfg.Bridge.Commit, which applies the left margin once, centrally
+	// (see Commit's own doc comment in bridge.go) — padding here too would
+	// double it.
 	return rows
 }
 
@@ -1731,6 +1863,7 @@ func (m Model) View() tea.View {
 	}
 	if editorTop >= 0 {
 		if c := m.editor.Cursor(); c != nil {
+			c.Position.X += m.margin()
 			c.Position.Y += editorTop
 			v.Cursor = c
 		}
@@ -1841,7 +1974,7 @@ func (m Model) liveTail(width int) []string {
 	}
 
 	if m.dialog != nil || (m.cfg.Bridge != nil && m.cfg.Bridge.Verbose()) {
-		return lines
+		return padMargin(lines, m.margin())
 	}
 
 	// The live-while-last blocks (live_freeze.go): streaming text and
@@ -1882,7 +2015,7 @@ func (m Model) liveTail(width int) []string {
 		lines = append(lines, "")
 	}
 
-	return lines
+	return padMargin(lines, m.margin())
 }
 
 // chromeLines builds the bottom chrome that stays pinned regardless of
@@ -1912,7 +2045,7 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
 		if s := m.spinner.Render(width, time.Time{}); len(s) > 0 {
 			lines = append(lines, s...)
 		}
-		lines = append(lines, RuleColour(strings.Repeat("─", width)), m.renderStatusRow(width))
+		lines = append(lines, RuleColour(strings.Repeat(RuleFillChar(), width)), m.renderStatusRow(width))
 	default:
 		// The busy line always sits directly above the input box — the
 		// last thing before it, whatever else is showing above (streaming
@@ -1948,7 +2081,12 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
 		}
 	}
 
-	return lines, editorTop
+	// Padding here (rather than per-case above) is the "one place" this
+	// port tries to keep the margin in: every case above already renders
+	// at width == m.contentWidth(), so the only thing left to add is the
+	// left-shift itself, once, on the way out — padMargin doesn't touch
+	// row count, so editorTop (an index into lines) stays valid.
+	return padMargin(lines, m.margin()), editorTop
 }
 
 // liveLines builds the live-region rows (everything below the committed
@@ -1999,6 +2137,43 @@ func (m Model) toggleVerbose() (tea.Model, tea.Cmd) {
 	}
 	m.cfg.Bridge.SetVerbose(!m.cfg.Bridge.Verbose())
 	return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
+}
+
+// commitBanner commits cfg.Banner (fitted, with its closing rule) and, for a
+// resumed session, replays the prior transcript right after it — the
+// startup work bannerBackgroundGrace defers off the first WindowSizeMsg (or
+// tea.BackgroundColorMsg's handler runs early, if the reply lands first).
+// A no-op once bannerDone is set, so whichever of those two call sites
+// reaches it first is the only one that commits anything.
+func (m Model) commitBanner() Model {
+	if m.bannerDone {
+		return m
+	}
+	if m.cfg.Bridge != nil && len(m.cfg.Banner) > 0 {
+		rows := m.bannerRows()
+		// The input box sits directly below the banner in inline mode. (No
+		// bottom-pinning filler: on a tall terminal it opens a huge void
+		// and, as the statusline loads and notices commit, scrolls the
+		// banner off the top.) In fullscreen the banner is the transcript's
+		// first content instead — appendTranscript (via the bridge's
+		// fullscreen sink) puts it at the top of the viewport, not
+		// scrollback.
+		m.cfg.Bridge.Commit(rows)
+	}
+	if m.cfg.IsResume {
+		// A resumed session (--resume/--continue) starts with a populated
+		// Lane but nothing yet committed to the transcript: without this,
+		// the screen shows the banner, its closing rule, a blank live
+		// region and then the input box's own top rule — two rules with no
+		// conversation between them (defect *resumed-session-no-
+		// transcript-replay). Replay uses the exact same renderer Ctrl+O
+		// does (RenderTranscriptEntries via replayTranscript), just
+		// triggered once here instead of by a later toggle, so nothing
+		// double-renders when Ctrl+O or a resize replay runs later.
+		m.replayTranscript()
+	}
+	m.bannerDone = true
+	return m
 }
 
 // replayTranscript re-commits every entry on the lane's current branch,
@@ -2099,7 +2274,7 @@ func (m Model) renderPopup(width, linesAbove int) []string {
 	if maxRows > room {
 		maxRows = room
 	}
-	rule := RuleColour(strings.Repeat("─", width))
+	rule := RuleColour(strings.Repeat(RuleFillChar(), width))
 	return append([]string{rule}, m.popup.Render(width, maxRows)...)
 }
 

@@ -1,0 +1,169 @@
+//go:build e2e
+
+package e2e
+
+// Regression coverage for four transcript-output defects the qa campaign
+// found in bridge.go and its subagent-panel/command-result plumbing:
+//
+//  1. qa/findings/20260927T000350Z-subagent-error-triplicated.json: a
+//     failed subagent's error message printed three times — a bare
+//     top-level "error" block (bridge.go's SubagentSink itself,
+//     committing a RenderError block for every SubagentEventError, not
+//     the EventFault path the finding's own design_ref guessed at — see
+//     SubagentSink's doc comment for how this was actually confirmed),
+//     the subagents panel row, and the parent's own "task" tool-call
+//     result text. Fixed by dropping SubagentSink's own commit: the panel
+//     row and the task result already say everything a failed dispatch
+//     needs to say.
+//  2. qa/findings/20260927T000638Z-subagent-row-no-action.json: a
+//     subagent row showed only "✓ finished" once done, and nothing but
+//     "starting…" while running, no matter how many tools it called.
+//     Fixed by forwarding a finished tool call's primary argument and
+//     result summary (agent/dispatch.go's SubagentEventTool, now reported
+//     on EventToolEnd instead of EventToolStart) and the subagent's final
+//     answer (SubagentEventDone.Text) to the row's own action line
+//     (subagents.go's formatSubagentAction/renderSubagentRow).
+//  3. qa/findings/20260927T000712Z-command-output-elbow-misaligned.json:
+//     a multi-line slash-command result rendered through a "⎿ " prefix
+//     that only ever touched the first row, so a command's own aligned
+//     key/value columns (e.g. /status) zig-zagged. Fixed by
+//     CommitCommandResult/RenderCommandResult rendering a labelled block
+//     named after the command instead, every row indented uniformly.
+//  4. qa/findings/20260927T000543Z-snake-case-tool-names-not-title-cased.json:
+//     MapToolName/titleCase capitalized only the tool name's first rune,
+//     leaving underscores in place ("bash_background" ->
+//     "Bash_background"). Fixed by splitting on "_" and joining with a
+//     single space before capitalizing the first letter.
+
+import (
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestTUI_SubagentError_ReportsOnce drives testdata/faux/qa/tools-
+// subagent-error.yaml (the qa campaign's own reproduction: a subagent
+// dispatch whose model turn returns a non-retryable 400) and checks the
+// failure appears exactly where the design wants it — the subagents
+// panel's row and the parent's own "task" tool-call result — and nowhere
+// else. Before the fix this screen also carried a third, contextless
+// "error ───" block with the identical text right under the user's
+// message; TestTUI_SubagentError_ReportsOnce would have failed against
+// the pre-fix bridge.go (verified manually: reverting SubagentSink to its
+// old body reintroduces the extra "error ───" row and this test's
+// wantErrorBlocks==0 check fails).
+func TestTUI_SubagentError_ReportsOnce(t *testing.T) {
+	script, err := os.ReadFile("../../testdata/faux/qa/tools-subagent-error.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj, home, sessDir, addr, _ := tuiFixture(t, string(script))
+	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
+
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr,
+		"--permission-mode", "acceptEdits",
+	)
+	waitReady(t, s)
+
+	s.Send("check the deploy config with a subagent")
+	s.SendKey("enter")
+
+	if err := s.WaitFor("subagents finished", 20*time.Second); err != nil {
+		t.Fatalf("turn never reached a finished subagents panel: %v", err)
+	}
+	if err := s.WaitFor(turnSummaryPattern, 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := s.Rows()
+	joined := strings.Join(append(append([]string(nil), s.Scrollback()...), rows...), "\n")
+
+	// Exactly one "error ───" label rule must appear (RenderError's own
+	// shape) — the design has no bare top-level error block for a
+	// subagent failure; a genuine parent-turn fault would still render
+	// one, but nothing in this script produces one.
+	errorBlocks := regexp.MustCompile(`(?m)^error ─+`).FindAllString(joined, -1)
+	if len(errorBlocks) != 0 {
+		t.Errorf("expected no bare top-level \"error\" block for a subagent failure, found %d:\n%s", len(errorBlocks), joined)
+	}
+	// The panel row still reports the failure inline ("✕ <message>").
+	if !regexp.MustCompile(`✕ .*boom, subagent misbehaved`).MatchString(joined) {
+		t.Errorf("subagents panel row missing its failure message:\n%s", joined)
+	}
+	// The task tool call's own result text still reports it too; the row
+	// wraps wherever the width puts it, so whitespace is matched loosely.
+	if !regexp.MustCompile(`(?s)Subagent "general-purpose" failed.*boom,\s+subagent\s+misbehaved`).MatchString(joined) {
+		t.Errorf("task tool result missing the subagent failure text:\n%s", joined)
+	}
+}
+
+// subagentToolActionScript has a single subagent dispatch, routed to its
+// own "fast"-role model (faux-2, via writeModelRolesSettings below — a
+// dispatch with no "model" field inherits the PARENT's model instead,
+// which would have the subagent share the top-level conversation's own
+// faux-1 script queue and garble both), whose own model calls "read" once
+// before answering, so its panel row has a real finished tool call to
+// show a "last action" line for (finding 2), and a real final answer to
+// show once done.
+const subagentToolActionScript = `models:
+  faux-1:
+    - tool_call:
+        name: task
+        args: {subagent_type: "general-purpose", description: "find the bug", prompt: "read math.js and report the bug", model: "fast"}
+        id: tc1
+    - on_tool_result: tc1
+      then:
+        - text: "Fixed, thanks to the subagent."
+          usage: {input: 100, output: 20}
+  faux-2:
+    - tool_call:
+        name: read
+        args: {path: "src/math.js"}
+        id: r1
+    - on_tool_result: r1
+      then:
+        # The delay gives a PTY-driven test a real window to observe the
+        # panel row's "running" state (its action line already updated
+        # from the just-finished read, but the subagent's own final
+        # answer — and so the row's Done transition — still pending)
+        # before this reply lands.
+        - text: "add() subtracts instead of adding."
+          usage: {input: 50, output: 10}
+          delay: 600ms
+`
+
+// TestTUI_SubagentPanel_ShowsToolActionThenFinalAnswer checks the running
+// row's action line names the tool it just finished plus its primary
+// argument and a result summary (not a bare "→ starting…" the whole
+// time), and the done row's action line is the subagent's own final
+// answer, not "✓ finished".
+// *qa/findings/20260927T000638Z-subagent-row-no-action.json*.
+func TestTUI_SubagentPanel_ShowsToolActionThenFinalAnswer(t *testing.T) {
+	proj, home, sessDir, addr, _ := tuiFixture(t, subagentToolActionScript)
+	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
+
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr,
+		"--permission-mode", "acceptEdits",
+	)
+	waitReady(t, s)
+
+	s.Send("find the bug with a subagent")
+	s.SendKey("enter")
+
+	if err := s.WaitFor(regexp.MustCompile(`Read "src/math\.js"`), 5*time.Second); err != nil {
+		t.Fatalf("subagent row never showed its finished tool call:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+
+	if err := s.WaitFor(turnSummaryPattern, 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(append(append([]string(nil), s.Scrollback()...), s.Rows()...), "\n")
+	if !strings.Contains(joined, "add() subtracts instead of adding.") {
+		t.Errorf("done row missing the subagent's final answer as its action line:\n%s", joined)
+	}
+	if regexp.MustCompile(`✓\s+finished\b`).MatchString(joined) {
+		t.Errorf("done row still shows the generic \"finished\" instead of the final answer:\n%s", joined)
+	}
+}

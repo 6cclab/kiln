@@ -95,13 +95,22 @@ func withRenderEnv(t *testing.T, width int) {
 	prevEnabled := enabled
 	prevPlain := plain
 	prevWidth := renderWidth
+	prevMargin := renderMargin
 
 	SetPlainMode(false)
 	SetColorEnabled(true)
 	SetRenderWidth(width)
+	// Golden tests assert exact-column strings against a fixed width, with
+	// no margin baked into their expectations — reset renderMargin (which
+	// Bridge.Commit reads centrally, bridge.go's own doc comment) to 0
+	// rather than leaving it at whatever an earlier test's WindowSizeMsg
+	// last left it, the same package-level-state hazard renderWidth itself
+	// already had before this helper existed.
+	renderMargin = 0
 
 	t.Cleanup(func() {
 		renderWidth = prevWidth
+		renderMargin = prevMargin
 		SetPlainMode(prevPlain)
 		SetColorEnabled(prevEnabled)
 	})

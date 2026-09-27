@@ -1,7 +1,7 @@
 plan ──────────────────────────────────────────────────────────────────────  5/5
 Plan · 5 of 5
-✓ Read the upload handler
-✓ Add the retry loop
-✓ Wire the retry loop into the route
-✓ Add a test
-✓ Update the docs
+✓  Read the upload handler
+✓  Add the retry loop
+✓  Wire the retry loop into the route
+✓  Add a test
+✓  Update the docs

@@ -312,11 +312,28 @@ func trimBlankLines(lines []string) []string {
 	return lines[start:end]
 }
 
-// Table glyphs glamour draws with its default table style.
+// Table glyphs glamour draws with its default table style. glamour has no
+// Table entry in ansi.StyleConfig to override (buildStyle's plain branch
+// above only reaches List/Heading/BlockQuote/... — there is nothing to set
+// for tables), so its raw output always uses these regardless of plain
+// mode; compactTable below parses glamour's own rows against these three
+// but writes tableColSepPlain/tableRuleRunPlain/tableCrossPlain back out
+// in plain mode instead, or a table would be the one place screen-reader
+// mode still drew box-drawing characters (defect *screen-reader-mode-
+// leaves-box-drawing-rules).
 const (
 	tableColSep  = "│"
 	tableRuleRun = "─"
 	tableCross   = "┼"
+)
+
+// tableColSepPlain, tableRuleRunPlain and tableCrossPlain are what
+// compactTable writes in place of tableColSep/tableRuleRun/tableCross when
+// rendering in plain mode.
+const (
+	tableColSepPlain  = "|"
+	tableRuleRunPlain = "-"
+	tableCrossPlain   = "+"
 )
 
 // compactTables shrinks every table glamour rendered to its content width
@@ -411,6 +428,10 @@ func compactTable(rows []string, rule, cols int, plain bool) {
 		}
 		return Rule(s)
 	}
+	cross, ruleRun, colSep := tableCross, tableRuleRun, tableColSep
+	if plain {
+		cross, ruleRun, colSep = tableCrossPlain, tableRuleRunPlain, tableColSepPlain
+	}
 	for r := range rows {
 		var b strings.Builder
 		for c, cell := range cells[r] {
@@ -420,13 +441,13 @@ func compactTable(rows []string, rule, cols int, plain bool) {
 					n = maxCellWidth(cells, rule, c, trimL[c])
 				}
 				if c > 0 {
-					b.WriteString(colour(tableCross))
+					b.WriteString(colour(cross))
 				}
-				b.WriteString(colour(strings.Repeat(tableRuleRun, max(n, 1))))
+				b.WriteString(colour(strings.Repeat(ruleRun, max(n, 1))))
 				continue
 			}
 			if c > 0 {
-				b.WriteString(colour(tableColSep))
+				b.WriteString(colour(colSep))
 			}
 			cut := cell
 			if strings.TrimSpace(cut) != "" {

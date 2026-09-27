@@ -16,6 +16,17 @@
   "qa/runs/c5/iterm-dark/permissions-plan-approval-options-120x40/02-plan-option2-highlighted.png",
   "qa/reference/permission.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go",
+   "internal/tui/theme.go",
+   "internal/tui/autocomplete.go"
+  ],
+  "regression_test": "TestRenderGolden_PermBash4Opt",
+  "after_evidence": [
+   "qa/runs/c8/iterm-dark/permissions-bash-option1-yes-120x40/01-bash-prompt.png"
+  ],
+  "updated_at": "2026-09-27T02:31:26Z"
+ }
 }

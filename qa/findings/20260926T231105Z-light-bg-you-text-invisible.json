@@ -15,18 +15,19 @@
  "evidence": [
   "qa/runs/adapter-check/iterm-light/startup-smoke-120x40/03-reply.png"
  ],
- "status": "open",
+ "status": "fixed",
  "fix": {
   "files": [
-   "internal/tui/theme.go",
-   "internal/tui/markdown.go",
-   "internal/tui/editor/model.go"
+   "internal/tui/app.go",
+   "internal/tui/editor/styles.go",
+   "internal/tui/theme.go"
   ],
-  "regression_test": "TestSetTerminalBackground_LightBackgroundTextTokensMeetContrast,TestSetTerminalBackground_LightBackgroundSurfacesVisible,TestMarkdownCacheInvalidatesOnThemeChange",
+  "regression_test": "TestBackgroundColorMsg_RebuildsEditorStyles",
   "after_evidence": [
-   "qa/runs/c3/iterm-light/content-verbose-toggle-120x40/02-reply-non-verbose.png"
+   "qa/runs/c3/iterm-light/content-verbose-toggle-120x40/02-reply-non-verbose.png",
+   "qa/runs/c6/iterm-light/startup-smoke-120x40/03-reply.png"
   ],
   "note": "Text tokens meet contrast on light; surfaces match the design's separation; you-block raise and label hairlines visible. Still open: banner divider and input box rules render heavy black because app.go builds editor.Styles from fixed hexes before SetTerminalBackground runs (needs an editor SetStyles refresh after detection).",
-  "updated_at": "2026-09-27T00:21:44Z"
+  "updated_at": "2026-09-27T01:48:30Z"
  }
 }

@@ -21,7 +21,10 @@ func RenderNote(text string, width int) []string {
 // CommitNote commits a system note block (a blank row, the note, then a
 // trailing blank row so the next block's own leading blank keeps blocks
 // separated by exactly one row, matching every other Commit call site in
-// this file).
+// this file). Not margin-padded here: CommitSynthetic stores these lines
+// for a later replay to splice back in unpadded, and calls Commit, which
+// applies the left margin once, centrally (see its own doc comment in
+// bridge.go).
 func (b *Bridge) CommitNote(text string) {
 	b.FreezeBefore()
 	width := ruleWidth()

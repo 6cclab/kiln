@@ -42,10 +42,7 @@ TYPE /model
 KEY enter
 # Enter on bare "/model" runs the command with no args, which opens the
 # interactive Select-model dialog (internal/commands/builtins.go's ModalSpec
-# branch), not the plain-text "current: <id>" line that only Result.Output
-# carries (used by print mode/non-interactive callers). The dialog's own
-# header is "current    <id>" (padded, no colon) — corrected here from an
-# earlier version of this scenario that expected the plain-text form.
-WAITFOR /current\s+faux\/faux-1/ 20
+# branch): the model picker, titled "Select model".
+WAITFOR /Select model/ 20
 SHOT palette-enter-ran
 EXPECT_NOT /panic|goroutine/

@@ -1035,7 +1035,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			SessionStart:    sessionStart,
 			ScreenReader:    args.ScreenReader,
 			Fullscreen:      args.Fullscreen,
-			IsResume:        args.ResumeSet,
+			// Both --resume/-r (args.ResumeSet) and --continue/-c
+			// (args.ContinueLatest) resume an existing session — IsResume's
+			// own doc comment on InteractiveDeps already says so — but this
+			// used to read args.ResumeSet alone, so a --continue run never
+			// replayed its prior transcript at startup (this flag is also
+			// what NewModel's commitBanner gates that replay on) and still
+			// showed the "Recent sessions" block it should have suppressed
+			// (defect *resumed-session-no-transcript-replay).
+			IsResume: args.ResumeSet || args.ContinueLatest,
 		}, stdout, stderr, stdin)
 
 		shells.KillAll()

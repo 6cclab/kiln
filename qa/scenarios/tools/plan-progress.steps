@@ -14,23 +14,23 @@
 WAITFOR /describe a task/ 20
 TYPE plan the rate limiter work
 KEY enter
-WAITFOR /▸ read the upload handler/ 20
+WAITFOR /▸\s+read the upload handler/ 20
 SHOT plan-first-step
-EXPECT /▸ read the upload handler/
-EXPECT /○ add the rate limiter/
-WAITFOR /▸ add the rate limiter/ 20
+EXPECT /▸\s+read the upload handler/
+EXPECT /○\s+add the rate limiter/
+WAITFOR /▸\s+add the rate limiter/ 20
 SHOT plan-second-step
-EXPECT /✓ read the upload handler/
-EXPECT /▸ add the rate limiter/
-EXPECT /○ wire it into the route/
-WAITFOR /▸ wire it into the route/ 20
+EXPECT /✓\s+read the upload handler/
+EXPECT /▸\s+add the rate limiter/
+EXPECT /○\s+wire it into the route/
+WAITFOR /▸\s+wire it into the route/ 20
 SHOT plan-third-step
-EXPECT /✓ read the upload handler/
-EXPECT /✓ add the rate limiter/
-EXPECT /▸ wire it into the route/
+EXPECT /✓\s+read the upload handler/
+EXPECT /✓\s+add the rate limiter/
+EXPECT /▸\s+wire it into the route/
 WAITFOR /Plan advanced through all three steps/ 20
 SHOT plan-done
-EXPECT /✓ read the upload handler/
-EXPECT /✓ add the rate limiter/
-EXPECT /✓ wire it into the route/
+EXPECT /✓\s+read the upload handler/
+EXPECT /✓\s+add the rate limiter/
+EXPECT /✓\s+wire it into the route/
 EXPECT_NOT /panic|goroutine/

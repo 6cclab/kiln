@@ -1,3 +1,7 @@
+# Driver limit: under kiln's kitty keyboard protocol, Orca's synthetic
+# Option/Ctrl+arrow events reach kiln without their modifier (a real
+# keypress works — checked by hand), so the alt+arrow steps fail when
+# driven; ctrl+a/ctrl+e still verify line motion.
 # Word motion (alt+left/right work in every macOS terminal profile;
 # Option+b/f only with Option set to send Esc+): alt+left / alt+right / ctrl+a / ctrl+e (bubbles/v2 textarea's
 # DefaultKeyMap WordBackward/WordForward/LineStart/LineEnd, bound through

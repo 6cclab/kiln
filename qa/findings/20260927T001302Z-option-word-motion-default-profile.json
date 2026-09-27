@@ -15,6 +15,14 @@
  "evidence": [
   "qa/runs/c1/iterm-dark/input-word-motion-120x40"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/shortcuts.go",
+   "internal/commands/account_commands.go"
+  ],
+  "regression_test": "TestAltLeftRightMoveByWord,TestTUI_AltArrowMovesByWord",
+  "note": "Alt+Left/Right and Ctrl+W work in the default profile (confirmed by Andre with a physical keypress); '?' panel and /terminal-setup explain Option-as-Meta for Alt+b/f.",
+  "updated_at": "2026-09-27T01:35:02Z"
+ }
 }

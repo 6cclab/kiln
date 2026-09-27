@@ -163,6 +163,33 @@ func TestMapToolNameEditBecomesUpdate(t *testing.T) {
 	}
 }
 
+// TestMapToolNameSnakeCaseTitleCased checks every snake_case tool name the
+// registry actually has (internal/tools/*.go's Name fields) renders as a
+// readable phrase instead of "Bash_background"/"Exit_plan_mode" (only the
+// first rune upper-cased, underscore left in place).
+// *qa/findings/20260927T000543Z-snake-case-tool-names-not-title-cased.json*.
+func TestMapToolNameSnakeCaseTitleCased(t *testing.T) {
+	cases := map[string]string{
+		"bash":               "Bash",
+		"read":               "Read",
+		"write":              "Write",
+		"task":               "Task",
+		"bash_output":        "Bash output",
+		"bash_background":    "Bash background",
+		"kill_shell":         "Kill shell",
+		"tool_search":        "Tool search",
+		"exit_plan_mode":     "Exit plan mode",
+		"session_search":     "Session search",
+		"todo_write":         "Todo write",
+		"mcp__fixture__echo": "Mcp fixture echo",
+	}
+	for name, want := range cases {
+		if got := MapToolName(name); got != want {
+			t.Errorf("MapToolName(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestRenderToolGroupRowsCollapseAndPluralize(t *testing.T) {
 	if got := stripANSI(RenderToolGroupRunning(GroupRead, 1)); got != "  Reading 1 file…" {
 		t.Errorf("got %q", got)

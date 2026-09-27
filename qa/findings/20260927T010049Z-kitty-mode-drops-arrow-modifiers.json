@@ -16,6 +16,9 @@
   "qa/runs/c5/iterm-dark/input-word-motion-120x40/01-word-back-alt-b.png",
   "qa/runs/c5/probes/word-motion-input.trace"
  ],
- "status": "open",
- "fix": null
+ "status": "wontfix",
+ "fix": {
+  "note": "Not a kiln bug: Andre confirmed on 2026-09-27 that a physical Option+Left in kiln's prompt in iTerm2 moves by a word. The modifier loss happens only with Orca's synthetic key events under the kitty keyboard protocol, so input/word-motion's alt+arrow steps cannot be driven through Orca.",
+  "updated_at": "2026-09-27T01:35:02Z"
+ }
 }

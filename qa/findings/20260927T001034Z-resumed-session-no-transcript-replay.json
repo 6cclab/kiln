@@ -15,6 +15,16 @@
  "evidence": [
   "qa/runs/c1/iterm-dark/startup-continue-resumes-120x40/01-continue-resumed.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/chat.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_Continue_ReplaysPriorTranscript",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/startup-continue-resumes-120x40"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
 }

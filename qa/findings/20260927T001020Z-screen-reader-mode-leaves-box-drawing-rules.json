@@ -15,6 +15,18 @@
  "evidence": [
   "qa/runs/c1/iterm-dark/startup-ax-screen-reader-120x40/01-screen-reader-welcome.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/editor/view.go",
+   "internal/tui/permission_render.go",
+   "internal/tui/app.go",
+   "internal/tui/markdown.go"
+  ],
+  "regression_test": "TestTUI_AxScreenReader_NoBoxDrawingGlyphs",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/startup-ax-screen-reader-120x40"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
 }

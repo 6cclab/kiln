@@ -107,7 +107,12 @@ func TestRenderBashPermissionPrompt_MatchesReference(t *testing.T) {
 	}
 	for i := range want {
 		row := got[i]
-		if i == 4 { // the "$ ..." row carries the raised background's padding
+		// The "$ ..." row and the selected option row (here, row 7, "1
+		// Yes") both carry the raised background's full-width padding
+		// (finding option-row-raise-key-only: the whole row raises, not
+		// just the key) — the reference capture is plain text with no
+		// colour, so it has no trailing spaces to compare against.
+		if i == 4 || i == 7 {
 			row = strings.TrimRight(row, " ")
 		}
 		if row != want[i] {

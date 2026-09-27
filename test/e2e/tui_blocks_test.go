@@ -39,13 +39,16 @@ func TestTUI_PlanBlock_Live(t *testing.T) {
 	s.SendKey("enter")
 
 	// First todo_write: item one (read the upload handler) is in_progress.
-	if err := s.WaitFor(regexp.MustCompile(`▸ read the upload handler`), 3*time.Second); err != nil {
+	// Glyph + two spaces, not one (finding plan-glyph-spacing:
+	// internal/tui/plan.go's rows match the design's glyph-in-a-2ch-box
+	// plus a 10px gap, ~2 columns before the text).
+	if err := s.WaitFor(regexp.MustCompile(`▸  read the upload handler`), 3*time.Second); err != nil {
 		t.Fatalf("live plan never showed the first in-progress item: %v", err)
 	}
 
 	// Second todo_write moves the ▸ marker to item three; the 600ms delay
 	// on the following text keeps this frame observable.
-	if err := s.WaitFor(regexp.MustCompile(`▸ wire the retry loop into the route`), 3*time.Second); err != nil {
+	if err := s.WaitFor(regexp.MustCompile(`▸  wire the retry loop into the route`), 3*time.Second); err != nil {
 		t.Fatalf("live plan marker never moved to the third item: %v", err)
 	}
 	if err := s.WaitFor(regexp.MustCompile(`plan .*2/5`), 1*time.Second); err != nil {

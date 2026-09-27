@@ -1,6 +1,6 @@
-Done. POST /api/upload now allows 10 requests per minute per user, backed by Redis, with tests
-covering the limit and the reset window.
-────────────────────────────────────────────────────────────────────────────────────────────────────
-›  describe a task · / for commands · @ to add files
-────────────────────────────────────────────────────────────────────────────────────────────────────
-● ask before edits  ⇧⇥  <cwd> ctx ──────────  4%  $0.00
+  Done. POST /api/upload now allows 10 requests per minute per user, backed by Redis, with tests
+  covering the limit and the reset window.
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ›  describe a task · / for commands · @ to add files
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ● ask before edits  ⇧⇥  <cwd> ctx ──────────  4%  $0.00

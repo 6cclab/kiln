@@ -16,6 +16,15 @@
   "qa/runs/c1/iterm-dark/content-streaming-120x40/02-mid-stream.png",
   "qa/reference/streaming.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestRenderGolden_UserPlain",
+  "after_evidence": [
+   "qa/runs/c7/iterm-dark/content-streaming-120x40/02-mid-stream.png"
+  ],
+  "updated_at": "2026-09-27T02:31:26Z"
+ }
 }

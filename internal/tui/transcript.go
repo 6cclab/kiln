@@ -44,11 +44,26 @@ const fallbackRuleWidth = 56
 // size message (e.g. in unit tests that call a renderer directly).
 var renderWidth int
 
+// renderMargin is the live left margin (layout_margin.go), set alongside
+// renderWidth by the app on every WindowSizeMsg (SetRenderMargin). Read by
+// CommitNote (note.go), the one width-less block that renders and commits
+// in the same call, so no app.go caller ever gets its lines back to
+// margin-pad itself the way m.commit/m.commitSynthetic do.
+var renderMargin int
+
 // SetRenderWidth records the current terminal content width for the
 // width-less Render* helpers. A non-positive value is ignored.
 func SetRenderWidth(w int) {
 	if w > 0 {
 		renderWidth = w
+	}
+}
+
+// SetRenderMargin records the current left margin for CommitNote. Negative
+// values are ignored; 0 (the narrow-terminal case) is valid.
+func SetRenderMargin(cols int) {
+	if cols >= 0 {
+		renderMargin = cols
 	}
 }
 
@@ -59,6 +74,12 @@ func ruleWidth() int {
 		return renderWidth
 	}
 	return fallbackRuleWidth
+}
+
+// ruleMargin is CommitNote's counterpart to ruleWidth: the left margin to
+// pad its rows by.
+func ruleMargin() int {
+	return renderMargin
 }
 
 // longestLineWidth returns the widest visible line in lines, or 0.
@@ -718,12 +739,28 @@ func RenderUserMessage(text string, width int) []string {
 	return RenderUserMessageMeta(text, "", width)
 }
 
+// userBlockPad is the you-block's inner horizontal padding, each side
+// (Terminal.dc.html:52, "padding:3px 10px" — 10px at 14px Fira Code
+// (~8.4px/col) is ~1 column), applied on top of whatever outer margin the
+// caller already indented the block by.
+const userBlockPad = 1
+
 // RenderUserMessageMeta is RenderUserMessage with an optional label-rule
 // meta, e.g. "queued" for a follow-up submitted while a turn is still
 // running (docs/kiln-design-handoff/README.md's "Queued follow-up" —
 // app.go's handleSubmit commits it this way instead of the plain form).
+//
+// The raised surface spans the full block width (not just the text cells,
+// finding you-block-surface-width) and insets the text by userBlockPad on
+// both sides (finding you-block-no-inner-padding): pad the plain text
+// first, colour it, then raise the whole already-single-span result last —
+// wrapping OnRaise around an independently pre-rendered (and so already
+// reset-terminated) span is what let the background die at the text's own
+// end instead of reaching the padding; see onRaiseSpan's doc comment for
+// the general form this needs when more than one foreground colour is
+// involved.
 func RenderUserMessageMeta(text, meta string, width int) []string {
-	inner := width - 2
+	inner := width - 2*userBlockPad
 	if inner < 1 {
 		inner = 1
 	}
@@ -732,11 +769,13 @@ func RenderUserMessageMeta(text, meta string, width int) []string {
 		body = append(body, splitLines(ansiWrap(line, inner))...)
 	}
 
+	pad := strings.Repeat(" ", userBlockPad)
 	out := make([]string, 0, len(body)+2)
 	out = append(out, "")
 	out = append(out, labelRule("you", KilnAmber, meta, width))
 	for _, wl := range body {
-		out = append(out, OnRaise(padToWidth(Ink(wl), width)))
+		row := padToWidth(pad+wl, width)
+		out = append(out, OnRaise(Ink(row)))
 	}
 	return out
 }
@@ -753,7 +792,7 @@ func RenderUserMessageMeta(text, meta string, width int) []string {
 // drain (turn.go's drainInbox) is what turns this into a real, ordinary
 // RenderUserMessage block, at the point it actually lands on the branch.
 func RenderQueuedFollowUp(text string, width int) []string {
-	inner := width - 2
+	inner := width - 2*userBlockPad
 	if inner < 1 {
 		inner = 1
 	}
@@ -762,11 +801,17 @@ func RenderQueuedFollowUp(text string, width int) []string {
 		body = append(body, splitLines(ansiWrap(line, inner))...)
 	}
 
+	pad := strings.Repeat(" ", userBlockPad)
 	out := make([]string, 0, len(body)+2)
 	out = append(out, "")
 	out = append(out, labelRule("you", Muted, "queued", width))
 	for _, wl := range body {
-		out = append(out, Muted(wl))
+		// No raised background here (unlike RenderUserMessageMeta): a
+		// queued follow-up previews an item not yet committed to the
+		// branch, and stays fully muted rather than reading as a landed
+		// "you" block — but it wraps and insets the same way so the two
+		// forms read as the same block shape once it does land.
+		out = append(out, Muted(pad+wl))
 	}
 	return out
 }

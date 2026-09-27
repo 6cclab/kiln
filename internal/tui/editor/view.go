@@ -88,17 +88,21 @@ func (m Model) View(width int) []string {
 // string, since pi-tui's own glyph choice is not specified beyond that
 // comment.
 func (m Model) rule(width int, hint string) string {
+	ch := m.styles.RuleChar
+	if ch == "" {
+		ch = "─"
+	}
 	if hint == "" {
-		return m.styles.Rule.Render(strings.Repeat("─", width))
+		return m.styles.Rule.Render(strings.Repeat(ch, width))
 	}
 	label := " " + hint + " "
 	remaining := width - ansi.StringWidth(label)
 	if remaining < 0 {
-		return m.styles.Rule.Render(strings.Repeat("─", width))
+		return m.styles.Rule.Render(strings.Repeat(ch, width))
 	}
 	left := remaining / 2
 	right := remaining - left
-	return m.styles.Rule.Render(strings.Repeat("─", left) + label + strings.Repeat("─", right))
+	return m.styles.Rule.Render(strings.Repeat(ch, left) + label + strings.Repeat(ch, right))
 }
 
 // scrollHints reports how many lines are scrolled out of view above and
