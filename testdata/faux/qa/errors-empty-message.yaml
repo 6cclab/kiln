@@ -1,0 +1,10 @@
+model: faux-1
+steps:
+  # A single turn whose only content step is an empty text: toContentStep
+  # (script.go) only sets cs.text when s.Text != "", so this turn's
+  # content list is effectively empty — a normal end-of-turn stop reason
+  # with no text delta at all. This is the whole script (one turn), so a
+  # second user message afterwards hits the "(faux: script exhausted)"
+  # fallback (doc.go), which doubles as proof kiln kept working after the
+  # empty reply.
+  - text: ""

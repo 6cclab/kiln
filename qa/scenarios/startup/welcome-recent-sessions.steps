@@ -1,0 +1,18 @@
+# Welcome screen WITH three recent sessions: seed them with three @pre
+# runs whose titles mirror the design's recent list
+# (docs/kiln-design-handoff/Terminal.dc.html line 45's "Recent sessions"
+# block), then check the banner lists all three (internal/cli/tui.go
+# recentSessionRows, capped at recentSessionRowLimit == 3).
+@faux testdata/faux/qa/startup-recent.yaml
+@size 120x40
+@pre -p "fix the upload timeout"
+@pre -p "add the retry loop"
+@pre -p "clean up the test fixtures"
+
+WAITFOR /describe a task/ 20
+SHOT welcome-recent-sessions
+EXPECT /Recent sessions/
+EXPECT /clean up the test fixtures/
+EXPECT /add the retry loop/
+EXPECT /fix the upload timeout/
+EXPECT_NOT /panic|goroutine/

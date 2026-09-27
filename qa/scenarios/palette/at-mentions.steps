@@ -1,0 +1,30 @@
+# `@` file mentions (internal/tui/autocomplete.go BuildPopup's KindFile
+# path, fileSuggestions/scoreEntry) against the design fixture
+# (testdata/behaviour/design): a directory match, a file match, and a
+# query with no matches at all (BuildPopup returns nil when fileSuggestions
+# is empty, so no popup appears — there is no "no matching files" row the
+# way the slash palette has "No matching commands").
+@faux testdata/faux/hello.yaml
+@fixture testdata/behaviour/design
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE @src
+SHOT at-mention-directory
+EXPECT /\+ src\//
+KEY tab
+SHOT at-mention-directory-completed
+EXPECT /@src\//
+KEY ctrl+u
+TYPE @package.json
+SHOT at-mention-file
+EXPECT /\+ package\.json/
+KEY tab
+SHOT at-mention-file-completed
+EXPECT /@package\.json/
+KEY ctrl+u
+TYPE @zzzznomatchxyz
+SHOT at-mention-no-match
+EXPECT /@zzzznomatchxyz/
+EXPECT_NOT /\+ /
+EXPECT_NOT /panic|goroutine/

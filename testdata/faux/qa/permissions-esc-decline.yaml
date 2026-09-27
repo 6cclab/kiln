@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "curl https://example.invalid/deploy"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Okay, I won't run that either."
+        usage: {input: 150, output: 15}

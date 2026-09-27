@@ -1,0 +1,21 @@
+{
+ "id": "20260926T231134Z-you-block-no-inner-padding",
+ "found_at": "2026-09-26T23:11:34Z",
+ "scenario": "startup/smoke",
+ "step": "03-reply",
+ "terminals": [
+  "iterm-dark",
+  "iterm-light"
+ ],
+ "category": "design-drift",
+ "severity": "low",
+ "title": "You-block text has no inner padding against its surface",
+ "observed": "User message text starts at the same column as the 'you' label with no inset inside the raised background.",
+ "expected": "Design gives the user message a raised surface with 10px (~1 column) horizontal padding.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:52",
+ "evidence": [
+  "qa/runs/adapter-check/iterm-light/startup-smoke-120x40/03-reply.png"
+ ],
+ "status": "open",
+ "fix": null
+}

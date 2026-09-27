@@ -1,0 +1,12 @@
+model: faux-1
+steps:
+  - tool_call:
+      name: task
+      args: {subagent_type: "general-purpose", description: "survey the redis mock", prompt: "Summarize test/helpers/redisMock.ts"}
+      id: tc1
+  - text: "redis mock only stubs get/set/del"
+    delay: 400ms
+  - on_tool_result: tc1
+    then:
+      - text: "Confirmed: the mock is missing zremrangebyscore/zcard/zadd."
+        usage: {input: 300, output: 30}

@@ -1,0 +1,20 @@
+# A tool call with malformed (non-JSON) arguments via raw_args. The
+# provider layer sets msg.ToolCall.InvalidArgs when the accumulated
+# partial_json does not parse (internal/provider/api/anthropic_messages.go:
+# 571), and internal/harness/turn.go's beginTool checks that BEFORE ever
+# reaching the tool's own Execute (line 668-671): "tool call arguments
+# were not valid JSON: <raw text>" — not bash.go's own "invalid
+# arguments" message, which only fires for well-formed-JSON-but-wrong-
+# shape input.
+@faux testdata/faux/qa/tools-malformed-args.yaml
+@args --permission-mode dontAsk
+
+WAITFOR /describe a task/ 20
+TYPE run a bash command
+KEY enter
+WAITFOR /not valid JSON/ 20
+SHOT malformed-args
+EXPECT /tool call arguments were not valid JSON/
+EXPECT /command.*echo hi/
+EXPECT /That call's arguments were broken/
+EXPECT_NOT /panic|goroutine/

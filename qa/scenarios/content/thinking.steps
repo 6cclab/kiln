@@ -1,14 +1,7 @@
-# Assistant content: a thinking (reasoning) step. internal/tui/
-# transcript.go's RenderThinking is only ever committed with
-# Expanded: false (internal/tui/app.go's handleThinking never sets it
-# true, and the live view at app.go:1778 hardcodes view.Expanded = false
-# too), so per its own doc comment ("collapsed... shows nothing") the
-# committed block renders as nothing at all, not a folded placeholder —
-# there is no on-screen affordance this scenario found that ctrl+o
-# expands into the "∴ Thinking" row RenderThinking can otherwise produce.
-# The EXPECT_NOT lines below record that as a real behaviour, not a typo:
-# if a future change wires Expanded through, these two would start
-# failing and that's the signal.
+# Assistant content: a thinking (reasoning) step renders as a dim
+# "thinking ────" block: collapsed to a one-line summary with a ctrl+o
+# hint, expanded to the full reasoning on ctrl+o, collapsed again on the
+# next ctrl+o (internal/tui/transcript.go RenderThinking).
 @faux testdata/faux/qa/content-thinking.yaml
 @size 120x40
 
@@ -18,12 +11,16 @@ TYPE explain the change
 KEY enter
 WAITFOR /I'll use a fixed window counter/ 20
 SHOT reply-collapsed
-EXPECT /I'll use a fixed window counter/
-EXPECT_NOT /fixed window, not a sliding one/
+EXPECT /thinking ─/
+EXPECT /fixed window, not a sliding one.*…/
+EXPECT_NOT /zremrangebyscore/
 EXPECT_NOT /∴/
 KEY ctrl+o
+WAITFOR /zremrangebyscore/ 10
 SHOT after-ctrl-o-expand
-EXPECT_NOT /fixed window, not a sliding one/
+EXPECT /only implements zremrangebyscore/
 KEY ctrl+o
+WAIT 1
 SHOT after-ctrl-o-collapse
+EXPECT_NOT /zremrangebyscore/
 EXPECT_NOT /panic|goroutine/

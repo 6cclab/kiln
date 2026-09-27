@@ -1,0 +1,32 @@
+{
+ "id": "20260927T000638Z-plan-approval-not-perm-block",
+ "found_at": "2026-09-27T00:06:38Z",
+ "scenario": "permissions/plan-approval-options",
+ "step": "01..03",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "medium",
+ "title": "Plan approval prompt does not use the design's permission-block anatomy",
+ "observed": "Verified on 02-plan-option2-highlighted.png: a stray full-width grey rule under the kiln reply, then two blank rows, then a 'plan ───' label; the body is indented 3 columns; a dashed rule frames the plan; options '1  Yes, and use auto mode' / '2  Yes, manually approve edits' / '3  Tell kiln what to change' mark the selection only by an amber digit and brighter text (no raised background); no amber top/bottom rules; the hint 'shift+tab to approve with this feedback' hangs under option 3.",
+ "expected": "Same anatomy as the design's permission block: amber top/bottom rules, question row, numbered options with the selected row on the raise background and an amber key, one hint row.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:75-80; qa/reference/permission.png",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/permissions-plan-approval-options-120x40/02-plan-option2-highlighted.png",
+  "qa/reference/permission.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestRenderPlanApproval_MatchesReference",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/permissions-plan-approval-options-120x40/02-plan-option2-highlighted.png"
+  ],
+  "note": "Selected-row raise covers only the key: see option-row-raise-key-only.",
+  "updated_at": "2026-09-27T01:01:59Z"
+ }
+}

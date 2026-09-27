@@ -1,0 +1,46 @@
+# /permissions dialog (internal/tui's generic commandDialog over
+# internal/commands/manage_commands.go's permissionsModal): navigate, then
+# its three action keys — "m" cycles permission mode, "p" promotes the
+# selected rule to deny, "d" deletes it. One real session grant (from
+# approving a bash call with "always allow this session", key "a" on the
+# inline permission prompt — internal/tui/permissionview.go) gives the
+# list a real row to act on, since a fresh project starts with no
+# persisted allow/deny/ask rules.
+@faux testdata/faux/qa/dialogs-permissions-dialog.yaml
+
+WAITFOR /describe a task/ 20
+TYPE run the command
+KEY enter
+WAITFOR /echo qa-alpha/ 20
+SHOT permission-prompt
+KEY a
+WAITFOR /First task done/ 20
+SHOT turn-one
+TYPE second task
+KEY enter
+WAITFOR /Second task done/ 20
+SHOT turn-two
+TYPE /permissions
+KEY enter
+WAITFOR /Permissions/ 20
+SHOT permissions-dialog-open
+EXPECT /mode\s+manual/
+EXPECT /bash::echo qa-alpha/
+EXPECT /session only/
+KEY down
+SHOT permissions-navigated
+KEY m
+WAITFOR /mode is now acceptEdits/ 20
+SHOT permissions-mode-cycled
+EXPECT /mode is now acceptEdits/
+KEY p
+WAITFOR /is now denied/ 20
+SHOT permissions-promoted
+EXPECT /bash::echo qa-alpha is now denied/
+KEY d
+WAITFOR /nothing to delete/ 20
+SHOT permissions-delete-session
+EXPECT /session grants clear when the session ends; nothing to delete/
+KEY esc
+SHOT permissions-closed
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,25 @@
+# Esc to decline the bash prompt. Note from reading app.go's handleKey:
+# a permission prompt is always raised mid-turn (m.busy stays true from
+# beginTurn until finishTurn), so PermissionKey's Esc branch sets
+# promptEscInterrupt = true (busy && pending && esc) — this suppresses
+# the ordinary declinedFollowupText ("Okay, I won't run it. What should I
+# do instead?") in favour of finishTurn's own "■ Interrupted. Tell kiln
+# what to do instead." note — one "what now" message, not two.
+@faux testdata/faux/qa/permissions-esc-decline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE deploy to production
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT bash-prompt
+EXPECT /curl https:\/\/example\.invalid\/deploy/
+KEY esc
+WAIT 1
+SHOT after-esc
+EXPECT /✕ Declined curl https:\/\/example\.invalid\/deploy/
+EXPECT_NOT /approval needed/
+EXPECT /■ Interrupted\. Tell kiln what to do instead\./
+# Recorded per the task brief's literal wording — expected to fail given
+# the promptEscInterrupt behaviour traced above.
+EXPECT_NOT /Okay, I won.t run it/
+EXPECT_NOT /panic|goroutine/

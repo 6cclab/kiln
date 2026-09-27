@@ -846,17 +846,18 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 				max = collapsedResultLines
 			}
 		}
+		status := CallOK
+		if ev.ToolResult != nil && ev.ToolResult.IsError {
+			status = CallError
+		}
 		view := ToolCallView{
 			Name:          name,
 			PrimaryArg:    primary,
-			Status:        CallOK,
-			ResultLines:   clipTo(summary, max),
+			Status:        status,
+			ResultLines:   clipResultLines(summary, max, status),
 			TotalLines:    len(summary),
 			HasTotalLines: true,
 			Meta:          toolMeta(ts, ev),
-		}
-		if ev.ToolResult != nil && ev.ToolResult.IsError {
-			view.Status = CallError
 		}
 		// Edit's and a successful Write's result render as a diff, not a
 		// text summary — matching the kiln "diff" block

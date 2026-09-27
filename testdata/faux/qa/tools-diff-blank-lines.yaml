@@ -1,0 +1,17 @@
+model: faux-1
+steps:
+  - tool_call:
+      name: write
+      args:
+        path: src/blanks.ts
+        content: |
+          export const first = 1;
+
+          export const second = 2;
+
+          export const third = 3;
+      id: tc1
+  - on_tool_result: tc1
+    then:
+      - text: "Added the file with blank lines between exports."
+        usage: {input: 200, output: 20}

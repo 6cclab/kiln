@@ -80,6 +80,63 @@ func TestCreateWritesHeaderOnly(t *testing.T) {
 	}
 }
 
+// TestListFindsSessionAcrossSymlinkedCwdSpellings guards against sessions
+// splitting into two projects when the same directory is reached through
+// two different spellings of a path (e.g. macOS's /tmp being a symlink to
+// /private/tmp): a session created via one spelling must still be found
+// when queried via the other, and querying by either spelling must find
+// sessions recorded under either.
+func TestListFindsSessionAcrossSymlinkedCwdSpellings(t *testing.T) {
+	root := t.TempDir()
+	repo, err := NewRepo(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	real := t.TempDir()
+	linkParent := t.TempDir()
+	link := linkParent + "/proj-link"
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	// A session created via the real (already-resolved) path.
+	storage1, meta1, err := repo.Create(CreateOptions{Cwd: real})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another session created via the symlinked spelling. Before the fix,
+	// this stored the literal symlinked path and bucketed into a
+	// different DirectoryName than the one above, splitting one project's
+	// history into two.
+	storage2, meta2, err := repo.Create(CreateOptions{Cwd: link})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage2.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Querying by either spelling must find both sessions.
+	for _, query := range []string{real, link} {
+		listed, err := repo.List(query)
+		if err != nil {
+			t.Fatalf("List(%q): %v", query, err)
+		}
+		if len(listed) != 2 {
+			t.Fatalf("List(%q) = %d sessions, want 2 (got %+v)", query, len(listed), listed)
+		}
+		ids := map[string]bool{listed[0].ID: true, listed[1].ID: true}
+		if !ids[meta1.ID] || !ids[meta2.ID] {
+			t.Fatalf("List(%q) = %+v, want both %s and %s", query, listed, meta1.ID, meta2.ID)
+		}
+	}
+}
+
 func readLines(t *testing.T, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path)

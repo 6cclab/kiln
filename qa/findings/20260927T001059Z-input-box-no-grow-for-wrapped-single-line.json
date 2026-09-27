@@ -1,0 +1,30 @@
+{
+ "id": "20260927T001059Z-input-box-no-grow-for-wrapped-single-line",
+ "found_at": "2026-09-27T00:10:59Z",
+ "scenario": "input/typing-wrap",
+ "step": "input-wrapped",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "A long single-line prompt never grows the input box; only the wrapped tail stays visible",
+ "observed": "Typing one 189-character line with no newlines ('this is a deliberately long single line of input typed with no line breaks at all so that it must wrap onto a second visual row inside the input box at 120 columns wide') leaves the input box exactly one row tall, showing only the tail: '› visual row inside the input box at 120 columns wide' (qa/runs/c1/iterm-dark/input-typing-wrap-120x40/03-input-wrapped.png/.txt) — everything typed before that is scrolled out of view with no visible indication more text exists above the cursor.",
+ "expected": "internal/tui/editor/model.go documents growing up to maxTextareaHeight=8 rows ('the plan's max height e.g. 8, then internal scroll') for exactly this kind of long input, and internal/tui/editor/doc.go documents 'line-wrapping to a configured width' as a supplied behaviour.",
+ "design_ref": "internal/tui/editor/model.go's syncHeight (line 434) sizes the box from m.ta.LineCount(), which internal/tui/editor/view.go's own doc comment (line 105-108) says 'counts logical (newline-delimited) lines rather than wrapped visual rows' — so a single long logical line always reports LineCount()==1 and the box height is pinned at 1 regardless of how many visual rows bubbles/v2's textarea wraps it into; the widget's own viewport then follows the cursor and shows only the last wrapped row.",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/input-typing-wrap-120x40/03-input-wrapped.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/editor/model.go"
+  ],
+  "regression_test": "TestBoxGrowsForWrappedSingleLine,TestTUI_Input_LongSingleLineGrowsBox",
+  "after_evidence": [
+   "qa/runs/c4/iterm-dark/input-typing-wrap-120x40/03-input-wrapped.png"
+  ],
+  "note": "Real iTerm2 at 120x40: the long line wraps onto a second input row with its start still visible.",
+  "updated_at": "2026-09-27T00:43:22Z"
+ }
+}

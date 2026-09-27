@@ -1,0 +1,14 @@
+@faux testdata/faux/qa/commands-resume.yaml
+@pre -p "seed a prior session"
+
+WAITFOR /describe a task/ 20
+TYPE current turn
+KEY enter
+WAITFOR /Main session turn/ 20
+TYPE /resume
+KEY enter
+WAITFOR /session\(s\):/ 20
+SHOT resume
+EXPECT /\d+ session\(s\):/
+EXPECT /Resume: harness --resume <id>/
+EXPECT_NOT /panic|goroutine/

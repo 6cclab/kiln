@@ -1,0 +1,23 @@
+{
+ "id": "20260926T231105Z-no-side-margin",
+ "found_at": "2026-09-26T23:11:05Z",
+ "scenario": "startup/smoke",
+ "step": "03-reply",
+ "terminals": [
+  "iterm-dark",
+  "iterm-light",
+  "terminal",
+  "warp"
+ ],
+ "category": "design-drift",
+ "severity": "medium",
+ "title": "Blocks start at column 0; design's 2-column side margin missing",
+ "observed": "Banner, you/kiln labels, prompt and status all start at column 0 against the window edge.",
+ "expected": "Design pads the terminal body by 2 columns on each side.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html body padding",
+ "evidence": [
+  "qa/runs/adapter-check/iterm-light/startup-smoke-120x40/03-reply.png"
+ ],
+ "status": "open",
+ "fix": null
+}

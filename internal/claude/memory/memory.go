@@ -195,9 +195,13 @@ func AddMemory(note, cwd string) (string, error) {
 		path = projectPath
 	}
 
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("could not create %s: %w", filepath.Dir(path), err)
+	}
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("could not save note to %s: %w", path, err)
 	}
 	defer f.Close()
 	if _, err := f.WriteString("\n" + strings.TrimSpace(note) + "\n"); err != nil {

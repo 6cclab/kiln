@@ -1,0 +1,23 @@
+# A mid-stream disconnect_after cut (testdata/faux/behaviour-retry.yaml
+# style) followed by a normal follow-up step: the cut retries and the
+# reconnected continuation lands as its own text.
+@faux testdata/faux/qa/errors-stream-cut-midtext.yaml
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE tell me something long
+SHOT typed
+KEY enter
+# "Here is the first half" is transient: once the retry lands, kiln
+# replaces the cut partial text with the fresh reply rather than
+# appending to it, so this EXPECT must run right after the WAITFOR that
+# first observes it, not after the later reconnect/continuation waits.
+WAITFOR /Here is the first half/ 20
+EXPECT /Here is the first half/
+SHOT cut-point
+WAITFOR /Reconnected on attempt 2/ 10
+SHOT reconnected
+WAITFOR /reconnected continuation lands here/ 10
+EXPECT /reconnected continuation lands here, safe and sound/
+SHOT continuation
+EXPECT_NOT /panic|goroutine/

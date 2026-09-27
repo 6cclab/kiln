@@ -1,0 +1,29 @@
+{
+ "id": "20260926T235515Z-diff-header-omits-zero-side",
+ "found_at": "2026-09-26T23:55:15Z",
+ "scenario": "tools/write-new-file",
+ "step": "write-diff",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "low",
+ "title": "New-file diff header shows only '+N', omitting the '−0' side the design always renders",
+ "observed": "write-new-file's diff header for a new file reads 'src/middleware/rateLimit.ts  new file' followed only by '+3' (01-write-diff.txt), no removals count at all.",
+ "expected": "Design's diff header always shows both counts, e.g. the block-anatomy example in internal/tui/transcript.go:254 itself documents '+2  −0', and Terminal.dc.html's stat builder (line 364: d.addS='+'+a; d.delS='−'+r) sets delS unconditionally even when r is 0 for an all-additions new-file diff (DIFF1, all A() lines). qa/reference/diff.png shows both signs together ('+2 -1').",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:363-364; internal/tui/transcript.go:234-247 diffCountsRow (comment: 'omitting a zero side' — contradicts its own doc-comment example at line 254 showing '+2  −0')",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/tools-write-new-file-120x40/01-write-diff.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestTUI_Design_Fullscreen_Done",
+  "after_evidence": [
+   "qa/runs/c4/iterm-dark/tools-write-new-file-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:53Z"
+ }
+}

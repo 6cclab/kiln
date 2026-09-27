@@ -189,8 +189,8 @@ func TestRenderEditPermissionPrompt_MatchesReference(t *testing.T) {
 		strings.Repeat("\u2500", 100),
 		" Allow kiln to edit math.js?",
 		strings.Repeat("\u254c", 100),
-		" 1 -function add(a,b){ return a - b }",
-		" 1 +function add(a,b){ return a + b }",
+		" 1 − function add(a,b){ return a - b }",
+		" 1 + function add(a,b){ return a + b }",
 		strings.Repeat("\u254c", 100),
 		" 1  Yes",
 		" 2  Yes, and switch to accept edits (auto-approve file edits and common file commands) for this",
@@ -220,7 +220,7 @@ func TestRenderEditPermissionPrompt_WriteKindUsesWriteHeader(t *testing.T) {
 	if got[2] != " Allow kiln to write to new.txt?" {
 		t.Errorf("row 2 = %q, want the write-header row", got[2])
 	}
-	if got[4] != " 1 +hello" {
+	if got[4] != " 1 + hello" {
 		t.Errorf("row 4 = %q, want the +hello row (Write has no old line)", got[4])
 	}
 }
@@ -240,10 +240,10 @@ func TestRenderEditPermissionPrompt_NumberWidthFromDiff(t *testing.T) {
 	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
 	// Number column width must come from the widest line number (12, two
 	// digits), so the single-digit "1" row pads to match.
-	if got[4] != "  1 -a" {
+	if got[4] != "  1 − a" {
 		t.Errorf("row 4 = %q, want padded to two-digit width", got[4])
 	}
-	if got[6] != " 12 -b" {
+	if got[6] != " 12 − b" {
 		t.Errorf("row 6 = %q", got[6])
 	}
 }
@@ -286,7 +286,7 @@ func TestRenderEditPermissionPrompt_CapsLongDiff(t *testing.T) {
 		if l == wantElision {
 			found = true
 		}
-		if strings.Contains(l, "+line ") {
+		if strings.Contains(l, "+ line ") {
 			plusRows++
 		}
 	}
@@ -317,7 +317,7 @@ func TestRenderEditPermissionPrompt_BlankLinesStayNumbered(t *testing.T) {
 	}
 	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
 
-	want := []string{" 1 +one", " 2 +", " 3 +three"}
+	want := []string{" 1 + one", " 2 + ", " 3 + three"}
 	// The three diff rows sit right after the dashed rule (row 3, index
 	// 3) that follows the label rule/amber rule/question rows.
 	for i, w := range want {
@@ -343,23 +343,32 @@ func TestRenderEditPermissionPrompt_AbsentSideNoSpuriousRow(t *testing.T) {
 	}
 	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
 	for _, l := range got {
-		if strings.Contains(l, "-") && strings.Contains(l, "1") && !strings.Contains(l, "+hi") {
+		if (strings.Contains(l, "-") || strings.Contains(l, "−")) && strings.Contains(l, "1") && !strings.Contains(l, "+ hi") {
 			t.Errorf("unexpected '-' row for an OldAbsent hunk: %q", l)
 		}
 	}
-	if got[4] != " 1 +hi" {
-		t.Errorf("row 4 = %q, want %q", got[4], " 1 +hi")
+	if got[4] != " 1 + hi" {
+		t.Errorf("row 4 = %q, want %q", got[4], " 1 + hi")
 	}
 }
 
 // TestRenderPlanApproval_MatchesReference pins the plan-approval
-// prompt's structural rows to the kiln design (docs/kiln-design.md's
-// "plan" block anatomy and the perm block's option layout): a "plan"
-// label rule, "Ready to code?", the plan body between dashed/thin rules,
-// the proceed question ("kiln has written up a plan...", not "the
-// model..." — see the real bug noted in the handback), and the three
-// numbered options (no "❯" marker; kiln marks selection with the raised
-// background and an amber key, invisible with colour disabled).
+// prompt's structural rows to the same permission-block anatomy the bash
+// and edit prompts use (docs/kiln-design-handoff/Terminal.dc.html:75-80,
+// qa/reference/permission.png): a "plan" label rule, a full-width amber
+// rule, "Ready to code?", the plan body at a 1-column indent (no dashed
+// frame around it — that framing belongs to the edit prompt's diff
+// hunks, not a plan body), the proceed question ("kiln has written up a
+// plan...", not "the model..." — see the real bug noted in the
+// handback), the three numbered options via the same permissionOptionRow
+// helper the bash/edit prompts use (no "❯" marker; kiln marks selection
+// with the raised background and an amber key, invisible with colour
+// disabled), one hint row, and a closing amber rule. This replaces the
+// prior structure (a "plan" label in Muted rather than amber, a 3-column
+// indent, a dashed-then-thin rule framing the body, and a sub-hint
+// hanging under option 3) that finding plan-approval-not-perm-block
+// flagged as design drift from the block anatomy every other permission
+// prompt uses.
 func TestRenderPlanApproval_MatchesReference(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
@@ -375,13 +384,13 @@ func TestRenderPlanApproval_MatchesReference(t *testing.T) {
 
 	wantPrefix := []string{
 		"plan " + strings.Repeat("\u2500", 95),
-		"   Ready to code?",
+		strings.Repeat("\u2500", 100),
+		" Ready to code?",
 		"",
-		"   Here is the plan:",
-		"  " + strings.Repeat("\u254c", 96),
-		"   Rename math.js \u2192 calc.js",
+		" Here is the plan:",
+		" Rename math.js \u2192 calc.js",
 		"",
-		"   Context",
+		" Context",
 		"",
 	}
 	for i, w := range wantPrefix {
@@ -390,21 +399,22 @@ func TestRenderPlanApproval_MatchesReference(t *testing.T) {
 		}
 	}
 
-	// The closing rule, question, options and path row are the
+	// The closing rule, question, options, hint and path row are the
 	// structural tail — find them relative to the end since the wrapped
 	// plan body's exact row count is a wrapping-formula detail already
 	// flagged [chk] in dialog.go.
-	tail := got[len(got)-9:]
+	tail := got[len(got)-10:]
 	wantTail := []string{
-		"  " + strings.Repeat("\u2500", 96),
-		"   kiln has written up a plan and is ready to execute. Would you like to proceed?",
+		" kiln has written up a plan and is ready to execute. Would you like to proceed?",
 		"",
-		"   1  Yes, and use auto mode",
-		"   2  Yes, manually approve edits",
-		"   3  Tell kiln what to change",
-		"        shift+tab to approve with this feedback",
+		" 1  Yes, and use auto mode",
+		" 2  Yes, manually approve edits",
+		" 3  Tell kiln what to change",
 		"",
-		"   ~/.harness/plans/3make-a-two-step-plan-ticklish-aurora.md",
+		" \u2191\u2193 select \u00b7 enter confirm \u00b7 shift+tab to tell kiln what to change",
+		strings.Repeat("\u2500", 100),
+		"",
+		" ~/.harness/plans/3make-a-two-step-plan-ticklish-aurora.md",
 	}
 	for i, w := range wantTail {
 		if tail[i] != w {

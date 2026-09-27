@@ -1,0 +1,13 @@
+model: faux-1
+steps:
+  # end_turn: true splits the two typed turns into two separate replies.
+  # Without it, consecutive text steps merge into one reply on the FIRST
+  # request (doc.go), so any scenario sending a real second turn (e.g.
+  # rewind.steps' "turn two") would silently get "faux: script exhausted"
+  # for it, masked because the merged first reply already contained
+  # "Second turn done." and any WAITFOR for that phrase would still pass.
+  - text: "Sure, working on it."
+    usage: {input: 120, output: 20}
+    end_turn: true
+  - text: "Second turn done."
+    usage: {input: 140, output: 18}

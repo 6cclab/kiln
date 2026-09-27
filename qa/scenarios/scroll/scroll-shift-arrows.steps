@@ -1,0 +1,22 @@
+# shift+up/shift+down over a long transcript. Fullscreen wires these to
+# viewport.ScrollUp(1)/ScrollDown(1) (internal/tui/app.go), one line per
+# press, so a handful of presses only nudges the view — nowhere near
+# scroll-long.yaml's top marker, unlike a pgup.
+@faux testdata/faux/qa/scroll-long.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE tell me the whole story
+KEY enter
+WAITFOR /SCROLL-BOTTOM-MARKER/ 20
+SHOT bottom
+EXPECT /SCROLL-BOTTOM-MARKER/
+
+KEY shift+up shift+up shift+up shift+up shift+up
+SHOT after-shift-up
+EXPECT_NOT /panic|goroutine/
+
+KEY shift+down shift+down shift+down shift+down shift+down
+SHOT after-shift-down
+EXPECT /SCROLL-BOTTOM-MARKER/
+EXPECT_NOT /panic|goroutine/

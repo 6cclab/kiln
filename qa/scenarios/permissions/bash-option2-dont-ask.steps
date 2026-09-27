@@ -1,0 +1,28 @@
+# Bash prompt, option 2 ("don't ask again for: <prefix> *"): a second,
+# EXACTLY identical command runs without a prompt.
+#
+# Read from source rather than the rendered label: the option's label
+# text promises a prefix rule ("npm test *"), but the session grant
+# (internal/claude/permission/permission.go's key()/grantSession) is
+# keyed on toolName + "::" + the exact primaryArg string, not a glob — a
+# *different* command sharing the same first two words would still
+# prompt again. This scenario repeats the identical command deliberately
+# (matching the task brief's "a second identical command"), and the
+# EXPECT below records the label/mechanism gap as a discrepancy rather
+# than silently assuming the friendlier, prefix-matching behaviour the
+# label describes.
+@faux testdata/faux/qa/permissions-bash-option2.yaml
+
+WAITFOR /describe a task/ 20
+TYPE run the upload tests twice
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT first-prompt
+EXPECT /npm test -- upload/
+EXPECT /Yes, and don.t ask again for: npm test \*/
+KEY 2
+WAITFOR /Both test runs done/ 20
+SHOT second-command-no-prompt
+EXPECT_NOT /approval needed/
+EXPECT /second one didn.t need approval/
+EXPECT_NOT /panic|goroutine/

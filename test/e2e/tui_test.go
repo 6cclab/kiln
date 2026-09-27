@@ -1021,9 +1021,12 @@ func TestTUI_ModelPanel_Select(t *testing.T) {
 	if err := s.WaitFor("Select model", 3*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	// The current model's row is marked with a ✔ (dialog_model.go's
-	// NewDialogModel seeds the cursor from it).
-	if err := s.WaitFor(regexp.MustCompile(`✔.*faux/faux-1|faux/faux-1.*✔`), 2*time.Second); err != nil {
+	// The current model's row is marked with a ✓ (dialog_model.go's
+	// NewDialogModel seeds the cursor from it; the kiln restyle renders
+	// this from G().OK rather than the literal "✔" Claude Code used — QA
+	// finding 20260927T000726Z-mcp-dialog-glyphs-plural's "rewind/model
+	// checkmarks likewise ✓").
+	if err := s.WaitFor(regexp.MustCompile(`✓.*faux/faux-1|faux/faux-1.*✓`), 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	// The faux provider registers both faux-1 and faux-2

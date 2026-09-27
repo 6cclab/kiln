@@ -1,0 +1,24 @@
+# Resize while idle, no turn in flight: layout must re-wrap sanely at
+# each size, growing and shrinking, with no crash and no leftover garbage.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT idle-120x40
+EXPECT /describe a task/
+EXPECT /ask before edits/
+EXPECT_NOT /panic|goroutine/
+
+RESIZE 80 24
+WAITFOR /describe a task/ 10
+SHOT idle-80x24
+EXPECT /describe a task/
+EXPECT /ask before edits/
+EXPECT_NOT /panic|goroutine/
+
+RESIZE 150 45
+WAITFOR /describe a task/ 10
+SHOT idle-150x45
+EXPECT /describe a task/
+EXPECT /ask before edits/
+EXPECT_NOT /panic|goroutine/

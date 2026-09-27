@@ -1,0 +1,9 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /todos
+KEY enter
+WAITFOR /No todos\./ 20
+SHOT todos
+EXPECT /No todos\./
+EXPECT_NOT /panic|goroutine/

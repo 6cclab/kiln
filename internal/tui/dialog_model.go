@@ -165,6 +165,9 @@ func (d *dialogModel) selected() (commands.Item, bool) {
 	return d.spec.Items[d.cursor], true
 }
 
+// FrameLabel names the label rule DialogTopRule draws above /model.
+func (d *dialogModel) FrameLabel() string { return "model" }
+
 // renderModelOptionRows lays out /model's numbered options. It does NOT
 // reuse dialog.go's renderOptionRows: that helper wraps descriptions at
 // width-descCol, which does not reproduce dialog-model.txt's row 31/32
@@ -197,7 +200,7 @@ func renderModelOptionRows(items []commands.Item, cursor, width int) []string {
 	for i, it := range items {
 		l := it.Label
 		if it.Marker == "✔" {
-			l += " ✔"
+			l += " " + G().OK
 		}
 		labels[i] = l
 		if w := VisibleWidth(l); w > labelWidth {
@@ -212,11 +215,10 @@ func renderModelOptionRows(items []commands.Item, cursor, width int) []string {
 
 	var out []string
 	for i, it := range items {
-		marker := Faint("  ")
+		marker := selectionGutter(i == cursor)
 		label := Muted(labels[i])
 		if i == cursor {
-			marker = KilnAmber("❯ ")
-			label = Ink(labels[i])
+			label = KilnAmber(labels[i])
 		}
 		pad := descCol - len(dialogIndent) - markerWidth - VisibleWidth(labels[i])
 		if pad < 2 {

@@ -1,0 +1,45 @@
+# /agents dialog (generic commandDialog over
+# internal/commands/manage_commands.go's agentsModal): navigate, then its
+# two action keys — "s" shows the agent's prompt, "w" shows where it's
+# defined. Uses the existing commands-fixture, which defines exactly one
+# subagent ("reader"), so up/down only prove the cursor-clamp guards don't
+# crash with a single row — see the handback report.
+@faux testdata/faux/qa/dialogs-agents.yaml
+@fixture testdata/behaviour/qa/commands-fixture
+
+WAITFOR /describe a task/ 20
+TYPE first task
+KEY enter
+WAITFOR /Sure, first task handled/ 20
+SHOT turn-one
+TYPE second task
+KEY enter
+WAITFOR /Second task handled too/ 20
+SHOT turn-two
+TYPE /agents
+WAIT 1
+SHOT agents-autocomplete
+# design: Terminal.dc.html:220 (CMDS entry "/agents" desc:'Manage
+# subagents') — kiln's actual popup description is "View the subagents
+# available for dispatch" (manage_commands.go's ManageCommands screens
+# table), a real discrepancy from the design copy; asserting the design
+# text here is expected to fail against the real binary.
+EXPECT /Manage subagents/
+KEY enter
+WAITFOR /Subagents/ 20
+SHOT agents-dialog-open
+EXPECT /Subagents/
+EXPECT /dispatched with the task tool[\s\S]*reader[\s\S]*inherit · 1 tools/
+KEY down
+SHOT agents-navigated
+KEY s
+WAITFOR /You are a test subagent restricted to reading files/ 20
+SHOT agents-show-prompt
+EXPECT /You are a test subagent restricted to reading files/
+KEY w
+WAITFOR /reader\.md/ 20
+SHOT agents-where-defined
+EXPECT /reader\.md/
+KEY esc
+SHOT agents-closed
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,23 @@
+# One 429 rate-limit error then success: humaniseRetryError
+# (internal/tui/bridge.go ~1023) renders "429 rate limited" wording for a
+# 429 status.
+@faux testdata/faux/qa/errors-429-rate-limited.yaml
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE ask while rate limited
+SHOT typed
+KEY enter
+# EXPECT runs a fresh screen read at the moment it executes, not the
+# SHOT's capture, so the 1s countdown could tick past (or the retry could
+# finish) between SHOT and EXPECT; check the transient text immediately
+# after WAITFOR observes it, then SHOT for evidence.
+WAITFOR /Stream interrupted · 429 rate limited/ 20
+EXPECT /Retrying in \ds · attempt 2 of 4 · r to retry now/
+SHOT countdown
+WAITFOR /Reconnected on attempt 2/ 10
+SHOT reconnected
+WAITFOR /Back within the rate limit/ 10
+SHOT reply
+EXPECT /Back within the rate limit/
+EXPECT_NOT /panic|goroutine/

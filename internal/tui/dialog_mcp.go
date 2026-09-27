@@ -15,14 +15,18 @@ import (
 // Enter opens a per-server detail view (status line + Item.Tools, or the
 // failure's Item.Error/Item.Detail).
 //
-// Rows verified against testdata/reference/claude-code/dialog-mcp.txt
-// (title, count row, one section header, one ✔ row, one ✘ row, the ※
-// row, the legend — terminal width 100) with the harness's own values
-// substituted (the harness has one flat server source, ~/.claude.json or
-// --mcp-config, so only one "User MCPs (<path>)" section exists; no
-// claude.ai/Built-in sections, no ⚠/◯ rows, since the harness has no
-// auth-needed or disabled-server state — see
-// internal/commands/manage_commands.go's mcpModal doc comment). See
+// Row shape (title, count row, one section header, a connected row, a
+// failed row, the legend) was originally verified against
+// testdata/reference/claude-code/dialog-mcp.txt at terminal width 100
+// with the harness's own values substituted (the harness has one flat
+// server source, ~/.claude.json or --mcp-config, so only one "User MCPs
+// (<path>)" section exists; no claude.ai/Built-in sections, no ⚠/◯ rows,
+// since the harness has no auth-needed or disabled-server state — see
+// internal/commands/manage_commands.go's mcpModal doc comment). The kiln
+// restyle (QA findings 20260927T000712Z-dialog-chrome-effort-indicator
+// and 20260927T000726Z-mcp-dialog-glyphs-plural) replaced that
+// reference's ✔/✘/※ glyphs and "N servers" count with the design's own
+// ✓/✕ (mcpStatusGlyph), a plain hint line, and pluralServers. See
 // TestDialogMCP_MatchesReferenceStructure in dialog_mcp_test.go for the
 // row-by-row diff.
 type dialogMCP struct {
@@ -90,24 +94,44 @@ func (d *dialogMCP) selected() (commands.Item, bool) {
 	return d.spec.Items[d.cursor], true
 }
 
-// renderMCPListRows lays out the sectioned server list: a five-space
+// FrameLabel names the label rule DialogTopRule draws above /mcp.
+func (d *dialogMCP) FrameLabel() string { return "mcp" }
+
+// pluralServers renders "N server"/"N servers" (QA finding
+// 20260927T000726Z-mcp-dialog-glyphs-plural: the count row said "1
+// servers").
+func pluralServers(n int) string {
+	if n == 1 {
+		return "1 server"
+	}
+	return fmt.Sprintf("%d servers", n)
+}
+
+// renderMCPListRows lays out the sectioned server list: a two-space
 // indented section header row whenever Item.Group changes (blank row
 // before every header after the first), then per-item rows
-// "<gutter><marker> <name>   <description>" — gutter is "  " or "❯ ",
-// matching dialog-mcp.txt rows 12-21 exactly (measured: header at
-// dialogIndent+"  "+text, row at dialogIndent+gutter+marker+" "+name,
-// description column separated by three spaces, not a computed column —
-// unlike /model's rows, /mcp's reference rows are NOT aligned to a common
-// description column; each row's gap is fixed at three spaces after the
-// name).
+// "<gutter><marker> <name>   <description>" — gutter is selectionGutter's
+// blank-or-"> " two cells (dialog-mcp.txt rows 12-21 originally measured
+// this at header dialogIndent+"  "+text, row
+// dialogIndent+gutter+marker+" "+name), description column separated by
+// three spaces, not a computed column — unlike /model's rows, /mcp's
+// rows are NOT aligned to a common description column; each row's gap is
+// fixed at three spaces after the name.
 // mcpStatusGlyph colours a server row's status marker per kiln: green for
-// connected, red for failed, faint otherwise.
+// connected, red for failed, faint otherwise. The rendered glyph always
+// comes from the active glyph table (G().OK/G().Fail, ✓/✕ with ASCII
+// "+"/"x" fallbacks in plain mode) rather than echoing back the
+// commands.Item.Marker sentinel verbatim — that sentinel is still the
+// literal "✔"/"✘" strings internal/commands uses to mean "connected"/
+// "failed" (see internal/commands/manage_commands.go), but the design
+// glyph is ✓/✕, not ✔/✘ (QA finding
+// 20260927T000726Z-mcp-dialog-glyphs-plural).
 func mcpStatusGlyph(marker string) string {
 	switch marker {
 	case "✔":
-		return KilnGreen(marker)
+		return KilnGreen(G().OK)
 	case "✘":
-		return KilnRed(marker)
+		return KilnRed(G().Fail)
 	default:
 		return Faint(marker)
 	}
@@ -127,20 +151,14 @@ func renderMCPListRows(items []commands.Item, cursor, width int) []string {
 		}
 		first = false
 
-		gutter := Faint("  ")
+		gutter := selectionGutter(i == cursor)
 		name := Muted(it.Label)
-		desc := it.Description
+		desc := Muted(it.Description)
 		if i == cursor {
-			gutter = KilnAmber("❯ ")
-			name = Ink(it.Label)
+			name = KilnAmber(it.Label)
 		}
 		row := dialogIndent + gutter + mcpStatusGlyph(it.Marker) + " " + name
-		if desc != "" {
-			if i == cursor {
-				desc = Ink(desc)
-			} else {
-				desc = Muted(desc)
-			}
+		if it.Description != "" {
 			row += "   " + desc
 		}
 		if i == cursor {
@@ -154,7 +172,7 @@ func renderMCPListRows(items []commands.Item, cursor, width int) []string {
 func (d *dialogMCP) renderList(width, height int) []string {
 	var out []string
 	out = append(out, dialogIndent+KilnAmber(Bold(dialogMCPTitle)))
-	out = append(out, dialogIndent+Muted(fmt.Sprintf("%d servers", len(d.spec.Items))))
+	out = append(out, dialogIndent+Muted(pluralServers(len(d.spec.Items))))
 	out = append(out, "")
 	out = append(out, renderMCPListRows(d.spec.Items, d.cursor, width)...)
 	out = append(out, "")
@@ -167,7 +185,11 @@ func (d *dialogMCP) renderList(width, height int) []string {
 		}
 	}
 	if anyFailed {
-		out = append(out, dialogIndent+Faint("※ Run kiln --debug to see error logs"))
+		// Plain dim hint line, no leading glyph (QA finding
+		// 20260927T000726Z-mcp-dialog-glyphs-plural flagged the "※" as
+		// outside the design's glyph set; the fix is to drop it, not
+		// swap in a different one).
+		out = append(out, dialogIndent+Faint("Run kiln --debug to see error logs"))
 	}
 	out = append(out, dialogIndent+Faint("kiln doctor for details"))
 

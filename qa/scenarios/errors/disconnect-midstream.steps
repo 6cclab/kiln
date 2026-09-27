@@ -1,0 +1,27 @@
+# A stream cut mid-text via disconnect_after: the retry loop sees a
+# provider.StreamInterrupted, humanised (internal/tui/bridge.go
+# humaniseRetryError) as plain "Stream interrupted" (no status code to
+# report), then reconnects and delivers the rest of the answer in full.
+@faux testdata/faux/qa/errors-disconnect-midstream.yaml
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE trigger a mid-stream disconnect
+KEY enter
+WAITFOR /Streaming a reply/ 20
+SHOT partial-before-cut
+# EXPECT re-reads the live screen, not the SHOT capture, so it must
+# follow the WAITFOR that observes a transient countdown state directly —
+# an intervening SHOT costs enough wall-clock time for a 1s countdown to
+# tick past.
+WAITFOR /Stream interrupted/ 20
+EXPECT /Stream interrupted/
+EXPECT /Retrying in \ds · attempt 2 of 4 · r to retry now/
+SHOT countdown
+WAITFOR /Reconnected on attempt 2/ 20
+EXPECT /Reconnected on attempt 2/
+SHOT reconnected
+WAITFOR /Reconnected, and here is the rest of the answer in full/ 20
+SHOT final-reply
+EXPECT /Reconnected, and here is the rest of the answer in full/
+EXPECT_NOT /panic|goroutine/

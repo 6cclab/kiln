@@ -4,20 +4,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// trustIndent is the one-space left margin every Trust dialog body row
-// sits at. Verified against testdata/reference/claude-code/dialog-trust.txt
-// (all 11 rows carry exactly one leading space before their content, not
-// the three-space dialogIndent the numbered-option dialogs use — see
-// dialog_trust_test.go).
-const trustIndent = " "
-
-// trustDialog is the once-per-new-folder safety prompt, rendered full
-// width starting with its own `─` rule (unlike the numbered-option
-// dialogs, which sit under the app-owned `▔` rule and are indented three).
-// Wording differs from Claude Code's own copy in two places per the task
-// brief: "The harness'll be able to..." instead of "Claude Code'll be able
-// to...", and no "Security guide" row (the harness has no such doc to
-// link).
+// trustDialog is the once-per-new-folder safety prompt. It used to render
+// full width starting with its own `─` rule, on top of the app-owned `▔`
+// rule every other dialog sat under (two stacked rules) — the kiln
+// restyle drops trustDialog's own rule and its one-space indent
+// (trustIndent) entirely: DialogTopRule now draws the single shared frame
+// above every dialog, trustDialog included ("trust ────", FrameLabel
+// below), and content aligns with every other block's left edge like the
+// rest. Wording differs from Claude Code's own copy in two places per the
+// task brief: "The harness'll be able to..." instead of "Claude Code'll be
+// able to...", and no "Security guide" row (the harness has no such doc
+// to link).
 type trustDialog struct {
 	cwd      string
 	onAnswer func(trusted bool)
@@ -34,58 +31,46 @@ const trustSafetyParagraph = "Quick safety check: Is this a project you created 
 	"(Like your own code, a well-known open source project, or work from your team). " +
 	"If not, take a moment to review what's in this folder first."
 
+// FrameLabel names the label rule DialogTopRule draws above Trust.
+func (d *trustDialog) FrameLabel() string { return "trust" }
+
 func (d *trustDialog) Render(width, height int) []string {
 	var out []string
-	out = append(out, KilnAmber(rule('─', width)))
-	out = append(out, trustIndent+KilnAmber(Bold("Accessing workspace:")))
-	out = append(out, trustIndent+Ink(d.cwd))
+	out = append(out, KilnAmber(Bold("Accessing workspace:")))
+	out = append(out, Ink(d.cwd))
 
-	wrapWidth := width - len(trustIndent)
+	wrapWidth := width
 	if wrapWidth < 10 {
 		wrapWidth = 10
 	}
 	for _, line := range wrapPlain(trustSafetyParagraph, wrapWidth) {
-		out = append(out, trustIndent+Muted(line))
+		out = append(out, Muted(line))
 	}
 	for _, line := range wrapPlain("kiln will be able to read, edit, and execute files here.", wrapWidth) {
-		out = append(out, trustIndent+Muted(line))
+		out = append(out, Muted(line))
 	}
 
 	options := []string{"No, exit", "Yes, I trust this folder"}
 	for i, label := range options {
-		marker := Faint("  ")
-		text := Muted(label)
 		selected := i == d.cursor
+		marker := selectionGutter(selected)
+		text := Muted(label)
 		if selected {
-			marker = KilnAmber("❯ ")
-			text = Ink(label)
+			text = KilnAmber(label)
 		}
-		row := trustIndent + marker + text
+		row := marker + text
 		if selected {
 			row = OnRaise(padTo(row, width))
 		}
 		out = append(out, row)
 	}
 
-	out = append(out, trustIndent+Muted("Enter to confirm · Esc to cancel"))
+	out = append(out, Muted("Enter to confirm · Esc to cancel"))
 
 	if height > 0 && len(out) > height {
 		out = out[:height]
 	}
 	return out
-}
-
-// rule renders a full-width row of ch, matching the `─` top rule in
-// dialog-trust.txt row 1 (100 columns in the reference capture).
-func rule(ch rune, width int) string {
-	if width < 0 {
-		width = 0
-	}
-	b := make([]rune, width)
-	for i := range b {
-		b[i] = ch
-	}
-	return string(b)
 }
 
 func (d *trustDialog) HandleKey(msg tea.KeyPressMsg) (consumed, closeIt bool, cmd tea.Cmd) {

@@ -28,9 +28,9 @@ import (
 
 // TestTools_BashTimeout runs a bash call whose timeout (1s) is far
 // shorter than its command (sleep 30), and checks the tool result reports
-// a timeout (bash.go: `fmt.Sprintf("Command timed out after %v seconds",
-// timeout.Seconds())`) and that the process is not left running
-// afterward.
+// a timeout (bash.go's formatSeconds pluralizes "second(s)" correctly, so
+// a 1-second timeout reads "Command timed out after 1 second", singular)
+// and that the process is not left running afterward.
 //
 // Proved able to fail: asserting the marker command is STILL running
 // after the run (inverting the pgrep check) turned this red because
@@ -60,8 +60,11 @@ steps:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "Command timed out after 1 seconds") {
+	if !strings.Contains(string(raw), "Command timed out after 1 second") {
 		t.Errorf("session does not mention the timeout:\n%s", raw)
+	}
+	if strings.Contains(string(raw), "Command timed out after 1 seconds") {
+		t.Errorf("session incorrectly pluralizes a 1-second timeout:\n%s", raw)
 	}
 
 	// Give the OS a brief moment to reap the killed process before

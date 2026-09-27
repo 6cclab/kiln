@@ -1,0 +1,20 @@
+# The bash prompt at a narrow 60-column terminal: FitLines/FitStatus must
+# keep the question, the command row and all four options legible rather
+# than overflowing or panicking.
+@faux testdata/faux/qa/permissions-bash-60cols.yaml
+@size 60x30
+
+WAITFOR /describe a task/ 20
+TYPE run the upload tests
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT bash-prompt-60-cols
+EXPECT /Allow kiln to run this command\?/
+EXPECT /npm test -- upload/
+EXPECT /Yes/
+EXPECT /No/
+EXPECT_NOT /panic|goroutine/
+KEY 1
+WAITFOR /Ran at 60 columns/ 20
+SHOT bash-approved-60-cols
+EXPECT_NOT /panic|goroutine/

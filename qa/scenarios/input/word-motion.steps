@@ -1,0 +1,35 @@
+# Word motion (alt+left/right work in every macOS terminal profile;
+# Option+b/f only with Option set to send Esc+): alt+left / alt+right / ctrl+a / ctrl+e (bubbles/v2 textarea's
+# DefaultKeyMap WordBackward/WordForward/LineStart/LineEnd, bound through
+# internal/tui/editor/model.go's KeyWordLeft/KeyWordRight/KeyLineStart/
+# KeyLineEnd). Verified behaviourally: moving the cursor with each key and
+# then inserting a marker proves where the cursor landed.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE hello world
+KEY alt+left
+TYPE NEW
+SHOT word-back-alt-b
+EXPECT /hello NEWworld/
+KEY ctrl+e
+KEY ctrl+u
+TYPE hello world
+KEY alt+left
+KEY alt+right
+TYPE NEW
+SHOT word-forward-alt-f
+EXPECT /hello worldNEW/
+KEY ctrl+e
+KEY ctrl+u
+TYPE hello world
+KEY ctrl+a
+TYPE START
+SHOT line-start-ctrl-a
+EXPECT /STARThello world/
+KEY ctrl+e
+TYPE END
+SHOT line-end-ctrl-e
+EXPECT /STARThello worldEND/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,14 @@
+# --ax-screen-reader: flat text, no borders (internal/cli/args.go's
+# ScreenReader falls back to inline and internal/tui/theme.go's
+# SetPlainMode(true) drives IsPlain()). One concrete, checkable difference:
+# Model.bannerRows() draws the divider under the banner with "-" instead of
+# "─" when IsPlain() is true.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@args --ax-screen-reader
+
+WAITFOR /describe a task/ 20
+SHOT screen-reader-welcome
+EXPECT /----------/
+EXPECT_NOT /─/
+EXPECT_NOT /panic|goroutine/

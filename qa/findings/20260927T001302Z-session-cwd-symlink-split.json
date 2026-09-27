@@ -1,0 +1,29 @@
+{
+ "id": "20260927T001302Z-session-cwd-symlink-split",
+ "found_at": "2026-09-27T00:13:02Z",
+ "scenario": "startup/welcome-recent-sessions",
+ "step": "01",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Sessions are keyed by the literal cwd string, so a symlinked path splits one project's history",
+ "observed": "Sessions created by 'kiln -p' launched without a shell recorded cwd /private/tmp/…/proj (Go's os.Getwd resolving /tmp's symlink when PWD is stale); an interactive launch after 'cd /tmp/…/proj' records /tmp/…/proj and lists no recent sessions — the session lookup matches Cwd by exact string (internal/session/jsonl/repo.go).",
+ "expected": "The same directory is one project however it was reached: compare cwd after filepath.EvalSymlinks (and store the resolved path), so --continue and Recent sessions find sessions started via either spelling.",
+ "design_ref": "n/a",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/startup-welcome-recent-sessions-120x40"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/session/jsonl/repo.go"
+  ],
+  "regression_test": "TestListFindsSessionAcrossSymlinkedCwdSpellings",
+  "after_evidence": [
+   "qa/runs/c4/iterm-dark/startup-welcome-recent-sessions-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:53Z"
+ }
+}

@@ -1,0 +1,19 @@
+# RESIZE down to a tiny 40x12 and back: no crash or garbage at the tiny
+# size, and the layout recovers cleanly once it grows back.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT before-tiny
+
+RESIZE 40 12
+WAIT 0.6
+SHOT tiny-40x12
+EXPECT_NOT /panic|goroutine/
+
+RESIZE 120 40
+WAITFOR /describe a task/ 10
+SHOT back-120x40
+EXPECT /describe a task/
+EXPECT /ask before edits/
+EXPECT_NOT /panic|goroutine/

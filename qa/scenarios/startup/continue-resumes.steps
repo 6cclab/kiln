@@ -1,0 +1,14 @@
+# --continue resumes the most recent session in this cwd (internal/cli/
+# args.go's ContinueLatest), seeded by an @pre run, and the prior turn's own
+# text is expected to replay into the transcript.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@pre -p "add tests for the parser"
+@args --continue
+
+WAITFOR /describe a task/ 20
+SHOT continue-resumed
+EXPECT /add tests for the parser/
+EXPECT /Hello from faux\./
+EXPECT_NOT /Recent sessions/
+EXPECT_NOT /panic|goroutine/

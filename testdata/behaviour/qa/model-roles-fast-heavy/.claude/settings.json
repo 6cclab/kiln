@@ -1,0 +1,6 @@
+{
+  "modelRoles": {
+    "fast": "faux/faux-2",
+    "heavy": "faux/faux-3"
+  }
+}

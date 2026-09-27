@@ -1,0 +1,31 @@
+model: faux-1
+steps:
+  - text: "SCROLL-TOP-MARKER begins a long reply written purely to build up
+      scrollback for the scrolling scenarios: this first paragraph is about
+      why the transcript needs to run past one screenful before scrolling
+      means anything, so the rest of it is deliberate padding rather than
+      anything worth reading closely.\n\nParagraph two keeps padding: it
+      covers a made-up upload route, why it needed a rate limiter, and why
+      that limiter had to be redis-backed rather than in-process once more
+      than one kiln process could be handling requests at once.\n\nParagraph
+      three covers the limiter's own shape: a fixed window counter keyed by
+      client id, rejecting once the count crosses ten in a rolling
+      minute, with the threshold itself coming from a config value rather
+      than a hardcoded constant.\n\nParagraph four covers the tests: a
+      hand-rolled redis mock implementing only the sorted-set commands the
+      limiter actually calls, since the real client is not available in
+      the sandbox this reply is padding for.\n\nParagraph five covers the
+      response shape on a rejection: a 429 status, a Retry-After header
+      computed from the window's remaining time, and a JSON body naming
+      the limit that was hit, all invented for the sake of having enough
+      lines here.\n\nParagraph six covers the rollout: behind a flag for a
+      week, logging what would have been rejected without enforcing it,
+      so the threshold can be tuned against real traffic first.\n\n
+      Paragraph seven covers monitoring: a panel counting rejections per
+      route, alerting if one client accounts for more than half of them,
+      which usually means the limit is too low rather than abuse.\n\n
+      Paragraph eight is the last stretch of padding before the reply
+      wraps up, restating that none of this is meant to be read for
+      content, only for length, so the scenario has real scrollback to
+      scroll through.\n\nSCROLL-BOTTOM-MARKER closes the reply."
+    usage: {input: 40, output: 320}

@@ -1,0 +1,21 @@
+{
+ "id": "20260927T010049Z-kitty-mode-drops-arrow-modifiers",
+ "found_at": "2026-09-27T01:00:49Z",
+ "scenario": "input/word-motion",
+ "step": "01-word-back-alt-b",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Inside kiln, Option/Ctrl+arrow arrive as plain arrows in iTerm2, so word motion moves one character",
+ "observed": "kiln pushes the kitty keyboard protocol (CSI > 1 u, seen in a TEA_TRACE of kiln's output). Probed with a raw byte logger in iTerm2's Default profile via Orca: without that mode Option+Left = ESC[1;3D, Ctrl+Left = ESC[1;5D; with CSI > 1 u set, both arrive as plain ESC[D, so kiln's alt+left word motion moves one character ('hello worlNEWd'). With the mode set, Shift+Enter = ESC[13;2u (distinguishable, which the mode is for) and Option+Backspace = ESC[127u.",
+ "expected": "Word motion by Option/Ctrl+arrow works inside kiln in iTerm2's Default profile. Caveat: the modifier loss was observed with Orca's synthetic key events; it needs confirming with a physical keypress before choosing between dropping kitty mode (losing Shift+Enter) and another route.",
+ "design_ref": "n/a",
+ "evidence": [
+  "qa/runs/c5/iterm-dark/input-word-motion-120x40/01-word-back-alt-b.png",
+  "qa/runs/c5/probes/word-motion-input.trace"
+ ],
+ "status": "open",
+ "fix": null
+}

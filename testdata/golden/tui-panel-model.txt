@@ -3,14 +3,14 @@ K I L N  dev · coding agent
 / commands   @ add files   ⇧⇥ cycle mode   esc stop
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔
-   Select model
-   Switch between models. Your pick becomes the default for new sessions. For other names, specify
-   with --model.
+model ──────────────────────────────────────────────────────────────────────────────────────────────
+Select model
+Switch between models. Your pick becomes the default for new sessions. For other names, specify with
+--model.
 
-   ❯ 1. faux/faux-1 ✔  128.0k context · medium tier
-     2. faux/faux-2    32.8k context · small tier
+  1. faux/faux-1 ✓  128.0k context · medium tier
+  2. faux/faux-2    32.8k context · small tier
 
-   ◐ Medium effort ←/→ to adjust
+◐ Medium effort ←/→ to adjust
 
-   Enter to set as default · s to use this session only · Esc to cancel
+Enter to set as default · s to use this session only · Esc to cancel

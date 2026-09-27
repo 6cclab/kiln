@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "echo should not run"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Noted, the call was blocked."
+        usage: {input: 40, output: 10}

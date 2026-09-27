@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -40,6 +42,57 @@ func TestMarkdownCachesByTextAndWidth(t *testing.T) {
 	diff := other.Render(strings.Repeat("hello world ", 5))
 	if len(diff) == 0 {
 		t.Error("a different renderer/width should still render")
+	}
+}
+
+// TestMarkdownCacheInvalidatesOnThemeChange regresses the cache half of
+// qa/findings/20260926T231105Z-light-bg-you-text-invisible.json: the
+// finding calls out that MarkdownRenderer's cache is keyed only by text, so
+// a block rendered (and cached) before SetTerminalBackground detected a
+// light terminal kept the pre-detection dark-design colours baked into its
+// ANSI escapes for the rest of the session. `code` renders in KilnAmber
+// (colorYellow in buildStyle), one of the tokens SetTerminalBackground
+// recomputes for a light background, so its rendered escape sequence must
+// change once the background is (re)detected as light, even though the
+// same renderer instance and the same input text are reused.
+func TestMarkdownCacheInvalidatesOnThemeChange(t *testing.T) {
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		resetSurfaceTokensToDesign()
+		resetTextTokensToDesign()
+	})
+	SetColorEnabled(true)
+	resetSurfaceTokensToDesign()
+	resetTextTokensToDesign()
+
+	r := NewMarkdownRenderer(80, false)
+	const text = "`code`"
+
+	beforeLines := r.Render(text)
+	before := strings.Join(beforeLines, "\n")
+
+	SetTerminalBackground(color.RGBA{R: 0xf7, G: 0xf4, B: 0xee, A: 0xff})
+
+	afterLines := r.Render(text)
+	after := strings.Join(afterLines, "\n")
+
+	if before == after {
+		t.Fatalf("Render(%q) unchanged after SetTerminalBackground recoloured KilnAmber; cache served stale pre-detection colours:\nbefore=%q\nafter=%q", text, before, after)
+	}
+
+	// The freshly rendered escape sequence must carry the *new* amber
+	// colour's RGB triplet (lipgloss emits truecolor ANSI as decimal
+	// "38;2;R;G;B", not the hex string), not the design's original amber
+	// still baked into the cached entry.
+	newAmberHex := CurrentTextHex().Amber
+	if newAmberHex == hexAmber {
+		t.Fatal("test assumption broken: KilnAmber unchanged by SetTerminalBackground for this background")
+	}
+	rgb := parseHex(newAmberHex)
+	wantSeq := fmt.Sprintf("38;2;%d;%d;%d", rgb.r, rgb.g, rgb.b)
+	if !strings.Contains(after, wantSeq) {
+		t.Errorf("Render(%q) after SetTerminalBackground = %q, want it to contain the recomputed amber ANSI sequence %q (hex %s)", text, after, wantSeq, newAmberHex)
 	}
 }
 

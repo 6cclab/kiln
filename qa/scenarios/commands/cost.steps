@@ -1,0 +1,23 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE turn one
+KEY enter
+WAITFOR /Sure, working on it/ 20
+TYPE /cost
+SHOT palette-cost
+# design: Terminal.dc.html:218 (CMDS entry {cmd:'/cost', desc:'Tokens and
+# spend this session'}) - kiln's real description (builtins.go) is "Show
+# token usage and cost for this session"; expected to fail, recording the
+# discrepancy.
+EXPECT /Tokens and spend this session/
+KEY enter
+WAITFOR /self-hosted, no marginal cost/ 20
+SHOT cost
+EXPECT /input \$0\/M · output \$0\/M/
+EXPECT /self-hosted, no marginal cost/
+# design: Terminal.dc.html:320 (runCmd's /cost note text: "Session:
+# $X.XX · Yk tokens in context · Zs") - kiln's real /cost has no such
+# note (it reports rate + a by-model table instead); expected to fail.
+EXPECT /tokens in context/
+EXPECT_NOT /panic|goroutine/

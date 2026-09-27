@@ -1,0 +1,55 @@
+# todo_write called four times across one turn so the live plan block
+# advances its current-item marker (▸) and checks off items (✓), mirroring
+# testdata/faux/plan-live.yaml but carried through to full completion.
+# Delays between calls are generous (2s) so a real-terminal driver has
+# room to WAITFOR a state-specific pattern and SHOT it before the next
+# call lands — 400ms proved too fast to capture distinct frames (the
+# first screenshot landed on the already-final state).
+model: faux-1
+steps:
+  - tool_call:
+      name: todo_write
+      args:
+        todos:
+          - {content: "read the upload handler", status: in_progress}
+          - {content: "add the rate limiter", status: pending}
+          - {content: "wire it into the route", status: pending}
+      id: tc1
+  - on_tool_result: tc1
+    then:
+      - tool_call:
+          name: todo_write
+          args:
+            todos:
+              - {content: "read the upload handler", status: completed}
+              - {content: "add the rate limiter", status: in_progress}
+              - {content: "wire it into the route", status: pending}
+          id: tc2
+        delay: 2s
+  - on_tool_result: tc2
+    then:
+      - tool_call:
+          name: todo_write
+          args:
+            todos:
+              - {content: "read the upload handler", status: completed}
+              - {content: "add the rate limiter", status: completed}
+              - {content: "wire it into the route", status: in_progress}
+          id: tc3
+        delay: 2s
+  - on_tool_result: tc3
+    then:
+      - tool_call:
+          name: todo_write
+          args:
+            todos:
+              - {content: "read the upload handler", status: completed}
+              - {content: "add the rate limiter", status: completed}
+              - {content: "wire it into the route", status: completed}
+          id: tc4
+        delay: 2s
+  - on_tool_result: tc4
+    then:
+      - text: "Plan advanced through all three steps."
+        delay: 400ms
+        usage: {input: 150, output: 15}

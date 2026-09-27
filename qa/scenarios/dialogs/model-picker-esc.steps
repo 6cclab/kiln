@@ -1,0 +1,25 @@
+# /model dialog: open, navigate, then Esc to cancel without applying
+# anything (internal/tui/dialog_model.go's Outcome() falls back to "Kept
+# model as <current>" when nothing was selected).
+@faux testdata/faux/qa/dialogs-model.yaml
+
+WAITFOR /describe a task/ 20
+TYPE only task
+KEY enter
+WAITFOR /you[\s\S]*kiln/ 20
+SHOT turn-one
+TYPE /model
+KEY enter
+WAITFOR /Select model/ 20
+SHOT model-dialog-open
+KEY down
+SHOT model-dialog-selected-faux-2
+KEY esc
+WAITFOR /Kept model as faux\/faux-1/ 20
+SHOT model-dialog-cancelled
+EXPECT /Kept model as faux\/faux-1/
+# The apply confirmation text is "Model: faux/faux-2 · ..." (see
+# model-picker.steps); check that string didn't leak in instead of the
+# stale "now on ..." wording that never matched anything real.
+EXPECT_NOT /Model: faux\/faux-2/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,26 @@
+# Option 2 ("switch to accept edits") then a second edit, which should
+# apply without a prompt now that the session is in acceptEdits mode.
+model: faux-1
+steps:
+  - tool_call:
+      name: edit
+      args:
+        path: src/middleware/auth.ts
+        edits:
+          - oldText: "if (!req.headers.authorization) {"
+            newText: "if (!req.headers.authorization || req.headers.authorization === '') {"
+      id: tc1
+  - on_tool_result: tc1
+    then:
+      - tool_call:
+          name: edit
+          args:
+            path: src/handlers/upload.ts
+            edits:
+              - oldText: "res.status(201).json({ ok: true });"
+                newText: "res.status(201).json({ ok: true, uploaded: true });"
+          id: tc2
+  - on_tool_result: tc2
+    then:
+      - text: "Both edits applied, second one under accept-edits mode."
+        usage: {input: 200, output: 20}

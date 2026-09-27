@@ -28,8 +28,11 @@ func keyMsg(name string) tea.KeyPressMsg {
 
 // TestRewindDialog_MatchesReferenceRows pins Render's body rows for one
 // user-message entry plus the "(current)" option, per the kiln design
-// (docs/kiln-design.md): the selected row's raised background pads it to
-// the full width.
+// (docs/kiln-design.md): no dialogIndent (content aligns with every other
+// block's left edge — DialogTopRule's "rewind ────" label rule carries
+// the indent instead, QA finding 20260927T000712Z-dialog-chrome-effort-
+// indicator), a blank-or-"> " selectionGutter instead of "❯", and the
+// selected row's raised background pads it to the full width.
 func TestRewindDialog_MatchesReferenceRows(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
@@ -41,12 +44,12 @@ func TestRewindDialog_MatchesReferenceRows(t *testing.T) {
 	got := d.Render(100, 40)
 
 	want := []string{
-		"   Rewind",
-		"   Restore the code and/or conversation to the point before…",
-		"     run this shell command and report its output: echo parity-check",
-		"     No code changes",
-		"   ❯ (current)",
-		"   Enter to continue · Esc to cancel",
+		"Rewind",
+		"Restore the code and/or conversation to the point before…",
+		"  run this shell command and report its output: echo parity-check",
+		"  No code changes",
+		"> (current)",
+		"Enter to continue · Esc to cancel",
 	}
 
 	if len(got) != len(want) {

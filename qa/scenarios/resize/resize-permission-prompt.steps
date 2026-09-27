@@ -1,0 +1,29 @@
+# RESIZE while a permission prompt is open (manual mode, the default):
+# testdata/faux/bash-approve.yaml scripts a bash tool call that needs
+# approval. Checks the prompt survives the resize and still works
+# afterward (approved here; see internal/tui/permission_render.go for the
+# exact copy).
+@faux testdata/faux/bash-approve.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE run the upload tests
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT permission-prompt-open
+EXPECT /Allow kiln to run this command\?/
+EXPECT /npm test -- upload/
+
+RESIZE 90 30
+WAITFOR /approval needed/ 10
+SHOT permission-prompt-after-resize
+EXPECT /Allow kiln to run this command\?/
+EXPECT /npm test -- upload/
+EXPECT_NOT /panic|goroutine/
+
+KEY enter
+WAITFOR /Tests passed/ 20
+SHOT permission-approved
+EXPECT /Tests passed/
+EXPECT_NOT /approval needed/
+EXPECT_NOT /panic|goroutine/

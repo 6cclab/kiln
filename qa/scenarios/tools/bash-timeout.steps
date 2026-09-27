@@ -1,0 +1,16 @@
+# bash's optional `timeout` arg (internal/tools/bash.go: "Timeout in
+# seconds"); a command that outlives it is killed and reported as
+# "Command timed out after N seconds" (bash.go's execErr/result.TimedOut
+# branch), rendered as an error block.
+@faux testdata/faux/qa/tools-bash-timeout.yaml
+@args --permission-mode dontAsk
+
+WAITFOR /describe a task/ 20
+TYPE sleep past the timeout
+KEY enter
+WAITFOR /timed out/ 20
+SHOT bash-timeout
+EXPECT /Command timed out after 1 second\b/
+EXPECT_NOT /1 seconds/
+EXPECT /That timed out/
+EXPECT_NOT /panic|goroutine/

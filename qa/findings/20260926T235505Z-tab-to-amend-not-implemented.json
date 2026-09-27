@@ -1,0 +1,29 @@
+{
+ "id": "20260926T235505Z-tab-to-amend-not-implemented",
+ "found_at": "2026-09-26T23:55:05Z",
+ "scenario": "permissions/bash-deny-feedback-tab",
+ "step": "after-tab",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "'tab to amend' hint on permission prompts does nothing; tab is silently swallowed",
+ "observed": "Bash approval prompt's hint row reads '↑↓ select · enter confirm · esc decline · tab to amend'. Pressing Tab (before-tab -> after-tab) leaves the prompt pixel-identical (still on 'Allow kiln to run this command?' with option 1 selected, no feedback field appears). Typing 'please explain what this does first' afterward does not populate any amend/feedback field — after-typing shows the bottom input line reading 'se explain what this does first' (leading characters swallowed) while the approval prompt is gone, and pressing enter runs the command as approved: after-enter shows 'bash ... approved · 2.8s' / 'Ran the probe command.', not a decline with the typed reason.",
+ "expected": "Tab should open a feedback/amend field on the prompt (or otherwise honor the advertised affordance) and Enter should submit a decline carrying the typed reason (expected screen text '✕ Declined echo tab-amend-probe'), per the scenario's own EXPECT at bash-deny-feedback-tab.steps:36.",
+ "design_ref": "internal/tui/permission_render.go:197,334 (hint text 'tab to amend'); internal/tui/permissionview.go promptOptionsFor(\"bash\") has no feedback option; PromptState.HandleKey has no tab case and falls through the digit-key default branch for any other key",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/permissions-bash-deny-feedback-tab-120x40/02-after-tab.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permissionview.go"
+  ],
+  "regression_test": "TestPromptState_BashTabOpensFeedback",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/permissions-bash-deny-feedback-tab-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:52Z"
+ }
+}

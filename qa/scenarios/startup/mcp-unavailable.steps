@@ -1,0 +1,15 @@
+# An MCP config naming a server whose command does not exist: the
+# connection attempt fails and kiln surfaces the "unavailable" notice
+# (internal/cli/tui.go mcpFailureNotice, committed via bridge.CommitNote).
+# The config's shape is internal/mcp/config.go's ServerConfig
+# ("mcpServers": {name: {command, args}}), read via --mcp-config
+# (internal/cli/chat.go / internal/mcp/config.go ResolveConfigs).
+@faux testdata/faux/hello.yaml
+@size 120x40
+@args --mcp-config {ROOT}/testdata/behaviour/qa/mcp-dead-server.json
+
+WAITFOR /describe a task/ 20
+WAITFOR /1 MCP server unavailable . run \/mcp/ 20
+SHOT mcp-unavailable
+EXPECT /1 MCP server unavailable . run \/mcp/
+EXPECT_NOT /panic|goroutine/

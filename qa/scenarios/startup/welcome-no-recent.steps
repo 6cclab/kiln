@@ -1,0 +1,12 @@
+# Welcome screen with no recent sessions: the banner's "Recent sessions"
+# block (internal/cli/tui.go bannerRows) must be absent on a fresh cwd.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome-no-recent
+EXPECT /K I L N/
+EXPECT /coding agent/
+EXPECT /model faux\/faux-1/
+EXPECT_NOT /Recent sessions/
+EXPECT_NOT /panic|goroutine/

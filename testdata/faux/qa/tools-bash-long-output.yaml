@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "seq 1 40"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Counted to 40."
+        usage: {input: 200, output: 20}

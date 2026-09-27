@@ -1,0 +1,41 @@
+# /config dialog (generic commandDialog over
+# internal/commands/manage_commands.go's configModal): a read-only rows
+# list, so its only real actions are navigation and Esc; Enter is a no-op
+# since the modal sets no Select/Act. Uses the existing commands-fixture
+# so hooks/subagents show non-zero counts.
+@faux testdata/faux/qa/dialogs-config.yaml
+@fixture testdata/behaviour/qa/commands-fixture
+
+WAITFOR /describe a task/ 20
+TYPE first task
+KEY enter
+WAITFOR /Sure, first task handled/ 20
+SHOT turn-one
+TYPE second task
+KEY enter
+WAITFOR /Second task handled too/ 20
+SHOT turn-two
+TYPE /config
+KEY enter
+WAITFOR /Configuration/ 20
+SHOT config-dialog-open
+EXPECT /Configuration/
+EXPECT /read-only; each line says where the value came from/
+EXPECT /model\s+faux\/faux-1/
+EXPECT /permission mode\s+manual/
+EXPECT /hooks\s+1 across 1 events/
+# 2, not 1: kiln always injects a built-in "general-purpose" agent
+# (internal/agent/subagent.go) alongside the fixture's reader.md.
+EXPECT /subagents\s+2 available/
+KEY down
+SHOT config-navigated
+KEY down
+SHOT config-navigated-2
+KEY up
+SHOT config-navigated-back
+KEY enter
+SHOT config-enter-noop
+EXPECT /Configuration/
+KEY esc
+SHOT config-closed
+EXPECT_NOT /panic|goroutine/

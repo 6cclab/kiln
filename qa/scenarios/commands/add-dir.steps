@@ -1,0 +1,16 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+@fixture testdata/behaviour/qa/commands-fixture
+
+WAITFOR /describe a task/ 20
+TYPE /add-dir extra
+# /add-dir has ArgumentCompletions (session_commands.go), so "extra"
+# matches the fixture's ./extra dir and opens a popup. The first Enter
+# accepts that completion (replacing "extra" with its resolved absolute
+# path) rather than submitting — app.go's popup handler completes a
+# partial name first, and only a second Enter submits.
+KEY enter
+KEY enter
+WAITFOR /Added .*extra\. Tools may now work there without prompting\./ 20
+SHOT add-dir
+EXPECT /Added .*extra\. Tools may now work there without prompting\./
+EXPECT_NOT /panic|goroutine/

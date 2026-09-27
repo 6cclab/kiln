@@ -1,0 +1,20 @@
+# Esc while a slow tool (bash sleep) is running: approve the bash call at
+# the permission prompt (manual mode, default option "Yes"), then
+# interrupt while it runs.
+@faux testdata/faux/qa/errors-esc-tool.yaml
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE run something slow
+KEY enter
+WAITFOR /Allow kiln to run this command\?/ 20
+SHOT permission-prompt
+KEY enter
+WAIT 1
+SHOT tool-running-before-esc
+KEY esc
+# design: Terminal.dc.html:312
+WAITFOR /Interrupted\. Tell kiln what to do instead\./ 20
+SHOT interrupted
+EXPECT /■ Interrupted\. Tell kiln what to do instead\./
+EXPECT_NOT /panic|goroutine/

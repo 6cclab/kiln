@@ -1,0 +1,29 @@
+{
+ "id": "20260927T000409Z-bash-timeout-message-pluralization",
+ "found_at": "2026-09-27T00:04:09Z",
+ "scenario": "tools/bash-timeout",
+ "step": "bash-timeout",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "low",
+ "title": "Bash timeout message always says 'seconds', even for a 1-second timeout",
+ "observed": "'sleep 5' against a 1-second timeout reads '→ Command timed out after 1 seconds' (01-bash-timeout.txt).",
+ "expected": "Singular 'second' when the timeout value is 1.",
+ "design_ref": "internal/tools/bash.go:159 (fmt.Sprintf(\"Command timed out after %v seconds\", timeout.Seconds()) always pluralizes)",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/tools-bash-timeout-120x40/01-bash-timeout.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tools/bash.go"
+  ],
+  "regression_test": "TestBashToolTimeoutMessageSingular",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/tools-bash-timeout-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:53Z"
+ }
+}

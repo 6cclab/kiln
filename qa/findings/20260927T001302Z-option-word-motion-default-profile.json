@@ -1,0 +1,20 @@
+{
+ "id": "20260927T001302Z-option-word-motion-default-profile",
+ "found_at": "2026-09-27T00:13:02Z",
+ "scenario": "input/word-motion",
+ "step": "all",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Option+b/f word motion does nothing in iTerm2's default profile",
+ "observed": "With iTerm2's Default profile (Left Option key = Normal), Option+b and Option+f insert '∫' and 'ƒ' into the prompt instead of moving by word; Option+Backspace sends 0x7f (plain backspace). Measured byte-level earlier this session: Alt+B arrives as '∫', Alt+Left as ESC[1;3D.",
+ "expected": "Word motion works out of the box on macOS terminals: bind Alt+Left/Alt+Right (ESC[1;3D / ESC[1;3C, which iTerm2's default profile does send) to word left/right and Ctrl+W to delete word, and have /terminal-setup explain how to set Option as Meta for the Alt+letter chords. Do not remap ∫/ƒ themselves (that breaks typing those characters).",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:344 (shortcuts)",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/input-word-motion-120x40"
+ ],
+ "status": "open",
+ "fix": null
+}

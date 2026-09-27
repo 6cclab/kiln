@@ -16,6 +16,6 @@ EXPECT /don't ask/
 KEY shift+tab
 SHOT after-shift-tab
 # dontAsk -> auto (not in the ring, so cycleMode goes to ring[0])
-EXPECT /auto-edit/
+EXPECT /● auto mode/
 EXPECT_NOT /don't ask/
 EXPECT_NOT /panic|goroutine/

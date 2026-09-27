@@ -1,0 +1,12 @@
+# Option 3 ("switch to auto mode") then a second, unrelated command,
+# which should also run without a prompt now that the mode switched.
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "echo first"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - tool_call: {name: bash, args: {command: "echo second, now in auto mode"}, id: tc2}
+  - on_tool_result: tc2
+    then:
+      - text: "Both ran, the second one under auto mode."
+        usage: {input: 200, output: 20}

@@ -11,6 +11,6 @@ KEY shift+tab
 SHOT after-shift-tab
 # plan -> auto, wrapping to the ring's first entry (permissionModeRing in
 # internal/tui/app.go)
-EXPECT /auto-edit/
+EXPECT /● auto mode/
 EXPECT_NOT /plan only/
 EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,28 @@
+# 529 overloaded twice, then a normal reply: the live countdown block,
+# both attempts' delays, and the reconnect note once the retry succeeds.
+@faux testdata/faux/qa/errors-529-retry.yaml
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE trigger an overloaded response
+KEY enter
+# design: Terminal.dc.html:205
+# EXPECT re-reads the live screen, not the SHOT capture, so it must run
+# immediately after the WAITFOR that observes a transient countdown state
+# — not after an intervening SHOT, which costs enough wall-clock time for
+# a 1s countdown to tick past (this is what made this line flaky before).
+WAITFOR /Stream interrupted · 529 overloaded/ 20
+EXPECT /Retrying in \ds · attempt 2 of 4 · r to retry now/
+SHOT first-countdown
+# Second failure schedules the longer (2s) countdown at attempt 3 of 4.
+WAITFOR /attempt 3 of 4/ 20
+EXPECT /Stream interrupted · 529 overloaded/
+SHOT second-countdown
+# design: Terminal.dc.html:209
+WAITFOR /Reconnected on attempt 3/ 20
+SHOT reconnected
+EXPECT /Reconnected on attempt 3/
+WAITFOR /Back online after the retry/ 20
+SHOT final-reply
+EXPECT /Back online after the retry/
+EXPECT_NOT /panic|goroutine/

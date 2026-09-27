@@ -1,0 +1,18 @@
+# A subagent whose own model turn fails outright: the dispatched
+# subagent's request (faux-2) gets a scripted error step instead of a
+# real reply, so agent.Dispatcher's Lane.Prompt returns an error and
+# fires SubagentEventError (internal/agent/dispatch.go:367-371). status
+# 400/invalid_request_error is used because it is not a retryable status,
+# so the failure is deterministic and does not depend on retry timing.
+models:
+  faux-1:
+    - tool_call:
+        name: task
+        args: {subagent_type: "general-purpose", description: "check the deploy config", prompt: "Summarize the deploy config", model: "fast"}
+        id: tc1
+    - on_tool_result: tc1
+      then:
+        - text: "That subagent failed, so I'll check the deploy config myself instead."
+          usage: {input: 300, output: 30}
+  faux-2:
+    - error: {status: 400, type: invalid_request_error, message: "boom, subagent misbehaved"}

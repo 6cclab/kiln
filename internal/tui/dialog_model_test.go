@@ -27,34 +27,42 @@ func referenceModelItems() []commands.Item {
 // TestDialogModel_MatchesReferenceStructure diffs the harness's /model
 // dialog body against dialog-model.txt rows 25-40 (title through legend),
 // width 100, with the harness's own title/description substituted per the
-// work item's brief. Row 31/32 (Fable's wrapped description) is the row
-// that pins down the wrap-width derivation documented on
-// renderModelOptionRows.
+// work item's brief and the kiln restyle's chrome substituted for that
+// reference's (QA finding 20260927T000712Z-dialog-chrome-effort-
+// indicator): no dialogIndent (dialogIndent is now "" — content aligns
+// with every other block's left edge; DialogTopRule's "model ────" label
+// rule carries the indent instead), a blank-or-"> " selectionGutter
+// instead of "❯", and the current item's checkmark from G().OK ("✓", not
+// "✔"). Row 31/32 in the original reference (Fable's wrapped
+// description) no longer wraps here: dropping the three-column indent
+// widens renderModelOptionRows' wrap column by the same three columns,
+// which is enough for "tasks" to fit on Fable's own row at width 100 —
+// still consistent with the wrap-width derivation documented on
+// renderModelOptionRows, just no longer wrapping at *this* width.
 func TestDialogModel_MatchesReferenceStructure(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
 
 	spec := commands.ModalSpec{Items: referenceModelItems(), Effort: "Medium"}
 	d := NewDialogModel(spec).(*dialogModel)
-	d.cursor = 1 // "2. Opus (1M context)" is current, matching the reference's ❯
+	d.cursor = 1 // "2. Opus (1M context)" is current, matching the reference's selected row
 
 	got := d.Render(100, 40)
 
 	want := []string{
-		"   Select model",
-		"   Switch between models. Your pick becomes the default for new sessions. For other names, specify",
-		"   with --model.",
+		"Select model",
+		"Switch between models. Your pick becomes the default for new sessions. For other names, specify with",
+		"--model.",
 		"",
-		"     1. Default (recommended)  Opus 5 with 1M context · Best for everyday, complex tasks",
-		"   \u276f 2. Opus (1M context) \u2714    Opus 5 with 1M context · Best for everyday, complex tasks",
-		"     3. Fable                  Fable 5.1 · Most capable for your hardest and longest-running",
-		"                               tasks",
-		"     4. Sonnet                 Sonnet 5 · Efficient for routine tasks",
-		"     5. Haiku                  Haiku 4.5 · Fastest for quick answers",
+		"  1. Default (recommended)  Opus 5 with 1M context · Best for everyday, complex tasks",
+		"> 2. Opus (1M context) \u2713    Opus 5 with 1M context · Best for everyday, complex tasks",
+		"  3. Fable                  Fable 5.1 · Most capable for your hardest and longest-running tasks",
+		"  4. Sonnet                 Sonnet 5 · Efficient for routine tasks",
+		"  5. Haiku                  Haiku 4.5 · Fastest for quick answers",
 		"",
-		"   \u25d0 Medium effort \u2190/\u2192 to adjust",
+		"\u25d0 Medium effort \u2190/\u2192 to adjust",
 		"",
-		"   Enter to set as default \u00b7 s to use this session only \u00b7 Esc to cancel",
+		"Enter to set as default \u00b7 s to use this session only \u00b7 Esc to cancel",
 	}
 
 	if len(got) != len(want) {
@@ -78,7 +86,7 @@ func TestDialogModel_MatchesReferenceStructure(t *testing.T) {
 // numbering, description column, legend) reflow correctly at a narrower
 // width; there is no reference capture at 60 columns for /model, so this
 // only asserts internal consistency (no row exceeds width, the current
-// row's ❯/✔ survive), not a byte-for-byte diff against Claude Code.
+// row's selectionGutter/checkmark survive), not a byte-for-byte diff against Claude Code.
 func TestDialogModel_Width60(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
@@ -96,12 +104,12 @@ func TestDialogModel_Width60(t *testing.T) {
 
 	found := false
 	for _, row := range got {
-		if strings.Contains(row, "\u276f") && strings.Contains(row, "2. Opus") && strings.Contains(row, "\u2714") {
+		if strings.Contains(row, "> ") && strings.Contains(row, "2. Opus") && strings.Contains(row, "\u2713") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected the current-model row (\u276f ... \u2714) somewhere in output, got %q", got)
+		t.Errorf("expected the current-model row (\"> \" ... \u2713) somewhere in output, got %q", got)
 	}
 }
 

@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "echo hello from bash"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "It printed the greeting."
+        usage: {input: 200, output: 20}

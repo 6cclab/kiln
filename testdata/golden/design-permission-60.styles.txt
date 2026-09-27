@@ -5,7 +5,8 @@
                                                             
  [fg=#e9a64b bg=#241f18]1[/]  [fg=#ece4d4]Yes[/]                                                     
  [fg=#7d7262]2[/]  [fg=#a39781]Yes, and don’t ask again for: ./scripts/npm test *[/]      
- [fg=#7d7262]3[/]  [fg=#a39781]Yes, and switch to auto mode · auto mode handles these p[/]
+ [fg=#7d7262]3[/]  [fg=#a39781]Yes, and switch to auto mode · auto mode handles[/]        
+[fg=#a39781]    these prompts for you[/]                                   
  [fg=#7d7262]4[/]  [fg=#a39781]No[/]                                                      
                                                             
  [fg=#a39781]↑↓ select · enter confirm · esc decline · tab to amend[/]     

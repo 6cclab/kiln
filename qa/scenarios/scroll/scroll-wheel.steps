@@ -1,0 +1,24 @@
+# Mouse wheel over a long transcript. Fullscreen routes wheel events to
+# the viewport at 3 lines/notch (internal/tui/app.go's tea.MouseWheelMsg
+# case), so SCROLL up 5 moves ~15 lines, not necessarily all the way to
+# testdata/faux/qa/scroll-long.yaml's top marker.
+@faux testdata/faux/qa/scroll-long.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE tell me the whole story
+KEY enter
+WAITFOR /SCROLL-BOTTOM-MARKER/ 20
+SHOT bottom
+EXPECT /SCROLL-BOTTOM-MARKER/
+EXPECT_NOT /SCROLL-TOP-MARKER/
+EXPECT_NOT /panic|goroutine/
+
+SCROLL up 5
+SHOT after-scroll-up
+EXPECT_NOT /panic|goroutine/
+
+SCROLL down 5
+SHOT after-scroll-down
+EXPECT /SCROLL-BOTTOM-MARKER/
+EXPECT_NOT /panic|goroutine/

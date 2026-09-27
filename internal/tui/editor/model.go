@@ -126,8 +126,15 @@ func New(styles Styles) Model {
 	ta.Placeholder = ""
 	ta.EndOfBufferCharacter = ' '
 	ta.MaxHeight = maxTextareaHeight
+	// DynamicHeight makes the textarea size itself from its own wrapped
+	// visual-row count (totalVisualLines in bubbles/v2's textarea.go),
+	// recomputed after every content-mutating call (SetValue, InsertString,
+	// InsertRune, Reset, Update) and after SetWidth — see syncHeight's doc
+	// comment for why this package no longer computes height itself.
+	ta.DynamicHeight = true
+	ta.MinHeight = 1
 	ta.SetVirtualCursor(false) // hardware cursor via Cursor(), not an inline block
-	ta.SetStyles(neutralTextareaStyles())
+	ta.SetStyles(neutralTextareaStyles(styles))
 	ta.SetHeight(1)
 	return Model{ta: ta, styles: styles, historyIdx: -1, placeholder: DefaultPlaceholder}
 }
@@ -146,9 +153,26 @@ func (m *Model) SetPlaceholder(s string) {
 // the terminal's own colours, matching Claude Code's plain input line —
 // only the rules and marker (Styles.Rule) and the placeholder
 // (Styles.Placeholder) carry colour.
-func neutralTextareaStyles() textarea.Styles {
+//
+// The hardware cursor textarea.Model.Cursor() reports is coloured from
+// Styles.Cursor.Color here too (docs/kiln-design-handoff/Terminal.dc.html:
+// 135 sets the input caret to the amber accent). Left unset, it defaults to
+// the zero CursorStyle{}'s nil Color, i.e. the terminal's own default
+// cursor colour rather than kiln's — the low-severity caret-colour defect.
+// MarkerStyle is reused rather than a separate hex so this package still
+// never imports the theme package directly: whatever amber the caller
+// (app.go) colours the prompt glyph with is what the caret matches.
+func neutralTextareaStyles(caller Styles) textarea.Styles {
 	var blank textarea.StyleState
-	return textarea.Styles{Focused: blank, Blurred: blank}
+	return textarea.Styles{
+		Focused: blank,
+		Blurred: blank,
+		Cursor: textarea.CursorStyle{
+			Color: caller.MarkerStyle.GetForeground(),
+			Shape: tea.CursorBlock,
+			Blink: true,
+		},
+	}
 }
 
 // Focus focuses the editor and returns its cursor-blink command, if any.
@@ -429,20 +453,22 @@ func (m *Model) recall(text string) {
 	m.syncHeight()
 }
 
-// syncHeight grows the textarea with its content up to maxTextareaHeight,
-// beyond which bubbles/v2's own viewport starts scrolling internally.
-func (m *Model) syncHeight() {
-	h := m.ta.LineCount()
-	if h < 1 {
-		h = 1
-	}
-	if h > maxTextareaHeight {
-		h = maxTextareaHeight
-	}
-	if h != m.ta.Height() {
-		m.ta.SetHeight(h)
-	}
-}
+// syncHeight is a no-op kept as the named call site every content-mutating
+// method below already calls: the textarea itself now owns growing to fit
+// its content, via DynamicHeight (set in New) plus MinHeight/MaxHeight.
+// Earlier, this method sized the box from m.ta.LineCount(), which counts
+// logical (newline-delimited) lines rather than wrapped visual rows, so a
+// single long line that word-wraps onto several rows always reported
+// LineCount()==1 and pinned the box at one row — only the wrapped tail
+// stayed visible, with no indication more text existed above the cursor
+// (qa/findings/20260927T001059Z-input-box-no-grow-for-wrapped-single-line.json).
+// bubbles/v2's own recalculateHeight (called at the end of every Update,
+// and by SetValue/InsertString/InsertRune/Reset/SetWidth) instead sizes from
+// totalVisualLines — the wrapped row count — clamped to [MinHeight,
+// MaxHeight], which is what this package needs and what the widget already
+// computes internally; there is no exported hook to call that logic
+// directly, so DynamicHeight is the supported way to get it.
+func (m *Model) syncHeight() {}
 
 // CursorLine returns the text of the line the cursor is on and the
 // cursor's column within it (both rune-based), for callers that need to

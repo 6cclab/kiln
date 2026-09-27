@@ -1,0 +1,24 @@
+# pgup/pgdown over a long transcript. Fullscreen wires these straight to
+# viewport.PageUp/PageDown (internal/tui/app.go), which scroll by exactly
+# one viewport height and clamp at top/bottom (charm.land/bubbles/v2's
+# viewport.SetYOffset). scroll-long.yaml's content is sized to be more
+# than one viewport height but less than two, so one pgup should clamp
+# all the way to the top marker and one pgdown back to the bottom one.
+@faux testdata/faux/qa/scroll-long.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE tell me the whole story
+KEY enter
+WAITFOR /SCROLL-BOTTOM-MARKER/ 20
+SHOT bottom
+
+KEY pgup
+SHOT after-pgup
+EXPECT /SCROLL-TOP-MARKER/
+EXPECT_NOT /panic|goroutine/
+
+KEY pgdown
+SHOT after-pgdown
+EXPECT /SCROLL-BOTTOM-MARKER/
+EXPECT_NOT /panic|goroutine/

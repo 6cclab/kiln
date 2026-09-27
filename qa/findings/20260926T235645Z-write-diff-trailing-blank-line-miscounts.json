@@ -1,0 +1,29 @@
+{
+ "id": "20260926T235645Z-write-diff-trailing-blank-line-miscounts",
+ "found_at": "2026-09-26T23:56:45Z",
+ "scenario": "permissions/write-40-lines-capped",
+ "step": "write-prompt-capped",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Write-tool diff preview counts a phantom trailing blank line, off-by-one in '… +N more lines'",
+ "observed": "40-line write's capped diff preview (lines 1-12 shown, cap=12) reads '… +29 more lines' (01-write-prompt-capped.txt), when the file only has 40 lines total (40-12=28 lines actually hidden).",
+ "expected": "Hidden-line count should equal 28 ('… +28 more lines'), matching the actual remaining line count.",
+ "design_ref": "internal/tui/permission_render.go:427-434 diffHunksFromWriteArgs: strings.Split(content, \"\\n\") on write content that ends with a trailing newline (YAML 'content: |' block scalar keeps one trailing \\n) yields a 41st empty-string element, inflating hunkLines by one; already flagged in the function's own doc comment as 'defect 2'",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/permissions-write-40-lines-capped-120x40/01-write-prompt-capped.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go"
+  ],
+  "regression_test": "TestRenderEditPermissionPrompt_CapsLongDiff",
+  "after_evidence": [
+   "qa/runs/c4/iterm-dark/permissions-write-40-lines-capped-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:52Z"
+ }
+}

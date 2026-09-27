@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "deadserver": {
+      "command": "/nonexistent/kiln-qa-mcp-does-not-exist",
+      "args": []
+    }
+  }
+}

@@ -1,0 +1,17 @@
+# A diff line wider than the terminal truncates (FitStatus), it does not
+# wrap — transcript.go's RenderDiffLines doc comment: "the design is
+# explicit that diff lines truncate, unlike every other block, because a
+# wrapped diff line loses its line-number alignment." At 120 columns a
+# 200+ char line must end well short of a second visual row for that
+# content.
+@faux testdata/faux/qa/tools-diff-long-line.yaml
+@size 120x40
+@args --permission-mode acceptEdits
+
+WAITFOR /describe a task/ 20
+TYPE add a very long line
+KEY enter
+WAITFOR /Added the long line/ 20
+SHOT long-line-diff
+EXPECT /veryLongLine/
+EXPECT_NOT /panic|goroutine/

@@ -29,6 +29,8 @@ func key(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "down":
 		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab}
 	default:
 		r := []rune(s)
 		return tea.KeyPressMsg{Code: r[0], Text: s}

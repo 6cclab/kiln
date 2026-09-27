@@ -1,0 +1,20 @@
+{
+ "id": "20260927T000543Z-snake-case-tool-names-not-title-cased",
+ "found_at": "2026-09-27T00:05:43Z",
+ "scenario": "tools/background-shell",
+ "step": "bashes-list",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "low",
+ "title": "Multi-word snake_case tool names render with a raw underscore instead of a readable title",
+ "observed": "A backgrounded bash call's body reads 'Bash_background sleep 30' (02-bashes-list.txt) and exiting plan mode reads 'Exit_plan_mode' as both the block label and the body verb (permissions/plan-approval-options run, 07-plan-approved.txt) — only the first character is capitalized, leaving the underscores in place.",
+ "expected": "A readable title like 'Bash Background' / 'Exit Plan Mode', consistent with single-word tool names ('Bash', 'Read', 'Task') which already render cleanly.",
+ "design_ref": "internal/tui/transcript.go:157-163 MapToolName calls titleCase(id), and titleCase (internal/tui/bridge.go, ~line 1310) only upper-cases the first rune of the whole string — it does not split on '_' or title-case each word",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/tools-background-shell-120x40/02-bashes-list.png"
+ ],
+ "status": "open",
+ "fix": null
+}

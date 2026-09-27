@@ -1,0 +1,22 @@
+# Three concurrent task dispatches in one assistant turn: the subagents
+# panel shows a row per dispatch (name column, running token counts, a
+# "→ "/"✓ " action row per subagentRow) while all three are still in
+# flight, per docs/kiln-design-handoff/Terminal.dc.html's agents block.
+# design: Terminal.dc.html:374 (agents block: name/task/last action/bar/tokens)
+@faux testdata/faux/qa/tools-task-concurrent.yaml
+@fixture testdata/behaviour/qa/model-roles-fast-heavy
+@args --permission-mode acceptEdits
+
+WAITFOR /describe a task/ 20
+TYPE scout the upload path with three subagents
+KEY enter
+WAITFOR /subagents running in parallel/ 20
+SHOT three-live
+EXPECT /3 subagents running in parallel/
+EXPECT /check the auth middleware/
+EXPECT /check the upload route/
+EXPECT /check the redis mock/
+WAITFOR /3 subagents finished/ 20
+SHOT three-done
+EXPECT /All three scouted/
+EXPECT_NOT /panic|goroutine/

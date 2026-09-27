@@ -144,6 +144,93 @@ func TestPromptState_BashNoDeniesOutright(t *testing.T) {
 	}
 }
 
+// TestPromptState_BashTabOpensFeedback pins finding
+// tab-to-amend-not-implemented: the Bash prompt's hint row advertises
+// "tab to amend", but Bash's option list (promptOptionsFor's
+// optAllow/optAllowAlways/optSwitchAutoAllow/optDenyOutright) has no
+// feedback option at all, so before this fix Tab fell into HandleKey's
+// digit-key default case, which does nothing for a non-digit key: the
+// prompt stayed open, unconsumed characters typed afterward leaked to the
+// editor behind it, and Enter ran whichever option was already
+// highlighted instead of declining. Tab must now open the same inline
+// feedback field the generic prompt's "3"/"n" already opens, and Enter
+// there must send a decline carrying the typed reason.
+func TestPromptState_BashTabOpensFeedback(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "bash", PrimaryArg: "echo tab-amend-probe"})
+
+	if !p.HandleKey(key("tab")) {
+		t.Fatal("tab not consumed by the bash prompt")
+	}
+	if p.feedback == nil {
+		t.Fatal("tab did not open the feedback field")
+	}
+	for _, r := range "please explain what this does first" {
+		if !p.HandleKey(key(string(r))) {
+			t.Fatalf("feedback char %q not consumed", r)
+		}
+	}
+	p.HandleKey(key("enter"))
+
+	choice := <-reply
+	if choice.Kind != ChoiceDeny {
+		t.Errorf("choice.Kind = %q, want deny", choice.Kind)
+	}
+	if choice.Feedback != "please explain what this does first" {
+		t.Errorf("choice.Feedback = %q, want the typed reason", choice.Feedback)
+	}
+}
+
+// TestPromptState_BashTabFromAnyOptionOpensFeedback checks tab is not
+// specific to the "No" row — it opens feedback capture regardless of
+// which option is currently highlighted, matching Claude Code's own
+// tab-to-amend (any option, not just the last one).
+func TestPromptState_BashTabFromAnyOptionOpensFeedback(t *testing.T) {
+	p := NewPromptState("/tmp")
+	p.AskTool(PermissionRequest{ToolName: "bash"})
+	p.HandleKey(key("down")) // selected=1 ("don't ask again")
+	p.HandleKey(key("tab"))
+	if p.feedback == nil {
+		t.Fatal("tab from a non-'No' option did not open the feedback field")
+	}
+}
+
+// TestPromptState_EditTabOpensFeedback checks the same fix for the
+// Edit/Write 3-option variant, which also advertises "tab to amend" with
+// no numbered feedback option of its own.
+func TestPromptState_EditTabOpensFeedback(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "edit", PrimaryArg: "src/math.js"})
+	p.HandleKey(key("tab"))
+	if p.feedback == nil {
+		t.Fatal("tab did not open the feedback field on the edit prompt")
+	}
+	for _, r := range "typo" {
+		p.HandleKey(key(string(r)))
+	}
+	p.HandleKey(key("enter"))
+	choice := <-reply
+	if choice.Kind != ChoiceDeny || choice.Feedback != "typo" {
+		t.Errorf("choice = %+v, want deny with feedback %q", choice, "typo")
+	}
+}
+
+// TestPromptState_TabEscCancelsBackToOptions checks Esc from the
+// tab-opened feedback field declines outright (same as Esc on the
+// options menu), not a decline "with empty feedback" distinguishable
+// from a bare Esc.
+func TestPromptState_TabEscCancelsBackToOptions(t *testing.T) {
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	p.HandleKey(key("tab"))
+	p.HandleKey(key("x"))
+	p.HandleKey(key("esc"))
+	choice := <-reply
+	if choice.Kind != ChoiceDeny || choice.Feedback != "" {
+		t.Errorf("choice = %+v, want a bare deny", choice)
+	}
+}
+
 func TestPromptState_BashArrowNavigation(t *testing.T) {
 	p := NewPromptState("/tmp")
 	reply := p.AskTool(PermissionRequest{ToolName: "bash"})

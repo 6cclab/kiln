@@ -1,0 +1,18 @@
+# Several reads grouped in one turn (docs/claude-code-reference.md §3:
+# read-only calls group into a collapsed row while running). This harness
+# has no built-in glob/grep tools (internal/tools/builtins.go registers
+# only bash, read, edit, write), so the group is three `read` calls rather
+# than read/glob/grep.
+@faux testdata/faux/qa/tools-read-group.yaml
+@fixture testdata/behaviour/design
+
+WAITFOR /describe a task/ 20
+TYPE map the upload path
+KEY enter
+WAITFOR /Read/ 20
+SHOT reads-committed
+EXPECT /auth\.ts/
+EXPECT /upload\.ts/
+EXPECT /redisMock\.ts/
+EXPECT /All three read/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,20 @@
+{
+ "id": "20260926T234001Z-palette-copy-drift",
+ "found_at": "2026-09-26T23:40:01Z",
+ "scenario": "commands/help,commands/cost,dialogs/agents-dialog,dialogs/model-picker",
+ "step": "palette",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "low",
+ "title": "Slash-palette descriptions differ from the design's command copy",
+ "observed": "Registry descriptions: /help 'Show available commands', /clear 'Clear conversation history', /compact 'Summarize and compact the current context', /context 'Show context usage against the active tier', /cost 'Show token usage and cost for this session', /model 'Show or change the active model', /agents 'Show the subagents available for dispatch' (internal/commands/builtins.go:351-583).",
+ "expected": "Design CMDS: /context 'Show context window usage', /cost 'Tokens and spend this session', /compact 'Summarize history to free context', /clear 'Start a fresh session', /model 'Switch model', /agents 'Manage subagents', /help 'Shortcuts and commands'.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:218-220",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/commands-help-120x40"
+ ],
+ "status": "open",
+ "fix": null
+}

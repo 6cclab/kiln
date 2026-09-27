@@ -162,6 +162,23 @@ type Model struct {
 	streamText string
 	dialog     Dialog
 	thinking   *ThinkingView
+	// queued holds the raw text of every follow-up submitted via Lane.Steer
+	// while a turn is busy, in submission order, that the lane has not yet
+	// drained onto the branch (harness/turn.go's drainInbox). Rendered in
+	// the live region (liveTail) as a dim "queued" row rather than
+	// committed to the transcript — committing it early is defect
+	// 20260926T232249Z-queued-block-order: it lands above the reply to the
+	// turn it interrupted, and its "queued" meta never clears. Once the
+	// lane actually drains the inbox, MsgQueue{Len:0} (EventQueueUpdate)
+	// commits every pending item here as an ordinary `you` block, in
+	// order, and clears this slice — which lands it after the reply it
+	// followed, since the drain always happens after that reply's own
+	// commit (turn.go's drive loop: text commits via EventMessageEnd/
+	// msgCommitMarkdown, then EventTurnEnd, then drainInbox). An aborted
+	// turn (Esc) never drains — those items stay here, still visible in
+	// the live region, until a later Prompt call's own drain (Lane.Prompt
+	// drains the inbox before its own entry is parented) delivers them.
+	queued []string
 	// popup is the `/` or `@` autocomplete list, non-nil while one of the
 	// two triggers matches the editor's current line/cursor. Rebuilt from
 	// scratch on every keystroke by refreshPopup — see autocomplete.go.
@@ -406,10 +423,9 @@ type MsgTrustAnswered struct{ Trusted bool }
 // the goroutine app.go's handleSubmit spawns, not by the bridge, since
 // nothing about it is harness-event-sourced.
 type msgTurnResult struct {
-	result    harness.RunResult
-	err       error
-	toolCalls int
-	seconds   int
+	result  harness.RunResult
+	err     error
+	seconds int
 }
 
 // --- Update ---------------------------------------------------------------
@@ -548,6 +564,19 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgQueue:
 		m.spinner.SetQueueLen(msg.Len)
+		// Len 0 is only ever sent by the lane's own drain (drainInbox's
+		// EventQueueUpdate, turn.go) — Steer's own EventQueueUpdate always
+		// carries the inbox's new, non-zero length. A drain means every
+		// pending item just got re-parented onto the branch, in the same
+		// order they were queued, so commit them here, in that order, as
+		// plain `you` blocks (no "queued" meta — it already delivered).
+		if msg.Len == 0 && len(m.queued) > 0 {
+			width := m.contentWidth()
+			for _, text := range m.queued {
+				m.commit(RenderUserMessage(text, width))
+			}
+			m.queued = nil
+		}
 		return m, nil
 
 	case MsgRetryStart:
@@ -597,8 +626,26 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case msgDialogResult:
 		if applier, ok := m.dialog.(interface{ Apply(msgDialogResult) }); ok {
 			applier.Apply(msg)
+			return m, nil
 		}
-		return m, nil
+		// The dialog already closed (Rewind closes on Enter): its outcome
+		// is a note in the transcript, after the redrawn history when the
+		// dialog changed what that history is.
+		note := func() tea.Msg {
+			if m.cfg.Bridge == nil {
+				return nil
+			}
+			if msg.err != nil {
+				m.cfg.Bridge.Commit(RenderError(msg.err.Error()))
+			} else if msg.msg != "" {
+				m.cfg.Bridge.CommitNote(msg.msg)
+			}
+			return nil
+		}
+		if msg.replay {
+			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} }, note)
+		}
+		return m, note
 
 	case msgReplayTranscript:
 		m.replayTranscript()
@@ -704,7 +751,11 @@ func (m Model) handleThinking(msg MsgThinking) Model {
 		if m.thinking != nil && strings.TrimSpace(m.thinking.Text) != "" {
 			view := *m.thinking
 			view.Active = false
-			lines := append([]string{""}, RenderThinking(view)...)
+			if m.cfg.Bridge != nil {
+				view.Expanded = m.cfg.Bridge.Verbose()
+			}
+			width := m.contentWidth()
+			lines := append([]string{""}, FitLines(RenderThinking(view), width, resultIndent)...)
 			m.commit(lines)
 		}
 		m.thinking = nil
@@ -759,17 +810,14 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 		m.commit(RenderError(msg.result.Status))
 	}
 
-	toolCalls := msg.toolCalls
-	if m.cfg.Bridge != nil {
-		toolCalls = m.cfg.Bridge.ToolCallsInTurn()
-	}
-	if m.cfg.Bridge != nil && toolCalls > 0 && m.cfg.Bridge.Verbose() {
-		done := time.Now()
-		if t, ok := clockOverride(); ok {
-			done = t
-		}
-		m.commit([]string{RenderVerboseModelRow(done, m.modelID(), m.contentWidth()), ""})
-	}
+	// The verbose "HH:MM AM model" row that used to commit here (before
+	// the plan/subagents freeze below) is gone: the kiln design's "text"
+	// block has no meta column at all (docs/kiln-design-handoff/README.md
+	// "Block anatomy" table — "kiln (dim) | – |"), so there is nowhere on
+	// a label rule for it to sit, and as its own row it was defect
+	// 20260926T232657Z-verbose-toggle-inconsistent's stray "7:00 PM
+	// faux/faux-1" line — dropped per that defect's own "or is dropped if
+	// the design has no place for it".
 	width := m.contentWidth()
 	// The live "plan" checklist and subagents panel both commit their
 	// final state once, as ordinary transcript blocks, instead of just
@@ -1420,15 +1468,18 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	// A follow-up typed while a turn is running (and no prompt is waiting
 	// on an answer — that keystroke belongs to the prompt, never to a new
 	// message) queues instead of starting a second turn
-	// (docs/kiln-design-handoff/README.md's "Queued follow-up"): the `you`
-	// block commits right away with a "queued" meta, and Lane.Steer queues
-	// the raw text for the harness's own next-turn injection
-	// (harness/lane.go's pi.lane.state.inbox) rather than going through
-	// this function's own command/mention/hook pipeline, which only
-	// applies to a message starting a turn right now.
+	// (docs/kiln-design-handoff/README.md's "Queued follow-up"): it shows
+	// in the live region with a "queued" meta (liveTail, RenderQueuedFollowUp)
+	// rather than committing to the transcript right away — committing it
+	// immediately read out of order, above the reply to the turn it
+	// interrupted (defect 20260926T232249Z-queued-block-order). Lane.Steer
+	// still queues the raw text for the harness's own next-turn injection
+	// (harness/lane.go's pi.lane.state.inbox); MsgQueue{Len:0} (the lane's
+	// own drain, EventQueueUpdate) is what actually commits it, as an
+	// ordinary `you` block with no meta, once the lane has re-parented it
+	// onto the branch.
 	if m.busy && !m.prompt.Active() {
-		width := m.contentWidth()
-		m.commit(RenderUserMessageMeta(line, "queued", width))
+		m.queued = append(m.queued, line)
 		if m.cfg.Lane != nil {
 			if err := m.cfg.Lane.Steer(line); err != nil {
 				m.commit(RenderError(err.Error()))
@@ -1781,6 +1832,14 @@ func (m Model) liveTail(width int) []string {
 		}
 	}
 
+	// Follow-ups queued via Lane.Steer while this turn (or an aborted one
+	// whose queued items the lane has not drained yet, see m.queued's doc
+	// comment) is busy: shown here, below the running turn, until the
+	// lane's own drain commits them for real (MsgQueue{Len:0} in Update).
+	for _, text := range m.queued {
+		lines = append(lines, RenderQueuedFollowUp(text, width)...)
+	}
+
 	if m.dialog != nil || (m.cfg.Bridge != nil && m.cfg.Bridge.Verbose()) {
 		return lines
 	}
@@ -1817,11 +1876,8 @@ func (m Model) liveTail(width int) []string {
 		// row below it all keep rendering too (docs/kiln-design-
 		// handoff/README.md scene 06): "approval needed" block, then
 		// "◐ Waiting for approval…", then the input with "press 1, 2
-		// or 3", then the status line. Plan approval keeps its own
-		// full `▔` rule and blank row above the block.
-		if m.prompt.plan != nil {
-			lines = append(lines, Rule(strings.Repeat("▔", width)), "")
-		}
+		// or 3", then the status line. Plan approval uses the same
+		// block anatomy, so it gets no chrome of its own here.
 		lines = append(lines, m.prompt.Render(width)...)
 		lines = append(lines, "")
 	}
@@ -1926,36 +1982,11 @@ func (m Model) dialogRows(width, linesAbove int) []string {
 	if room < 4 {
 		room = 4
 	}
-	rows := []string{m.dialogRule(width)}
+	rows := []string{DialogTopRule(m.dialog, width)}
 	for _, r := range m.dialog.Render(width, room) {
 		rows = append(rows, FitStatus(r, width))
 	}
 	return rows
-}
-
-// dialogRule is the `▔` rule above a dialog with the effort indicator set
-// in near the right edge: `▔…▔ ◐ medium · /effort ▔` (dialog-model.txt row 24).
-func (m Model) dialogRule(width int) string {
-	effort := m.cfg.Effort
-	if effort == "" {
-		effort = "medium"
-	}
-	label := " " + effortGlyph(effort) + " " + effort + " · /effort "
-	lead := width - VisibleWidth(label) - 1
-	if lead < 0 {
-		return FitStatus(Muted(strings.TrimSpace(label)), width)
-	}
-	// Kiln restyle: the ▔ rule uses the kiln hairline colour rather than
-	// the Claude Code accent.
-	return Rule(strings.Repeat("▔", lead)) + Muted(label) + Rule("▔")
-}
-
-// modelID is the id the verbose model row shows.
-func (m Model) modelID() string {
-	if m.cfg.ModelID != "" {
-		return m.cfg.ModelID
-	}
-	return m.footer.State().ModelLabel
 }
 
 // toggleVerbose flips the bridge's verbose flag on Ctrl+O, clears the
@@ -2009,14 +2040,13 @@ func (m Model) openRewind() Model {
 		return m
 	}
 	lane := m.cfg.Lane
-	bridge := m.cfg.Bridge
 	m.dialog = NewRewindDialog(RewindEntriesFromSession(entries), func(entryID string) error {
 		if err := lane.NavigateTree(context.Background(), parentOf(entries, entryID)); err != nil {
 			return err
 		}
-		if bridge != nil {
-			bridge.Send(MsgClearAndReplay{})
-		}
+		// The transcript redraw and the "Rewound to before" note follow
+		// from the dialog's result (msgDialogResult.replay). A Send from
+		// here would deadlock: this runs inside Update.
 		return nil
 	})
 	return m
@@ -2112,24 +2142,6 @@ func (m Model) renderStatusRow(width int) string {
 		return left + strings.Repeat(" ", pad) + right
 	}
 	return m.footer.RenderLine(width)
-}
-
-// effortGlyph maps a reasoning-effort label to its indicator glyph
-// (docs/claude-code-reference.md §1: "Glyph by effort: `◔ low`, `◐
-// medium`, `◕ high`, `● xhigh/max`"). Unrecognized labels fall back to the
-// medium glyph rather than an empty one, since the row must always show
-// something.
-func effortGlyph(effort string) string {
-	switch effort {
-	case "low":
-		return "◔"
-	case "high":
-		return "◕"
-	case "xhigh", "max":
-		return "●"
-	default:
-		return "◐"
-	}
 }
 
 // rightAlign pads s on the left so it ends at the row's last column,

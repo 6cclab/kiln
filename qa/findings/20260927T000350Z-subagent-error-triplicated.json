@@ -1,0 +1,20 @@
+{
+ "id": "20260927T000350Z-subagent-error-triplicated",
+ "found_at": "2026-09-27T00:03:50Z",
+ "scenario": "tools/subagent-error",
+ "step": "subagent-error-row",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "A failed subagent's error message is shown three times: a bare top-level 'error' block, the subagents panel row, and the task result",
+ "observed": "Dispatching a subagent whose model turn errors ('boom, subagent misbehaved') renders the identical message three times in the same screen (01-subagent-error-row.txt/png): a standalone 'error / general-purpose: provider request failed: status=400 body={...' block right under the user's message (with no visible tie to the later subagents panel), then again inside the subagents panel's row ('✕ provider request failed: status=400 body={...'), then a third time inside the 'task' tool call's own result text ('→ Subagent \"general-purpose\" failed: provider request failed: status=400 body={...').",
+ "expected": "One place should report a given subagent failure — the subagents panel row and/or the task tool result — not a third, contextless top-level error block repeating the same text.",
+ "design_ref": "internal/harness/turn.go:421-424 finishFailed emits EventFault with Lane=the subagent's own lane name, and internal/tui/bridge.go:941-950 commits ANY EventFault as a top-level RenderError block regardless of which lane raised it — it doesn't suppress a fault whose lane is a subagent already reporting through SubagentEventError (agent/dispatch.go:369,383) and the parent's task-result text",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/tools-subagent-error-120x40/01-subagent-error-row.png"
+ ],
+ "status": "open",
+ "fix": null
+}

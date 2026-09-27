@@ -1,0 +1,14 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /model
+KEY enter
+WAITFOR /Select model/ 20
+SHOT model-dialog
+EXPECT /Select model/
+EXPECT /faux\/faux-1/
+KEY esc
+WAITFOR /Kept model as/ 20
+SHOT model-kept
+EXPECT /Kept model as/
+EXPECT_NOT /panic|goroutine/

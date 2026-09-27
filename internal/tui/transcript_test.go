@@ -220,19 +220,46 @@ func stripANSI(s string) string {
 	return out.String()
 }
 
+// TestRenderThinkingCollapsedVsExpanded checks the fix for defect
+// 20260926T232657Z-thinking-invisible: a committed thinking block is a dim
+// "thinking" label rule (docs/kiln-design-handoff/README.md "Block
+// anatomy"), never nothing — the old version returned no lines at all
+// unless Expanded was already true, and nothing ever set Expanded true on
+// a committed block, so a thinking block never appeared in any state. ∴ is
+// gone from the label rule (not in the design's glyph set); collapsed
+// shows the rule plus a one-line summary and a "ctrl+o to expand" hint,
+// expanded shows the rule plus the full text.
 func TestRenderThinkingCollapsedVsExpanded(t *testing.T) {
-	// docs/claude-code-reference.md §7: "collapsed mode shows nothing but
-	// the spinner suffix" — RenderThinking renders nothing at all when
-	// not Expanded; the spinner's own "thinking with <effort> effort"
-	// suffix (RenderSpinner) carries that state instead.
 	collapsed := RenderThinking(ThinkingView{Text: "reasoning here", Active: false, Expanded: false})
-	if len(collapsed) != 0 {
-		t.Fatalf("collapsed thinking should render nothing, got %d lines", len(collapsed))
+	if len(collapsed) != 2 {
+		t.Fatalf("collapsed thinking should be label rule + one-line summary, got %d lines: %#v", len(collapsed), collapsed)
 	}
+	if !strings.HasPrefix(stripANSI(collapsed[0]), "thinking ") {
+		t.Errorf("collapsed thinking's first line = %q, want a \"thinking ────\" label rule (no ∴ glyph)", stripANSI(collapsed[0]))
+	}
+	if !strings.Contains(stripANSI(collapsed[1]), "reasoning here") {
+		t.Errorf("collapsed thinking's summary line = %q, want it to contain the reasoning text", stripANSI(collapsed[1]))
+	}
+	if strings.Contains(strings.Join(collapsed, "\n"), "∴") {
+		t.Error("collapsed thinking must not use the ∴ glyph — not in the design's glyph set")
+	}
+
+	multiline := RenderThinking(ThinkingView{Text: "first line\nsecond line\nthird line", Expanded: false})
+	if len(multiline) != 3 {
+		t.Fatalf("collapsed multi-line thinking should be rule + summary + hint, got %d lines: %#v", len(multiline), multiline)
+	}
+	if !strings.Contains(stripANSI(multiline[2]), "ctrl+o to expand") {
+		t.Errorf("collapsed multi-line thinking's last line = %q, want a \"ctrl+o to expand\" hint", stripANSI(multiline[2]))
+	}
+
 	expanded := RenderThinking(ThinkingView{Text: "reasoning here", Active: false, Expanded: true})
 	if len(expanded) != 2 {
-		t.Fatalf("expanded thinking should be header + body, got %d", len(expanded))
+		t.Fatalf("expanded thinking should be rule + body, got %d", len(expanded))
 	}
+	if !strings.Contains(stripANSI(expanded[1]), "reasoning here") {
+		t.Errorf("expanded thinking's body = %q, want the full reasoning text", stripANSI(expanded[1]))
+	}
+
 	empty := RenderThinking(ThinkingView{Text: "   "})
 	if len(empty) != 0 {
 		t.Error("blank thinking text should render nothing")
@@ -253,5 +280,30 @@ func TestPrimaryArgPicksIdentifyingKey(t *testing.T) {
 		if got := PrimaryArg(c.args); got != c.want {
 			t.Errorf("PrimaryArg(%v) = %q, want %q", c.args, got, c.want)
 		}
+	}
+}
+
+// TestRenderToolCallFailedHintBeforeKeptTail: a clipped failed result keeps
+// its last line (the exit status); the "… +N lines" hint stands where the
+// hidden lines were, above it, not after it.
+func TestRenderToolCallFailedHintBeforeKeptTail(t *testing.T) {
+	lines := RenderToolCall(ToolCallView{
+		Name: "Bash", PrimaryArg: "npm test", Status: CallError,
+		ResultLines:   []string{"FAIL upload", "TypeError: boom", "Command exited with code 1"},
+		TotalLines:    5,
+		HasTotalLines: true,
+	})
+	var hint, tail = -1, -1
+	for i, l := range lines {
+		plain := stripANSI(l)
+		if strings.Contains(plain, "… +2 lines") {
+			hint = i
+		}
+		if strings.Contains(plain, "Command exited with code 1") {
+			tail = i
+		}
+	}
+	if hint < 0 || tail < 0 || hint != tail-1 {
+		t.Errorf("hint at %d, exit line at %d; want the hint directly above the exit line:\n%s", hint, tail, strings.Join(lines, "\n"))
 	}
 }

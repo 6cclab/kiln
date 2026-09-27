@@ -1,0 +1,14 @@
+# A non-zero-exit bash call: red block (transcript.go's RenderToolCall,
+# KilnRed once the call errored) whose exit status stays visible without
+# expanding — the status line is part of what a failed result must show.
+@faux testdata/faux/qa/tools-bash-fail.yaml
+@args --permission-mode dontAsk
+
+WAITFOR /describe a task/ 20
+TYPE break something
+KEY enter
+WAITFOR /That command failed/ 20
+SHOT bash-error
+EXPECT /broke/
+EXPECT /Command exited with code 3/
+EXPECT_NOT /panic|goroutine/

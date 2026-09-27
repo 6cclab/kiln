@@ -32,25 +32,24 @@ import (
 // an optional per-line indent token, so "dim border" becomes a dim indent
 // token rather than a drawn line).
 
-// ansiColor mirrors the ANSI indices theme.go's style helpers use, as the
-// numeric strings lipgloss.Color (and therefore glamour's StylePrimitive.
-// Color) accepts.
-const (
-	// kiln palette (truecolor). Retargeted from ANSI indices so assistant
-	// markdown reads in the kiln design language.
-	colorRed     = hexRed   // errors, deletions
-	colorGreen   = hexGreen // list bullets, insertions, names
-	colorYellow  = hexAmber // inline code, literals/strings/numbers
-	colorCyan    = hexBlue  // links, keywords
-	colorGray    = hexDim   // comments, quotes, dim chrome
-	colorDefault = ""
-)
+// The colour entries markdownTheme maps onto (colorRed, colorGreen, ...)
+// used to be package-level consts pointing at the design's fixed dark-theme
+// hexes (hexRed, hexGreen, ...) baked in at compile time — exactly the bug
+// this file was flagged for: SetTerminalBackground recomputes the text
+// tokens' *style()* helpers for a light background, but a const string
+// never sees that. buildStyle now reads theme.CurrentTextHex() each call
+// instead, so assistant markdown follows the same background-aware tokens
+// as the rest of the transcript.
 
 func strPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool    { return &b }
 
 // buildStyle maps markdownTheme onto glamour's ansi.StyleConfig.
 func buildStyle(plain bool) glansi.StyleConfig {
+	tx := CurrentTextHex()
+	colorGreen := tx.Green  // list bullets, insertions, names
+	colorYellow := tx.Amber // inline code, literals/strings/numbers
+	colorCyan := tx.Blue    // links, keywords
 	if plain {
 		// Flat text, no colour, no decoration — mirrors SetPlainMode's
 		// screen-reader contract for the rest of the package.
@@ -120,7 +119,7 @@ func buildStyle(plain bool) glansi.StyleConfig {
 			StyleBlock: glansi.StyleBlock{
 				Indent: uintPtr(2),
 			},
-			Chroma: chromaFromTheme(),
+			Chroma: chromaFromTheme(tx),
 		},
 		// quote: (t) => dim(t), quoteBorder: (t) => gray(t) — glamour's
 		// nearest equivalent to a drawn quote border is the block's
@@ -171,33 +170,33 @@ func chromaColor(c string) *string {
 	return &hex
 }
 
-func chromaFromTheme() *glansi.Chroma {
-	dim := func() glansi.StylePrimitive { return glansi.StylePrimitive{Color: chromaColor(colorGray)} }
+func chromaFromTheme(tx TextHex) *glansi.Chroma {
+	dim := func() glansi.StylePrimitive { return glansi.StylePrimitive{Color: chromaColor(tx.Dim)} }
 	return &glansi.Chroma{
 		Text:                glansi.StylePrimitive{},
-		Error:               glansi.StylePrimitive{Color: chromaColor(colorRed)},
+		Error:               glansi.StylePrimitive{Color: chromaColor(tx.Red)},
 		Comment:             dim(),
 		CommentPreproc:      dim(),
-		Keyword:             glansi.StylePrimitive{Color: chromaColor(colorCyan)},
-		KeywordReserved:     glansi.StylePrimitive{Color: chromaColor(colorCyan)},
-		KeywordNamespace:    glansi.StylePrimitive{Color: chromaColor(colorCyan)},
-		KeywordType:         glansi.StylePrimitive{Color: chromaColor(colorCyan)},
+		Keyword:             glansi.StylePrimitive{Color: chromaColor(tx.Blue)},
+		KeywordReserved:     glansi.StylePrimitive{Color: chromaColor(tx.Blue)},
+		KeywordNamespace:    glansi.StylePrimitive{Color: chromaColor(tx.Blue)},
+		KeywordType:         glansi.StylePrimitive{Color: chromaColor(tx.Blue)},
 		Operator:            glansi.StylePrimitive{},
 		Punctuation:         glansi.StylePrimitive{},
 		Name:                glansi.StylePrimitive{},
-		NameBuiltin:         glansi.StylePrimitive{Color: chromaColor(colorGreen)},
-		NameTag:             glansi.StylePrimitive{Color: chromaColor(colorGreen)},
-		NameAttribute:       glansi.StylePrimitive{Color: chromaColor(colorGreen)},
-		NameClass:           glansi.StylePrimitive{Color: chromaColor(colorGreen), Bold: boolPtr(true)},
-		NameFunction:        glansi.StylePrimitive{Color: chromaColor(colorGreen)},
-		Literal:             glansi.StylePrimitive{Color: chromaColor(colorYellow)},
-		LiteralNumber:       glansi.StylePrimitive{Color: chromaColor(colorYellow)},
-		LiteralDate:         glansi.StylePrimitive{Color: chromaColor(colorYellow)},
-		LiteralString:       glansi.StylePrimitive{Color: chromaColor(colorYellow)},
-		LiteralStringEscape: glansi.StylePrimitive{Color: chromaColor(colorYellow)},
-		GenericDeleted:      glansi.StylePrimitive{Color: chromaColor(colorRed)},
+		NameBuiltin:         glansi.StylePrimitive{Color: chromaColor(tx.Green)},
+		NameTag:             glansi.StylePrimitive{Color: chromaColor(tx.Green)},
+		NameAttribute:       glansi.StylePrimitive{Color: chromaColor(tx.Green)},
+		NameClass:           glansi.StylePrimitive{Color: chromaColor(tx.Green), Bold: boolPtr(true)},
+		NameFunction:        glansi.StylePrimitive{Color: chromaColor(tx.Green)},
+		Literal:             glansi.StylePrimitive{Color: chromaColor(tx.Amber)},
+		LiteralNumber:       glansi.StylePrimitive{Color: chromaColor(tx.Amber)},
+		LiteralDate:         glansi.StylePrimitive{Color: chromaColor(tx.Amber)},
+		LiteralString:       glansi.StylePrimitive{Color: chromaColor(tx.Amber)},
+		LiteralStringEscape: glansi.StylePrimitive{Color: chromaColor(tx.Amber)},
+		GenericDeleted:      glansi.StylePrimitive{Color: chromaColor(tx.Red)},
 		GenericEmph:         glansi.StylePrimitive{Italic: boolPtr(true)},
-		GenericInserted:     glansi.StylePrimitive{Color: chromaColor(colorGreen)},
+		GenericInserted:     glansi.StylePrimitive{Color: chromaColor(tx.Green)},
 		GenericStrong:       glansi.StylePrimitive{Bold: boolPtr(true)},
 		GenericSubheading:   dim(),
 	}
@@ -206,12 +205,23 @@ func chromaFromTheme() *glansi.Chroma {
 // MarkdownRenderer renders assistant prose to lines fitted to a fixed
 // width, caching by (text, width) since the same finished block is
 // re-rendered on every repaint until the terminal resizes.
+//
+// The cache also has to account for a third axis: buildStyle's colours
+// (colorRed etc., ultimately theme.go's KilnAmber/KilnGreen/... tokens) can
+// change out from under it when SetTerminalBackground runs — a light-bg
+// terminal recolouring every text token after some assistant prose has
+// already been rendered and cached with the pre-detection dark-design
+// hexes baked into its ANSI escapes. genAtCache pins each cached entry to
+// theme.ThemeGeneration() at render time; a generation mismatch is treated
+// as a cache miss so a background-change re-renders every previously
+// cached block instead of serving stale colours forever.
 type MarkdownRenderer struct {
 	width int
 	plain bool
 
-	mu    sync.Mutex
-	cache map[string][]string
+	mu       sync.Mutex
+	cache    map[string][]string
+	cacheGen int
 }
 
 // NewMarkdownRenderer builds a renderer for a fixed width. plain mirrors
@@ -222,7 +232,17 @@ func NewMarkdownRenderer(width int, plain bool) *MarkdownRenderer {
 
 // Render renders text to lines already wrapped to the renderer's width.
 func (m *MarkdownRenderer) Render(text string) []string {
+	gen := ThemeGeneration()
+
 	m.mu.Lock()
+	if m.cacheGen != gen {
+		// The active token set changed since anything currently cached was
+		// rendered (or this is the first render) — every cached entry may
+		// have the wrong colours baked in, so drop them all rather than
+		// track staleness per entry.
+		m.cache = make(map[string][]string)
+		m.cacheGen = gen
+	}
 	if lines, ok := m.cache[text]; ok {
 		m.mu.Unlock()
 		return lines
@@ -232,7 +252,9 @@ func (m *MarkdownRenderer) Render(text string) []string {
 	lines := m.render(text)
 
 	m.mu.Lock()
-	m.cache[text] = lines
+	if m.cacheGen == gen {
+		m.cache[text] = lines
+	}
 	m.mu.Unlock()
 	return lines
 }

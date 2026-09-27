@@ -1,0 +1,27 @@
+# History recall with up/down after two submitted prompts
+# (KeyHistoryPrevious/KeyHistoryNext in internal/tui/editor). Two real
+# submissions, so the faux script needs two turns.
+@faux testdata/faux/qa/input-two-turns.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE first prompt
+KEY enter
+WAITFOR /ok, first\./ 20
+SHOT after-first-submit
+TYPE second prompt
+KEY enter
+WAITFOR /ok, second\./ 20
+SHOT after-second-submit
+KEY up
+SHOT history-up-once
+EXPECT /second prompt/
+KEY up
+SHOT history-up-twice
+EXPECT /first prompt/
+KEY down
+SHOT history-down-once
+EXPECT /second prompt/
+KEY down
+SHOT history-down-to-empty
+EXPECT_NOT /panic|goroutine/

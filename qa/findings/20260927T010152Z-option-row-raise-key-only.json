@@ -1,0 +1,21 @@
+{
+ "id": "20260927T010152Z-option-row-raise-key-only",
+ "found_at": "2026-09-27T01:01:52Z",
+ "scenario": "permissions/plan-approval-options",
+ "step": "02-plan-option2-highlighted",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "low",
+ "title": "Selected permission/plan option raises only its key digit, not the whole row",
+ "observed": "Option 2 selected: the raised background sits behind the '2' only; the label 'Yes, manually approve edits' is brighter text on the page background.",
+ "expected": "Design perm option row: the selected row has the raise background across the row (padding 2px 8px), amber key, ink label.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:80; qa/reference/permission.png",
+ "evidence": [
+  "qa/runs/c5/iterm-dark/permissions-plan-approval-options-120x40/02-plan-option2-highlighted.png",
+  "qa/reference/permission.png"
+ ],
+ "status": "open",
+ "fix": null
+}

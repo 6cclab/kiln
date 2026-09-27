@@ -184,6 +184,26 @@ func (p *PromptState) finishPlan(reply PlanReply) {
 // Precedence and behaviour match permission-prompt.ts exactly:
 //   - 1/y/enter allow; 2/a allow-always; 3/n start feedback capture; esc
 //     deny outright.
+//   - tab opens the same inline feedback field as "3/n" on a prompt
+//     variant that has no numbered feedback option of its own (Bash's
+//     four options are allow/allow-always/switch-then-allow/deny-
+//     outright; Edit/Write's three are allow/switch-then-allow/deny-
+//     outright — neither lists a "tell kiln what to do instead" option,
+//     yet both render the hint row "... · tab to amend"
+//     (permission_render.go's RenderBashPermissionPrompt/
+//     RenderEditPermissionPrompt). Before this, tab fell through to the
+//     digit-key default case, which does nothing for a non-digit key —
+//     the prompt silently ate the keystroke, subsequent typed characters
+//     leaked into the editor behind it, and Enter ran whatever option was
+//     already highlighted (finding tab-to-amend-not-implemented). Tab
+//     works from any selected option, not just "No": it is a shortcut to
+//     "decline with a reason" independent of the highlighted row, mirroring
+//     Claude Code's own tab-to-amend and this same package's shift+tab on
+//     the plan-approval prompt (handlePlanKey's "shift+tab" case below).
+//     It is a no-op for the generic prompt (RenderPermissionPrompt),
+//     which already has its own numbered feedback option ("3/n"); tab
+//     there takes the same feedback-capture path via optDenyFeedback so
+//     the two entry points converge on identical behaviour.
 //   - Plan: 1/y/enter approve into acceptEdits; 2 approve into manual;
 //     3/n/esc start feedback capture (a plan's "no" always asks why,
 //     unlike a tool prompt's Esc, matching handlePlanKey).
@@ -220,6 +240,10 @@ func (p *PromptState) HandleKey(msg tea.KeyPressMsg) bool {
 		return true
 	case "enter":
 		p.chooseOption(opts[p.pending.selected])
+		return true
+	case "tab":
+		f := ""
+		p.feedback = &f
 		return true
 	case "esc":
 		p.finishTool(PromptChoice{Kind: ChoiceDeny})

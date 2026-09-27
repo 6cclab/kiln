@@ -1,0 +1,10 @@
+model: faux-1
+steps:
+  # end_turn: true splits the two typed turns into two separate replies;
+  # see dialogs-agents.yaml for why this matters (without it "second task"
+  # silently hits "faux: script exhausted").
+  - text: "Sure, first task handled."
+    usage: {input: 20, output: 10}
+    end_turn: true
+  - text: "Second task handled too."
+    usage: {input: 25, output: 12}

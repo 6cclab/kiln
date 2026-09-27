@@ -1,0 +1,11 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /status
+KEY enter
+WAITFOR /model\s+faux\/faux-1/ 20
+SHOT status
+EXPECT /model\s+faux\/faux-1/
+EXPECT /tier\s+/
+EXPECT /sessions\s+/
+EXPECT_NOT /panic|goroutine/

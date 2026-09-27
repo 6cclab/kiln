@@ -1,0 +1,18 @@
+# Esc while a reply is busy in flight (held back by delay, before any
+# text has streamed in yet): the router's Interrupt action aborts the
+# turn and commits the "Interrupted" note.
+@faux testdata/faux/qa/errors-esc-stream.yaml
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE tell me something slowly
+KEY enter
+WAIT 1
+SHOT mid-flight-before-esc
+KEY esc
+# design: Terminal.dc.html:312
+WAITFOR /Interrupted\. Tell kiln what to do instead\./ 20
+SHOT interrupted
+EXPECT /■ Interrupted\. Tell kiln what to do instead\./
+EXPECT_NOT /This reply is held back long enough/
+EXPECT_NOT /panic|goroutine/

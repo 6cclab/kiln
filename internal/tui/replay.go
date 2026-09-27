@@ -1,10 +1,8 @@
 package tui
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/session"
@@ -43,10 +41,6 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 	var out []string
 	calls := map[string]msg.ToolCall{}
 	renderer := NewMarkdownRenderer(width, IsPlain())
-	// toolsSinceText is set once a tool result rendered since the last
-	// assistant text; verbose mode then places the right-aligned
-	// "HH:MM AM model" row before that text (verbose-ctrl-o.txt row 22).
-	toolsSinceText := false
 
 	bySynthetic := map[string][]SyntheticCommit{}
 	for _, sc := range synthetics {
@@ -58,15 +52,6 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 		}
 	}
 
-	var groupKind GroupKind
-	groupN := 0
-	flush := func() {
-		if groupN > 0 {
-			out = append(out, RenderToolGroupDone(groupKind, groupN), "")
-		}
-		groupN = 0
-	}
-
 	emitSynthetics("")
 	for _, e := range entries {
 		if e.Type != session.EntryMessage || e.Message == nil {
@@ -74,22 +59,37 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 		}
 		switch m := e.Message.(type) {
 		case msg.UserMessage:
-			flush()
 			if text := textOf(m.Content); strings.TrimSpace(text) != "" {
 				out = append(out, RenderUserMessage(text, width)...)
 			}
 		case msg.AssistantMessage:
 			for _, c := range m.Content {
-				if tc, ok := c.(msg.ToolCall); ok {
-					calls[tc.ID] = tc
+				switch cv := c.(type) {
+				case msg.ToolCall:
+					calls[cv.ID] = cv
+				case msg.ThinkingContent:
+					// A committed thinking block replays exactly like the
+					// live one (app.go's handleThinking), just sourced from
+					// the session log's AssistantMessage content instead of
+					// streamed deltas — same RenderThinking, same
+					// Expanded-by-verbosity rule, so ctrl+o toggles it the
+					// same way it toggles a tool block's collapsed output
+					// (defect 20260926T232657Z-thinking-invisible).
+					view := ThinkingView{Text: cv.Thinking, Expanded: verbose}
+					out = append(out, "")
+					out = append(out, FitLines(RenderThinking(view), width, resultIndent)...)
 				}
 			}
 			if text := strings.TrimSpace(textOf(m.Content)); text != "" {
-				flush()
-				if verbose && toolsSinceText {
-					out = append(out, RenderVerboseModelRow(time.UnixMilli(m.Timestamp), modelLabel(m), width))
-				}
-				toolsSinceText = false
+				// A leading blank row, matching the live commit path
+				// (app.go's msgCommitMarkdown: `append([]string{""},
+				// RenderAssistantText(...)...)`) — this replay used to
+				// omit it, the other half of defect
+				// 20260926T232657Z-verbose-toggle-inconsistent's missing
+				// blank row (the ToolResultMessage branch above had the
+				// same gap; a plain user-message-then-text turn, with no
+				// tool call in between, hits this branch directly instead).
+				out = append(out, "")
 				out = append(out, RenderAssistantText(renderer.Render(text))...)
 				out = append(out, "")
 			}
@@ -99,36 +99,28 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 			if name == "" {
 				name = call.Name
 			}
-			if kind, grouped := groupKindFor(name); grouped && !verbose {
-				if groupN > 0 && kind != groupKind {
-					flush()
-				}
-				groupKind = kind
-				groupN++
-			} else {
-				flush()
-				toolsSinceText = true
-				view := toolCallViewFor(name, call, &m, verbose, cwd)
-				out = append(out, FitLines(RenderToolCall(view), width, "     ")...)
-				out = append(out, "")
-			}
+			// One renderer for a committed tool block, live or replayed: no
+			// grouping here (the live commit path — app.go's flushGroup —
+			// only ever groups the *in-flight* indicator row, never a
+			// committed block; grouping a committed replay into a "Read N
+			// files" summary, as this used to, was a third, inconsistent
+			// rendering ctrl+o could land on — defect
+			// 20260926T232657Z-verbose-toggle-inconsistent). A leading
+			// blank row matches every other block and the live path's own
+			// commit (app.go's msgCommitToolCall/flushGroup both prepend
+			// one) — this replay used to omit it, dropping the blank row
+			// before whatever followed.
+			view := toolCallViewFor(name, call, &m, verbose, cwd)
+			out = append(out, "")
+			out = append(out, FitLines(RenderToolCall(view), width, "     ")...)
+			out = append(out, "")
 		}
 		emitSynthetics(e.ID)
 	}
-	flush()
 	// The turn summary row is gone (kiln design: the busy line just
 	// disappears at turn end, docs/kiln-design-handoff/README.md
 	// "Interactions"); a Ctrl+O replay no longer re-appends one.
 	return out
-}
-
-// modelLabel is the provider/model id for the verbose model row, matching
-// the footer's own display; the message's Model alone omits the provider.
-func modelLabel(m msg.AssistantMessage) string {
-	if m.Provider != "" {
-		return m.Provider + "/" + m.Model
-	}
-	return m.Model
 }
 
 // toolCallViewFor builds the ToolCallView for a replayed call, sharing the
@@ -145,24 +137,25 @@ func toolCallViewFor(name string, call msg.ToolCall, result *msg.ToolResultMessa
 	if verbose && primary != "" && !filepath.IsAbs(primary) && isPathTool(name) {
 		primary = filepath.Join(cwd, primary)
 	}
-	// Read's result is summarised as its line count ("Read 2 lines",
-	// verbose-ctrl-o.txt row 14), not the file's content. Claude counts a
-	// trailing newline as its own line, matching a text editor's line
-	// count, so the raw read output's newline count plus one is used.
-	if strings.EqualFold(name, "read") && !result.IsError {
-		n := readLineCount(result)
-		summary = []string{fmt.Sprintf("Read %d %s", n, plural(n, "line", "lines"))}
+	// Read's result summarises the same way live does (bridge.go's
+	// EventToolEnd handler, summarizeToolResult): the actual content
+	// preview, clipped to the tier's line budget. A replay used to
+	// override this to a bare "Read N lines" line count instead
+	// (matching Claude Code's own verbose parity, not this design), which
+	// meant ctrl+o showed *less* detail than the collapsed default and a
+	// different rendering altogether from the one already committed live
+	// — defect 20260926T232657Z-verbose-toggle-inconsistent.
+	status := CallOK
+	if result.IsError {
+		status = CallError
 	}
 	view := ToolCallView{
 		Name:          MapToolName(name),
 		PrimaryArg:    primary,
-		Status:        CallOK,
-		ResultLines:   clipTo(summary, max),
+		Status:        status,
+		ResultLines:   clipResultLines(summary, max, status),
 		TotalLines:    len(summary),
 		HasTotalLines: true,
-	}
-	if result.IsError {
-		view.Status = CallError
 	}
 	if strings.EqualFold(name, "edit") && view.Status == CallOK {
 		if d := diffFromToolDetails(result.Details); d != nil {
@@ -171,37 +164,6 @@ func toolCallViewFor(name string, call msg.ToolCall, result *msg.ToolResultMessa
 		}
 	}
 	return view
-}
-
-// readLineCount counts the lines in a read tool's raw output the way a
-// text editor does: the number of "\n" plus one when there is any content
-// (so "a\n" is two lines: "a" and the empty line after it).
-func readLineCount(result *msg.ToolResultMessage) int {
-	text := rawContent(result.Content)
-	if text == "" {
-		return 0
-	}
-	return strings.Count(text, "\n") + 1
-}
-
-// rawContent joins a tool result's text blocks verbatim, without
-// summarizeLines' trailing-empty-line drop, so a trailing newline still
-// counts toward the read's line count.
-func rawContent(blocks msg.Blocks) string {
-	var b strings.Builder
-	for _, c := range blocks {
-		if tc, ok := c.(msg.TextContent); ok {
-			b.WriteString(tc.Text)
-		}
-	}
-	return b.String()
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return many
 }
 
 // isPathTool reports whether a tool's primary argument is a file path.

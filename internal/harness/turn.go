@@ -656,6 +656,13 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	var result tool.Result
 	if before.Block != nil {
 		result = tool.Result{Content: msg.Blocks{msg.Text(before.Block.Reason)}, IsError: true}
+	} else if _, registered := l.h.opts.Tools.Get(call.Name); !registered {
+		// Distinct from the "not in the active tool set" branch below: a
+		// name that was never registered anywhere is a typo or a
+		// hallucinated tool, not an access restriction, and the two read
+		// very differently to a user watching the transcript.
+		diag.L().Info("tool refused: unknown", "lane", l.name, "tool", call.Name)
+		result = tool.Errorf("unknown tool %q", call.Name)
 	} else if !l.toolActive(call.Name) {
 		active, _ := l.GetActiveTools()
 		diag.L().Info("tool refused: not active", "lane", l.name, "tool", call.Name, "active", active)
@@ -669,7 +676,11 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		// The provider could not parse the call's arguments; running the
 		// tool with empty arguments would silently do the wrong thing.
 		result = tool.Errorf("tool call arguments were not valid JSON: %s", call.InvalidArgs)
-	} else if t, ok := l.h.opts.Tools.Get(call.Name); ok {
+	} else {
+		// Registration was already confirmed above, so Get cannot miss
+		// here; it is repeated rather than threading the *tool.Tool
+		// through the branches above.
+		t, _ := l.h.opts.Tools.Get(call.Name)
 		argsJSON, _ := json.Marshal(args)
 		res, execErr := t.Execute(ctx, argsJSON, func(tool.Result) {}, tool.Invocation{ToolCallID: call.ID, ToolName: call.Name, Cwd: l.h.opts.Cwd})
 		if execErr != nil {
@@ -677,8 +688,6 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		} else {
 			result = res
 		}
-	} else {
-		result = tool.Errorf("unknown tool %q", call.Name)
 	}
 
 	return msg.ToolResultMessage{

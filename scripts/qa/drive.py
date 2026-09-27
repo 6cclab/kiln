@@ -490,8 +490,11 @@ class Run:
         self.directives["args"] = [expand(a) for a in self.directives["args"]]
 
         for pre in self.directives["pre"]:
+            # PWD as a shell `cd` would set it (run.sh does for the main
+            # launch); a bare subprocess inherits the driver's own PWD and
+            # kiln then resolves the cwd through /tmp's symlink instead.
             p = run(kiln + [expand(a) for a in shlex.split(pre)], cwd=proj,
-                    env={**os.environ, **env}, timeout=60)
+                    env={**os.environ, **env, "PWD": str(proj)}, timeout=60)
             self.log("pre `%s` exit=%d%s" % (pre, p.returncode, (" stderr=" + p.stderr.strip()[:200]) if p.returncode else ""))
 
         launcher = self.work / "run.sh"

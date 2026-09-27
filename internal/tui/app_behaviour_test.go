@@ -49,14 +49,18 @@ func waitForPrinted(t *testing.T, f *fakeSink, want string) string {
 	return ""
 }
 
-// TestHandleSubmit_QueuedWhileBusy checks E's spec: a line submitted while
-// m.busy (and no prompt is waiting on an answer) commits the `you` block
-// immediately with a "queued" meta and clears the editor, instead of
-// running the normal command/mention/hook pipeline and starting a second
-// turn. cfg.Lane is left nil here — the harness-level delivery mechanism
-// (Lane.Steer) is verified separately and directly in
-// internal/harness/steer_verify_test.go, since app.go cannot itself see
-// whether the harness actually delivers it on the next turn.
+// TestHandleSubmit_QueuedWhileBusy checks defect
+// 20260926T232249Z-queued-block-order's fix: a line submitted while m.busy
+// (and no prompt is waiting on an answer) does NOT commit a `you` block to
+// the transcript right away — it used to, and read out of order, above the
+// reply to the turn it interrupted. Instead it lands in m.queued (rendered
+// by liveTail as a dim "queued" row, RenderQueuedFollowUp) until the lane
+// actually drains it (MsgQueue{Len:0} in Update commits it for real, see
+// TestUpdate_MsgQueueDrain_CommitsQueuedFollowUps). cfg.Lane is left nil
+// here — the harness-level delivery mechanism (Lane.Steer) is verified
+// separately and directly in internal/harness/steer_verify_test.go, since
+// app.go cannot itself see whether the harness actually delivers it on the
+// next turn.
 func TestHandleSubmit_QueuedWhileBusy(t *testing.T) {
 	m, f := newTestModelWithBridge(t)
 	m.busy = true
@@ -68,10 +72,48 @@ func TestHandleSubmit_QueuedWhileBusy(t *testing.T) {
 	if strings.TrimSpace(nm.editor.Value()) != "" {
 		t.Errorf("editor.Value() = %q, want empty after a queued submit", nm.editor.Value())
 	}
+	if len(nm.queued) != 1 || nm.queued[0] != "check the other file too" {
+		t.Errorf("m.queued = %#v, want one pending item with the submitted text", nm.queued)
+	}
+	if joined := strings.Join(nm.liveTail(80), "\n"); !strings.Contains(joined, "check the other file too") || !strings.Contains(joined, "queued") {
+		t.Errorf("liveTail() = %q, want the pending follow-up with its \"queued\" meta", joined)
+	}
 
-	got := waitForPrinted(t, f, "check the other file too")
-	if !strings.Contains(got, "queued") {
-		t.Errorf("committed block = %q, want it to carry the \"queued\" meta", got)
+	// Nothing commits to the transcript yet — the reply to the turn this
+	// follow-up interrupted has not landed, and committing now is exactly
+	// the out-of-order bug this test guards against.
+	time.Sleep(150 * time.Millisecond)
+	printed, _ := f.snapshot()
+	for _, p := range printed {
+		if strings.Contains(p, "check the other file too") {
+			t.Errorf("a queued follow-up must not commit to the transcript before the lane drains it, got %q", p)
+		}
+	}
+}
+
+// TestUpdate_MsgQueueDrain_CommitsQueuedFollowUps checks the other half of
+// defect 20260926T232249Z-queued-block-order's fix: MsgQueue{Len:0} — sent
+// only by the lane's own drain (turn.go's drainInbox, via
+// EventQueueUpdate) — commits every pending m.queued item, in order, as a
+// plain `you` block with no "queued" meta, and clears m.queued.
+func TestUpdate_MsgQueueDrain_CommitsQueuedFollowUps(t *testing.T) {
+	m, f := newTestModelWithBridge(t)
+	m.busy = true
+	m.queued = []string{"also check the login route", "and update the tests too"}
+
+	next, _ := m.Update(MsgQueue{Len: 0})
+	nm := next.(Model)
+
+	if len(nm.queued) != 0 {
+		t.Errorf("m.queued = %#v, want empty after a drain", nm.queued)
+	}
+	first := waitForPrinted(t, f, "also check the login route")
+	if strings.Contains(first, "queued") {
+		t.Errorf("drained follow-up block = %q, must not carry the \"queued\" meta", first)
+	}
+	second := waitForPrinted(t, f, "and update the tests too")
+	if strings.Contains(second, "queued") {
+		t.Errorf("drained follow-up block = %q, must not carry the \"queued\" meta", second)
 	}
 }
 

@@ -1,0 +1,12 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE turn one
+KEY enter
+WAITFOR /Sure, working on it/ 20
+TYPE /compact
+KEY enter
+WAITFOR /Context compacted\./ 20
+SHOT compacted
+EXPECT /Context compacted\./
+EXPECT_NOT /panic|goroutine/

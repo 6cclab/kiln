@@ -1,0 +1,36 @@
+# todo_write x4 in one turn: the live "plan" block advances its
+# in-progress marker (▸, plan.go's PlanCurrent) and checks off items (✓,
+# plan.go's OK) as each call lands, finishing with all three items
+# checked off.
+# design: Terminal.dc.html:372 (plan glyphs ✓ / ▸ / ○)
+#
+# Each todo_write in the faux script (testdata/faux/qa/tools-plan-progress.yaml)
+# is 2s apart so a real-terminal WAITFOR/SHOT round trip can land inside a
+# single state instead of racing straight through to the last one — the
+# original 400ms gaps meant the very first screenshot already showed the
+# final frame.
+@faux testdata/faux/qa/tools-plan-progress.yaml
+
+WAITFOR /describe a task/ 20
+TYPE plan the rate limiter work
+KEY enter
+WAITFOR /▸ read the upload handler/ 20
+SHOT plan-first-step
+EXPECT /▸ read the upload handler/
+EXPECT /○ add the rate limiter/
+WAITFOR /▸ add the rate limiter/ 20
+SHOT plan-second-step
+EXPECT /✓ read the upload handler/
+EXPECT /▸ add the rate limiter/
+EXPECT /○ wire it into the route/
+WAITFOR /▸ wire it into the route/ 20
+SHOT plan-third-step
+EXPECT /✓ read the upload handler/
+EXPECT /✓ add the rate limiter/
+EXPECT /▸ wire it into the route/
+WAITFOR /Plan advanced through all three steps/ 20
+SHOT plan-done
+EXPECT /✓ read the upload handler/
+EXPECT /✓ add the rate limiter/
+EXPECT /✓ wire it into the route/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,14 @@
+# exit_plan_mode under --permission-mode plan: the plan approval prompt
+# (RenderPlanApproval). We only need one dispatched plan turn — the
+# scenario itself navigates the three options (arrows/keys) before
+# finally committing one, since PromptState does not support
+# arrow-navigating this menu before committing (permission_render.go's
+# RenderPlanApproval doc comment: "1/2/3 commit immediately").
+model: faux-1
+steps:
+  - text: "Here is my plan for the rate limiter."
+  - tool_call: {name: exit_plan_mode, args: {plan: "1. Read the upload route\n2. Add a rateLimit middleware\n3. Wire it into POST /api/upload\n4. Add tests"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Plan approved, proceeding."
+        usage: {input: 200, output: 20}

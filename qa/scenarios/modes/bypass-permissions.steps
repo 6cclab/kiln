@@ -11,6 +11,6 @@ EXPECT /bypass permissions/
 KEY shift+tab
 SHOT after-shift-tab
 # bypassPermissions -> auto (not in the ring, so cycleMode goes to ring[0])
-EXPECT /auto-edit/
+EXPECT /● auto mode/
 EXPECT_NOT /bypass permissions/
 EXPECT_NOT /panic|goroutine/

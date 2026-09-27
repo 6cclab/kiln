@@ -1,0 +1,5 @@
+model: faux-1
+steps:
+  # Same shape as testdata/faux/behaviour-esc.yaml: a bash call that
+  # sleeps, long enough to press esc while it is running.
+  - tool_call: {name: bash, args: {command: "sleep 5"}, id: tc1}

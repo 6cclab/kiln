@@ -195,7 +195,15 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 	}
 
 	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · esc decline · tab to amend"), amberRule)
-	return lines
+	// Fit every row to width, same as the generic prompt path
+	// (RenderPermissionPrompt above returns FitLines(...) rather than
+	// lines directly) — this function used to return its lines raw, so a
+	// long option row (e.g. "Yes, and switch to auto mode · ...") ran
+	// past the right edge uncut on a narrow terminal instead of wrapping
+	// (finding bash-prompt-option-overflow-narrow-terminal). "    " lines
+	// up a wrapped continuation under the option label, matching
+	// permissionOptionRow's "key + two spaces" prefix.
+	return FitLines(lines, width, "    ")
 }
 
 // EditKind distinguishes the Edit vs Write permission prompt's header and
@@ -273,13 +281,20 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 		" " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to %s %s?", verb, req.Path))),
 		dashedRule,
 	}
+	// Sign-to-code spacing matches the committed diff block
+	// (transcript.go's RenderDiffLines: KilnGreen("+ ")/KilnRed("− "), sign
+	// then a space, not glued to the text) and the design's 2ch sign
+	// column (Terminal.dc.html's diff row template). Previously this used
+	// a bare ASCII "-"/"+" with no space, so the same diff read
+	// differently depending on whether it was pending approval or already
+	// committed (finding diff-sign-spacing-prompt-vs-committed).
 	var hunkLines []string
 	for _, h := range req.Hunks {
 		if !h.OldAbsent {
-			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnRed("-"+h.Old))
+			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnRed("− "+h.Old))
 		}
 		if !h.NewAbsent {
-			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnGreen("+"+h.New))
+			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnGreen("+ "+h.New))
 		}
 	}
 	// Cap the rows actually shown so the question, the path and the
@@ -426,6 +441,16 @@ func diffHunksFromEditArgs(args map[string]any) []DiffHunk {
 // reference capture of the Write prompt, so this shape is [chk].
 func diffHunksFromWriteArgs(args map[string]any) []DiffHunk {
 	content, _ := args["content"].(string)
+	// A file's content conventionally ends with a trailing newline; that
+	// newline terminates the last line, it does not introduce a phantom
+	// extra blank line after it. strings.Split on "a\nb\n" yields ["a",
+	// "b", ""] — three elements for a two-line file — which inflated the
+	// hidden-line count in the capped "… +N more lines" row by one
+	// (finding write-diff-trailing-blank-line-miscounts). Trimming exactly
+	// one trailing "\n" first keeps a genuine trailing blank line (content
+	// ending "\n\n") intact, since only the file-terminating newline is
+	// stripped.
+	content = strings.TrimSuffix(content, "\n")
 	lines := strings.Split(content, "\n")
 	hunks := make([]DiffHunk, 0, len(lines))
 	for i, l := range lines {
@@ -441,47 +466,55 @@ func firstLine(s string) string {
 	return s
 }
 
-// RenderPlanApproval renders a plan awaiting approval, matching
-// testdata/reference/claude-code/plan-approval.txt (selected=0) and
-// plan-keep-planning.txt (selected=2), captured at terminal width 100 —
-// verified in permission_render_test.go by diffing this function's
-// structural rows (rules, indents, markers, option layout) against both
-// files. Text that intentionally differs from Claude Code's own wording
-// ("Here is the plan:" not "Here is Claude's plan:", "the model" not
-// "Claude", the plan path under ~/.harness/plans) follows this task's own
-// deliverable 7 spec rather than the captured wording.
+// RenderPlanApproval renders a plan awaiting approval using the same
+// permission-block anatomy as RenderBashPermissionPrompt/
+// RenderEditPermissionPrompt: a label rule, an amber rule top and bottom,
+// an amber question row, the numbered options with the selected row on
+// the raised background and an amber key (permissionOptionRow, shared
+// with the other two prompts), and a single hint row — per
+// docs/kiln-design-handoff/Terminal.dc.html:75-80 (the "isPerm" block)
+// and qa/reference/permission.png.
+//
+// Before this, the plan prompt built its own one-off layout: a stray
+// full-width grey rule and a doubled blank row above the "plan" label (an
+// artifact of whatever committed the preceding block leaving its own
+// trailing blank, which this renderer then added another blank on top
+// of), a 3-column inner indent, a dashed rule framing the plan body (the
+// dashed rule is the edit prompt's diff-hunk framing — a plan body is not
+// a diff), no amber top/bottom rules at all, and a hint sentence
+// ("shift+tab to approve with this feedback") hanging under option 3
+// instead of one hint row at the bottom (finding
+// plan-approval-not-perm-block). This function no longer builds any of
+// that — it reuses the exact same label-rule/amber-rule/option-row
+// pieces the bash and edit prompts already use, at the same 1-column
+// indent, so all three permission variants share one visual language.
+//
+// Text that intentionally differs from Claude Code's own wording ("Here
+// is the plan:" not "Here is Claude's plan:", "the model" not "Claude",
+// the plan path under ~/.harness/plans) follows this task's own
+// deliverable 7 spec rather than any captured Claude Code wording.
 //
 // height, when > 0, bounds the plan body's vertical scroll: rows beyond
-// the budget are clipped and the last visible one gets a trailing "↓",
-// matching plan-approval.txt row 30 ("Step 2 — Verify no dangling
-// references" + padding + "↓" at width-1, i.e. one column short of the
-// true right edge — real evidence, not the flush-right placement
-// renderOptionRows uses elsewhere in dialog.go; the two are not the same
-// and this file does not assume they are).
+// the budget are clipped and the last visible one gets a trailing "↓".
 //
-// selected picks which of the three options is marked "❯"/bold.
-// PromptState does not currently support arrow-navigating this menu
-// before committing (1/2/3 commit immediately, per HandleKey below), so
-// its caller always passes 0 today; plan-keep-planning.txt's selected=2
-// state is exercised only by the unit test, not by any live key path —
-// see the handback report.
+// selected picks which of the three options carries the raised background
+// and amber key. PromptState does not currently support arrow-navigating
+// this menu before committing (1/2/3 commit immediately, per
+// handlePlanKey), so its caller always passes 0 today; selected=2 is
+// exercised only by the unit test, not by any live key path — see the
+// handback report.
 func RenderPlanApproval(plan, planPath string, width, height, selected int, feedbackMode bool, feedback string) []string {
-	innerWidth := width - 4
-	if innerWidth < 1 {
-		innerWidth = 1
-	}
-	thinRule := "  " + Rule(strings.Repeat("─", innerWidth))
-	dashRule := "  " + Rule(strings.Repeat("╌", innerWidth))
+	amberRule := KilnAmber(strings.Repeat("─", maxInt(width, 1)))
 
 	lines := []string{
-		labelRule("plan", Muted, "", width),
-		"   " + Ink(Bold("Ready to code?")),
+		labelRule("plan", KilnAmber, "", width),
+		amberRule,
+		" " + KilnAmber(Bold("Ready to code?")),
 		"",
-		"   " + Muted("Here is the plan:"),
-		dashRule,
+		" " + Muted("Here is the plan:"),
 	}
 
-	wrapWidth := width - 4
+	wrapWidth := width - 2
 	if wrapWidth < 10 {
 		wrapWidth = 10
 	}
@@ -492,14 +525,14 @@ func RenderPlanApproval(plan, planPath string, width, height, selected int, feed
 			continue
 		}
 		for _, wl := range wrapHard(raw, wrapWidth) {
-			planRows = append(planRows, "   "+Ink(wl))
+			planRows = append(planRows, " "+Ink(wl))
 		}
 	}
 
 	visible := planRows
 	scrolled := false
 	if height > 0 {
-		fixed := len(lines) + 1 /*closing rule*/ + 2 /*blank+question*/ + 3 /*options*/ + 2 /*sub-hint+blank*/ + 1 /*path*/
+		fixed := len(lines) + 1 /*blank before question*/ + 2 /*question+blank*/ + 3 /*options*/ + 2 /*hint+closing rule*/ + 1 /*path*/
 		budget := height - fixed
 		if budget < 1 {
 			budget = 1
@@ -519,19 +552,20 @@ func RenderPlanApproval(plan, planPath string, width, height, selected int, feed
 		visible[len(visible)-1] = last + strings.Repeat(" ", gap) + "↓"
 	}
 	lines = append(lines, visible...)
-	lines = append(lines, thinRule)
+	lines = append(lines, "")
 
 	if feedbackMode {
 		lines = append(lines,
-			"   "+Muted("What should change about the plan?"),
-			fmt.Sprintf("   %s %s%s", KilnAmber(">"), feedback, Faint("▌")),
-			"   "+Muted("enter to send · esc to go back"),
+			" "+Muted("What should change about the plan?"),
+			fmt.Sprintf(" %s %s%s", KilnAmber(">"), feedback, Faint("▌")),
+			" "+Muted("enter to send · esc to go back"),
+			amberRule,
 		)
-		return lines
+		return FitLines(lines, width, " ")
 	}
 
 	for _, wl := range wrapHard("kiln has written up a plan and is ready to execute. Would you like to proceed?", wrapWidth+1) {
-		lines = append(lines, "   "+Muted(wl))
+		lines = append(lines, " "+Muted(wl))
 	}
 	lines = append(lines, "")
 
@@ -542,21 +576,18 @@ func RenderPlanApproval(plan, planPath string, width, height, selected int, feed
 	}
 	for i, opt := range opts {
 		key := fmt.Sprintf("%d", i+1)
-		lines = append(lines, "   "+permissionOptionRow(key, opt, i == selected))
-		if i == 2 {
-			for _, wl := range wrapHard("shift+tab to approve with this feedback", width-8) {
-				lines = append(lines, "        "+Muted(wl))
-			}
-		}
+		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected))
 	}
+
+	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · shift+tab to tell kiln what to change"), amberRule)
 
 	if planPath != "" {
 		lines = append(lines, "")
 		for _, wl := range wrapHard(planPath, wrapWidth+1) {
-			lines = append(lines, "   "+Faint(wl))
+			lines = append(lines, " "+Faint(wl))
 		}
 	}
-	return lines
+	return FitLines(lines, width, " ")
 }
 
 // wrapHard word-wraps like wrapPlain, then splits any word longer than

@@ -1,0 +1,20 @@
+{
+ "id": "20260927T001020Z-screen-reader-mode-leaves-box-drawing-rules",
+ "found_at": "2026-09-27T00:10:20Z",
+ "scenario": "startup/ax-screen-reader",
+ "step": "screen-reader-welcome",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "--ax-screen-reader (plain mode) only ASCII-fies the banner divider, not the input box/popup/permission rules",
+ "observed": "With --ax-screen-reader, the banner divider under the K I L N banner is drawn as an ASCII '----------' row, but the input box's own top/bottom hairlines are still drawn as Unicode box-drawing '─' (e.g. row 6 and row 8 of qa/runs/c1/iterm-dark/startup-ax-screen-reader-120x40/01-screen-reader-welcome.txt), and the mode line still shows the glyphs '⇧⇥'.",
+ "expected": "Plain/screen-reader mode ('flat text, no borders' per the scenario's own framing of internal/tui/theme.go's IsPlain) should apply consistently to every hairline the live region draws, not just bannerRows' divider. internal/tui/app.go's chromeLines (RuleColour(strings.Repeat(\"─\", width)) at line 1859), renderPopup (line 2072) and internal/tui/permission_render.go's amberRule/thinRule all hardcode the Unicode '─' with no IsPlain() check, unlike bannerRows (app.go:1644-1647) which does.",
+ "design_ref": "internal/tui/app.go:1644-1650 (bannerRows, the one place that checks IsPlain) vs internal/tui/app.go:1859,2072 and internal/tui/permission_render.go:72,173,259,473 (unconditional '─')",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/startup-ax-screen-reader-120x40/01-screen-reader-welcome.png"
+ ],
+ "status": "open",
+ "fix": null
+}

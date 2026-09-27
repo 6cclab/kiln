@@ -1,0 +1,22 @@
+# ctrl+k (kill to end of line) then ctrl+y (yank it back), and the
+# "Ctrl+Y to paste deleted text" hint that shows until the next keystroke
+# (internal/tui/editor/model.go's EventKilled / justKilled,
+# docs/claude-code-reference.md §2, mode-manual.txt row 8).
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE keep this, drop this part
+KEY ctrl+a
+KEY alt+f
+KEY alt+f
+SHOT before-kill
+KEY ctrl+k
+SHOT after-kill
+EXPECT /keep this,/
+EXPECT_NOT /drop this part/
+EXPECT /Ctrl\+Y to paste deleted text/
+KEY ctrl+y
+SHOT after-yank
+EXPECT /keep this, drop this part/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,31 @@
+{
+ "id": "20260927T000712Z-dialog-chrome-effort-indicator",
+ "found_at": "2026-09-27T00:07:12Z",
+ "scenario": "dialogs/permissions-dialog",
+ "step": "04-permissions-dialog-open",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "medium",
+ "title": "Dialogs use ▔ rule, ❯ selection and a '◐ medium · /effort' indicator outside the design language",
+ "observed": "The /permissions dialog opens under a heavy grey full-width rule with '◐ medium · /effort' at its right end; the selected rule row is marked '❯ bash::echo qa-alpha' on a faint band; the title 'Permissions' is indented 3 columns. Same chrome verified on /mcp (03-mcp-dialog-open.png); /model, /agents and /config not yet checked by screenshot.",
+ "expected": "Dialogs in kiln's language: a label rule ('permissions ───') like every other block, the selected row on the raise background with an amber key/marker from the design set, no effort indicator (Andre asked for it removed).",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:80 (selected option row), :129 (palette selected row)",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/dialogs-permissions-dialog-120x40/04-permissions-dialog-open.png",
+  "qa/runs/c1/iterm-dark/dialogs-mcp-dialog-120x40/03-mcp-dialog-open.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/dialog.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_Panels_OpenClose",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/dialogs-mcp-dialog-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:53Z"
+ }
+}

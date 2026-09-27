@@ -1,0 +1,51 @@
+# Argument completion for /model, /memory, /posture and /add-dir
+# (internal/tui/autocomplete.go BuildPopup's KindArgument path, each
+# command's own ArgumentCompletions in internal/commands). Uses the design
+# fixture so /add-dir has real subdirectories to list (the default empty
+# project has none). Esc closes each popup without running the command.
+#
+# BuildPopup only opens the KindArgument popup once the line has a space
+# after the command name (autocomplete.go: `spaceIdx := strings.IndexAny
+# (textBefore, " \t"); if spaceIdx == -1 { ... slash-command popup ... }`);
+# typing just "/model" with no trailing space instead shows the single
+# slash-command suggestion row (its own usage-hint text), which is a
+# different popup and only coincidentally contains some of the same
+# words. A trailing space can't survive as literal TYPE text (the driver
+# strips it - parse_scenario's `rest.strip()`), so it is typed as a
+# separate KEY space step.
+@faux testdata/faux/hello.yaml
+@fixture testdata/behaviour/design
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE /model
+KEY space
+SHOT arg-model
+EXPECT /faux\/faux-1/
+EXPECT /usable/
+KEY esc
+KEY ctrl+u
+TYPE /memory
+KEY space
+SHOT arg-memory
+EXPECT /\buser\b/
+EXPECT /\bproject\b/
+KEY esc
+KEY ctrl+u
+TYPE /posture
+KEY space
+SHOT arg-posture
+EXPECT /\bops\b/
+EXPECT /\ball\b/
+KEY esc
+KEY ctrl+u
+TYPE /add-dir
+KEY space
+SHOT arg-add-dir
+EXPECT /\bsrc\b/
+EXPECT /\btest\b/
+EXPECT /\bscripts\b/
+KEY esc
+KEY ctrl+u
+SHOT arg-completion-cleared
+EXPECT_NOT /panic|goroutine/

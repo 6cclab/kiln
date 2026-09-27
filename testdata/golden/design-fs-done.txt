@@ -1,13 +1,13 @@
     TypeError: redis.zremrangebyscore is not a function
-  Tests: 2 failed, 14 passed
-  … +3 lines (ctrl+o to expand)
+  … +2 lines (ctrl+o to expand)
+  Command exited with code 1
 
 kiln ───────────────────────────────────────────────────────────────────────────────────────────────
 The redis mock is missing zremrangebyscore, so the rate limiter's cleanup call throws. I'll add it
 to the mock and fix the middleware's usage.
 
 edit ─────────────────────────────────────────────────────────────────────────────────  redisMock.ts
- test/helpers/redisMock.ts                                                                       +3
+ test/helpers/redisMock.ts                                                                   +3  −0
    2     get: jest.fn(),
    3     set: jest.fn(),
    4     del: jest.fn(),

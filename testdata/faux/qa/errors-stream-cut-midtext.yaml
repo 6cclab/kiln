@@ -1,0 +1,12 @@
+model: faux-1
+steps:
+  # chunk_delay (see errors-disconnect-midstream.yaml) slows the stream so
+  # the partial text and retry countdown are visible to a 0.4s screen
+  # poller; disconnect_after is nudged past the "first half" phrase's chunk
+  # boundary (24 bytes) so that chunk is fully delivered before the cut,
+  # instead of racing the hijack against the render.
+  - text: "Here is the first half of a long reply that gets cut off partway"
+    chunk_delay: 200ms
+    disconnect_after: 32
+  - text: "The reconnected continuation lands here, safe and sound."
+    usage: {input: 40, output: 10}

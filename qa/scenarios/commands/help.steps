@@ -1,0 +1,18 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /help
+SHOT palette-help
+# design: Terminal.dc.html:220 (CMDS entry {cmd:'/help', desc:'Shortcuts
+# and commands'}) - kiln's real /help description (registry.go's
+# Command.Description, set in builtins.go) is "Show available commands",
+# not the design mock's copy, so this is expected to fail: it records the
+# discrepancy rather than hiding it.
+EXPECT /Shortcuts and commands/
+KEY enter
+WAITFOR /Show available commands/ 20
+SHOT help
+EXPECT /\/help\s+Show available commands/
+EXPECT /\/clear\s+Clear conversation history/
+EXPECT /\/model\s+<provider\/model>\s+Show or change the active model/
+EXPECT_NOT /panic|goroutine/

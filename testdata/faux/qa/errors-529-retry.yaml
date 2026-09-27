@@ -1,0 +1,11 @@
+model: faux-1
+steps:
+  # Two consecutive 529s, each its own turn (error steps always end their
+  # own turn — internal/testkit/faux/script.go flattenSteps), so the
+  # retry loop (internal/harness/turn.go) sees: attempt1 fail (schedules
+  # retry attempt=1, delay=1s with HARNESS_RETRY_JITTER=0), attempt2 fail
+  # (schedules retry attempt=2, delay=2s), attempt3 succeeds.
+  - error: {status: 529, type: overloaded_error, message: "Overloaded"}
+  - error: {status: 529, type: overloaded_error, message: "Overloaded"}
+  - text: "Back online after the retry."
+    usage: {input: 50, output: 10}

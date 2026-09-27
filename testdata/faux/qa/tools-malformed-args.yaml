@@ -1,0 +1,11 @@
+# A tool call whose arguments are not valid JSON (raw_args splices this
+# verbatim into the tool_use input field — see internal/testkit/faux
+# package doc's "raw_args" section). bash.go's json.Unmarshal fails and
+# the call surfaces as an error result ("invalid arguments: ...").
+model: faux-1
+steps:
+  - tool_call: {name: bash, raw_args: '{"command": "echo hi"', id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "That call's arguments were broken, so I didn't run it."
+        usage: {input: 150, output: 15}

@@ -72,11 +72,12 @@ func firstLineOf(um msg.UserMessage) string {
 }
 
 // rewindDialog is Esc-Esc-on-an-empty-input: pick a point in the
-// conversation (or "(current)", the no-op) to rewind to. Row layout is
-// verified byte-for-byte against
+// conversation (or "(current)", the no-op) to rewind to. Row layout was
+// originally verified byte-for-byte against
 // testdata/reference/claude-code/dialog-rewind.txt rows 2-7 in
-// dialog_rewind_test.go (row 1, the `▔` rule with the effort indicator, is
-// drawn by the app per dialog.go's contract, not by Render here).
+// dialog_rewind_test.go (row 1, that reference's `▔` rule with the
+// effort indicator, was drawn by the app, not by Render here — DialogTopRule
+// replaces it with the kiln label rule, "rewind ────", per FrameLabel below).
 type rewindDialog struct {
 	entries  []RewindEntry
 	onSelect func(entryID string) error
@@ -101,6 +102,9 @@ func NewRewindDialog(entries []RewindEntry, onSelect func(entryID string) error)
 	return &rewindDialog{entries: entries, onSelect: onSelect, cursor: len(entries)}
 }
 
+// FrameLabel names the label rule DialogTopRule draws above Rewind.
+func (d *rewindDialog) FrameLabel() string { return "rewind" }
+
 func (d *rewindDialog) Render(width, height int) []string {
 	var out []string
 	out = append(out, dialogIndent+KilnAmber(Bold("Rewind")))
@@ -110,15 +114,14 @@ func (d *rewindDialog) Render(width, height int) []string {
 	if labelWidth < 10 {
 		labelWidth = 10
 	}
-	subIndent := dialogIndent + "  " // three-space indent + two-cell marker gutter = five
+	subIndent := dialogIndent + "  " // marker gutter's two cells, so the sub-row re-aligns under the label
 
 	for i, e := range d.entries {
-		marker := Faint("  ")
+		marker := selectionGutter(i == d.cursor)
 		label := Muted(FitStatus(e.Text, labelWidth))
 		selected := i == d.cursor
 		if selected {
-			marker = KilnAmber("❯ ")
-			label = Ink(FitStatus(e.Text, labelWidth))
+			label = KilnAmber(FitStatus(e.Text, labelWidth))
 		}
 		row := dialogIndent + marker + label
 		if selected {
@@ -138,12 +141,11 @@ func (d *rewindDialog) Render(width, height int) []string {
 	}
 
 	currentLabel := "(current)"
-	currentMarker := Faint("  ")
 	currentSelected := d.cursor == len(d.entries)
+	currentMarker := selectionGutter(currentSelected)
 	currentText := Muted(currentLabel)
 	if currentSelected {
-		currentMarker = KilnAmber("❯ ")
-		currentText = Ink(currentLabel)
+		currentText = KilnAmber(currentLabel)
 	}
 	currentRow := dialogIndent + currentMarker + currentText
 	if currentSelected {
@@ -189,7 +191,7 @@ func (d *rewindDialog) HandleKey(msg tea.KeyPressMsg) (consumed, closeIt bool, c
 			runErr = d.onSelect(entry.ID)
 		}
 		return true, true, func() tea.Msg {
-			return msgDialogResult{msg: "Rewound to before: " + entry.Text, err: runErr}
+			return msgDialogResult{msg: "Rewound to before: " + entry.Text, err: runErr, replay: runErr == nil}
 		}
 	case "esc":
 		return true, true, nil

@@ -1,0 +1,11 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+@fixture testdata/behaviour/qa/commands-fixture
+
+WAITFOR /describe a task/ 20
+TYPE /hooks
+KEY enter
+WAITFOR /PreToolUse/ 20
+SHOT hooks
+EXPECT /PreToolUse/
+EXPECT /\[Bash\] exit 0/
+EXPECT_NOT /panic|goroutine/

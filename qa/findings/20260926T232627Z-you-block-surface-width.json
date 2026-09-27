@@ -1,0 +1,21 @@
+{
+ "id": "20260926T232627Z-you-block-surface-width",
+ "found_at": "2026-09-26T23:26:27Z",
+ "scenario": "content/streaming",
+ "step": "02-mid-stream",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "medium",
+ "title": "You-block surface stops at the end of the text instead of spanning the content width",
+ "observed": "The raised background behind 'explain the change' covers only the text cells; the rest of the row is the page background, so short prompts look like highlighted text, not a message block.",
+ "expected": "Design renders the user message as a block-level surface (#241f18) across the full content width with 10px (~1 col) inner padding.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:52",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/content-streaming-120x40/02-mid-stream.png",
+  "qa/reference/streaming.png"
+ ],
+ "status": "open",
+ "fix": null
+}
