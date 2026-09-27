@@ -1,0 +1,26 @@
+{
+ "id": "20260927T231253Z-bash-hangs-on-background-job",
+ "found_at": "2026-09-27T23:12:53Z",
+ "scenario": "crud-trial/t2-kiln-2",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "bash tool hangs forever when the command backgrounds a job",
+ "observed": "Command 'go run . >/tmp/api.log 2>&1 & ... curl ...' finished, but the backgrounded subshell held the output pipe; kiln read to EOF and waited 29 min (no default timeout either). Killing the job released it instantly.",
+ "expected": "The tool returns when the shell exits (background job keeps running), and every command is bounded by a default timeout",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln-2/033-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/execenv/exec.go",
+   "internal/tools/bash.go"
+  ],
+  "regression_test": "TestExecReturnsWhileBackgroundJobHoldsPipes,TestBashTimeout",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T23:12:53Z"
+ }
+}

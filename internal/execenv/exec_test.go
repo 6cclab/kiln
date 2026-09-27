@@ -152,3 +152,22 @@ func TestExecContextCancelKillsProcessGroup(t *testing.T) {
 	}
 	t.Fatalf("background sleep 3.%s survived context cancellation", marker)
 }
+
+// TestExecReturnsWhileBackgroundJobHoldsPipes: a job the command
+// backgrounded inherits stdout, so reading to EOF waited on the job. A
+// trial's "go run . >log 2>&1 & ... curl ..." hung the bash tool for 30
+// minutes that way (qa/findings *bash-hangs-on-background-job).
+func TestExecReturnsWhileBackgroundJobHoldsPipes(t *testing.T) {
+	env := New(t.TempDir())
+	start := time.Now()
+	res, err := env.Exec(context.Background(), "sleep 20 & echo started; echo done", ExecOptions{})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Exec took %s; it waited on the background job", elapsed)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Text, "started") || !strings.Contains(res.Text, "done") {
+		t.Fatalf("got exit %d, text %q; want 0 with both lines", res.ExitCode, res.Text)
+	}
+}

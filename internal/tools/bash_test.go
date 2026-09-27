@@ -3,8 +3,10 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
@@ -159,5 +161,30 @@ func TestBashToolInvalidTimeout(t *testing.T) {
 	result := execTool(t, bt, map[string]any{"command": "echo hi", "timeout": -1})
 	if !result.IsError {
 		t.Fatal("expected IsError for invalid timeout")
+	}
+}
+
+// TestBashTimeout: no timeout argument still bounds the command (a
+// foreground server otherwise stalls the session), and a huge one is
+// capped rather than overflowing into "no timeout".
+func TestBashTimeout(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	cases := []struct {
+		in   *float64
+		want time.Duration
+		ok   bool
+	}{
+		{nil, bashDefaultTimeout, true},
+		{f(5), 5 * time.Second, true},
+		{f(1e20), bashMaxTimeout, true},
+		{f(0), 0, false},
+		{f(-1), 0, false},
+		{f(math.NaN()), 0, false},
+	}
+	for _, c := range cases {
+		got, ok := bashTimeout(c.in)
+		if got != c.want || ok != c.ok {
+			t.Errorf("bashTimeout(%v) = %s, %v; want %s, %v", c.in, got, ok, c.want, c.ok)
+		}
 	}
 }
