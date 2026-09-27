@@ -158,10 +158,12 @@ func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts 
 	}
 
 	if auth.IsOAuth {
+		// No breakpoint of its own: the system block's, right after it,
+		// caches this prefix too, and the four-breakpoint limit is spent on
+		// tools, system and the conversation (markConversationCache).
 		req.System = append(req.System, anthropicContentBlock{
-			Type:      "text",
-			Text:      "You are Claude Code, Anthropic's official CLI for Claude.",
-			CacheCtrl: cc,
+			Type: "text",
+			Text: "You are Claude Code, Anthropic's official CLI for Claude.",
 		})
 	}
 	if systemText != "" {
@@ -195,6 +197,8 @@ func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts 
 			req.Messages = append(req.Messages, anthropicWireMessage{Role: "user", Content: []anthropicContentBlock{block}})
 		}
 	}
+
+	markConversationCache(req.Messages, cc)
 
 	if len(opts.Tools) > 0 {
 		strict := model.SupportsStrictMode()
@@ -240,6 +244,37 @@ func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts 
 	}
 
 	return req
+}
+
+// markConversationCache puts a cache breakpoint on the last block of the
+// last two user-side messages (prompts and tool results), so each request
+// reads the conversation so far from the prompt cache instead of paying for
+// it again. Without it only tools and system were cached, and a 45-request
+// session paid full input price for 1.18M tokens of its own history. The
+// newest breakpoint caches the prefix the next request extends; the one
+// before it is the previous request's tail, which keeps the next request a
+// cache hit even when a turn adds more blocks than the API's 20-block
+// lookback (many parallel tool calls). With tools and system that is the
+// API's limit of four breakpoints.
+func markConversationCache(messages []anthropicWireMessage, cc *cacheControl) {
+	marked := 0
+	for i := len(messages) - 1; i >= 0 && marked < 2; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		blocks, ok := messages[i].Content.([]anthropicContentBlock)
+		if !ok {
+			continue
+		}
+		for j := len(blocks) - 1; j >= 0; j-- {
+			if blocks[j].Type == "thinking" || blocks[j].Type == "redacted_thinking" {
+				continue // not a cacheable block type
+			}
+			blocks[j].CacheCtrl = cc
+			marked++
+			break
+		}
+	}
 }
 
 func boolDefault(b *bool, def bool) bool {

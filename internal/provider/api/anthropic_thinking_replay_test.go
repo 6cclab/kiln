@@ -71,3 +71,37 @@ func TestToolResultWithImageIsSentAsBlocks(t *testing.T) {
 		t.Fatalf("image tool_result must carry the image block: %s", body)
 	}
 }
+
+// TestBuildAnthropicRequest_CachesConversation: the conversation carries
+// cache breakpoints on the last two user-side messages, and the request
+// never exceeds the API's four breakpoints (tools, system, two messages),
+// OAuth identity block included. Only tools and system used to be marked,
+// so every request paid full price for the whole history again
+// (qa/findings *conversation-not-prompt-cached).
+func TestBuildAnthropicRequest_CachesConversation(t *testing.T) {
+	transcript := []msg.Message{
+		msg.UserMessage{Content: msg.Blocks{msg.Text("build it")}},
+		msg.AssistantMessage{Content: msg.Blocks{msg.ToolCall{Type: "toolCall", ID: "t1", Name: "bash", Arguments: map[string]any{"command": "ls"}}}},
+		msg.ToolResultMessage{ToolCallID: "t1", Content: msg.Blocks{msg.Text("a b c")}},
+		msg.AssistantMessage{Content: msg.Blocks{msg.ToolCall{Type: "toolCall", ID: "t2", Name: "bash", Arguments: map[string]any{"command": "pwd"}}}},
+		msg.ToolResultMessage{ToolCallID: "t2", Content: msg.Blocks{msg.Text("/x")}},
+	}
+	opts := provider.StreamOptions{SystemPrompt: "sys", Tools: []provider.ToolDef{{Name: "bash", Description: "run"}}}
+	for _, oauth := range []bool{false, true} {
+		req := buildAnthropicRequest(provider.Model{ID: "m", MaxTokens: 1024}, transcript, opts, Auth{IsOAuth: oauth})
+		raw, _ := json.Marshal(req)
+		if n := strings.Count(string(raw), `"cache_control"`); n > 4 {
+			t.Errorf("oauth=%v: %d cache breakpoints, the API allows 4", oauth, n)
+		}
+		marked := func(i int) bool {
+			b, _ := req.Messages[i].Content.([]anthropicContentBlock)
+			return len(b) > 0 && b[len(b)-1].CacheCtrl != nil
+		}
+		if !marked(4) || !marked(2) {
+			t.Errorf("oauth=%v: want breakpoints on the last two tool results (messages 2 and 4)", oauth)
+		}
+		if marked(0) || marked(1) || marked(3) {
+			t.Errorf("oauth=%v: breakpoint on an older or assistant message", oauth)
+		}
+	}
+}
