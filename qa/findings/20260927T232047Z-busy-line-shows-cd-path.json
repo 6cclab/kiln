@@ -18,8 +18,8 @@
   "files": [
    "internal/tui/bridge.go"
   ],
-  "regression_test": "TestSkipLeadingCd",
-  "note": "Awaiting a live re-drive.",
-  "updated_at": "2026-09-27T23:20:47Z"
+  "regression_test": "TestSkipLeadingCd,TestTUI_BusyLineSkipsLeadingCd",
+  "note": "Verified through the real binary in a PTY (TestTUI_BusyLineSkipsLeadingCd); not yet caught in a live screenshot (60s capture cadence).",
+  "updated_at": "2026-09-27T23:42:36Z"
  }
 }

@@ -105,3 +105,28 @@ func waitGone(t *testing.T, pid int) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// TestTUI_BusyLineSkipsLeadingCd: the busy line names the command a bash
+// call runs, not the directory its leading cd moves to (qa/findings
+// *busy-line-shows-cd-path).
+func TestTUI_BusyLineSkipsLeadingCd(t *testing.T) {
+	addr, _ := startFaux(t, `model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "cd /usr/share/../share/../share && sleep 3"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "done"
+`)
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
+	defer s.Close()
+	if err := s.WaitFor("describe a task", 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	s.Send("go\r")
+	if err := s.WaitFor("Running sleep 3", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
