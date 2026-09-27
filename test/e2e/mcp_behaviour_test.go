@@ -124,7 +124,7 @@ func mcpWaitLogLine(t *testing.T, dir, contains string, timeout time.Duration) (
 					if m == nil {
 						t.Fatalf("log line has no leading time= attribute: %q", line)
 					}
-					ts, err := time.Parse("2006-01-02T15:04:05.000-07:00", m[1])
+					ts, err := time.Parse("2006-01-02T15:04:05.000Z07:00", m[1]) // Z07:00 accepts "Z" (UTC, as on CI) and offsets
 					if err != nil {
 						t.Fatalf("parse log time %q: %v", m[1], err)
 					}

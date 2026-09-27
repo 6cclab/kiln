@@ -9,7 +9,7 @@
 
   subagents ────────────────────────────────────────────────────────────────────────────  2/2 done
   2 subagents finished
-   gen-N     do the fast lookup                                                 ━━━━━━━━━━     150
+   gen-N     do the fast lookup                                                 ━━━━━━━━━━     170
              ✓ fast subagent report
    gen-N     look something up                                                  ━━━━━━━━━━     150
              ✓ inherited subagent report

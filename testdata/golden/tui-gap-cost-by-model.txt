@@ -1,6 +1,6 @@
     by model:
       faux/faux-1              input 300      output 150      cost -
-      faux/faux-2              input 100      output 50       cost $0.0010
+      faux/faux-2              input 120      output 50       cost $0.0011
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ›  describe a task · / for commands · @ to add files
   ────────────────────────────────────────────────────────────────────────────────────────────────

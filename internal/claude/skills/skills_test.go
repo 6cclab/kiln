@@ -82,3 +82,29 @@ func TestLoadSkillsProjectShadowsPersonal(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadFromSkipsNonSkillEntries: a stray file in skills/ and a skill
+// directory without a SKILL.md are skipped, not loaded or fatal. Hermetic
+// (a temp dir, not ~/.claude), so coverage no longer depends on what the
+// machine running the tests has installed.
+func TestLoadFromSkipsNonSkillEntries(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("not a skill"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	good := filepath.Join(dir, "greet")
+	if err := os.MkdirAll(good, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "SKILL.md"), []byte("---\nname: greet\ndescription: says hi\n---\nHello."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := loadFrom(dir, paths.ScopeProject)
+	if len(got) != 1 || got[0].Name != "greet" {
+		t.Fatalf("loadFrom = %+v, want only the greet skill", got)
+	}
+}
