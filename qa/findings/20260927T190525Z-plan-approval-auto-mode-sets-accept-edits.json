@@ -1,0 +1,25 @@
+{
+ "id": "20260927T190525Z-plan-approval-auto-mode-sets-accept-edits",
+ "found_at": "2026-09-27T19:05:25Z",
+ "scenario": "CRUD trial (Opus 4.8, plan mode), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Plan approval 'Yes, and use auto mode' switches to acceptEdits, not auto",
+ "observed": "After choosing option 1 the exit_plan_mode result said Permission mode is \"acceptEdits\" and the footer read auto-edit; the run then stopped for 11 bash prompts. Claude Code's identically labelled option entered auto mode and asked nothing.",
+ "expected": "Option 1 enters auto mode, as labelled.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permissionview.go"
+  ],
+  "regression_test": "TestPromptState_PlanApproveAutoMode",
+  "note": "Verified in the kiln-3 CRUD-trial rerun: 7.9 min, 0 prompts, $1.96 (Claude Code $2.70), 34/34 grade.",
+  "updated_at": "2026-09-27T21:24:12Z"
+ }
+}

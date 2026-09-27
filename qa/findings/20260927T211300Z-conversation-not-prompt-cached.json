@@ -1,0 +1,25 @@
+{
+ "id": "20260927T211300Z-conversation-not-prompt-cached",
+ "found_at": "2026-09-27T21:13:00Z",
+ "scenario": "CRUD trial (Opus 4.8, plan mode), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Anthropic requests cache only tools and system; the conversation is re-paid every request",
+ "observed": "kiln-2 run: 45 requests, 1,180,124 uncached input tokens, 7,860 cache-read per request, $7.01. Claude Code on the same spec: 36 requests, 72 uncached input, 2,544,223 cache-read, $2.70. buildAnthropicRequest put cache_control on the last tool and the system block only.",
+ "expected": "The conversation is read from the prompt cache; uncached input per request is only the newest turn.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/provider/api/anthropic_messages.go"
+  ],
+  "regression_test": "TestBuildAnthropicRequest_CachesConversation",
+  "note": "Verified in the kiln-3 CRUD-trial rerun: 7.9 min, 0 prompts, $1.96 (Claude Code $2.70), 34/34 grade.",
+  "updated_at": "2026-09-27T21:24:12Z"
+ }
+}

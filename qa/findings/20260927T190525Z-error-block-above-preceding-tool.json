@@ -1,0 +1,26 @@
+{
+ "id": "20260927T190525Z-error-block-above-preceding-tool",
+ "found_at": "2026-09-27T19:05:25Z",
+ "scenario": "CRUD trial (Opus 4.8, plan mode), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "low",
+ "title": "A turn error renders above the tool call that ran before it",
+ "observed": "In the failed first run the 'error' block (the 400) appeared above the bash block for the command that had run before the failing request.",
+ "expected": "Blocks commit in the order things happened: the bash call, then the error.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go",
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestTUI_FaultCommitsAfterPrecedingToolCall",
+  "note": "Verified in the kiln-3 CRUD-trial rerun: 7.9 min, 0 prompts, $1.96 (Claude Code $2.70), 34/34 grade.",
+  "updated_at": "2026-09-27T21:24:12Z"
+ }
+}
