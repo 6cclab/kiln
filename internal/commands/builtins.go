@@ -86,6 +86,11 @@ type BuiltinDeps struct {
 	// actually ran on. Nil (or a nil return) means "not tracked", and
 	// /cost falls back to just its single-model summary.
 	UsageByModel func() map[string]msg.Usage
+	// SessionElapsed reports how long this session has been running, for
+	// /cost's one-line design summary ("Session: $0.27 · 66k tokens in
+	// context · 71s", Terminal.dc.html:320). Nil (or a nil return of 0)
+	// omits the elapsed segment rather than printing a false "0s".
+	SessionElapsed func() time.Duration
 
 	// SessionsDir is shown by /status.
 	SessionsDir string
@@ -399,40 +404,69 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		{
 			Name:        "cost",
 			Description: "Tokens and spend this session",
+			// The design (Terminal.dc.html:320) renders /cost as a single
+			// system note: "Session: $0.27 · 66k tokens in context ·
+			// 71s" — spend, context tokens, elapsed session time, no
+			// rate table. *qa/findings/20260927T014721Z-cost-not-one-
+			// line-note.json*: the old implementation instead always
+			// printed a rate line plus a "by model:" block, never that
+			// summary.
+			//
+			// This keeps the summary as Output's first line
+			// unconditionally (a single line renders as the design's
+			// note, tui/app.go's `len(handled.Output) == 1` case), and
+			// appends the per-model breakdown only when more than one
+			// model actually ran this session: with just one, the
+			// breakdown would only repeat the summary's own total under
+			// a "by model:" heading, so the single-model case matches
+			// the design exactly, and the multi-model case (this
+			// codebase's own model-routing feature) gets the extra
+			// detail as a labelled block with the summary as its first
+			// row, which reads better than hiding that split entirely.
 			Run: func(ctx context.Context, args string) (Result, error) {
-				providerID, modelID := deps.CurrentModel()
-				m, ok := deps.Registry.GetModel(providerID, modelID)
-				if !ok {
-					return Result{Output: []string{"No cost data for this model."}}, nil
+				byModel := map[string]msg.Usage{}
+				if deps.UsageByModel != nil {
+					byModel = deps.UsageByModel()
 				}
-				rate := m.Cost.ModelCostRates
-				line := fmt.Sprintf("input $%g/M · output $%g/M", rate.Input, rate.Output)
-				if rate.Input == 0 {
-					line += "  (self-hosted, no marginal cost)"
+				var totalCost float64
+				for _, u := range byModel {
+					totalCost += u.Cost.Total
 				}
-				out := []string{line}
+
+				contextTokens := 0
+				if deps.ContextUsed != nil {
+					if v, ok := deps.ContextUsed(); ok {
+						contextTokens = v
+					}
+				}
+
+				summary := fmt.Sprintf("Session: $%.2f · %s tokens in context", totalCost, formatTokens(contextTokens))
+				if deps.SessionElapsed != nil {
+					if d := deps.SessionElapsed(); d > 0 {
+						summary += fmt.Sprintf(" · %ds", int(d.Round(time.Second).Seconds()))
+					}
+				}
+				out := []string{summary}
 
 				// "by model" table: this session's parent turns plus
 				// every dispatched subagent's usage, broken out by
 				// whichever model it actually ran on — a session that
 				// dispatched to a cheaper role should be able to see
 				// that split, not just one blended number.
-				if deps.UsageByModel != nil {
-					if byModel := deps.UsageByModel(); len(byModel) > 0 {
-						names := make([]string, 0, len(byModel))
-						for name := range byModel {
-							names = append(names, name)
+				if len(byModel) > 1 {
+					names := make([]string, 0, len(byModel))
+					for name := range byModel {
+						names = append(names, name)
+					}
+					sort.Strings(names)
+					out = append(out, "", "by model:")
+					for _, name := range names {
+						u := byModel[name]
+						cost := "-"
+						if u.Cost.Total != 0 {
+							cost = fmt.Sprintf("$%.4f", u.Cost.Total)
 						}
-						sort.Strings(names)
-						out = append(out, "", "by model:")
-						for _, name := range names {
-							u := byModel[name]
-							cost := "-"
-							if u.Cost.Total != 0 {
-								cost = fmt.Sprintf("$%.4f", u.Cost.Total)
-							}
-							out = append(out, fmt.Sprintf("  %-24s input %-8d output %-8d cost %s", name, u.Input, u.Output, cost))
-						}
+						out = append(out, fmt.Sprintf("  %-24s input %-8d output %-8d cost %s", name, u.Input, u.Output, cost))
 					}
 				}
 				return Result{Output: out}, nil

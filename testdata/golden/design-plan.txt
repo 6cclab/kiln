@@ -6,9 +6,9 @@
 
   subagents ────────────────────────────────────────────────────────────────────────────  0/2 done
   2 subagents running in parallel
-   scout     Check the Redis config and survey the upload tests                 ━━━━━━━━━━
+   scout-N   Check the Redis config and survey the upload tests                 ━━━━━━━━━━
              → starting…
-   scout     Map the middleware chain in src/server                             ━━━━━━━━━━
+   scout-N   Map the middleware chain in src/server                             ━━━━━━━━━━
              → starting…
   ◐ Running 2 subagents…  0s · 300 tokens                                             esc to stop
   ────────────────────────────────────────────────────────────────────────────────────────────────

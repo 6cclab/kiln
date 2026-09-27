@@ -10,9 +10,11 @@ KEY enter
 WAITFOR /subagents running in parallel|subagents finished/ 20
 SHOT subagent-live
 EXPECT /subagents/
-# The name column is truncated to 8 columns (subagents.go's
-# subagentNameWidth), so "general-purpose" reads as "general…", not in
-# full.
+# A single dispatch of a type keeps that type's plain short name
+# (subagents.go's assignDisplayNamesLocked): "general-purpose" -> its
+# first word, "general" — 7 columns, fitting the 8-column name slot
+# (subagentNameWidth) without truncation. The "-N" index only appears
+# when several dispatches share a type (task-concurrent.steps).
 EXPECT /general/
 WAITFOR /Confirmed: the mock is missing/ 20
 SHOT subagent-done

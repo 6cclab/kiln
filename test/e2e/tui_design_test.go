@@ -288,7 +288,35 @@ func mustSee(t *testing.T, s *screen.Screen, needle string, timeout time.Duratio
 // it) — see designSortSubagentPanel.
 // `^\s*`, not a bare `^`: every row now sits inside the 2-column side
 // margin (internal/tui/layout_margin.go, finding no-side-margin).
-var designScoutRowPattern = regexp.MustCompile(`^\s* scout\s`)
+//
+// Matches either "scout" (a lone dispatch) or "scout-N" (assignDisplay-
+// NamesLocked's index, given to each of several same-type dispatches —
+// see subagents.go and *qa/findings/20260927T014816Z-subagent-names-
+// indistinct.json*): the design's own "agents" scene dispatches two
+// scouts concurrently, so it hits the indexed case.
+var designScoutRowPattern = regexp.MustCompile(`^\s* scout(-(\d|N))?\s`)
+
+// designScoutIndexPattern matches the "-N" index assignDisplayNamesLocked
+// appends to a "scout" row's name when more than one scout is in the
+// panel; designNormalizeScoutIndex collapses it to a fixed "-N" (literal
+// "N") ahead of a golden compare, since which physical dispatch gets "-1"
+// vs "-2" is the same wall-clock race designSortSubagentPanel's own doc
+// comment already describes for row order — the index is assigned in the
+// order Start events are seen, not a property of the golden's expected
+// content.
+var designScoutIndexPattern = regexp.MustCompile(`scout-\d`)
+
+// designNormalizeScoutIndex replaces every "scout-N" name in rows with a
+// fixed "scout-N" placeholder (literal "N", not a digit), in a copy of
+// rows, so a golden compare does not depend on which concurrent scout
+// dispatch happened to be seen first.
+func designNormalizeScoutIndex(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = designScoutIndexPattern.ReplaceAllString(r, "scout-N")
+	}
+	return out
+}
 
 // designDispatchLinePattern matches bridge.go's SubagentSink "Start"
 // commit line (the "⏺ scout <description> on <model> [...]" row
@@ -419,6 +447,7 @@ func designDropIntermediateSubagentsBlocks(rows []string, styles [][]screen.Cell
 // moved together or the name row and its own action row would end up
 // mismatched.
 func designSortSubagentPanel(rows []string, styles [][]screen.CellStyle) ([]string, [][]screen.CellStyle) {
+	rows = designNormalizeScoutIndex(rows)
 	rows, styles = designDropIntermediateSubagentsBlocks(rows, styles)
 	rows, styles = designSortDispatchLines(rows, styles)
 	start := -1

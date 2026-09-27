@@ -9,9 +9,9 @@
 
   subagents ────────────────────────────────────────────────────────────────────────────  2/2 done
   2 subagents finished
-   general…  do the fast lookup                                                 ━━━━━━━━━━     150
+   gen-N     do the fast lookup                                                 ━━━━━━━━━━     150
              ✓ fast subagent report
-   general…  look something up                                                  ━━━━━━━━━━     150
+   gen-N     look something up                                                  ━━━━━━━━━━     150
              ✓ inherited subagent report
 
   task ─────────────────────────────────────────────────────────────────────  auto-approved · 1.0s

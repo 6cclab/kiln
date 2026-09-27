@@ -12,12 +12,23 @@ SHOT palette-cost
 # discrepancy.
 EXPECT /Tokens and spend this session/
 KEY enter
-WAITFOR /self-hosted, no marginal cost/ 20
-SHOT cost
-EXPECT /input \$0\/M · output \$0\/M/
-EXPECT /self-hosted, no marginal cost/
 # design: Terminal.dc.html:320 (runCmd's /cost note text: "Session:
-# $X.XX · Yk tokens in context · Zs") - kiln's real /cost has no such
-# note (it reports rate + a by-model table instead); expected to fail.
-EXPECT /tokens in context/
+# $X.XX · Yk tokens in context · Zs"). Fixed by
+# *qa/findings/20260927T014721Z-cost-not-one-line-note.json*: /cost's
+# first line is now this one-line summary (spend, context tokens, elapsed
+# session time), rendered as the design's system note. This scenario's
+# single faux model (faux-1) means there is nothing to break out by
+# model, so the note is /cost's whole output (internal/commands/
+# builtins.go's cost command only appends a "by model:" block when more
+# than one model actually ran this session) — the exact spend/token/
+# elapsed figures are real, session-dependent numbers, so the checks
+# below match the note's shape, not literal values.
+WAITFOR /tokens in context/ 20
+SHOT cost
+EXPECT /Session: \$[0-9.]+ · [0-9.,]+k? tokens in context/
+# The old rate-table/by-model form (this same command's pre-fix output)
+# must be gone now that a single model's usage renders as the one-line
+# note instead.
+EXPECT_NOT /input \$[0-9.]+\/M · output/
+EXPECT_NOT /by model:/
 EXPECT_NOT /panic|goroutine/

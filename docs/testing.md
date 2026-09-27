@@ -235,6 +235,46 @@ The step file takes `SEND`, `TYPE`, `KEY`, `WAIT` and `SHOT` lines;
 script closes its window and stops faux when done. It needs macOS with
 iTerm2 and Screen Recording permission for the terminal that runs it.
 
+## Real-terminal QA — `make qa`
+
+The emulator cannot show fonts, glyph widths, colour on the actual
+background, or how a terminal encodes keys. `make qa` drives the real
+`bin/kiln` through every `qa/scenarios/<area>/<name>.steps` file in a real
+terminal window and saves a screenshot and the screen text for every `SHOT`:
+
+    make qa                                   # every scenario, iTerm2 dark
+    make qa SCENARIO=permissions/bash-deny-feedback-tab
+    make qa TERMINAL=iterm-light              # iterm-dark, iterm-light, terminal, warp
+    make qa-lint                              # check steps and faux scripts only
+
+Requirements: macOS, the terminal under test, Orca (its `orca computer`
+actions deliver every key, click and capture; AppleScript only creates,
+sizes, activates and closes windows), and `yq` for `qa-lint`. Output goes to
+`qa/runs/<timestamp>/<terminal>/<scenario>/` (gitignored): `NN-<shot>.png`,
+`.txt` (visible screen), `.buffer.txt` (terminal scrollback), `run.log` and
+`result.json`. A run is safe by construction: faux model, `HARNESS_OFFLINE=1`,
+a scratch `HOME` and project per scenario.
+
+Step files: directives `@faux`, `@fixture`, `@size`, `@args`, `@env`,
+`@untrusted`, `@nogit`, `@pre`; verbs `TYPE`, `KEY`, `CLICK`, `RESIZE`, `WAIT`,
+`WAITFOR /re/ [s]`, `SHOT`, `EXPECT /re/`, `EXPECT_NOT /re/`, `NOTE`. The full
+reference is the docstring of `scripts/qa/drive.py`. Faux scripts for
+scenarios live in `testdata/faux/qa/`; `end_turn: true` closes a turn and
+`chunk_delay` paces a streamed reply (`internal/testkit/faux/doc.go`).
+
+Review every screenshot, not just `result.json`: an `EXPECT` sees text, the
+screenshot shows colour, spacing and glyphs. Compare against the design
+scenes in `qa/reference/` (rendered from
+`docs/kiln-design-handoff/Terminal.dc.html`). Record each defect as one file
+with `scripts/qa/findings.py new` (see its `--help`); `findings.py list
+--status open` shows what is left, and `findings.py set <id> --status fixed`
+records the fix, its regression test and the after-shot.
+
+Limits: Orca's `scroll` does not deliver wheel events, so `SCROLL` steps
+fail; and under kiln's kitty keyboard protocol Orca's synthetic
+Option/Ctrl+arrow events arrive without their modifier (a physical keypress
+works). Warp has no screen text, so its checks run on OCR and are advisory.
+
 ## Record/replay via `kiln-drive --record`
 
 Like the TypeScript layer's `HARNESS_RECORD_TTY`/`npm run replay`,

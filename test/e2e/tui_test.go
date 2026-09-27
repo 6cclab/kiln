@@ -664,8 +664,13 @@ func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts styles
 // It also pins the row *order* the fixed banner spacing (internal/cli/tui.go
 // bannerRows) produces: the banner's own rows (wordmark, cwd/branch/model,
 // tips — consecutive, no blank rows between them per the design), then one
-// blank row, then the banner's closing rule, then the input box's own
-// [rule, input, rule], then the one status row.
+// blank row, then a single rule serving both as the banner's own closing
+// rule and the input box's top rule (nothing yet separates them — a fresh
+// start's transcript is empty — so the input box's own top rule is
+// suppressed rather than stacking a second hairline directly under the
+// first, *qa/findings/20260927T022144Z-inline-stacked-rules.json*; see
+// app.go's transcriptEmpty), then the input row, the box's bottom rule,
+// then the one status row.
 func TestTUI_Startup_NoDuplicateRows(t *testing.T) {
 	for _, sz := range []struct{ w, h int }{{80, 24}, {120, 40}, {200, 50}} {
 		t.Run(fmt.Sprintf("%dx%d", sz.w, sz.h), func(t *testing.T) {
@@ -718,7 +723,7 @@ func TestTUI_Startup_NoDuplicateRows(t *testing.T) {
 			if safeRow(got, 3) != "" {
 				t.Errorf("row 3 = %q, want blank (one blank row after the banner's tips row)", safeRow(got, 3))
 			}
-			wantRule := []int{4, 5, 7}
+			wantRule := []int{4, 6}
 			for _, i := range wantRule {
 				if i >= len(got) || !isRule(got[i]) {
 					t.Errorf("row %d = %q, want a full-width rule row", i, safeRow(got, i))

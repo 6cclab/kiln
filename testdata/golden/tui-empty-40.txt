@@ -3,7 +3,6 @@
   / commands   @ add files   ⇧⇥ cycle…
 
   ────────────────────────────────────
-  ────────────────────────────────────
   ›  describe a task · / for commands
   ────────────────────────────────────
   ● ask before edits  ⇧⇥

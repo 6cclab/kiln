@@ -18,6 +18,7 @@ package cli
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
@@ -73,6 +74,11 @@ type registryDeps struct {
 	// UsageByModel reports this session's accumulated usage keyed by
 	// "provider/model", for /cost's by-model table. Nil when not tracked.
 	UsageByModel func() map[string]msg.Usage
+	// SessionStartedAt is when this session's Run began (captured right
+	// around agent.Start in chat.go), for /cost's one-line design summary
+	// ("... · 71s", Terminal.dc.html:320) via BuiltinDeps.SessionElapsed.
+	// Zero is treated as "unknown" and the elapsed segment is omitted.
+	SessionStartedAt time.Time
 	// MCPConfigPath is the mcpServers file /mcp names in its section header.
 	MCPConfigPath string
 }
@@ -181,6 +187,12 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		Agents:       deps.Agents,
 		SessionsDir:  deps.SessionsDir,
 		UsageByModel: deps.UsageByModel,
+		SessionElapsed: func() time.Duration {
+			if deps.SessionStartedAt.IsZero() {
+				return 0
+			}
+			return time.Since(deps.SessionStartedAt)
+		},
 		// /clear moves the lane's branch tip back to the root, so the next
 		// turn starts from an empty conversation; the session log keeps
 		// the earlier turns (reachable again through /rewind).

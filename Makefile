@@ -1,7 +1,7 @@
 MODULE := github.com/andrepato/harness
 BIN_DIR := bin
 
-.PHONY: build check e2e e2e-live eval eval-live cover covercheck race race-full generate clean
+.PHONY: build check e2e e2e-live qa qa-lint eval eval-live cover covercheck race race-full generate clean
 
 # kiln-drive (internal/testkit/screen's PTY driver, cmd/kiln-drive) is a
 # dev/test tool, not part of the `build` target; build it directly with:
@@ -47,6 +47,20 @@ e2e:
 # accordingly so a plain `make e2e` never talks to the network.
 e2e-live:
 	HARNESS_E2E_LIVE=1 go test -tags e2e -run Live ./test/e2e/... -timeout 10m
+
+# Real-terminal QA (macOS only): drives bin/kiln through qa/scenarios in a
+# real terminal window via Orca and records screenshots under qa/runs.
+# SCENARIO=<area>/<name> runs one scenario (default: all of them);
+# TERMINAL is iterm-dark, iterm-light, terminal or warp. See docs/testing.md.
+TERMINAL ?= iterm-dark
+SCENARIO ?=
+QA_STEPS := $(if $(SCENARIO),qa/scenarios/$(SCENARIO).steps,$(wildcard qa/scenarios/*/*.steps))
+qa: build
+	go build -o $(BIN_DIR)/faux ./cmd/faux
+	python3 scripts/qa/drive.py --terminal $(TERMINAL) --out qa/runs/$(shell date +%Y%m%dT%H%M%S) $(QA_STEPS)
+
+qa-lint:
+	python3 scripts/qa/drive.py --lint $(QA_STEPS)
 
 # kiln eval: runs every eval/scenarios entry against the faux provider
 # only (no network, no credentials), then reports the result against

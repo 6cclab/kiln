@@ -333,6 +333,50 @@ func TestSubagentPanel_UsageEventDoesNotUnfreeze(t *testing.T) {
 	}
 }
 
+// TestSubagentsPanel_ConcurrentSameTypeGetDistinctNames pins the fix for
+// *qa/findings/20260927T014816Z-subagent-names-indistinct.json*: three
+// concurrent `general-purpose` dispatches used to all render with the
+// same truncated "general…" name and were distinguishable only by their
+// task text. assignDisplayNamesLocked now gives each a distinct name —
+// the type's first word held to 6 characters plus a 1-based index in
+// arrival order ("gen-1", "gen-2", "gen-3"), matching the
+// design's agents scene ("scout-1", "scout-2", "scout-3").
+func TestSubagentsPanel_ConcurrentSameTypeGetDistinctNames(t *testing.T) {
+	p := NewSubagentPanelState()
+	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventStart, ID: "tc1", Agent: "general-purpose", Description: "check the auth middleware"})
+	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventStart, ID: "tc2", Agent: "general-purpose", Description: "check the upload route"})
+	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventStart, ID: "tc3", Agent: "general-purpose", Description: "check the redis mock"})
+
+	out := strings.Join(p.Render(100), "\n")
+	for _, want := range []string{"gen-1", "gen-2", "gen-3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("panel missing distinct name %q; rows:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "general…") {
+		t.Errorf("panel still shows the indistinct truncated name:\n%s", out)
+	}
+}
+
+// TestSubagentsPanel_SingleDispatchKeepsPlainShortName checks that a lone
+// dispatch of a type (no siblings of the same type in the panel) keeps
+// that type's plain short name with no "-N" index — "scout" stays
+// "scout", and "general-purpose" becomes its first word, "general" (7
+// columns, fitting the 8-column name slot with no ellipsis truncation,
+// unlike the pre-fix behaviour of truncating the raw type name).
+func TestSubagentsPanel_SingleDispatchKeepsPlainShortName(t *testing.T) {
+	p := NewSubagentPanelState()
+	p.Apply(agent.SubagentEvent{Kind: agent.SubagentEventStart, ID: "tc1", Agent: "general-purpose", Description: "look something up"})
+
+	out := strings.Join(p.Render(100), "\n")
+	if !strings.Contains(out, " general ") {
+		t.Errorf("single dispatch should show the plain short name \"general\":\n%s", out)
+	}
+	if strings.Contains(out, "general…") || strings.Contains(out, "general-1") {
+		t.Errorf("single dispatch should not be truncated or indexed:\n%s", out)
+	}
+}
+
 // TestSubagentsPanel_PlainModeKeepsFullName pins the accessibility
 // carve-out: the 8-column name is a visual grid constraint, but the
 // subagents panel is the only transcript record of a dispatch, so under

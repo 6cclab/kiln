@@ -195,6 +195,12 @@ type Model struct {
 	shortcuts bool
 	// bannerDone is set once Banner has been committed.
 	bannerDone bool
+	// bannerRowCount is how many rows commitBanner's own commit contributed
+	// to committedRows (0 if there was no banner to commit). Compared
+	// against committedRows by transcriptIsEmpty to tell whether anything
+	// besides the banner has been committed yet — see that method's doc
+	// comment.
+	bannerRowCount int
 	// bannerScheduled guards msgCommitBanner's grace-period tick (see
 	// bannerBackgroundGrace) so the first WindowSizeMsg schedules it
 	// exactly once, not once per resize before the banner has committed.
@@ -1094,7 +1100,7 @@ func (m Model) appendTranscript(newLines []string) Model {
 func (m Model) layoutViewport() Model {
 	width := m.contentWidth()
 	tail := m.liveTail(width)
-	chrome, _ := m.chromeLines(width, len(tail))
+	chrome, _, _ := m.chromeLines(width, len(tail))
 	h := m.height - len(chrome)
 	if h < 1 {
 		h = 1
@@ -1151,7 +1157,7 @@ func (m Model) fullscreenView() tea.View {
 		// No WindowSizeMsg yet to size the viewport against; the inline
 		// view degrades gracefully instead of drawing a zero-height frame.
 		width := m.contentWidth()
-		lines, editorTop := m.liveLines(width)
+		lines, editorTop, ruleSuppressed := m.liveLines(width)
 		v := tea.NewView(strings.Join(lines, "\n"))
 		if m.cfg.SessionName != "" {
 			v.WindowTitle = m.cfg.SessionName
@@ -1160,6 +1166,9 @@ func (m Model) fullscreenView() tea.View {
 			if c := m.editor.Cursor(); c != nil {
 				c.Position.X += m.margin()
 				c.Position.Y += editorTop
+				if ruleSuppressed {
+					c.Position.Y--
+				}
 				v.Cursor = c
 			}
 		}
@@ -1168,7 +1177,7 @@ func (m Model) fullscreenView() tea.View {
 
 	width := m.contentWidth()
 	tail := m.liveTail(width)
-	chrome, editorTop := m.chromeLines(width, len(tail))
+	chrome, editorTop, _ := m.chromeLines(width, len(tail))
 	if len(chrome) > m.height-1 {
 		overflow := len(chrome) - (m.height - 1)
 		chrome = chrome[overflow:]
@@ -1843,7 +1852,7 @@ func (m Model) View() tea.View {
 		return m.fullscreenView()
 	}
 	width := m.contentWidth()
-	lines, editorTop := m.liveLines(width)
+	lines, editorTop, ruleSuppressed := m.liveLines(width)
 
 	// The live region renders at its natural height directly below the
 	// committed transcript. An earlier version padded it to fill the
@@ -1865,6 +1874,9 @@ func (m Model) View() tea.View {
 		if c := m.editor.Cursor(); c != nil {
 			c.Position.X += m.margin()
 			c.Position.Y += editorTop
+			if ruleSuppressed {
+				c.Position.Y--
+			}
 			v.Cursor = c
 		}
 	}
@@ -2027,7 +2039,12 @@ func (m Model) liveTail(width int) []string {
 // always) and is only used to size a dialog's remaining room and to
 // position a popup relative to the input box's top rule, exactly as
 // liveLines used to when tail and chrome were one slice.
-func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
+//
+// ruleSuppressed reports whether the editor's own top rule was dropped —
+// see the call site below and transcriptIsEmpty's doc comment; the two
+// View/fullscreenView callers use it to adjust the hardware cursor's row
+// by the one line that convention assumes is always there.
+func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int, ruleSuppressed bool) {
 	editorTop = -1
 
 	switch {
@@ -2062,7 +2079,35 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
 		}
 
 		editorTop = len(lines)
-		lines = append(lines, m.editor.View(width)...)
+		editorRows := m.editor.View(width)
+		// A fresh start, or a resumed session before any turn, has
+		// nothing between the banner's own closing rule (already
+		// committed, permanently, to scrollback) and this box: in inline
+		// mode that puts two hairlines on consecutive rows with no
+		// content between them (*qa/findings/20260927T022144Z-inline-
+		// stacked-rules.json*). Dropping the box's own top rule in that
+		// one case leaves the banner's rule to do the same job alone —
+		// exactly one hairline, same as once a turn has committed
+		// something here (the ordinary case, untouched). Fullscreen never
+		// takes this branch: its viewport pads to its own height
+		// regardless of content, so the two rules are never adjacent
+		// there, and this must not fire while replaying into it.
+		//
+		// bannerDone/len(Banner)>0 guard the case there is no banner rule
+		// to double up with at all (a bare Model in a unit test, or a
+		// config with no banner configured) — transcriptIsEmpty alone
+		// cannot tell "nothing but the banner committed" from "nothing
+		// has committed, and there is no banner either", and only the
+		// former should drop this rule. tailLen==0/len(lines)==0 guard
+		// the busy spinner/popup case: once either shows, it is itself
+		// the separating content between the two rules, same as
+		// committed transcript text would be, so the box's own rule
+		// stays.
+		if !m.fullscreen && m.bannerDone && len(m.cfg.Banner) > 0 && m.transcriptIsEmpty() && tailLen == 0 && len(lines) == 0 && len(editorRows) > 0 {
+			editorRows = editorRows[1:]
+			ruleSuppressed = true
+		}
+		lines = append(lines, editorRows...)
 		if m.shortcuts {
 			// The shortcuts panel takes the status row's place
 			// (shortcuts.txt rows 32-39).
@@ -2086,7 +2131,7 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
 	// at width == m.contentWidth(), so the only thing left to add is the
 	// left-shift itself, once, on the way out — padMargin doesn't touch
 	// row count, so editorTop (an index into lines) stays valid.
-	return padMargin(lines, m.margin()), editorTop
+	return padMargin(lines, m.margin()), editorTop, ruleSuppressed
 }
 
 // liveLines builds the live-region rows (everything below the committed
@@ -2097,9 +2142,9 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
 // chromeLines — in inline mode the two always render together, back to
 // back; fullscreen instead folds liveTail into the scrolling viewport (see
 // fullscreenView) and keeps only chromeLines pinned to the bottom.
-func (m Model) liveLines(width int) (lines []string, editorTop int) {
+func (m Model) liveLines(width int) (lines []string, editorTop int, ruleSuppressed bool) {
 	tail := m.liveTail(width)
-	chrome, chromeEditorTop := m.chromeLines(width, len(tail))
+	chrome, chromeEditorTop, chromeRuleSuppressed := m.chromeLines(width, len(tail))
 
 	lines = make([]string, 0, len(tail)+len(chrome))
 	lines = append(lines, tail...)
@@ -2109,7 +2154,7 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 	if chromeEditorTop >= 0 {
 		editorTop = len(tail) + chromeEditorTop
 	}
-	return lines, editorTop
+	return lines, editorTop, chromeRuleSuppressed
 }
 
 // dialogRows renders the open dialog under its `▔` rule, sized to what is
@@ -2159,6 +2204,7 @@ func (m Model) commitBanner() Model {
 		// fullscreen sink) puts it at the top of the viewport, not
 		// scrollback.
 		m.cfg.Bridge.Commit(rows)
+		m.bannerRowCount = len(rows)
 	}
 	if m.cfg.IsResume {
 		// A resumed session (--resume/--continue) starts with a populated
@@ -2170,10 +2216,29 @@ func (m Model) commitBanner() Model {
 		// does (RenderTranscriptEntries via replayTranscript), just
 		// triggered once here instead of by a later toggle, so nothing
 		// double-renders when Ctrl+O or a resize replay runs later.
+		//
+		// A resumed session whose lane has no entries yet (never had a
+		// turn) replays nothing, leaving committedRows at bannerRowCount —
+		// transcriptIsEmpty then reports true, exactly as for a fresh
+		// start (*qa/findings/20260927T022144Z-inline-stacked-rules.json*).
 		m.replayTranscript()
 	}
 	m.bannerDone = true
 	return m
+}
+
+// transcriptIsEmpty reports whether nothing but the banner has been
+// committed to the transcript yet — a fresh start, or a resumed session
+// whose lane had no entries to replay. committedRows (incremented off
+// every tea.PrintedLines echo, whichever call site committed it) already
+// counts every row printed since the last clear; bannerRowCount is what
+// the banner's own commit alone contributed, captured once in
+// commitBanner. Used by chromeLines (inline mode only) to suppress the
+// input box's own top rule in that state, so it does not stack a second
+// hairline directly under the banner's closing rule with nothing between
+// them.
+func (m Model) transcriptIsEmpty() bool {
+	return m.committedRows <= m.bannerRowCount
 }
 
 // replayTranscript re-commits every entry on the lane's current branch,
@@ -2197,6 +2262,10 @@ func (m Model) replayTranscript() {
 		m.cfg.Bridge.Commit(RenderError(err.Error()))
 		return
 	}
+	// A resumed session whose lane has no entries yet (never had a turn)
+	// commits nothing here, leaving committedRows at bannerRowCount —
+	// transcriptIsEmpty then reports true, exactly as for a fresh start
+	// (*qa/findings/20260927T022144Z-inline-stacked-rules.json*).
 	m.cfg.Bridge.Commit(RenderTranscriptEntries(oldestFirst(entries), m.contentWidth(), m.cfg.Bridge.Verbose(), m.cfg.Cwd, m.cfg.Bridge.Synthetics()))
 }
 

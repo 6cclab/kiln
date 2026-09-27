@@ -594,6 +594,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 	systemPrompt := buildSystemPrompt(mcpIndexText)
 	phase("session start", "model", providerID+"/"+modelID, "tools", len(extraTools))
+	// Captured here, at the same "session start" point the phase log
+	// above marks, for /cost's one-line design summary's elapsed segment
+	// (registryDeps.SessionStartedAt -> BuiltinDeps.SessionElapsed).
+	sessionStartedAt := time.Now()
 
 	started, err := agent.Start(ctx, agent.Options{
 		Registry:        reg,
@@ -826,6 +830,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		ContextUsed:        contextUsed,
 		FileReadTokens:     getFileReadTokens,
 		UsageByModel:       getUsageByModel,
+		SessionStartedAt:   sessionStartedAt,
 		MCPConfigPath:      mcpgate.ConfigPath(args.MCPConfig),
 	}, hub)
 

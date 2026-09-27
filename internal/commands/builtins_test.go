@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/budget"
@@ -298,6 +299,9 @@ func TestCostCommandShowsByModelTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cost.Run: %v", err)
 	}
+	if len(res.Output) == 0 || !strings.HasPrefix(res.Output[0], "Session: $0.42") {
+		t.Fatalf("output[0] = %v, want the design summary line leading with the total spend", res.Output)
+	}
 	out := strings.Join(res.Output, "\n")
 	if !strings.Contains(out, "by model:") {
 		t.Fatalf("output = %q, want a by-model section", out)
@@ -307,6 +311,86 @@ func TestCostCommandShowsByModelTable(t *testing.T) {
 	}
 	if !strings.Contains(out, "ollama/qwen3.8:latest") || !strings.Contains(out, "cost -") {
 		t.Fatalf("output = %q, want the free model's cost shown as \"-\"", out)
+	}
+}
+
+// TestCostCommand_OneLineNoteForSingleModel pins the fix for
+// *qa/findings/20260927T014721Z-cost-not-one-line-note.json*: the design
+// (Terminal.dc.html:320) renders /cost as a single system note — "Session:
+// $0.27 · 66k tokens in context · 71s" — not a rate table. With a single
+// model's usage tracked (the common case), /cost's Output is exactly that
+// one line (which tui/app.go's `len(Output) == 1` case renders as the
+// design's note), with no "by model:" block appended, since a lone
+// model's breakdown would only repeat the summary's own total.
+func TestCostCommand_OneLineNoteForSingleModel(t *testing.T) {
+	reg := testRegistry(t)
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     reg,
+		CurrentModel: func() (string, string) { return "ollama", "qwen3.8:latest" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{} },
+		UsageByModel: func() map[string]msg.Usage {
+			return map[string]msg.Usage{
+				"ollama/qwen3.8:latest": {Input: 100, Output: 50, TotalTokens: 150, Cost: msg.Cost{Total: 0.27}},
+			}
+		},
+		ContextUsed: func() (int, bool) { return 66_000, true },
+		SessionElapsed: func() time.Duration {
+			return 71 * time.Second
+		},
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cost *Command
+	for i := range cmds {
+		if cmds[i].Name == "cost" {
+			cost = &cmds[i]
+		}
+	}
+	if cost == nil {
+		t.Fatal("no cost command registered")
+	}
+	res, err := cost.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("cost.Run: %v", err)
+	}
+	if len(res.Output) != 1 {
+		t.Fatalf("Output = %v, want exactly one line (renders as the design's note) with a single model tracked", res.Output)
+	}
+	want := "Session: $0.27 · 66.0k tokens in context · 71s"
+	if res.Output[0] != want {
+		t.Errorf("Output[0] = %q, want %q", res.Output[0], want)
+	}
+}
+
+// TestCostCommand_OmitsElapsedWhenUnknown checks the elapsed segment is
+// left off rather than printing a false "0s" when SessionElapsed is nil
+// or reports zero (BuiltinDeps.SessionElapsed's own doc comment).
+func TestCostCommand_OmitsElapsedWhenUnknown(t *testing.T) {
+	reg := testRegistry(t)
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     reg,
+		CurrentModel: func() (string, string) { return "ollama", "qwen3.8:latest" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{} },
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cost *Command
+	for i := range cmds {
+		if cmds[i].Name == "cost" {
+			cost = &cmds[i]
+		}
+	}
+	res, err := cost.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("cost.Run: %v", err)
+	}
+	want := "Session: $0.00 · 0 tokens in context"
+	if len(res.Output) != 1 || res.Output[0] != want {
+		t.Errorf("Output = %v, want a single line %q with no elapsed segment", res.Output, want)
 	}
 }
 

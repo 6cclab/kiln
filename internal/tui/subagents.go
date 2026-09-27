@@ -51,6 +51,13 @@ type subagentRow struct {
 	toolCalls  int
 	tokens     int
 	message    string
+	// displayName is the row's rendered name, computed per-render by
+	// assignDisplayNamesLocked from agent (the raw dispatch type) and its
+	// siblings in the panel — see that function's doc comment. Empty until
+	// a render has happened; renderSubagentRow falls back to agent (then
+	// "agent") when it is unset, which is also what a subagentRow built
+	// directly (bypassing the panel, as some tests do) gets.
+	displayName string
 }
 
 // SubagentPanelState tracks live/done subagent rows for the turn in
@@ -265,6 +272,7 @@ func (p *SubagentPanelState) freezeLocked(width int) []string {
 // renderLocked is Render's body, callable with mu already held (by Render
 // or Freeze).
 func (p *SubagentPanelState) renderLocked(width int) []string {
+	p.assignDisplayNamesLocked()
 	live, done := p.countsLocked()
 	total := live + done
 	header := fmt.Sprintf("%d subagents running in parallel", total)
@@ -289,6 +297,91 @@ func (p *SubagentPanelState) renderLocked(width int) []string {
 		lines = append(lines, FitStatus("  "+Muted(fmt.Sprintf("+%d more", more)), width))
 	}
 	return lines
+}
+
+// assignDisplayNamesLocked gives every row in the panel a distinct name
+// that fits the 8-column name slot, fixing *qa/findings/…-subagent-names-
+// indistinct.json*: three concurrent `general-purpose` dispatches used to
+// all render as "general…" (the type name truncated to the column width),
+// indistinguishable except by task text.
+//
+// The rule: a dispatch type that appears once in the panel keeps its
+// plain short name — the type's first word (shortAgentWord), e.g. "scout"
+// stays "scout" and "general-purpose" becomes "general" (both fit the
+// column with no ellipsis truncation, unlike the raw type name). A type
+// that appears more than once gets a 1-based "-N" index in arrival order
+// (indexedAgentName): the word itself when it fits the slot with the
+// index ("scout-1", as in the design's agents scene), else its first three
+// letters ("gen-1" for general-purpose) — a clean abbreviation, not a
+// word cut short.
+//
+// Plain mode (--ax-screen-reader) has no column to hold, so it keeps the
+// existing full-name behaviour: a singleton keeps its full type name
+// unchanged, and duplicates get the full type name plus "-N" rather than
+// a 6-character truncation, since there is no room constraint pushing the
+// screen reader's transcript record to be shorter.
+func (p *SubagentPanelState) assignDisplayNamesLocked() {
+	counts := map[string]int{}
+	for _, id := range p.order {
+		counts[p.rows[id].agent]++
+	}
+	seen := map[string]int{}
+	for _, id := range p.order {
+		r := p.rows[id]
+		typ := r.agent
+		if typ == "" {
+			r.displayName = ""
+			continue
+		}
+		if counts[typ] <= 1 {
+			if IsPlain() {
+				r.displayName = typ
+			} else {
+				r.displayName = shortAgentWord(typ)
+			}
+			continue
+		}
+		seen[typ]++
+		idx := seen[typ]
+		if IsPlain() {
+			r.displayName = fmt.Sprintf("%s-%d", typ, idx)
+		} else {
+			r.displayName = indexedAgentName(shortAgentWord(typ), idx)
+		}
+	}
+}
+
+// indexedAgentName is word plus "-idx", kept within the 8-column name slot:
+// the whole word when it fits, else its first three letters.
+func indexedAgentName(word string, idx int) string {
+	suffix := fmt.Sprintf("-%d", idx)
+	if len(word)+len(suffix) > 8 {
+		word = truncateWord(word, 3)
+	}
+	return word + suffix
+}
+
+// shortAgentWord returns typ's first word: the run of letters/digits/'_'
+// up to the first separator ('-', ' ', etc.), or typ unchanged if it has
+// none — "general-purpose" -> "general", "code-reviewer" -> "code",
+// "scout" -> "scout".
+func shortAgentWord(typ string) string {
+	for i, c := range typ {
+		if c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			continue
+		}
+		return typ[:i]
+	}
+	return typ
+}
+
+// truncateWord cuts s to at most n bytes (agent type identifiers are
+// plain ASCII, so byte and rune counts agree).
+func truncateWord(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // renderSubagentRow draws one dispatch's two rows: name (padded to
@@ -317,7 +410,10 @@ func renderSubagentRow(r *subagentRow, width int) []string {
 			action = r.lastAction
 		}
 	}
-	name := r.agent
+	name := r.displayName
+	if name == "" {
+		name = r.agent
+	}
 	if name == "" {
 		name = "agent"
 	}
