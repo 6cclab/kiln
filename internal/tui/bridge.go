@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -586,7 +587,7 @@ func busyLabelForToolStart(ts *turnState, ev harness.Event) string {
 		if cmd == "" {
 			cmd = PrimaryArg(ev.ToolArgs)
 		}
-		return "Running " + truncateBusyArg(cmd, 30)
+		return "Running " + truncateBusyArg(skipLeadingCd(cmd), 30)
 	case "task":
 		if ts != nil {
 			ts.tasksInFlight++
@@ -610,6 +611,22 @@ func busyArgDisplay(arg string) string {
 		return arg
 	}
 	return filepath.Base(arg)
+}
+
+// leadingCd matches a "cd <dir> &&" (or ";") prefix of a command line.
+var leadingCd = regexp.MustCompile(`^\s*cd\s+('[^']*'|"[^"]*"|\S+)\s*(&&|;)\s*`)
+
+// skipLeadingCd drops the "cd <dir> &&" prefixes from a command line for
+// the busy line: models lead most commands with an absolute cd, which
+// filled the 30-rune budget with a path and hid the command itself.
+func skipLeadingCd(cmd string) string {
+	for {
+		loc := leadingCd.FindStringIndex(cmd)
+		if loc == nil || loc[1] == len(cmd) {
+			return cmd
+		}
+		cmd = cmd[loc[1]:]
+	}
 }
 
 // truncateBusyArg keeps the busy line to a bounded width for a long bash

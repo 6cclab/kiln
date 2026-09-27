@@ -1,0 +1,25 @@
+{
+ "id": "20260927T232047Z-busy-line-shows-cd-path",
+ "found_at": "2026-09-27T23:20:47Z",
+ "scenario": "crud-trial/t2-kiln-2",
+ "step": "015-progress",
+ "terminals": [],
+ "category": "usability",
+ "severity": "low",
+ "title": "Busy line shows the cd path instead of the command",
+ "observed": "'Running cd /Users/andrepato/projects/c…': the 30-rune budget is spent on a leading absolute cd",
+ "expected": "Leading cd <dir> && segments skipped: 'Running npm run build'",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln-2/015-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestSkipLeadingCd",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T23:20:47Z"
+ }
+}

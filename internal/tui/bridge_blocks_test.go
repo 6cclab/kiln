@@ -379,3 +379,22 @@ func TestBusyLabel_MultiLineBashStaysOneLine(t *testing.T) {
 		t.Errorf("busy label = %q, want the command joined onto one line", label)
 	}
 }
+
+// TestSkipLeadingCd: the busy line names the command, not the directory a
+// leading cd moves to (qa/findings *busy-line-shows-cd-path).
+func TestSkipLeadingCd(t *testing.T) {
+	cases := map[string]string{
+		"cd /a/b/c && npm run build":          "npm run build",
+		"cd '/a b' && cd api; go test ./...":  "go test ./...",
+		"go test ./...":                       "go test ./...",
+		"cd /a/b":                             "cd /a/b",
+		"cd /a && ":                           "cd /a && ",
+		"cdx /a && ls":                        "cdx /a && ls",
+		"cd api && go vet ./... && go test .": "go vet ./... && go test .",
+	}
+	for in, want := range cases {
+		if got := skipLeadingCd(in); got != want {
+			t.Errorf("skipLeadingCd(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
