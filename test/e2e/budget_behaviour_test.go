@@ -217,17 +217,21 @@ func TestBudget_MemoryDroppedLeastSpecificFirst(t *testing.T) {
 	}
 }
 
-// TestBudget_ToolStrategyPerWindow proves the tool strategy changes what
-// the model is offered. An MCP server named "grafana" (known to the
-// built-in postures and excluded from the default "coding" one) is wired
-// to the fixture binary. On faux-1 (128k, full-index) the system prompt
-// indexes every server, grafana included; on faux-2 (32k, posture-index)
-// the posture keeps grafana out (internal/mcp/gating.go IndexScope). Break
-// to verify: make IndexScope return the posture for every strategy.
+// TestBudget_ToolStrategyPerWindow proves the tool strategy no longer
+// depends on window size at all -- posture-index at every size, per
+// budget.StrategyForWindow -- and that the posture is what actually gates
+// what the model is offered. An MCP server named "grafana" (known to the
+// built-in postures and excluded from the default "coding" one) is wired to
+// the fixture binary. Both faux-1 (128k) and faux-2 (32k) must resolve to
+// posture-index and must both keep grafana out of the system prompt: a
+// bigger window used to earn full-index/full-schemas and index (or fully
+// resident-schema) every server regardless of posture, which is exactly the
+// resident-MCP-schema cost this change removes. Break to verify: restore
+// the old window-based StrategyForWindow.
 func TestBudget_ToolStrategyPerWindow(t *testing.T) {
 	tier1 := budget.TierForWindow(128_000)
-	if tier1.ToolStrategy != budget.StrategyFullIndex {
-		t.Fatalf("faux-1 (128k) tier strategy = %v, want full-index", tier1.ToolStrategy)
+	if tier1.ToolStrategy != budget.StrategyPostureIndex {
+		t.Fatalf("faux-1 (128k) tier strategy = %v, want posture-index", tier1.ToolStrategy)
 	}
 	tier2 := budget.TierForWindow(32_768)
 	if tier2.ToolStrategy != budget.StrategyPostureIndex {
@@ -241,11 +245,11 @@ func TestBudget_ToolStrategyPerWindow(t *testing.T) {
 	sys1 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "", nil, "--mcp-config", mcpConfig)
 	sys2 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-2", "", nil, "--mcp-config", mcpConfig)
 
-	if !strings.Contains(sys1, "mcp__grafana__") {
-		t.Errorf("full-index (faux-1) system prompt does not index the grafana server:\n%s", sys1)
+	if strings.Contains(sys1, "mcp__grafana__") {
+		t.Errorf("faux-1 (128k, posture-index) system prompt indexes grafana, which the coding posture excludes:\n%s", sys1)
 	}
 	if strings.Contains(sys2, "mcp__grafana__") {
-		t.Errorf("posture-index (faux-2) system prompt indexes grafana, which the coding posture excludes:\n%s", sys2)
+		t.Errorf("faux-2 (32k, posture-index) system prompt indexes grafana, which the coding posture excludes:\n%s", sys2)
 	}
 }
 

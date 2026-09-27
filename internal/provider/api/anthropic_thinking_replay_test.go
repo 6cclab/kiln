@@ -37,6 +37,23 @@ func TestConvertBlocksToAnthropic_ThinkingReplay(t *testing.T) {
 	}
 }
 
+// TestConvertBlocksToAnthropic_EmptySignedThinking: models that omit their
+// thinking text (Opus 4.8's default) return signed blocks with thinking "".
+// omitempty dropped the field on replay, and every request after the first
+// tool call failed with "thinking.thinking: Field required" (seen live,
+// req_011CfUSYtweBteih4b1dGEwV). The field must be present, empty.
+func TestConvertBlocksToAnthropic_EmptySignedThinking(t *testing.T) {
+	out := convertBlocksToAnthropic(msg.Blocks{msg.ThinkingContent{Type: "thinking", Thinking: "", ThinkingSignature: "sig-xyz"}})
+	raw, _ := json.Marshal(out)
+	if body := string(raw); !strings.Contains(body, `"thinking":""`) || !strings.Contains(body, `"signature":"sig-xyz"`) {
+		t.Fatalf("empty signed thinking block = %s, want an explicit empty thinking field", body)
+	}
+	text, _ := json.Marshal(convertBlocksToAnthropic(msg.Blocks{msg.Text("hi")}))
+	if strings.Contains(string(text), `"thinking"`) {
+		t.Fatalf("a text block must not carry a thinking field: %s", text)
+	}
+}
+
 // TestToolResultWithImageIsSentAsBlocks guards the tool_result shape: a
 // text-only result is a plain string, a result with an image is a block
 // list carrying the image, so a read of a PNG reaches the model. Break to

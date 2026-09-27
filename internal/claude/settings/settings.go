@@ -293,8 +293,10 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 	switch mode {
 	case ModePlan:
 		// Read-only: anything that could mutate is refused outright rather
-		// than prompted, which is what makes plan mode trustworthy.
-		if ReadOnly[toolName] {
+		// than prompted, which is what makes plan mode trustworthy. A bash
+		// command that provably only reads (IsReadOnlyCommand) is allowed,
+		// so planning can look around the way the read tool does.
+		if ReadOnly[toolName] || (toolName == "bash" && IsReadOnlyCommand(primaryArg)) {
 			return Allow
 		}
 		return Deny

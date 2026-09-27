@@ -50,9 +50,13 @@ func (c *AnthropicClient) httpClient() *http.Client {
 // --- wire request shapes, matching the faux server's decoder and pi's encoder ---
 
 type anthropicContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	Thinking  string          `json:"thinking,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// Thinking is a pointer so a thinking block always carries the field,
+	// even empty: models that omit their thinking text (Opus 4.8 by
+	// default) return signed blocks with thinking "", and a replay without
+	// the field fails with "thinking.thinking: Field required".
+	Thinking  *string         `json:"thinking,omitempty"`
 	Signature string          `json:"signature,omitempty"`
 	Source    *anthropicImage `json:"source,omitempty"`
 	ID        string          `json:"id,omitempty"`
@@ -264,7 +268,8 @@ func convertBlocksToAnthropic(blocks msg.Blocks) []anthropicContentBlock {
 			if c.ThinkingSignature == "" {
 				continue
 			}
-			out = append(out, anthropicContentBlock{Type: "thinking", Thinking: c.Thinking, Signature: c.ThinkingSignature})
+			thinking := c.Thinking
+			out = append(out, anthropicContentBlock{Type: "thinking", Thinking: &thinking, Signature: c.ThinkingSignature})
 		case msg.ToolCall:
 			args, _ := json.Marshal(c.Arguments)
 			out = append(out, anthropicContentBlock{Type: "tool_use", ID: c.ID, Name: c.Name, Input: args})

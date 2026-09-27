@@ -975,8 +975,12 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		if ev.Err != nil {
 			msg = ev.Err.Error()
 		}
-		b.FreezeBefore()
-		b.Commit(RenderError(msg))
+		// Through the app like msgCommitToolCall, not straight to Commit: a
+		// tool block for a call that ran before the fault is still on its
+		// way through Update, and a direct Commit overtook it, so the error
+		// landed above the call that preceded it. SendAsync because a fault
+		// can be emitted from the Update goroutine (see Send).
+		b.SendAsync(msgCommitFault{Message: msg})
 		b.mu.Lock()
 		b.lastFault = msg
 		b.mu.Unlock()
@@ -1001,6 +1005,10 @@ type msgCommitMarkdown struct{ Text string }
 // msgCommitToolCall asks the app to render a finished tool call at the
 // current width and commit it.
 type msgCommitToolCall struct{ View ToolCallView }
+
+// msgCommitFault asks the app to commit a turn's error block, in order with
+// the tool calls committed before it.
+type msgCommitFault struct{ Message string }
 
 // MsgFooterNote sets the footer's transient note ("mcp: connecting 11
 // servers…"); an empty Text clears it. Sent by the CLI for work that

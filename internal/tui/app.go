@@ -665,6 +665,14 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.reconnectedAttempt = msg.Attempt
 		return m, nil
 
+	case msgCommitFault:
+		// A bash/read call that ran before the fault may still sit in the
+		// collapsed group, uncommitted; flush it first, as msgCommitToolCall
+		// does for any non-grouped block.
+		m = m.flushGroup()
+		m.commit(RenderError(msg.Message))
+		return m, nil
+
 	case msgCommitToolCall:
 		if m.cfg.Bridge == nil {
 			return m, nil

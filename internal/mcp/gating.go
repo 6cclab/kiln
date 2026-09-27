@@ -106,8 +106,17 @@ func knownServer(server string) bool {
 	return false
 }
 
+// indexDescriptionRunes is the description length BuildIndex keeps. Every
+// tool is indexed at every window size now (StrategyForWindow always
+// returns posture-index), so the index line is the only per-tool cost that
+// scales with catalog size; keeping it short is what makes tool_search's
+// on-demand admission cheaper than resident schemas ever were.
+const indexDescriptionRunes = 80
+
 // BuildIndex renders one "qualifiedName: description" line per tool.
-// Descriptions are first-line only, truncated to 160 runes: MCP
+// Descriptions are first-line only, truncated to indexDescriptionRunes
+// runes (not bytes -- a byte cut can split a multi-byte rune and emit
+// invalid UTF-8 mid-description), with "…" appended when cut: MCP
 // descriptions routinely run to paragraphs, and the index exists precisely
 // to avoid paying for them.
 func BuildIndex(tools []McpTool) string {
@@ -117,8 +126,9 @@ func BuildIndex(tools []McpTool) string {
 		if nl := strings.IndexByte(desc, '\n'); nl >= 0 {
 			desc = desc[:nl]
 		}
-		if len(desc) > 160 {
-			desc = desc[:160]
+		runes := []rune(desc)
+		if len(runes) > indexDescriptionRunes {
+			desc = string(runes[:indexDescriptionRunes]) + "…"
 		}
 		lines[i] = fmt.Sprintf("%s: %s", t.QualifiedName, desc)
 	}

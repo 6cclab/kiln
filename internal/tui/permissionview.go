@@ -361,7 +361,9 @@ func (p *PromptState) handlePlanKey(msg tea.KeyPressMsg) bool {
 		}
 		return true
 	case "1", "y":
-		p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "acceptEdits"})
+		// "Yes, and use auto mode": auto, as the option says. acceptEdits
+		// still prompted for every command the plan went on to run.
+		p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "auto"})
 		return true
 	case "2":
 		p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "manual"})
@@ -385,7 +387,7 @@ func (p *PromptState) handlePlanKey(msg tea.KeyPressMsg) bool {
 	case "enter":
 		switch p.plan.selected {
 		case 0:
-			p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "acceptEdits"})
+			p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "auto"})
 		case 1:
 			p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "manual"})
 		case 2:

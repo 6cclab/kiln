@@ -167,3 +167,44 @@ func TestTUI_SubagentPanel_ShowsToolActionThenFinalAnswer(t *testing.T) {
 		t.Errorf("done row still shows the generic \"finished\" instead of the final answer:\n%s", joined)
 	}
 }
+
+// faultAfterToolScript runs one bash call, then fails the follow-up
+// request with a hard 400 — the shape of the live Opus 4.8 failure, where
+// the second request of a turn was rejected after a tool had already run.
+const faultAfterToolScript = `model: faux-1
+steps:
+  - tool_call:
+      name: bash
+      args: {command: "echo ran-before-the-fault"}
+      id: b1
+  - on_tool_result: b1
+    then:
+      - error: {status: 400, type: invalid_request_error, message: "rejected after the tool ran"}
+`
+
+// TestTUI_FaultCommitsAfterPrecedingToolCall: the error block used to land
+// ABOVE the bash block for the call that ran before it. The tool block goes
+// through the app's Update loop while the fault was committed straight to
+// the output queue, so the fault overtook it
+// (qa/findings *error-block-above-preceding-tool). Both now go through
+// Update, in order.
+func TestTUI_FaultCommitsAfterPrecedingToolCall(t *testing.T) {
+	proj, home, sessDir, addr, _ := tuiFixture(t, faultAfterToolScript)
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	waitReady(t, s)
+
+	s.Send("run it")
+	s.SendKey("enter")
+	if err := s.WaitFor(regexp.MustCompile(`rejected after the tool\s+ran`), 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WaitFor(turnSummaryPattern, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(append(append([]string(nil), s.Scrollback()...), s.Rows()...), "\n")
+	tool := strings.Index(joined, "ran-before-the-fault")
+	fault := strings.Index(joined, "status=400")
+	if tool < 0 || fault < 0 || tool > fault {
+		t.Fatalf("want the bash block (at %d) above the error (at %d):\n%s", tool, fault, joined)
+	}
+}

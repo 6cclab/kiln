@@ -22,20 +22,23 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 // permEditThenBashScript has the model edit src/math.js (a real,
 // pre-existing oldText so the edit succeeds whenever the gate allows it)
-// and then run a harmless bash command, each gated by the permission
-// table under test.
+// and then run a bash command that writes a file (harmless, in the scratch
+// project), each gated by the permission table under test. It must write:
+// plan mode allows read-only bash (settings.IsReadOnlyCommand), so a
+// read-only command would not test plan mode's refusal.
 const permEditThenBashScript = `model: faux-1
 steps:
   - tool_call: {name: edit, args: {path: src/math.js, edits: [{oldText: "return a - b;", newText: "return a + b;"}]}, id: e1}
   - on_tool_result: e1
     then:
-      - tool_call: {name: bash, args: {command: "echo hi"}, id: b1}
+      - tool_call: {name: bash, args: {command: "echo hi > bash-ran.txt"}, id: b1}
   - on_tool_result: b1
     then:
       - text: "done"
@@ -407,4 +410,44 @@ steps:
 			t.Errorf("blocked=%v, want bash blocked (an ask rule beats mode auto's blanket allow, and with no prompter ask becomes a block)", res.Blocked)
 		}
 	})
+}
+
+// permPlanReadThenWriteScript runs a read-only bash command, then a
+// mutating one, then answers.
+const permPlanReadThenWriteScript = `model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "cat src/math.js && ls -la"}, id: r1}
+  - on_tool_result: r1
+    then:
+      - tool_call: {name: bash, args: {command: "mkdir build"}, id: w1}
+  - on_tool_result: w1
+    then:
+      - text: "planned"
+`
+
+// TestPermission_PlanModeAllowsReadOnlyBash: plan mode runs a bash command
+// that only reads and still refuses one that writes
+// (qa/findings *plan-mode-denies-read-only-bash). It used to refuse both,
+// so a model planning a change could not even cat the spec.
+func TestPermission_PlanModeAllowsReadOnlyBash(t *testing.T) {
+	addr, _ := startFaux(t, permPlanReadThenWriteScript)
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	run := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "plan it", "--output-format", "json", "--permission-mode", "plan")
+	var res struct {
+		Blocked []string `json:"blocked"`
+	}
+	if err := json.Unmarshal([]byte(run.Stdout), &res); err != nil {
+		t.Fatalf("parse --output-format json: %v\nstdout=%s\nstderr=%s", err, run.Stdout, run.Stderr)
+	}
+	joined := strings.Join(res.Blocked, "\n")
+	if strings.Contains(joined, "cat src/math.js") {
+		t.Errorf("read-only bash was blocked in plan mode: %v", res.Blocked)
+	}
+	if !strings.Contains(joined, "mkdir build") || !strings.Contains(joined, "plan mode is read-only") {
+		t.Errorf("mutating bash was not refused in plan mode: %v", res.Blocked)
+	}
+	if _, err := os.Stat(filepath.Join(proj, "build")); err == nil {
+		t.Errorf("plan mode let mkdir run")
+	}
 }
