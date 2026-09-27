@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
+
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -46,6 +48,10 @@ func named(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl}
 	case "alt+backspace":
 		return tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModAlt}
+	case "alt+left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModAlt}
+	case "alt+right":
+		return tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModAlt}
 	}
 	panic("unknown key: " + s)
 }
@@ -321,6 +327,177 @@ func TestSetValueAndClear(t *testing.T) {
 	m.Clear()
 	if got := m.Value(); got != "" {
 		t.Fatalf("Value() after Clear = %q, want empty", got)
+	}
+}
+
+// TestCursorColourMatchesMarker regresses the caret-colour defect
+// (qa/findings/20260926T232627Z-input-caret-colour.json): the input caret
+// was left at the terminal's own default colour because
+// neutralTextareaStyles built textarea.Styles{Focused, Blurred} with no
+// Cursor field, so textarea.Model.Cursor() reported a nil Color. The design
+// (docs/kiln-design-handoff/Terminal.dc.html:135) sets the caret to the
+// amber accent; this package takes that colour from the caller-supplied
+// MarkerStyle (already amber in production, via app.go) rather than
+// importing the theme package, so any colour MarkerStyle carries must come
+// back out of Model.Cursor().
+func TestCursorColourMatchesMarker(t *testing.T) {
+	amber := lipgloss.NewStyle().Foreground(lipgloss.Color("#e9a64b"))
+	m := New(Styles{Marker: "❯", MarkerStyle: amber})
+	m.Focus()
+	m.SetValue("hi")
+
+	c := m.Cursor()
+	if c == nil {
+		t.Fatal("Cursor() = nil while focused, want a hardware cursor")
+	}
+	if c.Color == nil {
+		t.Fatal("Cursor().Color = nil, want the marker's amber accent")
+	}
+	if got, want := c.Color, amber.GetForeground(); got != want {
+		t.Errorf("Cursor().Color = %v, want %v (MarkerStyle's foreground)", got, want)
+	}
+}
+
+// TestSetStyles_ReplacesMarkerRuleAndCursor covers defect
+// *light-bg-you-text-invisible's editor half: app.go's NewModel builds
+// Styles once, before the terminal's background colour is known, so the
+// caller needs a way to push adapted colours (and, for plain mode, a
+// different rule fill character) back in after construction — this is
+// SetStyles's whole job. Marker/Rule/Placeholder are lipgloss.Style values
+// this package cannot compare for equality directly (an unexported style
+// tree), so this checks the two externally observable effects a caller can
+// actually verify: the rendered rule line picks up a new RuleChar
+// (standing in for "the rule's colours also changed" — same call,
+// same struct), and Cursor() picks up the new MarkerStyle's colour,
+// matching TestCursorColourMatchesMarker's own check just above.
+func TestSetStyles_ReplacesMarkerRuleAndCursor(t *testing.T) {
+	initial := Styles{
+		Marker:      "❯",
+		MarkerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("#111111")),
+		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color("#222222")),
+		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("#333333")),
+		RuleChar:    "─",
+	}
+	m := New(initial)
+	m.Focus()
+
+	before := strings.Join(m.View(20), "\n")
+	if !strings.Contains(before, "─") {
+		t.Fatalf("initial rule line missing the unicode fill character: %q", before)
+	}
+
+	updated := Styles{
+		Marker:      "❯",
+		MarkerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("#e9a64b")),
+		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color("#d4d2cb")),
+		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("#7d7262")),
+		RuleChar:    "-",
+	}
+	m.SetStyles(updated)
+
+	after := strings.Join(m.View(20), "\n")
+	if strings.Contains(after, "─") {
+		t.Errorf("rule line still draws the unicode fill character after SetStyles set RuleChar to \"-\": %q", after)
+	}
+	if !strings.Contains(after, "-") {
+		t.Errorf("rule line missing the ASCII fill character SetStyles set: %q", after)
+	}
+
+	c := m.Cursor()
+	if c == nil {
+		t.Fatal("Cursor() = nil while focused, want a hardware cursor")
+	}
+	if got, want := c.Color, updated.MarkerStyle.GetForeground(); got != want {
+		t.Errorf("Cursor().Color after SetStyles = %v, want %v (the new MarkerStyle's foreground)", got, want)
+	}
+}
+
+// TestAltLeftRightMoveByWord covers
+// qa/findings/20260927T001302Z-option-word-motion-default-profile.json:
+// Alt+Left/Alt+Right arrive as the ESC[1;3D / ESC[1;3C sequences iTerm2's
+// Default profile (Left Option = Normal) sends even though Option+b/f do
+// not (those arrive as the literal runes '∫'/'ƒ' in that profile, which
+// this package must not try to intercept). bubbles/v2's textarea binds
+// alt+left/alt+right to WordBackward/WordForward by default
+// (DefaultKeyMap in textarea.go), and internal/tui/keybindings.go's
+// DefaultEditorBindings names the same keys explicitly, so this works
+// whether or not SetKeymap has been applied.
+func TestAltLeftRightMoveByWord(t *testing.T) {
+	m := newTestModel()
+	typeText(t, &m, "hello world")
+	press(t, &m, "alt+left")
+	typeText(t, &m, "NEW")
+	if got, want := m.Value(), "hello NEWworld"; got != want {
+		t.Fatalf("Value() after alt+left then typing = %q, want %q", got, want)
+	}
+
+	m2 := newTestModel()
+	typeText(t, &m2, "hello world")
+	press(t, &m2, "alt+left")
+	press(t, &m2, "alt+right")
+	typeText(t, &m2, "NEW")
+	if got, want := m2.Value(), "hello worldNEW"; got != want {
+		t.Fatalf("Value() after alt+left,alt+right then typing = %q, want %q", got, want)
+	}
+}
+
+// TestCtrlWDeletesWordBack is the Ctrl+W half of the same finding: Ctrl+W
+// (0x17) reaches the terminal unmodified in every Option-key profile, so it
+// must delete the previous word regardless of how Alt is configured.
+// duplicates TestKillWordBack's assertion under the finding's own name so
+// the fix is traceable to its test.
+func TestCtrlWDeletesWordBack(t *testing.T) {
+	m := newTestModel()
+	typeText(t, &m, "hello world")
+	press(t, &m, "ctrl+w")
+	if got, want := m.Value(), "hello "; got != want {
+		t.Fatalf("Value() after ctrl+w = %q, want %q", got, want)
+	}
+}
+
+// boxRows returns how many rows View reserves for the textarea's own
+// content, i.e. its rendered height, by subtracting the two rule lines
+// View always adds (view.go's out = append(rule, body..., rule)).
+func boxRows(m Model, width int) int {
+	return len(m.View(width)) - 2
+}
+
+// TestBoxGrowsForWrappedSingleLine covers
+// qa/findings/20260927T001059Z-input-box-no-grow-for-wrapped-single-line.json:
+// syncHeight used to size the box from m.ta.LineCount(), which counts
+// logical (newline-delimited) lines, so one long line with no newlines
+// always reported height 1 no matter how many visual rows it wrapped onto.
+// A 300-rune single line at width 60 must instead grow the box to its
+// wrapped row count (bubbles/v2's own DynamicHeight, driven by
+// totalVisualLines), capped at maxTextareaHeight.
+func TestBoxGrowsForWrappedSingleLine(t *testing.T) {
+	m := newTestModel()
+	m.SetWidth(60)
+	if got := boxRows(m, 60); got != 1 {
+		t.Fatalf("empty box height = %d, want 1", got)
+	}
+
+	m.SetValue(strings.Repeat("a", 300))
+	got := boxRows(m, 60)
+	if got <= 1 {
+		t.Fatalf("box height after a 300-rune single line at width 60 = %d, want >1 (must grow for the wrap, not stay pinned at 1)", got)
+	}
+	if got > maxTextareaHeight {
+		t.Fatalf("box height = %d, want capped at maxTextareaHeight=%d", got, maxTextareaHeight)
+	}
+
+	// Confirms the observed growth is real content wrapping, not just any
+	// nonzero delta: a line short enough to need only maxTextareaHeight-1
+	// rows must not be clamped to the same height a much longer line is
+	// capped at.
+	m2 := newTestModel()
+	m2.SetWidth(60)
+	m2.SetValue(strings.Repeat("b", 2000))
+	if capped := boxRows(m2, 60); capped != maxTextareaHeight {
+		t.Fatalf("box height for a 2000-rune line at width 60 = %d, want the cap %d", capped, maxTextareaHeight)
+	}
+	if got >= boxRows(m2, 60) {
+		t.Fatalf("300-rune box height (%d) should be less than the capped 2000-rune box height (%d)", got, boxRows(m2, 60))
 	}
 }
 

@@ -1,8 +1,8 @@
-[bg=#241f18]  [/][fg=#e9a64b bg=#241f18]/compact  [/][fg=#a39781]Summarize and compact the current context[/]                                               
-  [fg=#ece4d4]/config   [/][fg=#a39781]Show settings and where they came from[/]                                                  
-  [fg=#ece4d4]/context  [/][fg=#a39781]Show context usage against the active tier[/]                                              
-  [fg=#ece4d4]/cost     [/][fg=#a39781]Show token usage and cost for this session[/]                                              
-[fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────────[/]
-[fg=#e9a64b]›[/] /co                                                                                               
-[fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────────[/]
-[fg=#a39781]●[/] [fg=#a39781]ask before edits[/]  [fg=#a39781]⇧⇥[/]                                                    ctx [fg=#2f2920]──────────[/][fg=#a39781]  0%[/]  [fg=#a39781]$0.00[/] 
+  [bg=#241f18]  [/][fg=#e9a64b bg=#241f18]/compact  [/][fg=#a39781 bg=#241f18]Summarize history to free context[/][bg=#241f18]                                                   [/]  
+    [fg=#ece4d4]/config   [/][fg=#a39781]Show settings and where they came from[/]                                                
+    [fg=#ece4d4]/context  [/][fg=#a39781]Show context window usage[/]                                                             
+    [fg=#ece4d4]/cost     [/][fg=#a39781]Tokens and spend this session[/]                                                         
+  [fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────[/]  
+  [fg=#e9a64b]›[/] /co                                                                                             
+  [fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────[/]  
+  ● ask before edits  ⇧⇥  <cwd> ctx ──────────  0%  $0.00                                           

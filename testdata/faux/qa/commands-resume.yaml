@@ -1,0 +1,12 @@
+model: faux-1
+steps:
+  # end_turn: true closes this step's turn so the @pre seeding request (one
+  # request) consumes only this step; without it, two consecutive text
+  # steps with no end_turn boundary merge into a single reply (doc.go), so
+  # @pre's one request would swallow both steps and leave the main
+  # session's first turn hitting "faux: script exhausted".
+  - text: "Seed session turn."
+    usage: {input: 50, output: 10}
+    end_turn: true
+  - text: "Main session turn."
+    usage: {input: 60, output: 12}

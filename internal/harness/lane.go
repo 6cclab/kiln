@@ -348,3 +348,41 @@ func (l *Lane) RetryNow() {
 	default:
 	}
 }
+
+// ToolSchemaTokens estimates the tokens this lane's active tool schemas
+// occupy in every request it sends. It serializes exactly the
+// provider.ToolDef list buildStreamOptions builds (name, description and
+// JSON Schema parameters, in the lane's own active order) and applies the
+// same chars/4 heuristic the rest of the context accounting uses.
+//
+// This exists so /context can report a measured Tools segment instead of
+// budget.ToolStrategyCost's fixed per-strategy estimate, which is a
+// planning ceiling and can be far from what a given session actually
+// sends — an overshoot there consumed the whole measured context and drove
+// the Conversation segment to zero.
+func (l *Lane) ToolSchemaTokens() (int, error) {
+	cfg, err := l.config()
+	if err != nil {
+		return 0, err
+	}
+	tools := l.h.toolSet()
+	if tools == nil {
+		return 0, nil
+	}
+	var defs []provider.ToolDef
+	for _, name := range cfg.ActiveToolNames {
+		t, ok := tools.Get(name)
+		if !ok {
+			continue
+		}
+		defs = append(defs, provider.ToolDef{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
+	}
+	if len(defs) == 0 {
+		return 0, nil
+	}
+	encoded, err := json.Marshal(defs)
+	if err != nil {
+		return 0, err
+	}
+	return (len(encoded) + 3) / 4, nil
+}

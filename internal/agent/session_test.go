@@ -81,7 +81,18 @@ func TestStartCreatesSessionFile(t *testing.T) {
 		t.Fatal("Created = false, want true")
 	}
 
-	dir := filepath.Join(root, jsonl.DirectoryName(cwd))
+	// Repo.Create stores (and buckets) the symlink-resolved cwd, not cwd
+	// verbatim (see internal/session/jsonl/repo.go's resolveCwd and the
+	// session-cwd-symlink-split fix): t.TempDir() itself often sits behind
+	// a symlink (macOS's /tmp -> /private/tmp), so the directory this
+	// session actually lands in, and the cwd recorded in its header, are
+	// resolvedCwd's, not cwd's.
+	resolvedCwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		resolvedCwd = filepath.Clean(cwd)
+	}
+
+	dir := filepath.Join(root, jsonl.DirectoryName(resolvedCwd))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("ReadDir(%s): %v", dir, err)
@@ -97,8 +108,22 @@ func TestStartCreatesSessionFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(data, []byte(`"cwd":"`+cwd+`"`)) {
-		t.Fatalf("header line missing cwd %q:\n%s", cwd, data)
+	if !bytes.Contains(data, []byte(`"cwd":"`+resolvedCwd+`"`)) {
+		t.Fatalf("header line missing resolved cwd %q:\n%s", resolvedCwd, data)
+	}
+
+	// And List, queried by the original (possibly unresolved) cwd, still
+	// finds it - the resolved-to-resolved comparison this fix relies on.
+	repo, err := jsonl.NewRepo(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := repo.List(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != started.SessionID {
+		t.Fatalf("List(%q) = %+v, want one entry with id %s", cwd, listed, started.SessionID)
 	}
 }
 

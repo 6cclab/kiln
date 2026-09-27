@@ -1,0 +1,25 @@
+# Multi-line entry with shift+enter AND with ctrl+j
+# (internal/tui/editor/model.go's KeyNewLine: {"shift+enter", "alt+enter",
+# "ctrl+j"}). Neither submits; EventSubmit only fires on plain "enter"
+# (KeySubmit). No faux turn is consumed since nothing is ever sent.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE first line
+KEY shift+enter
+TYPE second line via shift enter
+SHOT multiline-shift-enter
+EXPECT /first line/
+EXPECT /second line via shift enter/
+EXPECT_NOT /Hello from faux/
+KEY ctrl+u
+KEY ctrl+u
+TYPE third line
+KEY ctrl+j
+TYPE fourth line via ctrl j
+SHOT multiline-ctrl-j
+EXPECT /third line/
+EXPECT /fourth line via ctrl j/
+EXPECT_NOT /Hello from faux/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,12 @@
+model: faux-1
+steps:
+  # end_turn: true splits the two typed turns into two separate replies;
+  # without it, consecutive text steps merge into one reply for the FIRST
+  # request (doc.go), so "second task" would hit "faux: script exhausted"
+  # instead of its own scripted text (silently masked here since the
+  # merged first reply already contained the phrase the WAITFOR wanted).
+  - text: "Sure, first task handled."
+    usage: {input: 20, output: 10}
+    end_turn: true
+  - text: "Second task handled too."
+    usage: {input: 25, output: 12}

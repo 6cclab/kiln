@@ -1,0 +1,13 @@
+# /exit returns Result{Exit: true} (builtins.go): the TUI program ends and
+# the terminal falls back to its own shell prompt, so there is nothing
+# kiln-rendered left on screen to WAITFOR against.
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /exit
+KEY enter
+WAIT 2
+SHOT after-exit
+EXPECT_NOT /describe a task/
+EXPECT_NOT /panic|goroutine/
+NOTE process-exit is inferred from the kiln UI disappearing from screen text, not observed directly (this driver has no PID check available to a scenario).

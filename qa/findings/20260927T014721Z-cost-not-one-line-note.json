@@ -1,0 +1,29 @@
+{
+ "id": "20260927T014721Z-cost-not-one-line-note",
+ "found_at": "2026-09-27T01:47:21Z",
+ "scenario": "commands/cost",
+ "step": "02-cost",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "low",
+ "title": "/cost prints a rate table instead of the design's one-line session summary",
+ "observed": "/cost renders a 'cost ───' block: 'input $0/M · output $0/M (self-hosted, no marginal cost)', 'by model:', then a per-model row with input/output tokens and cost.",
+ "expected": "Design /cost: a system note 'Session: $0.27 · 66k tokens in context · 71s' (spend, context tokens, elapsed) — the per-model table could follow it for detail.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:320",
+ "evidence": [
+  "qa/runs/c6/iterm-dark/commands-cost-120x40/02-cost.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/builtins.go"
+  ],
+  "regression_test": "qa/scenarios/commands/cost.steps",
+  "after_evidence": [
+   "qa/runs/c9/iterm-dark/commands-cost-120x40"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

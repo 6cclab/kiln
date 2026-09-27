@@ -101,6 +101,10 @@ type Config struct {
 	// Banner is the startup banner, committed (fitted to the terminal
 	// width) on the first WindowSizeMsg so a long cwd row never wraps.
 	Banner []string
+	// BannerFunc, when set, re-renders Banner at commit time, so the rows
+	// use the text tokens fitted to the terminal's reported background
+	// rather than the design defaults Banner was styled with at startup.
+	BannerFunc func() []string
 	// ModelID is the provider/model id the verbose transcript's model row
 	// shows after a turn's last tool call (docs/claude-code-reference.md
 	// §3); empty falls back to ModelLabel.
@@ -113,6 +117,13 @@ type Config struct {
 	SessionID      string
 	TranscriptPath string
 	Version        string
+	// IsResume is set when this run resumed an existing session
+	// (--resume/--continue): NewModel's first WindowSizeMsg handler
+	// replays Lane's prior entries into the transcript, right after the
+	// banner, exactly once — the same rendering replayTranscript uses for
+	// Ctrl+O/resize, so a resumed session never opens on an empty
+	// transcript (defect *resumed-session-no-transcript-replay).
+	IsResume bool
 }
 
 // Model is the interactive shell's Bubbletea v2 model — the Go port of
@@ -162,6 +173,23 @@ type Model struct {
 	streamText string
 	dialog     Dialog
 	thinking   *ThinkingView
+	// queued holds the raw text of every follow-up submitted via Lane.Steer
+	// while a turn is busy, in submission order, that the lane has not yet
+	// drained onto the branch (harness/turn.go's drainInbox). Rendered in
+	// the live region (liveTail) as a dim "queued" row rather than
+	// committed to the transcript — committing it early is defect
+	// 20260926T232249Z-queued-block-order: it lands above the reply to the
+	// turn it interrupted, and its "queued" meta never clears. Once the
+	// lane actually drains the inbox, MsgQueue{Len:0} (EventQueueUpdate)
+	// commits every pending item here as an ordinary `you` block, in
+	// order, and clears this slice — which lands it after the reply it
+	// followed, since the drain always happens after that reply's own
+	// commit (turn.go's drive loop: text commits via EventMessageEnd/
+	// msgCommitMarkdown, then EventTurnEnd, then drainInbox). An aborted
+	// turn (Esc) never drains — those items stay here, still visible in
+	// the live region, until a later Prompt call's own drain (Lane.Prompt
+	// drains the inbox before its own entry is parented) delivers them.
+	queued []string
 	// popup is the `/` or `@` autocomplete list, non-nil while one of the
 	// two triggers matches the editor's current line/cursor. Rebuilt from
 	// scratch on every keystroke by refreshPopup — see autocomplete.go.
@@ -171,6 +199,16 @@ type Model struct {
 	shortcuts bool
 	// bannerDone is set once Banner has been committed.
 	bannerDone bool
+	// bannerRowCount is how many rows commitBanner's own commit contributed
+	// to committedRows (0 if there was no banner to commit). Compared
+	// against committedRows by transcriptIsEmpty to tell whether anything
+	// besides the banner has been committed yet — see that method's doc
+	// comment.
+	bannerRowCount int
+	// bannerScheduled guards msgCommitBanner's grace-period tick (see
+	// bannerBackgroundGrace) so the first WindowSizeMsg schedules it
+	// exactly once, not once per resize before the banner has committed.
+	bannerScheduled bool
 	// committedRows counts rows printed above the live region since the last
 	// clear (tea.PrintedLines). View pads the live region so the input box
 	// sits at the bottom of the terminal; a constant-height live region is
@@ -183,6 +221,10 @@ type Model struct {
 	// closes (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
 	// model as …").
 	dialogEcho string
+	// dialogNotes are notes raised while dialogEcho's dialog was open (a
+	// model switch from /model); closeDialog commits them after the echo
+	// so the transcript reads in the order things happened.
+	dialogNotes []string
 	// group is the in-flight collapsed row for consecutive read-only tool
 	// calls ("  Reading 2 files…", docs/claude-code-reference.md §3). It is
 	// live (redrawn every frame) until a non-grouped commit or the turn's
@@ -258,6 +300,32 @@ type Model struct {
 	resizeGen int
 }
 
+// editorStyles builds the input box's editor.Styles from the theme
+// package's *current* adaptive tokens (CurrentTextHex/CurrentSurfaceHex) —
+// never the design's fixed hexAmber/hexRuleStrong/hexFaint consts directly,
+// or a rebuild after SetTerminalBackground adjusts those tokens for a
+// non-design terminal background would just reapply the same stale dark
+// colours (defect *light-bg-you-text-invisible). Called once in NewModel
+// (before any background reply, so it still reads the design defaults
+// resetTextTokensToDesign/resetSurfaceTokensToDesign seeded at init) and
+// again from the tea.BackgroundColorMsg handler, once SetTerminalBackground
+// has recomputed them for the real terminal.
+func editorStyles(marker string) editor.Styles {
+	text, surface := CurrentTextHex(), CurrentSurfaceHex()
+	return editor.Styles{
+		Marker: marker,
+		// Kiln: prompt glyph amber, rules in rule-strong, placeholder in
+		// kiln faint — see theme.go's hexAmber/hexRuleStrong/hexFaint doc
+		// comments for what those tokens mean on the design background;
+		// CurrentTextHex/CurrentSurfaceHex give whatever they currently
+		// resolve to for the detected terminal background.
+		MarkerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color(text.Amber)),
+		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color(surface.RuleStrong)),
+		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color(text.Faint)),
+		RuleChar:    RuleFillChar(),
+	}
+}
+
 // abbrevHomeEnv home-abbreviates path against os.UserHomeDir(), falling
 // back to path unchanged when the home directory cannot be read — the
 // status line's location segment (status.go RenderStatusLine, AbbrevHome).
@@ -286,14 +354,7 @@ func NewModel(cfg Config) Model {
 		cfg.Effort = "medium"
 	}
 	marker := G().UserMark
-	ed := editor.New(editor.Styles{
-		Marker: marker,
-		// Kiln: prompt glyph amber, rules in rule-strong (#3a3228),
-		// placeholder in kiln faint (#7d7262).
-		MarkerStyle: lipgloss.NewStyle().Foreground(lipgloss.Color(hexAmber)),
-		Rule:        lipgloss.NewStyle().Foreground(lipgloss.Color(hexRuleStrong)),
-		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color(hexFaint)),
-	})
+	ed := editor.New(editorStyles(marker))
 	m := Model{
 		cfg:            cfg,
 		editor:         ed,
@@ -398,6 +459,21 @@ type msgFullscreenRewrap struct{ gen int }
 // the new verbosity (see replayTranscript and Bridge.MsgClearAndReplay).
 type msgReplayTranscript struct{}
 
+// bannerBackgroundGrace is how long the first WindowSizeMsg's handler waits
+// for tea.BackgroundColorMsg before committing the banner (and, for a
+// resumed session, replaying the transcript) with whatever theme tokens are
+// live at that point — see the WindowSizeMsg case's own comment for why
+// committing inline there instead always loses that race. Local PTY round
+// trips land in low single-digit milliseconds; a terminal that never
+// answers the OSC 11 query still gets its banner once this fires.
+const bannerBackgroundGrace = 30 * time.Millisecond
+
+// msgCommitBanner fires bannerBackgroundGrace after the first WindowSizeMsg,
+// unless tea.BackgroundColorMsg's own handler already committed the banner
+// first — see commitBanner, which either call reaches, guarded by
+// bannerDone so it never double-commits.
+type msgCommitBanner struct{}
+
 // MsgTrustAnswered carries the trust dialog's answer; "No, exit" quits.
 type MsgTrustAnswered struct{ Trusted bool }
 
@@ -406,10 +482,9 @@ type MsgTrustAnswered struct{ Trusted bool }
 // the goroutine app.go's handleSubmit spawns, not by the bridge, since
 // nothing about it is harness-event-sourced.
 type msgTurnResult struct {
-	result    harness.RunResult
-	err       error
-	toolCalls int
-	seconds   int
+	result  harness.RunResult
+	err     error
+	seconds int
 }
 
 // --- Update ---------------------------------------------------------------
@@ -477,28 +552,46 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.editor.SetWidth(m.liveEditorWidth())
 		// Kiln label rules and full-row tints size to the live content
 		// width (transcript.go's width-less Render* helpers read this).
+		// SetRenderMargin feeds Bridge.Commit's own central margin pad
+		// (bridge.go), which runs off arbitrary goroutines the same way
+		// ruleWidth()'s renderWidth does.
 		SetRenderWidth(m.contentWidth())
-		if !m.bannerDone && m.cfg.Bridge != nil && len(m.cfg.Banner) > 0 {
-			rows := m.bannerRows()
-			// The input box sits directly below the banner in inline mode.
-			// (No bottom-pinning filler: on a tall terminal it opens a huge
-			// void and, as the statusline loads and notices commit, scrolls
-			// the banner off the top.) In fullscreen the banner is the
-			// transcript's first content instead — appendTranscript (via
-			// the bridge's fullscreen sink) puts it at the top of the
-			// viewport, not scrollback.
-			m.cfg.Bridge.Commit(rows)
+		SetRenderMargin(m.margin())
+		var bannerCmd tea.Cmd
+		if !m.bannerDone && !m.bannerScheduled {
+			// The banner (and, for a resumed session, the transcript
+			// replay right after it — see commitBanner) is deferred by
+			// bannerBackgroundGrace rather than committed here inline:
+			// bubbletea's own Run() sends this WindowSizeMsg (tty.go,
+			// `go p.Send(resizeMsg)`) before Init()'s Cmd even starts
+			// executing, so tea.RequestBackgroundColor's OSC 11 query (sent
+			// from that Cmd) can never win this race — committing straight
+			// from this handler always bakes in the pre-detection
+			// dark-design hexRuleStrong for the banner's closing rule,
+			// wrong on a light terminal (confirmed against qa/runs/c3/
+			// iterm-light/content-verbose-toggle-120x40/02-reply-non-
+			// verbose.png: that rule's pixels are RGB(41,37,29), the
+			// unadjusted design token, while every rule committed after
+			// SetTerminalBackground runs reads RGB(212,210,203) instead —
+			// defect *light-bg-you-text-invisible). The grace period gives
+			// a real terminal's OSC 11 round trip a chance to land first
+			// (tea.BackgroundColorMsg's own handler below commits
+			// immediately and cancels this tick's effect via bannerDone);
+			// a terminal that never answers still gets its banner once the
+			// tick fires — no indefinite wait, matching Init's own "no
+			// timer needed to give up" default for everything else.
+			m.bannerScheduled = true
+			bannerCmd = tea.Tick(bannerBackgroundGrace, func(time.Time) tea.Msg { return msgCommitBanner{} })
 		}
-		m.bannerDone = true
 		if m.fullscreen {
 			m = m.layoutViewport()
 			if prevWidth != 0 && prevWidth != m.width {
 				m.resizeGen++
 				gen := m.resizeGen
-				return m, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return msgFullscreenRewrap{gen: gen} })
+				return m, tea.Batch(bannerCmd, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return msgFullscreenRewrap{gen: gen} }))
 			}
 		}
-		return m, nil
+		return m, bannerCmd
 
 	case tea.QuitMsg:
 		m.quitting = true
@@ -548,6 +641,19 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgQueue:
 		m.spinner.SetQueueLen(msg.Len)
+		// Len 0 is only ever sent by the lane's own drain (drainInbox's
+		// EventQueueUpdate, turn.go) — Steer's own EventQueueUpdate always
+		// carries the inbox's new, non-zero length. A drain means every
+		// pending item just got re-parented onto the branch, in the same
+		// order they were queued, so commit them here, in that order, as
+		// plain `you` blocks (no "queued" meta — it already delivered).
+		if msg.Len == 0 && len(m.queued) > 0 {
+			width := m.contentWidth()
+			for _, text := range m.queued {
+				m.commit(RenderUserMessage(text, width))
+			}
+			m.queued = nil
+		}
 		return m, nil
 
 	case MsgRetryStart:
@@ -597,12 +703,35 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case msgDialogResult:
 		if applier, ok := m.dialog.(interface{ Apply(msgDialogResult) }); ok {
 			applier.Apply(msg)
+			// A dialog action can move the gate's mode (/permissions' "m");
+			// the footer re-reads it so it agrees once the panel closes.
+			return m.refreshMode(), nil
 		}
-		return m, nil
+		// The dialog already closed (Rewind closes on Enter): its outcome
+		// is a note in the transcript, after the redrawn history when the
+		// dialog changed what that history is.
+		note := func() tea.Msg {
+			if m.cfg.Bridge == nil {
+				return nil
+			}
+			if msg.err != nil {
+				m.cfg.Bridge.Commit(RenderError(msg.err.Error()))
+			} else if msg.msg != "" {
+				m.cfg.Bridge.CommitNote(msg.msg)
+			}
+			return nil
+		}
+		if msg.replay {
+			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} }, note)
+		}
+		return m, note
 
 	case msgReplayTranscript:
 		m.replayTranscript()
 		return m, nil
+
+	case msgCommitBanner:
+		return m.commitBanner(), nil
 
 	case MsgTrustAnswered:
 		if !msg.Trusted {
@@ -631,6 +760,14 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.footer.Apply(StatusPatch{ContextUsed: msg.ContextUsed, Cost: &cost})
 		return m, nil
 
+	case msgModelSwitchNote:
+		if m.dialog != nil && m.dialogEcho != "" {
+			m.dialogNotes = append(m.dialogNotes, msg.Text)
+			return m, nil
+		}
+		m.commitNote(msg.Text)
+		return m, nil
+
 	case MsgModelInfo:
 		label := msg.Label
 		window := msg.ContextWindow
@@ -646,6 +783,25 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.BackgroundColorMsg:
 		SetTerminalBackground(msg.Color)
+		// The banner divider and every other Rule/RuleStrong/Muted/...
+		// call site re-reads the theme package's adaptive tokens on its
+		// next render, but the editor's own Styles were captured by value
+		// in NewModel (marker/rule/placeholder colours, plus the cursor
+		// colour neutralTextareaStyles derives from MarkerStyle) — they
+		// need pushing back in explicitly or the input box stays on the
+		// pre-detection dark-design hexes forever (defect
+		// *light-bg-you-text-invisible).
+		m.editor.SetStyles(editorStyles(G().UserMark))
+		if m.bannerScheduled && !m.bannerDone {
+			// The background reply beat msgCommitBanner's grace-period
+			// tick: commit the banner now, with the just-adapted tokens,
+			// instead of waiting out the rest of bannerBackgroundGrace for
+			// no reason. bannerScheduled guards this on the first
+			// WindowSizeMsg having already run (m.width/height known); if
+			// it somehow hasn't yet, the later tick still commits once it
+			// does.
+			m = m.commitBanner()
+		}
 		return m, nil
 
 	case MsgPermissionPrompt:
@@ -704,7 +860,11 @@ func (m Model) handleThinking(msg MsgThinking) Model {
 		if m.thinking != nil && strings.TrimSpace(m.thinking.Text) != "" {
 			view := *m.thinking
 			view.Active = false
-			lines := append([]string{""}, RenderThinking(view)...)
+			if m.cfg.Bridge != nil {
+				view.Expanded = m.cfg.Bridge.Verbose()
+			}
+			width := m.contentWidth()
+			lines := append([]string{""}, FitLines(RenderThinking(view), width, resultIndent)...)
 			m.commit(lines)
 		}
 		m.thinking = nil
@@ -759,17 +919,14 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 		m.commit(RenderError(msg.result.Status))
 	}
 
-	toolCalls := msg.toolCalls
-	if m.cfg.Bridge != nil {
-		toolCalls = m.cfg.Bridge.ToolCallsInTurn()
-	}
-	if m.cfg.Bridge != nil && toolCalls > 0 && m.cfg.Bridge.Verbose() {
-		done := time.Now()
-		if t, ok := clockOverride(); ok {
-			done = t
-		}
-		m.commit([]string{RenderVerboseModelRow(done, m.modelID(), m.contentWidth()), ""})
-	}
+	// The verbose "HH:MM AM model" row that used to commit here (before
+	// the plan/subagents freeze below) is gone: the kiln design's "text"
+	// block has no meta column at all (docs/kiln-design-handoff/README.md
+	// "Block anatomy" table — "kiln (dim) | – |"), so there is nowhere on
+	// a label rule for it to sit, and as its own row it was defect
+	// 20260926T232657Z-verbose-toggle-inconsistent's stray "7:00 PM
+	// faux/faux-1" line — dropped per that defect's own "or is dropped if
+	// the design has no place for it".
 	width := m.contentWidth()
 	// The live "plan" checklist and subagents panel both commit their
 	// final state once, as ordinary transcript blocks, instead of just
@@ -783,7 +940,7 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 		m.cfg.Bridge.CommitSynthetic(lines)
 	}
 	m.plan.Reset()
-	if lines := m.subagents.Freeze(width); len(lines) > 0 && m.cfg.Bridge != nil {
+	if lines := m.subagents.FreezeFinal(width); len(lines) > 0 && m.cfg.Bridge != nil {
 		m.cfg.Bridge.CommitSynthetic(lines)
 	}
 	m.subagents.Reset()
@@ -819,6 +976,15 @@ func (m Model) refreshMode() Model {
 // commit (nothing can be live yet) and finishTurn's InFlightTools abort
 // loop (which must land before the plan/subagents freeze that follows it,
 // not trigger it early — see live_freeze.go's doc comment).
+// The left margin (layout_margin.go's padMargin) is deliberately not
+// applied here: it is applied once, centrally, inside Bridge.Commit itself
+// (bridge.go), which every one of these paths — and CommitSynthetic, which
+// calls Commit internally — ends up going through. Padding here too would
+// double it for anything that also gets stored for replay
+// (CommitSynthetic's own Lines field, spliced back in by
+// RenderTranscriptEntries on a Ctrl+O/Ctrl+F/Rewind redraw): the stored
+// copy has to stay unpadded so a later replay, which pads the whole
+// redrawn transcript once itself, doesn't pad twice.
 func (m Model) commit(lines []string) {
 	if m.cfg.Bridge == nil {
 		return
@@ -845,13 +1011,34 @@ func (m Model) commitNote(text string) {
 	m.cfg.Bridge.CommitNote(text)
 }
 
+// declinedFollowupText is the assistant text block that follows a
+// declined tool call (Terminal.dc.html line 303's pick(2): the note
+// "✕ Declined …" plus this exact sentence, copied literally from the
+// design source — a plain ASCII apostrophe in "won't", not a typographic
+// one).
+const declinedFollowupText = "Okay, I won't run it. What should I do instead?"
+
+// commitAssistantText commits text as an ordinary "kiln" assistant text
+// block (RenderAssistantText), the same rendering msgCommitMarkdown uses
+// for a real streamed reply — used for declinedFollowupText, which is
+// synthesized locally rather than streamed from the model, but must read
+// the same as one that was.
+func (m Model) commitAssistantText(text string) {
+	if m.cfg.Bridge == nil {
+		return
+	}
+	renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
+	lines := append([]string{""}, RenderAssistantText(renderer.Render(text))...)
+	m.commit(lines)
+}
+
 // commitCommandResult is commit's CommitCommandResult counterpart.
-func (m Model) commitCommandResult(lines []string) {
+func (m Model) commitCommandResult(name string, lines []string) {
 	if m.cfg.Bridge == nil {
 		return
 	}
 	m.cfg.Bridge.FreezeBefore()
-	m.cfg.Bridge.CommitCommandResult(lines)
+	m.cfg.Bridge.CommitCommandResult(name, lines)
 }
 
 // dialogOutcome is implemented by dialogs that leave a result row in the
@@ -868,6 +1055,9 @@ func (m Model) closeDialog() Model {
 	m.dialog = nil
 	if m.dialogEcho != "" && m.cfg.Bridge != nil {
 		m.commit(RenderUserMessage(m.dialogEcho, m.contentWidth()))
+		for _, note := range m.dialogNotes {
+			m.cfg.Bridge.CommitNote(note)
+		}
 		if outcome != "" {
 			// A dialog's outcome is always one line ("Kept model as …",
 			// "Compacted history · context 38% → 8%") — the kiln "note"
@@ -876,6 +1066,7 @@ func (m Model) closeDialog() Model {
 		}
 	}
 	m.dialogEcho = ""
+	m.dialogNotes = nil
 	return m
 }
 
@@ -931,13 +1122,26 @@ func (m Model) appendTranscript(newLines []string) Model {
 func (m Model) layoutViewport() Model {
 	width := m.contentWidth()
 	tail := m.liveTail(width)
-	chrome, _ := m.chromeLines(width, len(tail))
+	chrome, _, _ := m.chromeLines(width, len(tail))
 	h := m.height - len(chrome)
 	if h < 1 {
 		h = 1
 	}
 	wasBottom := m.viewport.AtBottom()
-	m.viewport.SetWidth(width)
+	// The viewport's own width is the raw terminal width (m.width), not
+	// contentWidth: every row it holds — appendTranscript's committed
+	// content, which already carries the left margin from Bridge.Commit's
+	// central pad (bridge.go's own doc comment), and the tail/chrome rows
+	// below, also margin-padded (layout_margin.go) — is already m.width
+	// columns wide by the time it reaches the viewport. Sizing the
+	// viewport to the narrower contentWidth clipped exactly the margin's
+	// own width back off the right edge of every row (observed: a
+	// fullscreen diff header's trailing "+1  −1" truncated to "+1  −").
+	rawWidth := m.width
+	if rawWidth <= 0 {
+		rawWidth = 80
+	}
+	m.viewport.SetWidth(rawWidth)
 	m.viewport.SetHeight(h)
 	if wasBottom {
 		m.viewport.GotoBottom()
@@ -975,14 +1179,18 @@ func (m Model) fullscreenView() tea.View {
 		// No WindowSizeMsg yet to size the viewport against; the inline
 		// view degrades gracefully instead of drawing a zero-height frame.
 		width := m.contentWidth()
-		lines, editorTop := m.liveLines(width)
+		lines, editorTop, ruleSuppressed := m.liveLines(width)
 		v := tea.NewView(strings.Join(lines, "\n"))
 		if m.cfg.SessionName != "" {
 			v.WindowTitle = m.cfg.SessionName
 		}
 		if editorTop >= 0 {
 			if c := m.editor.Cursor(); c != nil {
+				c.Position.X += m.margin()
 				c.Position.Y += editorTop
+				if ruleSuppressed {
+					c.Position.Y--
+				}
 				v.Cursor = c
 			}
 		}
@@ -991,7 +1199,7 @@ func (m Model) fullscreenView() tea.View {
 
 	width := m.contentWidth()
 	tail := m.liveTail(width)
-	chrome, editorTop := m.chromeLines(width, len(tail))
+	chrome, editorTop, _ := m.chromeLines(width, len(tail))
 	if len(chrome) > m.height-1 {
 		overflow := len(chrome) - (m.height - 1)
 		chrome = chrome[overflow:]
@@ -1033,6 +1241,7 @@ func (m Model) fullscreenView() tea.View {
 	v.MouseMode = tea.MouseModeCellMotion
 	if editorTop >= 0 {
 		if c := m.editor.Cursor(); c != nil {
+			c.Position.X += m.margin()
 			c.Position.Y += len(vpRows) + editorTop
 			v.Cursor = c
 		}
@@ -1170,11 +1379,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		didRewind     bool
 		didFullscreen bool
 		hintMessage   string
+		// promptEscInterrupt is set when Esc both declines the open
+		// tool-permission prompt and must end the turn (defect 5): the
+		// router's PermissionKey binding owns Esc ahead of everything
+		// else while a prompt is up (keys.go's Route), so the router's
+		// own "esc while busy -> Interrupt" case below never runs in
+		// that case — without this, a busy turn with a prompt queued
+		// behind it (concurrent subagents each raising their own bash
+		// approval) can never be stopped by Esc, only Ctrl+C, which
+		// disagrees with the design's stop() (Terminal.dc.html
+		// lines 310-313: Esc clears the pending permission block AND
+		// ends the turn). Scoped to a tool-permission prompt
+		// (m.prompt.pending, not m.prompt.plan) — a plan prompt's own
+		// Esc means "tell kiln what to change", not "decline and stop".
+		promptEscInterrupt bool
 	)
 	router := NewRouter(KeyActions{
 		PermissionKey: func(msg tea.KeyPressMsg) bool {
 			if !m.prompt.Active() {
 				return false
+			}
+			if m.busy && m.prompt.pending != nil && strings.EqualFold(msg.String(), "esc") {
+				promptEscInterrupt = true
 			}
 			return m.prompt.HandleKey(msg)
 		},
@@ -1209,6 +1435,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if denied := m.prompt.lastDenied; denied != nil {
 		m.prompt.lastDenied = nil
 		m.commitNote(declinedNoteText(*denied))
+		// The design's decline-only path (Terminal.dc.html line 303)
+		// also commits an assistant text block asking what to do
+		// instead — but not when this decline is really an Esc-driven
+		// interrupt (promptEscInterrupt, defect 5): the user is
+		// stopping the whole turn, not redirecting the one declined
+		// call, and finishTurn's own "■ Interrupted…" note is about to
+		// answer that same "what now" beat once the abort actually
+		// lands. Showing both would read as two different, competing
+		// answers to the same moment, so the interrupt note wins.
+		if !promptEscInterrupt {
+			m.commitAssistantText(declinedFollowupText)
+		}
 	}
 	// "Yes, and switch to auto mode" (Bash) / "Yes, and switch to accept
 	// edits" (Edit/Write) both allow the pending call AND change the
@@ -1234,7 +1472,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.modeHintText = hintMessage
 			hintCmd = tea.Tick(modeHintDuration, func(time.Time) tea.Msg { return msgClearModeHint{gen: gen} })
 		}
-		if didAbort && m.cfg.Lane != nil {
+		if (didAbort || promptEscInterrupt) && m.cfg.Lane != nil {
 			_ = m.cfg.Lane.Abort()
 		}
 		if didClear {
@@ -1370,15 +1608,18 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	// A follow-up typed while a turn is running (and no prompt is waiting
 	// on an answer — that keystroke belongs to the prompt, never to a new
 	// message) queues instead of starting a second turn
-	// (docs/kiln-design-handoff/README.md's "Queued follow-up"): the `you`
-	// block commits right away with a "queued" meta, and Lane.Steer queues
-	// the raw text for the harness's own next-turn injection
-	// (harness/lane.go's pi.lane.state.inbox) rather than going through
-	// this function's own command/mention/hook pipeline, which only
-	// applies to a message starting a turn right now.
+	// (docs/kiln-design-handoff/README.md's "Queued follow-up"): it shows
+	// in the live region with a "queued" meta (liveTail, RenderQueuedFollowUp)
+	// rather than committing to the transcript right away — committing it
+	// immediately read out of order, above the reply to the turn it
+	// interrupted (defect 20260926T232249Z-queued-block-order). Lane.Steer
+	// still queues the raw text for the harness's own next-turn injection
+	// (harness/lane.go's pi.lane.state.inbox); MsgQueue{Len:0} (the lane's
+	// own drain, EventQueueUpdate) is what actually commits it, as an
+	// ordinary `you` block with no meta, once the lane has re-parented it
+	// onto the branch.
 	if m.busy && !m.prompt.Active() {
-		width := m.contentWidth()
-		m.commit(RenderUserMessageMeta(line, "queued", width))
+		m.queued = append(m.queued, line)
 		if m.cfg.Lane != nil {
 			if err := m.cfg.Lane.Steer(line); err != nil {
 				m.commit(RenderError(err.Error()))
@@ -1413,6 +1654,17 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			echo()
 			return m, tea.Quit
 		}
+		if handled.Clear {
+			// The conversation was reset: redraw the (now empty)
+			// transcript, then show the command's note under it.
+			note := strings.Join(handled.Output, " ")
+			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} }, func() tea.Msg {
+				if m.cfg.Bridge != nil && note != "" {
+					m.cfg.Bridge.CommitNote(note)
+				}
+				return nil
+			})
+		}
 		if handled.Modal != nil {
 			// Echoed when the dialog closes — see dialogEcho.
 			m.dialogEcho = line
@@ -1436,7 +1688,7 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			// the echo.
 			m.commitNote(handled.Output[0])
 		case len(handled.Output) > 0:
-			m.commitCommandResult(handled.Output)
+			m.commitCommandResult(handled.Name, handled.Output)
 		}
 		if handled.Prompt == "" {
 			return m, nil
@@ -1554,11 +1806,19 @@ func (m Model) beginTurn(prompt string, images []msg.ImageContent) (tea.Model, t
 
 // --- layout -----------------------------------------------------------------
 
+// contentWidth is ContentWidth(m.width) — the 2-column side margin
+// (layout_margin.go) already subtracted, so every caller that wraps or
+// fits to it draws inside the margin without knowing the margin exists.
 func (m Model) contentWidth() int {
-	if m.width <= 0 {
-		return 80
-	}
-	return m.width
+	return ContentWidth(m.width)
+}
+
+// margin is marginFor(m.width): the left-pad every rendered row needs
+// (layout_margin.go's padMargin), applied at the points content leaves this
+// package for the terminal — see layout_margin.go's doc comment for the
+// full list.
+func (m Model) margin() int {
+	return marginFor(m.width)
 }
 
 func (m Model) liveEditorWidth() int {
@@ -1587,8 +1847,12 @@ func (m Model) frameHeight() int {
 // transcript buffer rather than native scrollback and is lost on every
 // clear+replay unless re-added.
 func (m Model) bannerRows() []string {
-	rows := make([]string, len(m.cfg.Banner))
-	for i, r := range m.cfg.Banner {
+	src := m.cfg.Banner
+	if m.cfg.BannerFunc != nil {
+		src = m.cfg.BannerFunc()
+	}
+	rows := make([]string, len(src))
+	for i, r := range src {
 		rows[i] = FitStatus(r, m.contentWidth())
 	}
 	ruleCh := "─"
@@ -1596,6 +1860,10 @@ func (m Model) bannerRows() []string {
 		ruleCh = "-"
 	}
 	rows = append(rows, Rule(strings.Repeat(ruleCh, m.contentWidth())))
+	// Not margin-padded here: every caller commits this through
+	// m.cfg.Bridge.Commit, which applies the left margin once, centrally
+	// (see Commit's own doc comment in bridge.go) — padding here too would
+	// double it.
 	return rows
 }
 
@@ -1610,7 +1878,7 @@ func (m Model) View() tea.View {
 		return m.fullscreenView()
 	}
 	width := m.contentWidth()
-	lines, editorTop := m.liveLines(width)
+	lines, editorTop, ruleSuppressed := m.liveLines(width)
 
 	// The live region renders at its natural height directly below the
 	// committed transcript. An earlier version padded it to fill the
@@ -1630,7 +1898,11 @@ func (m Model) View() tea.View {
 	}
 	if editorTop >= 0 {
 		if c := m.editor.Cursor(); c != nil {
+			c.Position.X += m.margin()
 			c.Position.Y += editorTop
+			if ruleSuppressed {
+				c.Position.Y--
+			}
 			v.Cursor = c
 		}
 	}
@@ -1706,7 +1978,21 @@ func (m Model) renderPlanLive(width int) []string {
 func (m Model) liveTail(width int) []string {
 	var lines []string
 
-	if m.group != nil {
+	// The tool-group's own live row (RenderToolGroupRunning, "● Running N
+	// shell commands…") only exists while m.group is accumulating, which
+	// is only ever true while a turn is running (flushGroup empties it
+	// before finishTurn clears m.busy, and MsgPermissionPrompt/
+	// MsgPlanPrompt both flush it before a prompt can open) — so any time
+	// this row would show, the busy line below it is already up and
+	// naming the same in-flight work (defect 4: a real 120x40 session
+	// showed both "● Running 2 shell commands…" and "◐ Running cd
+	// /private/tmp/…  43s · 7.1k tokens   esc to stop" at once; the
+	// design has only the busy line, Terminal.dc.html line 125). Suppress
+	// the live group row while busy rather than dropping the
+	// accumulation itself — flushGroup still commits every call's full
+	// block once the group ends, so nothing is lost from scrollback,
+	// only the redundant live summary.
+	if m.group != nil && !m.busy {
 		lines = append(lines, "", RenderToolGroupRunning(m.group.kind, len(m.group.views)))
 	}
 	if m.thinking != nil {
@@ -1717,8 +2003,16 @@ func (m Model) liveTail(width int) []string {
 		}
 	}
 
+	// Follow-ups queued via Lane.Steer while this turn (or an aborted one
+	// whose queued items the lane has not drained yet, see m.queued's doc
+	// comment) is busy: shown here, below the running turn, until the
+	// lane's own drain commits them for real (MsgQueue{Len:0} in Update).
+	for _, text := range m.queued {
+		lines = append(lines, RenderQueuedFollowUp(text, width)...)
+	}
+
 	if m.dialog != nil || (m.cfg.Bridge != nil && m.cfg.Bridge.Verbose()) {
-		return lines
+		return padMargin(lines, m.margin())
 	}
 
 	// The live-while-last blocks (live_freeze.go): streaming text and
@@ -1753,16 +2047,13 @@ func (m Model) liveTail(width int) []string {
 		// row below it all keep rendering too (docs/kiln-design-
 		// handoff/README.md scene 06): "approval needed" block, then
 		// "◐ Waiting for approval…", then the input with "press 1, 2
-		// or 3", then the status line. Plan approval keeps its own
-		// full `▔` rule and blank row above the block.
-		if m.prompt.plan != nil {
-			lines = append(lines, Rule(strings.Repeat("▔", width)), "")
-		}
+		// or 3", then the status line. Plan approval uses the same
+		// block anatomy, so it gets no chrome of its own here.
 		lines = append(lines, m.prompt.Render(width)...)
 		lines = append(lines, "")
 	}
 
-	return lines
+	return padMargin(lines, m.margin())
 }
 
 // chromeLines builds the bottom chrome that stays pinned regardless of
@@ -1774,7 +2065,12 @@ func (m Model) liveTail(width int) []string {
 // always) and is only used to size a dialog's remaining room and to
 // position a popup relative to the input box's top rule, exactly as
 // liveLines used to when tail and chrome were one slice.
-func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
+//
+// ruleSuppressed reports whether the editor's own top rule was dropped —
+// see the call site below and transcriptIsEmpty's doc comment; the two
+// View/fullscreenView callers use it to adjust the hardware cursor's row
+// by the one line that convention assumes is always there.
+func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int, ruleSuppressed bool) {
 	editorTop = -1
 
 	switch {
@@ -1792,7 +2088,7 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
 		if s := m.spinner.Render(width, time.Time{}); len(s) > 0 {
 			lines = append(lines, s...)
 		}
-		lines = append(lines, RuleColour(strings.Repeat("─", width)), m.renderStatusRow(width))
+		lines = append(lines, RuleColour(strings.Repeat(RuleFillChar(), width)), m.renderStatusRow(width))
 	default:
 		// The busy line always sits directly above the input box — the
 		// last thing before it, whatever else is showing above (streaming
@@ -1809,7 +2105,35 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
 		}
 
 		editorTop = len(lines)
-		lines = append(lines, m.editor.View(width)...)
+		editorRows := m.editor.View(width)
+		// A fresh start, or a resumed session before any turn, has
+		// nothing between the banner's own closing rule (already
+		// committed, permanently, to scrollback) and this box: in inline
+		// mode that puts two hairlines on consecutive rows with no
+		// content between them (*qa/findings/20260927T022144Z-inline-
+		// stacked-rules.json*). Dropping the box's own top rule in that
+		// one case leaves the banner's rule to do the same job alone —
+		// exactly one hairline, same as once a turn has committed
+		// something here (the ordinary case, untouched). Fullscreen never
+		// takes this branch: its viewport pads to its own height
+		// regardless of content, so the two rules are never adjacent
+		// there, and this must not fire while replaying into it.
+		//
+		// bannerDone/len(Banner)>0 guard the case there is no banner rule
+		// to double up with at all (a bare Model in a unit test, or a
+		// config with no banner configured) — transcriptIsEmpty alone
+		// cannot tell "nothing but the banner committed" from "nothing
+		// has committed, and there is no banner either", and only the
+		// former should drop this rule. tailLen==0/len(lines)==0 guard
+		// the busy spinner/popup case: once either shows, it is itself
+		// the separating content between the two rules, same as
+		// committed transcript text would be, so the box's own rule
+		// stays.
+		if !m.fullscreen && m.bannerDone && len(m.cfg.Banner) > 0 && m.transcriptIsEmpty() && tailLen == 0 && len(lines) == 0 && len(editorRows) > 0 {
+			editorRows = editorRows[1:]
+			ruleSuppressed = true
+		}
+		lines = append(lines, editorRows...)
 		if m.shortcuts {
 			// The shortcuts panel takes the status row's place
 			// (shortcuts.txt rows 32-39).
@@ -1828,7 +2152,12 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
 		}
 	}
 
-	return lines, editorTop
+	// Padding here (rather than per-case above) is the "one place" this
+	// port tries to keep the margin in: every case above already renders
+	// at width == m.contentWidth(), so the only thing left to add is the
+	// left-shift itself, once, on the way out — padMargin doesn't touch
+	// row count, so editorTop (an index into lines) stays valid.
+	return padMargin(lines, m.margin()), editorTop, ruleSuppressed
 }
 
 // liveLines builds the live-region rows (everything below the committed
@@ -1839,9 +2168,9 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int) {
 // chromeLines — in inline mode the two always render together, back to
 // back; fullscreen instead folds liveTail into the scrolling viewport (see
 // fullscreenView) and keeps only chromeLines pinned to the bottom.
-func (m Model) liveLines(width int) (lines []string, editorTop int) {
+func (m Model) liveLines(width int) (lines []string, editorTop int, ruleSuppressed bool) {
 	tail := m.liveTail(width)
-	chrome, chromeEditorTop := m.chromeLines(width, len(tail))
+	chrome, chromeEditorTop, chromeRuleSuppressed := m.chromeLines(width, len(tail))
 
 	lines = make([]string, 0, len(tail)+len(chrome))
 	lines = append(lines, tail...)
@@ -1851,7 +2180,7 @@ func (m Model) liveLines(width int) (lines []string, editorTop int) {
 	if chromeEditorTop >= 0 {
 		editorTop = len(tail) + chromeEditorTop
 	}
-	return lines, editorTop
+	return lines, editorTop, chromeRuleSuppressed
 }
 
 // dialogRows renders the open dialog under its `▔` rule, sized to what is
@@ -1862,36 +2191,11 @@ func (m Model) dialogRows(width, linesAbove int) []string {
 	if room < 4 {
 		room = 4
 	}
-	rows := []string{m.dialogRule(width)}
+	rows := []string{DialogTopRule(m.dialog, width)}
 	for _, r := range m.dialog.Render(width, room) {
 		rows = append(rows, FitStatus(r, width))
 	}
 	return rows
-}
-
-// dialogRule is the `▔` rule above a dialog with the effort indicator set
-// in near the right edge: `▔…▔ ◐ medium · /effort ▔` (dialog-model.txt row 24).
-func (m Model) dialogRule(width int) string {
-	effort := m.cfg.Effort
-	if effort == "" {
-		effort = "medium"
-	}
-	label := " " + effortGlyph(effort) + " " + effort + " · /effort "
-	lead := width - VisibleWidth(label) - 1
-	if lead < 0 {
-		return FitStatus(Muted(strings.TrimSpace(label)), width)
-	}
-	// Kiln restyle: the ▔ rule uses the kiln hairline colour rather than
-	// the Claude Code accent.
-	return Rule(strings.Repeat("▔", lead)) + Muted(label) + Rule("▔")
-}
-
-// modelID is the id the verbose model row shows.
-func (m Model) modelID() string {
-	if m.cfg.ModelID != "" {
-		return m.cfg.ModelID
-	}
-	return m.footer.State().ModelLabel
 }
 
 // toggleVerbose flips the bridge's verbose flag on Ctrl+O, clears the
@@ -1904,6 +2208,63 @@ func (m Model) toggleVerbose() (tea.Model, tea.Cmd) {
 	}
 	m.cfg.Bridge.SetVerbose(!m.cfg.Bridge.Verbose())
 	return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
+}
+
+// commitBanner commits cfg.Banner (fitted, with its closing rule) and, for a
+// resumed session, replays the prior transcript right after it — the
+// startup work bannerBackgroundGrace defers off the first WindowSizeMsg (or
+// tea.BackgroundColorMsg's handler runs early, if the reply lands first).
+// A no-op once bannerDone is set, so whichever of those two call sites
+// reaches it first is the only one that commits anything.
+func (m Model) commitBanner() Model {
+	if m.bannerDone {
+		return m
+	}
+	if m.cfg.Bridge != nil && len(m.cfg.Banner) > 0 {
+		rows := m.bannerRows()
+		// The input box sits directly below the banner in inline mode. (No
+		// bottom-pinning filler: on a tall terminal it opens a huge void
+		// and, as the statusline loads and notices commit, scrolls the
+		// banner off the top.) In fullscreen the banner is the transcript's
+		// first content instead — appendTranscript (via the bridge's
+		// fullscreen sink) puts it at the top of the viewport, not
+		// scrollback.
+		m.cfg.Bridge.Commit(rows)
+		m.bannerRowCount = len(rows)
+	}
+	if m.cfg.IsResume {
+		// A resumed session (--resume/--continue) starts with a populated
+		// Lane but nothing yet committed to the transcript: without this,
+		// the screen shows the banner, its closing rule, a blank live
+		// region and then the input box's own top rule — two rules with no
+		// conversation between them (defect *resumed-session-no-
+		// transcript-replay). Replay uses the exact same renderer Ctrl+O
+		// does (RenderTranscriptEntries via replayTranscript), just
+		// triggered once here instead of by a later toggle, so nothing
+		// double-renders when Ctrl+O or a resize replay runs later.
+		//
+		// A resumed session whose lane has no entries yet (never had a
+		// turn) replays nothing, leaving committedRows at bannerRowCount —
+		// transcriptIsEmpty then reports true, exactly as for a fresh
+		// start (*qa/findings/20260927T022144Z-inline-stacked-rules.json*).
+		m.replayTranscript()
+	}
+	m.bannerDone = true
+	return m
+}
+
+// transcriptIsEmpty reports whether nothing but the banner has been
+// committed to the transcript yet — a fresh start, or a resumed session
+// whose lane had no entries to replay. committedRows (incremented off
+// every tea.PrintedLines echo, whichever call site committed it) already
+// counts every row printed since the last clear; bannerRowCount is what
+// the banner's own commit alone contributed, captured once in
+// commitBanner. Used by chromeLines (inline mode only) to suppress the
+// input box's own top rule in that state, so it does not stack a second
+// hairline directly under the banner's closing rule with nothing between
+// them.
+func (m Model) transcriptIsEmpty() bool {
+	return m.committedRows <= m.bannerRowCount
 }
 
 // replayTranscript re-commits every entry on the lane's current branch,
@@ -1927,6 +2288,10 @@ func (m Model) replayTranscript() {
 		m.cfg.Bridge.Commit(RenderError(err.Error()))
 		return
 	}
+	// A resumed session whose lane has no entries yet (never had a turn)
+	// commits nothing here, leaving committedRows at bannerRowCount —
+	// transcriptIsEmpty then reports true, exactly as for a fresh start
+	// (*qa/findings/20260927T022144Z-inline-stacked-rules.json*).
 	m.cfg.Bridge.Commit(RenderTranscriptEntries(oldestFirst(entries), m.contentWidth(), m.cfg.Bridge.Verbose(), m.cfg.Cwd, m.cfg.Bridge.Synthetics()))
 }
 
@@ -1945,14 +2310,13 @@ func (m Model) openRewind() Model {
 		return m
 	}
 	lane := m.cfg.Lane
-	bridge := m.cfg.Bridge
 	m.dialog = NewRewindDialog(RewindEntriesFromSession(entries), func(entryID string) error {
 		if err := lane.NavigateTree(context.Background(), parentOf(entries, entryID)); err != nil {
 			return err
 		}
-		if bridge != nil {
-			bridge.Send(MsgClearAndReplay{})
-		}
+		// The transcript redraw and the "Rewound to before" note follow
+		// from the dialog's result (msgDialogResult.replay). A Send from
+		// here would deadlock: this runs inside Update.
 		return nil
 	})
 	return m
@@ -2005,7 +2369,7 @@ func (m Model) renderPopup(width, linesAbove int) []string {
 	if maxRows > room {
 		maxRows = room
 	}
-	rule := RuleColour(strings.Repeat("─", width))
+	rule := RuleColour(strings.Repeat(RuleFillChar(), width))
 	return append([]string{rule}, m.popup.Render(width, maxRows)...)
 }
 
@@ -2048,24 +2412,6 @@ func (m Model) renderStatusRow(width int) string {
 		return left + strings.Repeat(" ", pad) + right
 	}
 	return m.footer.RenderLine(width)
-}
-
-// effortGlyph maps a reasoning-effort label to its indicator glyph
-// (docs/claude-code-reference.md §1: "Glyph by effort: `◔ low`, `◐
-// medium`, `◕ high`, `● xhigh/max`"). Unrecognized labels fall back to the
-// medium glyph rather than an empty one, since the row must always show
-// something.
-func effortGlyph(effort string) string {
-	switch effort {
-	case "low":
-		return "◔"
-	case "high":
-		return "◕"
-	case "xhigh", "max":
-		return "●"
-	default:
-		return "◐"
-	}
 }
 
 // rightAlign pads s on the left so it ends at the row's last column,

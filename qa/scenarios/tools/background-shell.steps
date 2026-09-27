@@ -1,0 +1,21 @@
+# bash_background starts a shell (internal/tools/backgroundshell.go) and
+# returns immediately with an id; /bashes (internal/commands/inline.go,
+# rendered by agent.RenderShellList) lists it and its running status.
+@faux testdata/faux/qa/tools-background-shell.yaml
+@args --permission-mode dontAsk
+
+WAITFOR /describe a task/ 20
+TYPE start a background sleep
+KEY enter
+WAITFOR /Started bash_1/ 20
+SHOT dispatched
+EXPECT /Started bash_1: sleep 30/
+EXPECT /Started it in the background/
+TYPE /bashes
+KEY enter
+WAITFOR /shell\(s\)/ 20
+SHOT bashes-list
+EXPECT /1 shell\(s\), 1 running/
+EXPECT /bash_1\s+running/
+EXPECT /sleep 30/
+EXPECT_NOT /panic|goroutine/

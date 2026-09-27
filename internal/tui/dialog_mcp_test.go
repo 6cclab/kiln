@@ -24,11 +24,19 @@ func referenceMCPItems() []commands.Item {
 }
 
 // TestDialogMCP_MatchesReferenceStructure diffs the harness's /mcp list
-// view against dialog-mcp.txt's title, count row, section header, one ✔
-// row, one ✘ row, the ※ row and the legend (width 100). The harness has
-// no claude.ai/Built-in sections and no ⚠/◯ states (see mcpModal's doc
-// comment in internal/commands/manage_commands.go for why), so those
-// reference rows have no harness counterpart to test against.
+// view against its shape (title, count row, section header, a connected
+// row, a failed row, the legend, width 100). This originally diffed
+// byte-for-byte against Claude Code's own dialog-mcp.txt; the kiln
+// restyle (QA findings 20260927T000712Z-dialog-chrome-effort-indicator
+// and 20260927T000726Z-mcp-dialog-glyphs-plural) intentionally departs
+// from that reference: no dialogIndent (content aligns with every other
+// block's left edge — DialogTopRule's "mcp ────" label rule carries the
+// indent instead), a blank-or-"> " selectionGutter instead of "❯",
+// ✓/✕ instead of ✔/✘ (mcpStatusGlyph), and no "※" line (a plain dim hint
+// row). The harness has no claude.ai/Built-in sections and no ⚠/◯ states
+// (see mcpModal's doc comment in internal/commands/manage_commands.go for
+// why), so those reference rows have no harness counterpart to test
+// against.
 func TestDialogMCP_MatchesReferenceStructure(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
@@ -40,16 +48,16 @@ func TestDialogMCP_MatchesReferenceStructure(t *testing.T) {
 	got := d.Render(100, 40)
 
 	want := []string{
-		"   Manage MCP servers",
-		"   2 servers",
+		"Manage MCP servers",
+		"2 servers",
 		"",
-		"     User MCPs (/Users/andrepato/.claude.json)",
-		"   \u276f \u2714 argocd-mcp   16 tools",
-		"     \u2718 proxmox",
+		"  User MCPs (/Users/andrepato/.claude.json)",
+		"> \u2713 argocd-mcp   16 tools",
+		"  \u2715 proxmox",
 		"",
-		"   \u203b Run kiln --debug to see error logs",
-		"   kiln doctor for details",
-		"   \u2191/\u2193 to navigate \u00b7 Enter to confirm \u00b7 Esc to cancel",
+		"Run kiln --debug to see error logs",
+		"kiln doctor for details",
+		"\u2191/\u2193 to navigate \u00b7 Enter to confirm \u00b7 Esc to cancel",
 	}
 
 	if len(got) != len(want) {
@@ -57,10 +65,11 @@ func TestDialogMCP_MatchesReferenceStructure(t *testing.T) {
 	}
 	for i := range want {
 		row := got[i]
-		// The selected row (the "❯" list item) is padded to the full
-		// width by its raised background (OnRaise(padTo(...))); trim that
-		// padding before comparing so this test only pins content, not
-		// background width, which TestDialogMCP_Width60 already covers.
+		// The selected row (marked "> " with colour disabled) is padded to
+		// the full width by its raised background (OnRaise(padTo(...)));
+		// trim that padding before comparing so this test only pins
+		// content, not background width, which TestDialogMCP_Width60
+		// already covers.
 		if i == 4 {
 			row = strings.TrimRight(row, " ")
 		}
@@ -87,12 +96,13 @@ func TestDialogMCP_Width60(t *testing.T) {
 	}
 }
 
-// TestDialogMCP_NoFailuresOmitsDebugRow checks the ※ row only appears
-// when a server actually failed, matching the reference's own
-// conditional (dialog-mcp.txt shows it because proxmox is down; a
-// capture with everything connected would not have it — inferred from
-// the row's wording, "Run ... to see error logs", which implies errors
-// exist).
+// TestDialogMCP_NoFailuresOmitsDebugRow checks the debug-hint row only
+// appears when a server actually failed, matching dialog-mcp.txt's own
+// conditional (it shows because proxmox is down; a capture with
+// everything connected would not have it -- inferred from the row's
+// wording, "Run ... to see error logs", which implies errors exist). The
+// row carries no glyph at all now (QA finding 20260927T000726Z-mcp-dialog-glyphs-plural dropped the leading "※").
+// See dialog_mcp.go's renderList.
 func TestDialogMCP_NoFailuresOmitsDebugRow(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
@@ -103,7 +113,7 @@ func TestDialogMCP_NoFailuresOmitsDebugRow(t *testing.T) {
 	d := NewDialogMCP(spec).(*dialogMCP)
 	got := d.Render(100, 40)
 	for _, row := range got {
-		if row == "   \u203b Run harness --debug to see error logs" {
+		if row == "Run kiln --debug to see error logs" {
 			t.Errorf("did not expect the ※ row with no failed servers, got %q", got)
 		}
 	}

@@ -1,0 +1,22 @@
+# Edit prompt, option 1 ("Yes"): the diff preview shows in the prompt
+# itself, then the edit is applied and committed.
+@faux testdata/faux/qa/permissions-edit-yes.yaml
+@fixture testdata/behaviour/design
+
+WAITFOR /describe a task/ 20
+TYPE tighten the auth check
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT edit-prompt
+EXPECT /Allow kiln to edit .*auth\.ts\?/
+# Diff rows render as "<num> <sign>  <text>" (line number, sign, two
+# spaces, then the code) — allow for that prefix/gap instead of anchoring
+# directly on the sign.
+EXPECT /−\s+if \(!req\.headers\.authorization\) \{/
+EXPECT /\+\s+if \(!req\.headers\.authorization \|\| req\.headers\.authorization === ''\) \{/
+EXPECT /Yes, and switch to accept edits/
+KEY 1
+WAITFOR /Edit approved and applied/ 20
+SHOT edit-applied
+EXPECT_NOT /approval needed/
+EXPECT_NOT /panic|goroutine/

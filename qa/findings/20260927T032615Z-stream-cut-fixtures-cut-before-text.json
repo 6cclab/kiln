@@ -1,0 +1,30 @@
+{
+ "id": "20260927T032615Z-stream-cut-fixtures-cut-before-text",
+ "found_at": "2026-09-27T03:26:15Z",
+ "scenario": "qa/scenarios/errors/stream-cut-midtext.steps",
+ "step": "WAITFOR /Here is the first half/",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Mid-stream cut fixtures disconnect before any text is sent",
+ "observed": "errors-stream-cut-midtext and errors-disconnect-midstream timed out in runs c1, c3 and final: the partial reply never appears. curl against the fixture returned 236 bytes (message_start only) and zero text_delta events, because disconnect_after counts raw SSE bytes including framing and was set to 32 and 60.",
+ "expected": "The cut lands mid-text so the partial reply, the retry and the continuation are all observable.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-dark/errors-stream-cut-midtext-120x40/03-waitfor-timeout-line15.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "testdata/faux/qa/errors-stream-cut-midtext.yaml",
+   "testdata/faux/qa/errors-disconnect-midstream.yaml"
+  ],
+  "regression_test": "qa/scenarios/errors/stream-cut-midtext.steps",
+  "after_evidence": [
+   "qa/runs/c9/iterm-dark/errors-stream-cut-midtext-120x40"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

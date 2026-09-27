@@ -18,6 +18,7 @@ package cli
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
@@ -65,9 +66,19 @@ type registryDeps struct {
 	// ContextUsed reports the last usage event's total token count, for
 	// /usage. Nil is treated as "no usage yet".
 	ContextUsed func() (int, bool)
+	// FileReadTokens reports the tokens attributable to file contents
+	// read into this session, for /context's "Files read" segment
+	// (docs/kiln-design-handoff/Terminal.dc.html line 227). Nil is
+	// treated as "not tracked", and the segment reports zero.
+	FileReadTokens func() (int, bool)
 	// UsageByModel reports this session's accumulated usage keyed by
 	// "provider/model", for /cost's by-model table. Nil when not tracked.
 	UsageByModel func() map[string]msg.Usage
+	// SessionStartedAt is when this session's Run began (captured right
+	// around agent.Start in chat.go), for /cost's one-line design summary
+	// ("... · 71s", Terminal.dc.html:320) via BuiltinDeps.SessionElapsed.
+	// Zero is treated as "unknown" and the elapsed segment is omitted.
+	SessionStartedAt time.Time
 	// MCPConfigPath is the mcpServers file /mcp names in its section header.
 	MCPConfigPath string
 }
@@ -139,9 +150,10 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		CurrentModel: func() (string, string) {
 			return started.Model.Provider, started.Model.ID
 		},
-		CurrentTier: func() budget.Tier { return started.Tier },
-		ModelLabel:  func() string { return deps.ModelLabel },
-		ContextUsed: deps.ContextUsed,
+		CurrentTier:    func() budget.Tier { return started.Tier },
+		ModelLabel:     func() string { return deps.ModelLabel },
+		ContextUsed:    deps.ContextUsed,
+		FileReadTokens: deps.FileReadTokens,
 		// The tier's SystemPromptTokens is a fixed ceiling, not what this
 		// session's system prompt actually assembled to — measure the
 		// real one instead so /context's "System prompt" segment (and
@@ -154,14 +166,43 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 			}
 			return (len(sp) + 3) / 4, true
 		},
+		// Measured from the lane's own active tool schemas rather than
+		// budget.ToolStrategyCost, which is a planning ceiling per
+		// strategy: in a real session that estimate overshot the whole
+		// measured context and drove /context's Conversation segment to
+		// zero.
+		ToolSchemaTokens: func() (int, bool) {
+			if started.Lane == nil {
+				return 0, false
+			}
+			n, err := started.Lane.ToolSchemaTokens()
+			if err != nil || n <= 0 {
+				return 0, false
+			}
+			return n, true
+		},
 		SwitchModel: func(ctx context.Context, providerID, modelID string) (budget.Tier, error) {
 			return switchModel(ctx, reg, started, mcpSess, providerID, modelID)
 		},
 		Agents:       deps.Agents,
 		SessionsDir:  deps.SessionsDir,
 		UsageByModel: deps.UsageByModel,
-		OnClear:      func() {},
-		OnExit:       func() {},
+		SessionElapsed: func() time.Duration {
+			if deps.SessionStartedAt.IsZero() {
+				return 0
+			}
+			return time.Since(deps.SessionStartedAt)
+		},
+		// /clear moves the lane's branch tip back to the root, so the next
+		// turn starts from an empty conversation; the session log keeps
+		// the earlier turns (reachable again through /rewind).
+		OnClear: func(ctx context.Context) error {
+			if started.Lane == nil {
+				return nil
+			}
+			return started.Lane.NavigateTree(ctx, nil)
+		},
+		OnExit: func() {},
 	})
 	registry.Add(slashcommands.BindHelp(builtinSource, registry.List))
 

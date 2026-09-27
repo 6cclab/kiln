@@ -1,0 +1,17 @@
+# Untrusted folder: Esc also declines (dialog_trust.go's HandleKey "esc"
+# case calls answer(false) directly, regardless of cursor position), and
+# declining quits the process (internal/tui/app.go's MsgTrustAnswered
+# handler: `if !msg.Trusted { return m, tea.Quit }`) — it never reaches
+# "describe a task" (corrected from an earlier version of this scenario
+# that assumed the dialog just closed and the session continued).
+@faux testdata/faux/hello.yaml
+@size 120x40
+@untrusted
+
+WAITFOR /Accessing workspace/ 20
+SHOT trust-dialog-esc
+KEY esc
+WAIT 1
+SHOT trust-esc-closed
+NOTE kiln should have exited on esc; nothing further to type
+EXPECT_NOT /panic|goroutine/

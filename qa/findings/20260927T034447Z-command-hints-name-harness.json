@@ -1,0 +1,30 @@
+{
+ "id": "20260927T034447Z-command-hints-name-harness",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/commands/resume.steps",
+ "step": null,
+ "terminals": [
+  "iterm-light"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "/resume, /login and /logout hints tell the user to run 'harness'",
+ "observed": "'/resume' ends with 'Resume: harness --resume <id>'; /login and /logout say 'harness login <provider>'. The built binary is kiln (make build only produces bin/kiln).",
+ "expected": "Hints name the kiln binary.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-light/commands-resume-120x40/01-resume.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/session_commands.go",
+   "internal/commands/account_commands.go"
+  ],
+  "regression_test": "TestResume*/TestLogin* (updated expectations)",
+  "after_evidence": [
+   "qa/runs/c10/iterm-light/commands-resume-120x40/01-resume.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

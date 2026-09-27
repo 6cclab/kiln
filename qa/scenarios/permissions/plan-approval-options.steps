@@ -1,0 +1,39 @@
+# Plan approval under --permission-mode plan: an exit_plan_mode tool
+# call raises RenderPlanApproval. Its three options don't support
+# arrow-then-commit (permissionview.go: 1/2/3/enter all commit
+# immediately at whatever `selected` already is — see
+# RenderPlanApproval's doc comment) — this walks the highlight through
+# each option, exercises option 3's feedback field, cancels it, then
+# commits with option 2 ("manually approve edits").
+@faux testdata/faux/qa/permissions-plan-approval.yaml
+@args --permission-mode plan
+
+WAITFOR /describe a task/ 20
+TYPE plan the rate limiter work
+KEY enter
+WAITFOR /Ready to code\?/ 20
+SHOT plan-option1-highlighted
+EXPECT /Here is the plan:/
+EXPECT /Yes, and use auto mode/
+EXPECT /Yes, manually approve edits/
+EXPECT /Tell kiln what to change/
+KEY down
+SHOT plan-option2-highlighted
+KEY down
+SHOT plan-option3-highlighted
+KEY enter
+WAIT 1
+SHOT plan-feedback-open
+EXPECT /What should change about the plan\?/
+TYPE make it use a token bucket instead
+SHOT plan-feedback-typed
+EXPECT /make it use a token bucket instead/
+KEY esc
+WAIT 1
+SHOT plan-feedback-cancelled
+EXPECT_NOT /What should change about the plan\?/
+KEY 2
+WAITFOR /Plan approved, proceeding/ 20
+SHOT plan-approved
+EXPECT_NOT /Ready to code\?/
+EXPECT_NOT /panic|goroutine/

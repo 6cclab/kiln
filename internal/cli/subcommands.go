@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -452,4 +453,24 @@ var Version = "dev"
 // version reads the module's own version for `--version`.
 func version() string {
 	return "kiln " + Version + " (go port)"
+}
+
+// semverPrefix matches a real semver tag ("1.2.3", "v1.2.3", "1.2.3-4-g…"
+// from `git describe`'s own suffix), but not a bare git short hash: a hash
+// is hex digits with no dots ("61bae41"), so it never matches
+// \d+\.\d+\.\d+ even though, like a semver, it can start with a digit.
+var semverPrefix = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+`)
+
+// versionLabel renders Version for the startup banner: "v1.2.3" for a
+// real semver tag, and the bare string for anything else — a `git
+// describe` short hash ("61bae41"), a dirty one ("61bae41-dirty"), or
+// "dev" — so a dev build never reads "v61bae41" or "vdev" (see
+// qa/findings/20260926T231105Z-banner-version-hash.json: a hex hash
+// starting with a digit was wrongly treated as numeric-therefore-semver
+// by the previous `Version[0] >= '0' && Version[0] <= '9'` check).
+func versionLabel(v string) string {
+	if semverPrefix.MatchString(v) {
+		return "v" + strings.TrimPrefix(v, "v")
+	}
+	return v
 }

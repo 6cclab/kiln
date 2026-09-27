@@ -59,6 +59,14 @@ type BuiltinDeps struct {
 	// budget.ToolStrategyCost[tier.ToolStrategy]. false (or a nil func)
 	// falls back to that fixed cost.
 	ToolSchemaTokens func() (int, bool)
+	// FileReadTokens, if set, reports the tokens attributable to file
+	// contents read into the conversation this session (the "read" tool's
+	// results), for /context's "Files read" segment
+	// (docs/kiln-design-handoff/Terminal.dc.html line 227). A nil func (or
+	// one that returns false) leaves the segment at zero rather than
+	// inventing a figure — there is no fixed-budget fallback for this one,
+	// unlike System/Tools, since nothing about it is a tier constant.
+	FileReadTokens func() (int, bool)
 	// SwitchModel applies a model switch: the integrator implements it
 	// with agent.SetModel (which moves the lane's model AND the harness's
 	// compaction settings to the new tier) followed by whatever tool
@@ -78,11 +86,18 @@ type BuiltinDeps struct {
 	// actually ran on. Nil (or a nil return) means "not tracked", and
 	// /cost falls back to just its single-model summary.
 	UsageByModel func() map[string]msg.Usage
+	// SessionElapsed reports how long this session has been running, for
+	// /cost's one-line design summary ("Session: $0.27 · 66k tokens in
+	// context · 71s", Terminal.dc.html:320). Nil (or a nil return of 0)
+	// omits the elapsed segment rather than printing a false "0s".
+	SessionElapsed func() time.Duration
 
 	// SessionsDir is shown by /status.
 	SessionsDir string
 
-	OnClear func()
+	// OnClear starts the conversation over: the model sees no earlier
+	// turns afterwards.
+	OnClear func(ctx context.Context) error
 	OnExit  func()
 }
 
@@ -108,11 +123,12 @@ func formatTokens(n int) string {
 // reads Output instead, so a nil deps.ContextUsed (no usage yet this
 // session) is not an error here — it just reports Used: 0.
 //
-// The four segments and the header are built to be self-consistent by
-// construction, not just individually plausible: system+tools+conversation
-// always equals the header's "used" figure, and all four segments always
-// sum to exactly Window (percentages sum to ~100%, not something over
-// 100). This replaced a version where the header showed the session's
+// The five segments and the header are built to be self-consistent by
+// construction, not just individually plausible:
+// system+tools+filesRead+conversation always equals the header's "used"
+// figure, and all five segments always sum to exactly Window (percentages
+// sum to ~100%, not something over 100). This replaced a version where the
+// header showed the session's
 // real ContextUsed total while the legend's "System prompt"/"Tools" rows
 // showed the tier's fixed *budgets* (big, conservative ceilings, not what
 // was actually spent) — a session that had barely used any tokens yet
@@ -168,25 +184,58 @@ func buildContextBreakdown(deps BuiltinDeps, t budget.Tier) *ContextBreakdown {
 	}
 	tools = clampRange(tools, 0, window-system)
 
-	conversation := clampRange(used-system-tools, 0, window-system-tools)
+	filesRead := 0
+	if deps.FileReadTokens != nil {
+		if v, ok := deps.FileReadTokens(); ok {
+			filesRead = v
+		}
+	}
+	filesRead = clampRange(filesRead, 0, window-system-tools)
 
-	free := window - system - tools - conversation
+	// The measured context (used) is ground truth: it is the same figure
+	// the pinned status meter reports. System is measured, but Tools is a
+	// static per-strategy budget estimate (budget.ToolStrategyCost) and
+	// can overshoot what a given provider actually bills — in a real
+	// ollama session the estimates summed to 16.3k against a measured
+	// 10.7k, which drove Conversation to zero and made the header
+	// contradict the meter. Never report more occupancy than was
+	// measured: give back the overshoot, estimates first.
+	if used > 0 {
+		if over := system + tools + filesRead - used; over > 0 {
+			give := min(over, tools)
+			tools -= give
+			over -= give
+			if over > 0 {
+				give = min(over, filesRead)
+				filesRead -= give
+				over -= give
+			}
+			if over > 0 {
+				system = max(system-over, 0)
+			}
+		}
+	}
+
+	conversation := clampRange(used-system-tools-filesRead, 0, window-system-tools-filesRead)
+
+	free := window - system - tools - filesRead - conversation
 	if free < 0 {
 		free = 0
 	}
 
 	return &ContextBreakdown{
 		ModelLabel: label,
-		// The header reports system+tools+conversation, not the raw
-		// ContextUsed figure: they can otherwise disagree whenever a
+		// The header reports system+tools+filesRead+conversation, not the
+		// raw ContextUsed figure: they can otherwise disagree whenever a
 		// segment above got clamped (see the doc comment), and a header
 		// that does not match its own legend is the bug this rewrite
 		// fixes.
-		Used:   system + tools + conversation,
+		Used:   system + tools + filesRead + conversation,
 		Window: window,
 		Segments: []ContextSegment{
 			{Label: "System prompt", Tokens: system},
 			{Label: "Tools", Tokens: tools},
+			{Label: "Files read", Tokens: filesRead},
 			{Label: "Conversation", Tokens: conversation},
 			{Label: "Free", Tokens: free},
 		},
@@ -306,24 +355,26 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 	cmds := []Command{
 		{
 			Name:        "help",
-			Description: "Show available commands",
+			Description: "Shortcuts and commands",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				return Result{}, nil // filled in by BindHelp
 			},
 		},
 		{
 			Name:        "clear",
-			Description: "Clear conversation history",
+			Description: "Start a fresh session",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.OnClear != nil {
-					deps.OnClear()
+					if err := deps.OnClear(ctx); err != nil {
+						return Result{}, err
+					}
 				}
-				return Result{Output: []string{"Conversation cleared."}}, nil
+				return Result{Output: []string{"Conversation cleared."}, Clear: true}, nil
 			},
 		},
 		{
 			Name:        "compact",
-			Description: "Summarize and compact the current context",
+			Description: "Summarize history to free context",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.Lane == nil {
 					return Result{Output: []string{"No active lane to compact."}}, nil
@@ -336,7 +387,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "context",
-			Description: "Show context usage against the active tier",
+			Description: "Show context window usage",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				t := deps.CurrentTier()
 				out := []string{
@@ -352,41 +403,70 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "cost",
-			Description: "Show token usage and cost for this session",
+			Description: "Tokens and spend this session",
+			// The design (Terminal.dc.html:320) renders /cost as a single
+			// system note: "Session: $0.27 · 66k tokens in context ·
+			// 71s" — spend, context tokens, elapsed session time, no
+			// rate table. *qa/findings/20260927T014721Z-cost-not-one-
+			// line-note.json*: the old implementation instead always
+			// printed a rate line plus a "by model:" block, never that
+			// summary.
+			//
+			// This keeps the summary as Output's first line
+			// unconditionally (a single line renders as the design's
+			// note, tui/app.go's `len(handled.Output) == 1` case), and
+			// appends the per-model breakdown only when more than one
+			// model actually ran this session: with just one, the
+			// breakdown would only repeat the summary's own total under
+			// a "by model:" heading, so the single-model case matches
+			// the design exactly, and the multi-model case (this
+			// codebase's own model-routing feature) gets the extra
+			// detail as a labelled block with the summary as its first
+			// row, which reads better than hiding that split entirely.
 			Run: func(ctx context.Context, args string) (Result, error) {
-				providerID, modelID := deps.CurrentModel()
-				m, ok := deps.Registry.GetModel(providerID, modelID)
-				if !ok {
-					return Result{Output: []string{"No cost data for this model."}}, nil
+				byModel := map[string]msg.Usage{}
+				if deps.UsageByModel != nil {
+					byModel = deps.UsageByModel()
 				}
-				rate := m.Cost.ModelCostRates
-				line := fmt.Sprintf("input $%g/M · output $%g/M", rate.Input, rate.Output)
-				if rate.Input == 0 {
-					line += "  (self-hosted, no marginal cost)"
+				var totalCost float64
+				for _, u := range byModel {
+					totalCost += u.Cost.Total
 				}
-				out := []string{line}
+
+				contextTokens := 0
+				if deps.ContextUsed != nil {
+					if v, ok := deps.ContextUsed(); ok {
+						contextTokens = v
+					}
+				}
+
+				summary := fmt.Sprintf("Session: $%.2f · %s tokens in context", totalCost, formatTokens(contextTokens))
+				if deps.SessionElapsed != nil {
+					if d := deps.SessionElapsed(); d > 0 {
+						summary += fmt.Sprintf(" · %ds", int(d.Round(time.Second).Seconds()))
+					}
+				}
+				out := []string{summary}
 
 				// "by model" table: this session's parent turns plus
 				// every dispatched subagent's usage, broken out by
 				// whichever model it actually ran on — a session that
 				// dispatched to a cheaper role should be able to see
 				// that split, not just one blended number.
-				if deps.UsageByModel != nil {
-					if byModel := deps.UsageByModel(); len(byModel) > 0 {
-						names := make([]string, 0, len(byModel))
-						for name := range byModel {
-							names = append(names, name)
+				if len(byModel) > 1 {
+					names := make([]string, 0, len(byModel))
+					for name := range byModel {
+						names = append(names, name)
+					}
+					sort.Strings(names)
+					out = append(out, "", "by model:")
+					for _, name := range names {
+						u := byModel[name]
+						cost := "-"
+						if u.Cost.Total != 0 {
+							cost = fmt.Sprintf("$%.4f", u.Cost.Total)
 						}
-						sort.Strings(names)
-						out = append(out, "", "by model:")
-						for _, name := range names {
-							u := byModel[name]
-							cost := "-"
-							if u.Cost.Total != 0 {
-								cost = fmt.Sprintf("$%.4f", u.Cost.Total)
-							}
-							out = append(out, fmt.Sprintf("  %-24s input %-8d output %-8d cost %s", name, u.Input, u.Output, cost))
-						}
+						out = append(out, fmt.Sprintf("  %-24s input %-8d output %-8d cost %s", name, u.Input, u.Output, cost))
 					}
 				}
 				return Result{Output: out}, nil
@@ -394,7 +474,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:         "model",
-			Description:  "Show or change the active model",
+			Description:  "Switch model",
 			ArgumentHint: "<provider/model>",
 			ArgumentCompletions: func(prefix string) []Completion {
 				models, err := cache.get(context.Background(), deps.Registry)
@@ -512,7 +592,18 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						if err := writesettings.SetUserModel(label); err != nil {
 							return "", fmt.Errorf("switched but could not persist default: %w", err)
 						}
-						return fmt.Sprintf("⎿  Model set to %s (default for new sessions)", label), nil
+						// No leading "⎿ " glyph: this package cannot import
+						// internal/tui to route it through the plain-mode
+						// glyph table (BuiltinDeps's own doc comment: no
+						// cli/tui import, only callbacks), and every other
+						// status string this file returns is plain text —
+						// dialog_model.go's Render already colours and
+						// places this as the dialog's status line, so the
+						// glyph was redundant decoration, and a hardcoded
+						// one leaked a box-drawing character into plain/
+						// screen-reader mode (defect *screen-reader-mode-
+						// leaves-box-drawing-rules).
+						return fmt.Sprintf("Model set to %s (default for new sessions)", label), nil
 					},
 				}
 				return Result{Output: lines, Modal: modal}, nil
@@ -538,7 +629,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "agents",
-			Description: "Show the subagents available for dispatch",
+			Description: "Manage subagents",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if len(deps.Agents) == 0 {
 					return Result{Output: []string{"No subagents. Define them in .claude/agents/*.md"}}, nil

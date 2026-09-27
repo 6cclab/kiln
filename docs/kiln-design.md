@@ -180,7 +180,8 @@ Segments, left to right:
 
   | mode string | label | colour |
   |---|---|---|
-  | `acceptEdits`, `auto` | `auto-edit` | green |
+  | `acceptEdits` | `auto-edit` | green |
+  | `auto` | `auto mode` | green |
   | `bypassPermissions` | `bypass permissions` | green |
   | `dontAsk` | `don't ask` | green |
   | `plan` | `plan only` | blue |

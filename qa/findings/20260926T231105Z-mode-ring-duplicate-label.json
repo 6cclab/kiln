@@ -1,0 +1,31 @@
+{
+ "id": "20260926T231105Z-mode-ring-duplicate-label",
+ "found_at": "2026-09-26T23:11:05Z",
+ "scenario": "modes/ring-full",
+ "step": "02-press-1-acceptedits,04-press-3-auto",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "shift+tab ring shows auto-edit for two different modes",
+ "observed": "Ring manual→acceptEdits→plan→auto: acceptEdits and auto both render '● auto-edit' green; the user cannot tell which mode is active (status.go modeLabel maps both).",
+ "expected": "Each ring stop has a distinct label; design MODES lists exactly three: ask before edits, auto-edit, plan only.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:222",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/modes-ring-full-120x40/02-press-1-acceptedits.png",
+  "qa/runs/c1/iterm-dark/modes-ring-full-120x40/04-press-3-auto.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/status.go"
+  ],
+  "regression_test": "TestModeLabel_AutoDistinctFromAcceptEdits,TestTUI_ShiftTab_CyclesMode",
+  "after_evidence": [
+   "qa/runs/c2/iterm-dark/verify-scrollback-120x40"
+  ],
+  "note": "auto now reads 'auto mode' (the name the permission prompts already use).",
+  "updated_at": "2026-09-26T23:58:22Z"
+ }
+}

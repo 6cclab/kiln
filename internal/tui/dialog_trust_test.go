@@ -6,13 +6,18 @@ import (
 )
 
 // TestTrustDialog_MatchesReferenceRows pins Render's exact rows for a
-// known cwd at width 100, per the kiln design (docs/kiln-design.md):
-// Trust draws its own full-width `─` rule as row 0 (unlike the
-// numbered-option dialogs, which sit under the app-owned `▔` rule and are
-// indented three), the wording is "kiln will be able to read, edit, and
-// execute files here." (no "Security guide" row — the harness has no such
-// doc to link), and the selected row's raised background pads it to the
-// full width.
+// known cwd at width 100, per the kiln design (docs/kiln-design.md).
+// Trust used to draw its own full-width `─` rule as row 0, stacked on top
+// of the app-owned `▔` rule every other dialog sat under, and indented
+// its own body one space; the kiln restyle drops both (QA finding
+// 20260927T000712Z-dialog-chrome-effort-indicator): DialogTopRule now
+// draws the one shared frame above every dialog including Trust
+// ("trust ────", FrameLabel), and content aligns with every other block's
+// left edge, same as the numbered-option dialogs. The wording is "kiln
+// will be able to read, edit, and execute files here." (no "Security
+// guide" row — the harness has no such doc to link), the selected row
+// gets a blank-or-"> " selectionGutter instead of "❯", and its raised
+// background pads it to the full width.
 func TestTrustDialog_MatchesReferenceRows(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
@@ -22,16 +27,15 @@ func TestTrustDialog_MatchesReferenceRows(t *testing.T) {
 	got := d.Render(100, 40)
 
 	want := []string{
-		"────────────────────────────────────────────────────────────────────────────────────────────────────",
-		" Accessing workspace:",
-		" " + cwd,
-		" Quick safety check: Is this a project you created or one you trust? (Like your own code, a",
-		" well-known open source project, or work from your team). If not, take a moment to review what's in",
-		" this folder first.",
-		" kiln will be able to read, edit, and execute files here.",
-		" ❯ No, exit",
-		"   Yes, I trust this folder",
-		" Enter to confirm · Esc to cancel",
+		"Accessing workspace:",
+		cwd,
+		"Quick safety check: Is this a project you created or one you trust? (Like your own code, a",
+		"well-known open source project, or work from your team). If not, take a moment to review what's in",
+		"this folder first.",
+		"kiln will be able to read, edit, and execute files here.",
+		"> No, exit",
+		"  Yes, I trust this folder",
+		"Enter to confirm · Esc to cancel",
 	}
 
 	if len(got) != len(want) {
@@ -39,7 +43,7 @@ func TestTrustDialog_MatchesReferenceRows(t *testing.T) {
 	}
 	for i := range want {
 		row := got[i]
-		if i == 7 { // the selected "No, exit" row carries the raised background
+		if i == 6 { // the selected "No, exit" row carries the raised background
 			row = strings.TrimRight(row, " ")
 		}
 		if row != want[i] {
@@ -106,9 +110,6 @@ func TestTrustDialog_RenderAt100And60(t *testing.T) {
 			t.Fatalf("width %d: no rows rendered", width)
 		}
 		for i, r := range rows {
-			if i == 0 {
-				continue // the `─` rule is intentionally exactly width, not <=width-1
-			}
 			if VisibleWidth(r) > width {
 				t.Errorf("width %d: row %d exceeds width: %q", width, i, r)
 			}

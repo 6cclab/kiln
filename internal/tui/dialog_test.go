@@ -10,12 +10,20 @@ import (
 )
 
 // TestOptionRows_MatchesModelReference checks the generic option-row
-// layout (indent, marker gutter, label column from the widest label,
-// current-item "✔", description column) against the exact body rows
-// Claude Code produced in testdata/reference/claude-code/dialog-model.txt
-// (rows 28, 29, 32, 33 — the ones that do not wrap), captured at terminal
-// width 100. Colour is disabled for the comparison since the reference
-// file is plain text; column math is what's under test here, not styling.
+// layout (marker gutter, label column from the widest label, current-item
+// checkmark, description column) against the body rows Claude Code
+// produced in testdata/reference/claude-code/dialog-model.txt (rows 28,
+// 29, 32, 33 — the ones that do not wrap), captured at terminal width
+// 100, with the kiln restyle's own chrome substituted for that
+// reference's: no dialogIndent (dialogIndent is now "" — content aligns
+// with every other block's left edge instead of sitting three columns in
+// under the dialog's frame), a blank-or-"> " selectionGutter instead of
+// "❯", and the current item's checkmark from G().OK ("✓", not "✔"). See
+// dialog.go's dialogIndent/selectionGutter doc comments and QA finding
+// 20260927T000712Z-dialog-chrome-effort-indicator. Colour is disabled for
+// the comparison (which is also why selectionGutter renders "> ": see its
+// own doc comment) since the reference file is plain text; column math is
+// what's under test here, not styling.
 //
 // Row 30/31 (the "Fable" option, which wraps its description onto a
 // second line in the reference) is deliberately NOT asserted here: the
@@ -41,10 +49,10 @@ func TestOptionRows_MatchesModelReference(t *testing.T) {
 	got := renderOptionRows(options, 1, 100, 0)
 
 	want := []string{
-		"     1. Default (recommended)  Opus 5 with 1M context · Best for everyday, complex tasks",
-		"   ❯ 2. Opus (1M context) ✔    Opus 5 with 1M context · Best for everyday, complex tasks",
-		"     4. Sonnet                 Sonnet 5 · Efficient for routine tasks",
-		"     5. Haiku                  Haiku 4.5 · Fastest for quick answers",
+		"  1. Default (recommended)  Opus 5 with 1M context · Best for everyday, complex tasks",
+		"> 2. Opus (1M context) ✓    Opus 5 with 1M context · Best for everyday, complex tasks",
+		"  4. Sonnet                 Sonnet 5 · Efficient for routine tasks",
+		"  5. Haiku                  Haiku 4.5 · Fastest for quick answers",
 	}
 
 	if len(got) != len(want) {
@@ -87,7 +95,7 @@ func TestRenderTitleAndDescription_WrapsAtIndent(t *testing.T) {
 	defer SetColorEnabled(true)
 
 	got := renderTitleAndDescription("Select model", "one two three four five six seven eight nine ten", 20)
-	if got[0] != "   Select model" {
+	if got[0] != "Select model" {
 		t.Errorf("title row = %q", got[0])
 	}
 	for _, l := range got[1:] {
@@ -102,7 +110,7 @@ func TestRenderLegend_JoinsWithMiddleDot(t *testing.T) {
 	defer SetColorEnabled(true)
 
 	got := renderLegend([]string{"Enter to select", "Esc to cancel"}, 100)[0]
-	want := "   Enter to select · Esc to cancel"
+	want := "Enter to select · Esc to cancel"
 	if got != want {
 		t.Errorf("legend = %q, want %q", got, want)
 	}

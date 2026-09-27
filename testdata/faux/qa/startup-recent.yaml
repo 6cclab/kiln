@@ -1,0 +1,9 @@
+model: faux-1
+steps:
+  # Three turns, one per @pre -p seeding run in
+  # qa/scenarios/startup/welcome-recent-sessions.steps. Each @pre invocation
+  # is its own one-shot `-p` request; the response text does not matter,
+  # only that a turn is consumed and the session gets recorded.
+  - text: "Looked at it."
+  - text: "Looked at it."
+  - text: "Looked at it."

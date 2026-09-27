@@ -1,0 +1,38 @@
+# SCROLL while a reply is streaming: testdata/faux/qa/scroll-stream.yaml
+# holds its response behind a 3s delay so the turn is still busy ("esc to
+# interrupt") when the scroll lands. Checks the scroll itself doesn't
+# corrupt anything and the streamed markers land intact once the turn
+# finishes.
+#
+# What this does NOT establish (not traceable from source without a real
+# run): whether the viewport auto-snaps back to the bottom once the turn
+# settles while the user had scrolled up. internal/tui/app.go's transcript
+# commit helper only calls viewport.GotoBottom() when wasBottom was true
+# before the commit ("scroll-to-pause": follows the bottom only if it was
+# already there) — which reads as "stays wherever the user left it," but
+# that has not been confirmed against the running program here.
+@faux testdata/faux/qa/scroll-stream.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE tell me about the rollout
+KEY enter
+WAITFOR /esc to interrupt/ 10
+SHOT streaming-before-scroll
+
+SCROLL up 3
+SHOT streaming-during-scroll
+EXPECT_NOT /panic|goroutine/
+WAIT 3.5
+SHOT streaming-after-delay-still-scrolled
+EXPECT_NOT /panic|goroutine/
+
+# Scroll back down explicitly rather than assume auto-snap either way
+# (see the header note): this is the reliable way to confirm the
+# completed text landed intact once the turn is done.
+SCROLL down 3
+WAITFOR /STREAM-DONE-MARKER/ 20
+SHOT streaming-done
+EXPECT /STREAM-START-MARKER/
+EXPECT /STREAM-DONE-MARKER/
+EXPECT_NOT /panic|goroutine/

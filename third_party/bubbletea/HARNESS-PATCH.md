@@ -110,3 +110,20 @@ write+EraseLineRight+"\r\n" path unchanged.
 Verified through internal/testkit/screen: kiln label-rule rows and the "edit" block's
 filename meta now render at the full terminal width with the last character intact (was
 one column short); make check and make e2e green.
+
+## Patch: keep the incremental diff on the alternate screen (cursed_renderer.go)
+
+The full-redraw patch above starts every changed frame by clearing the screen from home.
+iTerm2 archives the alternate screen into its scrollback when it is cleared, so in fullscreen
+mode each state change (a keypress, a mode switch, a committed reply) left a complete stale
+frame in the terminal's history: after four shift+tab presses at 120x40 the scrollback held
+200 rows of old kiln frames. Changing the erase sequence (`CSI 2J` to `CSI H CSI J`) did not
+help; any clear from home is archived.
+
+The desync the full redraw works around only happens after `insertAbove`, which a fullscreen
+program never calls (kiln commits into its own transcript viewport there). So the render call
+keeps `Redraw` for inline mode and uses the incremental `Render` when `view.AltScreen` is set.
+
+Verified in a real iTerm2 window (scripts/qa/drive.py, 120x40): scrollback stays at 0 rows
+across two shift+tab mode changes, and the status row repaints with no residue from the
+longer previous label. Test: TestCursedRenderer_altScreenFramesDoNotClear.

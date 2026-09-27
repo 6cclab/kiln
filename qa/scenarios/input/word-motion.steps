@@ -1,0 +1,24 @@
+# Line motion: ctrl+a / ctrl+e (bubbles/v2 textarea's DefaultKeyMap
+# LineStart/LineEnd, bound through internal/tui/editor/model.go's
+# KeyLineStart/KeyLineEnd). Verified behaviourally: moving the cursor and
+# then inserting a marker proves where the cursor landed.
+#
+# Word motion (alt+left/right) is not driven here: under kiln's kitty
+# keyboard protocol, Orca's synthetic Option/Ctrl+arrow events reach kiln
+# without their modifier, while a physical keypress works (checked by hand;
+# qa/findings kitty-mode-drops-arrow-modifiers). internal/tui/editor's
+# model_test.go covers the alt-arrow bindings.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE hello world
+KEY ctrl+a
+TYPE START
+SHOT line-start-ctrl-a
+EXPECT /STARThello world/
+KEY ctrl+e
+TYPE END
+SHOT line-end-ctrl-e
+EXPECT /STARThello worldEND/
+EXPECT_NOT /panic|goroutine/

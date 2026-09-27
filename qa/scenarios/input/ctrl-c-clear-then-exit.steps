@@ -1,0 +1,18 @@
+# Ctrl+C clears input (with the "Press Ctrl-C again to exit" hint,
+# internal/tui/keys.go Router's ctrl+c case), then a second Ctrl+C within
+# the DoublePress window exits the program.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE this will be cleared
+SHOT before-ctrl-c
+EXPECT /this will be cleared/
+KEY ctrl+c
+SHOT after-first-ctrl-c
+EXPECT /Press Ctrl-C again to exit/
+EXPECT_NOT /this will be cleared/
+KEY ctrl+c
+WAIT 1
+NOTE second Ctrl+C should have exited kiln; the driver's teardown will not need its own ctrl+c
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,33 @@
+{
+ "id": "20260926T231105Z-light-bg-you-text-invisible",
+ "found_at": "2026-09-26T23:11:05Z",
+ "scenario": "startup/smoke",
+ "step": "03-reply",
+ "terminals": [
+  "iterm-light"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Light background: user message text and hairlines nearly invisible, rules render heavy",
+ "observed": "On the light profile the 'say hello' user text is near-background beige, the you-block has no visible surface, and the banner/input rules render as solid dark lines while the status hairline is faint.",
+ "expected": "Background-aware tokens: body text dark on light, hairlines subtle but visible, user message legible.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html (C tokens)",
+ "evidence": [
+  "qa/runs/adapter-check/iterm-light/startup-smoke-120x40/03-reply.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go",
+   "internal/tui/editor/styles.go",
+   "internal/tui/theme.go"
+  ],
+  "regression_test": "TestBackgroundColorMsg_RebuildsEditorStyles",
+  "after_evidence": [
+   "qa/runs/c3/iterm-light/content-verbose-toggle-120x40/02-reply-non-verbose.png",
+   "qa/runs/c6/iterm-light/startup-smoke-120x40/03-reply.png"
+  ],
+  "note": "Text tokens meet contrast on light; surfaces match the design's separation; you-block raise and label hairlines visible. Still open: banner divider and input box rules render heavy black because app.go builds editor.Styles from fixed hexes before SetTerminalBackground runs (needs an editor SetStyles refresh after detection).",
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
+}

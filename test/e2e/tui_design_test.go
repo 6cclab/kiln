@@ -286,7 +286,37 @@ func mustSee(t *testing.T, s *screen.Screen, needle string, timeout time.Duratio
 // chain in src/server ...". Each entry is two screen rows (the name/task/
 // bar/tokens row, then an indented "→ starting…"/"✓ finished" row below
 // it) — see designSortSubagentPanel.
-var designScoutRowPattern = regexp.MustCompile(`^ scout\s`)
+// `^\s*`, not a bare `^`: every row now sits inside the 2-column side
+// margin (internal/tui/layout_margin.go, finding no-side-margin).
+//
+// Matches either "scout" (a lone dispatch) or "scout-N" (assignDisplay-
+// NamesLocked's index, given to each of several same-type dispatches —
+// see subagents.go and *qa/findings/20260927T014816Z-subagent-names-
+// indistinct.json*): the design's own "agents" scene dispatches two
+// scouts concurrently, so it hits the indexed case.
+var designScoutRowPattern = regexp.MustCompile(`^\s* scout(-(\d|N))?\s`)
+
+// designScoutIndexPattern matches the "-N" index assignDisplayNamesLocked
+// appends to a "scout" row's name when more than one scout is in the
+// panel; designNormalizeScoutIndex collapses it to a fixed "-N" (literal
+// "N") ahead of a golden compare, since which physical dispatch gets "-1"
+// vs "-2" is the same wall-clock race designSortSubagentPanel's own doc
+// comment already describes for row order — the index is assigned in the
+// order Start events are seen, not a property of the golden's expected
+// content.
+var designScoutIndexPattern = regexp.MustCompile(`scout-\d`)
+
+// designNormalizeScoutIndex replaces every "scout-N" name in rows with a
+// fixed "scout-N" placeholder (literal "N", not a digit), in a copy of
+// rows, so a golden compare does not depend on which concurrent scout
+// dispatch happened to be seen first.
+func designNormalizeScoutIndex(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = designScoutIndexPattern.ReplaceAllString(r, "scout-N")
+	}
+	return out
+}
 
 // designDispatchLinePattern matches bridge.go's SubagentSink "Start"
 // commit line (the "⏺ scout <description> on <model> [...]" row
@@ -296,7 +326,7 @@ var designScoutRowPattern = regexp.MustCompile(`^ scout\s`)
 // goroutines, each committing its own Start line as soon as it begins —
 // so it needs the same sort-before-compare treatment, one row per entry
 // rather than a pair.
-var designDispatchLinePattern = regexp.MustCompile(`^⏺ \S`)
+var designDispatchLinePattern = regexp.MustCompile(`^\s*⏺ \S`)
 
 // designSortDispatchLines sorts a contiguous run of designDispatchLinePattern
 // rows (and their styles, kept in lockstep) among themselves.
@@ -347,7 +377,7 @@ func designSortDispatchLines(rows []string, styles [][]screen.CellStyle) ([]stri
 
 // designSubagentsBlockLabel matches the subagents panel's own label-rule
 // row (subagents.go's labelRule("subagents", ...)).
-var designSubagentsBlockLabel = regexp.MustCompile(`^subagents `)
+var designSubagentsBlockLabel = regexp.MustCompile(`^\s*subagents `)
 
 // designDropIntermediateSubagentsBlocks removes every committed
 // subagents-panel block except the last, keeping styles in lockstep.
@@ -417,6 +447,7 @@ func designDropIntermediateSubagentsBlocks(rows []string, styles [][]screen.Cell
 // moved together or the name row and its own action row would end up
 // mismatched.
 func designSortSubagentPanel(rows []string, styles [][]screen.CellStyle) ([]string, [][]screen.CellStyle) {
+	rows = designNormalizeScoutIndex(rows)
 	rows, styles = designDropIntermediateSubagentsBlocks(rows, styles)
 	rows, styles = designSortDispatchLines(rows, styles)
 	start := -1
@@ -476,6 +507,10 @@ func assertDesignGoldenTailSorted(t *testing.T, s *screen.Screen, name, anchor s
 	}
 	rows = rows[start:]
 	rows, _ = designSortSubagentPanel(rows, nil)
+	// The status row now always carries the working directory, which is a
+	// fresh t.TempDir() on every run — mask it, as tui_test.go's own
+	// assertions do, or no golden containing that row can be stable.
+	rows = normalizeSpinnerGlyph(normalizeStatusRowCwd(rows))
 	assertGolden(t, goldenPath(name+".txt"), strings.Join(rows, "\n")+"\n")
 }
 
@@ -498,6 +533,8 @@ func assertDesignGoldenStylesSorted(t *testing.T, s *screen.Screen, name, anchor
 	rows = rows[start:]
 	styles = styles[start:]
 	rows, styles = designSortSubagentPanel(rows, styles)
+	rows, styles = maskStyledRows(rows, styles, maskStatusRowCwd)
+	rows = normalizeSpinnerGlyph(rows)
 
 	lines := make([]string, len(rows))
 	for i := range rows {
@@ -588,10 +625,12 @@ func TestTUI_Design_Streaming(t *testing.T) {
 	// see driveDesignTo's doc comment: by the time diff2 is on screen,
 	// this earlier text has very likely already scrolled out of view.
 	joined := strings.Join(s.Scrollback(), "\n")
-	// Wraps across two rows at 100 columns ("...I'll add a rateLimit" /
-	// "middleware and wire it in."), so the check is on a substring that
-	// stays on one row rather than the whole sentence.
-	if !strings.Contains(joined, "I'll add a rateLimit") {
+	// Wraps across two rows at 100 columns' content width (96, once the
+	// 2-column side margin is subtracted on each side — finding
+	// no-side-margin): "...jest mock. I'll add a" / "rateLimit middleware
+	// and wire it in.", so the check is on a substring that stays on one
+	// row rather than the whole sentence.
+	if !strings.Contains(joined, "rateLimit middleware and wire it in.") {
 		t.Errorf("committed text from the post-agents turn missing:\n%s", joined)
 	}
 	if !strings.Contains(joined, "rateLimit.ts") {
@@ -767,12 +806,12 @@ func TestTUI_Design_Fullscreen_Welcome(t *testing.T) {
 
 // designPlanLabelPattern matches the live plan checklist's own label-rule
 // row (plan.go's labelRule("plan", ...), e.g. "plan ────── 0/3").
-var designPlanLabelPattern = regexp.MustCompile(`^plan `)
+var designPlanLabelPattern = regexp.MustCompile(`^\s*plan `)
 
 // designApprovalLabelPattern matches the bash permission prompt's own
 // label-rule row (permission_render.go's RenderBashPermissionPrompt,
 // labelRule("approval needed", ...)).
-var designApprovalLabelPattern = regexp.MustCompile(`^approval needed`)
+var designApprovalLabelPattern = regexp.MustCompile(`^\s*approval needed`)
 
 // countBlanksAbove walks upward from rows[before-1] counting a leading run
 // of blank rows, returning that count and the index of the first non-blank
@@ -793,7 +832,7 @@ func countBlanksAbove(rows []string, before int) (blanks, nonBlank int) {
 // multi-word label like "Waiting for approval…" / "Running 2 subagents…"
 // that pattern does not, since it requires "…" immediately after one
 // \S+ token).
-var designSpinnerGlyphPattern = regexp.MustCompile(`^[◐◓◑◒]`)
+var designSpinnerGlyphPattern = regexp.MustCompile(`^(\s*)[◐◓◑◒]`)
 
 // normalizeDesignSpinnerGlyph replaces the leading glyph of every busy-line
 // row with a fixed placeholder before a golden compare — the frame it
@@ -810,7 +849,7 @@ func normalizeDesignSpinnerGlyph(rows []string) []string {
 	out := make([]string, len(rows))
 	for i, r := range rows {
 		if designSpinnerGlyphPattern.MatchString(r) {
-			out[i] = designSpinnerGlyphPattern.ReplaceAllString(r, "◐")
+			out[i] = designSpinnerGlyphPattern.ReplaceAllString(r, "${1}◐")
 			continue
 		}
 		out[i] = r
@@ -858,7 +897,7 @@ func TestTUI_Design_Fullscreen_Plan(t *testing.T) {
 	}
 
 	rows, _ = designSortSubagentPanel(rows, nil)
-	rows = normalizeDesignSpinnerGlyph(rows)
+	rows = normalizeStatusRowCwd(normalizeDesignSpinnerGlyph(rows))
 	assertGolden(t, goldenPath("design-fs-plan.txt"), strings.Join(rows, "\n")+"\n")
 }
 
@@ -929,7 +968,7 @@ func TestTUI_Design_Fullscreen_Permission(t *testing.T) {
 		t.Errorf("last row is not the mode line: %q", last)
 	}
 
-	rows = normalizeDesignSpinnerGlyph(rows)
+	rows = normalizeStatusRowCwd(normalizeDesignSpinnerGlyph(rows))
 	assertGolden(t, goldenPath("design-fs-permission.txt"), strings.Join(rows, "\n")+"\n")
 }
 
@@ -971,6 +1010,7 @@ func TestTUI_Design_Fullscreen_Done(t *testing.T) {
 	}
 
 	rows, _ = designSortSubagentPanel(rows, nil)
+	rows = normalizeStatusRowCwd(rows)
 	assertGolden(t, goldenPath("design-fs-done.txt"), strings.Join(rows, "\n")+"\n")
 }
 
@@ -1019,7 +1059,7 @@ func TestTUI_Design_ExitAfterFullSession(t *testing.T) {
 
 // tuiLabelRulePattern matches a labelRule row's own label token, e.g.
 // "you ─" or "plan ─── 2/5" -- see transcript.go's labelRule.
-var tuiLabelRulePattern = regexp.MustCompile(`^(you|kiln|plan|subagents|edit|approval needed|error|system|context)\b.*─`)
+var tuiLabelRulePattern = regexp.MustCompile(`^\s*(you|kiln|plan|subagents|edit|approval needed|error|system|context)\b.*─`)
 
 // TestTUI_Design_FullSession runs the whole scripted session to idle and
 // checks the scrollback's label-rule blocks appear in the design's own

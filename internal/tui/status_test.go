@@ -71,7 +71,7 @@ func TestElapsed(t *testing.T) {
 
 func TestRenderStatusLine_ModeLabelAndKey(t *testing.T) {
 	out := RenderStatusLine(baseState(), 80)
-	if !strings.Contains(out, "auto-edit") {
+	if !strings.Contains(out, "auto mode") {
 		t.Errorf("status line %q missing mode label", out)
 	}
 	if !strings.Contains(out, "⇧⇥") {
@@ -82,7 +82,7 @@ func TestRenderStatusLine_ModeLabelAndKey(t *testing.T) {
 func TestRenderStatusLine_EveryMode(t *testing.T) {
 	cases := map[string]string{
 		"manual":            "ask before edits",
-		"auto":              "auto-edit",
+		"auto":              "auto mode",
 		"acceptEdits":       "auto-edit",
 		"bypassPermissions": "bypass permissions",
 		"dontAsk":           "don't ask",
@@ -95,6 +95,25 @@ func TestRenderStatusLine_EveryMode(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("mode %q: status line %q missing %q", mode, out, want)
 		}
+	}
+}
+
+// TestModeLabel_AutoDistinctFromAcceptEdits pins the fix for
+// qa/findings/20260926T231105Z-mode-ring-duplicate-label.json: acceptEdits
+// and auto are different permission-mode ring stops (settings.Decide
+// auto-allows only edit/write for acceptEdits, but everything for auto)
+// and must render distinguishable labels.
+func TestModeLabel_AutoDistinctFromAcceptEdits(t *testing.T) {
+	acceptEditsLabel, _ := modeLabel("acceptEdits")
+	autoLabel, _ := modeLabel("auto")
+	if acceptEditsLabel == autoLabel {
+		t.Fatalf("acceptEdits and auto must have distinct labels, both got %q", acceptEditsLabel)
+	}
+	if acceptEditsLabel != "auto-edit" {
+		t.Errorf("acceptEdits label = %q, want %q", acceptEditsLabel, "auto-edit")
+	}
+	if autoLabel != "auto mode" {
+		t.Errorf("auto label = %q, want %q", autoLabel, "auto mode")
 	}
 }
 
@@ -177,6 +196,54 @@ func TestRenderStatusLine_FitsWidthDroppingSegments(t *testing.T) {
 	out := RenderStatusLine(s, 20)
 	if VisibleWidth(out) > 20 {
 		t.Errorf("status line overflowed width 20: %q (%d cols)", out, VisibleWidth(out))
+	}
+}
+
+// TestShortenPathLeft covers the left-truncation helper defect 1 relies on:
+// leading ellipsis, trailing components kept, unchanged when it already
+// fits.
+func TestShortenPathLeft(t *testing.T) {
+	cases := []struct {
+		path  string
+		width int
+		want  string
+	}{
+		{"~/src/relay-api", 80, "~/src/relay-api"}, // fits, unchanged
+		{"/private/tmp/scratchpad/real-proj", 22, "…/scratchpad/real-proj"},
+		{"/private/tmp/scratchpad/real-proj", 11, "…/real-proj"},
+		{"/private/tmp/scratchpad/real-proj", 1, "…"},
+		{"/private/tmp/scratchpad/real-proj", 0, ""},
+	}
+	for _, c := range cases {
+		got := ShortenPathLeft(c.path, c.width)
+		if got != c.want {
+			t.Errorf("ShortenPathLeft(%q, %d) = %q, want %q", c.path, c.width, got, c.want)
+		}
+		if VisibleWidth(got) > c.width && c.width > 0 {
+			t.Errorf("ShortenPathLeft(%q, %d) = %q (%d cols) overflowed", c.path, c.width, got, VisibleWidth(got))
+		}
+	}
+}
+
+// TestRenderStatusLine_LongCwdKeepsBranchAt120Cols is defect 1: a long cwd
+// used to make build(true,true) return "" (spacer < 1), dropping the WHOLE
+// location segment — cwd and branch both vanished. The fix shortens the
+// cwd first; branch and its dirty marker must survive.
+func TestRenderStatusLine_LongCwdKeepsBranchAt120Cols(t *testing.T) {
+	s := baseState()
+	s.Cwd = "/private/tmp/very/deeply/nested/scratchpad/directory/for/a/real-project-name"
+	s.Git = &GitStatus{Branch: "feature/long-branch-name", Dirty: true}
+	for _, width := range []int{120, 80} {
+		out := RenderStatusLine(s, width)
+		if VisibleWidth(out) > width {
+			t.Errorf("width %d: status line overflowed: %q (%d cols)", width, out, VisibleWidth(out))
+		}
+		if !strings.Contains(out, "feature/long-branch-name*") {
+			t.Errorf("width %d: branch/dirty marker missing from %q", width, out)
+		}
+		if !strings.Contains(out, "…") {
+			t.Errorf("width %d: expected the cwd to be left-truncated with an ellipsis in %q", width, out)
+		}
 	}
 }
 

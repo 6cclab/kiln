@@ -1,0 +1,30 @@
+{
+ "id": "20260926T232249Z-queued-block-order",
+ "found_at": "2026-09-26T23:22:49Z",
+ "scenario": "queue/queue-two",
+ "step": "05-drained",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Queued follow-ups commit above the running turn's reply and keep 'queued' after delivery",
+ "observed": "Transcript order after draining: you(start…), you(also check… · queued), you(and update… · queued), kiln(Working on the upload route now.), kiln(Checked the login route…). The first reply answers the first prompt but sits below the follow-ups; both follow-ups still read 'queued' after the model answered them.",
+ "expected": "Queued prompts wait below the live turn (in the live region) and commit into the transcript when they are delivered, after the reply they followed; once delivered the 'queued' meta is gone.",
+ "design_ref": "docs/kiln-design-handoff/README.md (Enter while busy becomes a queued follow-up)",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/queue-queue-two-120x40/05-drained.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go",
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestTUI_QueueTwo_OrderAfterDrain,TestUpdate_MsgQueueDrain_CommitsQueuedFollowUps",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/queue-queue-two-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:52Z"
+ }
+}

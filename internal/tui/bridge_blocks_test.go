@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,8 +196,8 @@ func TestBusyLabelForToolStart_Verbs(t *testing.T) {
 		{"edit", "edit", map[string]any{"path": "src/math.js"}, "Editing math.js"},
 		{"write", "write", map[string]any{"path": "new/deep/file.txt"}, "Writing file.txt"},
 		{"todo_write", "todo_write", nil, "Planning"},
-		{"mcp tool", "mcp__grafana__query_prometheus", nil, "Running Mcp__grafana__query_prometheus"},
-		{"unmapped tool falls back to Running <Name>", "some_custom_tool", nil, "Running Some_custom_tool"},
+		{"mcp tool", "mcp__grafana__query_prometheus", nil, "Running Mcp grafana query prometheus"},
+		{"unmapped tool falls back to Running <Name>", "some_custom_tool", nil, "Running Some custom tool"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -208,12 +209,20 @@ func TestBusyLabelForToolStart_Verbs(t *testing.T) {
 	}
 }
 
+// truncateBusyArg's own output carries no "…" marker: RenderSpinnerLeft
+// (transcript.go) always appends exactly one trailing "…" to the whole
+// busy-line label, truncated or not, so a marker added here too produced a
+// double ellipsis in the real busy line ("Running cd /private/tmp/-Us……
+// 43s"). See truncateBusyArg's doc comment.
 func TestBusyLabelForToolStart_Bash_TruncatesLongCommand(t *testing.T) {
 	cmd := "find . -name '*.go' -exec grep -l TODO {} ; # a very long trailing comment"
 	got := busyLabelForToolStart(&turnState{}, harness.Event{ToolName: "bash", ToolArgs: map[string]any{"command": cmd}})
-	want := "Running " + string([]rune(cmd)[:30]) + "…"
+	want := "Running " + string([]rune(cmd)[:30])
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "…") {
+		t.Errorf("busyLabelForToolStart truncation added its own ellipsis: %q (RenderSpinnerLeft adds the single trailing one)", got)
 	}
 }
 
@@ -236,5 +245,91 @@ func TestBusyLabelForToolStart_Task_CountsLiveSubagents(t *testing.T) {
 	}
 	if got := busyLabelForToolStart(ts, harness.Event{ToolName: "task"}); got != "Running 2 subagents" {
 		t.Errorf("second concurrent task dispatch: got %q, want %q", got, "Running 2 subagents")
+	}
+}
+
+// --- Command-result block, no "⎿" (finding 3) -------------------------
+
+// TestRenderCommandResult_RowsAlignUniformly checks every row (including
+// the first) gets the same continuationIndent prefix, so a command's own
+// pre-aligned key/value columns (e.g. /status's "model     x", "auth
+// y") stay aligned instead of zig-zagging under a "⎿ " glyph that only
+// ever prefixed the first row.
+// *qa/findings/20260927T000712Z-command-output-elbow-misaligned.json*.
+func TestRenderCommandResult_RowsAlignUniformly(t *testing.T) {
+	lines := []string{
+		"model     faux/faux-1",
+		"auth      configured",
+		"tier      default",
+	}
+	out := RenderCommandResult("status", lines, 80)
+	if len(out) != len(lines)+1 {
+		t.Fatalf("got %d rows, want %d (label rule + %d content rows)", len(out), len(lines)+1, len(lines))
+	}
+	if !strings.Contains(stripANSI(out[0]), "status") {
+		t.Fatalf("first row should be the \"status\" label rule: %q", out[0])
+	}
+	if strings.Contains(strings.Join(out, "\n"), "⎿") {
+		t.Fatalf("command-result block must not use \"⎿\":\n%s", strings.Join(out, "\n"))
+	}
+	// Every content row's visible prefix (before the value it carries)
+	// starts at the same column — the exact bug: the old form indented row
+	// 0 by len(resultIndent+glyph+"  ") and every other row by only
+	// len(continuationIndent), so "model" and "auth" landed in different
+	// columns.
+	prefixLen := func(s string) int {
+		return len(s) - len(strings.TrimLeft(stripANSI(s), " "))
+	}
+	first := prefixLen(out[1])
+	for i, row := range out[1:] {
+		if got := prefixLen(row); got != first {
+			t.Errorf("row %d indent = %d, want %d (same as every other content row):\n%s", i+1, got, first, strings.Join(out, "\n"))
+		}
+	}
+}
+
+// TestRenderCommandResult_EmptyNameFallsBackToResult checks a command
+// result with no Name (should not happen once registry.go's Execute fills
+// it in, but a defensive default reads better than a blank label rule).
+func TestRenderCommandResult_EmptyNameFallsBackToResult(t *testing.T) {
+	out := RenderCommandResult("", []string{"one line"}, 80)
+	if !strings.Contains(stripANSI(out[0]), "result") {
+		t.Fatalf("empty name should fall back to \"result\": %q", out[0])
+	}
+}
+
+// TestBridge_CommitCommandResult_NoElbowGlyph drives the real committed
+// block through the bridge's queue (not just the pure renderer), checking
+// the printed text carries no "⎿" and is tagged as a synthetic for Ctrl+O
+// replay (CommitCommandResult must go through CommitSynthetic, same as
+// every other block with no session entry of its own).
+func TestBridge_CommitCommandResult_NoElbowGlyph(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+
+	b.CommitCommandResult("status", []string{"model     faux/faux-1", "auth      configured"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	var printed []string
+	for time.Now().Before(deadline) {
+		if printed, _ = f.snapshot(); len(printed) >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(printed) == 0 {
+		t.Fatal("timed out waiting for the command-result block to commit")
+	}
+	joined := strings.Join(printed, "\n")
+	if strings.Contains(joined, "⎿") {
+		t.Fatalf("committed command-result block still uses \"⎿\":\n%s", joined)
+	}
+	if !strings.Contains(joined, "status") {
+		t.Fatalf("committed block missing its \"status\" label:\n%s", joined)
+	}
+	if syn := b.Synthetics(); len(syn) != 1 {
+		t.Fatalf("CommitCommandResult should record exactly one synthetic (for Ctrl+O replay), got %d", len(syn))
 	}
 }

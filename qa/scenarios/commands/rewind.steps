@@ -1,0 +1,17 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE turn one
+KEY enter
+WAITFOR /Sure, working on it/ 20
+TYPE turn two
+KEY enter
+WAITFOR /Second turn done/ 20
+TYPE /rewind
+KEY enter
+WAITFOR /Rewind to which turn\?/ 20
+SHOT rewind-list
+EXPECT /Rewind to which turn\?/
+EXPECT /turn one/
+EXPECT /Use: \/rewind <entry-id>/
+EXPECT_NOT /panic|goroutine/

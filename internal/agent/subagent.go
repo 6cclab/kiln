@@ -251,6 +251,12 @@ type SubagentEventKind string
 const (
 	SubagentEventStart SubagentEventKind = "start"
 	SubagentEventTool  SubagentEventKind = "tool"
+	// SubagentEventUsage carries the subagent session's running token
+	// totals, emitted once per model turn inside the dispatch. The design
+	// (docs/kiln-design-handoff/Terminal.dc.html line 187-189) gives a
+	// running subagent row a token figure, not only a finished one, so
+	// the panel needs a usage signal before Done arrives.
+	SubagentEventUsage SubagentEventKind = "usage"
 	SubagentEventDone  SubagentEventKind = "done"
 	SubagentEventError SubagentEventKind = "error"
 )
@@ -288,15 +294,31 @@ type SubagentEvent struct {
 	// carry, when one was built at all.
 	Depth int
 
-	// tool
-	ToolName string
+	// tool: reported on EventToolEnd (not Start), so ToolArgs/ToolResult
+	// are the finished call's own — the panel's "last action" line
+	// (internal/tui/subagents.go's renderSubagentRow) reads a primary
+	// argument and a short result summary off these, the same way the
+	// parent transcript's own tool blocks do (bridge.go's PrimaryArg/
+	// summarizeToolResult). Nil/empty ToolResult means the call is still
+	// running when this fires — which does not happen today (only
+	// EventToolEnd is forwarded) but callers should not assume otherwise.
+	ToolName   string
+	ToolArgs   map[string]any
+	ToolResult *msg.ToolResultMessage
 
 	// done
 	ToolCalls int
 	Chars     int
-	// Usage is the subagent session's aggregate token/cost usage, set on
-	// SubagentEventDone only.
+	// Usage is the subagent session's aggregate token/cost usage. It is
+	// set on SubagentEventDone (final) and on SubagentEventUsage (the
+	// running total after each of the subagent's own model turns).
 	Usage msg.Usage
+	// Text is the subagent's final answer (SubagentEventDone only) — the
+	// same text DispatchResult.Text carries back to the parent's `task`
+	// tool result. The panel's done row shows its first line as the "last
+	// action" (design: "✓ Upload route mounts at src/routes/upload.ts:22"),
+	// not the last tool name it happened to call.
+	Text string
 
 	// error
 	Message string

@@ -49,6 +49,16 @@ func (f *fakeSink) snapshot() (printed []string, sent []tea.Msg) {
 // new one (Send(MsgTranscriptAppend)) — bridgeItem's own doc comment on the
 // ordering guarantee.
 func TestBridge_FullscreenSinkOrdered(t *testing.T) {
+	// renderMargin (layout_margin.go/bridge.go's Commit) is package-level
+	// state, set by whatever test ran last and constructed a real Model
+	// with a wide terminal (app.go's WindowSizeMsg) — reset it so this
+	// test's exact-string assertions ("A"/"B") don't depend on suite
+	// ordering, the same hazard withRenderEnv already guards golden tests
+	// against for renderWidth.
+	prevMargin := renderMargin
+	renderMargin = 0
+	t.Cleanup(func() { renderMargin = prevMargin })
+
 	b := NewBridge("/tmp")
 	defer b.Stop()
 

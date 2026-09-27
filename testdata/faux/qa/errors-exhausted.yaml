@@ -1,0 +1,11 @@
+model: faux-1
+steps:
+  # internal/harness/retry.go: DefaultRetryPolicy().MaxAttempts == 4, and
+  # the loop `for attempt := 1; attempt <= retry.MaxAttempts; attempt++`
+  # only schedules a retry while attempt < MaxAttempts, so exactly 4
+  # consecutive retriable errors (one per attempt) exhausts every retry
+  # and the 4th failure is returned as the final fault, uncountdowned.
+  - error: {status: 529, type: overloaded_error, message: "Overloaded"}
+  - error: {status: 529, type: overloaded_error, message: "Overloaded"}
+  - error: {status: 529, type: overloaded_error, message: "Overloaded"}
+  - error: {status: 529, type: overloaded_error, message: "Overloaded"}

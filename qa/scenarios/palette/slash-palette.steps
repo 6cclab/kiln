@@ -1,0 +1,51 @@
+# `/` opens the command palette (internal/tui/autocomplete.go BuildPopup,
+# KindSlashCommand), typing filters by prefix (slashCommandSuggestions),
+# up/down moves the selection (Popup.Move), tab completes the highlighted
+# item into the line without running it (Popup.Accept), enter on a typed
+# command runs it directly, and esc closes the popup without touching the
+# line.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE /
+SHOT palette-open
+# registry.List() sorts alphabetically and the popup shows only maxRows==5
+# rows around the selection (app.go's popup maxRows, autocomplete.go's
+# visibleRange), so the unfiltered list's first page is the earliest
+# names, not /model or /memory.
+EXPECT /\/add-dir/
+EXPECT /\/agents/
+TYPE co
+SHOT palette-filtered-co
+EXPECT /\/compact/
+EXPECT /\/context/
+EXPECT /\/config/
+EXPECT /\/cost/
+EXPECT_NOT /\/model /
+KEY down
+SHOT palette-down-once
+KEY up
+SHOT palette-up-once
+KEY esc
+SHOT palette-closed-by-esc
+EXPECT /\/co/
+EXPECT_NOT /Summarize and compact the current context/
+KEY ctrl+u
+TYPE /model
+KEY tab
+SHOT palette-tab-completed
+# Tab completes to "/model " with a trailing space. Terminal.app's text
+# capture drops trailing spaces, so a marker typed after tab proves it.
+TYPE X
+EXPECT /\/model X/
+EXPECT_NOT /current: faux\/faux-1/
+KEY ctrl+u
+TYPE /model
+KEY enter
+# Enter on bare "/model" runs the command with no args, which opens the
+# interactive Select-model dialog (internal/commands/builtins.go's ModalSpec
+# branch): the model picker, titled "Select model".
+WAITFOR /Select model/ 20
+SHOT palette-enter-ran
+EXPECT_NOT /panic|goroutine/

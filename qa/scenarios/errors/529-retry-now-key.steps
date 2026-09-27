@@ -1,0 +1,22 @@
+# Pressing r during the live retry countdown fires the retry immediately
+# instead of waiting out the delay (README.md's "error" row: "r to retry
+# now" — internal/tui/app.go's retryNow wiring).
+@faux testdata/faux/qa/errors-529-retry.yaml
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE trigger an overloaded response
+KEY enter
+WAITFOR /Stream interrupted · 529 overloaded/ 20
+SHOT first-countdown
+# The second failure's countdown (2s) gives more room to catch it live.
+WAITFOR /attempt 3 of 4/ 20
+SHOT second-countdown-before-r
+KEY r
+WAITFOR /Reconnected on attempt 3/ 20
+SHOT reconnected-after-r
+EXPECT /Reconnected on attempt 3/
+WAITFOR /Back online after the retry/ 20
+SHOT final-reply
+EXPECT /Back online after the retry/
+EXPECT_NOT /panic|goroutine/

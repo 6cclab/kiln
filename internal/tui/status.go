@@ -115,13 +115,25 @@ func Elapsed(d time.Duration) string {
 }
 
 // modeLabel returns the status line's mode label text for the dot+label
-// segment, and its colour — manual/default/ask before edits (dim), the
-// auto-edit family (green), plan (blue). Unrecognised modes fall back to
-// "ask before edits" dim, the safest default.
+// segment, and its colour — manual/default/ask before edits (dim),
+// acceptEdits/auto (green, but with distinct labels — see below), plan
+// (blue). Unrecognised modes fall back to "ask before edits" dim, the
+// safest default.
+//
+// acceptEdits and auto are both green but are NOT the same mode
+// (settings.Decide, internal/claude/settings/settings.go): acceptEdits
+// only auto-allows edit/write and read-only calls, asking for everything
+// else, while auto is a blanket allow for every call not already denied —
+// the same "auto mode" the Bash/plan permission prompts already offer to
+// switch into (internal/tui/permission_render.go's "switch to auto mode").
+// So they get distinct labels: "auto-edit" for acceptEdits, "auto mode"
+// for auto, reusing that established name rather than inventing a new one.
 func modeLabel(mode string) (label string, colour func(string) string) {
 	switch mode {
-	case "acceptEdits", "auto":
+	case "acceptEdits":
 		return "auto-edit", KilnGreen
+	case "auto":
+		return "auto mode", KilnGreen
 	case "bypassPermissions":
 		return "bypass permissions", KilnGreen
 	case "dontAsk":
@@ -141,6 +153,58 @@ func contextPressure(fraction float64) func(string) string {
 		return KilnRed
 	}
 	return KilnAmber
+}
+
+// ShortenPathLeft fits path into maxWidth by dropping leading path
+// components (left-truncation), keeping the trailing, most specific
+// components and marking the cut with a leading "…" — e.g.
+// ShortenPathLeft("/private/tmp/scratchpad/real-proj", 22) is
+// "…/scratchpad/real-proj". Used for the status line's location segment and
+// the startup banner's cwd, both of which would rather lose distant
+// ancestors than the branch/model that follow them on the same row.
+//
+// Home-dir abbreviation ("~/…") is the caller's job (AbbrevHome) and happens
+// before this; ShortenPathLeft treats "~" as an ordinary leading component,
+// so it is the first thing dropped once even the last path segment needs
+// room.
+func ShortenPathLeft(path string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if VisibleWidth(path) <= maxWidth {
+		return path
+	}
+	if maxWidth == 1 {
+		return "…"
+	}
+	parts := strings.Split(path, "/")
+	kept := ""
+	for i := len(parts) - 1; i >= 0; i-- {
+		next := parts[i]
+		if kept != "" {
+			next = parts[i] + "/" + kept
+		}
+		if VisibleWidth("…/"+next) <= maxWidth {
+			kept = next
+		} else {
+			break
+		}
+	}
+	if kept != "" {
+		return "…/" + kept
+	}
+	// Not even the last component fits alongside "…/" — hard-clip its tail
+	// end, keeping the most specific (rightmost) characters.
+	last := parts[len(parts)-1]
+	room := maxWidth - VisibleWidth("…")
+	r := []rune(last)
+	if room >= len(r) {
+		return "…" + last
+	}
+	if room <= 0 {
+		return "…"
+	}
+	return "…" + string(r[len(r)-room:])
 }
 
 // AbbrevHome replaces the user's home directory prefix in path with "~".
@@ -176,16 +240,42 @@ func RenderStatusLine(s StatusState, width int) string {
 	modeSeg := colour(dot) + " " + colour(label) + "  " + Muted(shiftTab)
 
 	// --- location segment ---
-	var locSeg string
-	if s.Cwd != "" {
-		locSeg = Muted(s.Cwd)
-		if s.Git != nil {
-			branch := s.Git.Branch
-			if s.Git.Dirty {
-				branch += "*"
-			}
-			locSeg += Muted(" · " + branch)
+	// branchSuffix is fixed text that must survive alongside the cwd (per
+	// the design, the branch is never optional once there is a cwd to show
+	// it next to) — the cwd is what gets shortened when the row is tight,
+	// never the branch.
+	branchSuffix := ""
+	if s.Git != nil {
+		branch := s.Git.Branch
+		if s.Git.Dirty {
+			branch += "*"
 		}
+		branchSuffix = " · " + branch
+	}
+	// locSegAt renders the location segment with the cwd fitted to at most
+	// cwdWidth columns (left-truncated with a leading "…", so the trailing,
+	// most specific path components survive) — "" only when the cwd cannot
+	// even be shown as an ellipsis.
+	locSegAt := func(cwdWidth int) string {
+		if s.Cwd == "" {
+			return ""
+		}
+		cwd := s.Cwd
+		if VisibleWidth(cwd) > cwdWidth {
+			cwd = ShortenPathLeft(cwd, cwdWidth)
+		}
+		if cwd == "" {
+			return ""
+		}
+		// Two separate Muted() calls (not one Muted(cwd+branchSuffix)) to
+		// match the pre-existing golden output's ANSI run boundaries, which
+		// style the cwd and the " · branch" suffix as adjacent same-colour
+		// spans rather than one merged span.
+		out := Muted(cwd)
+		if branchSuffix != "" {
+			out += Muted(branchSuffix)
+		}
+		return out
 	}
 
 	// --- right side: ctx meter + cost ---
@@ -212,31 +302,49 @@ func RenderStatusLine(s StatusState, width int) string {
 	// is nonzero.
 	costSeg := Muted(fmt.Sprintf("$%.2f", s.Cost))
 
-	build := func(includeLoc, includeCost bool) string {
+	// build tries, in order: the full cwd, a left-shortened cwd sized to
+	// whatever room is left once the mode segment, branch and right side
+	// are accounted for, then no location at all — location only drops
+	// once even a minimal shortened form cannot fit (defect: a long cwd
+	// used to blank the whole segment, branch included, instead of
+	// shrinking the path first).
+	build := func(includeCost bool) string {
 		r := ctxSeg
 		if includeCost {
 			r += "  " + costSeg
 		}
-		left := modeSeg
-		if includeLoc && locSeg != "" {
-			left += "  " + locSeg
-		}
-		lw := VisibleWidth(left)
 		rw := VisibleWidth(r)
-		spacer := width - 1 - lw - rw
-		if spacer < 1 {
-			return ""
+		lwMode := VisibleWidth(modeSeg)
+
+		tryLoc := func(cwdWidth int) string {
+			left := modeSeg
+			if loc := locSegAt(cwdWidth); loc != "" {
+				left += "  " + loc
+			}
+			lw := VisibleWidth(left)
+			spacer := width - 1 - lw - rw
+			if spacer < 1 {
+				return ""
+			}
+			return left + strings.Repeat(" ", spacer) + r
 		}
-		return left + strings.Repeat(" ", spacer) + r
+
+		if out := tryLoc(VisibleWidth(s.Cwd)); out != "" {
+			return out
+		}
+		available := width - 1 - lwMode - 2 - VisibleWidth(branchSuffix) - rw - 1
+		if available >= 1 {
+			if out := tryLoc(available); out != "" {
+				return out
+			}
+		}
+		return tryLoc(0)
 	}
 
-	if out := build(true, true); out != "" {
+	if out := build(true); out != "" {
 		return out
 	}
-	if out := build(false, true); out != "" {
-		return out
-	}
-	if out := build(false, false); out != "" {
+	if out := build(false); out != "" {
 		return out
 	}
 	return FitStatus(modeSeg, width)

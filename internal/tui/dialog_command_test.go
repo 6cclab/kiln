@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -29,6 +30,8 @@ func key(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "down":
 		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab}
 	default:
 		r := []rune(s)
 		return tea.KeyPressMsg{Code: r[0], Text: s}
@@ -93,5 +96,22 @@ func runKey(v *commandDialog, k tea.KeyPressMsg) {
 		if r, ok := cmd().(msgDialogResult); ok {
 			v.Apply(r)
 		}
+	}
+}
+
+// TestCommandDialog_ActRefreshesHeader: a header row reporting state the
+// action changed is rebuilt once the result lands, so the open panel does
+// not show the old value (qa/findings *permissions-mode-row-stale).
+func TestCommandDialog_ActRefreshesHeader(t *testing.T) {
+	mode := "manual"
+	spec := fakeModalSpec()
+	spec.Header = []string{"mode       " + mode}
+	spec.RefreshHeader = func() []string { return []string{"mode       " + mode} }
+	spec.Act = func(key, value string) (string, error) { mode = "acceptEdits"; return "mode is now " + mode, nil }
+	v := NewCommandDialog(spec).(*commandDialog)
+	_, _, cmd := v.HandleKey(key("d"))
+	v.Apply(cmd().(msgDialogResult))
+	if got := strings.Join(v.Render(80, 20), "\n"); !strings.Contains(got, "acceptEdits") || strings.Contains(got, "mode       manual") {
+		t.Errorf("header not refreshed after the action:\n%s", got)
 	}
 }

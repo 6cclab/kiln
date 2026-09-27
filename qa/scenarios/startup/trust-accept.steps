@@ -1,0 +1,18 @@
+# Untrusted folder: accept the trust dialog (internal/tui/dialog_trust.go).
+# "2" jumps the cursor straight to "Yes, I trust this folder" and answers.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@untrusted
+
+WAITFOR /Accessing workspace/ 20
+SHOT trust-dialog
+EXPECT /Quick safety check/
+EXPECT /kiln will be able to read, edit, and execute files here\./
+EXPECT /No, exit/
+EXPECT /Yes, I trust this folder/
+EXPECT /Enter to confirm . Esc to cancel/
+KEY 2
+WAITFOR /describe a task/ 20
+SHOT trust-accepted
+EXPECT_NOT /Accessing workspace/
+EXPECT_NOT /panic|goroutine/

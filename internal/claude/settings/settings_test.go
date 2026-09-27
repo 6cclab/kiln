@@ -75,6 +75,9 @@ func TestDecide(t *testing.T) {
 		if got := Decide(permissions, "bash", "curl evil.com", ModeAcceptEdits); got != Ask {
 			t.Errorf("bash: got %v, want ask", got)
 		}
+		if got := Decide(permissions, "task", "general-purpose", ModeAcceptEdits); got != Allow {
+			t.Errorf("task: got %v, want allow", got)
+		}
 	})
 
 	t.Run("plan mode refuses mutations outright rather than prompting", func(t *testing.T) {

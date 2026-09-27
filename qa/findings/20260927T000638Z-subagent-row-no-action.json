@@ -1,0 +1,33 @@
+{
+ "id": "20260927T000638Z-subagent-row-no-action",
+ "found_at": "2026-09-27T00:06:38Z",
+ "scenario": "tools/task-concurrent",
+ "step": "01-three-live,02-three-done",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "medium",
+ "title": "Subagent rows show no latest action or result summary",
+ "observed": "Each subagent row shows name, task and meter, with only '✓ finished' beneath once done; no line says what the subagent is doing or what it found.",
+ "expected": "Design agents scene: under each row a dim action line — live: '→ Grep \"app.use(\" · 14 matches'; done: '✓ Upload route mounts at src/routes/upload.ts:22' (the result's first line).",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html agents block; qa/reference/agents.png",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/tools-task-concurrent-120x40/01-three-live.png",
+  "qa/runs/c1/iterm-dark/tools-task-concurrent-120x40/02-three-done.png",
+  "qa/reference/agents.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/subagents.go",
+   "internal/agent/dispatch.go",
+   "internal/agent/subagent.go"
+  ],
+  "regression_test": "TestTUI_SubagentPanel_ShowsToolActionThenFinalAnswer",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/tools-task-concurrent-120x40/01-three-live.png"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
+}

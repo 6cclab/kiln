@@ -25,6 +25,9 @@ type dialogModel struct {
 	cursor   int
 	status   string
 	statusOK bool
+	// picking is the item value an in-flight Select/SelectDefault was
+	// run for; Apply moves the current-model mark to it on success.
+	picking string
 }
 
 // NewDialogModel builds the /model Dialog. Called by
@@ -71,6 +74,7 @@ func (d *dialogModel) HandleKey(msg tea.KeyPressMsg) (consumed, closeIt bool, cm
 		}
 		next := nextEffortLevel(d.spec.Effort, key == "right")
 		d.status, d.statusOK = "…", true
+		d.picking = ""
 		setEffort := d.spec.SetEffort
 		return true, false, func() tea.Msg {
 			label, err := setEffort(next)
@@ -80,6 +84,7 @@ func (d *dialogModel) HandleKey(msg tea.KeyPressMsg) (consumed, closeIt bool, cm
 		if item, ok := d.selected(); ok && d.spec.Select != nil {
 			sel, value := d.spec.Select, item.Value
 			d.status, d.statusOK = "…", true
+			d.picking = value
 			return true, false, func() tea.Msg {
 				msg, err := sel(value)
 				return msgDialogResult{msg: msg, err: err}
@@ -95,6 +100,7 @@ func (d *dialogModel) HandleKey(msg tea.KeyPressMsg) (consumed, closeIt bool, cm
 			if apply != nil {
 				value := item.Value
 				d.status, d.statusOK = "…", true
+				d.picking = value
 				return true, false, func() tea.Msg {
 					msg, err := apply(value)
 					return msgDialogResult{msg: msg, err: err}
@@ -129,11 +135,24 @@ func (d *dialogModel) Outcome() string {
 // Apply records a Select/SelectDefault/SetEffort result as the dialog's
 // status line, mirroring commandDialog.Apply.
 func (d *dialogModel) Apply(r msgDialogResult) {
+	picked := d.picking
+	d.picking = ""
 	if r.err != nil {
 		d.status, d.statusOK = r.err.Error(), false
 		return
 	}
 	d.status, d.statusOK = r.msg, true
+	if picked != "" {
+		// The ✓ marks the model in use; after a switch that is the pick.
+		items := append([]commands.Item(nil), d.spec.Items...)
+		for i := range items {
+			items[i].Marker = ""
+			if items[i].Value == picked {
+				items[i].Marker = "✔"
+			}
+		}
+		d.spec.Items = items
+	}
 }
 
 // effortLevels is the low/medium/high/xhigh/max cycle order the work
@@ -164,6 +183,9 @@ func (d *dialogModel) selected() (commands.Item, bool) {
 	}
 	return d.spec.Items[d.cursor], true
 }
+
+// FrameLabel names the label rule DialogTopRule draws above /model.
+func (d *dialogModel) FrameLabel() string { return "model" }
 
 // renderModelOptionRows lays out /model's numbered options. It does NOT
 // reuse dialog.go's renderOptionRows: that helper wraps descriptions at
@@ -197,7 +219,7 @@ func renderModelOptionRows(items []commands.Item, cursor, width int) []string {
 	for i, it := range items {
 		l := it.Label
 		if it.Marker == "✔" {
-			l += " ✔"
+			l += " " + G().OK
 		}
 		labels[i] = l
 		if w := VisibleWidth(l); w > labelWidth {
@@ -212,11 +234,10 @@ func renderModelOptionRows(items []commands.Item, cursor, width int) []string {
 
 	var out []string
 	for i, it := range items {
-		marker := Faint("  ")
+		marker := selectionGutter(i == cursor)
 		label := Muted(labels[i])
 		if i == cursor {
-			marker = KilnAmber("❯ ")
-			label = Ink(labels[i])
+			label = KilnAmber(labels[i])
 		}
 		pad := descCol - len(dialogIndent) - markerWidth - VisibleWidth(labels[i])
 		if pad < 2 {

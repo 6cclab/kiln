@@ -1,0 +1,24 @@
+# Queue: one follow-up queued, then Esc while the turn is still busy.
+# Esc-while-busy interrupts the running turn (internal/tui/keys.go's
+# Interrupt binding) rather than touching the already-queued follow-up,
+# and internal/tui/app.go's finishTurn commits "■ Interrupted. Tell kiln
+# what to do instead." once the aborted turn unwinds.
+@faux testdata/faux/qa/queue-busy.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE start the rate limiter work
+KEY enter
+WAITFOR /esc to stop/ 10
+SHOT busy
+TYPE also check the login route
+KEY enter
+SHOT queued-one
+EXPECT /1 queued/
+KEY esc
+WAITFOR /Interrupted/ 20
+SHOT after-esc
+EXPECT /Interrupted/
+EXPECT /also check the login route/
+EXPECT_NOT /panic|goroutine/

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -106,7 +107,12 @@ func TestRenderBashPermissionPrompt_MatchesReference(t *testing.T) {
 	}
 	for i := range want {
 		row := got[i]
-		if i == 4 { // the "$ ..." row carries the raised background's padding
+		// The "$ ..." row and the selected option row (here, row 7, "1
+		// Yes") both carry the raised background's full-width padding
+		// (finding option-row-raise-key-only: the whole row raises, not
+		// just the key) — the reference capture is plain text with no
+		// colour, so it has no trailing spaces to compare against.
+		if i == 4 || i == 7 {
 			row = strings.TrimRight(row, " ")
 		}
 		if row != want[i] {
@@ -188,8 +194,8 @@ func TestRenderEditPermissionPrompt_MatchesReference(t *testing.T) {
 		strings.Repeat("\u2500", 100),
 		" Allow kiln to edit math.js?",
 		strings.Repeat("\u254c", 100),
-		" 1 -function add(a,b){ return a - b }",
-		" 1 +function add(a,b){ return a + b }",
+		" 1 − function add(a,b){ return a - b }",
+		" 1 + function add(a,b){ return a + b }",
 		strings.Repeat("\u254c", 100),
 		" 1  Yes",
 		" 2  Yes, and switch to accept edits (auto-approve file edits and common file commands) for this",
@@ -214,12 +220,12 @@ func TestRenderEditPermissionPrompt_WriteKindUsesWriteHeader(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
 
-	req := EditPermissionRequest{Kind: EditKindWrite, Path: "new.txt", Hunks: []DiffHunk{{LineNum: 1, New: "hello"}}}
+	req := EditPermissionRequest{Kind: EditKindWrite, Path: "new.txt", Hunks: []DiffHunk{{LineNum: 1, New: "hello", OldAbsent: true}}}
 	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
 	if got[2] != " Allow kiln to write to new.txt?" {
 		t.Errorf("row 2 = %q, want the write-header row", got[2])
 	}
-	if got[4] != " 1 +hello" {
+	if got[4] != " 1 + hello" {
 		t.Errorf("row 4 = %q, want the +hello row (Write has no old line)", got[4])
 	}
 }
@@ -239,22 +245,135 @@ func TestRenderEditPermissionPrompt_NumberWidthFromDiff(t *testing.T) {
 	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
 	// Number column width must come from the widest line number (12, two
 	// digits), so the single-digit "1" row pads to match.
-	if got[4] != "  1 -a" {
+	if got[4] != "  1 − a" {
 		t.Errorf("row 4 = %q, want padded to two-digit width", got[4])
 	}
-	if got[6] != " 12 -b" {
+	if got[6] != " 12 − b" {
 		t.Errorf("row 6 = %q", got[6])
 	}
 }
 
+// TestRenderEditPermissionPrompt_CapsLongDiff pins defect 1: an uncapped
+// diff (a real 90-line file write, observed live) pushed the "approval
+// needed" label, the amber rule and the question clean off the top of a
+// real terminal, leaving only the options visible. A diff wider than the
+// cap must still leave the question, the path and the options visible,
+// with a dim "… +N more lines" row standing in for what got elided.
+func TestRenderEditPermissionPrompt_CapsLongDiff(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+
+	hunks := make([]DiffHunk, 90)
+	for i := range hunks {
+		hunks[i] = DiffHunk{LineNum: i + 1, New: fmt.Sprintf("line %d", i+1), OldAbsent: true}
+	}
+	req := EditPermissionRequest{Kind: EditKindWrite, Path: "big.txt", Hunks: hunks}
+	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
+
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "Allow kiln to write to big.txt?") {
+		t.Errorf("question row missing from output:\n%s", joined)
+	}
+	if !strings.Contains(joined, "big.txt") {
+		t.Errorf("path missing from output")
+	}
+	if !strings.Contains(joined, " 1  Yes") {
+		t.Errorf("Yes option missing from output")
+	}
+	if !strings.Contains(joined, " 3  No") {
+		t.Errorf("No option missing from output")
+	}
+
+	wantElision := " " + "… +78 more lines"
+	found := false
+	plusRows := 0
+	for _, l := range got {
+		if l == wantElision {
+			found = true
+		}
+		if strings.Contains(l, "+ line ") {
+			plusRows++
+		}
+	}
+	if !found {
+		t.Errorf("elision row %q not found in:\n%s", wantElision, joined)
+	}
+	if plusRows != 12 {
+		t.Errorf("visible diff rows = %d, want 12 (the cap)", plusRows)
+	}
+}
+
+// TestRenderEditPermissionPrompt_BlankLinesStayNumbered pins defect 2: a
+// written file with blank lines must render every line, including blank
+// ones, as a numbered row with no text — not skip the row — so the line
+// numbers shown stay continuous instead of jumping.
+func TestRenderEditPermissionPrompt_BlankLinesStayNumbered(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+
+	req := EditPermissionRequest{
+		Kind: EditKindWrite,
+		Path: "f.txt",
+		Hunks: []DiffHunk{
+			{LineNum: 1, New: "one", OldAbsent: true},
+			{LineNum: 2, New: "", OldAbsent: true},
+			{LineNum: 3, New: "three", OldAbsent: true},
+		},
+	}
+	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
+
+	want := []string{" 1 + one", " 2 + ", " 3 + three"}
+	// The three diff rows sit right after the dashed rule (row 3, index
+	// 3) that follows the label rule/amber rule/question rows.
+	for i, w := range want {
+		if got[4+i] != w {
+			t.Errorf("row %d = %q, want %q (numbering must not skip the blank line)", 4+i, got[4+i], w)
+		}
+	}
+}
+
+// TestRenderEditPermissionPrompt_AbsentSideNoSpuriousRow checks that a
+// hunk with no old side at all (OldAbsent, the normal Write shape) never
+// renders a "-" row, even though Old == "" — the same zero value a
+// legitimate blank old *line* would carry — matching the DiffHunk doc
+// comment's distinction.
+func TestRenderEditPermissionPrompt_AbsentSideNoSpuriousRow(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+
+	req := EditPermissionRequest{
+		Kind:  EditKindWrite,
+		Path:  "f.txt",
+		Hunks: []DiffHunk{{LineNum: 1, New: "hi", OldAbsent: true}},
+	}
+	got := RenderEditPermissionPrompt(req, 100, 0, false, "")
+	for _, l := range got {
+		if (strings.Contains(l, "-") || strings.Contains(l, "−")) && strings.Contains(l, "1") && !strings.Contains(l, "+ hi") {
+			t.Errorf("unexpected '-' row for an OldAbsent hunk: %q", l)
+		}
+	}
+	if got[4] != " 1 + hi" {
+		t.Errorf("row 4 = %q, want %q", got[4], " 1 + hi")
+	}
+}
+
 // TestRenderPlanApproval_MatchesReference pins the plan-approval
-// prompt's structural rows to the kiln design (docs/kiln-design.md's
-// "plan" block anatomy and the perm block's option layout): a "plan"
-// label rule, "Ready to code?", the plan body between dashed/thin rules,
-// the proceed question ("kiln has written up a plan...", not "the
-// model..." — see the real bug noted in the handback), and the three
-// numbered options (no "❯" marker; kiln marks selection with the raised
-// background and an amber key, invisible with colour disabled).
+// prompt's structural rows to the same permission-block anatomy the bash
+// and edit prompts use (docs/kiln-design-handoff/Terminal.dc.html:75-80,
+// qa/reference/permission.png): a "plan" label rule, a full-width amber
+// rule, "Ready to code?", the plan body at a 1-column indent (no dashed
+// frame around it — that framing belongs to the edit prompt's diff
+// hunks, not a plan body), the proceed question ("kiln has written up a
+// plan...", not "the model..." — see the real bug noted in the
+// handback), the three numbered options via the same permissionOptionRow
+// helper the bash/edit prompts use (no "❯" marker; kiln marks selection
+// with the raised background and an amber key, invisible with colour
+// disabled), one hint row, and a closing amber rule. This replaces the
+// prior structure (a "plan" label in Muted rather than amber, a 3-column
+// indent, a dashed-then-thin rule framing the body, and a sub-hint
+// hanging under option 3) that finding plan-approval-not-perm-block
+// flagged as design drift from the block anatomy every other permission
+// prompt uses.
 func TestRenderPlanApproval_MatchesReference(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
@@ -270,13 +389,13 @@ func TestRenderPlanApproval_MatchesReference(t *testing.T) {
 
 	wantPrefix := []string{
 		"plan " + strings.Repeat("\u2500", 95),
-		"   Ready to code?",
+		strings.Repeat("\u2500", 100),
+		" Ready to code?",
 		"",
-		"   Here is the plan:",
-		"  " + strings.Repeat("\u254c", 96),
-		"   Rename math.js \u2192 calc.js",
+		" Here is the plan:",
+		" Rename math.js \u2192 calc.js",
 		"",
-		"   Context",
+		" Context",
 		"",
 	}
 	for i, w := range wantPrefix {
@@ -285,21 +404,22 @@ func TestRenderPlanApproval_MatchesReference(t *testing.T) {
 		}
 	}
 
-	// The closing rule, question, options and path row are the
+	// The closing rule, question, options, hint and path row are the
 	// structural tail — find them relative to the end since the wrapped
 	// plan body's exact row count is a wrapping-formula detail already
 	// flagged [chk] in dialog.go.
-	tail := got[len(got)-9:]
+	tail := got[len(got)-10:]
 	wantTail := []string{
-		"  " + strings.Repeat("\u2500", 96),
-		"   kiln has written up a plan and is ready to execute. Would you like to proceed?",
+		" kiln has written up a plan and is ready to execute. Would you like to proceed?",
 		"",
-		"   1  Yes, and use auto mode",
-		"   2  Yes, manually approve edits",
-		"   3  Tell kiln what to change",
-		"        shift+tab to approve with this feedback",
+		" 1  Yes, and use auto mode",
+		" 2  Yes, manually approve edits",
+		" 3  Tell kiln what to change",
 		"",
-		"   ~/.harness/plans/3make-a-two-step-plan-ticklish-aurora.md",
+		" \u2191\u2193 select \u00b7 enter confirm \u00b7 shift+tab to tell kiln what to change",
+		strings.Repeat("\u2500", 100),
+		"",
+		" ~/.harness/plans/3make-a-two-step-plan-ticklish-aurora.md",
 	}
 	for i, w := range wantTail {
 		if tail[i] != w {
@@ -359,5 +479,33 @@ func TestRenderPlanApproval_ScrollIndicatorWhenClipped(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected a scroll indicator when the plan overflows the height budget, got %v", got)
+	}
+}
+
+// TestBashPromptFeedbackKeepsFrame: tab to amend used to swap the bash
+// prompt for the generic one — a different title ("use bash?"), a deeper
+// indent and an extra blank row (qa/findings *bash-feedback-reframes).
+// The feedback field now replaces only the options.
+func TestBashPromptFeedbackKeepsFrame(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+	req := BashPermissionRequest{Command: "echo tab-amend-probe"}
+	options := RenderBashPermissionPrompt(req, 80, 0)
+	typed := "use printf"
+	req.Feedback = &typed
+	feedback := RenderBashPermissionPrompt(req, 80, 0)
+	for i := 0; i < 4; i++ {
+		if options[i] != feedback[i] {
+			t.Errorf("row %d changed on tab:\n options  %q\n feedback %q", i, options[i], feedback[i])
+		}
+	}
+	joined := strings.Join(feedback, "\n")
+	for _, want := range []string{" What should be done instead?", " > use printf▌"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("feedback view missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "Yes") {
+		t.Errorf("options still shown in feedback view:\n%s", joined)
 	}
 }

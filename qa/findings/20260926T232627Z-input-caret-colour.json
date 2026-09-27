@@ -1,0 +1,31 @@
+{
+ "id": "20260926T232627Z-input-caret-colour",
+ "found_at": "2026-09-26T23:26:27Z",
+ "scenario": "content/streaming",
+ "step": "02-mid-stream",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "low",
+ "title": "Input caret is the terminal's default cursor colour, not amber",
+ "observed": "The input box cursor renders as the terminal's default light-grey block.",
+ "expected": "Design sets caret-color #e9a64b (amber) on the input; kiln can request it via the cursor colour (OSC 12) while running and restore it on exit.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:135",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/content-streaming-120x40/02-mid-stream.png",
+  "qa/reference/streaming.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/editor/model.go"
+  ],
+  "regression_test": "TestCursorColourMatchesMarker",
+  "after_evidence": [
+   "qa/runs/c3/iterm-light/content-verbose-toggle-120x40/02-reply-non-verbose.png"
+  ],
+  "note": "Caret is amber in iTerm2 (light shot shows the amber block); the renderer resets the cursor colour on exit (cursed_renderer close).",
+  "updated_at": "2026-09-27T00:21:44Z"
+ }
+}

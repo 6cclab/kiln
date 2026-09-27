@@ -68,7 +68,7 @@ func AccountCommands(deps AccountDeps) Source {
 					return Result{Output: []string{
 						"Run this outside the session:",
 						"",
-						fmt.Sprintf("  harness login %s", wanted),
+						fmt.Sprintf("  kiln login %s", wanted),
 					}}, nil
 				}
 				if deps.Registry == nil {
@@ -90,9 +90,9 @@ func AccountCommands(deps AccountDeps) Source {
 					lines = append(lines, fmt.Sprintf("  %-18s configured%s", p.ID(), subscription))
 				}
 				if len(lines) > 0 {
-					return Result{Output: append(append([]string{"logged in:"}, lines...), "", "Add one with: harness login <provider>")}, nil
+					return Result{Output: append(append([]string{"logged in:"}, lines...), "", "Add one with: kiln login <provider>")}, nil
 				}
-				return Result{Output: []string{"Not logged in to any provider.", "", "Log in with: harness login <provider>"}}, nil
+				return Result{Output: []string{"Not logged in to any provider.", "", "Log in with: kiln login <provider>"}}, nil
 			},
 		},
 		{
@@ -125,7 +125,7 @@ func AccountCommands(deps AccountDeps) Source {
 				return Result{Output: []string{
 					"Run this outside the session:",
 					"",
-					fmt.Sprintf("  harness logout %s", wanted),
+					fmt.Sprintf("  kiln logout %s", wanted),
 				}}, nil
 			},
 		},

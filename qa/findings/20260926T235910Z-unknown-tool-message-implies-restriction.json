@@ -1,0 +1,29 @@
+{
+ "id": "20260926T235910Z-unknown-tool-message-implies-restriction",
+ "found_at": "2026-09-26T23:59:10Z",
+ "scenario": "tools/unknown-tool",
+ "step": "unknown-tool",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "Nonexistent tool name reports 'not in the active tool set' instead of 'unknown tool', implying access control rather than a typo/hallucinated name",
+ "observed": "Calling a tool name the model made up ('frobnicate', never registered anywhere) shows: 'frobnicate ─── auto-approved · 0.0s / Frobnicate / → tool \"frobnicate\" is not available to this agent: it is not in the active tool set' (01-waitfor-timeout-line9.txt, after WAITFOR /unknown tool/ timed out because that text never appears).",
+ "expected": "The 'unknown tool %q' error path (internal/harness/turn.go:681) exists specifically for this case but is unreachable for a real CLI session: toolActive() (turn.go:782-791) returns true only when the lane's ActiveToolNames is empty, and a real session's ActiveToolNames is always the CLI's populated tool list, so any unregistered name is rejected by the 'not in the active tool set' branch (turn.go:667) first. The two messages read very differently to a user — one implies a permissions restriction, the other a nonexistent/mistyped tool — and only the misleading one is ever reachable in practice.",
+ "design_ref": "internal/harness/turn.go:657-681 (beginTool's toolActive check at 657 short-circuits before the registry lookup at 673-681); turn.go:782-791 toolActive",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/tools-unknown-tool-120x40/01-waitfor-timeout-line9.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/turn.go"
+  ],
+  "regression_test": "TestUnknownToolNameReportsUnknownTool",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/tools-unknown-tool-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:53Z"
+ }
+}

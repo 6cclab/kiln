@@ -1,0 +1,18 @@
+# Edit of an existing file: committed as a "diff" block (transcript.go's
+# RenderToolCall Diff branch), no "new file" tag, "+N −N" header
+# (diffCountsRow).
+# design: Terminal.dc.html:362 (diff block header: +N / −N counts)
+@faux testdata/faux/qa/tools-edit-existing.yaml
+@fixture testdata/behaviour/design
+@args --permission-mode acceptEdits
+
+WAITFOR /describe a task/ 20
+TYPE tighten the auth check
+KEY enter
+WAITFOR /Tightened the auth check/ 20
+SHOT edit-diff
+EXPECT /edit/
+EXPECT /auth\.ts/
+EXPECT_NOT /new file/
+EXPECT /\+1\s+−1/
+EXPECT_NOT /panic|goroutine/

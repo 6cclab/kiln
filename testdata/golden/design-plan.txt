@@ -1,17 +1,17 @@
-▸ Find the upload route and its middleware chain
-○ Check how Redis is configured
-○ Write a rateLimit middleware
-○ Wire it into POST /api/upload
-○ Add tests and run the suite
+  ▸  Find the upload route and its middleware chain
+  ○  Check how Redis is configured
+  ○  Write a rateLimit middleware
+  ○  Wire it into POST /api/upload
+  ○  Add tests and run the suite
 
-subagents ────────────────────────────────────────────────────────────────────────────────  0/2 done
-2 subagents running in parallel
- scout     Check the Redis config and survey the upload tests                     ──────────
-           → starting…
- scout     Map the middleware chain in src/server                                 ──────────
-           → starting…
-◐ Running 2 subagents…  0s · 300 tokens                                                 esc to stop
-────────────────────────────────────────────────────────────────────────────────────────────────────
-›  queue a follow-up, or esc to stop
-────────────────────────────────────────────────────────────────────────────────────────────────────
-● ask before edits  ⇧⇥                                                    ctx ──────────  0%  $0.00
+  subagents ────────────────────────────────────────────────────────────────────────────  0/2 done
+  2 subagents running in parallel
+   scout-N   Check the Redis config and survey the upload tests                 ━━━━━━━━━━
+             → starting…
+   scout-N   Map the middleware chain in src/server                             ━━━━━━━━━━
+             → starting…
+  ◐ Running 2 subagents…  0s · 300 tokens                                             esc to stop
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ›  queue a follow-up, or esc to stop
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ● ask before edits  ⇧⇥  <cwd> ctx ──────────  0%  $0.00

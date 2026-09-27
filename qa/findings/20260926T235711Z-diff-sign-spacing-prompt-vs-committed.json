@@ -1,0 +1,29 @@
+{
+ "id": "20260926T235711Z-diff-sign-spacing-prompt-vs-committed",
+ "found_at": "2026-09-26T23:57:11Z",
+ "scenario": "permissions/write-40-lines-capped",
+ "step": "write-prompt-capped",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "low",
+ "title": "Diff +/- sign has no space before the code in the pending-approval preview, but a space once committed",
+ "observed": "Same write's diff content renders two different ways depending on which screen shows it: the pending approval prompt (01-write-prompt-capped.txt) reads '  1 +export const line1 = 1;' (sign glued to the code, no space), while the committed diff block after approval (02-write-applied.txt) reads '   8 + export const line8 = 8;' (sign, then a space, then the code).",
+ "expected": "One glyph-to-text spacing convention for +/- diff signs across both the pending-approval preview and the committed diff block.",
+ "design_ref": "internal/tui/permission_render.go:279,282 (KilnRed(\"-\"+h.Old), KilnGreen(\"+\"+h.New) — no space) vs internal/tui/transcript.go:196,200 RenderDiffLines (KilnGreen(\"+ \"), KilnRed(\"− \") — sign plus space)",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/permissions-write-40-lines-capped-120x40/01-write-prompt-capped.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go"
+  ],
+  "regression_test": "TestRenderEditPermissionPrompt_MatchesReference",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/permissions-edit-option1-yes-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:53Z"
+ }
+}

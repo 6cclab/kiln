@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // pi-tui's renderer throws when a component returns a line wider than the
@@ -154,5 +156,26 @@ func TestUserMessageRewrapsOnResize(t *testing.T) {
 	msg := strings.Repeat("a ", 60)
 	if len(RenderUserMessage(msg, 40)) == len(RenderUserMessage(msg, 100)) {
 		t.Error("rewrap at a different width should change line count")
+	}
+}
+
+// TestRenderErrorWrapsLongMessage: a provider error with a long raw body
+// used to render as one row clipped at the terminal edge, cutting off the
+// error type with no ellipsis (qa/findings *error-line-clipped).
+func TestRenderErrorWrapsLongMessage(t *testing.T) {
+	prev := renderWidth
+	t.Cleanup(func() { renderWidth = prev })
+	SetRenderWidth(60)
+	msg := `provider request failed: status=401 body={"error":{"message":"invalid api key","type":"authentication_error"},"type":"error"}`
+	out := RenderError(msg)
+	var body []string
+	for _, l := range out[2:] {
+		if w := VisibleWidth(l); w > 60 {
+			t.Errorf("row wider than 60 columns (%d): %q", w, l)
+		}
+		body = append(body, ansi.Strip(l))
+	}
+	if got := strings.Join(body, ""); strings.ReplaceAll(got, " ", "") != strings.ReplaceAll(msg, " ", "") {
+		t.Errorf("wrapped rows lost text:\n got %q\nwant %q", got, msg)
 	}
 }

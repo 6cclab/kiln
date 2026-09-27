@@ -1,0 +1,21 @@
+# A diff whose content has genuine blank lines: diffHunksFromWriteArgs
+# keeps blank "+" rows so line numbers stay continuous (transcript.go's
+# DiffHunk doc comment, "defect 2").
+@faux testdata/faux/qa/tools-diff-blank-lines.yaml
+@args --permission-mode acceptEdits
+
+WAITFOR /describe a task/ 20
+TYPE add three exports with gaps
+KEY enter
+WAITFOR /blank lines between exports/ 20
+SHOT blank-line-diff
+EXPECT /first = 1/
+EXPECT /second = 2/
+EXPECT /third = 3/
+# Every source line, including the blanks between exports, should get its
+# own numbered "+" row: 5 content lines total (1 first, 2 blank, 3
+# second, 4 blank, 5 third) — the blank rows keep the numbering
+# continuous rather than skipping (transcript.go DiffHunk's "defect 2").
+EXPECT /1 \+ export const first = 1;/
+EXPECT /5 \+ export const third = 3;/
+EXPECT_NOT /panic|goroutine/

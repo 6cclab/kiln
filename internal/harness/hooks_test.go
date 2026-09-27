@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,4 +154,94 @@ steps:
 	if len(last.Tools) != 1 || last.Tools[0].Name != "read" {
 		t.Fatalf("recorded tools = %+v, want exactly [read]", last.Tools)
 	}
+}
+
+// TestUnknownToolNameReportsUnknownTool asserts that calling a tool name
+// that was never registered anywhere produces the "unknown tool %q"
+// message, not the "not in the active tool set" restriction message -
+// the two read very differently to a user (a typo/hallucinated name vs.
+// an access restriction), and only the registry lookup (not the active-set
+// check) can tell them apart.
+func TestUnknownToolNameReportsUnknownTool(t *testing.T) {
+	rig := newTestRig(t, `
+model: faux-1
+steps:
+  - tool_call: {name: frobnicate, args: {}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "done"
+`, []string{"bash", "read", "edit", "write"})
+	lane := rig.mustLane("main")
+
+	result, err := lane.Prompt(context.Background(), "go", nil)
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("status = %q, err = %v", result.Status, result.Error)
+	}
+
+	tr := findToolResult(t, lane, "tc1")
+	if !tr.IsError {
+		t.Fatalf("toolResult.IsError = false, want true")
+	}
+	got := msg.TextOf(tr.Content)
+	want := `unknown tool "frobnicate"`
+	if got != want {
+		t.Fatalf("toolResult content = %q, want %q", got, want)
+	}
+}
+
+// TestInactiveRegisteredToolReportsRestriction asserts that a tool which
+// IS registered but not in the lane's active set still gets the
+// restriction message, not "unknown tool" - the registry-existence check
+// added for the unknown-tool case above must not swallow this branch.
+func TestInactiveRegisteredToolReportsRestriction(t *testing.T) {
+	rig := newTestRig(t, `
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "true"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "done"
+`, []string{"read"}) // bash is registered (it's a built-in) but not active
+
+	lane := rig.mustLane("main")
+
+	result, err := lane.Prompt(context.Background(), "go", nil)
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if result.Status != StatusCompleted {
+		t.Fatalf("status = %q, err = %v", result.Status, result.Error)
+	}
+
+	tr := findToolResult(t, lane, "tc1")
+	if !tr.IsError {
+		t.Fatalf("toolResult.IsError = false, want true")
+	}
+	got := msg.TextOf(tr.Content)
+	want := `tool "bash" is not available to this agent: it is not in the active tool set`
+	if got != want {
+		t.Fatalf("toolResult content = %q, want %q", got, want)
+	}
+}
+
+// findToolResult locates the toolResult entry for toolCallID on lane's
+// branch, failing the test if it is not present.
+func findToolResult(t *testing.T, lane *Lane, toolCallID string) msg.ToolResultMessage {
+	t.Helper()
+	entries, err := lane.FindEntries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		tr, ok := e.Message.(msg.ToolResultMessage)
+		if !ok || !strings.HasSuffix(tr.ToolCallID, toolCallID) {
+			continue
+		}
+		return tr
+	}
+	t.Fatalf("no toolResult entry found for tool call %q", toolCallID)
+	return msg.ToolResultMessage{}
 }

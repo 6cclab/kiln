@@ -1,0 +1,25 @@
+# Write of a new file: diff header carries the "new file" tag
+# (writeDetails.NewFile) and a pure-addition count, "+N −0"
+# (diffCountsRow omits the zero side... actually it omits when EITHER
+# side is zero, so a new file's count reads as plain "+N" with no "−0" —
+# see the discrepancy EXPECT below).
+# design: Terminal.dc.html:196 (diff block, tag:'new file')
+@faux testdata/faux/qa/tools-write-new-file.yaml
+@fixture testdata/behaviour/design
+@args --permission-mode acceptEdits
+
+WAITFOR /describe a task/ 20
+TYPE add the rate limiter file
+KEY enter
+WAITFOR /Added the rate limiter file/ 20
+SHOT write-diff
+EXPECT /edit/
+EXPECT /rateLimit\.ts/
+EXPECT /new file/
+EXPECT /\+3/
+# The task brief calls for "+N −0" per file, but diffCountsRow
+# (transcript.go) omits a zero side entirely for a pure addition — this
+# EXPECT is the design's stated shape and is expected to fail against
+# kiln's current rendering, recording that gap.
+EXPECT /\+3\s+−0/
+EXPECT_NOT /panic|goroutine/

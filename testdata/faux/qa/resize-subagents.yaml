@@ -1,0 +1,24 @@
+# Two concurrent `task` dispatches, same shape as
+# testdata/faux/task_concurrent_tui.yaml (used by
+# test/e2e/tui_gap_test.go's TestTUI_ResizeDuringLiveSubagentRow), but with
+# a 3s delay on both subagents' replies instead of 400ms. 400ms is far
+# shorter than one real-terminal drive.py poll round-trip (an AppleScript
+# capture plus a screen-text read), so the "N subagents running in
+# parallel" window closed before the driver's WAITFOR ever sampled the
+# screen — every observed run found both subagents already finished and
+# committed by the time it looked (a scenario timing defect, not a kiln
+# one; the in-process PTY harness that 400ms fixture was written for polls
+# far faster than a real terminal drive can).
+models:
+  faux-1:
+    - tool_calls:
+        - {name: task, args: {subagent_type: "general-purpose", description: "look something up", prompt: "find X"}, id: tc1}
+        - {name: task, args: {subagent_type: "general-purpose", description: "do the fast lookup", prompt: "find Y", model: "fast"}, id: tc2}
+    - text: "inherited subagent report"
+      delay: 3s
+    - on_tool_results: [tc1, tc2]
+      then:
+        - text: "Both done."
+  faux-2:
+    - text: "fast subagent report"
+      delay: 3s

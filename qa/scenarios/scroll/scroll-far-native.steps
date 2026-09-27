@@ -1,0 +1,24 @@
+# Scroll far up with the mouse wheel to exercise the real terminal
+# emulator's own scrollback buffer, not just kiln's internal viewport.
+# Whether kiln's fullscreen (alt-screen) mode leaves anything in the
+# terminal's native scrollback at all is exactly the open question here
+# (see scripts/qa/drive.py's Run.buffer()/screen() split and the
+# scrollback_rows figure it records on every SHOT) — not established by
+# reading source, since it depends on the terminal emulator's own alt-
+# screen handling, not on kiln.
+@faux testdata/faux/qa/scroll-long.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE tell me the whole story
+KEY enter
+WAITFOR /SCROLL-BOTTOM-MARKER/ 20
+SHOT bottom
+
+SCROLL up 40
+SHOT far-scrollback
+EXPECT_NOT /panic|goroutine/
+NOTE check this SHOT's result.json scrollback_rows figure: >0 means the
+NOTE terminal emulator held native scrollback behind kiln's alt-screen
+NOTE frame; 0 means SCROLL up 40 only moved (or failed to move) kiln's
+NOTE own viewport, with nothing beyond it to reach.

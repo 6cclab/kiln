@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -129,6 +130,130 @@ func TestBridge_StreamText_Throttled(t *testing.T) {
 	}
 	if !sawFinal {
 		t.Fatal("EventMessageEnd did not send the final MsgStreamText{\"xxxxx\"}")
+	}
+}
+
+// TestBridge_StreamText_ResetsBetweenMessages is the regression for the
+// defect where a turn's separate assistant text messages (each its own
+// EventMessageStart/EventMessageEnd pair around a tool call) ran together
+// in the live region because ts.streamed was only reset on
+// EventThinkingStart and once per turn. EventMessageStart must reset it so
+// the second message's live stream starts clean instead of appending onto
+// the first message's already-committed text.
+func TestBridge_StreamText_ResetsBetweenMessages(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	ts := &turnState{toolStarts: map[string]toolStart{}}
+
+	// First assistant message streams and ends.
+	b.handleEvent(harness.Event{Type: harness.EventMessageStart}, ts, 4000)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "Let me write the limiter."}, ts)
+	b.handleEvent(harness.Event{
+		Type:    harness.EventMessageEnd,
+		Message: &msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.Text("Let me write the limiter.")}},
+	}, ts, 4000)
+
+	// A tool call happens in between (not modelled here beyond the turn
+	// state persisting across it), then a second assistant message starts.
+	// The sleep clears streamThrottle's window so the second delta's send
+	// below is not itself throttled away by the first message's send.
+	time.Sleep(streamThrottle + 10*time.Millisecond)
+	b.handleEvent(harness.Event{Type: harness.EventMessageStart}, ts, 4000)
+	if got := ts.streamed.String(); got != "" {
+		t.Fatalf("ts.streamed not reset at EventMessageStart: got %q, want empty", got)
+	}
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "Now the Redis client."}, ts)
+
+	deadline := time.Now().Add(2 * time.Second)
+	var gotSecond string
+	for time.Now().Before(deadline) {
+		_, sent := f.snapshot()
+		for _, m := range sent {
+			if v, ok := m.(MsgStreamText); ok && strings.Contains(v.Text, "Redis") {
+				gotSecond = v.Text
+			}
+		}
+		if gotSecond != "" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if gotSecond != "Now the Redis client." {
+		t.Errorf("second message's live text = %q, want %q (no concatenation with the first message)", gotSecond, "Now the Redis client.")
+	}
+}
+
+// TestBridge_FreezeBefore_SkipsIdenticalConsecutiveFreeze is the
+// regression for a real session where pressing Escape while three
+// subagents were live produced, in transcript order: the subagents panel
+// (2/3 done), a "✕ Declined …" note, the SAME subagents panel again (2/3
+// done, identical content), then the still-live busy line. The panel's
+// Apply clears its frozen flag on every subagent event by design (so a
+// still-running dispatch makes it live again), and every commit calls
+// FreezeBefore first — so a panel unfrozen by an unrelated in-flight tick
+// and refrozen before its rendered content actually changed was committed
+// twice. FreezeBefore now skips committing when the hook's output is
+// byte-identical to the last thing it actually committed.
+func TestBridge_FreezeBefore_SkipsIdenticalConsecutiveFreeze(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+
+	calls := 0
+	b.SetFreezeHook(func() []string {
+		calls++
+		// Simulates Freeze() returning the panel's current (unchanged)
+		// rendered lines each time it is asked, exactly as
+		// SubagentPanelState.Freeze does when Apply flipped frozen back to
+		// false without the visible summary having moved.
+		return []string{"", "2/3 done"}
+	})
+
+	b.FreezeBefore()
+	b.FreezeBefore() // simulates Apply() having unfrozen it again in between
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if calls >= 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if calls < 2 {
+		t.Fatalf("freeze hook called %d times, want at least 2 (both FreezeBefore calls should still consult it)", calls)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	printed, _ := f.snapshot()
+	panelCommits := 0
+	for _, p := range printed {
+		if strings.Contains(p, "2/3 done") {
+			panelCommits++
+		}
+	}
+	if panelCommits > 1 {
+		t.Errorf("panel committed %d times for identical consecutive freezes, want 1", panelCommits)
+	}
+
+	// A genuinely changed freeze must still commit.
+	b.SetFreezeHook(func() []string { return []string{"", "3/3 done"} })
+	b.FreezeBefore()
+	deadline = time.Now().Add(2 * time.Second)
+	var sawChanged bool
+	for time.Now().Before(deadline) && !sawChanged {
+		printed, _ := f.snapshot()
+		for _, p := range printed {
+			if strings.Contains(p, "3/3 done") {
+				sawChanged = true
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !sawChanged {
+		t.Fatal("a genuinely changed freeze after a de-duplicated one was not committed")
 	}
 }
 

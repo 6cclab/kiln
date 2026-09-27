@@ -1,0 +1,23 @@
+{
+ "id": "20260927T044553Z-streaming-shows-raw-markdown",
+ "found_at": "2026-09-27T04:45:53Z",
+ "scenario": "real-model streaming pass",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "Streaming text shows raw markdown, then snaps to the rendered block",
+ "observed": "While claude-sonnet-5 streamed, the live tail showed '- **Bucket capacity**' and a ```python fence verbatim; at the end of the turn it re-rendered as bullets, bold and a code block. stream.go documents this as a choice (glamour per delta is too costly).",
+ "expected": "Decision pending: keep raw streaming, or render completed blocks as they finish and keep only the in-progress paragraph raw.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-model/iterm-dark/04-stream-01.png"
+ ],
+ "status": "wontfix",
+ "fix": {
+  "note": "Andre, 2026-09-27: keep raw streaming as is (stream.go's documented choice).",
+  "updated_at": "2026-09-27T04:48:58Z"
+ }
+}

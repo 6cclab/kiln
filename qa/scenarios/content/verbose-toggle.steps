@@ -1,0 +1,28 @@
+# Assistant content: the verbose (ctrl+o) toggle after a turn that ran a
+# read tool call. internal/tui/app.go's toggleVerbose flips
+# Bridge.SetVerbose; once verbose, app.go's status row (line 2104) shows
+# "Showing detailed transcript · ctrl+o to toggle · ? for shortcuts" with
+# a right-aligned "verbose" label, and a finished turn with a tool call
+# commits a RenderVerboseModelRow timestamp+model line (transcript.go).
+@fixture testdata/behaviour/design
+@faux testdata/faux/qa/content-verbose.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE what dependencies does this project have
+KEY enter
+WAITFOR /small Node project with one dependency/ 20
+SHOT reply-non-verbose
+EXPECT /read/
+EXPECT /package\.json/
+EXPECT_NOT /Showing detailed transcript/
+KEY ctrl+o
+SHOT reply-verbose
+EXPECT /Showing detailed transcript · ctrl\+o to toggle · \? for shortcuts/
+EXPECT /verbose/
+EXPECT /faux-1/
+KEY ctrl+o
+SHOT reply-non-verbose-again
+EXPECT_NOT /Showing detailed transcript/
+EXPECT_NOT /panic|goroutine/

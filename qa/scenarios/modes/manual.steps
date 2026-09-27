@@ -1,0 +1,18 @@
+# --permission-mode manual is the default; captured explicitly here (as
+# its own ring entry rather than folded into ring-full.steps, per the
+# one-scenario-per-mode instruction) so a broken default is caught even
+# if ring-full.steps changes its starting point later.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@args --permission-mode manual
+
+WAITFOR /describe a task/ 20
+SHOT idle
+# design: Terminal.dc.html:222 (MODES[0] "ask before edits")
+EXPECT /ask before edits/
+KEY shift+tab
+SHOT after-shift-tab
+# manual -> acceptEdits (permissionModeRing in internal/tui/app.go)
+EXPECT /auto-edit/
+EXPECT_NOT /ask before edits/
+EXPECT_NOT /panic|goroutine/

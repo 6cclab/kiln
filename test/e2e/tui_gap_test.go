@@ -33,7 +33,7 @@ import (
 // dispatch-order race tuiFinishedLinePattern's doc comment describes for
 // the "Done" line and the panel rows below — two independent goroutines
 // each committing their own Start line as soon as their dispatch begins.
-var tuiStartLinePattern = regexp.MustCompile(`^⏺ \S`)
+var tuiStartLinePattern = regexp.MustCompile(`^\s*⏺ \S`)
 
 // tuiFinishedLinePattern matches bridge.go's SubagentSink "Done" commit
 // line ("  <agent> finished - N tool calls, N chars returned, N tokens").
@@ -41,13 +41,40 @@ var tuiFinishedLinePattern = regexp.MustCompile(`^\s+\S.* finished - \d+ tool ca
 
 // tuiSubagentPanelRowPattern matches subagents.go's renderSubagentRow
 // output for the two "general-purpose" rows task_concurrent_tui.yaml's
-// script produces (" general-purpose  <description> ... <meter> <tokens>").
-var tuiSubagentPanelRowPattern = regexp.MustCompile(`^ general-purpose  `)
+// script produces. Since assignDisplayNamesLocked (subagents.go) now gives
+// each of several same-type rows a distinct "gen-N" name, the pattern
+// matches either index; tuiNormalizeSubagentIndex below collapses it back
+// to a fixed placeholder before the golden compare, since which physical
+// dispatch gets "-1" vs "-2" is the same wall-clock race
+// tuiSortSubagentFinishLines's doc comment already describes for row/Done
+// order — the index is assigned in the order Start events are seen, not a
+// property of the golden's expected content.
+var tuiSubagentPanelRowPattern = regexp.MustCompile(`^\s*gen-(\d|N)  `)
+
+// tuiSubagentIndexPattern matches the "gen-N" short name
+// assignDisplayNamesLocked (internal/tui/subagents.go) gives each row when
+// several dispatches share a type, so tuiNormalizeSubagentIndex can
+// collapse it to a fixed placeholder ahead of a golden compare — see
+// tuiSubagentPanelRowPattern's doc comment for why the index itself is
+// racy.
+var tuiSubagentIndexPattern = regexp.MustCompile(`gen-\d`)
+
+// tuiNormalizeSubagentIndex replaces every "gen-N" name in rows with a
+// fixed "gen-N" placeholder (literal "N", not a digit), in a copy of
+// rows, so a golden compare does not depend on which concurrent dispatch
+// happened to be seen first.
+func tuiNormalizeSubagentIndex(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = tuiSubagentIndexPattern.ReplaceAllString(r, "gen-N")
+	}
+	return out
+}
 
 // tuiSubagentsBlockLabel matches the subagents panel's own label-rule row
 // (subagents.go's labelRule("subagents", ...)), the fixed marker every
 // committed panel snapshot starts with.
-var tuiSubagentsBlockLabel = regexp.MustCompile(`^subagents `)
+var tuiSubagentsBlockLabel = regexp.MustCompile(`^\s*subagents `)
 
 // dropIntermediateSubagentsBlocks removes every committed subagents-panel
 // block except the last, given a copy of rows.
@@ -126,6 +153,7 @@ func dropIntermediateSubagentsBlocks(rows []string) []string {
 // and unrelated (if correlated) underlying races.
 func tuiSortSubagentFinishLines(rows []string) []string {
 	out := dropIntermediateSubagentsBlocks(rows)
+	out = tuiNormalizeSubagentIndex(out)
 	tuiSortBlock(out, tuiStartLinePattern)
 	tuiSortBlock(out, tuiFinishedLinePattern)
 	tuiSortPanelPairs(out, tuiSubagentPanelRowPattern)

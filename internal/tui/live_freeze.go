@@ -98,6 +98,13 @@ func (p *planLiveState) freeze(width int) []string {
 // neither is live). Factored out of NewModel so it has no dependency on
 // Model itself — only the two shared pointers and a width reader, all of
 // which are safe to call from any goroutine.
+//
+// Not margin-padded here: this hook's return value is what FreezeBefore
+// hands to CommitSynthetic (bridge.go), which both stores it (for a later
+// Ctrl+O/Ctrl+F/Rewind replay to splice back in) and prints it via Commit —
+// Commit applies the left margin once, centrally (see its own doc comment
+// in bridge.go), so the stored copy has to stay unpadded or a replay would
+// pad it a second time.
 func newFreezeHook(plan *planLiveState, subagents *SubagentPanelState, width func() int) func() []string {
 	return func() []string {
 		w := width()

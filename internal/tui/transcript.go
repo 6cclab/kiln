@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Transcript rendering — the layout defined in docs/claude-code-reference.md
@@ -34,8 +33,8 @@ const continuationIndent = "  "
 // width and the *content* below it still gets wrapped/fitted to the real
 // terminal width downstream, by the caller, via FitLines(...,
 // m.contentWidth(), ...) (see app.go:442) — only the rule's own fill length
-// is approximate for these blocks. RenderUserMessage and
-// RenderVerboseModelRow, which already take width, use it for real.
+// is approximate for these blocks. RenderUserMessage, which already takes
+// width, uses it for real.
 const fallbackRuleWidth = 56
 
 // renderWidth is the live terminal content width, set by the app on every
@@ -45,11 +44,26 @@ const fallbackRuleWidth = 56
 // size message (e.g. in unit tests that call a renderer directly).
 var renderWidth int
 
+// renderMargin is the live left margin (layout_margin.go), set alongside
+// renderWidth by the app on every WindowSizeMsg (SetRenderMargin). Read by
+// CommitNote (note.go), the one width-less block that renders and commits
+// in the same call, so no app.go caller ever gets its lines back to
+// margin-pad itself the way m.commit/m.commitSynthetic do.
+var renderMargin int
+
 // SetRenderWidth records the current terminal content width for the
 // width-less Render* helpers. A non-positive value is ignored.
 func SetRenderWidth(w int) {
 	if w > 0 {
 		renderWidth = w
+	}
+}
+
+// SetRenderMargin records the current left margin for CommitNote. Negative
+// values are ignored; 0 (the narrow-terminal case) is valid.
+func SetRenderMargin(cols int) {
+	if cols >= 0 {
+		renderMargin = cols
 	}
 }
 
@@ -60,6 +74,12 @@ func ruleWidth() int {
 		return renderWidth
 	}
 	return fallbackRuleWidth
+}
+
+// ruleMargin is CommitNote's counterpart to ruleWidth: the left margin to
+// pad its rows by.
+func ruleMargin() int {
+	return renderMargin
 }
 
 // longestLineWidth returns the widest visible line in lines, or 0.
@@ -231,19 +251,47 @@ func diffHeaderRow(path string, d *ToolDiff, width int) string {
 	return OnPanel(padToWidth(row, width))
 }
 
-// diffCountsRow renders "+N  −N", omitting a zero side, for the diff
-// header row.
+// diffCountsRow renders "+N  −N" for the diff header row. Both sides
+// always show, even when one is zero (a new file is all additions, so its
+// removed count is 0, not absent) — Terminal.dc.html's stat builder sets
+// both d.addS and d.delS unconditionally (line ~364: d.addS='+'+a;
+// d.delS='−'+r), and qa/reference/diff.png shows both signs together.
+// Defect: this used to omit whichever side was 0, which for a new-file
+// diff meant no "−0" ever appeared at all (finding
+// diff-header-omits-zero-side).
 func diffCountsRow(d *ToolDiff) string {
-	switch {
-	case d.Added > 0 && d.Removed > 0:
-		return fmt.Sprintf("%s  %s", KilnGreen("+"+strconv.Itoa(d.Added)), KilnRed("−"+strconv.Itoa(d.Removed)))
-	case d.Added > 0:
-		return KilnGreen("+" + strconv.Itoa(d.Added))
-	case d.Removed > 0:
-		return KilnRed("−" + strconv.Itoa(d.Removed))
-	default:
+	if d.Added == 0 && d.Removed == 0 {
 		return Muted("no changes")
 	}
+	return fmt.Sprintf("%s  %s", KilnGreen("+"+strconv.Itoa(d.Added)), KilnRed("−"+strconv.Itoa(d.Removed)))
+}
+
+// clipResultLines clips a tool result's summary lines to max the same way
+// every committed tool block does (kiln's "tool" row: first N lines, then
+// "… +N lines (ctrl+o to expand)") — except for a failed call, where the
+// single most important line is the LAST one, not the first: bash.go
+// appends the exit-code/timeout/abort status after the command's own
+// output, so keeping only the first max lines silently buries that status
+// behind the collapse cutoff for any failure with more than max-1 lines of
+// output (defect 20260926T235921Z-bash-exit-code-message-hidden-by-
+// collapse). Both committed-tool-block builders (bridge.go's EventToolEnd
+// handler, replay.go's toolCallViewFor) call this instead of the bare
+// clipTo, so a failed call's collapsed view always ends with its own exit
+// status, live or replayed alike.
+func clipResultLines(lines []string, max int, status CallStatus) []string {
+	if len(lines) <= max || max <= 0 {
+		return clipTo(lines, max)
+	}
+	if status != CallError {
+		return lines[:max]
+	}
+	if max == 1 {
+		return lines[len(lines)-1:]
+	}
+	out := make([]string, 0, max)
+	out = append(out, lines[:max-1]...)
+	out = append(out, lines[len(lines)-1])
+	return out
 }
 
 // RenderToolCall renders a tool call and its result in the kiln "tool"/
@@ -298,13 +346,23 @@ func RenderToolCall(view ToolCallView) []string {
 
 	// Arrow on the first result line only; later lines indent two columns
 	// under it.
+	hidden := 0
+	if view.HasTotalLines && view.TotalLines > len(body) {
+		hidden = view.TotalLines - len(body)
+	}
+	hint := continuationIndent + Muted(fmt.Sprintf("… +%d lines (ctrl+o to expand)", hidden))
+	// A clipped failed result keeps its last line (clipResultLines), and
+	// the hidden lines sit before it, so the hint goes there too.
+	tailKept := hidden > 0 && view.Status == CallError && len(body) > 1
 	lines = append(lines, fmt.Sprintf("%s %s", Muted(gl.Action), outputColor(body[0])))
-	for _, extra := range body[1:] {
+	for i, extra := range body[1:] {
+		if tailKept && i == len(body)-2 {
+			lines = append(lines, hint)
+		}
 		lines = append(lines, continuationIndent+continuationColor(extra))
 	}
-
-	if view.HasTotalLines && view.TotalLines > len(body) {
-		lines = append(lines, continuationIndent+Muted(fmt.Sprintf("… +%d lines (ctrl+o to expand)", view.TotalLines-len(body))))
+	if hidden > 0 && !tailKept {
+		lines = append(lines, hint)
 	}
 	return lines
 }
@@ -588,7 +646,9 @@ func PickLabel(seed int) string {
 // RenderError renders an error message: red, visually distinct from
 // ordinary tool output.
 func RenderError(message string) []string {
-	lines := strings.Split(strings.TrimRight(message, "\n"), "\n")
+	// Wrapped, never clipped: provider errors carry a raw response body
+	// whose tail (the error type) is the part worth reading.
+	lines := wrapMultiline(strings.TrimRight(message, "\n"), ruleWidth())
 	out := make([]string, 0, len(lines)+2)
 	// The design's "error" block: a red label rule, then the message in
 	// red, one blank row above like every other block.
@@ -608,27 +668,62 @@ type ThinkingView struct {
 	Expanded bool
 }
 
-// RenderThinking renders a reasoning block. Collapsed (default, non-verbose
-// mode) shows nothing — the spinner's own suffix carries "thinking with
-// <effort> effort" while it streams, and nothing at all once done, per
-// docs/claude-code-reference.md §7 ("collapsed mode shows nothing but the
-// spinner suffix"). Verbose mode shows a "∴ Thinking" row with the text
-// dim underneath.
+// RenderThinking renders a reasoning block in the design's label-rule
+// language (docs/kiln-design-handoff/README.md "Block anatomy": a dim
+// label on a hairline rule, like the "you"/"kiln"/tool blocks use) instead
+// of the old ad hoc "∴ Thinking" line — ∴ is dropped outright, since it is
+// not in the design's glyph set. Collapsed (default) shows the label rule
+// and a one-line summary — the reasoning's first line, width-truncated
+// when even that one line overflows the row — plus a "ctrl+o to expand"
+// hint whenever anything is actually hidden (more lines, or the first one
+// truncated); a short, single-line reasoning that already fits gets no
+// hint, since there is nothing ctrl+o would reveal. Expanded shows the
+// label rule and the full reasoning text, dim and italic. The previous
+// version returned nothing at all unless Expanded was already true, and
+// nothing ever set Expanded true on a committed block (app.go's
+// handleThinking, ended case) — so a thinking block was invisible in
+// every state, never reachable by ctrl+o (defect
+// 20260926T232657Z-thinking-invisible).
 func RenderThinking(view ThinkingView) []string {
-	if !view.Expanded {
-		return []string{}
-	}
 	body := strings.TrimSpace(view.Text)
 	if body == "" {
 		return []string{}
 	}
-	gl := G()
-	label := "Thinking"
+	label := "thinking"
 	if view.Active {
-		label = "Thinking…"
+		label = "thinking…"
 	}
-	out := []string{Muted(fmt.Sprintf("%s %s", gl.Thinking, label))}
-	for _, line := range strings.Split(body, "\n") {
+	width := ruleWidth()
+	lines := strings.Split(body, "\n")
+	out := []string{labelRule(label, Muted, "", width)}
+	if !view.Expanded {
+		// A fixed preview budget, not "whatever fits in this terminal": a
+		// wide terminal must still collapse a longish reasoning line to a
+		// genuine summary rather than rendering it in full just because it
+		// happens to fit the row, or "collapsed" and "expanded" would be
+		// identical on anything but a narrow screen.
+		const previewChars = 80
+		budget := previewChars
+		if w := width - VisibleWidth(resultIndent); w < budget {
+			budget = w
+		}
+		if budget < 10 {
+			budget = 10
+		}
+		first := lines[0]
+		summary := FitStatus(first, budget)
+		truncatedFirstLine := VisibleWidth(summary) < VisibleWidth(first)
+		hiddenLines := len(lines) - 1
+		out = append(out, resultIndent+Muted(Italic(summary)))
+		switch {
+		case hiddenLines > 0:
+			out = append(out, resultIndent+Muted(fmt.Sprintf("… +%d lines (ctrl+o to expand)", hiddenLines)))
+		case truncatedFirstLine:
+			out = append(out, resultIndent+Muted("(ctrl+o to expand)"))
+		}
+		return out
+	}
+	for _, line := range lines {
 		out = append(out, resultIndent+Muted(Italic(line)))
 	}
 	return out
@@ -646,12 +741,28 @@ func RenderUserMessage(text string, width int) []string {
 	return RenderUserMessageMeta(text, "", width)
 }
 
+// userBlockPad is the you-block's inner horizontal padding, each side
+// (Terminal.dc.html:52, "padding:3px 10px" — 10px at 14px Fira Code
+// (~8.4px/col) is ~1 column), applied on top of whatever outer margin the
+// caller already indented the block by.
+const userBlockPad = 1
+
 // RenderUserMessageMeta is RenderUserMessage with an optional label-rule
 // meta, e.g. "queued" for a follow-up submitted while a turn is still
 // running (docs/kiln-design-handoff/README.md's "Queued follow-up" —
 // app.go's handleSubmit commits it this way instead of the plain form).
+//
+// The raised surface spans the full block width (not just the text cells,
+// finding you-block-surface-width) and insets the text by userBlockPad on
+// both sides (finding you-block-no-inner-padding): pad the plain text
+// first, colour it, then raise the whole already-single-span result last —
+// wrapping OnRaise around an independently pre-rendered (and so already
+// reset-terminated) span is what let the background die at the text's own
+// end instead of reaching the padding; see onRaiseSpan's doc comment for
+// the general form this needs when more than one foreground colour is
+// involved.
 func RenderUserMessageMeta(text, meta string, width int) []string {
-	inner := width - 2
+	inner := width - 2*userBlockPad
 	if inner < 1 {
 		inner = 1
 	}
@@ -660,11 +771,49 @@ func RenderUserMessageMeta(text, meta string, width int) []string {
 		body = append(body, splitLines(ansiWrap(line, inner))...)
 	}
 
+	pad := strings.Repeat(" ", userBlockPad)
 	out := make([]string, 0, len(body)+2)
 	out = append(out, "")
 	out = append(out, labelRule("you", KilnAmber, meta, width))
 	for _, wl := range body {
-		out = append(out, OnRaise(padToWidth(Ink(wl), width)))
+		row := padToWidth(pad+wl, width)
+		out = append(out, OnRaise(Ink(row)))
+	}
+	return out
+}
+
+// RenderQueuedFollowUp renders a follow-up submitted via Lane.Steer while a
+// turn is busy, for the live region (app.go's liveTail) rather than the
+// committed transcript: a dim "you" label rule with a "queued" meta, dim
+// body text — matching the design's label-rule language
+// (docs/kiln-design-handoff/README.md "Block anatomy": label, rule, meta)
+// but muted throughout, since it is not committed yet. It renders in place
+// of RenderUserMessageMeta's "queued" form, which used to commit the block
+// immediately and read out of order, above the reply to the turn it
+// interrupted (defect 20260926T232249Z-queued-block-order) — the lane's own
+// drain (turn.go's drainInbox) is what turns this into a real, ordinary
+// RenderUserMessage block, at the point it actually lands on the branch.
+func RenderQueuedFollowUp(text string, width int) []string {
+	inner := width - 2*userBlockPad
+	if inner < 1 {
+		inner = 1
+	}
+	var body []string
+	for _, line := range strings.Split(text, "\n") {
+		body = append(body, splitLines(ansiWrap(line, inner))...)
+	}
+
+	pad := strings.Repeat(" ", userBlockPad)
+	out := make([]string, 0, len(body)+2)
+	out = append(out, "")
+	out = append(out, labelRule("you", Muted, "queued", width))
+	for _, wl := range body {
+		// No raised background here (unlike RenderUserMessageMeta): a
+		// queued follow-up previews an item not yet committed to the
+		// branch, and stays fully muted rather than reading as a landed
+		// "you" block — but it wraps and insets the same way so the two
+		// forms read as the same block shape once it does land.
+		out = append(out, Muted(pad+wl))
 	}
 	return out
 }
@@ -792,24 +941,12 @@ func RenderAssistantText(lines []string) []string {
 	return out
 }
 
-// RenderVerboseModelRow renders the right-aligned dim row Claude Code
-// shows after a turn's last tool call in verbose mode:
-//
-//	10:03 AM claude-opus-5
-//
-// (docs/claude-code-reference.md §3/§7). Right-aligned to width.
-func RenderVerboseModelRow(done time.Time, modelID string, width int) string {
-	if done.IsZero() {
-		done = time.Now()
-	}
-	text := fmt.Sprintf("%s %s", done.Format("3:04 PM"), modelID)
-	// The row sits eight columns short of the right edge, not flush against
-	// it (verbose-ctrl-o.txt row 21 ends at column 92 of a 100-wide
-	// terminal — a right margin Claude Code leaves on this row alone).
-	const rightMargin = 8
-	pad := width - rightMargin - VisibleWidth(text)
-	if pad < 0 {
-		pad = 0
-	}
-	return strings.Repeat(" ", pad) + Muted(text)
-}
+// RenderVerboseModelRow (the right-aligned "10:03 AM claude-opus-5" row
+// after a turn's last tool call in verbose mode) is gone: the kiln design's
+// "text" block has no meta column (docs/kiln-design-handoff/README.md
+// "Block anatomy" table — "kiln (dim) | – |") for it to sit on, and as its
+// own row it was defect 20260926T232657Z-verbose-toggle-inconsistent's
+// stray "7:00 PM faux/faux-1" line, dropped per that defect's own "or is
+// dropped if the design has no place for it". Its two call sites
+// (app.go's finishTurn, replay.go's RenderTranscriptEntries) are removed
+// along with it.

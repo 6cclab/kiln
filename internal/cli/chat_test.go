@@ -13,6 +13,7 @@ import (
 
 	"github.com/andrepato/harness/internal/claude/skills"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
+	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/session/jsonl"
 	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
 	"github.com/andrepato/harness/internal/testkit/fauxtest"
@@ -656,6 +657,61 @@ func benchClaudeMD() string {
 		b.WriteString(line)
 	}
 	return b.String()
+}
+
+// TestUsageRowContextTokens_ReadsInputPlusOutputNotTotalTokens is defect
+// 1's regression test: /context and the TUI's pinned status meter must
+// report the same context-occupancy figure. The status meter
+// (internal/tui/bridge.go) computes it as UsageRow.Input+UsageRow.Output;
+// this must match exactly, not fall back to TotalTokens (which, for the
+// anthropic provider, also folds in CacheRead+CacheWrite and would
+// disagree with the meter even for a single row).
+func TestUsageRowContextTokens_ReadsInputPlusOutputNotTotalTokens(t *testing.T) {
+	row := &msg.Usage{Input: 3_000, Output: 500, CacheRead: 900_000, CacheWrite: 50_000, TotalTokens: 953_500}
+	got, ok := usageRowContextTokens(row)
+	if !ok {
+		t.Fatal("ok = false, want true for a non-nil row")
+	}
+	if got != 3_500 {
+		t.Errorf("usageRowContextTokens = %d, want Input+Output = 3500 (not TotalTokens = %d)", got, row.TotalTokens)
+	}
+}
+
+// TestUsageRowContextTokens_NilBeforeFirstUsageEvent covers the
+// not-yet-reported case: nil until the first EventUsage arrives.
+func TestUsageRowContextTokens_NilBeforeFirstUsageEvent(t *testing.T) {
+	got, ok := usageRowContextTokens(nil)
+	if ok {
+		t.Errorf("ok = true for a nil row (got %d), want false (nothing to report yet)", got)
+	}
+}
+
+// TestFileReadTokensFromToolEnd_OnlyCountsSuccessfulReads covers defect
+// 2's data source: /context's "Files read" segment must be sourced from
+// real "read" tool results, not fabricated, and must not count a tool
+// other than "read" or a failed read.
+func TestFileReadTokensFromToolEnd_OnlyCountsSuccessfulReads(t *testing.T) {
+	readResult := &msg.ToolResultMessage{
+		ToolName: "read",
+		Content:  msg.Blocks{msg.Text(strings.Repeat("x", 400))},
+	}
+	if n, ok := fileReadTokensFromToolEnd("read", readResult); !ok || n != 100 {
+		t.Errorf("fileReadTokensFromToolEnd(read, 400 chars) = (%d, %v), want (100, true)", n, ok)
+	}
+
+	errResult := &msg.ToolResultMessage{ToolName: "read", IsError: true, Content: msg.Blocks{msg.Text(strings.Repeat("x", 400))}}
+	if n, ok := fileReadTokensFromToolEnd("read", errResult); ok {
+		t.Errorf("fileReadTokensFromToolEnd(failed read) = (%d, %v), want ok=false", n, ok)
+	}
+
+	otherToolResult := &msg.ToolResultMessage{ToolName: "bash", Content: msg.Blocks{msg.Text(strings.Repeat("x", 400))}}
+	if n, ok := fileReadTokensFromToolEnd("bash", otherToolResult); ok {
+		t.Errorf("fileReadTokensFromToolEnd(bash) = (%d, %v), want ok=false (not a file read)", n, ok)
+	}
+
+	if n, ok := fileReadTokensFromToolEnd("read", nil); ok {
+		t.Errorf("fileReadTokensFromToolEnd(read, nil result) = (%d, %v), want ok=false", n, ok)
+	}
 }
 
 // BenchmarkSystemPromptAssembly measures assembling the system prompt from

@@ -1,0 +1,30 @@
+{
+ "id": "20260927T000638Z-plan-glyph-spacing",
+ "found_at": "2026-09-27T00:06:38Z",
+ "scenario": "tools/plan-progress",
+ "step": "02-plan-second-step",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "design-drift",
+ "severity": "low",
+ "title": "Plan items put one space between glyph and text; design uses two",
+ "observed": "Plan rows render '✓ Find…', '▸ Write…', '○ Wire…' with a single space (internal/tui/plan.go:35-39 fmt.Sprintf(\"%s %s\")).",
+ "expected": "Design plan rows: glyph in a 2ch box plus a 10px gap, i.e. glyph + 2 spaces ('✓  Find the upload route…').",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html plan block; qa/reference/plan.png",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/tools-plan-progress-120x40/02-plan-second-step.png",
+  "qa/reference/plan.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/plan.go"
+  ],
+  "regression_test": "TestTUI_PlanBlock_Live",
+  "after_evidence": [
+   "qa/runs/c8/iterm-dark/tools-plan-progress-120x40"
+  ],
+  "updated_at": "2026-09-27T02:31:26Z"
+ }
+}

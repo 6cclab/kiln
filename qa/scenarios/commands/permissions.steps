@@ -1,0 +1,11 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /permissions
+KEY enter
+WAITFOR /Permissions/ 20
+SHOT permissions-dialog
+EXPECT /Permissions/
+EXPECT /mode\s+manual/
+KEY esc
+EXPECT_NOT /panic|goroutine/

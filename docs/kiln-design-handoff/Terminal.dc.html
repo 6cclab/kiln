@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet"></helmet>
+<div onClick="{{ focusInput }}" style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;background:#14110d;border:1px solid #2f2920;border-radius:10px;overflow:hidden;font-family:'Fira Code',ui-monospace,monospace;font-size:14px;line-height:1.6;color:#ece4d4;box-shadow:0 30px 80px rgba(0,0,0,.4);font-variant-ligatures:contextual">
+  <div style="height:34px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;background:#1c1813;border-bottom:1px solid #2f2920">
+    <div style="display:flex;gap:7px;width:60px"><span style="width:11px;height:11px;border-radius:50%;background:#3b3329"></span><span style="width:11px;height:11px;border-radius:50%;background:#3b3329"></span><span style="width:11px;height:11px;border-radius:50%;background:#3b3329"></span></div>
+    <div style="flex:1;text-align:center;font-size:12px;color:#a39781">kiln — ~/src/relay-api — zsh</div>
+    <div style="width:60px"></div>
+  </div>
+  <sc-if value="{{ statusTop }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:none;display:flex;gap:18px;padding:5px 20px;font-size:12px;color:#a39781;align-items:center;flex-wrap:wrap;background:#1c1813;border-bottom:1px solid #2f2920">
+      <span style="color:{{ modeC }}">{{ modeLabel }}</span>
+      <span>~/src/relay-api · main*</span>
+      <span style="flex:1"></span>
+      <span style="display:flex;align-items:center;gap:8px">ctx <span style="width:80px;height:6px;background:#2f2920;position:relative;display:inline-block"><span style="position:absolute;left:0;top:0;bottom:0;width:{{ ctxW }};background:{{ ctxC }}"></span></span> {{ ctxPct }}</span>
+      <span>{{ cost }}</span>
+    </div>
+  </sc-if>
+  <div ref="{{ scrollRef }}" style="flex:1;min-height:0;overflow-y:auto;padding:18px 20px 10px;display:flex;flex-direction:column;gap:14px">
+    <sc-for list="{{ blocks }}" as="b" hint-placeholder-count="0">
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <sc-if value="{{ b.showLabel }}">
+          <div style="display:flex;align-items:center;gap:10px;color:#a39781;font-size:12px"><span style="color:{{ b.lc }}">{{ b.label }}</span><div style="flex:1;height:1px;background:#2f2920"></div><span>{{ b.meta }}</span></div>
+        </sc-if>
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <sc-if value="{{ b.rail }}"><div style="width:8ch;flex:none;color:#7d7262;font-size:12px;padding-top:1px">{{ b.time }}</div></sc-if>
+          <sc-if value="{{ b.gut }}"><div style="width:2ch;flex:none;color:{{ b.gc }};text-align:center">{{ b.glyph }}</div></sc-if>
+          <div style="flex:1;min-width:0">
+            <sc-if value="{{ b.isBanner }}">
+              <div style="display:flex;flex-direction:column;gap:12px;padding-bottom:14px;border-bottom:1px solid #2f2920">
+                <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap"><span style="color:#e9a64b;font-weight:600;font-size:22px;letter-spacing:.24em">KILN</span><span style="color:#a39781">v0.9.2 · coding agent</span></div>
+                <div style="color:#a39781">~/src/relay-api · branch main · model kiln-large</div>
+                <div style="display:flex;flex-wrap:wrap;gap:4px 22px">
+                  <sc-for list="{{ b.tips }}" as="t"><span style="display:flex;gap:8px"><span style="color:#e9a64b">{{ t.k }}</span><span style="color:#a39781">{{ t.d }}</span></span></sc-for>
+                </div>
+                <sc-if value="{{ b.showRecent }}">
+                  <div style="display:flex;flex-direction:column;gap:2px;padding-top:4px">
+                    <div style="color:#a39781">Recent sessions</div>
+                    <sc-for list="{{ b.recent }}" as="r"><div style="display:flex;gap:16px"><span style="width:10ch;flex:none;color:#a39781">{{ r.when }}</span><span>{{ r.t }}</span></div></sc-for>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+            <sc-if value="{{ b.isUser }}">
+              <div style="background:#241f18;padding:3px 10px;border-radius:3px;color:#ece4d4;text-wrap:pretty">{{ b.text }}</div>
+            </sc-if>
+            <sc-if value="{{ b.isText }}">
+              <div style="color:#ece4d4;white-space:pre-wrap;text-wrap:pretty">{{ b.shown }}<sc-if value="{{ b.streaming }}"><span style="color:#e9a64b">▍</span></sc-if></div>
+            </sc-if>
+            <sc-if value="{{ b.isNote }}">
+              <div style="color:#a39781">{{ b.text }}</div>
+            </sc-if>
+            <sc-if value="{{ b.isTool }}">
+              <div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap"><span style="color:{{ b.sc }};font-weight:500">{{ b.name }}</span><span style="color:#a39781;min-width:0;overflow-wrap:anywhere">{{ b.arg }}</span></div>
+                <sc-for list="{{ b.outL }}" as="o"><div style="color:{{ o.c }};white-space:pre-wrap">{{ o.t }}</div></sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ b.isDiff }}">
+              <div style="border:1px solid #2f2920;border-radius:4px;overflow:hidden;font-size:13px">
+                <div style="display:flex;gap:12px;padding:3px 10px;background:#1c1813;border-bottom:1px solid #2f2920"><span>{{ b.file }}</span><span style="color:#a39781">{{ b.tag }}</span><span style="flex:1"></span><span style="color:#9bc46e">{{ b.addS }}</span><span style="color:#e5765d">{{ b.delS }}</span></div>
+                <sc-for list="{{ b.dl }}" as="l">
+                  <div style="display:flex;background:{{ l.bg }}"><span style="width:4ch;flex:none;text-align:right;padding-right:1ch;color:#7d7262">{{ l.n }}</span><span style="width:2ch;flex:none;color:{{ l.c }}">{{ l.k }}</span><span style="white-space:pre;overflow:hidden;text-overflow:ellipsis;color:{{ l.tc }}">{{ l.t }}</span></div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ b.isPerm }}">
+              <div style="border-top:1px solid #e9a64b;border-bottom:1px solid #e9a64b;padding:10px 0;display:flex;flex-direction:column;gap:8px">
+                <div style="color:#e9a64b;font-weight:600">Allow kiln to run this command?</div>
+                <div style="background:#241f18;padding:5px 12px;border-radius:3px"><span style="color:#a39781">$ </span>{{ b.cmd }}</div>
+                <div style="color:#a39781">{{ b.why }}</div>
+                <div style="display:flex;flex-direction:column;gap:2px">
+                  <sc-for list="{{ b.opts }}" as="o"><div onClick="{{ o.pick }}" style="display:flex;gap:12px;padding:2px 8px;cursor:pointer;background:{{ o.bg }};color:{{ o.c }}"><span style="color:{{ o.kc }}">{{ o.key }}</span><span>{{ o.label }}</span></div></sc-for>
+                </div>
+                <div style="color:#a39781;font-size:12px">↑↓ select · enter confirm · esc decline</div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ b.isPlan }}">
+              <div style="display:flex;flex-direction:column;gap:1px">
+                <div style="color:#a39781">{{ b.title }}</div>
+                <sc-for list="{{ b.pi }}" as="it"><div style="display:flex;gap:10px;color:{{ it.c }}"><span style="width:2ch;flex:none;color:{{ it.gc }}">{{ it.g }}</span><span style="text-decoration:{{ it.td }};text-decoration-color:#6f6555">{{ it.t }}</span></div></sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ b.isAgents }}">
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div style="color:#a39781">{{ b.head }}</div>
+                <sc-for list="{{ b.al }}" as="a">
+                  <div style="display:grid;grid-template-columns:8ch minmax(0,1fr) 11ch 6ch;gap:14px;align-items:baseline">
+                    <span style="color:{{ a.c }}">{{ a.name }}</span>
+                    <div style="min-width:0"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ a.task }}</div><div style="color:#a39781;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px">{{ a.last }}</div></div>
+                    <span style="white-space:nowrap"><span style="color:{{ a.c }}">{{ a.on }}</span><span style="color:#3f372c">{{ a.off }}</span></span>
+                    <span style="color:#a39781;text-align:right">{{ a.tok }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ b.isError }}">
+              <div style="display:flex;flex-direction:column"><div style="color:#e5765d">{{ b.msg }}</div><div style="color:#a39781">{{ b.sub }}</div></div>
+            </sc-if>
+            <sc-if value="{{ b.isContext }}">
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div style="color:#a39781">{{ b.head }}</div>
+                <div style="display:flex;height:10px;gap:2px">
+                  <sc-for list="{{ b.segs }}" as="s"><div style="flex:{{ s.f }};background:{{ s.c }};border-radius:1px"></div></sc-for>
+                </div>
+                <div style="display:flex;flex-direction:column">
+                  <sc-for list="{{ b.segs }}" as="s"><div style="display:flex;gap:12px"><span style="color:{{ s.c }}">■</span><span style="flex:1">{{ s.label }}</span><span style="color:#a39781">{{ s.tok }}</span><span style="width:5ch;text-align:right;color:#a39781">{{ s.pct }}</span></div></sc-for>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+          <sc-if value="{{ b.showMeta }}"><div style="flex:none;color:#a39781;font-size:12px;padding-top:1px">{{ b.meta }}</div></sc-if>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+  <sc-if value="{{ busy }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:none;display:flex;gap:10px;padding:4px 20px;color:#e9a64b;flex-wrap:wrap"><span>{{ spin }}</span><span>{{ status }}</span><span style="color:#a39781">{{ busyMeta }}</span><span style="flex:1"></span><span style="color:#a39781">esc to stop</span></div>
+  </sc-if>
+  <sc-if value="{{ palOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:none;margin:0 20px;padding:6px 0;display:flex;flex-direction:column;border-top:1px solid #2f2920">
+      <sc-for list="{{ pal }}" as="p"><div onClick="{{ p.pick }}" style="display:flex;gap:16px;padding:2px 10px;background:{{ p.bg }};cursor:pointer"><span style="width:10ch;flex:none;color:{{ p.c }}">{{ p.cmd }}</span><span style="color:#a39781">{{ p.desc }}</span></div></sc-for>
+    </div>
+  </sc-if>
+  <div style="flex:none;margin:4px 20px 0;border-top:1px solid #3a3228;border-bottom:1px solid #3a3228;display:flex;gap:10px;padding:8px 0;align-items:center">
+    <span style="color:#e9a64b">›</span>
+    <sc-if value="{{ live }}" hint-placeholder-val="{{ false }}">
+      <input ref="{{ inputRef }}" value="{{ input }}" onChange="{{ onInput }}" onKeyDown="{{ onKey }}" placeholder="{{ placeholder }}" spellcheck="false" style="flex:1;min-width:0;background:transparent;border:0;outline:0;color:#ece4d4;font:inherit;caret-color:#e9a64b;padding:0">
+    </sc-if>
+    <sc-if value="{{ notLive }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;min-width:0;white-space:nowrap;overflow:hidden"><span>{{ input }}</span><span style="color:#e9a64b">▍</span><span style="color:#7d7262">{{ ghost }}</span></div>
+    </sc-if>
+  </div>
+  <sc-if value="{{ statusBottom }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:none;display:flex;gap:18px;padding:7px 20px 10px;font-size:12px;color:#a39781;align-items:center;flex-wrap:wrap">
+      <span style="color:{{ modeC }}">{{ modeLabel }}</span>
+      <span>~/src/relay-api · main*</span>
+      <span style="flex:1"></span>
+      <span style="display:flex;align-items:center;gap:8px">ctx <span style="width:80px;height:6px;background:#2f2920;position:relative;display:inline-block"><span style="position:absolute;left:0;top:0;bottom:0;width:{{ ctxW }};background:{{ ctxC }}"></span></span> {{ ctxPct }}</span>
+      <span>{{ cost }}</span>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1100,&quot;height&quot;:720},&quot;layout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;gutter&quot;,&quot;ruled&quot;,&quot;rail&quot;],&quot;default&quot;:&quot;gutter&quot;,&quot;tsType&quot;:&quot;'gutter'|'ruled'|'rail'&quot;},&quot;scene&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;live&quot;,&quot;welcome&quot;,&quot;plan&quot;,&quot;agents&quot;,&quot;streaming&quot;,&quot;diff&quot;,&quot;permission&quot;,&quot;error&quot;,&quot;palette&quot;,&quot;context&quot;,&quot;done&quot;],&quot;default&quot;:&quot;live&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+const C = { ink:'#ece4d4', dim:'#a39781', faint:'#7d7262', amber:'#e9a64b', green:'#9bc46e', red:'#e5765d', blue:'#86b4d4', violet:'#c3a3d6', raise:'#241f18', rule:'#2f2920' };
+const TASK = 'Add rate limiting to POST /api/upload: 10 requests per minute per user, backed by Redis.';
+const PLAN = ['Find the upload route and its middleware chain', 'Check how Redis is configured', 'Write a rateLimit middleware', 'Wire it into POST /api/upload', 'Add tests and run the suite'];
+const A = (n, t) => ({ k:'+', n, t }), R = (n, t) => ({ k:'-', n, t }), K = (n, t) => ({ k:' ', n, t });
+const DIFF1 = [
+  A(1,"import type { Request, Response, NextFunction } from 'express';"), A(2,"import { redis } from '../lib/redis';"), A(3,''),
+  A(4,'const WINDOW_MS = 60_000;'), A(5,'const LIMIT = 10;'), A(6,''),
+  A(7,'export async function rateLimit(req: Request, res: Response, next: NextFunction) {'),
+  A(8,'  const key = `rl:upload:${req.user.id}`;'), A(9,'  const now = Date.now();'),
+  A(10,'  await redis.zremrangebyscore(key, 0, now - WINDOW_MS);'), A(11,'  if ((await redis.zcard(key)) >= LIMIT) {'),
+  A(12,"    res.set('Retry-After', '60');"), A(13,"    return res.status(429).json({ error: 'rate_limited' });"), A(14,'  }'),
+  A(15,'  await redis.zadd(key, now, `${now}`);'), A(16,'  await redis.pexpire(key, WINDOW_MS);'), A(17,'  next();'), A(18,'}')
+];
+const DIFF2 = [
+  K(3,"import { requireAuth } from '../middleware/auth';"), A(4,"import { rateLimit } from '../middleware/rateLimit';"), K(5,''),
+  R(22,"router.post('/upload', requireAuth, upload.single('file'), handleUpload);"),
+  A(22,"router.post('/upload', requireAuth, rateLimit, upload.single('file'), handleUpload);")
+];
+const DIFF3 = [
+  K(13,'  get: jest.fn(), set: jest.fn(), del: jest.fn(),'),
+  A(14,'  zremrangebyscore: jest.fn(async () => 0),'), A(15,'  zcard: jest.fn(async (k) => (sets[k] ??= []).length),'),
+  A(16,'  zadd: jest.fn(async (k, _s, v) => (sets[k] ??= []).push(v)),'), A(17,'  pexpire: jest.fn(async () => 1),'), K(18,'};')
+];
+const find = (s, id) => s.blocks.find(x => x.id === id);
+const plan = (s, i) => { const b = find(s, 'p1'); if (b) b.items = PLAN.map((t, j) => ({ t, s: j < i ? 'done' : j === i ? 'doing' : 'todo' })); };
+const upd = (s, id, o) => { const b = find(s, id); if (b) Object.assign(b, o); };
+const del = (s, id) => { s.blocks = s.blocks.filter(x => x.id !== id); };
+const SCRIPT = [
+  { scene:'welcome' },
+  { d:300, f:s => { s.blocks.push({ id:'u1', type:'user', text:TASK }); s.busy = true; s.status = 'Reading the request'; s.ctx = 6; s.cost = .01; } },
+  { d:700, stream:{ id:'a1', text:"I'll check how the upload route is wired and whether there's middleware I can reuse. Plan:" } },
+  { d:400, f:s => { s.blocks.push({ id:'p1', type:'plan', items:[] }); plan(s, 0); s.status = 'Planning'; s.ctx = 9; s.cost = .04; } },
+  { scene:'plan' },
+  { d:700, f:s => { s.blocks.push({ id:'ag', type:'agents', list:[
+    { name:'scout-1', task:'Map the middleware chain in src/server', last:'Grep "app.use(" · 14 matches', p:.6, tok:'6.3k' },
+    { name:'scout-2', task:'Find the Redis client and its config', last:'Read src/lib/redis.ts', p:.8, tok:'3.9k' },
+    { name:'scout-3', task:'Survey upload tests and fixtures', last:'Glob test/**/upload*', p:.3, tok:'2.1k' } ] });
+    s.status = 'Running 3 subagents'; s.ctx = 14; s.cost = .09; } },
+  { scene:'agents' },
+  { d:1200, f:s => { const l = find(s,'ag').list; Object.assign(l[0], { p:1, done:true, tok:'8.8k', last:'Upload route mounts at src/routes/upload.ts:22' }); Object.assign(l[1], { p:1, done:true, tok:'4.4k', last:'ioredis client exported from src/lib/redis.ts' }); l[2].p = .7; l[2].last = 'Read test/upload.test.ts'; plan(s, 1); s.ctx = 18; } },
+  { d:1000, f:s => { const l = find(s,'ag').list; Object.assign(l[2], { p:1, done:true, tok:'3.2k', last:'Tests use a hand-rolled Redis mock' }); plan(s, 2); s.status = 'Thinking'; s.ctx = 21; s.cost = .14; } },
+  { d:300, stream:{ id:'a2', text:"There's an ioredis client in src/lib/redis.ts and no existing limiter. I'll add a sliding-window limiter keyed on the user id and apply it only to the upload route, so other endpoints are unaffected." } },
+  { scene:'streaming', partial:{ id:'a2', frac:.56 } },
+  { d:500, f:s => { s.blocks.push({ type:'diff', file:'src/middleware/rateLimit.ts', tag:'new file', lines:DIFF1 }); s.status = 'Writing rateLimit.ts'; s.ctx = 27; s.cost = .19; } },
+  { d:800, f:s => { plan(s, 3); s.blocks.push({ type:'diff', file:'src/routes/upload.ts', tag:'', lines:DIFF2 }); s.ctx = 29; } },
+  { scene:'diff' },
+  { d:600, f:s => { plan(s, 4); s.blocks.push({ id:'perm', type:'perm', cmd:'npm test -- upload', why:'Runs the Jest suite for upload. Reads only; no files change.' }); s.status = 'Waiting for approval'; s.waiting = true; } },
+  { scene:'permission' },
+  { wait:'perm' },
+  { d:200, f:s => { del(s, 'perm'); s.waiting = false; s.blocks.push({ id:'t1', type:'tool', name:'Bash', arg:'npm test -- upload', status:'run', out:['running…'] }); s.status = 'Running tests'; } },
+  { d:1600, f:s => { upd(s, 't1', { status:'err', ms:'4.8s', out:['Tests: 2 failed, 14 passed', 'TypeError: redis.zremrangebyscore is not a function', '  at rateLimit (src/middleware/rateLimit.ts:10)'] }); s.ctx = 33; s.cost = .27; s.status = 'Thinking'; } },
+  { d:400, stream:{ id:'a3', text:'The limiter is fine; the test Redis mock has no sorted-set commands. Adding them.' } },
+  { d:500, f:s => { s.blocks.push({ id:'e1', type:'error', msg:'Stream interrupted · 529 overloaded', sub:'Retrying in 3s · attempt 2 of 5 · r to retry now' }); s.status = 'Reconnecting'; } },
+  { scene:'error' },
+  { d:1000, f:s => upd(s, 'e1', { sub:'Retrying in 2s · attempt 2 of 5 · r to retry now' }) },
+  { d:1000, f:s => upd(s, 'e1', { sub:'Retrying in 1s · attempt 2 of 5 · r to retry now' }) },
+  { d:1000, f:s => { del(s, 'e1'); s.blocks.push({ type:'note', text:'↺ Reconnected on attempt 2' }); s.status = 'Editing redisMock.ts'; } },
+  { d:600, f:s => { s.blocks.push({ type:'diff', file:'test/helpers/redisMock.ts', tag:'', lines:DIFF3 }); s.ctx = 35; } },
+  { d:600, f:s => { s.blocks.push({ id:'t2', type:'tool', name:'Bash', arg:'npm test -- upload', status:'run', out:['running…'], note:s.always ? 'auto-approved' : 'approved' }); s.status = 'Running tests'; } },
+  { d:1600, f:s => { upd(s, 't2', { status:'ok', ms:'4.1s', out:['Tests: 16 passed, 16 total'] }); plan(s, 5); s.ctx = 38; s.cost = .42; s.status = 'Summarizing'; } },
+  { d:400, stream:{ id:'a4', text:'Done. POST /api/upload now allows 10 requests per minute per user and returns 429 with a Retry-After header after that.\nChanged: src/middleware/rateLimit.ts (new), src/routes/upload.ts, test/helpers/redisMock.ts.' } },
+  { d:0, f:s => { s.busy = false; s.status = ''; } },
+  { scene:'done' }
+];
+const CMDS = [
+  { cmd:'/context', desc:'Show context window usage' }, { cmd:'/cost', desc:'Tokens and spend this session' },
+  { cmd:'/compact', desc:'Summarize history to free context' }, { cmd:'/clear', desc:'Start a fresh session' },
+  { cmd:'/model', desc:'Switch model' }, { cmd:'/agents', desc:'Manage subagents' }, { cmd:'/help', desc:'Shortcuts and commands' }
+];
+const MODES = [{ l:'● ask before edits', c:C.dim }, { l:'● auto-edit', c:C.green }, { l:'● plan only', c:C.blue }];
+const SPIN = ['◐','◓','◑','◒'];
+const fresh = () => ({ blocks:[{ type:'banner' }], busy:false, status:'', ctx:2, cost:0, mode:1 });
+const clone = o => JSON.parse(JSON.stringify(o));
+const ctxBlock = ctx => {
+  const used = ctx * 2, parts = [['System prompt', .04, C.blue], ['Tools', .15, C.violet], ['Files read', .5, C.amber], ['Conversation', .31, C.green]];
+  const segs = parts.map(([label, r, c]) => ({ label, c, k: used * r }));
+  segs.push({ label:'Free', c:C.rule, k:200 - used });
+  return { type:'context', head:`kiln-large · ${used.toFixed(0)}k of 200k tokens`, segs: segs.map(s => ({ label:s.label, c:s.c, f:String(s.k), tok:s.k.toFixed(1) + 'k', pct:(s.k / 2).toFixed(0) + '%' })) };
+};
+function build(scene) {
+  let s = fresh();
+  const target = scene === 'palette' || scene === 'context' ? 'done' : scene;
+  for (const a of SCRIPT) {
+    if (a.scene) {
+      if (a.scene === target) {
+        if (a.partial) { const b = find(s, a.partial.id); b.shown = b.text.slice(0, Math.round(b.text.length * a.partial.frac)); b.streaming = true; }
+        break;
+      }
+      continue;
+    }
+    if (a.wait) continue;
+    if (a.stream) s.blocks.push({ id:a.stream.id, type:'text', text:a.stream.text, shown:a.stream.text });
+    else a.f(s);
+  }
+  if (scene === 'context') { s.blocks.push({ type:'user', text:'/context' }); s.blocks.push(ctxBlock(s.ctx)); }
+  if (scene === 'palette') s.input = '/co';
+  s.el = { plan:6, agents:14, streaming:31, diff:44, permission:52, error:71 }[scene] || 0;
+  return s;
+}
+
+class Component extends DCLogic {
+  state = { sim: fresh(), input:'', palIdx:0, permSel:0, spin:0, el:0 };
+  scrollRef = React.createRef();
+  inputRef = React.createRef();
+  timers = [];
+  get live() { return !this.props.scene || this.props.scene === 'live'; }
+  componentDidMount() {
+    this.scroll();
+    if (this.live) this.tick = setInterval(() => { if (this.state.sim.busy) this.setState(st => ({ spin:(st.spin + 1) % 4, el: Math.floor((Date.now() - this.t0) / 1000) })); }, 140);
+  }
+  componentDidUpdate() { this.scroll(); }
+  componentWillUnmount() { clearInterval(this.tick); this.clearTimers(); }
+  scroll() { const el = this.scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }
+  clearTimers() { this.timers.forEach(t => { clearTimeout(t); clearInterval(t); }); this.timers = []; }
+  mut(f) { this.setState(st => { const s = clone(st.sim); f(s); return { sim:s }; }); }
+  run() {
+    while (this.p < SCRIPT.length && SCRIPT[this.p].scene) this.p++;
+    if (this.p >= SCRIPT.length) return;
+    const a = SCRIPT[this.p];
+    if (a.wait) { this.p++; this.setState({ permSel:0 }); return; }
+    this.timers.push(setTimeout(() => {
+      this.p++;
+      if (a.stream) this.stream(a.stream, () => this.run());
+      else { this.mut(a.f); this.run(); }
+    }, a.d));
+  }
+  stream(o, done) {
+    this.mut(s => s.blocks.push({ id:o.id, type:'text', text:o.text, shown:'', streaming:true }));
+    let n = 0;
+    const iv = setInterval(() => {
+      n += 3;
+      const fin = n >= o.text.length;
+      this.mut(s => upd(s, o.id, { shown:o.text.slice(0, n), streaming:!fin }));
+      if (fin) { clearInterval(iv); done(); }
+    }, 18);
+    this.timers.push(iv);
+  }
+  start(text) {
+    if (this.started) {
+      this.mut(s => { s.blocks.push({ type:'user', text }); s.blocks.push({ type:'text', text:'', shown:'This prototype scripts a single session. Type /clear to replay it.' }); });
+      return;
+    }
+    this.started = true; this.t0 = Date.now();
+    this.p = SCRIPT.findIndex(a => a.scene === 'welcome') + 1;
+    this.run();
+  }
+  pick(i) {
+    if (!this.state.sim.waiting) return;
+    if (i === 2) {
+      this.clearTimers();
+      this.mut(s => { del(s, 'perm'); s.waiting = false; s.busy = false; s.blocks.push({ type:'note', text:'✕ Declined npm test -- upload' }); s.blocks.push({ type:'text', text:'', shown:"Okay, I won't run it. What should I do instead?" }); });
+      this.started = true;
+      return;
+    }
+    if (i === 1) this.mut(s => { s.always = true; });
+    this.run();
+  }
+  stop() {
+    this.clearTimers();
+    this.mut(s => { del(s, 'perm'); s.busy = false; s.waiting = false; s.blocks.forEach(b => { b.streaming = false; if (b.status === 'run') b.status = 'err'; }); s.blocks.push({ type:'note', text:'■ Interrupted. Tell kiln what to do instead.' }); });
+  }
+  runCmd(c) {
+    this.setState({ input:'', palIdx:0 });
+    if (c.cmd === '/clear') { this.clearTimers(); this.started = false; this.setState({ sim:fresh() }); return; }
+    this.mut(s => {
+      s.blocks.push({ type:'user', text:c.cmd });
+      if (c.cmd === '/context') s.blocks.push(ctxBlock(s.ctx));
+      else if (c.cmd === '/cost') s.blocks.push({ type:'note', text:`Session: $${s.cost.toFixed(2)} · ${(s.ctx * 2).toFixed(0)}k tokens in context · ${Math.floor((Date.now() - (this.t0 || Date.now())) / 1000)}s` });
+      else if (c.cmd === '/compact') { s.blocks.push({ type:'note', text:`Compacted history · context ${s.ctx}% → 8%` }); s.ctx = 8; }
+      else if (c.cmd === '/model') s.blocks.push({ type:'note', text:'Model: kiln-large · also available: kiln-fast' });
+      else if (c.cmd === '/agents') s.blocks.push({ type:'note', text:'Subagents: scout (read-only explorer), fixer (edits, asks first)' });
+      else s.blocks.push({ type:'note', text:'enter send · / commands · @ add file · ⇧⇥ cycle mode · esc stop' });
+    });
+  }
+  filtered(input) { return input.startsWith('/') && !input.includes(' ') ? CMDS.filter(c => c.cmd.startsWith(input)) : []; }
+  onKey = e => {
+    const { sim, input, palIdx, permSel } = this.state;
+    if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); this.mut(s => { s.mode = (s.mode + 1) % 3; }); return; }
+    if (sim.waiting && !input) {
+      if (['1','2','3'].includes(e.key)) { e.preventDefault(); this.pick(+e.key - 1); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); this.setState({ permSel:(permSel + (e.key === 'ArrowDown' ? 1 : 2)) % 3 }); return; }
+      if (e.key === 'Enter') { e.preventDefault(); this.pick(permSel); return; }
+      if (e.key === 'Escape') { this.pick(2); return; }
+    }
+    const pal = this.filtered(input);
+    if (pal.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); this.setState({ palIdx:(palIdx + (e.key === 'ArrowDown' ? 1 : pal.length - 1)) % pal.length }); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); this.runCmd(pal[Math.min(palIdx, pal.length - 1)]); return; }
+      if (e.key === 'Escape') { this.setState({ input:'' }); return; }
+    }
+    if (e.key === 'Escape' && sim.busy) { this.stop(); return; }
+    if (e.key === 'Enter' && input.trim()) { this.setState({ input:'' }); if (!sim.busy) this.start(input.trim()); }
+  };
+  deco(b, i, L, sim, spin, live) {
+    const d = Object.assign({}, b, { gut:L === 'gutter', rail:L === 'rail', time:`14:${String(2 + Math.floor((8 + i * 13) / 60)).padStart(2, '0')}:${String((8 + i * 13) % 60).padStart(2, '0')}`, lc:C.dim, label:'', meta:'', glyph:'', gc:C.dim });
+    const t = b.type;
+    d['is' + { banner:'Banner', user:'User', text:'Text', note:'Note', tool:'Tool', diff:'Diff', perm:'Perm', plan:'Plan', agents:'Agents', error:'Error', context:'Context' }[t]] = true;
+    if (t === 'banner') {
+      d.tips = [{ k:'/', d:'commands' }, { k:'@', d:'add files' }, { k:'⇧⇥', d:'cycle mode' }, { k:'esc', d:'stop' }];
+      d.recent = [{ when:'2h ago', t:'Fix flaky auth refresh test' }, { when:'yesterday', t:'Migrate uploads to S3 multipart' }, { when:'Mon', t:'Profile slow /search queries' }];
+      d.showRecent = sim.blocks.length === 1;
+    } else if (t === 'user') { d.glyph = '›'; d.gc = C.amber; d.label = 'you'; d.lc = C.amber; }
+    else if (t === 'text') { d.glyph = '•'; d.gc = C.dim; d.label = 'kiln'; }
+    else if (t === 'note') { d.glyph = '·'; d.label = 'system'; }
+    else if (t === 'tool') {
+      d.sc = { run:C.amber, ok:C.green, err:C.red }[b.status];
+      d.glyph = b.status === 'run' ? spin : b.status === 'ok' ? '✓' : '✕'; d.gc = d.sc;
+      d.label = b.name.toLowerCase(); d.lc = d.sc; d.meta = [b.note, b.ms].filter(Boolean).join(' · ');
+      d.outL = (b.out || []).map((x, j) => ({ t:(j ? '  ' : '→ ') + x, c: b.status === 'err' && j ? C.red : C.dim }));
+    } else if (t === 'diff') {
+      const a = b.lines.filter(l => l.k === '+').length, r = b.lines.filter(l => l.k === '-').length;
+      d.glyph = '±'; d.gc = C.blue; d.label = 'edit'; d.lc = C.blue; d.addS = '+' + a; d.delS = '−' + r; d.meta = b.file.split('/').pop();
+      d.dl = b.lines.map(l => ({ n:l.n, t:l.t, k:l.k === '-' ? '−' : l.k, c:l.k === '+' ? C.green : C.red, tc:l.k === ' ' ? C.dim : C.ink, bg:l.k === '+' ? 'rgba(155,196,110,.10)' : l.k === '-' ? 'rgba(229,118,93,.13)' : 'transparent' }));
+    } else if (t === 'perm') {
+      d.glyph = '?'; d.gc = C.amber; d.label = 'approval needed'; d.lc = C.amber;
+      const sel = live ? this.state.permSel : 0;
+      d.opts = ['Yes', 'Yes, and don’t ask again for npm test', 'No, and tell kiln what to do instead'].map((label, j) => ({ key:String(j + 1), label, pick:() => this.pick(j), bg:j === sel ? C.raise : 'transparent', c:j === sel ? C.ink : C.dim, kc:j === sel ? C.amber : C.faint }));
+    } else if (t === 'plan') {
+      const done = b.items.filter(x => x.s === 'done').length;
+      d.glyph = '≡'; d.label = 'plan'; d.title = `Plan · ${done} of ${b.items.length}`; d.meta = `${done}/${b.items.length}`;
+      d.pi = b.items.map(x => x.s === 'done' ? { t:x.t, g:'✓', gc:C.green, c:C.dim, td:'line-through' } : x.s === 'doing' ? { t:x.t, g:'▸', gc:C.amber, c:C.ink, td:'none' } : { t:x.t, g:'○', gc:C.faint, c:C.dim, td:'none' });
+    } else if (t === 'agents') {
+      const n = b.list.filter(a => a.done).length;
+      d.glyph = '∥'; d.gc = n === b.list.length ? C.green : C.amber; d.label = 'subagents'; d.meta = `${n}/${b.list.length} done`;
+      d.head = n === b.list.length ? `${b.list.length} subagents finished` : `${b.list.length} subagents running in parallel`;
+      d.al = b.list.map(a => { const k = Math.round(a.p * 10); return { name:a.name, task:a.task, last:(a.done ? '✓ ' : '→ ') + a.last, tok:a.tok, c:a.done ? C.green : C.amber, on:'━'.repeat(k), off:'━'.repeat(10 - k) }; });
+    } else if (t === 'error') { d.glyph = '!'; d.gc = C.red; d.label = 'error'; d.lc = C.red; }
+    else if (t === 'context') { d.glyph = '◧'; d.label = 'context'; }
+    d.showLabel = L === 'ruled' && !!d.label;
+    d.showMeta = L === 'rail' && !!d.meta;
+    return d;
+  }
+  renderVals() {
+    const live = this.live, L = this.props.layout || 'gutter';
+    const sim = live ? this.state.sim : (this._c && this._c.k === this.props.scene ? this._c.s : (this._c = { k:this.props.scene, s:build(this.props.scene) }).s);
+    const input = live ? this.state.input : (sim.input || '');
+    const spin = SPIN[live ? this.state.spin : 1];
+    const pal = this.filtered(input), pi = live ? Math.min(this.state.palIdx, Math.max(pal.length - 1, 0)) : 0;
+    const el = live ? this.state.el : sim.el;
+    const m = MODES[sim.mode];
+    return {
+      live, notLive:!live, input,
+      ghost: input ? '' : (sim.busy ? ' queue a follow-up, or esc to stop' : ' describe a task · / for commands'),
+      placeholder: sim.waiting ? 'press 1, 2 or 3' : sim.busy ? 'queue a follow-up, or esc to stop' : 'describe a task · / for commands · @ to add files',
+      blocks: sim.blocks.map((b, i) => this.deco(b, i, L, sim, spin, live)),
+      busy: !!sim.busy, spin, status: sim.status + '…', busyMeta: `${el}s · ${(sim.ctx * 2).toFixed(0)}k tokens`,
+      palOpen: pal.length > 0,
+      pal: pal.map((c, j) => ({ cmd:c.cmd, desc:c.desc, bg:j === pi ? C.raise : 'transparent', c:j === pi ? C.amber : C.ink, pick:() => this.runCmd(c) })),
+      statusTop: L === 'rail', statusBottom: L !== 'rail',
+      modeLabel: m.l + '  ⇧⇥', modeC: m.c,
+      ctxW: sim.ctx + '%', ctxPct: sim.ctx + '%', ctxC: sim.ctx > 70 ? C.red : C.amber, cost: '$' + sim.cost.toFixed(2),
+      scrollRef: this.scrollRef, inputRef: this.inputRef,
+      onInput: e => this.setState({ input:e.target.value, palIdx:0 }),
+      onKey: this.onKey,
+      focusInput: () => { if (this.inputRef.current) this.inputRef.current.focus(); }
+    };
+  }
+}
+</script>
+</body>
+</html>

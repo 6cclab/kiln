@@ -1,0 +1,24 @@
+# Write prompt for a 40-line file: the diff preview caps at
+# maxEditPromptDiffRows=12 (permission_render.go), showing "… +28 more
+# lines", while the question and the option rows stay on screen (that
+# capping is exactly what keeps them visible — permission_render.go's
+# doc comment on defect 1).
+@faux testdata/faux/qa/permissions-write-40-lines.yaml
+
+WAITFOR /describe a task/ 20
+TYPE generate the 40-line file
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT write-prompt-capped
+EXPECT /Allow kiln to write to .*lines\.ts\?/
+EXPECT /line1 = 1;/
+EXPECT /line12 = 12;/
+EXPECT_NOT /line13 = 13;/
+EXPECT /… \+28 more lines/
+EXPECT /Yes/
+EXPECT /No/
+EXPECT /↑↓ select · enter confirm · esc decline · tab to amend/
+KEY 1
+WAITFOR /Wrote the 40-line file/ 20
+SHOT write-applied
+EXPECT_NOT /panic|goroutine/

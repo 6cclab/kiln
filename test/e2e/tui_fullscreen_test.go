@@ -282,18 +282,23 @@ func TestTUI_Fullscreen_Resize(t *testing.T) {
 			t.Errorf("resize to %dx%d: last row is not the mode line: %q", w, h, rows[len(rows)-1])
 		}
 
-		// A rule row (all '─') spans exactly the new width, proving the
-		// content actually re-wrapped rather than just being truncated at
-		// the old width.
+		// A rule row (all '─') spans exactly the new content width, proving
+		// the content actually re-wrapped rather than just being truncated
+		// at the old width. Content width, not the raw terminal width: a
+		// rule now sits inside the 2-column side margin
+		// (internal/tui/layout_margin.go, finding no-side-margin) like
+		// every other full-width block, so its dash run is
+		// margin.ContentWidth(w) long, not w.
 		ruleWidth := -1
 		for _, r := range s.Viewport() {
 			if isRuleRow(r) {
-				ruleWidth = len([]rune(strings.TrimRight(r, " ")))
+				ruleWidth = len([]rune(strings.TrimSpace(r)))
 				break
 			}
 		}
-		if ruleWidth != w {
-			t.Errorf("resize to %dx%d: rule row width = %d, want %d", w, h, ruleWidth, w)
+		wantWidth := contentWidthForTest(w)
+		if ruleWidth != wantWidth {
+			t.Errorf("resize to %dx%d: rule row width = %d, want %d", w, h, ruleWidth, wantWidth)
 		}
 	}
 

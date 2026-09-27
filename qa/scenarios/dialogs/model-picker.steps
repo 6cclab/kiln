@@ -1,0 +1,49 @@
+# /model dialog: navigate, select a different model, confirm the applied
+# result (internal/tui/dialog_model.go). Esc-to-cancel is covered
+# separately in model-picker-esc.steps.
+@faux testdata/faux/qa/dialogs-model.yaml
+
+WAITFOR /describe a task/ 20
+TYPE first task please
+KEY enter
+WAITFOR /you[\s\S]*kiln/ 20
+SHOT turn-one
+TYPE second task please
+KEY enter
+WAITFOR /you[\s\S]*kiln/ 20
+SHOT turn-two
+EXPECT /Second task done as well/
+TYPE /model
+WAIT 1
+SHOT model-autocomplete
+# design: Terminal.dc.html:220 (CMDS entry "/model" desc:'Switch model') —
+# kiln's actual popup description is "Show or change the active model"
+# (internal/commands/builtins.go modelCommand.Description), a real
+# discrepancy from the design copy; asserting the design text here is
+# expected to fail against the real binary.
+EXPECT /Switch model/
+KEY enter
+WAITFOR /Select model/ 20
+SHOT model-dialog-open
+EXPECT /Select model/
+EXPECT /Switch between models\. Your pick becomes the default for new sessions\. For other names, specify with --model\./
+EXPECT /1\. faux\/faux-1[\s\S]*2\. faux\/faux-2/
+EXPECT /Medium effort ←\/→ to adjust/
+KEY down
+SHOT model-dialog-selected
+# Actual confirmation text (dialog_model.go) is "Model: faux/faux-2 ·
+# small tier · 32.8k usable", not the "now on <model> — <tier> tier"
+# wording this scenario originally assumed.
+KEY enter
+# While the dialog is open the switch shows as its status line and the ✓
+# moves to faux-2; the "Model: …" note waits for the /model echo, which
+# commits when the dialog closes.
+WAITFOR /Model set to faux\/faux-2/ 20
+SHOT model-dialog-applied
+EXPECT /2\. faux\/faux-2 ✓/
+EXPECT_NOT /1\. faux\/faux-1 ✓/
+EXPECT_NOT /Model: faux\/faux-2 · small tier/
+KEY esc
+WAITFOR /you ─+\s+\/model\s+system ─+\s+Model: faux\/faux-2 · small tier/ 20
+SHOT model-dialog-closed
+EXPECT_NOT /panic|goroutine/

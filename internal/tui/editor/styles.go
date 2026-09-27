@@ -29,4 +29,14 @@ type Styles struct {
 	// Placeholder colours the placeholder text spliced into an empty
 	// editor's content line. app.ts wraps it in `dim(...)`.
 	Placeholder lipgloss.Style
+
+	// RuleChar is the top/bottom rule's fill character: "─" normally, "-"
+	// in plain mode (--ax-screen-reader). This package cannot call
+	// tui.IsPlain itself (tui imports editor, not the other way around),
+	// so the caller (app.go's editorStyles) passes the answer down instead
+	// — view.go's rule() falls back to "─" when this is left unset, so
+	// nothing outside app.go has to change. Fixed at "─" unconditionally
+	// used to be exactly the box-drawing leak plain mode was supposed to
+	// have none of (defect *screen-reader-mode-leaves-box-drawing-rules).
+	RuleChar string
 }

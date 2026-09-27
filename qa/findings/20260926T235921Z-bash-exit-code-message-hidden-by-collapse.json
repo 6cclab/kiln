@@ -1,0 +1,30 @@
+{
+ "id": "20260926T235921Z-bash-exit-code-message-hidden-by-collapse",
+ "found_at": "2026-09-26T23:59:21Z",
+ "scenario": "tools/bash-fail",
+ "step": "bash-error",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Bash failure's 'Command exited with code N' message gets folded behind '… +N lines (ctrl+o to expand)' instead of staying visible",
+ "observed": "A failing bash call ('echo broke; exit 3') collapses to: 'bash ── auto-approved · 0.0s / Bash echo broke; exit 3 / → broke / (blank) / (blank) / … +1 lines (ctrl+o to expand)' (01-waitfor-timeout-line9.txt) — the diagnostic 'Command exited with code 3' text is never shown; only 'broke' and two blank lines occupy the 3-line collapsed budget.",
+ "expected": "The most important line on a failed command (the exit-code message) should be visible without expanding, not buried past the collapse cutoff.",
+ "design_ref": "internal/tools/bash.go:169-171 (text := outputText + \"\\n\\n\" + fmt.Sprintf(\"Command exited with code %%d\", ...) — outputText already ends in its own trailing newline from echo's stdout, so concatenating \"\\n\\n\" produces two blank lines before the status text); internal/tui/bridge.go:842,1361 collapsedResultLines=3 caps the committed block at 3 lines total, so 'broke' + 2 blank lines exhausts the budget before the actual status line is reached",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/tools-bash-fail-120x40/01-waitfor-timeout-line9.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tools/bash.go",
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestBashToolExitCodeMessageNotBuriedByBlankLines,TestTUI_BashFailure_ExitStatusSurvivesCollapse,TestRenderToolCallFailedHintBeforeKeptTail",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/tools-bash-fail-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:52Z"
+ }
+}

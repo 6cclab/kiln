@@ -1,0 +1,10 @@
+model: faux-1
+steps:
+  - text: "STREAM-START-MARKER: this reply is held back before it streams so
+      a scroll can land while kiln is still busy with the turn, then it
+      pads out with filler about a rollout plan, a dashboard panel, and an
+      alert, purely to give the busy state something to render before the
+      turn ends. STREAM-DONE-MARKER closes it out once the delay has
+      passed and the text has streamed in."
+    delay: 3s
+    usage: {input: 50, output: 90}

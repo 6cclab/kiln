@@ -1,0 +1,23 @@
+# RESIZE while a reply is streaming: testdata/faux/qa/resize-mid-stream.yaml
+# holds its response behind a 3s delay so the turn is still busy ("esc to
+# stop", internal/tui/spinner.go's busy line — footer.go's own doc comment
+# notes the hint moved off the status row to the spinner line and is no
+# longer literally "esc to interrupt", which does not appear anywhere in
+# the current source) when the resize lands. Checks the streamed marker
+# text survives the resize once the turn finishes.
+@faux testdata/faux/qa/resize-mid-stream.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE tell me about the rollout
+KEY enter
+WAITFOR /esc to stop/ 10
+SHOT mid-stream-before-resize
+RESIZE 90 30
+WAITFOR /esc to stop/ 10
+SHOT mid-stream-during-resize
+EXPECT_NOT /panic|goroutine/
+WAITFOR /resize-mid-stream-ok/ 20
+SHOT mid-stream-after
+EXPECT /resize-mid-stream-ok/
+EXPECT_NOT /panic|goroutine/

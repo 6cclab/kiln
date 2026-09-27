@@ -2,6 +2,7 @@ package tui
 
 import (
 	"image/color"
+	"math"
 	"reflect"
 	"testing"
 
@@ -131,6 +132,118 @@ func TestSetTerminalBackground_NearDesignKeepsExactHexes(t *testing.T) {
 	}
 }
 
+// --- text token contrast (light-bg-you-text-invisible fix) -----------------
+
+// TestContrastRatioKnownValues pins contrastRatio's WCAG formula against a
+// couple of textbook values: pure black vs. pure white is the maximum
+// 21:1, and a colour against itself is the minimum 1:1.
+func TestContrastRatioKnownValues(t *testing.T) {
+	black := rgb8{0, 0, 0}
+	white := rgb8{0xff, 0xff, 0xff}
+	if got := contrastRatio(black, white); math.Abs(got-21) > 0.01 {
+		t.Errorf("contrastRatio(black, white) = %.4f, want 21", got)
+	}
+	if got := contrastRatio(white, white); math.Abs(got-1) > 0.0001 {
+		t.Errorf("contrastRatio(white, white) = %.4f, want 1", got)
+	}
+}
+
+// TestEnsureContrastNoOpWhenAlreadyLegible confirms ensureContrast leaves a
+// colour untouched when it already clears the threshold — the design's own
+// dark background must never see its exact hexes perturbed.
+func TestEnsureContrastNoOpWhenAlreadyLegible(t *testing.T) {
+	bg := rgb8{0x14, 0x11, 0x0d} // hexDesignBg
+	ink := parseHex(hexInk)      // near-white on near-black: already >4.5:1
+	if got := ensureContrast(bg, ink, bodyMinContrast); got != ink {
+		t.Errorf("ensureContrast(design bg, ink, 4.5) = %+v, want unchanged %+v", got, ink)
+	}
+}
+
+// TestEnsureContrastDarkensForLightBackground is the direct regression for
+// qa/findings/20260926T231105Z-light-bg-you-text-invisible.json: hexInk
+// (near-white body text) against the QA light-profile background
+// (#f7f4ee, scripts/qa/drive.py's ensure_light_profile) starts at ~1.15:1 —
+// invisible — and ensureContrast must bring it to at least 4.5:1.
+func TestEnsureContrastDarkensForLightBackground(t *testing.T) {
+	bg := parseHex("#f7f4ee")
+	ink := parseHex(hexInk)
+
+	before := contrastRatio(bg, ink)
+	if before >= bodyMinContrast {
+		t.Fatalf("test assumption broken: hexInk already clears %.1f:1 against the light bg (%.2f:1) — pick a token that actually fails", bodyMinContrast, before)
+	}
+
+	after := ensureContrast(bg, ink, bodyMinContrast)
+	ratio := contrastRatio(bg, after)
+	if ratio < bodyMinContrast {
+		t.Errorf("ensureContrast(lightBg, ink, 4.5) = %+v (%.2f:1), want >= 4.5:1", after, ratio)
+	}
+}
+
+// TestSetTerminalBackground_LightBackgroundTextTokensMeetContrast is the
+// end-to-end regression: every text token SetTerminalBackground recomputes
+// for the QA light profile's background must clear its threshold —
+// bodyMinContrast (4.5:1, WCAG AA normal text) for Ink, dimMinContrast
+// (3:1, WCAG AA large-text/UI-component floor) for Muted/Faint, and
+// accentMinContrast (3:1) for the named accents, which render as bold
+// labels, single glyphs or decorative marks rather than small body copy.
+func TestSetTerminalBackground_LightBackgroundTextTokensMeetContrast(t *testing.T) {
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		resetSurfaceTokensToDesign()
+		resetTextTokensToDesign()
+	})
+	SetColorEnabled(true)
+	resetTextTokensToDesign()
+
+	SetTerminalBackground(color.RGBA{R: 0xf7, G: 0xf4, B: 0xee, A: 0xff})
+	bg := parseHex("#f7f4ee")
+
+	tx := CurrentTextHex()
+	cases := []struct {
+		name string
+		hex  string
+		min  float64
+	}{
+		{"Ink", tx.Ink, bodyMinContrast},
+		{"Muted/Dim", tx.Dim, dimMinContrast},
+		{"Faint", tx.Faint, dimMinContrast},
+		{"KilnAmber", tx.Amber, accentMinContrast},
+		{"KilnGreen", tx.Green, accentMinContrast},
+		{"KilnRed", tx.Red, accentMinContrast},
+		{"KilnBlue", tx.Blue, accentMinContrast},
+		{"Violet", tx.Violet, accentMinContrast},
+	}
+	for _, c := range cases {
+		ratio := contrastRatio(bg, parseHex(c.hex))
+		if ratio < c.min {
+			t.Errorf("%s = %s against light bg #f7f4ee: contrast %.2f:1, want >= %.1f:1", c.name, c.hex, ratio, c.min)
+		}
+	}
+}
+
+// TestSetTerminalBackground_NearDesignKeepsExactTextHexes is resetTextTokensToDesign's
+// half of TestSetTerminalBackground_NearDesignKeepsExactHexes: a background
+// at (or within designBgNearThreshold of) the design's own must leave the
+// text tokens at the design's exact hexes, matching the PTY goldens pinned
+// to them.
+func TestSetTerminalBackground_NearDesignKeepsExactTextHexes(t *testing.T) {
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		resetTextTokensToDesign()
+	})
+	SetColorEnabled(true)
+	resetTextTokensToDesign()
+
+	SetTerminalBackground(color.RGBA{R: 0x14, G: 0x11, B: 0x0d, A: 0xff})
+	tx := CurrentTextHex()
+	if tx.Ink != hexInk || tx.Amber != hexAmber || tx.Dim != hexDim {
+		t.Errorf("text tokens after the exact design bg = %+v, want the design's exact hexes (ink=%s amber=%s dim=%s)", tx, hexInk, hexAmber, hexDim)
+	}
+}
+
 func TestSetTerminalBackground_FarRecomputesSurfaceTokens(t *testing.T) {
 	prevEnabled := enabled
 	t.Cleanup(func() {
@@ -150,9 +263,43 @@ func TestSetTerminalBackground_FarRecomputesSurfaceTokens(t *testing.T) {
 		t.Errorf("Rule(x) after a far bg == the design's own Rule(x); want it recomputed")
 	}
 
-	wantHex := mix(bg, parseHex(hexInk), 0.16).hex()
+	ink := ensureContrast(bg, parseHex(hexInk), bodyMinContrast)
+	wantHex := matchDesignSeparation(bg, ink, hexRule).hex()
 	want := style(lipgloss.NewStyle().Foreground(lipgloss.Color(wantHex)))("x")
 	if got := Rule("x"); got != want {
-		t.Errorf("Rule(x) after bg %+v = %q, want %q (mix(bg, ink, 0.16))", bg, got, want)
+		t.Errorf("Rule(x) after bg %+v = %q, want %q (design separation from bg)", bg, got, want)
 	}
+}
+
+// TestSetTerminalBackground_LightBackgroundSurfacesVisible: on a light
+// profile the label hairlines and the raised you-block surface stand off
+// the background by the same contrast their design hexes have on the
+// design background. They used to blend toward the design's light ink,
+// which is itself near a light background, and vanished.
+func TestSetTerminalBackground_LightBackgroundSurfacesVisible(t *testing.T) {
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		resetSurfaceTokensToDesign()
+		resetTextTokensToDesign()
+	})
+	SetColorEnabled(true)
+	bg := parseHex("#f7f4ee") // scripts/qa/drive.py's light QA profile
+	SetTerminalBackground(color.RGBA{R: bg.r, G: bg.g, B: bg.b, A: 0xff})
+	for name, c := range map[string]struct {
+		hex string
+		min float64
+	}{
+		"rule":       {surfaceHex.rule, designSeparation(hexRule)},
+		"ruleStrong": {surfaceHex.ruleStrong, designSeparation(hexRuleStrong)},
+		"raise":      {surfaceHex.raise, designSeparation(hexRaise)},
+	} {
+		if got := contrastRatio(bg, parseHex(c.hex)); got < c.min-0.01 {
+			t.Errorf("%s %s on %s: contrast %.2f, want >= %.2f", name, c.hex, bg.hex(), got, c.min)
+		}
+	}
+}
+
+func designSeparation(hex string) float64 {
+	return contrastRatio(parseHex(hexDesignBg), parseHex(hex))
 }

@@ -1,0 +1,14 @@
+# Ctrl+D on an empty input line exits (internal/tui/keys.go Router's
+# ctrl+d case: HasInput() false -> Exit()). On a non-empty line Ctrl+D is
+# left to the editor as delete-forward instead (not exercised here — that
+# is ordinary editing, not an exit).
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT before-ctrl-d
+KEY ctrl+d
+WAIT 1
+SHOT after-ctrl-d
+NOTE kiln should have exited; nothing further to type
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,12 @@
+model: faux-1
+steps:
+  # A delay precedes the whole response, so the first turn stays busy for
+  # 8s with nothing written; follow-ups typed during it are queued.
+  - delay: 8s
+  - text: "Working on the upload route now."
+    usage: {input: 20, output: 12}
+    end_turn: true
+  # Queued follow-ups drain as one batch into the next request, so one
+  # reply answers however many were queued.
+  - text: "Checked the login route and updated the tests."
+    usage: {input: 30, output: 10}

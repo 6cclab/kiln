@@ -1,0 +1,9 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "echo qa-alpha"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "First task done."
+        usage: {input: 30, output: 10}
+  - text: "Second task done."
+    usage: {input: 20, output: 8}

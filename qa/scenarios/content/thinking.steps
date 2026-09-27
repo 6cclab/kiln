@@ -1,0 +1,26 @@
+# Assistant content: a thinking (reasoning) step renders as a dim
+# "thinking ────" block: collapsed to a one-line summary with a ctrl+o
+# hint, expanded to the full reasoning on ctrl+o, collapsed again on the
+# next ctrl+o (internal/tui/transcript.go RenderThinking).
+@faux testdata/faux/qa/content-thinking.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /I'll use a fixed window counter/ 20
+SHOT reply-collapsed
+EXPECT /thinking ─/
+EXPECT /fixed window, not a sliding one.*…/
+EXPECT_NOT /zremrangebyscore/
+EXPECT_NOT /∴/
+KEY ctrl+o
+WAITFOR /zremrangebyscore/ 10
+SHOT after-ctrl-o-expand
+EXPECT /only implements zremrangebyscore/
+KEY ctrl+o
+WAIT 1
+SHOT after-ctrl-o-collapse
+EXPECT_NOT /zremrangebyscore/
+EXPECT_NOT /panic|goroutine/

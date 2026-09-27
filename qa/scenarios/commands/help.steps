@@ -1,0 +1,15 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /help
+SHOT palette-help
+# design: Terminal.dc.html:220 (CMDS entry {cmd:'/help', desc:'Shortcuts
+# and commands'})
+EXPECT /Shortcuts and commands/
+KEY enter
+WAITFOR /\/clear\s+Start a fresh session/ 20
+SHOT help
+EXPECT /\/help\s+Shortcuts and commands/
+EXPECT /\/clear\s+Start a fresh session/
+EXPECT /\/model\s+<provider\/model>\s+Switch model/
+EXPECT_NOT /panic|goroutine/

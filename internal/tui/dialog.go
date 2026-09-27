@@ -10,18 +10,20 @@ import (
 
 // Dialog is a full-screen panel rendered under the transcript in place of
 // the input box. This is the interface agreed with the app.go owner: the
-// app draws the `▔` rule (with the effort indicator) and composes Render
-// below it; keys reach HandleKey first.
+// app draws the dialog's top rule (DialogTopRule, below) and composes
+// Render below it; keys reach HandleKey first.
 //
-// Row layout is spelled out in docs/claude-code-reference.md section 5 and
-// verified byte-for-byte against testdata/reference/claude-code/
-// dialog-model.txt body rows 24-39 (see dialog_test.go
-// TestOptionRows_MatchesModelReference): three-space body indent, a
-// two-column marker gutter ("  " or "❯ "), the label column padded to the
-// widest label plus two spaces, description text starting in that column,
-// and any wrapped continuation re-aligned to it.
+// Row layout was originally verified byte-for-byte against Claude Code's
+// own reference captures (three-space body indent, a `❯` marker gutter,
+// a heavy `▔` rule with an effort indicator). The kiln restyle (QA
+// findings 20260927T000712Z-dialog-chrome-effort-indicator and
+// 20260927T000726Z-mcp-dialog-glyphs-plural) replaces that chrome with
+// kiln's own block label rule and selected-row treatment — see
+// DialogTopRule, selectionGutter and dialogIndent's doc comments — while
+// keeping the label column / description column math renderOptionRows
+// derived from that reference.
 type Dialog interface {
-	// Render returns the dialog's body rows only (no `▔` rule) sized to
+	// Render returns the dialog's body rows only (no top rule) sized to
 	// width x height. Rows beyond height are clipped by the caller's
 	// choice of a scrolling list (see renderOptionRows's "↓" marker) rather
 	// than by truncating output here.
@@ -32,20 +34,77 @@ type Dialog interface {
 	HandleKey(msg tea.KeyPressMsg) (consumed, closeIt bool, cmd tea.Cmd)
 }
 
+// frameLabeler is implemented by every Dialog to name the label rule
+// DialogTopRule draws above it ("permissions", "mcp", "model", …). It is
+// a separate, optional interface (rather than a Dialog method) so adding
+// it never has to touch every existing Dialog implementation's method
+// set signature checks at once — though in practice all of them
+// implement it (see each file's FrameLabel).
+type frameLabeler interface {
+	FrameLabel() string
+}
+
+// DialogTopRule is the label rule drawn above every dialog, replacing
+// app.go's old `▔▔▔…▔▔ ◐ medium · /effort ▔` rule (docs/claude-code-
+// reference.md §5): the same labelRule helper (theme.go) every
+// transcript block's header uses ("you ────", "kiln ────", "bash ────"),
+// carrying the dialog's own name instead — "permissions ────",
+// "mcp ────", "model ────" — with no trailing meta/effort indicator (the
+// owner's decision: that indicator was never part of the kiln design and
+// is dropped outright, not relocated). app.go's dialogRows draws it.
+func DialogTopRule(d Dialog, width int) string {
+	name := ""
+	if f, ok := d.(frameLabeler); ok {
+		name = f.FrameLabel()
+	}
+	return labelRule(name, KilnAmber, "", width)
+}
+
 // msgDialogResult carries a Select/Act result back to the open dialog,
 // the Dialog-era name for what msgModalResult was.
 type msgDialogResult struct {
 	msg string
 	err error
+	// replay redraws the transcript from the session log before the note
+	// is shown (Rewind moved the branch tip, so the history on screen is
+	// stale).
+	replay bool
 }
 
-// dialogIndent is the three-space left margin every body row (title,
-// description, options, legend) sits at.
-const dialogIndent = "   "
+// dialogIndent is every body row's (title, description, options, legend)
+// left margin. It is empty: the kiln restyle aligns dialog content with
+// every other transcript block's left edge (the label rule above it
+// carries the indent visually, same as "you ───"/"kiln ───"), dropping
+// the three-space indent Claude Code's reference dialogs used. Kept as a
+// named constant (rather than deleted outright) so the width math below
+// and every call site that adds it still reads the same way.
+const dialogIndent = ""
 
-// markerWidth is the two-column gutter before a numbered option's label:
-// "  " when unselected, "❯ " when selected. Both are exactly two cells.
+// markerWidth is the two-column gutter before an option's label. In the
+// kiln selected-row treatment (raised background + amber label, no
+// arrow — see selectionGutter) both states render two blank cells; only
+// when colour can't carry the distinction (NO_COLOR, --ax-screen-reader)
+// does the selected row's gutter carry the ASCII-safe "> " marker.
 const markerWidth = 2
+
+// selectionGutter is the two-cell marker before an option's label: blank
+// when the row can rely on colour (OnRaise's raised background plus
+// KilnAmber on the label — Terminal.dc.html's palette/permission
+// selected-row pattern has no arrow glyph either, just those two cues),
+// "> " when it can't. IsColorEnabled, not IsPlain, gates this: NO_COLOR
+// alone (no --ax-screen-reader) already turns every style() call into a
+// no-op, so a selected row would otherwise be indistinguishable from an
+// unselected one; plain mode is the (stricter) case the owner's brief
+// named, and it always has colour disabled too.
+func selectionGutter(selected bool) string {
+	if !selected {
+		return "  "
+	}
+	if !IsColorEnabled() {
+		return "> "
+	}
+	return "  "
+}
 
 // renderTitleAndDescription renders the bold title row followed by the
 // dim description wrapped at width-3 (the indent), one blank row after.
@@ -92,16 +151,17 @@ func wrapPlain(s string, limit int) []string {
 // DialogOption is one numbered, selectable row in a dialog's list.
 type DialogOption struct {
 	Label       string // e.g. "2. Opus (1M context)"
-	Current     bool   // appends " ✔" after Label, before the description column
+	Current     bool   // appends " <G().OK>" after Label, before the description column
 	Description string // wrapped and column-aligned under Description
 }
 
 // renderOptionRows lays out options starting at row number `startNumber`
 // with the numbering already embedded in Label (Label carries "N. " itself
 // so callers control numbering, matching ModalSpec.Items order). selected
-// is the index of the option the `❯` marker sits on. scrollOffset/visible
-// implement the "↓ at the right edge of the last visible row" contract
-// when the list is taller than the space given.
+// is the index of the row that gets the kiln selected-row treatment
+// (selectionGutter's marker, an OnRaise background, a KilnAmber label).
+// scrollOffset/visible implement the "↓ at the right edge of the last
+// visible row" contract when the list is taller than the space given.
 func renderOptionRows(options []DialogOption, selected int, width, maxRows int) []string {
 	if len(options) == 0 {
 		return nil
@@ -115,7 +175,7 @@ func renderOptionRows(options []DialogOption, selected int, width, maxRows int) 
 	for i, o := range options {
 		l := o.Label
 		if o.Current {
-			l += " ✔"
+			l += " " + G().OK
 		}
 		labels[i] = l
 		if w := VisibleWidth(l); w > labelWidth {
@@ -151,11 +211,10 @@ func renderOptionRows(options []DialogOption, selected int, width, maxRows int) 
 	var out []string
 	for i := start; i < end; i++ {
 		o := options[i]
-		marker := Faint("  ")
+		marker := selectionGutter(i == selected)
 		label := Muted(labels[i])
 		if i == selected {
-			marker = KilnAmber("❯ ")
-			label = Ink(labels[i])
+			label = KilnAmber(labels[i])
 		}
 		pad := descCol - len(dialogIndent) - markerWidth - VisibleWidth(labels[i])
 		if pad < 2 {
@@ -299,11 +358,26 @@ func (d *commandDialog) HandleKey(msg tea.KeyPressMsg) (consumed, shouldClose bo
 // Apply records a Select/Act result as the panel's status line, the
 // Dialog-era name for ModalView.Apply.
 func (d *commandDialog) Apply(r msgDialogResult) {
+	if d.spec.RefreshHeader != nil {
+		d.spec.Header = d.spec.RefreshHeader()
+	}
 	if r.err != nil {
 		d.status, d.statusOK = r.err.Error(), false
 		return
 	}
 	d.status, d.statusOK = r.msg, true
+}
+
+// FrameLabel names the label rule DialogTopRule draws above this dialog:
+// spec.Kind when the registry set one (manage_commands.go sets
+// "permissions"/"agents"/"config" alongside "mcp"/"model"), else the
+// dialog's own Title lowercased, so a spec nobody annotated still gets a
+// reasonable frame name instead of an empty one.
+func (d *commandDialog) FrameLabel() string {
+	if d.spec.Kind != "" {
+		return d.spec.Kind
+	}
+	return strings.ToLower(d.spec.Title)
 }
 
 func (d *commandDialog) selected() (commands.Item, bool) {

@@ -1,0 +1,5 @@
+model: faux-1
+steps:
+  - thinking: "The limiter needs a fixed window, not a sliding one, since the test mock only implements zremrangebyscore."
+  - text: "I'll use a fixed window counter."
+    usage: {input: 20, output: 24}

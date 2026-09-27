@@ -1,0 +1,18 @@
+# Edit prompt, option 2 ("switch to accept edits"): approves this edit
+# and moves the session to acceptEdits, so a second, unrelated edit
+# applies without a prompt.
+@faux testdata/faux/qa/permissions-edit-accept-mode.yaml
+@fixture testdata/behaviour/design
+
+WAITFOR /describe a task/ 20
+TYPE tighten auth then update the upload handler
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT first-edit-prompt
+KEY 2
+WAITFOR /uploaded: true/ 20
+SHOT second-edit-no-prompt
+EXPECT_NOT /approval needed/
+WAITFOR /Both edits applied/ 20
+SHOT both-applied
+EXPECT_NOT /panic|goroutine/

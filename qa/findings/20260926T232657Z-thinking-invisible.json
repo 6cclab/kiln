@@ -1,0 +1,32 @@
+{
+ "id": "20260926T232657Z-thinking-invisible",
+ "found_at": "2026-09-26T23:26:57Z",
+ "scenario": "content/thinking",
+ "step": "02,03,04",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Thinking is never shown: no collapsed marker, and ctrl+o does not expand it",
+ "observed": "The faux turn carries a thinking block; the transcript shows only 'I'll use a fixed window counter.' before and after ctrl+o and after a second ctrl+o — no thinking row in any state.",
+ "expected": "A collapsed thinking row (dim label block) that ctrl+o expands to the reasoning text, restyled into the design's label-rule language.",
+ "design_ref": "plan: thinking restyle (transcript.go RenderThinking)",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/content-thinking-120x40/02-reply-collapsed.png",
+  "qa/runs/c1/iterm-dark/content-thinking-120x40/03-after-ctrl-o-expand.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go",
+   "internal/tui/app.go",
+   "internal/tui/replay.go"
+  ],
+  "regression_test": "TestTUI_ThinkingBlock_CollapsedExpandedToggle",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/content-thinking-120x40/03-after-ctrl-o-expand.png"
+  ],
+  "updated_at": "2026-09-27T01:01:52Z"
+ }
+}

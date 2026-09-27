@@ -49,6 +49,12 @@ type Step struct {
 	Error           *ErrorSpec      `yaml:"error,omitempty"`
 	Delay           string          `yaml:"delay,omitempty"`
 	DisconnectAfter *disconnectSpec `yaml:"disconnect_after,omitempty"`
+	// EndTurn closes the current turn after this step, so the next text
+	// step answers the following request instead of merging into this one.
+	EndTurn bool `yaml:"end_turn,omitempty"`
+	// ChunkDelay sleeps between the streamed chunks of this step's text,
+	// so a live, still-arriving reply stays on screen long enough to see.
+	ChunkDelay string `yaml:"chunk_delay,omitempty"`
 }
 
 // ToolCallSpec describes a scripted tool call. Args and RawArgs are
@@ -122,6 +128,7 @@ type contentStep struct {
 	toolCall        *ToolCallSpec
 	usage           *UsageSpec
 	delay           time.Duration
+	chunkDelay      time.Duration
 	disconnectAfter *disconnectSpec
 }
 
@@ -207,7 +214,7 @@ func flattenSteps(steps []Step) ([]turn, error) {
 				return nil, err
 			}
 			pending = append(pending, cs)
-			if s.ToolCall != nil || s.DisconnectAfter != nil {
+			if s.ToolCall != nil || s.DisconnectAfter != nil || s.EndTurn {
 				// A disconnect_after step, like a tool_call, always ends
 				// its own turn: it's a one-shot fault against a single
 				// request, and the cursor must move on to the next step
@@ -257,6 +264,13 @@ func toContentStep(s Step) (contentStep, error) {
 			return cs, fmt.Errorf("faux: invalid delay %q: %w", s.Delay, err)
 		}
 		cs.delay = d
+	}
+	if s.ChunkDelay != "" {
+		d, err := time.ParseDuration(s.ChunkDelay)
+		if err != nil {
+			return cs, fmt.Errorf("faux: invalid chunk_delay %q: %w", s.ChunkDelay, err)
+		}
+		cs.chunkDelay = d
 	}
 	if s.DisconnectAfter != nil {
 		cs.disconnectAfter = s.DisconnectAfter

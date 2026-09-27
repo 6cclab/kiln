@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "# Overview\n\nThe upload route.\n\n## Middleware\n\nRate limiting happens here."
+    usage: {input: 20, output: 24}

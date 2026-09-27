@@ -1,0 +1,21 @@
+# --inline: native scrollback instead of the alt-screen TUI (default is
+# fullscreen; see internal/cli/args.go's Inline and internal/cli/tui.go's
+# bridge.SetFullscreen(true) only firing when Fullscreen && !ScreenReader,
+# which --inline suppresses by leaving deps.Fullscreen false). The
+# transcript still works normally; a real terminal-vs-alt-screen
+# distinction is a pixel/behaviour difference (whether the window's own
+# scrollback grows) this text-only driver cannot assert — see the scenario
+# author's report for that limitation.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@args --inline
+
+WAITFOR /describe a task/ 20
+SHOT inline-welcome
+TYPE say hello
+SHOT inline-typed
+KEY enter
+WAITFOR /Hello from faux/ 20
+SHOT inline-reply
+EXPECT /say hello/
+EXPECT_NOT /panic|goroutine/

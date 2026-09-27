@@ -1,0 +1,18 @@
+# Typing and long input that wraps past the editor width
+# (internal/tui/editor: textarea wraps at the input box width; nothing is
+# submitted here, so no faux turn is consumed).
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT input-empty
+TYPE short line
+SHOT input-short
+EXPECT /short line/
+KEY ctrl+u
+TYPE this is a deliberately long single line of input typed with no line breaks at all so that it must wrap onto a second visual row inside the input box at 120 columns wide
+SHOT input-wrapped
+EXPECT /deliberately long single line/
+# the line wraps inside the box: the second row continues it
+EXPECT /must wrap onto a[^\n]*\n\s+[^\n]*at 120 columns wide/
+EXPECT_NOT /panic|goroutine/

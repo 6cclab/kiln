@@ -1,0 +1,8 @@
+model: faux-1
+steps:
+  - text: "I'll check the project's package.json first."
+  - tool_call: {name: read, args: {path: package.json}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "It's a small Node project with one dependency."
+        usage: {input: 60, output: 30}

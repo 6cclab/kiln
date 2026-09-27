@@ -105,17 +105,28 @@ const (
 	hexBarEmpty   = "#3f372c" // subagents panel: progress bar empty cell
 )
 
-// Kiln foreground helpers. Ink, Faint and the named accents are the design's
-// own fixed hexes — only the *surface* tokens (hairlines, raised/panel
-// backgrounds, diff tints) are background-aware; see SetTerminalBackground.
+// Kiln foreground helpers. Ink, Faint and the named accents default to the
+// design's own fixed hexes, but — like the surface tokens below — are
+// background-aware: SetTerminalBackground re-derives each of them so body
+// text, dim/muted text and every accent stay legible against whatever
+// background the terminal actually has, per ensureContrast's thresholds
+// (bodyMinContrast, dimMinContrast, accentMinContrast). They are func vars
+// (not style() literals assigned once) for the same reason
+// Rule/RuleStrong/BarEmpty are: SetTerminalBackground has to be able to
+// rebuild them.
 var (
-	Ink       = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexInk)))
-	Faint     = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexFaint)))
-	KilnAmber = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexAmber)))
-	KilnGreen = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexGreen)))
-	KilnRed   = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexRed)))
-	KilnBlue  = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexBlue)))
-	Violet    = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexViolet)))
+	Ink       func(string) string
+	Faint     func(string) string
+	KilnAmber func(string) string
+	KilnGreen func(string) string
+	KilnRed   func(string) string
+	KilnBlue  func(string) string
+	Violet    func(string) string
+	// MutedStrike is Muted with a line through it (a done plan item). One
+	// style, not Muted(Strike(s)): lipgloss renders strikethrough one cell
+	// at a time with a reset after each, which cancels an outer colour
+	// after the first character.
+	MutedStrike func(string) string
 )
 
 // Rule is the hairline colour for block label rules and diff borders.
@@ -173,6 +184,7 @@ const designBgNearThreshold = 24.0
 
 func init() {
 	resetSurfaceTokensToDesign()
+	resetTextTokensToDesign()
 }
 
 // resetSurfaceTokensToDesign rebuilds every surface token (Rule, RuleStrong,
@@ -184,7 +196,12 @@ func resetSurfaceTokensToDesign() {
 	setSurfaceTokens(hexRule, hexRuleStrong, hexBarEmpty, hexRaise, hexPanel, hexDiffAddBg, hexDiffDelBg)
 }
 
+// surfaceHex holds the hexes the surface tokens were last built from, so
+// tests can check them against the background they sit on.
+var surfaceHex struct{ rule, ruleStrong, raise string }
+
 func setSurfaceTokens(rule, ruleStrong, barEmpty, raise, panel, diffAdd, diffDel string) {
+	surfaceHex.rule, surfaceHex.ruleStrong, surfaceHex.raise = rule, ruleStrong, raise
 	Rule = style(lipgloss.NewStyle().Foreground(lipgloss.Color(rule)))
 	RuleStrong = style(lipgloss.NewStyle().Foreground(lipgloss.Color(ruleStrong)))
 	BarEmpty = style(lipgloss.NewStyle().Foreground(lipgloss.Color(barEmpty)))
@@ -192,6 +209,92 @@ func setSurfaceTokens(rule, ruleStrong, barEmpty, raise, panel, diffAdd, diffDel
 	OnPanel = style(lipgloss.NewStyle().Background(lipgloss.Color(panel)))
 	OnDiffAdd = style(lipgloss.NewStyle().Background(lipgloss.Color(diffAdd)))
 	OnDiffDel = style(lipgloss.NewStyle().Background(lipgloss.Color(diffDel)))
+}
+
+// onRaiseSpan renders one span of a raised (OnRaise) row with its own
+// foreground baked into the same style call ("" keeps the terminal's
+// default foreground for a span that carries no text of its own, e.g. a
+// row's trailing fill). A raised row that mixes more than one foreground
+// colour — a permission option's amber key next to its ink label, the
+// command palette's amber value next to its dim description — cannot be
+// built by wrapping OnRaise around content that already went through its
+// own independent style call: an ANSI reset (the code every lipgloss
+// Render() ends its span with) clears every SGR attribute, not just the
+// one that Render() call set, so the raised background dies at the first
+// inner reset and every span after it (the gap, the second colour, the
+// trailing pad) reverts to the terminal's own background. Composing
+// background+foreground in one style per span sidesteps it: each span's
+// own reset only ever lands after its own content, and the next span
+// re-asserts the background itself. permissionOptionRow, Popup.Render and
+// RenderUserMessageMeta all had this bug before this helper (RenderUserMessageMeta's
+// case had only one foreground colour, so reordering — pad the plain text,
+// then colour it, then raise the whole already-single-span result — was
+// enough there instead).
+func onRaiseSpan(fg, text string) string {
+	if !enabled {
+		return text
+	}
+	st := lipgloss.NewStyle().Background(lipgloss.Color(surfaceHex.raise))
+	if fg != "" {
+		st = st.Foreground(lipgloss.Color(fg))
+	}
+	return st.Render(text)
+}
+
+// resetTextTokensToDesign rebuilds every text token (Ink, Faint, Muted,
+// KilnAmber, KilnGreen, KilnRed, KilnBlue, Violet) from the design's own
+// fixed hexes — the state at startup before any SetTerminalBackground call,
+// and the state SetTerminalBackground restores when the reported background
+// is within designBgNearThreshold of hexDesignBg (existing PTY goldens are
+// pinned to these exact hexes on the design background; see theme_test.go).
+func resetTextTokensToDesign() {
+	setTextTokens(hexInk, hexDim, hexFaint, hexAmber, hexGreen, hexRed, hexBlue, hexViolet)
+}
+
+func setTextTokens(ink, dim, faint, amber, green, red, blue, violet string) {
+	Ink = style(lipgloss.NewStyle().Foreground(lipgloss.Color(ink)))
+	Muted = style(lipgloss.NewStyle().Foreground(lipgloss.Color(dim)))
+	MutedStrike = style(lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Strikethrough(true))
+	Faint = style(lipgloss.NewStyle().Foreground(lipgloss.Color(faint)))
+	KilnAmber = style(lipgloss.NewStyle().Foreground(lipgloss.Color(amber)))
+	KilnGreen = style(lipgloss.NewStyle().Foreground(lipgloss.Color(green)))
+	KilnRed = style(lipgloss.NewStyle().Foreground(lipgloss.Color(red)))
+	KilnBlue = style(lipgloss.NewStyle().Foreground(lipgloss.Color(blue)))
+	Violet = style(lipgloss.NewStyle().Foreground(lipgloss.Color(violet)))
+	textHex = TextHex{Ink: ink, Dim: dim, Faint: faint, Amber: amber, Green: green, Red: red, Blue: blue, Violet: violet}
+}
+
+// TextHex is the current text tokens' raw hex strings — what setTextTokens
+// last set Ink/Muted/Faint/KilnAmber/KilnGreen/KilnRed/KilnBlue/Violet to.
+// Consumers that bake a colour into a value they build once and keep across
+// repaints (markdown.go's buildStyle feeds these into glamour's
+// ansi.StyleConfig, itself rebuilt on every render call) read this instead
+// of the package's own hexInk/hexAmber/... consts, which are only ever the
+// unadjusted dark-design values.
+type TextHex struct {
+	Ink, Dim, Faint, Amber, Green, Red, Blue, Violet string
+}
+
+var textHex TextHex
+
+// CurrentTextHex returns the active text tokens' hex strings.
+func CurrentTextHex() TextHex { return textHex }
+
+// SurfaceHex is the current surface tokens' raw hex strings — what
+// setSurfaceTokens last built Rule/RuleStrong/OnRaise from. Consumers that
+// bake one of these into a colour they build once and keep across repaints
+// (app.go's editor styles: the input box's rules are lipgloss.Style values
+// captured at construction, not re-read every frame the way a Rule(...)
+// call would be) read this instead of the package's own hexRule/
+// hexRuleStrong/... consts, which are only ever the unadjusted dark-design
+// values — see CurrentTextHex's own doc comment for the parallel case.
+type SurfaceHex struct {
+	Rule, RuleStrong, Raise string
+}
+
+// CurrentSurfaceHex returns the active surface tokens' hex strings.
+func CurrentSurfaceHex() SurfaceHex {
+	return SurfaceHex{Rule: surfaceHex.rule, RuleStrong: surfaceHex.ruleStrong, Raise: surfaceHex.raise}
 }
 
 // rgb8 is an 8-bit-per-channel colour, the precision every hex token and
@@ -241,6 +344,26 @@ func (c rgb8) distance(o rgb8) float64 {
 // to the nearest 8-bit value. This is a plain linear RGB blend (not a
 // perceptual colour space) — the design handoff specifies each surface
 // token as "mix(bg, x, t)" in exactly these terms.
+// matchDesignSeparation blends bg toward fg until the result stands off bg
+// by the same contrast ratio the design's own surface hex has against the
+// design background: a hairline stays exactly as faint, and a raised
+// surface exactly as raised, on whatever background the terminal has. A
+// fixed blend ratio does not do that — luminance is not linear, so the
+// same blend reads far weaker on a light background than on a dark one.
+func matchDesignSeparation(bg, fg rgb8, designHex string) rgb8 {
+	target := contrastRatio(parseHex(hexDesignBg), parseHex(designHex))
+	lo, hi := 0.0, 1.0
+	for i := 0; i < 24; i++ {
+		m := (lo + hi) / 2
+		if contrastRatio(bg, mix(bg, fg, m)) < target {
+			lo = m
+		} else {
+			hi = m
+		}
+	}
+	return mix(bg, fg, hi)
+}
+
 func mix(bg, fg rgb8, t float64) rgb8 {
 	blend := func(a, b uint8) uint8 {
 		v := float64(a) + (float64(b)-float64(a))*t
@@ -288,44 +411,163 @@ func SetTerminalBackground(c color.Color) {
 	design := parseHex(hexDesignBg)
 	if bg.distance(design) <= designBgNearThreshold {
 		resetSurfaceTokensToDesign()
+		resetTextTokensToDesign()
+		themeGenerationBump()
 		return
 	}
-	ink := parseHex(hexInk)
 	green := parseHex(hexGreen)
 	red := parseHex(hexRed)
+	// Surfaces blend the background toward the legible foreground, not the
+	// design's light ink: on a light background the design ink is itself
+	// near the background, and blends toward it vanish (hairlines and the
+	// raised you-block surface disappeared on a light profile).
+	ink := ensureContrast(bg, parseHex(hexInk), bodyMinContrast)
 	setSurfaceTokens(
-		mix(bg, ink, 0.16).hex(),
-		mix(bg, ink, 0.24).hex(),
-		mix(bg, ink, 0.22).hex(),
-		mix(bg, ink, 0.09).hex(),
-		mix(bg, ink, 0.06).hex(),
+		matchDesignSeparation(bg, ink, hexRule).hex(),
+		matchDesignSeparation(bg, ink, hexRuleStrong).hex(),
+		matchDesignSeparation(bg, ink, hexBarEmpty).hex(),
+		matchDesignSeparation(bg, ink, hexRaise).hex(),
+		matchDesignSeparation(bg, ink, hexPanel).hex(),
 		mix(bg, green, 0.12).hex(),
 		mix(bg, red, 0.14).hex(),
 	)
+	setTextTokens(
+		ink.hex(),
+		ensureContrast(bg, parseHex(hexDim), dimMinContrast).hex(),
+		ensureContrast(bg, parseHex(hexFaint), dimMinContrast).hex(),
+		ensureContrast(bg, parseHex(hexAmber), accentMinContrast).hex(),
+		ensureContrast(bg, green, accentMinContrast).hex(),
+		ensureContrast(bg, red, accentMinContrast).hex(),
+		ensureContrast(bg, parseHex(hexBlue), accentMinContrast).hex(),
+		ensureContrast(bg, parseHex(hexViolet), accentMinContrast).hex(),
+	)
+	themeGenerationBump()
+}
+
+// bodyMinContrast is the WCAG 2.1 AAA threshold for normal-size body text
+// (Success Criterion 1.4.6): the Ink token (the `you` block's own text)
+// must clear this against the detected background. AA's 4.5:1 left the
+// user's own text a mid grey on a light profile, visibly fainter than the
+// reply body in the terminal's own foreground.
+//
+// dimMinContrast and accentMinContrast use the AA threshold for large-scale
+// text and non-text UI components/graphics (SC 1.4.11, 1.4.3's large-text
+// case): dim/muted/faint chrome (labels, meta, statuslines) and every named
+// accent (amber/green/red/blue/violet) are either large/bold-weight text,
+// single-glyph markers, or decorative, so 3:1 — not 4.5:1 — is the
+// applicable bar, and holding accents to 4.5:1 would wash out their hue
+// more than legibility requires.
+const (
+	bodyMinContrast   = 7.0
+	dimMinContrast    = 3.0
+	accentMinContrast = 3.0
+)
+
+// srgbChannel converts one 8-bit sRGB channel to its linear-light value,
+// the per-channel step of the WCAG relative luminance formula.
+func srgbChannel(v uint8) float64 {
+	c := float64(v) / 255
+	if c <= 0.03928 {
+		return c / 12.92
+	}
+	return math.Pow((c+0.055)/1.055, 2.4)
+}
+
+// relLuminance is the WCAG 2.1 relative luminance of a colour (0-1).
+func relLuminance(c rgb8) float64 {
+	return 0.2126*srgbChannel(c.r) + 0.7152*srgbChannel(c.g) + 0.0722*srgbChannel(c.b)
+}
+
+// contrastRatio is the WCAG 2.1 contrast ratio between two colours
+// (1-21, order-independent).
+func contrastRatio(a, b rgb8) float64 {
+	la, lb := relLuminance(a)+0.05, relLuminance(b)+0.05
+	if la < lb {
+		la, lb = lb, la
+	}
+	return la / lb
+}
+
+// ensureContrast returns fg unchanged when it already clears minRatio
+// against bg. Otherwise it mixes fg toward whichever of pure black/white
+// contrasts more against bg (i.e. away from bg's own luminance) in small
+// steps, returning the first mix that clears the threshold — the smallest
+// nudge off the design's exact hue that gets there — or, if even the
+// extreme cannot clear it, the closest mix reached (which is at least the
+// most legible option available, that extreme itself).
+func ensureContrast(bg, fg rgb8, minRatio float64) rgb8 {
+	if contrastRatio(bg, fg) >= minRatio {
+		return fg
+	}
+	black := rgb8{0, 0, 0}
+	white := rgb8{0xff, 0xff, 0xff}
+	target := black
+	if contrastRatio(bg, white) > contrastRatio(bg, black) {
+		target = white
+	}
+	best, bestRatio := fg, contrastRatio(bg, fg)
+	for i := 1; i <= 100; i++ {
+		t := float64(i) / 100
+		candidate := mix(fg, target, t)
+		ratio := contrastRatio(bg, candidate)
+		if ratio > bestRatio {
+			best, bestRatio = candidate, ratio
+		}
+		if ratio >= minRatio {
+			return candidate
+		}
+	}
+	return best
+}
+
+// themeGeneration counts every SetTerminalBackground call that changed the
+// active tokens (including a reset to the design's own hexes) so callers
+// that cache render output by input text alone — MarkdownRenderer's cache
+// — can also key on "which token set produced this," and stop serving lines
+// coloured before the terminal's background was known. See
+// MarkdownRenderer.Render.
+var themeGeneration int
+
+func themeGenerationBump() {
+	themeGeneration++
+}
+
+// ThemeGeneration reports the current token generation; see themeGeneration.
+func ThemeGeneration() int {
+	return themeGeneration
 }
 
 // Suggestion is the accent for a selected autocomplete/dialog row. Kiln
 // marks selection with the raised background and an amber key rather than
 // a coloured `❯`; this alias keeps existing accent call sites pointing at
 // the kiln amber until they move to the raised-row styling in the layout
-// pass.
-var Suggestion = KilnAmber
+// pass. A wrapper func (not a var snapshotting KilnAmber once) so it always
+// reflects whatever SetTerminalBackground last set KilnAmber to — see
+// RuleColour's doc comment for why the surface tokens use the same pattern.
+func Suggestion(s string) string { return KilnAmber(s) }
 
 // Legacy token names, remapped onto the kiln palette so existing call
 // sites recolor without edits. Prefer the kiln helpers above in new code.
+// Wrapper funcs, not var aliases, for the same reason Suggestion is: they
+// must track whatever SetTerminalBackground last set the underlying kiln
+// token to, not the value it held at package-init time.
 var (
-	// BrandOrange (logo glyphs, `✻` marker) → kiln amber accent.
-	BrandOrange = KilnAmber
 	// Muted (secondary/dim text: version, model/effort, cwd, tips, `⎿`
 	// rows) → kiln dim.
-	Muted = style(lipgloss.NewStyle().Foreground(lipgloss.Color(hexDim)))
-	// Amber (mode-line lead-in, `⚠`) → kiln amber.
-	Amber = KilnAmber
-	// CallGreen (successful tool marker) → kiln green.
-	CallGreen = KilnGreen
-	// CallRed (failed / disconnected) → kiln red.
-	CallRed = KilnRed
+	Muted func(string) string
 )
+
+// BrandOrange (logo glyphs, `✻` marker) → kiln amber accent.
+func BrandOrange(s string) string { return KilnAmber(s) }
+
+// Amber (mode-line lead-in, `⚠`) → kiln amber.
+func Amber(s string) string { return KilnAmber(s) }
+
+// CallGreen (successful tool marker) → kiln green.
+func CallGreen(s string) string { return KilnGreen(s) }
+
+// CallRed (failed / disconnected) → kiln red.
+func CallRed(s string) string { return KilnRed(s) }
 
 // RuleColour (block/label hairlines) → kiln rule. A wrapper function
 // (rather than a var alias snapshotting Rule once) so it always reflects
@@ -480,6 +722,21 @@ func IsPlain() bool {
 	return plain
 }
 
+// RuleFillChar is the horizontal rule's fill character: the box-drawing
+// "─" normally, ASCII "-" in plain mode (--ax-screen-reader). Every call
+// site that draws a rule directly with strings.Repeat — rather than
+// through labelRule, which already branches on IsPlain itself — reads this
+// instead of hardcoding "─", so plain mode never leaks a box-drawing glyph
+// through one of them (defect *screen-reader-mode-leaves-box-drawing-
+// rules: permission_render.go's amberRule and the input box's own rule
+// were doing exactly that).
+func RuleFillChar() string {
+	if IsPlain() {
+		return "-"
+	}
+	return "─"
+}
+
 // labelRule renders kiln's block header (Layout 1b "Ruled"): a label in
 // labelColor, a hairline `─` fill in the rule colour, and right-aligned
 // dim meta, fitted to width:
@@ -493,10 +750,7 @@ func labelRule(label string, labelColor func(string) string, meta string, width 
 	if width <= 0 {
 		return label
 	}
-	fillCh := "─"
-	if IsPlain() {
-		fillCh = "-"
-	}
+	fillCh := RuleFillChar()
 	// Visible widths of the fixed parts. Layout: label + " " + fill + meta,
 	// with two spaces before meta when meta is present.
 	lw := VisibleWidth(label)

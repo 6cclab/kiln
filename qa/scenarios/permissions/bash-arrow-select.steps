@@ -1,0 +1,18 @@
+# Bash prompt navigated with arrows instead of a digit key: down, down to
+# reach option 3 ("switch to auto mode"), enter to commit it.
+@faux testdata/faux/qa/permissions-bash-arrow.yaml
+
+WAITFOR /describe a task/ 20
+TYPE run an arrow-selected command
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT option1-selected
+KEY down
+SHOT option2-selected
+KEY down
+SHOT option3-selected
+KEY enter
+WAITFOR /Ran the arrow-selected option/ 20
+SHOT approved
+EXPECT_NOT /approval needed/
+EXPECT_NOT /panic|goroutine/

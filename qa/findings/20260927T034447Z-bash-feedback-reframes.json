@@ -1,0 +1,30 @@
+{
+ "id": "20260927T034447Z-bash-feedback-reframes",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/permissions/bash-deny-feedback-tab.steps",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "medium",
+ "title": "Tab to amend swaps the bash prompt for the generic prompt",
+ "observed": "After tab the title changed from 'Allow kiln to run this command?' to 'Allow kiln to use bash?', the indent grew by one column and an extra blank row appeared above the block.",
+ "expected": "The feedback field replaces only the options; everything above stays put.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-dark/permissions-bash-deny-feedback-tab-120x40/02-after-tab.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go",
+   "internal/tui/permissionview.go"
+  ],
+  "regression_test": "TestBashPromptFeedbackKeepsFrame,TestPromptState_BashTabOpensFeedback",
+  "after_evidence": [
+   "qa/runs/c9/iterm-dark/permissions-bash-deny-feedback-tab-120x40/02-after-tab.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

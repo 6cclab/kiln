@@ -1,0 +1,31 @@
+{
+ "id": "20260927T034447Z-scenario-capture-races",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/errors/disconnect-midstream.steps",
+ "step": null,
+ "terminals": [
+  "terminal"
+ ],
+ "category": "bug",
+ "severity": "low",
+ "title": "disconnect-midstream and slash-palette assertions depend on capture timing and trailing spaces",
+ "observed": "disconnect-midstream: WAITFOR caught the ~1s countdown but the separate EXPECT ran after it cleared. slash-palette: EXPECT /\\/model / needs a trailing space that Terminal.app's text capture strips.",
+ "expected": "Countdown asserted inside one WAITFOR; tab completion proven by typing a marker after it.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/terminal/errors-disconnect-midstream-120x40/03-countdown.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "qa/scenarios/errors/disconnect-midstream.steps",
+   "qa/scenarios/palette/slash-palette.steps",
+   "qa/scenarios/tools/plan-progress.steps"
+  ],
+  "regression_test": "scenarios",
+  "after_evidence": [
+   "qa/runs/c9/iterm-dark/errors-disconnect-midstream-120x40/03-countdown.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

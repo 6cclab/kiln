@@ -1,0 +1,29 @@
+{
+ "id": "20260927T000726Z-mcp-dialog-glyphs-plural",
+ "found_at": "2026-09-27T00:07:26Z",
+ "scenario": "dialogs/mcp-dialog",
+ "step": "03-mcp-dialog-open",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "low",
+ "title": "MCP dialog uses ✘ and ※ glyphs and says '1 servers'",
+ "observed": "'1 servers' under the title; the failed server row reads '❯ ✘ deadserver'; the footer hint starts with '※ Run kiln --debug to see error logs'.",
+ "expected": "'1 server' (singular); status marks from the design set (✕ for failed, ✓ for connected); no ※ — a plain dim hint line.",
+ "design_ref": "design glyph set (Terminal.dc.html uses ✓ ✕ ● ○ ▸)",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/dialogs-mcp-dialog-120x40/03-mcp-dialog-open.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/dialog_mcp.go"
+  ],
+  "regression_test": "TestTUI_Panels_OpenClose",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/dialogs-mcp-dialog-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:53Z"
+ }
+}

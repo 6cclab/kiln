@@ -1,0 +1,53 @@
+model: faux-1
+steps:
+  - tool_call:
+      name: write
+      args:
+        path: src/generated/lines.ts
+        content: |
+            export const line1 = 1;
+            export const line2 = 2;
+            export const line3 = 3;
+            export const line4 = 4;
+            export const line5 = 5;
+            export const line6 = 6;
+            export const line7 = 7;
+            export const line8 = 8;
+            export const line9 = 9;
+            export const line10 = 10;
+            export const line11 = 11;
+            export const line12 = 12;
+            export const line13 = 13;
+            export const line14 = 14;
+            export const line15 = 15;
+            export const line16 = 16;
+            export const line17 = 17;
+            export const line18 = 18;
+            export const line19 = 19;
+            export const line20 = 20;
+            export const line21 = 21;
+            export const line22 = 22;
+            export const line23 = 23;
+            export const line24 = 24;
+            export const line25 = 25;
+            export const line26 = 26;
+            export const line27 = 27;
+            export const line28 = 28;
+            export const line29 = 29;
+            export const line30 = 30;
+            export const line31 = 31;
+            export const line32 = 32;
+            export const line33 = 33;
+            export const line34 = 34;
+            export const line35 = 35;
+            export const line36 = 36;
+            export const line37 = 37;
+            export const line38 = 38;
+            export const line39 = 39;
+            export const line40 = 40;
+      id: tc1
+  - on_tool_result: tc1
+    then:
+      - text: "Wrote the 40-line file."
+        usage: {input: 200, output: 20}
+

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	term "github.com/charmbracelet/x/term"
 
 	"github.com/andrepato/harness/internal/agent"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
@@ -156,6 +157,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		fmt.Fprintf(stderr, "keybindings: %s\n", c)
 	}
 
+	banner := newBanner(deps, bannerContentWidth(stdout))
 	cfg := tui.Config{
 		Cwd:            deps.Cwd,
 		ModelLabel:     deps.ModelLabel,
@@ -204,11 +206,13 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		SessionName:    "kiln", // the terminal title, as Claude Code sets "Claude Code"
 		Effort:         deps.Effort,
 		ModelID:        deps.Resolved.Model.ID,
-		Banner:         bannerRows(deps),
+		Banner:         banner(),
+		BannerFunc:     banner,
 		SessionID:      deps.Started.SessionID,
 		TranscriptPath: deps.Started.TranscriptPath,
 		Version:        Version,
 		Keymap:         bindings.Keymap(),
+		IsResume:       deps.IsResume,
 	}
 	// deps.StatusLine (settings.json's "statusLine" command) is
 	// intentionally not wired into cfg any more: kiln's own status line is
@@ -400,28 +404,99 @@ func mcpFailureNotice(statuses []mcpgate.ServerStatus) string {
 	return fmt.Sprintf("%d MCP servers unavailable · run /mcp", failed)
 }
 
+// bannerContentWidth is the terminal width bannerRows should fit row 1
+// into. It reads the same stdout the eventual Bubbletea program will get
+// its first WindowSizeMsg from, so the width matches what app.go's
+// contentWidth() will use when it later re-fits every banner row with
+// FitStatus — falling back to 80 (contentWidth's own fallback) when stdout
+// is not a real terminal (a test, a pipe) or the size can't be read, so a
+// long cwd is only pre-shortened when there is an actual width to shorten
+// it against.
+//
+// tui.ContentWidth, not the raw terminal width: contentWidth() now
+// subtracts the 2-column side margin (internal/tui/layout_margin.go,
+// finding no-side-margin), so pre-shortening row 1 against the unreduced
+// width left 4 columns of slack app.go's later re-fit would then have to
+// cut on its own — reintroducing a shape of the defect
+// TestBannerRow1_LongCwdKeepsBranchAndModelAt120And80 guards against (a
+// long cwd at 120 columns, pre-shortened against the raw width, had its
+// model segment clipped to "kiln-…" once the margin-aware re-fit ran at
+// 116).
+func bannerContentWidth(stdout io.Writer) int {
+	f, ok := stdout.(*os.File)
+	if !ok {
+		return 80
+	}
+	w, _, err := term.GetSize(f.Fd())
+	if err != nil || w <= 0 {
+		return 80
+	}
+	return tui.ContentWidth(w)
+}
+
 // bannerRows is the startup banner, row for row per the kiln design handoff
 // (design_handoff_kiln_tui/README.md "Banner"): row 0 "K I L N  v… ·
 // coding agent", row 1 "<cwd> · branch <b> · model <m>" (exactly once), row
 // 2 the shortcut tips, then — unless this run resumed an existing session —
 // a "Recent sessions" block listing up to 3 past sessions in this cwd. No
 // label rule above it (it is the one block the design exempts).
-func bannerRows(deps InteractiveDeps) []string {
-	// Version label: "v1.2.3" for a real semver, the bare string otherwise
-	// (so a "dev" build reads "dev · coding agent", never "vdev").
-	verLabel := Version
-	if len(Version) > 0 && Version[0] >= '0' && Version[0] <= '9' {
-		verLabel = "v" + Version
-	}
+//
+// width is bannerContentWidth's reading of the real terminal: row 1 needs
+// it up front because app.go's later re-fit (FitStatus, tail-truncation)
+// would otherwise cut the branch and model off a long cwd instead of
+// shortening the cwd first — defect: at 120 columns a long cwd rendered as
+// "/private/tmp/.../real-proj · b…", losing the branch name and the whole
+// model segment. The fix shortens the cwd from the left (ShortenPathLeft,
+// leading "…", trailing components kept) so " · branch <b> · model <m>"
+// always survives; only if that suffix alone does not fit does the row
+// fall through to app.go's tail-truncation.
+func bannerRows(deps InteractiveDeps, width int) []string {
+	return newBanner(deps, width)()
+}
+
+// newBanner reads everything the banner shows (git branch, recent
+// sessions) once, and returns a function that styles those rows on each
+// call. app.go calls it when it commits the banner, after the terminal has
+// reported its background, so the rows pick up the background-aware text
+// tokens. Rows styled before that reply keep the dark design defaults,
+// and ink-coloured text on a light background is near-invisible.
+func newBanner(deps InteractiveDeps, width int) func() []string {
+	verLabel := versionLabel(Version)
 
 	// Row 1 per the design: "<cwd> · branch <b> · model <m>", cwd with the
-	// home dir abbreviated to ~.
-	loc := abbrevHome(deps.Cwd)
+	// home dir abbreviated to ~ and, when the row is tight, left-truncated
+	// so the branch/model suffix survives intact.
+	cwd := abbrevHome(deps.Cwd)
+	suffix := ""
 	if st, ok := readGitStatus(context.Background()); ok && st.Branch != "" {
-		loc += " · branch " + st.Branch
+		suffix += " · branch " + st.Branch
 	}
-	loc += " · model " + deps.ModelLabel
+	suffix += " · model " + deps.ModelLabel
 
+	maxCwd := width - tui.VisibleWidth(suffix)
+	if maxCwd < 1 {
+		maxCwd = 1
+	}
+	if tui.VisibleWidth(cwd) > maxCwd {
+		cwd = tui.ShortenPathLeft(cwd, maxCwd)
+	}
+	loc := cwd + suffix
+
+	var recent []recentSession
+	var currentSessionID string
+	if deps.Started != nil {
+		currentSessionID = deps.Started.SessionID
+	}
+	if !deps.IsResume {
+		recent = recentSessionRows(deps.Cwd, currentSessionID)
+	}
+
+	return func() []string { return styleBanner(verLabel, loc, recent) }
+}
+
+// styleBanner renders the banner rows from newBanner's data with the
+// current theme tokens.
+func styleBanner(verLabel, loc string, recent []recentSession) []string {
 	tips := tui.KilnAmber("/") + " " + tui.Muted("commands") + "   " +
 		tui.KilnAmber("@") + " " + tui.Muted("add files") + "   " +
 		tui.KilnAmber("⇧⇥") + " " + tui.Muted("cycle mode") + "   " +
@@ -436,14 +511,10 @@ func bannerRows(deps InteractiveDeps) []string {
 		tips,
 	}
 
-	var currentSessionID string
-	if deps.Started != nil {
-		currentSessionID = deps.Started.SessionID
-	}
-	if !deps.IsResume {
-		if recent := recentSessionRows(deps.Cwd, currentSessionID); len(recent) > 0 {
-			rows = append(rows, "", tui.Muted("Recent sessions"))
-			rows = append(rows, recent...)
+	if len(recent) > 0 {
+		rows = append(rows, "", tui.Muted("Recent sessions"))
+		for _, r := range recent {
+			rows = append(rows, "  "+tui.Muted(padTo(r.when, 10))+tui.Ink(r.title))
 		}
 	}
 	// One blank row of spacing; the caller (app.go) appends a full-width
@@ -459,15 +530,15 @@ const recentSessionRowLimit = 3
 // store never delays startup; on timeout the block is omitted silently.
 const recentSessionsTimeout = 300 * time.Millisecond
 
-// recentSessionRows renders up to recentSessionRowLimit "<when>  <title>"
+// recentSessionRows returns up to recentSessionRowLimit "<when>  <title>"
 // rows for the most recently modified TOP-LEVEL sessions under cwd, sourced
 // from internal/session/jsonl.Repo.List — the only data this run has for
 // past sessions in this folder. excludeID (the session being resumed, or
 // this run's own freshly-created id) is never listed. Returns nil (silently,
 // logged via diag) on any error, on timeout, or when there are no sessions.
-func recentSessionRows(cwd, excludeID string) []string {
+func recentSessionRows(cwd, excludeID string) []recentSession {
 	type result struct {
-		rows []string
+		rows []recentSession
 	}
 	done := make(chan result, 1)
 	go func() {
@@ -483,7 +554,10 @@ func recentSessionRows(cwd, excludeID string) []string {
 	}
 }
 
-func buildRecentSessionRows(cwd, excludeID string) []string {
+// recentSession is one "Recent sessions" banner row, unstyled.
+type recentSession struct{ when, title string }
+
+func buildRecentSessionRows(cwd, excludeID string) []recentSession {
 	repo, err := jsonl.NewRepo("")
 	if err != nil {
 		diag.L().Warn("banner: recent sessions repo", "err", err)
@@ -518,14 +592,13 @@ func buildRecentSessionRows(cwd, excludeID string) []string {
 		metas = metas[:recentSessionRowLimit]
 	}
 	now := time.Now()
-	var rows []string
+	var rows []recentSession
 	for _, meta := range metas {
 		title := firstUserMessageTitle(meta.Path)
 		if title == "" {
 			continue
 		}
-		when := humaneAge(now, time.UnixMilli(meta.ModifiedAt))
-		rows = append(rows, "  "+tui.Muted(padTo(when, 10))+tui.Ink(title))
+		rows = append(rows, recentSession{when: humaneAge(now, time.UnixMilli(meta.ModifiedAt)), title: title})
 	}
 	return rows
 }

@@ -1,0 +1,23 @@
+# `!echo hi` (bang: runs directly in the user's shell, never reaches the
+# model) and `#remember to run tests` (memory: appended to CLAUDE.md,
+# never reaches the model) — internal/tui/inputmodes.go ClassifyInput,
+# RunBang and AddMemory. Neither consumes a faux turn.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE !echo hi
+KEY enter
+WAITFOR /! echo hi/ 20
+SHOT bang-echo
+EXPECT /! echo hi/
+EXPECT /hi/
+EXPECT_NOT /Hello from faux/
+TYPE #remember to run tests
+KEY enter
+WAITFOR /added to/ 20
+SHOT memory-note
+EXPECT /added to/
+EXPECT /applies from the next session/
+EXPECT_NOT /Hello from faux/
+EXPECT_NOT /panic|goroutine/

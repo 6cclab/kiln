@@ -113,3 +113,52 @@ steps:
 		t.Error("faux never received a request whose Messages contained the queued follow-up text")
 	}
 }
+
+// TestTUI_QueueTwo queues two follow-ups while the first turn is busy:
+// the busy line counts both ("2 queued"), and once the turn ends both
+// reach the model together in one request (Lane.Steer's inbox drains as
+// a batch), answered by one reply.
+func TestTUI_QueueTwo(t *testing.T) {
+	script := `
+model: faux-1
+steps:
+  - delay: 3s
+  - text: "working on it"
+    end_turn: true
+  - text: "Got both follow-ups."
+`
+	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	waitReady(t, s)
+
+	s.Send("first")
+	s.SendKey("enter")
+	deadline := time.Now().Add(3 * time.Second)
+	for !anyRowMatches(s, spinnerFramePattern) {
+		if time.Now().After(deadline) {
+			t.Fatalf("spinner never appeared:\n%s", strings.Join(s.Rows(), "\n"))
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	s.Send("second")
+	s.SendKey("enter")
+	if err := s.WaitFor("1 queued", 2*time.Second); err != nil {
+		t.Fatalf("first follow-up not queued:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+	s.Send("third")
+	s.SendKey("enter")
+	if err := s.WaitFor("2 queued", 2*time.Second); err != nil {
+		t.Fatalf("second follow-up not queued:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+	if err := s.WaitFor("Got both follow-ups.", 15*time.Second); err != nil {
+		t.Fatalf("queued follow-ups never answered:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+	reqs := requests()
+	if len(reqs) != 2 {
+		t.Fatalf("faux saw %d requests, want 2 (the turn, then one batch of follow-ups)", len(reqs))
+	}
+	last := string(reqs[1])
+	if !strings.Contains(last, `"second"`) || !strings.Contains(last, `"third"`) {
+		t.Errorf("second request lacks one of the follow-ups: %s", last)
+	}
+}

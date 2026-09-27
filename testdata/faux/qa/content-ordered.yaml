@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "Steps to reproduce:\n\n1. Start the server\n2. Send eleven requests in a minute\n3. Observe the 429 on the eleventh"
+    usage: {input: 20, output: 24}

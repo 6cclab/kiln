@@ -1,0 +1,33 @@
+# Esc-Esc on an empty, idle input opens the Rewind dialog
+# (internal/tui/dialog_rewind.go, wired by app.go's openRewind /
+# keys.go's double-Esc Router). Two completed turns give it real history:
+# navigate to the older one and confirm the transcript truncates to just
+# before it. Esc-to-cancel is covered separately in
+# rewind-empty-input-esc.steps.
+@faux testdata/faux/qa/dialogs-rewind.yaml
+
+WAITFOR /describe a task/ 20
+TYPE run this shell command and report its output: echo turn-one
+KEY enter
+WAITFOR /First turn reply from kiln/ 20
+SHOT turn-one
+TYPE run this shell command and report its output: echo turn-two
+KEY enter
+WAITFOR /Second turn reply from kiln/ 20
+SHOT turn-two
+KEY esc esc
+WAITFOR /Restore the code and\/or conversation to the point before/ 20
+SHOT rewind-dialog-open
+EXPECT /Rewind/
+EXPECT /run this shell command and report its output: echo turn-one/
+EXPECT /run this shell command and report its output: echo turn-two/
+EXPECT /\(current\)/
+KEY up
+SHOT rewind-navigated
+KEY enter
+WAITFOR /Rewound to before: run this shell command and report its output: echo turn-two/ 20
+SHOT rewind-applied
+EXPECT /Rewound to before: run this shell command and report its output: echo turn-two/
+EXPECT /First turn reply from kiln/
+EXPECT_NOT /Second turn reply from kiln/
+EXPECT_NOT /panic|goroutine/

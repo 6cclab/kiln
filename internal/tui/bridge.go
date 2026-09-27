@@ -95,12 +95,14 @@ type Bridge struct {
 	synthetics  []SyntheticCommit
 	lastEntryID string
 
-	// freezeHookMu guards freezeHook: set once by app.go (NewModel, via
-	// SetFreezeHook) and read from any goroutine that commits — see
-	// live_freeze.go's doc comment for the whole mechanism this is one half
-	// of.
-	freezeHookMu sync.Mutex
-	freezeHook   func() []string
+	// freezeHookMu guards freezeHook and lastFreezeCommit: freezeHook is set
+	// once by app.go (NewModel, via SetFreezeHook) and read from any
+	// goroutine that commits — see live_freeze.go's doc comment for the
+	// whole mechanism this is one half of. lastFreezeCommit is
+	// FreezeBefore's own de-duplication guard; see its doc comment.
+	freezeHookMu     sync.Mutex
+	freezeHook       func() []string
+	lastFreezeCommit string
 }
 
 // bridgeItem is one entry on the commit queue: either a block of text to
@@ -235,10 +237,24 @@ func (b *Bridge) prog() sink {
 // from Bubbletea's Update itself — unlike calling Program.Println
 // directly, this never blocks waiting for the event loop, so it cannot
 // deadlock it.
+//
+// This is the transcript's one true sink: every commit path in this
+// package — app.go's m.commit/m.commitSynthetic, CommitNote,
+// CommitCommandResult, the freeze hook (live_freeze.go), this file's own
+// event-driven commits (EventFault, SubagentSink, HookNotice, ModelSwitch)
+// — reaches a terminal row only through here or through CommitSynthetic,
+// which itself calls this. That makes it the one place to apply the left
+// margin (layout_margin.go's padMargin, finding no-side-margin) rather than
+// each of those padding its own lines: CommitSynthetic also stores its
+// lines (unpadded) for RenderTranscriptEntries to splice back into a later
+// Ctrl+O/Ctrl+F/Rewind replay, and that replay commits the whole redrawn
+// transcript through this same Commit — padding anywhere upstream of here
+// would double the margin on every synthetic block once replayed.
 func (b *Bridge) Commit(lines []string) {
 	if len(lines) == 0 {
 		return
 	}
+	lines = padMargin(lines, ruleMargin())
 	select {
 	case b.queue <- bridgeItem{text: strings.Join(lines, "\n")}:
 	case <-b.quit:
@@ -310,6 +326,22 @@ func (b *Bridge) SetFreezeHook(hook func() []string) {
 // helper) call it directly. finishTurn is the one call site that
 // deliberately does NOT call this ahead of its InFlightTools abort loop —
 // see live_freeze.go's doc comment for why.
+//
+// De-duplication: SubagentPanelState.Apply (subagents.go) clears the
+// panel's frozen flag on every agent.SubagentEvent, by design, so a still-
+// running dispatch makes an already-frozen panel live again — see its doc
+// comment. A live turn commits constantly (tool calls, notes, a permission
+// decline), and every one of those calls FreezeBefore first, so the panel
+// can be frozen, unfrozen by an unrelated in-flight subagent tick, and
+// frozen again — and committed a second time — before its visible content
+// (the header's "N/M done", the row summaries) has actually changed. A
+// real session showed exactly this: the subagents panel committed, then a
+// "✕ Declined …" note, then the identical panel content committed again,
+// while the busy line kept running live underneath. Comparing this call's
+// hook() output against the last one actually committed catches that: an
+// unfrozen-then-refrozen panel whose rendered lines haven't moved produces
+// no second block, while a panel that genuinely changed (a row finished, a
+// count moved) still commits normally.
 func (b *Bridge) FreezeBefore() {
 	b.freezeHookMu.Lock()
 	hook := b.freezeHook
@@ -317,9 +349,21 @@ func (b *Bridge) FreezeBefore() {
 	if hook == nil {
 		return
 	}
-	if lines := hook(); len(lines) > 0 {
-		b.CommitSynthetic(lines)
+	lines := hook()
+	if len(lines) == 0 {
+		return
 	}
+	joined := strings.Join(lines, "\n")
+	b.freezeHookMu.Lock()
+	dup := joined == b.lastFreezeCommit
+	if !dup {
+		b.lastFreezeCommit = joined
+	}
+	b.freezeHookMu.Unlock()
+	if dup {
+		return
+	}
+	b.CommitSynthetic(lines)
 }
 
 // SetVerbose sets the bridge's verbose-transcript flag. Called by the app
@@ -373,25 +417,42 @@ type MsgClearAndReplay struct{}
 // on "\n" before appending.
 type MsgTranscriptAppend struct{ Text string }
 
-// CommitCommandResult commits a slash command's result row(s) under its
-// own echo: "  ⎿  <line>" for the first line, two-space continuation for
-// the rest (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
-// model as Opus 5 (1M context)"). The echo itself is committed separately
-// via RenderUserMessage, same as a typed prompt — this only adds the
-// result row(s) that follow it.
-func (b *Bridge) CommitCommandResult(lines []string) {
+// RenderCommandResult renders a slash command's multi-line result as a
+// labelled block named after the command ("status ───", "cost ───", …),
+// each row indented by the same continuationIndent so the key/value
+// columns the command itself already aligned (e.g. /status's
+// "model     faux/faux-1", "auth      configured") stay aligned instead of
+// zig-zagging (qa/findings/20260927T000712Z-command-output-elbow-
+// misaligned.json: the old "⎿ " form only ever prefixed the first row, not
+// the rest, which pushed everything after it one glyph-and-two-spaces
+// narrower). There is no "⎿" anywhere in kiln's block set — a one-line
+// result is a "system" note instead (app.go's handleSubmit, commitNote),
+// which this function does not handle.
+func RenderCommandResult(name string, lines []string, width int) []string {
+	label := name
+	if label == "" {
+		label = "result"
+	}
+	out := make([]string, 0, len(lines)+1)
+	out = append(out, labelRule(label, Muted, "", width))
+	for _, l := range lines {
+		out = append(out, FitStatus(continuationIndent+l, width))
+	}
+	return out
+}
+
+// CommitCommandResult commits a slash command's multi-line result as its
+// own labelled block (RenderCommandResult), named after the command that
+// produced it. The echo itself is committed separately via
+// RenderUserMessage, same as a typed prompt — this only adds the block
+// that follows it, with the same leading blank row every other commit
+// call site in this file uses to separate blocks.
+func (b *Bridge) CommitCommandResult(name string, lines []string) {
 	if len(lines) == 0 {
 		return
 	}
-	gl := G()
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		if i == 0 {
-			out[i] = fmt.Sprintf("%s%s  %s", resultIndent, Muted(gl.Result), l)
-		} else {
-			out[i] = continuationIndent + l
-		}
-	}
+	width := ruleWidth()
+	out := append([]string{""}, RenderCommandResult(name, lines, width)...)
 	b.CommitSynthetic(out)
 }
 
@@ -555,12 +616,21 @@ func busyArgDisplay(arg string) string {
 // command (design: "first 30 chars of cmd"), preferring the head — same
 // reasoning as SummarizeArg in permission_render.go: the part of a command
 // that matters is almost always at the front.
+//
+// It does not append its own "…" marker. transcript.go's RenderSpinnerLeft
+// always appends exactly one trailing "…" to the whole busy-line label
+// (design: sim.status + '…', Terminal.dc.html line 398) whether or not the
+// label was truncated, so a marker added here as well produced a double
+// ellipsis ("Running cd /private/tmp/-Us……  43s"). Composing the two
+// unconditionally — one truncation cut with no marker of its own, one
+// trailing ellipsis always drawn by the renderer — leaves exactly one "…"
+// on screen either way.
 func truncateBusyArg(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
 		return s
 	}
-	return string(r[:n]) + "…"
+	return string(r[:n])
 }
 
 // MsgSpinnerReset returns the busy-line label to the turn's own gerund
@@ -697,6 +767,14 @@ func (b *Bridge) ResetTurnCounters() {
 		b.ts.tasksInFlight = 0
 		b.ts.lastStreamSend = time.Time{}
 	}
+	// A new turn's plan/subagents state starts fresh (app.go's beginTurn
+	// resets both), so FreezeBefore's de-duplication guard must not compare
+	// this turn's first freeze against whatever the previous turn last
+	// froze — otherwise a coincidentally identical first block (e.g. the
+	// same single "Running a subagent" summary) would be silently dropped.
+	b.freezeHookMu.Lock()
+	b.lastFreezeCommit = ""
+	b.freezeHookMu.Unlock()
 }
 
 // ToolCallsInTurn reports how many tool_start events fired since the last
@@ -722,6 +800,20 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		b.synthMu.Lock()
 		b.lastEntryID = ev.EntryID
 		b.synthMu.Unlock()
+
+	case harness.EventMessageStart:
+		// A turn can run several assistant messages back to back, each
+		// separated by its own tool calls (turn.go emits one
+		// EventMessageStart/EventMessageEnd pair per call to
+		// requestWithRetry). ts.streamed used to be reset only on
+		// EventThinkingStart and once per turn (ResetTurnCounters), so text
+		// deltas from every message after the first kept appending onto the
+		// same builder and the live region showed them all run together
+		// with no separation. Resetting here means each message's live
+		// stream starts from empty; the committed block for a finished
+		// message never reads ts.streamed (EventMessageEnd uses
+		// assistantText(ev.Message) instead), so no partial text is lost.
+		ts.streamed.Reset()
 
 	case harness.EventMessageUpdate:
 		b.handleStreamEvent(ev.StreamEvent, ts)
@@ -785,17 +877,18 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 				max = collapsedResultLines
 			}
 		}
+		status := CallOK
+		if ev.ToolResult != nil && ev.ToolResult.IsError {
+			status = CallError
+		}
 		view := ToolCallView{
 			Name:          name,
 			PrimaryArg:    primary,
-			Status:        CallOK,
-			ResultLines:   clipTo(summary, max),
+			Status:        status,
+			ResultLines:   clipResultLines(summary, max, status),
 			TotalLines:    len(summary),
 			HasTotalLines: true,
 			Meta:          toolMeta(ts, ev),
-		}
-		if ev.ToolResult != nil && ev.ToolResult.IsError {
-			view.Status = CallError
 		}
 		// Edit's and a successful Write's result render as a diff, not a
 		// text summary — matching the kiln "diff" block
@@ -1217,17 +1310,24 @@ func (b *Bridge) SubagentPanelSink() func(agent.SubagentEvent) {
 // echoed — that would undo their context isolation visually even though
 // it is real underneath — only the dispatch, the model it landed on, and
 // the result size are.
+//
+// A subagent failure (SubagentEventError) is deliberately NOT committed
+// here as its own transcript block: it already renders twice on its own —
+// once in the subagents panel's row (subagents.go's renderSubagentRow,
+// the "✕ <message>" action line, the design's one record of a dispatch)
+// and once in the parent's own "task" tool-call result text
+// (internal/tools/task.go turns a Dispatch error into the call's result,
+// "Subagent %q failed: %s", rendered by the ordinary EventToolEnd path
+// below). A bare "error" block committed here as well was a third,
+// context-free copy of the identical message with no visible tie to
+// either of those (qa/findings/20260927T000350Z-subagent-error-
+// triplicated.json) — removed rather than suppressed elsewhere, since the
+// panel row and the task result already say everything a failed dispatch
+// needs to say. A genuine top-level fault (the parent turn's own, not a
+// subagent's) still renders via handleEvent's EventFault case above,
+// which this function has no bearing on.
 func (b *Bridge) SubagentSink() func(agent.SubagentEvent) {
-	return func(e agent.SubagentEvent) {
-		// The subagents panel (subagents.go) is the design's one record of
-		// a dispatch: name, task, last action, progress and tokens. Only a
-		// failure gets its own transcript block.
-		if e.Kind != agent.SubagentEventError {
-			return
-		}
-		b.FreezeBefore()
-		b.CommitSynthetic(RenderError(fmt.Sprintf("%s: %s", e.Agent, e.Message)))
-	}
+	return func(e agent.SubagentEvent) {}
 }
 
 // HookNotice renders a hook activity line, matching app.ts's onHookNotices
@@ -1238,18 +1338,44 @@ func (b *Bridge) HookNotice(message string) {
 
 // ModelSwitch renders the model-switch transcript line, matching app.ts's
 // onModelChanges (app.ts:619-632).
+//
+// The note goes through the app rather than straight to Commit: a switch
+// made from /model's open dialog must land after the "/model" echo, which
+// the app commits only once the dialog closes. SendAsync, because a
+// "/model <name>" argument switch runs on the Update goroutine.
 func (b *Bridge) ModelSwitch(label string, tierName string, usable int) {
-	b.CommitNote(fmt.Sprintf("Model: %s · %s tier · %s usable", label, tierName, FormatTokens(usable)))
-	b.Send(MsgModelInfo{Label: label})
+	b.SendAsync(msgModelSwitchNote{Text: fmt.Sprintf("Model: %s · %s tier · %s usable", label, tierName, FormatTokens(usable))})
+	b.SendAsync(MsgModelInfo{Label: label})
 }
+
+// msgModelSwitchNote carries ModelSwitch's transcript note to the app.
+type msgModelSwitchNote struct{ Text string }
 
 // --- helpers -------------------------------------------------------------
 
+// titleCase turns a snake_case tool name into a readable phrase: split on
+// "_" (dropping empty segments, so an MCP tool's "mcp__server__tool"
+// double-underscore does not leave a double space), join with a single
+// space, and capitalize only the very first letter of the whole phrase —
+// "bash_background" -> "Bash background", "exit_plan_mode" -> "Exit plan
+// mode", "mcp__fixture__echo" -> "Mcp fixture echo" — not per-word title
+// case, which would read as shouting for a multi-word tool name.
 func titleCase(name string) string {
 	if name == "" {
 		return name
 	}
-	r := []rune(name)
+	parts := strings.Split(name, "_")
+	words := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			words = append(words, p)
+		}
+	}
+	joined := strings.Join(words, " ")
+	if joined == "" {
+		return name
+	}
+	r := []rune(joined)
 	if r[0] >= 'a' && r[0] <= 'z' {
 		r[0] -= 'a' - 'A'
 	}

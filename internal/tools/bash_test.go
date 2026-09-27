@@ -101,6 +101,58 @@ func TestBashToolTruncationFooter(t *testing.T) {
 	}
 }
 
+func TestBashToolTimeoutMessageSingular(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	bt := BashTool(env)
+	result := execTool(t, bt, map[string]any{"command": "sleep 5", "timeout": 1})
+	if !result.IsError {
+		t.Fatal("expected IsError for a timed-out command")
+	}
+	text := resultText(result)
+	if !strings.Contains(text, "Command timed out after 1 second") {
+		t.Fatalf("text = %q, want singular \"1 second\"", text)
+	}
+	if strings.Contains(text, "1 seconds") {
+		t.Fatalf("text = %q, incorrectly pluralized a 1-second timeout", text)
+	}
+}
+
+func TestBashToolTimeoutMessagePlural(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	bt := BashTool(env)
+	result := execTool(t, bt, map[string]any{"command": "sleep 5", "timeout": 2})
+	if !result.IsError {
+		t.Fatal("expected IsError for a timed-out command")
+	}
+	text := resultText(result)
+	if !strings.Contains(text, "Command timed out after 2 seconds") {
+		t.Fatalf("text = %q, want plural \"2 seconds\"", text)
+	}
+}
+
+// TestBashToolExitCodeMessageNotBuriedByBlankLines guards against the
+// output's own trailing newline plus the "\n\n" joiner producing two
+// blank lines before the exit-code status line — which, in the TUI's
+// collapsed transcript view, can push the status line entirely out of
+// the collapsed budget. The status line must immediately follow the
+// output with exactly one blank line, never two.
+func TestBashToolExitCodeMessageNotBuriedByBlankLines(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	bt := BashTool(env)
+	result := execTool(t, bt, map[string]any{"command": "echo broke; exit 3"})
+	if !result.IsError {
+		t.Fatal("expected IsError result")
+	}
+	text := resultText(result)
+	if strings.Contains(text, "\n\n\n") {
+		t.Fatalf("text has more than one blank line before the status: %q", text)
+	}
+	want := "broke\n\nCommand exited with code 3"
+	if text != want {
+		t.Fatalf("text = %q, want %q", text, want)
+	}
+}
+
 func TestBashToolInvalidTimeout(t *testing.T) {
 	env := execenv.New(t.TempDir())
 	bt := BashTool(env)

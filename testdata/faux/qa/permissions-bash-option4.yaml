@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "rm -rf something-important"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Okay, I won't run that."
+        usage: {input: 150, output: 15}

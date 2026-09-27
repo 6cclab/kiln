@@ -1,0 +1,20 @@
+# Bash prompt, option 1 ("Yes"): approve once, run, and continue.
+@faux testdata/faux/qa/permissions-bash-option1.yaml
+
+WAITFOR /describe a task/ 20
+TYPE echo something
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT bash-prompt
+EXPECT /Allow kiln to run this command\?/
+EXPECT /echo approved/
+EXPECT /Yes/
+EXPECT /Yes, and don.t ask again for: echo approved \*/
+EXPECT /Yes, and switch to auto mode/
+EXPECT /No/
+EXPECT /tab to amend/
+KEY 1
+WAITFOR /Ran it once, approved/ 20
+SHOT bash-approved
+EXPECT_NOT /approval needed/
+EXPECT_NOT /panic|goroutine/

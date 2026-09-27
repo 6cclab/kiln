@@ -1,0 +1,31 @@
+{
+ "id": "20260927T034447Z-model-dialog-stale-state",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/dialogs/model-picker.steps",
+ "step": null,
+ "terminals": [
+  "iterm-light"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "/model: switch note lands above the /model echo and the ✓ stays on the old model",
+ "observed": "Applying faux-2 committed 'Model: faux/faux-2 · small tier' immediately, above the '/model' you-block committed at close; the open list kept the ✓ on faux-1.",
+ "expected": "The transcript reads /model, then the switch note, then the outcome; the ✓ moves to the model now in use.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-light/dialogs-model-picker-120x40/06-model-dialog-applied.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go",
+   "internal/tui/app.go",
+   "internal/tui/dialog_model.go"
+  ],
+  "regression_test": "TestModelSwitchNote_WaitsForDialogEcho,TestDialogModel_PickMovesCurrentMark",
+  "after_evidence": [
+   "qa/runs/c10/iterm-light/dialogs-model-picker-120x40/07-model-dialog-closed.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

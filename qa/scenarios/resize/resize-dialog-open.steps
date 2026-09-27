@@ -1,0 +1,25 @@
+# RESIZE while the /model dialog is open (internal/commands/builtins.go's
+# "model" command, internal/tui/dialog_model.go's dialogModelTitle).
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE /model
+KEY enter
+WAITFOR /Select model/ 20
+SHOT dialog-open
+EXPECT /Select model/
+EXPECT /Esc to cancel/
+
+RESIZE 90 30
+WAITFOR /Select model/ 10
+SHOT dialog-after-resize
+EXPECT /Select model/
+EXPECT /Esc to cancel/
+EXPECT_NOT /panic|goroutine/
+
+KEY esc
+WAITFOR /describe a task/ 10
+SHOT dialog-closed
+EXPECT_NOT /Select model/
+EXPECT_NOT /panic|goroutine/

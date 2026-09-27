@@ -100,10 +100,20 @@ type ModalSpec struct {
 	// Act runs when an Action's key is pressed against a selected item's
 	// value. It returns a short status message to show, or an error.
 	Act func(key, value string) (string, error)
+	// RefreshHeader, when set, rebuilds Header after a Select or Act
+	// result lands, so a header row that reports state an action changed
+	// (/permissions' "mode" row) never goes stale while the panel is open.
+	RefreshHeader func() []string
 }
 
 // Result is what a command's Run returns.
 type Result struct {
+	// Name is the qualified command name that produced this result
+	// ("status", "cost", "model", a plugin's "namespace:cmd" — see
+	// QualifiedName), filled in by Execute when the command's own Run
+	// left it blank. Used to label a multi-line Output as its own block
+	// in the TUI ("status ───") instead of an anonymous continuation.
+	Name string
 	// Output is the text to display in the transcript, as lines. Nil means
 	// nothing to print.
 	Output []string
@@ -116,6 +126,9 @@ type Result struct {
 	// Exit signals the interactive shell to quit after this command (e.g.
 	// /exit, /quit). Print mode ignores it.
 	Exit bool
+	// Clear tells the interactive shell the conversation was reset: the
+	// transcript on screen is stale and is redrawn (empty) before Output.
+	Clear bool
 	// Context is /context's structured breakdown, for a renderer that
 	// wants more than the plain Output text (the kiln TUI's
 	// tui.RenderContext, via internal/tui/context.go). nil for every
@@ -297,6 +310,13 @@ func (r *Registry) Execute(ctx context.Context, line string) (*Result, error) {
 	res, err := cmd.Run(ctx, rest)
 	if err != nil {
 		return nil, err
+	}
+	// Name identifies which command produced this result, so a renderer
+	// that shows a multi-line result as its own labelled block (the TUI's
+	// CommitCommandResult) knows what to label it ("status", "cost", …)
+	// without re-parsing the input line itself.
+	if res.Name == "" {
+		res.Name = QualifiedName(cmd)
 	}
 	return &res, nil
 }

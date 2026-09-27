@@ -1,0 +1,15 @@
+model: faux-1
+steps:
+  - tool_call:
+      name: write
+      args:
+        path: src/middleware/rateLimit.ts
+        content: |
+          export async function rateLimit(req: any, res: any, next: any) {
+            next();
+          }
+      id: tc1
+  - on_tool_result: tc1
+    then:
+      - text: "Added the rate limiter file."
+        usage: {input: 200, output: 20}

@@ -1,0 +1,10 @@
+# /quit is /exit's alias (builtins.go: identical Run).
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /quit
+KEY enter
+WAIT 2
+SHOT after-quit
+EXPECT_NOT /describe a task/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,12 @@
+model: faux-1
+steps:
+  - tool_call:
+      name: write
+      args:
+        path: src/long.ts
+        content: "export const veryLongLine = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';\n"
+      id: tc1
+  - on_tool_result: tc1
+    then:
+      - text: "Added the long line."
+        usage: {input: 200, output: 20}

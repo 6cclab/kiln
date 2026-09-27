@@ -1,0 +1,11 @@
+# --debug prints its run-log path as one line before the banner settles
+# (internal/cli/tui.go: `if deps.Debug && deps.LogPath != "" { bridge.Commit(
+# []string{tui.Muted("  debug log: " + deps.LogPath)}) }`).
+@faux testdata/faux/hello.yaml
+@size 120x40
+@args --debug
+
+WAITFOR /describe a task/ 20
+SHOT debug-log-line
+EXPECT /debug log: /
+EXPECT_NOT /panic|goroutine/

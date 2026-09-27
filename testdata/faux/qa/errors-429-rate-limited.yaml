@@ -1,0 +1,5 @@
+model: faux-1
+steps:
+  - error: {status: 429, type: rate_limit_error, message: "Rate limited"}
+  - text: "Back within the rate limit."
+    usage: {input: 40, output: 10}

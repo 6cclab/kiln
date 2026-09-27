@@ -1,0 +1,13 @@
+model: faux-1
+steps:
+  # chunk_delay (see errors-disconnect-midstream.yaml) slows the stream so
+  # the partial text and retry countdown are visible to a 0.4s screen
+  # poller. disconnect_after counts raw SSE body bytes, framing included
+  # (message_start alone is ~236 bytes): 844 ends the fourth delta ("Here is
+  # the first half of a long"), measured by curling this script with the
+  # cut removed.
+  - text: "Here is the first half of a long reply that gets cut off partway"
+    chunk_delay: 200ms
+    disconnect_after: 844
+  - text: "The reconnected continuation lands here, safe and sound."
+    usage: {input: 40, output: 10}

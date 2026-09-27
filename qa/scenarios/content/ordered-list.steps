@@ -1,0 +1,18 @@
+# Assistant content: an ordered list. internal/tui/markdown.go's
+# Enumeration style glues the numeral straight onto the item with a ". "
+# separator (its own comment: no Enumeration style configured would render
+# "1Point me..." with no separator at all, so this is the specific thing
+# to check for).
+@faux testdata/faux/qa/content-ordered.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /the eleventh/ 20
+SHOT reply
+EXPECT /1\. Start the server/
+EXPECT /2\. Send eleven requests in a minute/
+EXPECT /3\. Observe the 429 on the eleventh/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,30 @@
+{
+ "id": "20260927T000712Z-command-output-elbow-misaligned",
+ "found_at": "2026-09-27T00:07:12Z",
+ "scenario": "commands/status",
+ "step": "01-status",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Command output renders through ⎿ and its first row's columns are shifted",
+ "observed": "/status prints '  ⎿  model      faux/faux-1' then '  auth       configured', '  tier ...': the ⎿ prefix is only on the first row, so the first key/value pair sits 2 columns right of the rest and the value column zig-zags. The output hangs off the you block with no label of its own.",
+ "expected": "Command output as a design block: a one-line 'system' note, or a labelled block (e.g. 'status ───') with the key/value rows aligned in one grid; no ⎿ (not in the design set).",
+ "design_ref": "plan restyle item: bridge.go CommitCommandResult; Terminal.dc.html system note",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/commands-status-120x40/01-status.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go",
+   "internal/commands/registry.go"
+  ],
+  "regression_test": "TestRenderCommandResult_RowsAlignUniformly",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/commands-status-120x40"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
+}

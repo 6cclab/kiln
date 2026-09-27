@@ -110,14 +110,19 @@ func permissionsModal(deps ManageDeps) *ModalSpec {
 		items = append(items, Item{Value: "session:" + grant, Label: grant, Description: "session only"})
 	}
 
-	return &ModalSpec{
-		Title: "Permissions",
-		Header: []string{
+	header := func() []string {
+		return []string{
 			fmt.Sprintf("mode       %s", deps.Gate.Mode()),
 			fmt.Sprintf("workspace  %s", strings.Join(deps.Gate.Roots(), ", ")),
 			fmt.Sprintf("settings   %s", joinOrNone(deps.SettingsLoadedFrom)),
-		},
-		Items: items,
+		}
+	}
+	return &ModalSpec{
+		Title:         "Permissions",
+		Kind:          "permissions",
+		Header:        header(),
+		RefreshHeader: header,
+		Items:         items,
 		Actions: []Action{
 			{Key: "m", Label: "cycle mode"},
 			{Key: "d", Label: "delete rule"},
@@ -256,11 +261,24 @@ func mcpModal(deps ManageDeps) *ModalSpec {
 	}
 
 	return &ModalSpec{
-		Title:  "Manage MCP servers",
-		Kind:   "mcp",
-		Header: []string{fmt.Sprintf("%d servers", len(statuses))},
+		Title: "Manage MCP servers",
+		Kind:  "mcp",
+		// Header is unused today: dialogMCP (internal/tui/dialog_mcp.go)
+		// renders its own list, not commandDialog's generic Header/Items
+		// loop, since Kind == "mcp" routes to it instead. Kept plural-
+		// correct anyway (pluralServers-equivalent) for whichever future
+		// consumer reads ModalSpec.Header directly (print mode, a test).
+		Header: []string{mcpServerCount(len(statuses))},
 		Items:  items,
 	}
+}
+
+// mcpServerCount renders "N server"/"N servers".
+func mcpServerCount(n int) string {
+	if n == 1 {
+		return "1 server"
+	}
+	return fmt.Sprintf("%d servers", n)
 }
 
 func agentsModal(deps ManageDeps) *ModalSpec {
@@ -278,6 +296,7 @@ func agentsModal(deps ManageDeps) *ModalSpec {
 	}
 	return &ModalSpec{
 		Title:  "Subagents",
+		Kind:   "agents",
 		Header: []string{"dispatched with the task tool · defined in .claude/agents"},
 		Items:  items,
 		Actions: []Action{
@@ -332,6 +351,7 @@ func configModal(deps ManageDeps) *ModalSpec {
 	}
 	return &ModalSpec{
 		Title:  "Configuration",
+		Kind:   "config",
 		Header: []string{"read-only; each line says where the value came from"},
 		Items:  items,
 	}
@@ -360,7 +380,7 @@ func ManageCommands(deps ManageDeps) Source {
 			}
 			return mcpStatusesText(statuses)
 		}},
-		{"agents", "View the subagents available for dispatch", func() *ModalSpec { return agentsModal(deps) }, func() []string {
+		{"agents", "Manage subagents", func() *ModalSpec { return agentsModal(deps) }, func() []string {
 			if len(deps.Agents) == 0 {
 				return []string{"No subagents. Define them in .claude/agents/*.md"}
 			}

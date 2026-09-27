@@ -1,0 +1,23 @@
+# Four consecutive 529s use up every attempt (internal/harness/retry.go
+# DefaultRetryPolicy().MaxAttempts == 4): three countdowns render and
+# reconnect, then the fourth failure is final — a committed error block,
+# no fourth countdown, no reconnect note.
+@faux testdata/faux/qa/errors-exhausted.yaml
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE trigger repeated overload
+KEY enter
+WAITFOR /Stream interrupted · 529 overloaded/ 20
+SHOT first-countdown
+WAITFOR /attempt 4 of 4/ 20
+SHOT last-countdown-before-attempt-4
+# The 4th attempt fails too; retry.go's loop bound means no 5th countdown
+# is ever scheduled — the fault commits directly instead.
+WAITFOR /status=529/ 20
+SHOT final-error
+EXPECT /status=529/
+EXPECT /overloaded_error/
+EXPECT_NOT /Reconnected on attempt 4/
+EXPECT_NOT /Retrying in \ds · attempt 5 of 4/
+EXPECT_NOT /panic|goroutine/

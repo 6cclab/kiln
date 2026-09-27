@@ -1,0 +1,18 @@
+# Bash prompt, option 3 ("switch to auto mode"): approves this call and
+# switches the permission mode, so an unrelated second bash call runs
+# without a prompt too.
+@faux testdata/faux/qa/permissions-bash-option3.yaml
+
+WAITFOR /describe a task/ 20
+TYPE run two echo commands
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT first-prompt
+EXPECT /echo first/
+KEY 3
+WAITFOR /echo second, now in auto mode/ 20
+SHOT second-no-prompt
+EXPECT_NOT /approval needed/
+WAITFOR /Both ran, the second one under auto mode/ 20
+SHOT both-done
+EXPECT_NOT /panic|goroutine/

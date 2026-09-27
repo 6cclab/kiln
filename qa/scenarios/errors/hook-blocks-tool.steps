@@ -1,0 +1,24 @@
+# A PreToolUse hook (testdata/behaviour/qa/hook-blocks-bash/.claude/
+# settings.json) blocks a bash call before it runs. GuardToolCall
+# (internal/claude/hooks/runner.go) treats the hook's exit 2 as a block,
+# whose stderr becomes the Reason; internal/harness/turn.go ~658 turns
+# that Reason into the tool's own isError result content verbatim (no
+# "blocked by hook:" prefix - that prefix is app.go's separate
+# UserPromptSubmit-hook path, not this PreToolUse one), so it commits as
+# an ordinary red Bash CallError block carrying the hook's message.
+@faux testdata/faux/qa/errors-hook-blocks-tool.yaml
+@fixture testdata/behaviour/qa/hook-blocks-bash
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE run the blocked command
+SHOT typed
+KEY enter
+WAITFOR /blocked: bash is disabled for this scenario/ 20
+SHOT blocked
+EXPECT /blocked: bash is disabled for this scenario/
+EXPECT /Bash/
+WAITFOR /Noted, the call was blocked/ 10
+SHOT reply
+EXPECT_NOT /blocked by hook:/
+EXPECT_NOT /panic|goroutine/

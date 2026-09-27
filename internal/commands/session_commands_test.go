@@ -49,7 +49,7 @@ func TestResumeWithArgPrintsTheCLIInvocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(res.Output, "\n")
-	if !strings.Contains(joined, "harness --resume abc123") {
+	if !strings.Contains(joined, "kiln --resume abc123") {
 		t.Fatalf("got %q", joined)
 	}
 }

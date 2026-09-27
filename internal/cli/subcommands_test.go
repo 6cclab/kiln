@@ -139,3 +139,24 @@ func TestVersion_Prints(t *testing.T) {
 		t.Fatal("Version printed nothing")
 	}
 }
+
+// TestVersionLabel pins the fix for
+// qa/findings/20260926T231105Z-banner-version-hash.json: the banner used
+// to glue a "v" onto ANY Version starting with a digit, which a git short
+// hash ("61bae41") or a dirty one ("61bae41-dirty") does just as often as
+// a real semver tag does. Only a real semver gets the "v" prefix.
+func TestVersionLabel(t *testing.T) {
+	cases := map[string]string{
+		"0.9.2":           "v0.9.2",
+		"v0.9.2":          "v0.9.2",
+		"1.2.3-4-gabcdef": "v1.2.3-4-gabcdef",
+		"61bae41":         "61bae41",
+		"2f74412-dirty":   "2f74412-dirty",
+		"dev":             "dev",
+	}
+	for in, want := range cases {
+		if got := versionLabel(in); got != want {
+			t.Errorf("versionLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

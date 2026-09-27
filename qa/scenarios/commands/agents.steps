@@ -1,0 +1,17 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+@fixture testdata/behaviour/qa/commands-fixture
+
+# The interactive /agents opens a modal (manage_commands.go agentsModal):
+# title "Subagents" and a header line, then a list of agent items. The
+# "N available:" line is only the -p/print-mode text fallback
+# (ManageCommands' text() closure) and never appears in this dialog, so
+# waiting for it here timed out.
+WAITFOR /describe a task/ 20
+TYPE /agents
+KEY enter
+WAITFOR /Subagents/ 20
+SHOT agents
+EXPECT /Subagents/
+EXPECT /reader/
+KEY esc
+EXPECT_NOT /panic|goroutine/

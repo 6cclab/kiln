@@ -1,0 +1,32 @@
+{
+ "id": "20260927T003640Z-rewind-enter-deadlocks",
+ "found_at": "2026-09-27T00:36:40Z",
+ "scenario": "dialogs/rewind-empty-input",
+ "step": "04-rewind-navigated,05",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Choosing a turn in Rewind freezes kiln; the rewind note is never shown",
+ "observed": "Esc Esc, Up, Enter: the Rewind dialog stays on screen and kiln stops responding. openRewind's onSelect called bridge.Send(MsgClearAndReplay{}) inside Update — the blocking Program.Send self-deadlocks the event loop (bridge.go documents this). Separately, msgDialogResult was only delivered to a still-open dialog's Apply, so the 'Rewound to before: …' outcome of a closed dialog was dropped.",
+ "expected": "Enter rewinds, the transcript redraws from the session log, and a 'Rewound to before: <turn>' note follows the redrawn history.",
+ "design_ref": "n/a",
+ "evidence": [
+  "qa/runs/c3/iterm-dark/dialogs-rewind-empty-input-120x40/05-waitfor-timeout-line28.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go",
+   "internal/tui/dialog.go",
+   "internal/tui/dialog_rewind.go"
+  ],
+  "regression_test": "TestTUI_RewindEnterApplies",
+  "note": "PTY test reproduced the freeze (dialog still drawn after Enter) and passes after; real-terminal re-drive pending.",
+  "updated_at": "2026-09-27T01:01:53Z",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/dialogs-rewind-empty-input-120x40"
+  ]
+ }
+}

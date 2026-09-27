@@ -1,0 +1,16 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE turn one
+KEY enter
+WAITFOR /Sure, working on it/ 20
+TYPE /context
+KEY enter
+WAITFOR /of.*tokens/ 20
+SHOT context
+EXPECT /System prompt/
+EXPECT /Tools/
+EXPECT /Files read/
+EXPECT /Conversation/
+EXPECT /Free/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,20 @@
+# `?` on an empty input shows the shortcuts panel (internal/tui/app.go
+# line ~1132, internal/tui/shortcuts.go RenderShortcuts); any key dismisses
+# it (app.go line ~1070's `if m.shortcuts { m.shortcuts = false ... }`).
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE ?
+SHOT shortcuts-panel
+EXPECT /! for shell mode/
+EXPECT /\/ for commands/
+EXPECT /@ for file paths/
+EXPECT /double tap esc to clear input/
+EXPECT /shift \+ tab to auto-accept edits/
+EXPECT /ctrl \+ o for verbose output/
+EXPECT /shift \+ . for newline/
+KEY a
+SHOT shortcuts-dismissed
+EXPECT_NOT /for shell mode/
+EXPECT_NOT /panic|goroutine/

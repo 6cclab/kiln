@@ -1,0 +1,24 @@
+# 400 and 401 are not retriable (internal/harness/retry.go isRetriable
+# only recognizes 429/529/5xx): each surfaces as a straight-to-final error
+# block, no countdown, no reconnect note.
+@faux testdata/faux/qa/errors-hard.yaml
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE trigger a bad request
+KEY enter
+WAITFOR /status=400/ 20
+SHOT bad-request-error
+EXPECT /status=400/
+EXPECT /invalid_request_error/
+EXPECT /bad request\s+shape/
+EXPECT_NOT /Retrying in|attempt \d of \d/
+TYPE trigger an auth failure
+KEY enter
+WAITFOR /status=401/ 20
+SHOT auth-error
+EXPECT /status=401/
+EXPECT /authentication_error/
+EXPECT /invalid api\s+key/
+EXPECT_NOT /Retrying in|attempt \d of \d/
+EXPECT_NOT /panic|goroutine/

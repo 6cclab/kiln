@@ -59,7 +59,7 @@ func TestView_IdleFrame(t *testing.T) {
 		t.Fatalf("frame too short: %d lines", len(lines))
 	}
 	last := lines[len(lines)-1]
-	want := m.renderStatusRow(m.contentWidth())
+	want := padMargin([]string{m.renderStatusRow(m.contentWidth())}, m.margin())[0]
 	if last != want {
 		t.Errorf("last row = %q, want the status row %q", last, want)
 	}
@@ -101,16 +101,94 @@ func TestView_SpinnerRowWhileBusy(t *testing.T) {
 	}
 }
 
+// TestChromeLines_SuppressesDuplicateRuleWhenTranscriptEmpty pins the fix
+// for *qa/findings/20260927T022144Z-inline-stacked-rules.json*: with an
+// empty transcript (a fresh start, or a resumed session before any turn),
+// the banner's own closing rule (already committed, permanently, to
+// scrollback) and the input box's own top rule used to land on
+// consecutive rows with nothing between them. Once transcriptIsEmpty
+// (committedRows <= bannerRowCount, both set by commitBanner) is true,
+// chromeLines drops the editor's own top rule instead, leaving the
+// banner's rule to do the job alone.
+func TestChromeLines_SuppressesDuplicateRuleWhenTranscriptEmpty(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Banner = []string{"K I L N  dev · coding agent"}
+	bannerRows := m.bannerRows()
+	m.bannerDone = true
+	m.bannerRowCount = len(bannerRows)
+	// Nothing but the banner has committed: committedRows sits exactly at
+	// bannerRowCount (transcriptIsEmpty's own contract).
+	m.committedRows = len(bannerRows)
+
+	lines, editorTop, suppressed := m.chromeLines(m.contentWidth(), 0)
+	if !suppressed {
+		t.Fatalf("ruleSuppressed = false, want true with an empty transcript")
+	}
+	if editorTop != 0 {
+		t.Fatalf("editorTop = %d, want 0 (nothing renders above the editor here)", editorTop)
+	}
+	if isFullRule(lines[editorTop]) {
+		t.Errorf("editor's own top rule should have been dropped, but row %d is still a rule: %q", editorTop, lines[editorTop])
+	}
+}
+
+// TestChromeLines_KeepsRuleOnceTranscriptHasContent checks the ordinary
+// case is untouched: once anything besides the banner has committed
+// (committedRows past bannerRowCount — a turn's echo, a command's output,
+// a replayed entry...), the editor's own top rule renders as normal.
+func TestChromeLines_KeepsRuleOnceTranscriptHasContent(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Banner = []string{"K I L N  dev · coding agent"}
+	bannerRows := m.bannerRows()
+	m.bannerDone = true
+	m.bannerRowCount = len(bannerRows)
+	m.committedRows = len(bannerRows) + 3 // something else committed after the banner
+
+	lines, editorTop, suppressed := m.chromeLines(m.contentWidth(), 0)
+	if suppressed {
+		t.Fatalf("ruleSuppressed = true, want false once the transcript has content")
+	}
+	if !isFullRule(lines[editorTop]) {
+		t.Errorf("row %d should be the editor's own top rule, got %q", editorTop, lines[editorTop])
+	}
+}
+
+// TestChromeLines_NeverSuppressesInFullscreen checks fullscreen never
+// takes the suppression branch even with an empty transcript: its
+// viewport pads to its own height regardless of content
+// (fullscreenView), so the banner's and the editor's rules are never
+// adjacent there, and dropping the editor's rule would be wrong (nothing
+// separates them structurally the way the inline live region does).
+func TestChromeLines_NeverSuppressesInFullscreen(t *testing.T) {
+	m := newTestModel()
+	m.cfg.Banner = []string{"K I L N  dev · coding agent"}
+	bannerRows := m.bannerRows()
+	m.bannerDone = true
+	m.bannerRowCount = len(bannerRows)
+	m.committedRows = len(bannerRows)
+	m.fullscreen = true
+
+	lines, editorTop, suppressed := m.chromeLines(m.contentWidth(), 0)
+	if suppressed {
+		t.Fatalf("ruleSuppressed = true, want false in fullscreen")
+	}
+	if !isFullRule(lines[editorTop]) {
+		t.Errorf("row %d should be the editor's own top rule in fullscreen, got %q", editorTop, lines[editorTop])
+	}
+}
+
 // TestStatusRow_ExactTextPerMode checks every mode's exact rendered label
 // against the kiln design handoff's status-line contract: a "●" lead-in,
-// coloured by mode (ask/manual dim, the auto-edit family green, plan
-// blue), followed by the mode label and the mode-cycle key.
+// coloured by mode (ask/manual dim, acceptEdits/auto/bypassPermissions/
+// dontAsk green, plan blue), followed by the mode label and the
+// mode-cycle key. acceptEdits and auto are distinct modes (see
+// modeLabel's doc comment) and must render distinct labels.
 func TestStatusRow_ExactTextPerMode(t *testing.T) {
 	cases := []struct {
 		mode string
 		want string
 	}{
-		{"auto", "auto-edit"},
+		{"auto", "auto mode"},
 		{"manual", "ask before edits"},
 		{"acceptEdits", "auto-edit"},
 		{"plan", "plan only"},
@@ -294,7 +372,10 @@ func newTestModelWithRegistry() Model {
 // or bottom border), ignoring ANSI styling.
 func isFullRule(l string) bool {
 	stripped := ansiStrip(l)
-	stripped = strings.TrimRight(stripped, " ")
+	// TrimSpace, not TrimRight: every full-width rule now sits inside the
+	// 2-column side margin (layout_margin.go), so a real rule row has
+	// leading spaces too, not just trailing ones.
+	stripped = strings.TrimSpace(stripped)
 	return len(stripped) > 0 && strings.Count(stripped, "─") == len([]rune(stripped))
 }
 
@@ -375,9 +456,12 @@ func TestApp_SlashOpensPopupAboveEditor(t *testing.T) {
 		t.Fatalf("expected a popup row naming \"/model\" above the editor's top rule (index %d), got:\n%s", topRuleIdx, strings.Join(lines, "\n"))
 	}
 
+	// Every row's ceiling is the real terminal width (m.width), not
+	// m.contentWidth() — rows now carry the 2-column side margin
+	// (layout_margin.go) on top of the content width they wrap to.
 	for _, l := range lines {
-		if w := VisibleWidth(l); w > m.contentWidth() {
-			t.Errorf("row %q has width %d, want at most %d", l, w, m.contentWidth())
+		if w := VisibleWidth(l); w > m.width {
+			t.Errorf("row %q has width %d, want at most %d", l, w, m.width)
 		}
 	}
 }

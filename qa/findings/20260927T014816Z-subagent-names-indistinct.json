@@ -1,0 +1,30 @@
+{
+ "id": "20260927T014816Z-subagent-names-indistinct",
+ "found_at": "2026-09-27T01:48:16Z",
+ "scenario": "tools/task-concurrent",
+ "step": "01-three-live",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Parallel subagents of one type all read 'general…' and can't be told apart",
+ "observed": "Three concurrent general-purpose dispatches render as three rows named 'general…' (the type name truncated to 8 columns); only the task text distinguishes them.",
+ "expected": "Each row gets a distinct short name, as the design's agents scene does ('scout-1', 'scout-2', 'scout-3'): e.g. the type's short form plus an index when several of one type run ('general-1', 'general-2'), fitting the 8-column name slot without truncation.",
+ "design_ref": "qa/reference/agents.png; Terminal.dc.html agents block",
+ "evidence": [
+  "qa/runs/c6/iterm-dark/tools-task-concurrent-120x40/01-three-live.png",
+  "qa/reference/agents.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/subagents.go"
+  ],
+  "regression_test": "subagents_test.go,TestTUI_FullscreenWithSubagentsPanel",
+  "after_evidence": [
+   "qa/runs/c9/iterm-dark/tools-task-concurrent-120x40"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

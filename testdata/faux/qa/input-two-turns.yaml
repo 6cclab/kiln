@@ -1,0 +1,16 @@
+model: faux-1
+steps:
+  # Two turns for qa/scenarios/input/history-recall.steps: two prompts get
+  # submitted, each needing its own reply so the second submission's
+  # request is answered rather than exhausting the script.
+  #
+  # end_turn: true on the first step matters: per internal/testkit/faux/
+  # doc.go, "Consecutive text ... steps merge into one turn" — without it
+  # these two text steps merged into a single turn whose text was the
+  # concatenation "ok, first.ok, second.", entirely consumed by the FIRST
+  # submission (observed in qa/runs/c1/iterm-dark/input-history-recall-
+  # 120x40/01-after-first-submit.txt), leaving the second submission's
+  # request to find the script exhausted.
+  - text: "ok, first."
+    end_turn: true
+  - text: "ok, second."

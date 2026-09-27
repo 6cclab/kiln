@@ -56,7 +56,7 @@ func TestLoginWithProviderPointsAtTheCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(res.Output, "\n"), "harness login anthropic") {
+	if !strings.Contains(strings.Join(res.Output, "\n"), "kiln login anthropic") {
 		t.Fatalf("got %+v", res)
 	}
 }

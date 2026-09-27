@@ -5,7 +5,7 @@ approval needed ─────────────────────�
   Allow kiln to use grep?
   $ TODO                                                                      
 
-  1  Yes
+  1  Yes                                                                        
   2  Yes, and don't ask again for this
   3  No, and tell kiln what to do instead
 

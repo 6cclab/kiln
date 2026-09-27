@@ -1,0 +1,14 @@
+model: faux-1
+steps:
+  - tool_call:
+      name: edit
+      args:
+        path: src/middleware/auth.ts
+        edits:
+          - oldText: "if (!req.headers.authorization) {"
+            newText: "if (!req.headers.authorization || req.headers.authorization === '') {"
+      id: tc1
+  - on_tool_result: tc1
+    then:
+      - text: "Okay, I won't make that change."
+        usage: {input: 150, output: 15}

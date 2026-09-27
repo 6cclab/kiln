@@ -1,0 +1,29 @@
+{
+ "id": "20260927T000507Z-bash-prompt-option-overflow-narrow-terminal",
+ "found_at": "2026-09-27T00:05:07Z",
+ "scenario": "permissions/bash-60-cols",
+ "step": "bash-prompt-60-cols",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Long bash-approval option text overflows the terminal edge uncut on a narrow (60-col) window instead of wrapping or truncating with …",
+ "observed": "At 60x30, option 3 reads ' 3  Yes, and switch to auto mode · auto mode handles these p' (01-bash-prompt-60-cols.txt) — hard-clipped mid-word at the terminal's right edge with no '…' and no wrap to a second line, unlike the same text at 120 cols where it fits on one line, and unlike edit/write prompts' option 2 which wraps onto a continuation line ('session (shift+tab)') when it doesn't fit.",
+ "expected": "Option rows should wrap or truncate with an ellipsis like other kiln text, not silently overflow past the terminal width.",
+ "design_ref": "internal/tui/permission_render.go: RenderBashPermissionPrompt (around line 171) builds and returns its lines directly with no FitLines/FitStatus call, unlike the generic feedback-prompt path in the same file (lines 105,116: return FitLines(lines, width, \"    \")) — the bash prompt's option rows are never wrapped or width-fitted",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/permissions-bash-60-cols-60x30/01-bash-prompt-60-cols.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go"
+  ],
+  "regression_test": "TestTUI_Design_Permission_60cols",
+  "after_evidence": [
+   "qa/runs/c4/iterm-dark/permissions-bash-60-cols-60x30"
+  ],
+  "updated_at": "2026-09-27T01:01:53Z"
+ }
+}

@@ -1,0 +1,23 @@
+# Deny with feedback via "tab to amend" on the bash prompt: tab opens an
+# inline feedback field in the prompt, the typed reason shows there, and
+# enter declines the command with that reason (permissionview.go
+# PromptState.HandleKey "tab").
+@faux testdata/faux/qa/permissions-deny-feedback.yaml
+
+WAITFOR /describe a task/ 20
+TYPE run the probe command
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT before-tab
+KEY tab
+SHOT after-tab
+EXPECT /approval needed/
+TYPE please explain what this does first
+SHOT after-typing
+# The reason appears in the prompt's feedback field, not in the editor.
+EXPECT /please explain what this does first/
+KEY enter
+WAITFOR /Ran the probe command|Declined/ 20
+SHOT after-enter
+EXPECT /✕ Declined echo tab-amend-probe/
+EXPECT_NOT /panic|goroutine/

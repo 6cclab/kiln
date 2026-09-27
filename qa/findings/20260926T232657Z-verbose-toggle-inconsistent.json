@@ -1,0 +1,34 @@
+{
+ "id": "20260926T232657Z-verbose-toggle-inconsistent",
+ "found_at": "2026-09-26T23:26:57Z",
+ "scenario": "content/verbose-toggle",
+ "step": "02,03,04",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "ctrl+o verbose toggle renders the tool block three different ways and shows less detail when verbose",
+ "observed": "Default: 'Read package.json → { \"name\": … … +5 lines (ctrl+o to expand)'. After ctrl+o (verbose): 'Read /tmp/…/package.json → Read 9 lines' — the file preview is gone — plus a stray right-aligned '7:00 PM faux/faux-1' row, and no blank row between the you block and the kiln label. After ctrl+o again: '  Read 1 file' — a third rendering, not the original.",
+ "expected": "ctrl+o expands the collapsed output in place (all 9 lines) and toggling back restores exactly the original rendering; block spacing stays one blank row; any per-message meta sits on the label rule, not a row of its own.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html tool block; README ctrl+o",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/content-verbose-toggle-120x40/02-reply-non-verbose.png",
+  "qa/runs/c1/iterm-dark/content-verbose-toggle-120x40/03-reply-verbose.png",
+  "qa/runs/c1/iterm-dark/content-verbose-toggle-120x40/04-reply-non-verbose-again.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/replay.go",
+   "internal/tui/transcript.go",
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestTUI_VerboseToggle_ExpandsInPlace",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/content-verbose-toggle-120x40"
+  ],
+  "note": "Known gap: a replayed tool block's meta (approved · 4.1s) is empty; the session log does not persist it.",
+  "updated_at": "2026-09-27T01:01:59Z"
+ }
+}

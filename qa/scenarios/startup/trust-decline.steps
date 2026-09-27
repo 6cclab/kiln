@@ -1,0 +1,19 @@
+# Untrusted folder: decline the trust dialog with Enter on the default
+# cursor (0 == "No, exit" — internal/tui/dialog_trust.go's answer(cursor==1)
+# is false here). "No, exit" means what it says: internal/tui/app.go's
+# MsgTrustAnswered handler does `if !msg.Trusted { return m, tea.Quit }`, so
+# declining quits the whole process rather than merely closing the dialog
+# (corrected from an earlier version of this scenario that assumed the
+# process stayed up — it does not, and never reaches "describe a task").
+@faux testdata/faux/hello.yaml
+@size 120x40
+@untrusted
+
+WAITFOR /Accessing workspace/ 20
+SHOT trust-dialog-decline
+EXPECT /No, exit/
+KEY enter
+WAIT 1
+SHOT trust-declined
+NOTE kiln should have exited on decline; nothing further to type
+EXPECT_NOT /panic|goroutine/

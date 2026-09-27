@@ -1,0 +1,43 @@
+# /mcp dialog: sectioned server list, Enter opens per-server detail, Esc
+# backs out of detail then closes the dialog (internal/tui/dialog_mcp.go).
+# The fixture names one server whose command does not exist, so it always
+# renders as a single failed (✕) row — deterministic, no real MCP server
+# needed. dialog_mcp.go's own doc comment (and mcpModal's in
+# internal/commands/manage_commands.go) says the harness has no
+# auth-needed/disabled-server states, so there is no toggle/reconnect
+# action key to exercise here beyond navigate/Enter/Esc — see the handback
+# report.
+@faux testdata/faux/qa/dialogs-mcp.yaml
+@args --mcp-config {ROOT}/testdata/behaviour/qa/mcp-dead-server.json
+
+WAITFOR /describe a task/ 20
+TYPE first task
+KEY enter
+WAITFOR /Sure, first task handled/ 20
+SHOT turn-one
+TYPE second task
+KEY enter
+WAITFOR /Second task handled too/ 20
+SHOT turn-two
+TYPE /mcp
+KEY enter
+WAITFOR /Manage MCP servers/ 20
+SHOT mcp-dialog-open
+EXPECT /Manage MCP servers/
+EXPECT /1 server\b/
+EXPECT_NOT /1 servers/
+EXPECT /✕ deadserver/
+EXPECT /Run kiln --debug to see error logs[\s\S]*kiln doctor for details/
+KEY down
+SHOT mcp-navigated
+KEY enter
+WAITFOR /failed: command not found/ 20
+SHOT mcp-detail
+EXPECT /deadserver/
+EXPECT /failed: command not found: \/nonexistent\/kiln-qa-mcp-does-not-exist/
+KEY esc
+WAITFOR /Manage MCP servers/ 20
+SHOT mcp-back-to-list
+KEY esc
+SHOT mcp-closed
+EXPECT_NOT /panic|goroutine/

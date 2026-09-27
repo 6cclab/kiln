@@ -1,0 +1,10 @@
+# bash_background is neither "bash" nor "edit"/"write", so it hits the
+# generic RenderPermissionPrompt (permission_render.go), not the
+# 4-option bash prompt or the 3-option edit prompt.
+model: faux-1
+steps:
+  - tool_call: {name: bash_background, args: {command: "npm run dev"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Dev server started in the background."
+        usage: {input: 150, output: 15}

@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  # 400 and 401 are not in isRetriable's status set (internal/harness/
+  # retry.go: only 429/529/5xx), so each is a hard failure on its own
+  # turn: no retry countdown, straight to a final error block.
+  - error: {status: 400, type: invalid_request_error, message: "bad request shape"}
+  - error: {status: 401, type: authentication_error, message: "invalid api key"}

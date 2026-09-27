@@ -1,0 +1,26 @@
+# Esc-Esc on an empty, idle input opens the Rewind dialog; Esc again
+# cancels with no change (dialog_rewind.go's HandleKey "esc" case returns
+# closeIt=true with no onSelect call, so Outcome leaves nothing behind).
+@faux testdata/faux/qa/dialogs-rewind.yaml
+
+WAITFOR /describe a task/ 20
+TYPE run this shell command and report its output: echo turn-one
+KEY enter
+WAITFOR /First turn reply from kiln/ 20
+SHOT turn-one
+TYPE run this shell command and report its output: echo turn-two
+KEY enter
+WAITFOR /Second turn reply from kiln/ 20
+SHOT turn-two
+KEY esc esc
+WAITFOR /Restore the code and\/or conversation to the point before/ 20
+SHOT rewind-dialog-open
+KEY up
+SHOT rewind-navigated
+KEY esc
+WAITFOR /describe a task/ 20
+SHOT rewind-cancelled
+EXPECT /First turn reply from kiln/
+EXPECT /Second turn reply from kiln/
+EXPECT_NOT /Rewound to before/
+EXPECT_NOT /panic|goroutine/

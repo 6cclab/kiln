@@ -1,0 +1,11 @@
+model: faux-1
+steps:
+  # end_turn: true splits the two typed turns into two separate replies;
+  # see dialogs-agents.yaml for why this matters (without it "echo
+  # turn-two" silently hits "faux: script exhausted", and /rewind's
+  # "before: echo turn-two" step never lands on the actual second reply).
+  - text: "First turn reply from kiln."
+    usage: {input: 20, output: 10}
+    end_turn: true
+  - text: "Second turn reply from kiln."
+    usage: {input: 25, output: 12}

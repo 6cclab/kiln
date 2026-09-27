@@ -1,0 +1,10 @@
+# A tool name kiln has never registered: internal/harness/turn.go's
+# beginTool hits the "unknown tool" error path (line 681:
+# tool.Errorf("unknown tool %q", call.Name)).
+model: faux-1
+steps:
+  - tool_call: {name: frobnicate, args: {thing: "widget"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "That tool doesn't exist, so I'll stop here."
+        usage: {input: 150, output: 15}

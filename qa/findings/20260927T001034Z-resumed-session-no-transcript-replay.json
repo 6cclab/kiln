@@ -1,0 +1,30 @@
+{
+ "id": "20260927T001034Z-resumed-session-no-transcript-replay",
+ "found_at": "2026-09-27T00:10:34Z",
+ "scenario": "startup/continue-resumes",
+ "step": "continue-resumed",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Resumed/continued sessions never replay prior conversation onto the screen at startup",
+ "observed": "After 'kiln --continue' resumes a session seeded by a prior '-p \"add tests for the parser\"' turn, the welcome screen shows a completely empty transcript (qa/runs/c1/iterm-dark/startup-continue-resumes-120x40/01-continue-resumed.txt rows 5-37 are blank) — neither the prior user prompt 'add tests for the parser' nor its reply 'Hello from faux.' appear anywhere on screen.",
+ "expected": "docs/kiln-design-handoff and this scenario's own framing ('the prior turn's own text is expected to replay into the transcript') call for a resumed session's existing conversation to be redrawn on startup, the way replayTranscript() redraws it after a verbosity toggle or resize.",
+ "design_ref": "internal/tui/app.go's replayTranscript (~line 1982) is only invoked via msgReplayTranscript, which is sent from Ctrl+O toggle, fullscreen resize and a couple of other in-session events (app.go:457,614,986,1970) — never from RunInteractive's startup path in internal/cli/tui.go. A resumed session's FindEntries() output is never committed to the bridge at startup; only agent.ResumeIncomplete (internal/agent/session.go:261) runs there, and it only re-drives a stalled *incomplete* operation, not a normal completed prior turn. Grepped the whole internal/tui and internal/cli packages for any 'isNew'/'IsNew' concept gating an initial replay: none exists.",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/startup-continue-resumes-120x40/01-continue-resumed.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/chat.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_Continue_ReplaysPriorTranscript",
+  "after_evidence": [
+   "qa/runs/c6/iterm-dark/startup-continue-resumes-120x40"
+  ],
+  "updated_at": "2026-09-27T01:48:30Z"
+ }
+}

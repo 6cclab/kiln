@@ -1,0 +1,14 @@
+# A tool name kiln never registered: an error block naming the tool as
+# unknown (internal/harness/turn.go beginTool checks registration before
+# the active tool set, so this is not reported as a restriction).
+@faux testdata/faux/qa/tools-unknown.yaml
+@args --permission-mode dontAsk
+
+WAITFOR /describe a task/ 20
+TYPE call a tool that does not exist
+KEY enter
+WAITFOR /That tool doesn't exist/ 20
+SHOT unknown-tool
+EXPECT /unknown tool "frobnicate"/
+EXPECT_NOT /not in the active tool set/
+EXPECT_NOT /panic|goroutine/

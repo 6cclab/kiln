@@ -1,0 +1,21 @@
+# Long bash output collapses to collapsedResultLines=3 plus a
+# "… +N lines (ctrl+o to expand)" tail (bridge.go); ctrl+o toggles verbose
+# mode, which raises the shown-lines budget (bridge.go's toolOutputTokens
+# budget), so more of the 40 lines become visible.
+@faux testdata/faux/qa/tools-bash-long-output.yaml
+@args --permission-mode dontAsk
+
+WAITFOR /describe a task/ 20
+TYPE count to forty
+KEY enter
+WAITFOR /ctrl\+o to expand/ 20
+SHOT collapsed
+# First output line carries the "→ " lead glyph (not bare whitespace), so
+# match that instead of assuming a line with only "1" on it.
+EXPECT /→ 1\b/
+EXPECT /ctrl\+o to expand/
+EXPECT /\+37 lines/
+KEY ctrl+o
+WAIT 1
+SHOT expanded
+EXPECT /Showing detailed transcript/

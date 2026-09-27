@@ -1,0 +1,17 @@
+# @env clears OLLAMA_HOST: /login's CheckAuth treats a nonempty
+# OLLAMA_HOST in the real environment as "ollama configured" regardless of
+# the faux provider (internal/provider/registry.go CheckAuth, ollama's
+# AuthSpec{EnvVars: []string{"OLLAMA_HOST"}}), so this scenario was
+# non-deterministic on any machine that has OLLAMA_HOST set for real local
+# use.
+@faux testdata/faux/qa/commands-baseline.yaml
+@env OLLAMA_HOST=
+
+WAITFOR /describe a task/ 20
+TYPE /login
+KEY enter
+WAITFOR /Not logged in to any provider\./ 20
+SHOT login
+EXPECT /Not logged in to any provider\./
+EXPECT /Log in with: kiln login <provider>/
+EXPECT_NOT /panic|goroutine/

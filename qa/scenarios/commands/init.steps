@@ -1,0 +1,13 @@
+# /init has no direct Output: it sends a fixed Prompt to the model
+# (session_commands.go), so what shows on screen is the echoed command
+# followed by whatever the (faux) model replies.
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /init
+KEY enter
+WAITFOR /Sure, working on it/ 20
+SHOT init
+EXPECT /\/init/
+EXPECT /Sure, working on it/
+EXPECT_NOT /panic|goroutine/

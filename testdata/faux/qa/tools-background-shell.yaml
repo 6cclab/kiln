@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash_background, args: {command: "sleep 30"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Started it in the background."
+        usage: {input: 200, output: 20}

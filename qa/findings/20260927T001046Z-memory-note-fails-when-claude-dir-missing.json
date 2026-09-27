@@ -1,0 +1,29 @@
+{
+ "id": "20260927T001046Z-memory-note-fails-when-claude-dir-missing",
+ "found_at": "2026-09-27T00:10:46Z",
+ "scenario": "input/bang-and-memory",
+ "step": "memory-note",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "'#remember ...' memory note crashes with a raw filesystem error when ~/.claude doesn't exist yet",
+ "observed": "Typing '#remember to run tests' and pressing Enter (no project CLAUDE.md present) shows: '# open /tmp/kiln-qa-01kp6mpe/home/.claude/CLAUDE.md: no such file or directory' instead of a confirmation, and the note is not saved (qa/runs/c1/iterm-dark/input-bang-and-memory-120x40/02-waitfor-timeout-line18.png).",
+ "expected": "The memory hint row itself promises 'applies from the next session', i.e. a successful save; internal/tui/inputmodes.go's AddMemory should create the note in ~/.claude/CLAUDE.md even on a machine/HOME that has never had a ~/.claude directory before.",
+ "design_ref": "internal/claude/memory/memory.go:191-207 AddMemory opens path with os.O_APPEND|os.O_CREATE|os.O_WRONLY, which creates the *file* but not missing parent directories — os.OpenFile fails with ENOENT when ~/.claude/ itself does not exist, and that raw error string is what gets shown to the user.",
+ "evidence": [
+  "qa/runs/c1/iterm-dark/input-bang-and-memory-120x40/02-waitfor-timeout-line18.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/memory/memory.go"
+  ],
+  "regression_test": "TestAddMemoryCreatesMissingClaudeDir",
+  "after_evidence": [
+   "qa/runs/c5/iterm-dark/input-bang-and-memory-120x40"
+  ],
+  "updated_at": "2026-09-27T01:01:52Z"
+ }
+}

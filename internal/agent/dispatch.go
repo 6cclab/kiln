@@ -318,13 +318,50 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	var toolCalls int
 	var text string
 
-	unsubTool := started.Harness.Events().On(harness.EventToolStart, func(ev harness.Event) {
+	unsubToolStart := started.Harness.Events().On(harness.EventToolStart, func(ev harness.Event) {
 		toolCalls++
+	})
+	defer unsubToolStart()
+
+	// The panel's "last action" line (internal/tui/subagents.go) wants a
+	// finished call's primary argument and a short result summary, not
+	// just the tool's name — neither is known until the call ends, so this
+	// forwards EventToolEnd instead of EventToolStart (which the "tool"
+	// SubagentEvent used to fire on, before the panel needed anything more
+	// than the bare tool name).
+	unsubToolEnd := started.Harness.Events().On(harness.EventToolEnd, func(ev harness.Event) {
 		if d.OnEvent != nil {
-			d.OnEvent(SubagentEvent{Kind: SubagentEventTool, Agent: def.Name, ID: req.ToolCallID, ToolName: ev.ToolName, Depth: depth})
+			d.OnEvent(SubagentEvent{
+				Kind:       SubagentEventTool,
+				Agent:      def.Name,
+				ID:         req.ToolCallID,
+				ToolName:   ev.ToolName,
+				ToolArgs:   ev.ToolArgs,
+				ToolResult: ev.ToolResult,
+				Depth:      depth,
+			})
 		}
 	})
-	defer unsubTool()
+	defer unsubToolEnd()
+
+	// The subagent's own harness emits EventUsage once per model turn with
+	// the session's running totals (internal/harness/turn.go). Forwarding
+	// it lets the panel show a live token figure for a running row, which
+	// the design requires; without it a row's tokens column stays empty
+	// until Done.
+	unsubUsage := started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
+		if ev.UsageTotals == nil || d.OnEvent == nil {
+			return
+		}
+		d.OnEvent(SubagentEvent{
+			Kind:  SubagentEventUsage,
+			Agent: def.Name,
+			ID:    req.ToolCallID,
+			Depth: depth,
+			Usage: *ev.UsageTotals,
+		})
+	})
+	defer unsubUsage()
 
 	unsubMsg := started.Harness.Events().On(harness.EventMessageEnd, func(ev harness.Event) {
 		if ev.Message == nil {
@@ -381,6 +418,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			Chars:     len(text),
 			Usage:     usage,
 			Depth:     depth,
+			Text:      text,
 		})
 	}
 	return DispatchResult{Text: text, ToolCalls: toolCalls, Chars: len(text), Model: modelLabel, Usage: usage}, nil

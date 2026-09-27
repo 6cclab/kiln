@@ -1,0 +1,15 @@
+@faux testdata/faux/qa/commands-baseline.yaml
+@fixture testdata/behaviour/qa/commands-fixture
+
+WAITFOR /describe a task/ 20
+TYPE /doctor
+KEY enter
+WAITFOR /resident, strategy/ 20
+SHOT doctor
+EXPECT /model\s+faux\/faux-1/
+EXPECT /tier\s+/
+EXPECT /hooks\s+\d+ across \d+ events/
+# 2, not 1: kiln always injects a built-in "general-purpose" agent
+# (internal/agent/subagent.go) alongside the fixture's reader.md.
+EXPECT /agents\s+2 available/
+EXPECT_NOT /panic|goroutine/

@@ -136,6 +136,35 @@ func TestAddMemoryFallsBackToUserFile(t *testing.T) {
 	}
 }
 
+func TestAddMemoryCreatesMissingClaudeDir(t *testing.T) {
+	// A fresh HOME (or a HOME whose ~/.claude was never created) must not
+	// crash AddMemory with a raw ENOENT — the parent directory needs to be
+	// created before the file is opened.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir() // no CLAUDE.md here, and no ~/.claude either
+
+	if _, err := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
+		t.Fatalf("test setup: expected ~/.claude to not exist yet, stat err = %v", err)
+	}
+
+	path, err := AddMemory("remember this", cwd)
+	if err != nil {
+		t.Fatalf("AddMemory returned error on missing ~/.claude dir: %v", err)
+	}
+	want := filepath.Join(home, ".claude", "CLAUDE.md")
+	if path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	data, err := os.ReadFile(want)
+	if err != nil {
+		t.Fatalf("note file not written: %v", err)
+	}
+	if !strings.Contains(string(data), "remember this") {
+		t.Errorf("note not appended: %s", data)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

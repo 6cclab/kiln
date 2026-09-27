@@ -1,0 +1,11 @@
+model: faux-1
+steps:
+  - text: "I'll look at the auth middleware, the upload route and the redis mock together."
+  - tool_calls:
+      - {name: read, args: {path: src/middleware/auth.ts}, id: tc1}
+      - {name: read, args: {path: src/routes/upload.ts}, id: tc2}
+      - {name: read, args: {path: test/helpers/redisMock.ts}, id: tc3}
+  - on_tool_results: [tc1, tc2, tc3]
+    then:
+      - text: "All three read. Auth checks for an Authorization header, the route wires auth then multer then the handler, and the redis mock only stubs get/set/del."
+        usage: {input: 400, output: 40}

@@ -1,0 +1,22 @@
+# A single `task` dispatch: the subagents panel appears live while it
+# runs, then freezes into the transcript once it finishes (subagents.go).
+@faux testdata/faux/qa/tools-task-single.yaml
+@fixture testdata/behaviour/design
+@args --permission-mode acceptEdits
+
+WAITFOR /describe a task/ 20
+TYPE survey the redis mock with a subagent
+KEY enter
+WAITFOR /subagents running in parallel|subagents finished/ 20
+SHOT subagent-live
+EXPECT /subagents/
+# A single dispatch of a type keeps that type's plain short name
+# (subagents.go's assignDisplayNamesLocked): "general-purpose" -> its
+# first word, "general" — 7 columns, fitting the 8-column name slot
+# (subagentNameWidth) without truncation. The "-N" index only appears
+# when several dispatches share a type (task-concurrent.steps).
+EXPECT /general/
+WAITFOR /Confirmed: the mock is missing/ 20
+SHOT subagent-done
+EXPECT /1 subagents finished/
+EXPECT_NOT /panic|goroutine/

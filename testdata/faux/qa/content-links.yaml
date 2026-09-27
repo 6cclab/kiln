@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "See the [rate limiting RFC](https://example.invalid/rfc-6585) for the 429 status code."
+    usage: {input: 20, output: 24}

@@ -1,0 +1,37 @@
+# RESIZE while the subagents panel shows two live rows.
+# testdata/faux/qa/resize-subagents.yaml dispatches two concurrent `task`
+# calls and holds both replies behind a 3s delay so they are still
+# "running" when the resize lands (see test/e2e/tui_gap_test.go's
+# TestTUI_ResizeDuringLiveSubagentRow and testdata/faux/task_concurrent_tui.yaml
+# for the fixture/pattern this is adapted from, driven there through the
+# in-process PTY harness instead of a real terminal — that fixture's 400ms
+# delay is far shorter than one real-terminal drive.py poll round-trip, so
+# every observed run here found both subagents already finished by the
+# time WAITFOR looked; see the qa yaml's own comment). --permission-mode
+# dontAsk avoids an unrelated approval prompt for the `task` calls
+# themselves, which is not what this scenario is about.
+@faux testdata/faux/qa/resize-subagents.yaml
+@fixture testdata/behaviour/qa/model-roles-fast-heavy
+@size 120x40
+@args --permission-mode dontAsk
+
+WAITFOR /describe a task/ 20
+TYPE dispatch two tasks
+KEY enter
+WAITFOR /2 subagents running in parallel/ 20
+SHOT subagents-running
+EXPECT /look something up/
+EXPECT /do the fast lookup/
+
+# The 3s delay on both subagents' replies should still be running across
+# a real window resize (~0.6s), but this SHOT is deliberately not gated on
+# still being in the "running" state, only on not crashing — a slow
+# driver round-trip could still land after both finish.
+RESIZE 90 30
+SHOT subagents-after-resize
+EXPECT_NOT /panic|goroutine/
+
+WAITFOR /2 subagents finished/ 20
+SHOT subagents-finished
+EXPECT /2 subagents finished/
+EXPECT_NOT /panic|goroutine/

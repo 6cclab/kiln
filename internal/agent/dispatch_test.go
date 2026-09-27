@@ -633,3 +633,51 @@ func containsAll(s string, subs ...string) bool {
 	}
 	return true
 }
+
+// TestDispatchForwardsRunningUsage covers the running-token figure the
+// design gives a subagent row that has not finished yet
+// (docs/kiln-design-handoff/Terminal.dc.html lines 187-189): the panel
+// can only fill that column if Dispatch forwards the subagent session's
+// usage before Done, so a SubagentEventUsage must arrive with a nonzero
+// total and must describe the subagent's own session rather than the
+// parent's.
+func TestDispatchForwardsRunningUsage(t *testing.T) {
+	d, _, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - text: \"hi\"\n", nil)
+
+	var events []SubagentEvent
+	d.OnEvent = func(ev SubagentEvent) { events = append(events, ev) }
+
+	if _, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "general-purpose", Description: "x", Prompt: "go"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	var usage []SubagentEvent
+	doneAt := -1
+	for i, ev := range events {
+		switch ev.Kind {
+		case SubagentEventUsage:
+			usage = append(usage, ev)
+		case SubagentEventDone:
+			doneAt = i
+		}
+	}
+	if len(usage) == 0 {
+		t.Fatalf("no SubagentEventUsage was emitted; events = %+v", kindsOf(events))
+	}
+	if usage[0].Usage.TotalTokens <= 0 {
+		t.Errorf("SubagentEventUsage carried TotalTokens = %d, want > 0", usage[0].Usage.TotalTokens)
+	}
+	for i, ev := range events {
+		if ev.Kind == SubagentEventUsage && doneAt >= 0 && i > doneAt {
+			t.Errorf("SubagentEventUsage at index %d arrived after Done at %d", i, doneAt)
+		}
+	}
+}
+
+func kindsOf(events []SubagentEvent) []SubagentEventKind {
+	out := make([]SubagentEventKind, 0, len(events))
+	for _, ev := range events {
+		out = append(out, ev.Kind)
+	}
+	return out
+}

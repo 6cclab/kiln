@@ -110,7 +110,15 @@ func (r *Repo) Create(opts CreateOptions) (*Storage, Metadata, error) {
 			return nil, Metadata{}, err
 		}
 	}
-	dir := filepath.Join(r.Root, DirectoryName(opts.Cwd))
+	// Store (and bucket) the symlink-resolved cwd, not opts.Cwd verbatim:
+	// this is what keeps a project reached via a symlinked path (e.g.
+	// macOS's /tmp -> /private/tmp) from splitting into a second, separate
+	// project every time it is reached via a different spelling. Older
+	// sessions recorded before this still carry their original,
+	// unresolved cwd; List's resolved-to-resolved comparison is what keeps
+	// those findable rather than requiring every session to be rewritten.
+	resolvedCwd := resolveCwd(opts.Cwd)
+	dir := filepath.Join(r.Root, DirectoryName(resolvedCwd))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, Metadata{}, fmt.Errorf("jsonl: failed to create sessions directory %s: %w", dir, err)
 	}
@@ -124,7 +132,7 @@ func (r *Repo) Create(opts CreateOptions) (*Storage, Metadata, error) {
 		ID:              id,
 		StorageVersion:  session.StorageVersion,
 		CreatedAt:       createdAt,
-		Cwd:             opts.Cwd,
+		Cwd:             resolvedCwd,
 		ParentSessionID: opts.ParentSessionID,
 	}
 	// Create writes only the header; a lane's initial pi.branch.tip /
@@ -178,8 +186,36 @@ func (r *Repo) Open(path string) (*Storage, Metadata, error) {
 	return storage, metadataFromHeader(storage.Header(), path, info.ModTime().UnixMilli()), nil
 }
 
+// resolveCwd returns cwd's symlink-resolved form so that two spellings of
+// the same directory (e.g. /tmp/x and its macOS-canonical /private/tmp/x)
+// compare equal. Resolution can fail — the directory may no longer exist,
+// or cwd may already be gone — so on error this falls back to the merely
+// cleaned path rather than propagating the error: a session-matching
+// helper must always return something comparable, never bubble up a
+// filesystem error for what is ultimately a best-effort match. Empty stays
+// empty (List's "no filter" sentinel).
+func resolveCwd(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		return resolved
+	}
+	return filepath.Clean(cwd)
+}
+
 // List returns every session under Root (optionally filtered to one cwd),
 // newest createdAt first.
+//
+// A cwd filter compares resolved-to-resolved (resolveCwd on both the
+// query and each candidate's stored header.Cwd), not by exact string
+// equality: this is what lets a session recorded via one spelling of a
+// directory (e.g. an older session's unresolved /tmp/x, from before Create
+// started storing the resolved path) still be found when queried via
+// another spelling (/private/tmp/x). Because a stored cwd's directory
+// bucket (DirectoryName) is keyed off its own literal string, sessions for
+// the "same" resolved directory can live in two buckets — the resolved
+// spelling's and the queried spelling's — and both are scanned.
 func (r *Repo) List(cwd string) ([]Metadata, error) {
 	if _, err := os.Stat(r.Root); err != nil {
 		if os.IsNotExist(err) {
@@ -187,10 +223,9 @@ func (r *Repo) List(cwd string) ([]Metadata, error) {
 		}
 		return nil, err
 	}
+	resolvedQuery := resolveCwd(cwd)
 	var dirs []string
-	if cwd != "" {
-		dirs = []string{filepath.Join(r.Root, DirectoryName(cwd))}
-	} else {
+	if cwd == "" {
 		entries, err := os.ReadDir(r.Root)
 		if err != nil {
 			return nil, err
@@ -199,6 +234,16 @@ func (r *Repo) List(cwd string) ([]Metadata, error) {
 			if e.IsDir() {
 				dirs = append(dirs, filepath.Join(r.Root, e.Name()))
 			}
+		}
+	} else {
+		// A project's sessions live in the resolved spelling's bucket
+		// (Create stores that) and, for sessions recorded before Create
+		// resolved symlinks, in the bucket of the spelling they were made
+		// under. Scanning just those two keeps List proportional to the
+		// project rather than to every session on the machine.
+		dirs = append(dirs, filepath.Join(r.Root, DirectoryName(resolvedQuery)))
+		if lit := DirectoryName(cwd); lit != DirectoryName(resolvedQuery) {
+			dirs = append(dirs, filepath.Join(r.Root, lit))
 		}
 	}
 	var out []Metadata
@@ -219,7 +264,7 @@ func (r *Repo) List(cwd string) ([]Metadata, error) {
 			if err != nil {
 				continue // matches repo.js: skip files whose header fails to parse
 			}
-			if cwd == "" || meta.Cwd == cwd {
+			if cwd == "" || resolveCwd(meta.Cwd) == resolvedQuery {
 				out = append(out, meta)
 			}
 		}

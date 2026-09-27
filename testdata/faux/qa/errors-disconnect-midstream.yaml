@@ -1,0 +1,21 @@
+model: faux-1
+steps:
+  # disconnect_after cuts the stream partway through this text (a
+  # text/disconnect_after step always ends its own turn — script.go
+  # flattenSteps), so the retry loop's first attempt sees a
+  # provider.StreamInterrupted and retries; the next request lands on the
+  # following step, a clean full reply.
+  # chunk_delay slows the 8-byte SSE chunks enough (~200ms apart) that the
+  # partial "Streaming a reply" text and the ~1s retry countdown are both
+  # visible to a screen poller running every 0.4s; without it the whole
+  # cut/retry/reconnect cycle completes in well under one poll interval and
+  # WAITFOR never observes the intermediate text at all.
+  # disconnect_after counts raw SSE body bytes, framing included: the
+  # message_start event alone is ~236 bytes, so a small value cuts before
+  # any text is sent. 967 bytes ends the fifth delta ("...will get cut
+  # befo"), measured by curling this script with the cut removed.
+  - text: "Streaming a reply that will get cut before it finishes rendering completely."
+    chunk_delay: 200ms
+    disconnect_after: 967
+  - text: "Reconnected, and here is the rest of the answer in full."
+    usage: {input: 40, output: 12}

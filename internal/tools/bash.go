@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/andrepato/harness/internal/execenv"
@@ -156,21 +157,15 @@ func BashTool(env *execenv.Env) *tool.Tool {
 			if execErr != nil {
 				status := execErr.Error()
 				if result.TimedOut {
-					status = fmt.Sprintf("Command timed out after %v seconds", timeout.Seconds())
+					status = fmt.Sprintf("Command timed out after %s", formatSeconds(timeout.Seconds()))
 				} else if ctx.Err() != nil {
 					status = "Command aborted"
 				}
-				text := status
-				if outputText != "" {
-					text = outputText + "\n\n" + status
-				}
+				text := appendStatus(outputText, status)
 				return tool.Result{Content: msg.Blocks{msg.Text(text)}, Details: detailsJSON, IsError: true}, nil
 			}
 			if result.ExitCode != 0 {
-				text := fmt.Sprintf("Command exited with code %d", result.ExitCode)
-				if outputText != "" {
-					text = outputText + "\n\n" + text
-				}
+				text := appendStatus(outputText, fmt.Sprintf("Command exited with code %d", result.ExitCode))
 				return tool.Result{Content: msg.Blocks{msg.Text(text)}, Details: detailsJSON, IsError: true}, nil
 			}
 			if outputText == "" {
@@ -179,4 +174,27 @@ func BashTool(env *execenv.Env) *tool.Tool {
 			return tool.Result{Content: msg.Blocks{msg.Text(outputText)}, Details: detailsJSON}, nil
 		},
 	}
+}
+
+// appendStatus joins a status line (a timeout or exit-code message) onto
+// the command's output. outputText's own trailing newline(s) are trimmed
+// first so the result has exactly one blank line between output and
+// status, not two — two blank lines plus the output can exhaust a
+// collapsed transcript block's line budget before the status line (the
+// most important line on a failure) is ever reached.
+func appendStatus(outputText, status string) string {
+	outputText = strings.TrimRight(outputText, "\n")
+	if outputText == "" {
+		return status
+	}
+	return outputText + "\n\n" + status
+}
+
+// formatSeconds renders a duration in seconds with correct pluralization,
+// e.g. "1 second" or "5 seconds".
+func formatSeconds(seconds float64) string {
+	if seconds == 1 {
+		return "1 second"
+	}
+	return fmt.Sprintf("%v seconds", seconds)
 }

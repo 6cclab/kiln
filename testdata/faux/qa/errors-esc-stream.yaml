@@ -1,0 +1,8 @@
+model: faux-1
+steps:
+  # delay holds the response back before any of it is written (script.go
+  # doc: "sleeps for the given duration before the turn's response is
+  # written"), so pressing esc partway through the delay interrupts a
+  # busy turn before any text has streamed in.
+  - text: "This reply is held back long enough to press escape before any of it arrives."
+    delay: 3s
