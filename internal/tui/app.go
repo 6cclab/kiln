@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
@@ -2058,6 +2059,16 @@ func (m Model) liveTail(width int) []string {
 		// or 3", then the status line. Plan approval uses the same
 		// block anatomy, so it gets no chrome of its own here.
 		lines = append(lines, m.prompt.Render(width)...)
+		lines = append(lines, "")
+	}
+
+	// The busy line is set off from the transcript by one blank row, as
+	// every block is from the next (the design's 14px block gap: the
+	// transcript's bottom padding plus the busy row's own). Only the
+	// permission prompt used to end with one, so the busy line sat flush
+	// under streamed text and tool blocks everywhere else.
+	if len(m.spinner.Render(width, time.Time{})) > 0 &&
+		(len(lines) == 0 || strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) != "") {
 		lines = append(lines, "")
 	}
 

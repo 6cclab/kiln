@@ -10,6 +10,7 @@
              [d]→ starting…[/]                                                                            
    [fg=#e9a64b]scout-N [/]  [fg=#ece4d4]Map the middleware chain in src/server[/]                             [fg=#3f372c]━━━━━━━━━━[/]          
              [d]→ starting…[/]                                                                            
+                                                                                                    
   [fg=#e9a64b]◐[/] [fg=#e9a64b]Running 2 subagents…[/]  [fg=#a39781]0s · 150 tokens[/]                                             [fg=#a39781]esc to stop[/]   
   [fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────[/]  
   [fg=#e9a64b]›[/]  [fg=#7d7262]queue a follow-up, or esc to stop[/]                                                              

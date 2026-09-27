@@ -1,6 +1,7 @@
     23 + router.post('/upload', requireAuth, rateLimit, upload.single('file'), handleUpload);
     24
     25   export default router;
+
   ◐ Editing upload.ts…  1s · 150 tokens                                               esc to stop
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ›  queue a follow-up, or esc to stop

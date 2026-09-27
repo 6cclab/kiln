@@ -10,6 +10,7 @@
              → starting…
    scout-N   Map the middleware chain in src/server                             ━━━━━━━━━━
              → starting…
+
   ◐ Running 2 subagents…  0s · 150 tokens                                             esc to stop
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ›  queue a follow-up, or esc to stop
