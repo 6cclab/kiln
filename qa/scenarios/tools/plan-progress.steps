@@ -18,16 +18,12 @@ WAITFOR /▸\s+read the upload handler/ 20
 SHOT plan-first-step
 EXPECT /▸\s+read the upload handler/
 EXPECT /○\s+add the rate limiter/
-WAITFOR /▸\s+add the rate limiter/ 20
+# One WAITFOR per state: separate EXPECTs run about a second later and can
+# land on the next state.
+WAITFOR /✓\s+read the upload handler\s+▸\s+add the rate limiter\s+○\s+wire it into the route/ 20
 SHOT plan-second-step
-EXPECT /✓\s+read the upload handler/
-EXPECT /▸\s+add the rate limiter/
-EXPECT /○\s+wire it into the route/
-WAITFOR /▸\s+wire it into the route/ 20
+WAITFOR /✓\s+read the upload handler\s+✓\s+add the rate limiter\s+▸\s+wire it into the route/ 20
 SHOT plan-third-step
-EXPECT /✓\s+read the upload handler/
-EXPECT /✓\s+add the rate limiter/
-EXPECT /▸\s+wire it into the route/
 WAITFOR /Plan advanced through all three steps/ 20
 SHOT plan-done
 EXPECT /✓\s+read the upload handler/

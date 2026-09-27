@@ -1,0 +1,29 @@
+{
+ "id": "20260927T034447Z-inline-code-fixture-no-backticks",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/content/inline-code.steps",
+ "step": null,
+ "terminals": [
+  "iterm-light"
+ ],
+ "category": "bug",
+ "severity": "low",
+ "title": "inline-code scenario fixture contains no inline code",
+ "observed": "testdata/faux/qa/content-inline-code.yaml's reply had no backticks, so the scenario never exercised inline code; the reply rendered as plain prose.",
+ "expected": "The fixture wraps limited(count) in backticks so the amber inline-code style is on screen.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-light/content-inline-code-120x40/02-reply.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "testdata/faux/qa/content-inline-code.yaml"
+  ],
+  "regression_test": "qa/scenarios/content/inline-code.steps",
+  "after_evidence": [
+   "qa/runs/c9/iterm-light/content-inline-code-120x40/02-reply.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

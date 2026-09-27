@@ -1,0 +1,30 @@
+{
+ "id": "20260927T034447Z-plan-done-text-default-fg",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/tools/plan-progress.steps",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "medium",
+ "title": "Done plan items lose the dim colour after their first character",
+ "observed": "Muted(Strike(s)): lipgloss strikes one cell at a time with a reset after each, cancelling the outer dim colour, so the rest of the text drew in the terminal default (sampled ~rgb 202,204,202 vs dim 152,141,117).",
+ "expected": "Done items dim with a line through, every character (Terminal.dc.html plan: c:C.dim, line-through).",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-dark/tools-plan-progress-120x40/04-plan-done.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/theme.go",
+   "internal/tui/plan.go"
+  ],
+  "regression_test": "TestRenderPlanDoneItemDimThroughout,TestRenderGolden_Plan*",
+  "after_evidence": [
+   "qa/runs/c10/iterm-dark/tools-plan-progress-120x40/04-plan-done.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

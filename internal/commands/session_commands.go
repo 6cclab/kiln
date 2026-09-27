@@ -100,7 +100,7 @@ func truncateRunes(s string, max int) string {
 // session, tools, model and gate, effectively rebuilding everything the
 // process holds. Doing that in place would leave half-torn-down state on
 // any failure, so the session id is printed and the restart flag named
-// instead. "harness --resume <id>" is the supported path.
+// instead. "kiln --resume <id>" is the supported path.
 func SessionCommands(deps SessionCommandDeps) Source {
 	cmds := []Command{
 		{
@@ -138,7 +138,7 @@ func SessionCommands(deps SessionCommandDeps) Source {
 					return Result{Output: []string{
 						"Resuming replaces the session, tools and model, so it happens at startup:",
 						"",
-						fmt.Sprintf("  harness --resume %s", args),
+						fmt.Sprintf("  kiln --resume %s", args),
 					}}, nil
 				}
 				if deps.Repo == nil {
@@ -160,7 +160,7 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				for _, m := range top {
 					lines = append(lines, fmt.Sprintf("  %s  %8s", m.ID, ago(m.ModifiedAt)))
 				}
-				lines = append(lines, "", "Resume: harness --resume <id>")
+				lines = append(lines, "", "Resume: kiln --resume <id>")
 				return Result{Output: lines}, nil
 			},
 		},

@@ -103,9 +103,10 @@ func buildStyle(plain bool) glansi.StyleConfig {
 		Heading: glansi.StyleBlock{
 			StylePrimitive: glansi.StylePrimitive{Bold: boolPtr(true), BlockSuffix: "\n"},
 		},
-		// link: (t) => cyan(t), linkUrl: (t) => dim(t)
-		Link:     glansi.StylePrimitive{Color: strPtr(colorCyan)},
-		LinkText: glansi.StylePrimitive{Faint: boolPtr(true)},
+		// link: (t) => cyan(t), linkUrl: (t) => dim(t). glamour's LinkText
+		// styles the label and Link the URL printed after it.
+		LinkText: glansi.StylePrimitive{Color: strPtr(colorCyan)},
+		Link:     glansi.StylePrimitive{Color: strPtr(tx.Dim)},
 		// code: (t) => yellow(t) — inline code.
 		Code: glansi.StyleBlock{
 			StylePrimitive: glansi.StylePrimitive{Color: strPtr(colorYellow)},

@@ -233,3 +233,31 @@ func TestMarkdownNoLeadingBlankRow(t *testing.T) {
 		}
 	}
 }
+
+// TestMarkdownLinkLabelAccentURLDim pins the design's link mapping (link
+// label cyan, URL dim). glamour's LinkText styles the label and Link the
+// URL; they were swapped, so a real terminal showed an unstyled label next
+// to a blue URL (qa/findings *link-label-url-styles-swapped).
+func TestMarkdownLinkLabelAccentURLDim(t *testing.T) {
+	prev := enabled
+	t.Cleanup(func() { SetColorEnabled(prev) })
+	SetColorEnabled(true)
+	tx := CurrentTextHex()
+	joined := strings.Join(NewMarkdownRenderer(120, false).Render("See the [rate RFC](https://example.invalid/rfc) now."), "\n")
+	sgr := func(hex string) string {
+		var r, g, b int
+		fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b)
+		return fmt.Sprintf("38;2;%d;%d;%dm", r, g, b)
+	}
+	label := strings.Index(joined, "rate RFC")
+	url := strings.LastIndex(joined, "https://example.invalid/rfc")
+	if label < 0 || url < 0 {
+		t.Fatalf("link text missing: %q", joined)
+	}
+	if !strings.Contains(joined[:label], sgr(tx.Blue)) {
+		t.Errorf("link label not in the accent (blue) colour: %q", joined)
+	}
+	if !strings.Contains(joined[label:url], sgr(tx.Dim)) {
+		t.Errorf("link URL not in the dim colour: %q", joined)
+	}
+}

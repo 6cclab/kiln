@@ -1,0 +1,29 @@
+{
+ "id": "20260927T034447Z-error-line-clipped",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/errors/hard-400-401.steps",
+ "step": null,
+ "terminals": [
+  "iterm-light"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Long error messages clipped at the terminal edge with no ellipsis",
+ "observed": "RenderError emitted each message line unwrapped, so a provider error with a raw JSON body ran off the right edge: '...\"type\":\"authentication_error\"},\"type\":\"' then nothing.",
+ "expected": "Error text wraps to the content width; nothing is lost.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-light/errors-hard-400-401-120x40/03-auth-error.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestRenderErrorWrapsLongMessage",
+  "after_evidence": [
+   "qa/runs/c10/iterm-light/errors-hard-400-401-120x40/03-auth-error.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

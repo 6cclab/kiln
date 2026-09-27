@@ -646,7 +646,9 @@ func PickLabel(seed int) string {
 // RenderError renders an error message: red, visually distinct from
 // ordinary tool output.
 func RenderError(message string) []string {
-	lines := strings.Split(strings.TrimRight(message, "\n"), "\n")
+	// Wrapped, never clipped: provider errors carry a raw response body
+	// whose tail (the error type) is the part worth reading.
+	lines := wrapMultiline(strings.TrimRight(message, "\n"), ruleWidth())
 	out := make([]string, 0, len(lines)+2)
 	// The design's "error" block: a red label rule, then the message in
 	// red, one blank row above like every other block.

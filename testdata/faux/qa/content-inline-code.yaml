@@ -1,4 +1,4 @@
 model: faux-1
 steps:
-  - text: "Call the limited(count) helper before writing the response."
+  - text: "Call the `limited(count)` helper before writing the response."
     usage: {input: 20, output: 24}

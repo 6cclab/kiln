@@ -13,5 +13,5 @@ KEY enter
 WAITFOR /Not logged in to any provider\./ 20
 SHOT login
 EXPECT /Not logged in to any provider\./
-EXPECT /Log in with: harness login <provider>/
+EXPECT /Log in with: kiln login <provider>/
 EXPECT_NOT /panic|goroutine/

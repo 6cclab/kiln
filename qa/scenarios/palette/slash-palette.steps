@@ -35,7 +35,10 @@ KEY ctrl+u
 TYPE /model
 KEY tab
 SHOT palette-tab-completed
-EXPECT /\/model /
+# Tab completes to "/model " with a trailing space. Terminal.app's text
+# capture drops trailing spaces, so a marker typed after tab proves it.
+TYPE X
+EXPECT /\/model X/
 EXPECT_NOT /current: faux\/faux-1/
 KEY ctrl+u
 TYPE /model

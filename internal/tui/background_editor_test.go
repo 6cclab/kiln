@@ -55,3 +55,35 @@ func TestBackgroundColorMsg_RebuildsEditorStyles(t *testing.T) {
 		t.Errorf("editor's top rule after SetTerminalBackground = %q, want %q (the theme package's *current* RuleStrong token, not a stale design one)", after, want)
 	}
 }
+
+// TestBannerRows_StyledAfterBackgroundReply pins why Config.BannerFunc
+// exists: the banner is styled when it is committed, after the terminal
+// reported a light background, not with the dark design ink it would have
+// had at startup (a "Recent sessions" title drew near-invisible on light,
+// qa/findings *banner-ink-invisible-on-light).
+func TestBannerRows_StyledAfterBackgroundReply(t *testing.T) {
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		resetSurfaceTokensToDesign()
+		resetTextTokensToDesign()
+	})
+	SetColorEnabled(true)
+	resetSurfaceTokensToDesign()
+	resetTextTokensToDesign()
+
+	m := newTestModel()
+	m.cfg.Banner = []string{Ink("seed a prior session")}
+	m.cfg.BannerFunc = func() []string { return []string{Ink("seed a prior session")} }
+	startup := m.cfg.Banner[0]
+
+	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{R: 0xf7, G: 0xf4, B: 0xee, A: 0xff}})
+	m2 := next.(Model)
+	got := m2.bannerRows()[0]
+	if got == startup {
+		t.Fatalf("banner row kept its startup styling after a light background reply: %q", got)
+	}
+	if want := Ink("seed a prior session"); !strings.Contains(got, want) {
+		t.Errorf("banner row = %q, want the light-background ink %q", got, want)
+	}
+}

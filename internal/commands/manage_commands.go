@@ -110,15 +110,19 @@ func permissionsModal(deps ManageDeps) *ModalSpec {
 		items = append(items, Item{Value: "session:" + grant, Label: grant, Description: "session only"})
 	}
 
-	return &ModalSpec{
-		Title: "Permissions",
-		Kind:  "permissions",
-		Header: []string{
+	header := func() []string {
+		return []string{
 			fmt.Sprintf("mode       %s", deps.Gate.Mode()),
 			fmt.Sprintf("workspace  %s", strings.Join(deps.Gate.Roots(), ", ")),
 			fmt.Sprintf("settings   %s", joinOrNone(deps.SettingsLoadedFrom)),
-		},
-		Items: items,
+		}
+	}
+	return &ModalSpec{
+		Title:         "Permissions",
+		Kind:          "permissions",
+		Header:        header(),
+		RefreshHeader: header,
+		Items:         items,
 		Actions: []Action{
 			{Key: "m", Label: "cycle mode"},
 			{Key: "d", Label: "delete rule"},

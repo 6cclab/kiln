@@ -1,0 +1,32 @@
+{
+ "id": "20260927T034447Z-permissions-mode-row-stale",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/dialogs/permissions-dialog.steps",
+ "step": null,
+ "terminals": [
+  "iterm-light"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "/permissions panel keeps showing the old mode after 'm' cycles it",
+ "observed": "After 'm', the status line said 'mode is now acceptEdits' but the header row still read 'mode       manual' through later frames; the footer was not refreshed either.",
+ "expected": "The header row and the footer follow the mode change.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-light/dialogs-permissions-dialog-120x40/06-permissions-mode-cycled.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/registry.go",
+   "internal/commands/manage_commands.go",
+   "internal/tui/dialog.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestCommandDialog_ActRefreshesHeader,TestManagePermissionsModalCyclesMode",
+  "after_evidence": [
+   "qa/runs/c9/iterm-light/dialogs-permissions-dialog-120x40/06-permissions-mode-cycled.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

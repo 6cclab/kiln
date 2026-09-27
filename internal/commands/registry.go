@@ -100,6 +100,10 @@ type ModalSpec struct {
 	// Act runs when an Action's key is pressed against a selected item's
 	// value. It returns a short status message to show, or an error.
 	Act func(key, value string) (string, error)
+	// RefreshHeader, when set, rebuilds Header after a Select or Act
+	// result lands, so a header row that reports state an action changed
+	// (/permissions' "mode" row) never goes stale while the panel is open.
+	RefreshHeader func() []string
 }
 
 // Result is what a command's Run returns.

@@ -33,6 +33,14 @@ func TestManagePermissionsModalCyclesMode(t *testing.T) {
 	if gate.mode != settings.ModeAcceptEdits {
 		t.Fatalf("got %q", gate.mode)
 	}
+	// The open panel's "mode" row must follow the change, not keep the
+	// mode it was opened with (qa/findings *permissions-mode-row-stale).
+	if res.Modal.RefreshHeader == nil {
+		t.Fatal("permissions modal has no RefreshHeader")
+	}
+	if got := res.Modal.RefreshHeader()[0]; !strings.Contains(got, "acceptEdits") {
+		t.Errorf("header mode row = %q after cycling, want acceptEdits", got)
+	}
 }
 
 func TestManagePermissionsPromoteToDeny(t *testing.T) {

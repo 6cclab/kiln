@@ -466,13 +466,14 @@ func (p *PromptState) Render(width int) []string {
 			cmd = req.PrimaryArg
 		}
 		desc, _ := req.Args["description"].(string)
+		// The feedback field replaces the options inside the same bash
+		// prompt, so tab does not swap in the generic prompt's different
+		// title, indent and spacing.
+		var fb *string
 		if p.feedback != nil {
-			// No reference capture of the Bash prompt's feedback state;
-			// reuse the generic tool-feedback rendering rather than
-			// guessing a Bash-specific one. [chk].
-			return RenderPermissionPrompt(req, p.cwd, width, p.pending.selected, true, feedback)
+			fb = &feedback
 		}
-		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc}, width, p.pending.selected)
+		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc, Feedback: fb}, width, p.pending.selected)
 	case "edit":
 		return RenderEditPermissionPrompt(EditPermissionRequest{
 			Kind:  EditKindEdit,

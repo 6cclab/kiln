@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -169,6 +170,11 @@ func TestPromptState_BashTabOpensFeedback(t *testing.T) {
 		if !p.HandleKey(key(string(r))) {
 			t.Fatalf("feedback char %q not consumed", r)
 		}
+	}
+	// The field opens inside the bash prompt, not the generic one
+	// (qa/findings *bash-feedback-reframes).
+	if view := strings.Join(p.Render(100), "\n"); !strings.Contains(view, "Allow kiln to run this command?") || strings.Contains(view, "use bash?") {
+		t.Errorf("feedback view left the bash prompt:\n%s", view)
 	}
 	p.HandleKey(key("enter"))
 

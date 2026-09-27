@@ -1,0 +1,30 @@
+{
+ "id": "20260927T034447Z-banner-ink-invisible-on-light",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/commands/resume.steps",
+ "step": null,
+ "terminals": [
+  "iterm-light"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Banner rows styled before the background reply; recent-session titles near-invisible on light",
+ "observed": "In iTerm light the banner's recent-session title 'seed a prior session' drew at ~#e8e0ce on ~#f5f2ec (about 1.15:1). The banner was rendered in cli/tui.go before the terminal reported its background, so it kept the dark design ink.",
+ "expected": "Banner rows use the background-aware text tokens.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-light/commands-resume-120x40/01-resume.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/tui.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestBannerRows_StyledAfterBackgroundReply",
+  "after_evidence": [
+   "qa/runs/c10/iterm-light/commands-resume-120x40/01-resume.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

@@ -1338,10 +1338,18 @@ func (b *Bridge) HookNotice(message string) {
 
 // ModelSwitch renders the model-switch transcript line, matching app.ts's
 // onModelChanges (app.ts:619-632).
+//
+// The note goes through the app rather than straight to Commit: a switch
+// made from /model's open dialog must land after the "/model" echo, which
+// the app commits only once the dialog closes. SendAsync, because a
+// "/model <name>" argument switch runs on the Update goroutine.
 func (b *Bridge) ModelSwitch(label string, tierName string, usable int) {
-	b.CommitNote(fmt.Sprintf("Model: %s · %s tier · %s usable", label, tierName, FormatTokens(usable)))
-	b.Send(MsgModelInfo{Label: label})
+	b.SendAsync(msgModelSwitchNote{Text: fmt.Sprintf("Model: %s · %s tier · %s usable", label, tierName, FormatTokens(usable))})
+	b.SendAsync(MsgModelInfo{Label: label})
 }
+
+// msgModelSwitchNote carries ModelSwitch's transcript note to the app.
+type msgModelSwitchNote struct{ Text string }
 
 // --- helpers -------------------------------------------------------------
 

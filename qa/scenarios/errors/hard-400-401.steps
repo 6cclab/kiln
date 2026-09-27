@@ -11,7 +11,7 @@ WAITFOR /status=400/ 20
 SHOT bad-request-error
 EXPECT /status=400/
 EXPECT /invalid_request_error/
-EXPECT /bad request shape/
+EXPECT /bad request\s+shape/
 EXPECT_NOT /Retrying in|attempt \d of \d/
 TYPE trigger an auth failure
 KEY enter
@@ -19,6 +19,6 @@ WAITFOR /status=401/ 20
 SHOT auth-error
 EXPECT /status=401/
 EXPECT /authentication_error/
-EXPECT /invalid api key/
+EXPECT /invalid api\s+key/
 EXPECT_NOT /Retrying in|attempt \d of \d/
 EXPECT_NOT /panic|goroutine/

@@ -122,6 +122,11 @@ var (
 	KilnRed   func(string) string
 	KilnBlue  func(string) string
 	Violet    func(string) string
+	// MutedStrike is Muted with a line through it (a done plan item). One
+	// style, not Muted(Strike(s)): lipgloss renders strikethrough one cell
+	// at a time with a reset after each, which cancels an outer colour
+	// after the first character.
+	MutedStrike func(string) string
 )
 
 // Rule is the hairline colour for block label rules and diff borders.
@@ -249,6 +254,7 @@ func resetTextTokensToDesign() {
 func setTextTokens(ink, dim, faint, amber, green, red, blue, violet string) {
 	Ink = style(lipgloss.NewStyle().Foreground(lipgloss.Color(ink)))
 	Muted = style(lipgloss.NewStyle().Foreground(lipgloss.Color(dim)))
+	MutedStrike = style(lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Strikethrough(true))
 	Faint = style(lipgloss.NewStyle().Foreground(lipgloss.Color(faint)))
 	KilnAmber = style(lipgloss.NewStyle().Foreground(lipgloss.Color(amber)))
 	KilnGreen = style(lipgloss.NewStyle().Foreground(lipgloss.Color(green)))

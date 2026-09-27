@@ -41,7 +41,7 @@ func RenderPlan(items []TodoView, width int) []string {
 	for _, it := range items {
 		switch it.Status {
 		case TodoCompletedStatus:
-			lines = append(lines, fmt.Sprintf("%s  %s", KilnGreen(gl.OK), Muted(Strike(it.Content))))
+			lines = append(lines, fmt.Sprintf("%s  %s", KilnGreen(gl.OK), MutedStrike(it.Content)))
 		case TodoInProgressStatus:
 			lines = append(lines, fmt.Sprintf("%s  %s", KilnAmber(gl.PlanCurrent), Ink(it.Content)))
 		default:

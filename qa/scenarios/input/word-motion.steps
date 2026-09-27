@@ -1,32 +1,17 @@
-# Driver limit: under kiln's kitty keyboard protocol, Orca's synthetic
-# Option/Ctrl+arrow events reach kiln without their modifier (a real
-# keypress works — checked by hand), so the alt+arrow steps fail when
-# driven; ctrl+a/ctrl+e still verify line motion.
-# Word motion (alt+left/right work in every macOS terminal profile;
-# Option+b/f only with Option set to send Esc+): alt+left / alt+right / ctrl+a / ctrl+e (bubbles/v2 textarea's
-# DefaultKeyMap WordBackward/WordForward/LineStart/LineEnd, bound through
-# internal/tui/editor/model.go's KeyWordLeft/KeyWordRight/KeyLineStart/
-# KeyLineEnd). Verified behaviourally: moving the cursor with each key and
+# Line motion: ctrl+a / ctrl+e (bubbles/v2 textarea's DefaultKeyMap
+# LineStart/LineEnd, bound through internal/tui/editor/model.go's
+# KeyLineStart/KeyLineEnd). Verified behaviourally: moving the cursor and
 # then inserting a marker proves where the cursor landed.
+#
+# Word motion (alt+left/right) is not driven here: under kiln's kitty
+# keyboard protocol, Orca's synthetic Option/Ctrl+arrow events reach kiln
+# without their modifier, while a physical keypress works (checked by hand;
+# qa/findings kitty-mode-drops-arrow-modifiers). internal/tui/editor's
+# model_test.go covers the alt-arrow bindings.
 @faux testdata/faux/hello.yaml
 @size 120x40
 
 WAITFOR /describe a task/ 20
-TYPE hello world
-KEY alt+left
-TYPE NEW
-SHOT word-back-alt-b
-EXPECT /hello NEWworld/
-KEY ctrl+e
-KEY ctrl+u
-TYPE hello world
-KEY alt+left
-KEY alt+right
-TYPE NEW
-SHOT word-forward-alt-f
-EXPECT /hello worldNEW/
-KEY ctrl+e
-KEY ctrl+u
 TYPE hello world
 KEY ctrl+a
 TYPE START

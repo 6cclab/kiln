@@ -1,0 +1,29 @@
+{
+ "id": "20260927T034447Z-link-label-url-styles-swapped",
+ "found_at": "2026-09-27T03:44:47Z",
+ "scenario": "qa/scenarios/content/links.steps",
+ "step": null,
+ "terminals": [
+  "iterm-light"
+ ],
+ "category": "design-drift",
+ "severity": "medium",
+ "title": "Markdown link label unstyled and URL blue; design says label cyan, URL dim",
+ "observed": "'rate limiting RFC' rendered in body colour (its Faint was dropped by glamour) while the URL after it rendered blue: glamour's LinkText styles the label and Link the URL, and the mapping was swapped.",
+ "expected": "Label in the accent blue, URL dim (Terminal.dc.html markdown theme: link cyan, linkUrl dim).",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/final/iterm-light/content-links-120x40/02-reply.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/markdown.go"
+  ],
+  "regression_test": "TestMarkdownLinkLabelAccentURLDim",
+  "after_evidence": [
+   "qa/runs/c9/iterm-light/content-links-120x40/02-reply.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
+}

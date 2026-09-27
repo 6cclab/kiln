@@ -15,6 +15,15 @@
  "evidence": [
   "testdata/golden/tui-ax-empty-80.txt"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestChromeLines_SuppressesDuplicateRuleWhenTranscriptEmpty",
+  "after_evidence": [
+   "qa/runs/c9/iterm-dark/startup-inline-mode-120x40/01-inline-welcome.png"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
 }

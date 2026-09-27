@@ -169,6 +169,9 @@ type BashPermissionRequest struct {
 	Command     string
 	Description string // omitted row when empty
 	Cwd         string
+	// Feedback, when non-nil, is the reason typed after tab: the options
+	// give way to the feedback field, everything above them unchanged.
+	Feedback *string
 }
 
 // bashDontAskRule is the gate expression option 2 offers: the first two
@@ -211,6 +214,17 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 		lines = append(lines, "   "+Muted(req.Description))
 	}
 	lines = append(lines, "")
+
+	if req.Feedback != nil {
+		lines = append(lines,
+			" "+Muted("What should be done instead?"),
+			fmt.Sprintf(" %s %s%s", KilnAmber(">"), *req.Feedback, Faint("▌")),
+			"",
+			" "+Muted("enter to send · esc to decline without a reason"),
+			amberRule,
+		)
+		return FitLines(lines, width, "    ")
+	}
 
 	options := []string{
 		"Yes",

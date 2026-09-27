@@ -147,3 +147,25 @@ func TestDialogModel_EnterCallsSelectDefault(t *testing.T) {
 		t.Errorf("s: gotSelect=%q gotDefault=%q, want select called, default not", gotSelect, gotDefault)
 	}
 }
+
+// TestDialogModel_PickMovesCurrentMark: once a switch applies, the ✓ marks
+// the model now in use, not the one the dialog opened with
+// (qa/findings *model-dialog-stale-state).
+func TestDialogModel_PickMovesCurrentMark(t *testing.T) {
+	spec := commands.ModalSpec{
+		Items:         referenceModelItems(),
+		SelectDefault: func(value string) (string, error) { return "Model set to " + value, nil },
+	}
+	d := NewDialogModel(spec).(*dialogModel)
+	d.cursor = 3 // "4. Sonnet"
+	_, _, cmd := d.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	d.Apply(cmd().(msgDialogResult))
+	for _, it := range d.spec.Items {
+		if marked := it.Marker == "✔"; marked != (it.Value == "d") {
+			t.Errorf("item %q marked=%v after picking d", it.Label, marked)
+		}
+	}
+	if spec.Items[1].Marker != "✔" {
+		t.Errorf("Apply mutated the caller's items slice")
+	}
+}

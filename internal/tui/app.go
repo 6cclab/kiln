@@ -101,6 +101,10 @@ type Config struct {
 	// Banner is the startup banner, committed (fitted to the terminal
 	// width) on the first WindowSizeMsg so a long cwd row never wraps.
 	Banner []string
+	// BannerFunc, when set, re-renders Banner at commit time, so the rows
+	// use the text tokens fitted to the terminal's reported background
+	// rather than the design defaults Banner was styled with at startup.
+	BannerFunc func() []string
 	// ModelID is the provider/model id the verbose transcript's model row
 	// shows after a turn's last tool call (docs/claude-code-reference.md
 	// §3); empty falls back to ModelLabel.
@@ -217,6 +221,10 @@ type Model struct {
 	// closes (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
 	// model as …").
 	dialogEcho string
+	// dialogNotes are notes raised while dialogEcho's dialog was open (a
+	// model switch from /model); closeDialog commits them after the echo
+	// so the transcript reads in the order things happened.
+	dialogNotes []string
 	// group is the in-flight collapsed row for consecutive read-only tool
 	// calls ("  Reading 2 files…", docs/claude-code-reference.md §3). It is
 	// live (redrawn every frame) until a non-grouped commit or the turn's
@@ -695,7 +703,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case msgDialogResult:
 		if applier, ok := m.dialog.(interface{ Apply(msgDialogResult) }); ok {
 			applier.Apply(msg)
-			return m, nil
+			// A dialog action can move the gate's mode (/permissions' "m");
+			// the footer re-reads it so it agrees once the panel closes.
+			return m.refreshMode(), nil
 		}
 		// The dialog already closed (Rewind closes on Enter): its outcome
 		// is a note in the transcript, after the redrawn history when the
@@ -748,6 +758,14 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			cost = *msg.Cost
 		}
 		m.footer.Apply(StatusPatch{ContextUsed: msg.ContextUsed, Cost: &cost})
+		return m, nil
+
+	case msgModelSwitchNote:
+		if m.dialog != nil && m.dialogEcho != "" {
+			m.dialogNotes = append(m.dialogNotes, msg.Text)
+			return m, nil
+		}
+		m.commitNote(msg.Text)
 		return m, nil
 
 	case MsgModelInfo:
@@ -1037,6 +1055,9 @@ func (m Model) closeDialog() Model {
 	m.dialog = nil
 	if m.dialogEcho != "" && m.cfg.Bridge != nil {
 		m.commit(RenderUserMessage(m.dialogEcho, m.contentWidth()))
+		for _, note := range m.dialogNotes {
+			m.cfg.Bridge.CommitNote(note)
+		}
 		if outcome != "" {
 			// A dialog's outcome is always one line ("Kept model as …",
 			// "Compacted history · context 38% → 8%") — the kiln "note"
@@ -1045,6 +1066,7 @@ func (m Model) closeDialog() Model {
 		}
 	}
 	m.dialogEcho = ""
+	m.dialogNotes = nil
 	return m
 }
 
@@ -1825,8 +1847,12 @@ func (m Model) frameHeight() int {
 // transcript buffer rather than native scrollback and is lost on every
 // clear+replay unless re-added.
 func (m Model) bannerRows() []string {
-	rows := make([]string, len(m.cfg.Banner))
-	for i, r := range m.cfg.Banner {
+	src := m.cfg.Banner
+	if m.cfg.BannerFunc != nil {
+		src = m.cfg.BannerFunc()
+	}
+	rows := make([]string, len(src))
+	for i, r := range src {
 		rows[i] = FitStatus(r, m.contentWidth())
 	}
 	ruleCh := "─"

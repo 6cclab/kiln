@@ -14,5 +14,5 @@ TYPE this is a deliberately long single line of input typed with no line breaks 
 SHOT input-wrapped
 EXPECT /deliberately long single line/
 # the line wraps inside the box: the second row continues it
-EXPECT /must wrap onto a second\s*\n\s+visual row inside the input box/
+EXPECT /must wrap onto a[^\n]*\n\s+[^\n]*at 120 columns wide/
 EXPECT_NOT /panic|goroutine/

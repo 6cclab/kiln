@@ -157,6 +157,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		fmt.Fprintf(stderr, "keybindings: %s\n", c)
 	}
 
+	banner := newBanner(deps, bannerContentWidth(stdout))
 	cfg := tui.Config{
 		Cwd:            deps.Cwd,
 		ModelLabel:     deps.ModelLabel,
@@ -205,7 +206,8 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		SessionName:    "kiln", // the terminal title, as Claude Code sets "Claude Code"
 		Effort:         deps.Effort,
 		ModelID:        deps.Resolved.Model.ID,
-		Banner:         bannerRows(deps, bannerContentWidth(stdout)),
+		Banner:         banner(),
+		BannerFunc:     banner,
 		SessionID:      deps.Started.SessionID,
 		TranscriptPath: deps.Started.TranscriptPath,
 		Version:        Version,
@@ -449,6 +451,16 @@ func bannerContentWidth(stdout io.Writer) int {
 // always survives; only if that suffix alone does not fit does the row
 // fall through to app.go's tail-truncation.
 func bannerRows(deps InteractiveDeps, width int) []string {
+	return newBanner(deps, width)()
+}
+
+// newBanner reads everything the banner shows (git branch, recent
+// sessions) once, and returns a function that styles those rows on each
+// call. app.go calls it when it commits the banner, after the terminal has
+// reported its background, so the rows pick up the background-aware text
+// tokens. Rows styled before that reply keep the dark design defaults,
+// and ink-coloured text on a light background is near-invisible.
+func newBanner(deps InteractiveDeps, width int) func() []string {
 	verLabel := versionLabel(Version)
 
 	// Row 1 per the design: "<cwd> · branch <b> · model <m>", cwd with the
@@ -470,6 +482,21 @@ func bannerRows(deps InteractiveDeps, width int) []string {
 	}
 	loc := cwd + suffix
 
+	var recent []recentSession
+	var currentSessionID string
+	if deps.Started != nil {
+		currentSessionID = deps.Started.SessionID
+	}
+	if !deps.IsResume {
+		recent = recentSessionRows(deps.Cwd, currentSessionID)
+	}
+
+	return func() []string { return styleBanner(verLabel, loc, recent) }
+}
+
+// styleBanner renders the banner rows from newBanner's data with the
+// current theme tokens.
+func styleBanner(verLabel, loc string, recent []recentSession) []string {
 	tips := tui.KilnAmber("/") + " " + tui.Muted("commands") + "   " +
 		tui.KilnAmber("@") + " " + tui.Muted("add files") + "   " +
 		tui.KilnAmber("⇧⇥") + " " + tui.Muted("cycle mode") + "   " +
@@ -484,14 +511,10 @@ func bannerRows(deps InteractiveDeps, width int) []string {
 		tips,
 	}
 
-	var currentSessionID string
-	if deps.Started != nil {
-		currentSessionID = deps.Started.SessionID
-	}
-	if !deps.IsResume {
-		if recent := recentSessionRows(deps.Cwd, currentSessionID); len(recent) > 0 {
-			rows = append(rows, "", tui.Muted("Recent sessions"))
-			rows = append(rows, recent...)
+	if len(recent) > 0 {
+		rows = append(rows, "", tui.Muted("Recent sessions"))
+		for _, r := range recent {
+			rows = append(rows, "  "+tui.Muted(padTo(r.when, 10))+tui.Ink(r.title))
 		}
 	}
 	// One blank row of spacing; the caller (app.go) appends a full-width
@@ -507,15 +530,15 @@ const recentSessionRowLimit = 3
 // store never delays startup; on timeout the block is omitted silently.
 const recentSessionsTimeout = 300 * time.Millisecond
 
-// recentSessionRows renders up to recentSessionRowLimit "<when>  <title>"
+// recentSessionRows returns up to recentSessionRowLimit "<when>  <title>"
 // rows for the most recently modified TOP-LEVEL sessions under cwd, sourced
 // from internal/session/jsonl.Repo.List — the only data this run has for
 // past sessions in this folder. excludeID (the session being resumed, or
 // this run's own freshly-created id) is never listed. Returns nil (silently,
 // logged via diag) on any error, on timeout, or when there are no sessions.
-func recentSessionRows(cwd, excludeID string) []string {
+func recentSessionRows(cwd, excludeID string) []recentSession {
 	type result struct {
-		rows []string
+		rows []recentSession
 	}
 	done := make(chan result, 1)
 	go func() {
@@ -531,7 +554,10 @@ func recentSessionRows(cwd, excludeID string) []string {
 	}
 }
 
-func buildRecentSessionRows(cwd, excludeID string) []string {
+// recentSession is one "Recent sessions" banner row, unstyled.
+type recentSession struct{ when, title string }
+
+func buildRecentSessionRows(cwd, excludeID string) []recentSession {
 	repo, err := jsonl.NewRepo("")
 	if err != nil {
 		diag.L().Warn("banner: recent sessions repo", "err", err)
@@ -566,14 +592,13 @@ func buildRecentSessionRows(cwd, excludeID string) []string {
 		metas = metas[:recentSessionRowLimit]
 	}
 	now := time.Now()
-	var rows []string
+	var rows []recentSession
 	for _, meta := range metas {
 		title := firstUserMessageTitle(meta.Path)
 		if title == "" {
 			continue
 		}
-		when := humaneAge(now, time.UnixMilli(meta.ModifiedAt))
-		rows = append(rows, "  "+tui.Muted(padTo(when, 10))+tui.Ink(title))
+		rows = append(rows, recentSession{when: humaneAge(now, time.UnixMilli(meta.ModifiedAt)), title: title})
 	}
 	return rows
 }

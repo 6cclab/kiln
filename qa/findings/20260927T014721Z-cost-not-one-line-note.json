@@ -15,6 +15,15 @@
  "evidence": [
   "qa/runs/c6/iterm-dark/commands-cost-120x40/02-cost.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/builtins.go"
+  ],
+  "regression_test": "qa/scenarios/commands/cost.steps",
+  "after_evidence": [
+   "qa/runs/c9/iterm-dark/commands-cost-120x40"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
 }

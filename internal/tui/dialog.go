@@ -358,6 +358,9 @@ func (d *commandDialog) HandleKey(msg tea.KeyPressMsg) (consumed, shouldClose bo
 // Apply records a Select/Act result as the panel's status line, the
 // Dialog-era name for ModalView.Apply.
 func (d *commandDialog) Apply(r msgDialogResult) {
+	if d.spec.RefreshHeader != nil {
+		d.spec.Header = d.spec.RefreshHeader()
+	}
 	if r.err != nil {
 		d.status, d.statusOK = r.err.Error(), false
 		return

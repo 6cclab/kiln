@@ -481,3 +481,31 @@ func TestRenderPlanApproval_ScrollIndicatorWhenClipped(t *testing.T) {
 		t.Errorf("expected a scroll indicator when the plan overflows the height budget, got %v", got)
 	}
 }
+
+// TestBashPromptFeedbackKeepsFrame: tab to amend used to swap the bash
+// prompt for the generic one — a different title ("use bash?"), a deeper
+// indent and an extra blank row (qa/findings *bash-feedback-reframes).
+// The feedback field now replaces only the options.
+func TestBashPromptFeedbackKeepsFrame(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+	req := BashPermissionRequest{Command: "echo tab-amend-probe"}
+	options := RenderBashPermissionPrompt(req, 80, 0)
+	typed := "use printf"
+	req.Feedback = &typed
+	feedback := RenderBashPermissionPrompt(req, 80, 0)
+	for i := 0; i < 4; i++ {
+		if options[i] != feedback[i] {
+			t.Errorf("row %d changed on tab:\n options  %q\n feedback %q", i, options[i], feedback[i])
+		}
+	}
+	joined := strings.Join(feedback, "\n")
+	for _, want := range []string{" What should be done instead?", " > use printf▌"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("feedback view missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "Yes") {
+		t.Errorf("options still shown in feedback view:\n%s", joined)
+	}
+}

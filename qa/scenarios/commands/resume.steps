@@ -10,5 +10,5 @@ KEY enter
 WAITFOR /session\(s\):/ 20
 SHOT resume
 EXPECT /\d+ session\(s\):/
-EXPECT /Resume: harness --resume <id>/
+EXPECT /Resume: kiln --resume <id>/
 EXPECT_NOT /panic|goroutine/

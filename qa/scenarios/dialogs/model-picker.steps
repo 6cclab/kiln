@@ -35,9 +35,15 @@ SHOT model-dialog-selected
 # small tier · 32.8k usable", not the "now on <model> — <tier> tier"
 # wording this scenario originally assumed.
 KEY enter
-WAITFOR /Model: faux\/faux-2/ 20
+# While the dialog is open the switch shows as its status line and the ✓
+# moves to faux-2; the "Model: …" note waits for the /model echo, which
+# commits when the dialog closes.
+WAITFOR /Model set to faux\/faux-2/ 20
 SHOT model-dialog-applied
-EXPECT /Model: faux\/faux-2 · small tier/
+EXPECT /2\. faux\/faux-2 ✓/
+EXPECT_NOT /1\. faux\/faux-1 ✓/
+EXPECT_NOT /Model: faux\/faux-2 · small tier/
 KEY esc
+WAITFOR /you ─+\s+\/model\s+system ─+\s+Model: faux\/faux-2 · small tier/ 20
 SHOT model-dialog-closed
 EXPECT_NOT /panic|goroutine/

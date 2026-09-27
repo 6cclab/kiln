@@ -16,6 +16,15 @@
   "qa/runs/c6/iterm-dark/tools-task-concurrent-120x40/01-three-live.png",
   "qa/reference/agents.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/subagents.go"
+  ],
+  "regression_test": "subagents_test.go,TestTUI_FullscreenWithSubagentsPanel",
+  "after_evidence": [
+   "qa/runs/c9/iterm-dark/tools-task-concurrent-120x40"
+  ],
+  "updated_at": "2026-09-27T04:35:30Z"
+ }
 }

@@ -2,14 +2,25 @@
 # "Ctrl+Y to paste deleted text" hint that shows until the next keystroke
 # (internal/tui/editor/model.go's EventKilled / justKilled,
 # docs/claude-code-reference.md §2, mode-manual.txt row 8).
+# The cursor is placed with plain right-arrows, not alt+f: Orca's synthetic
+# Option keys lose their modifier under kiln's kitty keyboard protocol
+# (qa/findings kitty-mode-drops-arrow-modifiers, wontfix).
 @faux testdata/faux/hello.yaml
 @size 120x40
 
 WAITFOR /describe a task/ 20
 TYPE keep this, drop this part
 KEY ctrl+a
-KEY alt+f
-KEY alt+f
+KEY right
+KEY right
+KEY right
+KEY right
+KEY right
+KEY right
+KEY right
+KEY right
+KEY right
+KEY right
 SHOT before-kill
 KEY ctrl+k
 SHOT after-kill

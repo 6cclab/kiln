@@ -14,9 +14,9 @@ SHOT partial-before-cut
 # follow the WAITFOR that observes a transient countdown state directly —
 # an intervening SHOT costs enough wall-clock time for a 1s countdown to
 # tick past.
-WAITFOR /Stream interrupted/ 20
-EXPECT /Stream interrupted/
-EXPECT /Retrying in \ds · attempt 2 of 4 · r to retry now/
+# One WAITFOR for both rows: the countdown lasts about a second, so a
+# separate EXPECT after the WAITFOR can run after the reconnect cleared it.
+WAITFOR /Stream interrupted[\s\S]*Retrying in \ds · attempt 2 of 4 · r to retry now/ 20
 SHOT countdown
 WAITFOR /Reconnected on attempt 2/ 20
 EXPECT /Reconnected on attempt 2/
