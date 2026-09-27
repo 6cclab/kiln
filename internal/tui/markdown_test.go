@@ -261,3 +261,48 @@ func TestMarkdownLinkLabelAccentURLDim(t *testing.T) {
 		t.Errorf("link URL not in the dim colour: %q", joined)
 	}
 }
+
+// TestMarkdownListItemsHangAndCollapse covers the real-model pass
+// (qa/findings *list-wrap-no-hanging-indent): a wrapped item's rows line up
+// under its text, not its marker; nested and ordered items too; the
+// marker is green; a nested list's closing blank row does not double up;
+// and blank lines inside a code block are left alone.
+func TestMarkdownListItemsHangAndCollapse(t *testing.T) {
+	prev := enabled
+	t.Cleanup(func() { SetColorEnabled(prev) })
+	SetColorEnabled(true)
+	src := "- **Consumption rule**: each request removes one (or more) tokens; if insufficient tokens exist, the request is denied, queued, or throttled.\n" +
+		"  - nested item that is also quite long and has to wrap past the sixty column width limit here\n\n" +
+		"1. ordered item long enough to wrap around the sixty column width for sure yes\n\n" +
+		"```python\nimport time\n\n\nclass T:\n    pass\n```"
+	lines := NewMarkdownRenderer(60, false).Render(src)
+	plain := make([]string, len(lines))
+	for i, l := range lines {
+		plain[i] = ansi.Strip(l)
+	}
+	want := []string{
+		"• Consumption rule: each request removes one (or more)",
+		"  tokens; if insufficient tokens exist, the request is",
+		"  denied, queued, or throttled.",
+		"  • nested item that is also quite long and has to wrap past",
+		"    the sixty column width limit here",
+		"",
+		"1. ordered item long enough to wrap around the sixty column",
+		"   width for sure yes",
+		"",
+	}
+	for i, w := range want {
+		if i >= len(plain) || plain[i] != w {
+			t.Fatalf("row %d = %q, want %q\nall:\n%s", i, plain[min(i, len(plain)-1)], w, strings.Join(plain, "\n"))
+		}
+	}
+	if got := strings.Join(plain[len(want):], "\n"); !strings.Contains(got, "import time\n\n\n  class T:") {
+		t.Errorf("code block blank lines changed:\n%s", got)
+	}
+	green := CurrentTextHex().Green
+	var r, g, b int
+	fmt.Sscanf(green, "#%02x%02x%02x", &r, &g, &b)
+	if !strings.HasPrefix(lines[0], fmt.Sprintf("\x1b[38;2;%d;%d;%dm•", r, g, b)) {
+		t.Errorf("bullet not green: %q", lines[0])
+	}
+}

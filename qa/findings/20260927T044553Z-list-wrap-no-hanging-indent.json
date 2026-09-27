@@ -1,0 +1,31 @@
+{
+ "id": "20260927T044553Z-list-wrap-no-hanging-indent",
+ "found_at": "2026-09-27T04:45:53Z",
+ "scenario": "real-model streaming pass",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "medium",
+ "title": "Wrapped list items continue at the bullet's column; markers uncoloured; doubled blank after nested list",
+ "observed": "Real claude-sonnet-5 reply: '• Consumption rule: … the request is denied,' wrapped to 'queued, or throttled.' at the bullet's column. Renderer probe also showed markers without the listBullet green and two blank rows where a nested list closes before the next list.",
+ "expected": "Continuation rows hang under the item text; markers green; one blank row between blocks.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-model/iterm-dark/07-done.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/markdown.go",
+   "testdata/faux/qa/content-bullets.yaml",
+   "qa/scenarios/content/bullet-list.steps"
+  ],
+  "regression_test": "TestMarkdownListItemsHangAndCollapse",
+  "after_evidence": [
+   "qa/runs/c11/iterm-dark/content-bullet-list-120x40/02-reply.png"
+  ],
+  "updated_at": "2026-09-27T04:45:53Z"
+ }
+}

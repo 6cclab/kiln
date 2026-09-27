@@ -12,4 +12,6 @@ SHOT reply
 EXPECT /• Added the rate limiter middleware/
 EXPECT /• Wired it into the upload route/
 EXPECT /• Added a redis mock for tests/
+# A wrapped item continues under its text, two columns in from the bullet.
+EXPECT /• Kept the old fixed-window counter[^\n]*\n    [a-z]/
 EXPECT_NOT /panic|goroutine/

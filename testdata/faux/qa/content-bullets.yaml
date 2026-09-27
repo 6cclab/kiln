@@ -1,4 +1,4 @@
 model: faux-1
 steps:
-  - text: "Three things changed:\n\n- Added the rate limiter middleware\n- Wired it into the upload route\n- Added a redis mock for tests"
+  - text: "Three things changed:\n\n- Added the rate limiter middleware\n- Wired it into the upload route\n- Added a redis mock for tests\n- Kept the old fixed-window counter behind a flag so the rollout can fall back to it if the token bucket misbehaves under real production traffic"
     usage: {input: 20, output: 24}

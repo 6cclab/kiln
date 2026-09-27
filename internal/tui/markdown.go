@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"charm.land/glamour/v2"
 	glansi "charm.land/glamour/v2/ansi"
@@ -298,7 +300,71 @@ func (m *MarkdownRenderer) render(text string) []string {
 	// edges covers every block kind; the body then starts on the row under
 	// the block label.
 	lines = trimBlankLines(lines)
+	lines = hangListItems(lines, width, m.plain)
 	return compactTables(lines, m.plain)
+}
+
+// listMarker matches a rendered list item's leading indent and marker:
+// "• " (or the plain-mode "- ") and ordered "12. ".
+var listMarker = regexp.MustCompile(`^( *)(• |- |\d+\. )`)
+
+// hangListItems finishes glamour's list output:
+//   - each item is re-wrapped so its wrapped rows line up under the item's
+//     text, not its marker (glamour wraps an item as one block at the
+//     list's own indent, so a long item's second row started back at the
+//     bullet's column). A continuation row is a non-blank row at the item's
+//     own indent that is not itself a marker row; deeper rows (a nested
+//     list, a code block) and blank rows end the item;
+//   - the marker is drawn green (listBullet), which glamour's Item colour
+//     never reached (it styles the text, not the block prefix);
+//   - a run of blank rows right after a list collapses to one: a nested
+//     list and its parent each close with their own blank row. Only after
+//     a list row, so blank lines inside a code block are left alone.
+func hangListItems(lines []string, width int, plain bool) []string {
+	out := make([]string, 0, len(lines))
+	afterList := false
+	for i := 0; i < len(lines); i++ {
+		m := listMarker.FindStringSubmatch(ansi.Strip(lines[i]))
+		if m == nil {
+			if lines[i] == "" && afterList && len(out) > 0 && out[len(out)-1] == "" {
+				continue
+			}
+			if lines[i] != "" {
+				afterList = false
+			}
+			out = append(out, lines[i])
+			continue
+		}
+		afterList = true
+		lead, hang := len(m[1]), len(m[1])+utf8.RuneCountInString(m[2])
+		body := []string{ansi.TruncateLeft(lines[i], hang, "")}
+		j := i + 1
+		for ; j < len(lines); j++ {
+			plain := ansi.Strip(lines[j])
+			if strings.TrimSpace(plain) == "" || len(plain)-len(strings.TrimLeft(plain, " ")) != lead || listMarker.MatchString(plain) {
+				break
+			}
+			body = append(body, ansi.TruncateLeft(lines[j], lead, ""))
+		}
+		prefix := m[1] + m[2]
+		if !plain {
+			prefix = m[1] + KilnGreen(strings.TrimRight(m[2], " ")) + " "
+		}
+		if j == i+1 || width-hang < 8 {
+			out = append(out, prefix+body[0])
+			continue
+		}
+		wrapped := strings.Split(ansi.Wrap(strings.Join(body, " "), width-hang, ""), "\n")
+		for k, row := range wrapped {
+			if k == 0 {
+				out = append(out, prefix+row)
+			} else {
+				out = append(out, strings.Repeat(" ", hang)+row)
+			}
+		}
+		i = j - 1
+	}
+	return out
 }
 
 // trimBlankLines drops leading and trailing empty lines.
