@@ -1,5 +1,5 @@
-     7   const router = express.Router();
      8   const upload = multer({ dest: 'uploads/' });
+     …
     20   //
     21   //
     22   //

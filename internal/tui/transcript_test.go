@@ -334,3 +334,18 @@ func TestRenderToolCallFailedHintBeforeKeptTail(t *testing.T) {
 		t.Errorf("hint at %d, exit line at %d; want the hint directly above the exit line:\n%s", hint, tail, strings.Join(lines, "\n"))
 	}
 }
+
+func TestParseUnifiedDiffMarksGapBetweenHunks(t *testing.T) {
+	patch := "@@ -2,1 +2,1 @@\n-a\n+b\n@@ -40,1 +40,1 @@\n-c\n+d\n"
+	d := ParseUnifiedDiff(patch, 1)
+	if len(d.Lines) != 5 || d.Lines[2].Sign != '~' {
+		t.Fatalf("got %+v, want a '~' gap row between the two hunks", d.Lines)
+	}
+	if d.Added != 2 || d.Removed != 2 {
+		t.Fatalf("gap row counted as a change: Added=%d Removed=%d", d.Added, d.Removed)
+	}
+	out := RenderDiffLines(d.Lines)
+	if got := stripANSI(out[2]); !strings.Contains(got, "…") || strings.ContainsAny(got, "+−") {
+		t.Errorf("gap row renders as %q, want a dim … row", got)
+	}
+}

@@ -57,17 +57,34 @@ const meterWidthDefault = 6
 
 // Meter renders a small bar using the active glyph table's fill/empty
 // cells (G().MeterFull/MeterEmpty: "━"/"─", ASCII "="/"-" in plain mode) —
-// unstyled; callers colour the filled and empty runs separately. Fractional
-// fills round down, so a full bar means genuinely full.
+// unstyled; callers colour the filled and empty runs separately. The fill
+// is meterFilled's.
 func Meter(fraction float64, width ...int) string {
 	w := meterWidthDefault
 	if len(width) > 0 {
 		w = width[0]
 	}
-	clamped := math.Max(0, math.Min(1, fraction))
-	filled := int(math.Floor(clamped * float64(w)))
+	filled := meterFilled(fraction, w)
 	gl := G()
 	return strings.Repeat(gl.MeterFull, filled) + strings.Repeat(gl.MeterEmpty, w-filled)
+}
+
+// meterFilled is how many of w cells a fraction fills: rounded down, but
+// any use at all shows at least one cell (the design's meter shows a
+// sliver at 9%; rounding down left a 10-cell bar empty below 10%, so a
+// session at 4% looked unused), and only a genuinely full context fills
+// every cell. The sliver starts where the label reads 1%, so a bar never
+// shows use beside "0%".
+func meterFilled(fraction float64, w int) int {
+	clamped := math.Max(0, math.Min(1, fraction))
+	filled := int(math.Floor(clamped * float64(w)))
+	if clamped >= 0.005 && filled == 0 {
+		filled = 1
+	}
+	if clamped < 1 && filled == w && w > 1 {
+		filled = w - 1
+	}
+	return filled
 }
 
 // Compact renders 450k, 1.0m, 21.1k — the compact forms the meter sits
@@ -286,7 +303,7 @@ func RenderStatusLine(s StatusState, width int) string {
 		percent = int(math.Round(fraction * 100))
 	}
 	meter := Meter(fraction, 10)
-	filledN := int(math.Floor(math.Max(0, math.Min(1, fraction)) * 10))
+	filledN := meterFilled(fraction, 10)
 	// Meter emits filled cells then empty cells with no separator, so split
 	// by rune count rather than byte offset since glyphs may be multi-byte.
 	runes := []rune(meter)

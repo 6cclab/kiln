@@ -1,0 +1,28 @@
+{
+ "id": "20260927T222335Z-bash-allow-rule-matches-compound-command",
+ "found_at": "2026-09-27T22:23:35Z",
+ "scenario": "real Opus 4.8 sessions (CRUD trial, workload 2), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Bash allow rules match a whole command line as a prefix",
+ "observed": "MatchesRule compiled Bash(git *) to ^git .*$ over the whole line, so it approved \"git status && rm -rf ~\"; the prompt's own offered rule echo \"=== * would have approved anything chained after an echo.",
+ "expected": "Rules are judged per command segment; allow needs every segment, deny/ask any; substitutions are never allowed by a rule.",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/kiln/018-prompt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/settings/bash_rules.go",
+   "internal/claude/settings/settings.go"
+  ],
+  "regression_test": "TestDecideBashRulesPerSegment,TestBashSegments",
+  "note": "Fixed in 7f8e470; regression test fails without the fix. Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T22:23:35Z"
+ }
+}

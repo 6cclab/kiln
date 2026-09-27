@@ -258,3 +258,18 @@ func TestAbbrevHome(t *testing.T) {
 		t.Errorf("AbbrevHome(unrelated) = %q", got)
 	}
 }
+
+// TestMeterFilled: any use the label shows (≥1%) fills at least one cell, and only a full
+// context fills the bar. Rounding down left a 10-cell meter empty below 10%
+// (qa/findings *ctx-meter-empty-below-10pct).
+func TestMeterFilled(t *testing.T) {
+	cases := []struct {
+		f    float64
+		want int
+	}{{0, 0}, {0.001, 0}, {0.005, 1}, {0.04, 1}, {0.09, 1}, {0.1, 1}, {0.38, 3}, {0.999, 9}, {1, 10}, {1.5, 10}}
+	for _, c := range cases {
+		if got := meterFilled(c.f, 10); got != c.want {
+			t.Errorf("meterFilled(%v, 10) = %d, want %d", c.f, got, c.want)
+		}
+	}
+}

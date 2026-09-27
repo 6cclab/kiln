@@ -1,0 +1,25 @@
+{
+ "id": "20260927T223553Z-ctx-meter-empty-below-10pct",
+ "found_at": "2026-09-27T22:35:53Z",
+ "scenario": "crud-trial/kiln-3",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "ctx meter empty below 10%",
+ "observed": "Status ctx meter floored to whole cells, so a 10-cell bar stayed empty at 4% while the label read 4%",
+ "expected": "Any use the label shows (>=1%) fills at least one cell; only a full context fills all",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/kiln-3"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/status.go"
+  ],
+  "regression_test": "TestMeterFilled",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T22:35:58Z"
+ }
+}

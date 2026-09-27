@@ -1,0 +1,27 @@
+{
+ "id": "20260927T222335Z-busy-line-token-figure",
+ "found_at": "2026-09-27T22:23:35Z",
+ "scenario": "real Opus 4.8 sessions (CRUD trial, workload 2), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Busy-line token count collapses once the conversation is cached",
+ "observed": "\"369s · 30 tokens\" six minutes into a session: the figure was session Input+Output, and cached input is not in Input.",
+ "expected": "The figure is the context in use, as the design's busy line shows.",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/kiln-3/010-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestBridge_UsageContextCountsCachedTokens",
+  "note": "Fixed in 7f8e470; regression test fails without the fix. Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T22:23:35Z"
+ }
+}

@@ -1,0 +1,28 @@
+{
+ "id": "20260927T222335Z-system-prompt-has-no-environment",
+ "found_at": "2026-09-27T22:23:35Z",
+ "scenario": "real Opus 4.8 sessions (CRUD trial, workload 2), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "The model is not told its working directory, platform or date",
+ "observed": "Workload 2: the model's first read was /Users/andrepato/dev/api/handlers.go (a guess), which hit the outside-workspace prompt while planning. The system prompt had no environment information at all.",
+ "expected": "An <env> block: working directory, git repo and branch, platform, date.",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln/004-prompt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/chat.go",
+   "internal/cli/tui.go"
+  ],
+  "regression_test": "TestEnvironmentPrompt",
+  "note": "Fixed in 7f8e470; regression test fails without the fix. Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T22:23:35Z"
+ }
+}

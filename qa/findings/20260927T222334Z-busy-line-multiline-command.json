@@ -1,0 +1,27 @@
+{
+ "id": "20260927T222334Z-busy-line-multiline-command",
+ "found_at": "2026-09-27T22:23:34Z",
+ "scenario": "real Opus 4.8 sessions (CRUD trial, workload 2), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "medium",
+ "title": "A multi-line bash command breaks the busy row",
+ "observed": "The busy label copied the raw command: \"Running H='http://localhost:8080'\" then \"curl…\" on the next row at column 0, separated from its timer.",
+ "expected": "One row: the command's whitespace collapsed before truncation.",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/kiln-3/010-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestBusyLabel_MultiLineBashStaysOneLine",
+  "note": "Fixed in 7f8e470; regression test fails without the fix. Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T22:23:34Z"
+ }
+}

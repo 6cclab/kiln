@@ -124,7 +124,7 @@ const (
 // DiffLine is one numbered row of an Edit's rendered diff.
 type DiffLine struct {
 	Num  int
-	Sign byte // '-', '+', or ' ' for an unchanged context line
+	Sign byte // '-', '+', ' ' for an unchanged context line, or '~' for a gap between hunks
 	Text string
 }
 
@@ -220,6 +220,9 @@ func RenderDiffLines(lines []DiffLine) []string {
 			sign = KilnRed("− ")
 			bg = OnDiffDel
 			row = Faint(numStr) + " " + sign + Ink(l.Text)
+		case '~':
+			out = append(out, padToWidth(Faint("   …"), width))
+			continue
 		default:
 			bg = func(s string) string { return s }
 			row = Faint(numStr) + "   " + Muted(l.Text)
@@ -459,6 +462,11 @@ func ParseUnifiedDiff(patch string, startLine int) *ToolDiff {
 
 	for _, line := range strings.Split(patch, "\n") {
 		if strings.HasPrefix(line, "@@") {
+			// A second hunk is elsewhere in the file: mark the gap, or the
+			// two hunks read as one change with jumping line numbers.
+			if len(d.Lines) > 0 {
+				d.Lines = append(d.Lines, DiffLine{Sign: '~'})
+			}
 			inHunk = true
 			if m := hunkHeaderRe.FindStringSubmatch(line); m != nil {
 				oldNo, _ = strconv.Atoi(m[1])

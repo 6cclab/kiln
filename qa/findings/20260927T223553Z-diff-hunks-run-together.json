@@ -1,0 +1,25 @@
+{
+ "id": "20260927T223553Z-diff-hunks-run-together",
+ "found_at": "2026-09-27T22:35:53Z",
+ "scenario": "crud-trial/kiln-3",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Multi-hunk edit diffs have no gap between hunks",
+ "observed": "Edits touching distant parts of a file render hunks back to back; line numbers jump with no marker so separate changes read as one",
+ "expected": "A dim … row between non-contiguous hunks",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/kiln-3/009-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestParseUnifiedDiffMarksGapBetweenHunks",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T22:35:58Z"
+ }
+}
