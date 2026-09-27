@@ -1,0 +1,28 @@
+{
+ "id": "20260927T232753Z-background-jobs-outlive-session",
+ "found_at": "2026-09-27T23:27:53Z",
+ "scenario": "crud-trial/t2-kiln-3",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Jobs a bash command backgrounds outlive the session; SIGHUP skips cleanup",
+ "observed": "After the run, two 'go run .' API servers from t2-kiln-3/api were still running, orphaned to launchd. Separately, SIGHUP (window close) ended kiln with no exit path: bash_background shells and SessionEnd hooks skipped.",
+ "expected": "Background jobs are stopped when the session ends, including when the terminal window closes",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln-3"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/execenv/exec.go",
+   "internal/tools/bash.go",
+   "internal/cli/chat.go",
+   "internal/cli/tui.go"
+  ],
+  "regression_test": "TestPrint_BashBackgroundJob_DoesNotHangAndDiesWithSession,TestTUI_Hangup_StopsBackgroundJobs,TestExecKillLeftoverJobs",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T23:27:54Z"
+ }
+}

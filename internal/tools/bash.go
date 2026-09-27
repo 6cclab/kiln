@@ -197,6 +197,10 @@ func BashTool(env *execenv.Env) *tool.Tool {
 			if outputText == "" {
 				outputText = "(no output)"
 			}
+			if result.JobsLeft {
+				outputText += "\n\n[A background job this command started is still running. It is stopped when the session ends; " +
+					"use bash_background for a process you need to check on or stop.]"
+			}
 			return tool.Result{Content: msg.Blocks{msg.Text(outputText)}, Details: detailsJSON}, nil
 		},
 	}

@@ -1054,6 +1054,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}, stdout, stderr, stdin)
 
 		shells.KillAll()
+		execenv.KillLeftoverJobs()
 		claudehooks.RunHooks(claudehooks.RunOptions{
 			Config: hookConfig,
 			Event:  claudehooks.SessionEnd,
@@ -1075,6 +1076,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// SessionEnd fires, matching cli.ts's own ordering (src/cli.ts:653-659) —
 	// hub.Close is already deferred above, so it runs last of the three.
 	shells.KillAll()
+	execenv.KillLeftoverJobs()
 
 	claudehooks.RunHooks(claudehooks.RunOptions{
 		Config: hookConfig,

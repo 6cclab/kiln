@@ -46,6 +46,29 @@ type ExecResult struct {
 	Text       string
 	Truncation TruncationResult
 	SpillPath  string
+	// JobsLeft reports that the command left background jobs running
+	// ("server &"): its process group outlived the shell. They are
+	// stopped by KillLeftoverJobs when the session ends.
+	JobsLeft bool
+}
+
+// leftoverGroups holds the process groups of commands whose background
+// jobs outlived them, so the session can stop them on exit instead of
+// leaving a server holding a port nobody has a handle on.
+var leftoverGroups = struct {
+	mu    sync.Mutex
+	pgids map[int]struct{}
+}{pgids: map[int]struct{}{}}
+
+// KillLeftoverJobs sends SIGTERM to every process group a command left
+// running (ExecResult.JobsLeft). Called on exit.
+func KillLeftoverJobs() {
+	leftoverGroups.mu.Lock()
+	defer leftoverGroups.mu.Unlock()
+	for pgid := range leftoverGroups.pgids {
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		delete(leftoverGroups.pgids, pgid)
+	}
 }
 
 // resolveShell picks the shell Exec runs commands under, mirroring
@@ -183,6 +206,15 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	if errors.Is(waitErr, exec.ErrWaitDelay) {
 		waitErr = nil // the shell exited 0; only a background job held the pipes
 	}
+	// The shell ran in its own process group; if anything is still in it,
+	// the command backgrounded a job that is still running.
+	pgid := cmd.Process.Pid
+	jobsLeft := syscall.Kill(-pgid, 0) == nil
+	if jobsLeft {
+		leftoverGroups.mu.Lock()
+		leftoverGroups.pgids[pgid] = struct{}{}
+		leftoverGroups.mu.Unlock()
+	}
 	if timer != nil {
 		timer.Stop()
 	}
@@ -227,6 +259,7 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 		Text:       final.Text,
 		Truncation: final.Truncation,
 		SpillPath:  final.SpillPath,
+		JobsLeft:   jobsLeft,
 	}, nil
 }
 

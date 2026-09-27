@@ -15,8 +15,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -338,10 +341,39 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	// Program.shutdown via this function's line (then) 321. Removing the
 	// duplicate handler removes the race.
 
+	// Closing the terminal window sends SIGHUP, which bubbletea does not
+	// handle and which otherwise ends the process on the spot: no
+	// background-shell cleanup, no SessionEnd hook, and a dev server the
+	// session started left holding its port. Stop the program instead so
+	// the caller's exit path runs. (SIGINT and SIGTERM are bubbletea's;
+	// see above for why they get no second handler here.)
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	runDone := make(chan struct{})
+	var hungUp atomic.Bool
+	go func() {
+		select {
+		case <-hup:
+			diag.L().Info("sighup: stopping")
+			hungUp.Store(true)
+			// With SIGHUP caught, nothing else ends the process: if
+			// shutdown ever blocked on the dead terminal it would linger
+			// forever, so bound it.
+			time.AfterFunc(10*time.Second, func() { os.Exit(129) })
+			program.Kill()
+		case <-runDone:
+		}
+	}()
+
 	diag.L().Info("phase tui run", "elapsed", diag.Since())
 	_, err := program.Run()
+	signal.Stop(hup)
+	close(runDone)
 	diag.L().Info("phase tui exit", "elapsed", diag.Since(), "err", err)
 	bridge.Stop()
+	if hungUp.Load() {
+		return 129 // 128 + SIGHUP: the terminal went away
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "harness:", err)
 		return 1
