@@ -19,7 +19,10 @@
    "internal/tui/permission_render.go"
   ],
   "regression_test": "TestRenderPlanApproval_RendersMarkdown",
-  "note": "Awaiting a live re-drive.",
-  "updated_at": "2026-09-27T23:18:10Z"
+  "note": "Verified live in iTerm2 (t2-kiln-4, build 9285da7).",
+  "updated_at": "2026-09-27T23:36:28Z",
+  "after_evidence": [
+   "/Users/andrepato/projects/crud-trial/runs/t2-kiln-4/005-prompt.png"
+  ]
  }
 }

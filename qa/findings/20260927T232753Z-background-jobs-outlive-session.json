@@ -22,7 +22,7 @@
    "internal/cli/tui.go"
   ],
   "regression_test": "TestPrint_BashBackgroundJob_DoesNotHangAndDiesWithSession,TestTUI_Hangup_StopsBackgroundJobs,TestExecKillLeftoverJobs",
-  "note": "Awaiting a live re-drive.",
-  "updated_at": "2026-09-27T23:27:54Z"
+  "note": "Verified live: closing the iTerm2 window of a real session (t2-kiln-4, build 9285da7) logged 'sighup: stopping' and ran the exit path in 90ms; no api processes left.",
+  "updated_at": "2026-09-27T23:41:32Z"
  }
 }

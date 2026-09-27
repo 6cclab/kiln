@@ -20,7 +20,7 @@
    "internal/tools/bash.go"
   ],
   "regression_test": "TestExecReturnsWhileBackgroundJobHoldsPipes,TestBashTimeout",
-  "note": "Awaiting a live re-drive.",
-  "updated_at": "2026-09-27T23:12:53Z"
+  "note": "Verified live: t2-kiln-3 and t2-kiln-4 ran their curl-against-backgrounded-server checks with no stall (tool time 14.9s total on t2-kiln-3).",
+  "updated_at": "2026-09-27T23:41:32Z"
  }
 }

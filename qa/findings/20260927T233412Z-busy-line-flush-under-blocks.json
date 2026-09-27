@@ -19,7 +19,10 @@
    "internal/tui/app.go"
   ],
   "regression_test": "TestView_SpinnerRowWhileBusy",
-  "note": "Awaiting a live re-drive.",
-  "updated_at": "2026-09-27T23:34:12Z"
+  "note": "Verified live in iTerm2 (t2-kiln-4, build 9285da7).",
+  "updated_at": "2026-09-27T23:41:32Z",
+  "after_evidence": [
+   "/Users/andrepato/projects/crud-trial/runs/t2-kiln-4/007-before-interrupt.png"
+  ]
  }
 }
