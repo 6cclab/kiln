@@ -15,12 +15,15 @@
  "evidence": [
   "qa/runs/real-20260928T083329/iterm-dark/real-wf-sessions-140x45/05-context.png"
  ],
- "status": "open",
+ "status": "fixed",
  "fix": {
   "files": [
    "internal/cli/chat.go"
   ],
   "regression_test": "TestUsageRowContextTokens_MatchesTheMeter",
-  "updated_at": "2026-09-28T12:52:51Z"
+  "updated_at": "2026-09-28T16:58:15Z",
+  "after_evidence": [
+   "qa/runs/real-20260928T134637/iterm-dark/real-wf-sessions-140x45/05-context.png"
+  ]
  }
 }
