@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/andrepato/harness/internal/plural"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/search"
 	"github.com/andrepato/harness/internal/tool"
 )

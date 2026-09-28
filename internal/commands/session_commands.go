@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"github.com/andrepato/harness/internal/plural"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/session/jsonl"
 )

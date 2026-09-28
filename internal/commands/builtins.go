@@ -285,6 +285,41 @@ func (c *modelCache) get(ctx context.Context, reg *provider.Registry) ([]provide
 
 func modelID(m provider.Model) string { return m.Provider + "/" + m.ID }
 
+// withoutDatedAliases drops a dated snapshot ID ("claude-haiku-4-5-20251001")
+// when the same provider also lists its undated alias ("claude-haiku-4-5"):
+// the two are the same model, and listing both doubles the picker. The
+// dated ID stays when it is the current model, so the picker still marks
+// it, and it stays resolvable by name either way.
+func withoutDatedAliases(models []provider.Model, currentID string) []provider.Model {
+	has := make(map[string]bool, len(models))
+	for _, m := range models {
+		has[modelID(m)] = true
+	}
+	out := make([]provider.Model, 0, len(models))
+	for _, m := range models {
+		id := modelID(m)
+		if base, ok := strings.CutSuffix(id, dateSuffix(id)); ok && base != id && has[base] && id != currentID {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// dateSuffix is id's trailing "-YYYYMMDD", or "" when it has none.
+func dateSuffix(id string) string {
+	i := strings.LastIndexByte(id, '-')
+	if i < 0 || len(id)-i-1 != 8 {
+		return ""
+	}
+	for _, r := range id[i+1:] {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return id[i:]
+}
+
 func modelDescription(m provider.Model) string {
 	tier := budget.TierFor(m.ContextWindow)
 	return fmt.Sprintf("%s · %s · %s usable", formatTokens(m.ContextWindow), tier.Name, formatTokens(budget.UsableTokens(tier)))
@@ -551,6 +586,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				// order, so numbering it in place reproduces /model's
 				// "grouped by provider via ordering, no section headers"
 				// contract with no extra sort here.
+				models = withoutDatedAliases(models, currentID)
 				items := make([]Item, 0, len(models))
 				lines := []string{fmt.Sprintf("current: %s", orUnknown(currentID)), ""}
 				for i, m := range models {
@@ -681,7 +717,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "exit",
-			Description: "Exit the harness",
+			Description: "Exit kiln",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.OnExit != nil {
 					deps.OnExit()
@@ -691,7 +727,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "quit",
-			Description: "Exit the harness",
+			Description: "Exit kiln",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.OnExit != nil {
 					deps.OnExit()
@@ -720,14 +756,29 @@ func BindHelp(source Source, list func() []Command) Source {
 			for i, c := range cmds {
 				if c.Name == "help" {
 					c.Run = func(ctx context.Context, args string) (Result, error) {
-						lines := make([]string, 0)
-						for _, cc := range list() {
-							hint := ""
+						// Names in one column, descriptions in the next, the
+						// same shape as the / palette. An unusually long
+						// usage line does not push every description right:
+						// the column is capped and that one row overflows.
+						const maxNameCol = 28
+						cmds := list()
+						usage := make([]string, len(cmds))
+						col := 0
+						for i, cc := range cmds {
+							usage[i] = "/" + QualifiedName(cc)
 							if cc.ArgumentHint != "" {
-								hint = " " + cc.ArgumentHint
+								usage[i] += " " + cc.ArgumentHint
 							}
-							lines = append(lines, fmt.Sprintf("  /%s%s  %s", QualifiedName(cc), hint, cc.Description))
+							if n := len([]rune(usage[i])); n <= maxNameCol {
+								col = max(col, n)
+							}
 						}
+						lines := make([]string, 0, len(cmds)+2)
+						for i, cc := range cmds {
+							pad := max(col-len([]rune(usage[i])), 0)
+							lines = append(lines, usage[i]+strings.Repeat(" ", pad)+"  "+cc.Description)
+						}
+						lines = append(lines, "", "Press ? on an empty prompt for keyboard shortcuts.")
 						return Result{Output: lines}, nil
 					}
 				}

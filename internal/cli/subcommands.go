@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/andrepato/harness/internal/diag"
-	"github.com/andrepato/harness/internal/plural"
 	"io"
 	"os"
 	"os/signal"
@@ -26,6 +25,7 @@ import (
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/search"
 )

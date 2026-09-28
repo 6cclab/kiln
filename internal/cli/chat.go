@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/andrepato/harness/internal/plural"
 	"io"
 	"net/http"
 	"os"
@@ -25,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/mattn/go-isatty"
 
 	"github.com/andrepato/harness/internal/agent"

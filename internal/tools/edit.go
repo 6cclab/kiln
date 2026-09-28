@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/andrepato/harness/internal/plural"
 	"os"
 
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/tool"
 )
 

@@ -710,3 +710,16 @@ func TestContextBreakdown_NeverExceedsMeasuredUsed(t *testing.T) {
 		t.Errorf("segments sum to %d, want the full window %d", sum+free, tier.ContextWindow)
 	}
 }
+
+func TestWithoutDatedAliases(t *testing.T) {
+	m := func(id string) provider.Model { return provider.Model{Provider: "anthropic", ID: id} }
+	in := []provider.Model{m("claude-haiku-4-5"), m("claude-haiku-4-5-20251001"), m("claude-opus-4-5-20251101"), m("claude-sonnet-4-5"), m("claude-sonnet-4-5-20250929")}
+	var got []string
+	for _, x := range withoutDatedAliases(in, "anthropic/claude-sonnet-4-5-20250929") {
+		got = append(got, x.ID)
+	}
+	want := "claude-haiku-4-5 claude-opus-4-5-20251101 claude-sonnet-4-5 claude-sonnet-4-5-20250929"
+	if strings.Join(got, " ") != want {
+		t.Errorf("got %v, want %s (dated alias hidden unless current or alone)", got, want)
+	}
+}

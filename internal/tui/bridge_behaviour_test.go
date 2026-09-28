@@ -278,3 +278,13 @@ func TestBridge_InFlightTools_ReportsStartedNotEnded(t *testing.T) {
 		t.Errorf("PrimaryArg = %q, want %q", views[0].PrimaryArg, "sleep 5")
 	}
 }
+
+func TestWebSearchBusyLabel(t *testing.T) {
+	got, ok := webSearchBusyLabel(`{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"go generics"}}`)
+	if !ok || got != "Searching the web for go generics" {
+		t.Errorf("label = %q, %v", got, ok)
+	}
+	if _, ok := webSearchBusyLabel(`{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[]}`); ok {
+		t.Error("a search result block is not a search start")
+	}
+}

@@ -1286,7 +1286,33 @@ func (b *Bridge) handleStreamEvent(se *msg.StreamEvent, ts *turnState) {
 			ts.lastStreamSend = now
 			b.Send(MsgStreamText{Text: ts.streamed.String()})
 		}
+	case msg.EventProviderBlockEnd:
+		// A server-side web search runs inside the stream, with no
+		// EventToolStart of its own: without this the busy line kept the
+		// turn's gerund for the seconds the search took.
+		if label, ok := webSearchBusyLabel(se.Content); ok {
+			b.Send(MsgSpinnerLabel{Text: label})
+		} else if strings.Contains(se.Content, `"web_search_tool_result"`) {
+			b.Send(MsgSpinnerReset{})
+		}
 	}
+}
+
+// webSearchBusyLabel is the busy label for a completed server_tool_use
+// web_search block: "Searching the web for <query>".
+func webSearchBusyLabel(raw string) (string, bool) {
+	var b anthropicServerToolUseBlock
+	if json.Unmarshal([]byte(raw), &b) != nil || b.Type != "server_tool_use" || b.Name != "web_search" {
+		return "", false
+	}
+	var in struct {
+		Query string `json:"query"`
+	}
+	_ = json.Unmarshal(b.Input, &in)
+	if in.Query == "" {
+		return "Searching the web", true
+	}
+	return "Searching the web for " + truncateBusyArg(in.Query, 40), true
 }
 
 // --- gate / plan approver wiring ----------------------------------------

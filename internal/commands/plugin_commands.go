@@ -3,11 +3,11 @@ package commands
 import (
 	"context"
 	"fmt"
-	"github.com/andrepato/harness/internal/plural"
 	"sort"
 	"strings"
 
 	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // PluginReportCommand builds /plugin: a report of every active plugin

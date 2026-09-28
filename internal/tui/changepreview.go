@@ -2,9 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"github.com/andrepato/harness/internal/plural"
 	"os"
 	"strings"
+
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // Render what a tool call will actually change, for the permission prompt.

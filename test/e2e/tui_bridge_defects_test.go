@@ -204,7 +204,7 @@ func TestTUI_FaultCommitsAfterPrecedingToolCall(t *testing.T) {
 	}
 	joined := strings.Join(append(append([]string(nil), s.Scrollback()...), s.Rows()...), "\n")
 	tool := strings.Index(joined, "ran-before-the-fault")
-	fault := strings.Index(joined, "status=400")
+	fault := strings.Index(joined, "Bad Request (400)")
 	if tool < 0 || fault < 0 || tool > fault {
 		t.Fatalf("want the bash block (at %d) above the error (at %d):\n%s", tool, fault, joined)
 	}

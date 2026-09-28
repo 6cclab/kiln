@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/andrepato/harness/internal/plural"
 	"sort"
 	"strings"
 
 	mcpgate "github.com/andrepato/harness/internal/mcp"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/tool"
 )
 

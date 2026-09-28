@@ -34,13 +34,13 @@ package agent
 
 import (
 	"context"
-	"github.com/andrepato/harness/internal/plural"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/tools"
 )
 

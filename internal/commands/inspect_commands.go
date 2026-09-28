@@ -3,13 +3,13 @@ package commands
 import (
 	"context"
 	"fmt"
-	"github.com/andrepato/harness/internal/plural"
 	"strings"
 
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/agents"
 	"github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // ServerStatus is one MCP server's connection outcome. It stands in for a
@@ -46,15 +46,6 @@ type InspectGate interface {
 	Roots() []string
 }
 
-// defaultUnfiredHookEvents are the events the harness parses but does not
-// yet fire. Saying so beats implying otherwise.
-var defaultUnfiredHookEvents = map[hooks.Event]bool{
-	hooks.Stop:         true,
-	hooks.SubagentStop: true,
-	hooks.Notification: true,
-	hooks.PreCompact:   true,
-}
-
 // hookEventOrder is the fixed display order for /hooks and /doctor's count.
 var hookEventOrder = []hooks.Event{
 	hooks.PreToolUse,
@@ -73,12 +64,10 @@ type InspectDeps struct {
 	MCPStatuses func() []ServerStatus
 	Gate        InspectGate
 	Hooks       hooks.Config
-	// UnfiredEvents overrides defaultUnfiredHookEvents when non-nil.
-	UnfiredEvents map[hooks.Event]bool
-	Agents        []agents.Definition
-	Tier          budget.Tier
-	Cwd           string
-	ModelLabel    string
+	Agents      []agents.Definition
+	Tier        budget.Tier
+	Cwd         string
+	ModelLabel  string
 	// ActiveTools returns the resident tool names, for /doctor's summary.
 	ActiveTools        func() ([]string, error)
 	SettingsLoadedFrom []string
@@ -115,11 +104,6 @@ func hookCount(cfg hooks.Config) (total int, eventsUsed int) {
 // integrator also registers ManageCommands, its versions of the same
 // names (which additionally open a panel) are registered later and win.
 func InspectCommands(deps InspectDeps) Source {
-	unfired := deps.UnfiredEvents
-	if unfired == nil {
-		unfired = defaultUnfiredHookEvents
-	}
-
 	cmds := []Command{
 		{
 			Name:        "mcp",
@@ -211,11 +195,7 @@ func InspectCommands(deps InspectDeps) Source {
 				}
 				var lines []string
 				for _, event := range configured {
-					note := ""
-					if unfired[event] {
-						note = "  (parsed, not yet fired by this harness)"
-					}
-					lines = append(lines, fmt.Sprintf("%s%s", event, note))
+					lines = append(lines, string(event))
 					for _, group := range deps.Hooks[event] {
 						matcher := ""
 						if group.MatcherPattern != "" {
