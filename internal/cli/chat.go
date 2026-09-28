@@ -533,7 +533,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	} else {
 		fmt.Fprintf(stderr, "kiln: session search unavailable: %v\n", err)
 	}
-	residentNow := residentToolNames(sessionSearch != nil)
+	residentNow := residentToolNames(sessionSearch != nil, webSearchAllowed(perms))
 
 	mcpSess := &mcpSession{
 		tools:    mcpTools,
@@ -640,7 +640,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	mcpExtras, mcpIndexText := buildMCPExtras(mcpTools)
 	extraTools := make([]*tool.Tool, 0, len(mcpExtras)+7)
 	extraTools = append(extraTools, mcpExtras...)
-	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool)
+	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool, tools.WebSearchTool())
 	extraTools = append(extraTools, bgShellTools...)
 	extraTools = append(extraTools, tools.WebFetchTool(nil))
 	if sessionSearch != nil {

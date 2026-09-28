@@ -90,10 +90,21 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 				out = append(out, RenderUserMessage(text, width)...)
 			}
 		case msg.AssistantMessage:
+			searchQueries := searchQueriesByToolUseID(m.Content)
 			for _, c := range m.Content {
 				switch cv := c.(type) {
 				case msg.ToolCall:
 					calls[cv.ID] = cv
+				case msg.ProviderBlock:
+					// A replayed web_search_tool_result commits in place,
+					// the same as a live search — see bridge.go's
+					// commitMessageInOrder, which this mirrors for Ctrl+O
+					// / resume.
+					if view, ok := searchResultView(cv, searchQueries); ok {
+						out = append(out, "")
+						out = append(out, FitLines(RenderToolCall(view), width, resultIndent)...)
+						out = append(out, "")
+					}
 				case msg.ThinkingContent:
 					// A committed thinking block replays exactly like the
 					// live one (app.go's handleThinking), just sourced from

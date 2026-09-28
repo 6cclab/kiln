@@ -62,6 +62,18 @@ type Tool struct {
 	// process-wide state (bash, read, edit, write, ...) must leave this
 	// false so the turn loop keeps running them one at a time.
 	Concurrent bool
+
+	// ServerTool, when non-nil, marks this as a provider server tool: a
+	// tool the model calls whose execution happens on the provider's own
+	// infrastructure (e.g. Anthropic's web_search), not through Execute.
+	// It holds that provider's verbatim tool-declaration JSON (see
+	// provider.ToolDef.ServerTool), copied into the request only by the
+	// client for that provider; every other provider's client omits the
+	// tool entirely. Execute is still required to satisfy the Tool
+	// contract and as a defensive fallback, but must never legitimately
+	// run: a provider that actually offered this tool always resolves the
+	// call itself and never emits a client-side msg.ToolCall for it.
+	ServerTool json.RawMessage
 }
 
 // Set is a name-indexed collection with stable order.

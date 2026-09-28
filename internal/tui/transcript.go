@@ -3,10 +3,13 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/andrepato/harness/internal/msg"
 )
 
 // Transcript rendering — the layout defined in docs/claude-code-reference.md
@@ -1055,3 +1058,117 @@ func RenderAssistantText(lines []string) []string {
 // dropped if the design has no place for it". Its two call sites
 // (app.go's finishTurn, replay.go's RenderTranscriptEntries) are removed
 // along with it.
+
+// --- provider blocks (Anthropic web_search) ------------------------------
+
+// anthropicServerToolUseBlock/anthropicWebSearchResultBlock decode the raw
+// JSON a msg.ProviderBlock carries for Provider=="anthropic", mirroring
+// the wire shapes internal/provider/api/anthropic_messages.go builds.
+type anthropicServerToolUseBlock struct {
+	Type  string          `json:"type"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+type anthropicWebSearchResultBlock struct {
+	Type      string          `json:"type"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+}
+
+type anthropicSearchResultItem struct {
+	Type  string `json:"type"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
+}
+
+type anthropicSearchErrorItem struct {
+	Type      string `json:"type"`
+	ErrorCode string `json:"error_code"`
+}
+
+// searchQueriesByToolUseID scans an assistant message's content for
+// server_tool_use blocks and returns their queries keyed by block id, so
+// the paired web_search_tool_result block (matched on tool_use_id) can
+// show what was searched for.
+func searchQueriesByToolUseID(content msg.Blocks) map[string]string {
+	out := map[string]string{}
+	for _, c := range content {
+		pb, ok := c.(msg.ProviderBlock)
+		if !ok || pb.Provider != "anthropic" {
+			continue
+		}
+		var b anthropicServerToolUseBlock
+		if json.Unmarshal(pb.Raw, &b) != nil || b.Type != "server_tool_use" || b.Name != "web_search" {
+			continue
+		}
+		var input struct {
+			Query string `json:"query"`
+		}
+		if json.Unmarshal(b.Input, &input) == nil {
+			out[b.ID] = input.Query
+		}
+	}
+	return out
+}
+
+// searchResultView builds the committed block for one Anthropic
+// web_search_tool_result ProviderBlock: label "Web Search", the query as
+// the primary arg, and one result row — "→ N results · domain, domain, …"
+// on success, the error code on failure. ok is false when pb is not a
+// web_search_tool_result block at all (a server_tool_use block never gets
+// its own row; its query is folded into the paired result's view instead).
+func searchResultView(pb msg.ProviderBlock, queries map[string]string) (ToolCallView, bool) {
+	if pb.Provider != "anthropic" {
+		return ToolCallView{}, false
+	}
+	var b anthropicWebSearchResultBlock
+	if json.Unmarshal(pb.Raw, &b) != nil || b.Type != "web_search_tool_result" {
+		return ToolCallView{}, false
+	}
+	view := ToolCallView{
+		Name:       MapToolName("web_search"),
+		PrimaryArg: queries[b.ToolUseID],
+		Status:     CallOK,
+	}
+	var errItem anthropicSearchErrorItem
+	if json.Unmarshal(b.Content, &errItem) == nil && errItem.Type == "web_search_tool_result_error" {
+		view.Status = CallError
+		view.ResultLines = []string{"→ " + errItem.ErrorCode}
+		return view, true
+	}
+	var items []anthropicSearchResultItem
+	if err := json.Unmarshal(b.Content, &items); err != nil {
+		// An unrecognized content shape still commits a block rather than
+		// silently dropping the search from the transcript.
+		view.ResultLines = []string{"→ 0 results"}
+		return view, true
+	}
+	const maxDomains = 5
+	domains := make([]string, 0, maxDomains)
+	seen := map[string]bool{}
+	for _, it := range items {
+		if len(domains) >= maxDomains {
+			break
+		}
+		host := it.URL
+		if u, err := url.Parse(it.URL); err == nil && u.Hostname() != "" {
+			host = u.Hostname()
+		}
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		domains = append(domains, host)
+	}
+	line := fmt.Sprintf("→ %d result", len(items))
+	if len(items) != 1 {
+		line += "s"
+	}
+	if len(domains) > 0 {
+		line += " · " + strings.Join(domains, ", ")
+	}
+	view.ResultLines = []string{line}
+	return view, true
+}

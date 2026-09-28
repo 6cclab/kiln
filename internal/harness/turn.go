@@ -273,6 +273,16 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		tip = responseEntryID
 
 		if len(toolCalls) == 0 {
+			if final.StopReason == msg.StopPause {
+				// Anthropic's pause_turn: a long server-tool turn (e.g. an
+				// extended web search) was cut for interim delivery, not
+				// finished. The partial assistant message was already
+				// committed to the branch tip above, so the next loop
+				// iteration's transcript scan includes it verbatim; simply
+				// looping back re-requests exactly as Anthropic's docs
+				// prescribe, without treating this as the end of the turn.
+				continue
+			}
 			l.h.events.Emit(Event{Type: EventTurnEnd, Lane: l.name, OperationID: operationID})
 			// The model finished before the next loop iteration's own
 			// checkpoint got a chance to drain the inbox. A queued
@@ -532,7 +542,7 @@ func buildStreamOptions(opts Options, cfg session.LaneConfiguration) provider.St
 		if !ok {
 			continue
 		}
-		toolDefs = append(toolDefs, provider.ToolDef{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
+		toolDefs = append(toolDefs, provider.ToolDef{Name: t.Name, Description: t.Description, Parameters: t.Parameters, ServerTool: t.ServerTool})
 	}
 	return provider.StreamOptions{
 		ThinkingLevel: provider.ThinkingLevel(thinking),

@@ -66,6 +66,21 @@ type anthropicContentBlock struct {
 	Content   any             `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
 	CacheCtrl *cacheControl   `json:"cache_control,omitempty"`
+	// Raw, when set, is a provider-native block (msg.ProviderBlock.Raw for
+	// Provider=="anthropic": a server_tool_use or web_search_tool_result
+	// block) replayed to the API verbatim. MarshalJSON below sends Raw
+	// as-is instead of the struct's own fields when set.
+	Raw json.RawMessage `json:"-"`
+}
+
+// MarshalJSON sends b.Raw verbatim when set (a replayed provider-native
+// block), or the struct's own fields otherwise.
+func (b anthropicContentBlock) MarshalJSON() ([]byte, error) {
+	if b.Raw != nil {
+		return b.Raw, nil
+	}
+	type alias anthropicContentBlock
+	return json.Marshal(alias(b))
 }
 
 type anthropicImage struct {
@@ -89,6 +104,20 @@ type anthropicTool struct {
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema"`
 	CacheCtrl   *cacheControl   `json:"cache_control,omitempty"`
+	// Raw, when set, is a provider.ToolDef.ServerTool declaration (e.g.
+	// {"type":"web_search_20250305","name":"web_search","max_uses":5})
+	// sent verbatim in place of the function-tool fields above.
+	Raw json.RawMessage `json:"-"`
+}
+
+// MarshalJSON sends t.Raw verbatim when set (a server tool declaration),
+// or the struct's own function-tool fields otherwise.
+func (t anthropicTool) MarshalJSON() ([]byte, error) {
+	if t.Raw != nil {
+		return t.Raw, nil
+	}
+	type alias anthropicTool
+	return json.Marshal(alias(t))
 }
 
 type anthropicThinking struct {
@@ -247,12 +276,19 @@ func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts 
 		strict := model.SupportsStrictMode()
 		_ = strict
 		for i, td := range opts.Tools {
-			schema := td.Parameters
-			if len(schema) == 0 {
-				schema = json.RawMessage(`{"type":"object","properties":{}}`)
+			var tool anthropicTool
+			if len(td.ServerTool) > 0 {
+				// A provider-native tool (e.g. web_search): its declaration
+				// is sent verbatim, not built from Name/Parameters.
+				tool = anthropicTool{Raw: td.ServerTool}
+			} else {
+				schema := td.Parameters
+				if len(schema) == 0 {
+					schema = json.RawMessage(`{"type":"object","properties":{}}`)
+				}
+				tool = anthropicTool{Name: td.Name, Description: td.Description, InputSchema: schema}
 			}
-			tool := anthropicTool{Name: td.Name, Description: td.Description, InputSchema: schema}
-			if i == len(opts.Tools)-1 && boolDefault(compat.SupportsCacheControlOnTools, true) {
+			if i == len(opts.Tools)-1 && tool.Raw == nil && boolDefault(compat.SupportsCacheControlOnTools, true) {
 				tool.CacheCtrl = cc
 			}
 			req.Tools = append(req.Tools, tool)
@@ -360,6 +396,16 @@ func convertBlocksToAnthropic(blocks msg.Blocks) []anthropicContentBlock {
 		case msg.ToolCall:
 			args, _ := json.Marshal(c.Arguments)
 			out = append(out, anthropicContentBlock{Type: "tool_use", ID: c.ID, Name: c.Name, Input: args})
+		case msg.ProviderBlock:
+			// Replayed verbatim only for the provider that sent it (a
+			// server_tool_use/web_search_tool_result pair recorded while
+			// running against Anthropic). A ProviderBlock from any other
+			// provider is silently dropped, same as every other provider's
+			// own convertBlocksTo* leaving ProviderBlock unmatched in their
+			// type switches.
+			if c.Provider == "anthropic" {
+				out = append(out, anthropicContentBlock{Raw: c.Raw})
+			}
 		}
 	}
 	return out
@@ -432,7 +478,28 @@ type anthropicSSEContentBlockStart struct {
 		ID        string          `json:"id"`
 		Name      string          `json:"name"`
 		Input     json.RawMessage `json:"input"`
+		// ToolUseID/Content are set on a web_search_tool_result block
+		// (server_tool_use reuses ID/Name/Input above, same as tool_use).
+		ToolUseID string          `json:"tool_use_id"`
+		Content   json.RawMessage `json:"content"`
 	} `json:"content_block"`
+}
+
+// anthropicServerToolUseWire is the JSON shape a server_tool_use
+// ProviderBlock is stored/replayed as.
+type anthropicServerToolUseWire struct {
+	Type  string          `json:"type"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+// anthropicWebSearchResultWire is the JSON shape a web_search_tool_result
+// ProviderBlock is stored/replayed as.
+type anthropicWebSearchResultWire struct {
+	Type      string          `json:"type"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
 }
 
 type anthropicSSEContentBlockDelta struct {
@@ -459,14 +526,22 @@ type anthropicSSEMessageDelta struct {
 		OutputTokens             *int `json:"output_tokens"`
 		CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
 		CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+		ServerToolUse            *struct {
+			WebSearchRequests int `json:"web_search_requests"`
+		} `json:"server_tool_use"`
 	} `json:"usage"`
 }
 
-// mapAnthropicStopReason mirrors pi's mapStopReason.
+// mapAnthropicStopReason mirrors pi's mapStopReason. pause_turn is its own
+// reason, not folded into "stop": it means a long server-tool turn was cut
+// for interim delivery, and the caller (internal/harness/turn.go's drive())
+// must re-request rather than finish the operation.
 func mapAnthropicStopReason(reason string) (msg.StopReason, string) {
 	switch reason {
-	case "end_turn", "pause_turn", "stop_sequence":
+	case "end_turn", "stop_sequence":
 		return msg.StopStop, ""
+	case "pause_turn":
+		return msg.StopPause, ""
 	case "max_tokens":
 		return msg.StopLength, ""
 	case "tool_use":
@@ -540,8 +615,10 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 
 	// blockKind tracks each content index's kind so deltas route correctly.
 	type blockInfo struct {
-		kind        string // "text" | "thinking" | "toolCall"
-		partialJSON string
+		kind         string // "text" | "thinking" | "toolCall" | "serverToolUse" | "providerBlockDone"
+		partialJSON  string
+		providerID   string
+		providerName string
 	}
 	blocks := map[int]*blockInfo{}
 	indexOf := map[int]int{} // sse index -> position in partial.Content
@@ -591,6 +668,30 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 				indexOf[cb.Index] = pos
 				blocks[cb.Index] = &blockInfo{kind: "toolCall"}
 				events <- msg.StreamEvent{Type: msg.EventToolCallStart, ContentIndex: pos, Partial: partial}
+			case "server_tool_use":
+				// A provider-executed tool call (e.g. web_search): its
+				// input streams in via input_json_delta exactly like a
+				// tool_use block, but it is carried as a ProviderBlock, not
+				// a msg.ToolCall, so the harness turn loop never treats it
+				// as a client-side call to execute.
+				initial, _ := json.Marshal(anthropicServerToolUseWire{
+					Type: "server_tool_use", ID: cb.ContentBlock.ID, Name: cb.ContentBlock.Name, Input: json.RawMessage("{}"),
+				})
+				partial.Content = append(partial.Content, msg.ProviderBlock{Provider: "anthropic", Type: "providerBlock", Raw: initial})
+				pos := len(partial.Content) - 1
+				indexOf[cb.Index] = pos
+				blocks[cb.Index] = &blockInfo{kind: "serverToolUse", providerID: cb.ContentBlock.ID, providerName: cb.ContentBlock.Name}
+				events <- msg.StreamEvent{Type: msg.EventProviderBlockStart, ContentIndex: pos, Partial: partial}
+			case "web_search_tool_result":
+				// Complete as soon as it starts -- no deltas follow.
+				raw, _ := json.Marshal(anthropicWebSearchResultWire{
+					Type: "web_search_tool_result", ToolUseID: cb.ContentBlock.ToolUseID, Content: cb.ContentBlock.Content,
+				})
+				partial.Content = append(partial.Content, msg.ProviderBlock{Provider: "anthropic", Type: "providerBlock", Raw: raw})
+				pos := len(partial.Content) - 1
+				indexOf[cb.Index] = pos
+				blocks[cb.Index] = &blockInfo{kind: "providerBlockDone"}
+				events <- msg.StreamEvent{Type: msg.EventProviderBlockEnd, ContentIndex: pos, Content: string(raw), Partial: partial}
 			}
 		case "content_block_delta":
 			var cd anthropicSSEContentBlockDelta
@@ -615,6 +716,13 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 				events <- msg.StreamEvent{Type: msg.EventThinkingDelta, ContentIndex: pos, Delta: cd.Delta.Thinking, Partial: partial}
 			case "input_json_delta":
 				bi.partialJSON += cd.Delta.PartialJSON
+				if bi.kind == "serverToolUse" {
+					// The input accumulates as raw JSON text; rebuilt into
+					// the ProviderBlock's Raw at content_block_stop below,
+					// once the whole object is known to be well-formed.
+					events <- msg.StreamEvent{Type: msg.EventProviderBlockStart, ContentIndex: pos, Delta: cd.Delta.PartialJSON, Partial: partial}
+					return
+				}
 				tc := partial.Content[pos].(msg.ToolCall)
 				var args map[string]any
 				if json.Unmarshal([]byte(bi.partialJSON), &args) == nil {
@@ -668,6 +776,20 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 					partial.Content[pos] = tc
 				}
 				events <- msg.StreamEvent{Type: msg.EventToolCallEnd, ContentIndex: pos, ToolCall: &tc, Partial: partial}
+			case "serverToolUse":
+				input := json.RawMessage("{}")
+				if bi.partialJSON != "" {
+					var probe map[string]any
+					if json.Unmarshal([]byte(bi.partialJSON), &probe) == nil {
+						input = json.RawMessage(bi.partialJSON)
+					}
+				}
+				raw, _ := json.Marshal(anthropicServerToolUseWire{
+					Type: "server_tool_use", ID: bi.providerID, Name: bi.providerName, Input: input,
+				})
+				pb := msg.ProviderBlock{Provider: "anthropic", Type: "providerBlock", Raw: raw}
+				partial.Content[pos] = pb
+				events <- msg.StreamEvent{Type: msg.EventProviderBlockEnd, ContentIndex: pos, Content: string(raw), Partial: partial}
 			}
 		case "message_delta":
 			var md anthropicSSEMessageDelta
@@ -693,6 +815,9 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 			}
 			if md.Usage.CacheCreationInputTokens != nil {
 				partial.Usage.CacheWrite = *md.Usage.CacheCreationInputTokens
+			}
+			if md.Usage.ServerToolUse != nil {
+				partial.Usage.ServerToolUse = &msg.ServerToolUse{WebSearchRequests: md.Usage.ServerToolUse.WebSearchRequests}
 			}
 			partial.Usage.TotalTokens = partial.Usage.Input + partial.Usage.Output + partial.Usage.CacheRead + partial.Usage.CacheWrite
 			computeAnthropicCost(model, &partial.Usage)
@@ -751,7 +876,11 @@ func computeAnthropicCost(model provider.Model, u *msg.Usage) {
 		CacheRead:  float64(u.CacheRead) / 1_000_000 * rates.CacheRead,
 		CacheWrite: float64(u.CacheWrite) / 1_000_000 * rates.CacheWrite,
 	}
-	u.Cost.Total = u.Cost.Input + u.Cost.Output + u.Cost.CacheRead + u.Cost.CacheWrite
+	if u.ServerToolUse != nil {
+		// $10 per 1000 web searches, per Anthropic's published pricing.
+		u.Cost.Search = float64(u.ServerToolUse.WebSearchRequests) / 1000 * 10
+	}
+	u.Cost.Total = u.Cost.Input + u.Cost.Output + u.Cost.CacheRead + u.Cost.CacheWrite + u.Cost.Search
 }
 
 // hasNonText reports whether blocks holds anything other than text.

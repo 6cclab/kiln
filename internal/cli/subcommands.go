@@ -366,7 +366,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		hasSessionSearch = true
 		_ = s.Close()
 	}
-	residentNow := residentToolNames(hasSessionSearch)
+	residentNow := residentToolNames(hasSessionSearch, webSearchAllowed(settings.Permissions))
 	lines = append(lines, fmt.Sprintf(`tools      %d resident, strategy "%s"`, len(residentNow), strategy))
 
 	hookConfig := claudehooks.LoadHooks(cwd)

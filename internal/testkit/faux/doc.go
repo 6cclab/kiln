@@ -198,6 +198,25 @@
 // end-of-turn stop reason, and the exhaustion is recorded in /_faux/state
 // under that model; other scripted models are unaffected.
 //
+// A raw_blocks step emits a list of objects verbatim as Anthropic content
+// blocks, for provider-native blocks this package has no first-class step
+// for (server_tool_use, web_search_tool_result):
+//
+//	steps:
+//	  - raw_blocks:
+//	      - {type: server_tool_use, id: srvtoolu_1, name: web_search, input: {query: "go generics"}}
+//	      - {type: web_search_tool_result, tool_use_id: srvtoolu_1, content: [{type: web_search_result, url: "https://go.dev", title: "Go"}]}
+//	    stop_reason: pause_turn
+//
+// A "server_tool_use"-typed block streams its "input" field via
+// input_json_delta chunks, matching the real API; every other type is sent
+// complete in content_block_start, with no deltas. A raw_blocks step always
+// ends its own turn, like a tool_call. stop_reason overrides the turn's
+// normal end_turn/tool_use stop reason inference (e.g. "pause_turn" for a
+// long server-tool turn that was cut for interim delivery) and may be set
+// on any step, not just raw_blocks. Both are Anthropic-only; the OpenAI
+// handler ignores them.
+//
 // The server is deterministic: streamed content is split into small,
 // fixed-size chunks, ids are derived from script step ids and a request
 // sequence number instead of randomness, and no wall-clock value is

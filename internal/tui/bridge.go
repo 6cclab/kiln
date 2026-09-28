@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -848,15 +849,25 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 			return
 		}
 		text := assistantText(ev.Message)
-		if text == "" {
+		if text != "" {
+			// The final state always sends regardless of streamThrottle —
+			// a throttled-away last delta must not be the one dropped, or
+			// the live caret's last frame would show stale, truncated text
+			// for an instant before the committed block replaces it.
+			b.Send(MsgStreamText{Text: text})
+		}
+		if !hasSearchBlocks(ev.Message.Content) {
+			if text != "" {
+				b.Send(msgCommitMarkdown{Text: text})
+			}
 			return
 		}
-		// The final state always sends regardless of streamThrottle — a
-		// throttled-away last delta must not be the one dropped, or the
-		// live caret's last frame would show stale, truncated text for an
-		// instant before the committed block replaces it.
-		b.Send(MsgStreamText{Text: text})
-		b.Send(msgCommitMarkdown{Text: text})
+		// A message that ran a web search interleaves text and search
+		// blocks in Content order (Anthropic can emit text, a search, then
+		// more text, all within one message since the search resolved
+		// server-side mid-stream): commit each in that order instead of
+		// the single whole-message markdown block above.
+		b.commitMessageInOrder(ev.Message)
 
 	case harness.EventToolStart:
 		ts.toolCallsInTurn++
@@ -1454,6 +1465,54 @@ func assistantText(m *msg.AssistantMessage) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, ""))
+}
+
+// hasSearchBlocks reports whether m's content carries an Anthropic
+// web_search_tool_result ProviderBlock — the signal bridge.go uses to
+// switch EventMessageEnd from "commit the whole message as one markdown
+// block" to "walk Content in order, committing each search where it
+// happened".
+func hasSearchBlocks(content msg.Blocks) bool {
+	for _, c := range content {
+		if pb, ok := c.(msg.ProviderBlock); ok && pb.Provider == "anthropic" {
+			if bytes.Contains(pb.Raw, []byte(`"web_search_tool_result"`)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// commitMessageInOrder renders m's content in order, flushing accumulated
+// text as its own markdown block whenever a web search result block is
+// reached, and committing that search as a tool-call-shaped block (same
+// renderer as a real tool call: label, query, "→ N results · domains").
+// server_tool_use blocks carry no row of their own — their query is read
+// into the paired result's PrimaryArg via searchQueriesByToolUseID.
+func (b *Bridge) commitMessageInOrder(m *msg.AssistantMessage) {
+	queries := searchQueriesByToolUseID(m.Content)
+	var pending strings.Builder
+	flush := func() {
+		text := strings.TrimSpace(pending.String())
+		pending.Reset()
+		if text != "" {
+			b.Send(msgCommitMarkdown{Text: text})
+		}
+	}
+	for _, c := range m.Content {
+		switch cv := c.(type) {
+		case msg.TextContent:
+			pending.WriteString(cv.Text)
+		case msg.ProviderBlock:
+			view, ok := searchResultView(cv, queries)
+			if !ok {
+				continue
+			}
+			flush()
+			b.Send(msgCommitToolCall{View: view})
+		}
+	}
+	flush()
 }
 
 // diffFromToolDetails decodes an edit result's Details payload

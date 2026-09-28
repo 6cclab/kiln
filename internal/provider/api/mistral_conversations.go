@@ -468,6 +468,9 @@ func convertToMistralTools(tools []provider.ToolDef, model provider.Model) []mis
 	strict := model.SupportsStrictMode()
 	out := make([]mistralWireTool, 0, len(tools))
 	for _, td := range tools {
+		if len(td.ServerTool) > 0 {
+			continue
+		}
 		schema := td.Parameters
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)

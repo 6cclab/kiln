@@ -35,6 +35,12 @@ const (
 	StopError    StopReason = "error"
 	StopAborted  StopReason = "aborted"
 	StopDeferred StopReason = "deferred"
+	// StopPause is Anthropic's "pause_turn": a long server-tool turn (e.g.
+	// an extended web search) was cut off for interim delivery, not
+	// finished. The caller must re-send the conversation, including the
+	// partial assistant message this stop reason came with, to let the
+	// turn continue -- see internal/harness/turn.go's drive().
+	StopPause StopReason = "pause"
 )
 
 // Content is one block inside a message. Concrete types: TextContent,
@@ -90,10 +96,36 @@ type ToolCall struct {
 	Type             string `json:"type"`
 }
 
+// ProviderBlock carries one provider-native content block verbatim: a
+// block shape this harness does not model as its own content type (e.g.
+// Anthropic's server_tool_use / web_search_tool_result), kept as raw JSON
+// so it round-trips on disk and can be replayed to the provider that sent
+// it exactly as it was received. Raw holds the block's own JSON object
+// (its own "type" field is inside Raw, not read from this struct's Type
+// field, which is always the fixed discriminator "providerBlock" so
+// UnmarshalContent can route to this type).
+//
+// The harness turn loop (internal/harness/turn.go) must not treat this as
+// a tool call: msg.ToolCallsOf only matches msg.ToolCall, so a
+// ProviderBlock is silently invisible to it, which is exactly the
+// "must not treat it as a tool call" requirement -- no extra guard needed.
+type ProviderBlock struct {
+	// Provider names which provider's wire format Raw is in (e.g.
+	// "anthropic"). A provider's request converter must replay Raw
+	// verbatim only when Provider matches its own name; every other
+	// provider's converter leaves the block out of its request entirely
+	// (a plain type switch over msg.Content already does this: none of
+	// them have a case for ProviderBlock, so it falls through unmatched).
+	Provider string          `json:"provider"`
+	Raw      json.RawMessage `json:"raw"`
+	Type     string          `json:"type"`
+}
+
 func (TextContent) contentType() string     { return "text" }
 func (ThinkingContent) contentType() string { return "thinking" }
 func (ImageContent) contentType() string    { return "image" }
 func (ToolCall) contentType() string        { return "toolCall" }
+func (ProviderBlock) contentType() string   { return "providerBlock" }
 
 // Text builds a text block.
 func Text(s string) TextContent { return TextContent{Text: s, Type: "text"} }
@@ -166,6 +198,9 @@ func UnmarshalContent(raw []byte) (Content, error) {
 	case "toolCall":
 		var c ToolCall
 		return c, json.Unmarshal(raw, &c)
+	case "providerBlock":
+		var c ProviderBlock
+		return c, json.Unmarshal(raw, &c)
 	default:
 		return nil, fmt.Errorf("unknown content type %q", probe.Type)
 	}
@@ -177,7 +212,13 @@ type Cost struct {
 	CacheWrite float64 `json:"cacheWrite"`
 	Input      float64 `json:"input"`
 	Output     float64 `json:"output"`
-	Total      float64 `json:"total"`
+	// Search is the cost of provider-executed server-tool searches (e.g.
+	// Anthropic web_search at $10/1000 searches), folded into Total the
+	// same as every other component. Zero for a request that used no
+	// server tool; omitempty so an old session on disk (written before
+	// this field existed) round-trips byte-for-byte unchanged.
+	Search float64 `json:"search,omitempty"`
+	Total  float64 `json:"total"`
 }
 
 // Usage is token accounting for one request or one aggregate.
@@ -191,6 +232,17 @@ type Usage struct {
 	// Reasoning is a subset of Output. nil when the provider reports no split.
 	Reasoning   *int `json:"reasoning,omitempty"`
 	TotalTokens int  `json:"totalTokens"`
+	// ServerToolUse is usage.server_tool_use from the Anthropic Messages
+	// API, when the response reported any (currently only web search). nil
+	// when the provider did not report this, distinct from a reported
+	// zero.
+	ServerToolUse *ServerToolUse `json:"serverToolUse,omitempty"`
+}
+
+// ServerToolUse is a count of provider-executed server-tool invocations
+// within one request, priced separately from token usage.
+type ServerToolUse struct {
+	WebSearchRequests int `json:"webSearchRequests"`
 }
 
 // Add returns u plus o, field by field.
@@ -205,6 +257,7 @@ func (u Usage) Add(o Usage) Usage {
 	out.Cost.CacheWrite += o.Cost.CacheWrite
 	out.Cost.Input += o.Cost.Input
 	out.Cost.Output += o.Cost.Output
+	out.Cost.Search += o.Cost.Search
 	out.Cost.Total += o.Cost.Total
 	if u.Reasoning != nil || o.Reasoning != nil {
 		r := 0
@@ -215,6 +268,16 @@ func (u Usage) Add(o Usage) Usage {
 			r += *o.Reasoning
 		}
 		out.Reasoning = &r
+	}
+	if u.ServerToolUse != nil || o.ServerToolUse != nil {
+		s := ServerToolUse{}
+		if u.ServerToolUse != nil {
+			s.WebSearchRequests += u.ServerToolUse.WebSearchRequests
+		}
+		if o.ServerToolUse != nil {
+			s.WebSearchRequests += o.ServerToolUse.WebSearchRequests
+		}
+		out.ServerToolUse = &s
 	}
 	return out
 }

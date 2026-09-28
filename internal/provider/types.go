@@ -357,6 +357,14 @@ type ToolDef struct {
 	// Parameters is the tool's JSON Schema, already serialized. Each API
 	// client maps this into its own tool-definition shape.
 	Parameters json.RawMessage
+	// ServerTool, when non-nil, is a provider-native tool declaration
+	// (e.g. Anthropic's {"type":"web_search_20250305","name":"web_search",
+	// "max_uses":5}) to be sent verbatim in place of the Name/Parameters
+	// function schema. Only the client whose wire format this JSON is
+	// written for should ever send it; every other client must skip a
+	// ToolDef with ServerTool set rather than declare it as a function
+	// tool, since the tool has no schema-callable implementation there.
+	ServerTool json.RawMessage
 }
 
 // StreamOptions configures one Stream call. It mirrors the subset of pi-ai's

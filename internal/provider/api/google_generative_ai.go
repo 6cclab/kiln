@@ -231,6 +231,9 @@ func buildGoogleRequest(model provider.Model, transcript []msg.Message, opts pro
 	if len(opts.Tools) > 0 {
 		decls := make([]googleFunctionDeclaration, 0, len(opts.Tools))
 		for _, td := range opts.Tools {
+			if len(td.ServerTool) > 0 {
+				continue
+			}
 			schema := td.Parameters
 			if len(schema) == 0 {
 				schema = json.RawMessage(`{"type":"object","properties":{}}`)

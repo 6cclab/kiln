@@ -200,6 +200,12 @@ func buildOpenAIRequest(model provider.Model, transcript []msg.Message, opts pro
 	}
 
 	for _, td := range opts.Tools {
+		if len(td.ServerTool) > 0 {
+			// A provider-native tool declaration (e.g. Anthropic's
+			// web_search): this API has no equivalent, so the tool is
+			// simply not offered, matching every non-Anthropic client.
+			continue
+		}
 		schema := td.Parameters
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
