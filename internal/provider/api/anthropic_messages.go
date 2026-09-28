@@ -96,18 +96,61 @@ type anthropicThinking struct {
 	BudgetToks int    `json:"budget_tokens,omitempty"`
 }
 
+// anthropicOutputConfig carries the effort level adaptive thinking uses.
+type anthropicOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
+}
+
 type anthropicRequest struct {
-	Model       string                  `json:"model"`
-	System      []anthropicContentBlock `json:"system,omitempty"`
-	Messages    []anthropicWireMessage  `json:"messages"`
-	Tools       []anthropicTool         `json:"tools,omitempty"`
-	MaxTokens   int                     `json:"max_tokens"`
-	Stream      bool                    `json:"stream"`
-	Thinking    *anthropicThinking      `json:"thinking,omitempty"`
-	Temperature *float64                `json:"temperature,omitempty"`
+	Model        string                  `json:"model"`
+	System       []anthropicContentBlock `json:"system,omitempty"`
+	Messages     []anthropicWireMessage  `json:"messages"`
+	Tools        []anthropicTool         `json:"tools,omitempty"`
+	MaxTokens    int                     `json:"max_tokens"`
+	Stream       bool                    `json:"stream"`
+	Thinking     *anthropicThinking      `json:"thinking,omitempty"`
+	OutputConfig *anthropicOutputConfig  `json:"output_config,omitempty"`
+	Temperature  *float64                `json:"temperature,omitempty"`
 }
 
 // --- request construction ---
+
+// adaptiveLevels is the order effort levels step up in.
+var adaptiveLevels = []provider.ThinkingLevel{
+	provider.ThinkingMinimal, provider.ThinkingLow, provider.ThinkingMedium,
+	provider.ThinkingHigh, provider.ThinkingXHigh, provider.ThinkingMax,
+}
+
+// adaptiveEffort is the output_config.effort an adaptive-thinking model
+// gets for level, from the catalog's thinkingLevelMap: a listed level uses
+// its mapped name, an unlisted one its own name, and a level mapped to
+// null (unsupported) steps up to the next supported one. ok is false only
+// for "off" (or no level) on a model whose map does not rule "off" out:
+// that model can still be sent thinking "disabled".
+func adaptiveEffort(levels provider.ThinkingLevelMap, level provider.ThinkingLevel) (effort string, ok bool) {
+	if level == provider.ThinkingOff {
+		if mapped, listed := levels[provider.ThinkingOff]; !listed || mapped != nil {
+			return "", false
+		}
+		level = provider.ThinkingMinimal
+	}
+	start := 0
+	for i, l := range adaptiveLevels {
+		if l == level {
+			start = i
+		}
+	}
+	for _, l := range adaptiveLevels[start:] {
+		mapped, listed := levels[l]
+		switch {
+		case !listed && l != provider.ThinkingMinimal:
+			return string(l), true
+		case listed && mapped != nil:
+			return *mapped, true
+		}
+	}
+	return string(provider.ThinkingHigh), true
+}
 
 // budgetForThinkingLevel maps a ThinkingLevel to a token budget for
 // budget-based (non-adaptive) thinking, matching pi's
@@ -216,25 +259,29 @@ func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts 
 		}
 	}
 
-	if model.Reasoning && opts.ThinkingLevel != "" && opts.ThinkingLevel != provider.ThinkingOff {
+	switch {
+	case !model.Reasoning, opts.ThinkingLevel == "":
+		// No level asked for: the model's own default applies.
+	case boolDefault(compat.ForceAdaptiveThinking, false):
+		// Adaptive-only models (Opus 4.8 and later) reject budget-based
+		// thinking and, when the catalog maps "off" to null, "disabled"
+		// too ("thinking.type.disabled is not supported for this model",
+		// req_011CfW6VDzwAzRAgoSscp8x9). They take an effort level instead.
+		if effort, ok := adaptiveEffort(model.ThinkingLevelMap, opts.ThinkingLevel); ok {
+			req.Thinking = &anthropicThinking{Type: "adaptive"}
+			req.OutputConfig = &anthropicOutputConfig{Effort: effort}
+		} else {
+			req.Thinking = &anthropicThinking{Type: "disabled"}
+		}
+	case opts.ThinkingLevel != "" && opts.ThinkingLevel != provider.ThinkingOff:
 		budget := budgetForThinkingLevel(opts.ThinkingLevel)
-		if model.ThinkingLevelMap != nil {
-			if mapped, ok := model.ThinkingLevelMap[opts.ThinkingLevel]; ok && mapped != nil {
-				// A provider/model-specific string override; still expressed
-				// as a budget since this client only implements
-				// budget-based (non-adaptive) thinking this phase.
-				_ = mapped
-			}
+		if budget > req.MaxTokens-1 {
+			budget = req.MaxTokens - 1
 		}
 		if budget > 0 {
-			if budget > req.MaxTokens-1 {
-				budget = req.MaxTokens - 1
-			}
-			if budget > 0 {
-				req.Thinking = &anthropicThinking{Type: "enabled", BudgetToks: budget}
-			}
+			req.Thinking = &anthropicThinking{Type: "enabled", BudgetToks: budget}
 		}
-	} else if model.Reasoning && opts.ThinkingLevel == provider.ThinkingOff {
+	case opts.ThinkingLevel == provider.ThinkingOff:
 		req.Thinking = &anthropicThinking{Type: "disabled"}
 	}
 
