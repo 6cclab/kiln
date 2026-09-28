@@ -1,0 +1,23 @@
+{
+ "id": "20260928T171359Z-memory-drops-global-claudemd",
+ "found_at": "2026-09-28T17:13:59Z",
+ "scenario": "user-report",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Small models drop the global CLAUDE.md whole; .claude/CLAUDE.md never read",
+ "observed": "ollama/qwen3.8 in ~/job-search: 'memory over budget, not loaded: ~/.claude/CLAUDE.md' (15 tokens over a 4.9k cap); kiln read only <cwd>/CLAUDE.md",
+ "expected": "CLAUDE.md files always load; rules that do not fit are indexed by description; .claude/CLAUDE.md is read",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/memory/memory.go",
+   "internal/cli/chat.go"
+  ],
+  "regression_test": "TestLoadMemoryTightBudgetIndexesRules,TestBudget_ClaudeMDAlwaysLoadsRulesIndexed",
+  "updated_at": "2026-09-28T17:13:59Z"
+ }
+}

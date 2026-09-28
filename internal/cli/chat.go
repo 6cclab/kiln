@@ -409,8 +409,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// is capped at ~2k tokens, and an unbounded CLAUDE.md would eat the
 	// session.
 	memory := claudememory.LoadMemory(cwd, resolved.Tier.SystemPromptTokens)
-	for _, path := range memory.Dropped {
-		fmt.Fprintf(stderr, "memory over budget, not loaded: %s\n", path)
+	if n := len(memory.Indexed); n > 0 {
+		diag.L().Info("memory: rules indexed, not loaded in full", "count", n, "budget", resolved.Tier.SystemPromptTokens, "paths", memory.Indexed)
+	}
+	if memory.OverBudget {
+		fmt.Fprintf(stderr, "kiln: CLAUDE.md files use ~%dk tokens, over this model's %dk memory budget; loaded anyway\n", memory.EstimatedTokens/1000, resolved.Tier.SystemPromptTokens/1000)
 	}
 
 	// --add-dir may be repeated, matching Claude Code's flag.

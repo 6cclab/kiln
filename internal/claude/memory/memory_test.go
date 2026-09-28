@@ -31,8 +31,8 @@ func TestLoadMemoryBasic(t *testing.T) {
 	if !strings.Contains(assembled.Text, "User preferences.") || !strings.Contains(assembled.Text, "Project instructions.") {
 		t.Errorf("text missing content: %s", assembled.Text)
 	}
-	if len(assembled.Dropped) != 0 {
-		t.Errorf("expected nothing dropped, got %v", assembled.Dropped)
+	if len(assembled.Indexed) != 0 {
+		t.Errorf("expected nothing indexed, got %v", assembled.Indexed)
 	}
 }
 
@@ -86,20 +86,42 @@ func TestLoadMemoryRules(t *testing.T) {
 	}
 }
 
-func TestLoadMemoryBudgetDropsLeastSpecificFirst(t *testing.T) {
+// TestLoadMemoryTightBudgetIndexesRules: under a tight budget every
+// CLAUDE.md still loads in full; rules that do not fit are listed by path
+// and description, the most specific (project) rules loading first.
+func TestLoadMemoryTightBudgetIndexesRules(t *testing.T) {
 	home := setupHome(t)
 	cwd := t.TempDir()
-	// User memory is found first (least specific); project is most
-	// specific and should survive when the budget can't fit both.
-	writeFile(t, filepath.Join(home, ".claude", "CLAUDE.md"), strings.Repeat("x", 4000))
-	writeFile(t, filepath.Join(cwd, "CLAUDE.md"), "small project note")
+	writeFile(t, filepath.Join(home, ".claude", "CLAUDE.md"), "global instructions")
+	writeFile(t, filepath.Join(cwd, ".claude", "CLAUDE.md"), "project pointer: read AGENTS.md")
+	writeFile(t, filepath.Join(home, ".claude", "rules", "evidence.md"), "# Evidence\n\n"+strings.Repeat("x", 800))
+	writeFile(t, filepath.Join(cwd, ".claude", "rules", "gate.md"), "---\ndescription: The preflight is the gate\n---\n\n"+strings.Repeat("y", 200))
 
-	assembled := LoadMemory(cwd, 100)
-	if len(assembled.Dropped) == 0 {
-		t.Fatal("expected something dropped under a tight budget")
+	a := LoadMemory(cwd, 120)
+	for _, want := range []string{"global instructions", "project pointer: read AGENTS.md", strings.Repeat("y", 200)} {
+		if !strings.Contains(a.Text, want) {
+			t.Errorf("missing %q in:\n%s", want[:min(len(want), 30)], a.Text)
+		}
 	}
-	if !strings.Contains(assembled.Text, "small project note") {
-		t.Errorf("expected project memory to survive, got: %s", assembled.Text)
+	if strings.Contains(a.Text, strings.Repeat("x", 800)) {
+		t.Errorf("the user rule loaded in full despite the budget")
+	}
+	wantIndex := "- " + filepath.Join(home, ".claude", "rules", "evidence.md") + ": Evidence"
+	if !strings.Contains(a.Text, wantIndex) || len(a.Indexed) != 1 {
+		t.Errorf("index missing %q (indexed %v):\n%s", wantIndex, a.Indexed, a.Text)
+	}
+}
+
+func TestRuleSummary(t *testing.T) {
+	cases := map[string]string{
+		"---\ndescription: \"Quoted desc\"\n---\n# Title": "Quoted desc",
+		"# Just A Title\n\nbody":                          "Just A Title",
+		"plain first line\nmore":                          "plain first line",
+	}
+	for in, want := range cases {
+		if got := ruleSummary(in); got != want {
+			t.Errorf("ruleSummary(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

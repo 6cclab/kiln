@@ -215,7 +215,7 @@ The resolved `provider/model` is split on the first `/` (`splitProviderModel`, `
 
 ### Effort
 
-`--effort` is the only input path that sets thinking effort — `settings.json`'s `effortLevel` key is parsed and merged (`internal/claude/settings/settings.go`) but **no code reads `settings.EffortLevel`** (confirmed: no reference to it outside the settings package). If `--effort` is unset, `ThinkingLevel` is `""`, and `internal/harness/harness.go` defaults it to `"off"`. Valid values: `low`, `medium`, `high`, `xhigh`, `max` (`internal/cli/args.go`); anything else is dropped by the parser.
+Thinking effort comes from `--effort`, else `settings.json`'s `effortLevel` for Claude models (not for other providers), else it is unset. Unset leaves the model's default: Claude models with adaptive thinking decide how much to think. The level a run asks for also applies to a resumed session. Valid values: `low`, `medium`, `high`, `xhigh`, `max` (`internal/cli/args.go`); anything else is dropped by the parser.
 
 ### Tiers (`internal/budget/tier.go`)
 
@@ -369,11 +369,11 @@ Namespace: the relative path under `commands/` with `.md` stripped; every direct
 
 ### Memory (`CLAUDE.md`)
 
-Discovery: `~/.claude/CLAUDE.md` (user) and `<cwd>/CLAUDE.md` (project — note: beside `.claude`, not inside it). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
+Discovery: `~/.claude/CLAUDE.md` (user), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
 
 `@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently.
 
-Budget: `LoadMemory(cwd, budgetTokens)` estimates tokens as `ceil(len/4)`. Files are discovered least-specific-first but **spent in reverse** — project/most-specific memory is kept first; broad personal (`~/.claude/CLAUDE.md`) content is what gets dropped first when the budget runs out. `Assembled.Dropped` lists the paths that didn't fit.
+Budget: `LoadMemory(cwd, budgetTokens)` estimates tokens as `ceil(len/4)`; the budget is the tier's `SystemPromptTokens` (10% of the context window, 2k–32k). CLAUDE.md files always load in full. Rules load in full while the budget allows, project rules first; the rest are listed in a `<memory-index>` block, one line each with the rule's path and its frontmatter `description` (else its first heading), and the model is told to read a rule before doing work it covers. `Assembled.Indexed` lists those paths (logged at startup); if the CLAUDE.md files alone exceed the budget they load anyway and kiln prints a warning.
 
 ### Keybindings
 

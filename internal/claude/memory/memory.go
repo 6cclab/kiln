@@ -52,9 +52,13 @@ type File struct {
 type Assembled struct {
 	Text  string
 	Files []File
-	// Dropped lists files dropped because the budget was exhausted.
-	Dropped         []string
+	// Indexed lists rules listed by description instead of loaded in
+	// full, because the budget ran out.
+	Indexed         []string
 	EstimatedTokens int
+	// OverBudget is set when the instruction files alone exceed the
+	// budget; they load in full anyway.
+	OverBudget bool
 }
 
 // estimate is a rough token estimate, only used for budgeting, never
@@ -120,65 +124,110 @@ func resolveImports(content, fromFile string, seen map[string]bool, depth int) s
 
 // LoadMemory loads and assembles memory within a token budget.
 //
-// Order is least- to most-specific (user, then project), and the budget
-// is spent in reverse: project memory is the most situational and
-// survives, while broad personal preferences are dropped first if
-// something must go.
+// Instruction files (CLAUDE.md: ~/.claude/CLAUDE.md, <cwd>/CLAUDE.md and
+// <cwd>/.claude/CLAUDE.md, with @imports resolved) always load in full:
+// they are what the user wrote for every session, and small. Rules
+// (.claude/rules/*.md) load in full while the budget allows, the most
+// specific (project) first; the rest are listed in an index, one line per
+// rule with its path and description, and the model is told to read a rule
+// before doing work its description covers. Nothing is silently left out:
+// a small-context model keeps a pointer to every rule at a fraction of the
+// cost.
 func LoadMemory(cwd string, budgetTokens int) Assembled {
-	var found []File
-
+	var instructions, rules []File
 	for _, root := range paths.ClaudeRoots(cwd) {
-		// ~/.claude/CLAUDE.md for user scope; <project>/CLAUDE.md at the
-		// repo root for project scope - note the project file sits beside
-		// .claude, not inside it.
-		var path string
+		var candidates []string
 		if root.Scope == paths.ScopeUser {
-			path = filepath.Join(root.Dir, paths.CLAUDEMD)
+			candidates = []string{filepath.Join(root.Dir, paths.CLAUDEMD)}
 		} else {
-			path = filepath.Join(cwd, paths.CLAUDEMD)
+			// The project file sits beside .claude or inside it; Claude
+			// Code reads both.
+			candidates = []string{filepath.Join(cwd, paths.CLAUDEMD), filepath.Join(cwd, ".claude", paths.CLAUDEMD)}
 		}
-		if raw, err := os.ReadFile(path); err == nil {
-			content := resolveImports(string(raw), path, map[string]bool{path: true}, 0)
-			found = append(found, File{Path: path, Scope: root.Scope, Content: content})
+		for _, path := range candidates {
+			if raw, err := os.ReadFile(path); err == nil {
+				content := resolveImports(string(raw), path, map[string]bool{path: true}, 0)
+				instructions = append(instructions, File{Path: path, Scope: root.Scope, Content: content})
+			}
 		}
-
-		// .claude/rules/*.md are loaded as memory too, without needing an
-		// explicit import.
 		for _, rule := range listRules(filepath.Join(root.Dir, "rules")) {
 			if raw, err := os.ReadFile(rule); err == nil {
 				content := resolveImports(string(raw), rule, map[string]bool{rule: true}, 0)
-				found = append(found, File{Path: rule, Scope: root.Scope, Content: content})
+				rules = append(rules, File{Path: rule, Scope: root.Scope, Content: content})
 			}
 		}
 	}
 
-	var kept []File
-	var dropped []string
 	used := 0
-
-	// Reverse so the most specific scope claims budget first.
-	for i := len(found) - 1; i >= 0; i-- {
-		f := found[i]
-		cost := estimate(f.Content)
-		if used+cost > budgetTokens {
-			dropped = append(dropped, f.Path)
-			continue
-		}
-		kept = append([]File{f}, kept...)
-		used += cost
+	for _, f := range instructions {
+		used += estimate(f.Content)
 	}
 
-	parts := make([]string, len(kept))
-	for i, f := range kept {
-		parts[i] = fmt.Sprintf("<memory path=%q scope=%q>\n%s\n</memory>", f.Path, f.Scope, strings.TrimSpace(f.Content))
+	// Rules found later are more specific; they claim the budget first.
+	full := make([]bool, len(rules))
+	var indexed []File
+	for i := len(rules) - 1; i >= 0; i-- {
+		cost := estimate(rules[i].Content)
+		if used+cost <= budgetTokens {
+			full[i] = true
+			used += cost
+		}
+	}
+	kept := append([]File{}, instructions...)
+	for i, f := range rules {
+		if full[i] {
+			kept = append(kept, f)
+		} else {
+			indexed = append(indexed, f)
+		}
+	}
+
+	parts := make([]string, 0, len(kept)+1)
+	for _, f := range kept {
+		parts = append(parts, fmt.Sprintf("<memory path=%q scope=%q>\n%s\n</memory>", f.Path, f.Scope, strings.TrimSpace(f.Content)))
+	}
+	var indexedPaths []string
+	if len(indexed) > 0 {
+		lines := []string{"<memory-index>", "These rules are not loaded, to save context. Before doing work a rule's description covers, read its file with the read tool and follow it."}
+		for _, f := range indexed {
+			lines = append(lines, fmt.Sprintf("- %s: %s", f.Path, ruleSummary(f.Content)))
+			indexedPaths = append(indexedPaths, f.Path)
+		}
+		lines = append(lines, "</memory-index>")
+		index := strings.Join(lines, "\n")
+		used += estimate(index)
+		parts = append(parts, index)
 	}
 
 	return Assembled{
 		Text:            strings.Join(parts, "\n\n"),
 		Files:           kept,
-		Dropped:         dropped,
+		Indexed:         indexedPaths,
 		EstimatedTokens: used,
+		OverBudget:      used > budgetTokens,
 	}
+}
+
+var (
+	descriptionRe = regexp.MustCompile(`(?m)^description:\s*(.+?)\s*$`)
+	headingRe     = regexp.MustCompile(`(?m)^#+\s+(.+?)\s*$`)
+)
+
+// ruleSummary is a rule's one-line description for the index: its
+// frontmatter description, else its first heading, else its first line.
+func ruleSummary(content string) string {
+	if fm, ok := strings.CutPrefix(strings.TrimLeft(content, "\n"), "---\n"); ok {
+		if end := strings.Index(fm, "\n---"); end >= 0 {
+			if m := descriptionRe.FindStringSubmatch(fm[:end]); m != nil {
+				return strings.Trim(m[1], `"'`)
+			}
+		}
+	}
+	if m := headingRe.FindStringSubmatch(content); m != nil {
+		return m[1]
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(content), "\n")
+	return first
 }
 
 // AddMemory appends a note to <cwd>/CLAUDE.md if it exists, else
