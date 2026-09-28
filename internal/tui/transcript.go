@@ -340,7 +340,9 @@ func RenderToolCall(view ToolCallView) []string {
 	}
 
 	body := view.ResultLines
-	if len(body) == 0 {
+	// Whitespace-only output (a command that printed a bare newline) drew
+	// a "→" with nothing after it.
+	if strings.TrimSpace(strings.Join(body, "")) == "" && (!view.HasTotalLines || view.TotalLines <= len(body)) {
 		return lines
 	}
 

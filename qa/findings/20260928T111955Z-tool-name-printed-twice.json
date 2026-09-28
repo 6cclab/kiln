@@ -19,7 +19,10 @@
    "internal/tui/transcript.go"
   ],
   "regression_test": "TestRenderGolden_ToolOKMeta,TestTUI_FixBug,TestTUI_ConsecutiveReadsCommitAsOneBlock",
-  "note": "Awaiting a live re-drive.",
-  "updated_at": "2026-09-28T11:19:55Z"
+  "note": "Verified live in iTerm2 (t2-kiln-8, build 47e0748; 21/21, 5.8 min, $1.67).",
+  "updated_at": "2026-09-28T11:34:11Z",
+  "after_evidence": [
+   "/Users/andrepato/projects/crud-trial/runs/t2-kiln-8/006-progress.png"
+  ]
  }
 }

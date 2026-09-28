@@ -349,3 +349,14 @@ func TestParseUnifiedDiffMarksGapBetweenHunks(t *testing.T) {
 		t.Errorf("gap row renders as %q, want a dim … row", got)
 	}
 }
+
+// TestRenderToolCall_BlankOutputHasNoResultRow: a command whose output was
+// only whitespace draws no "→" row with nothing after it.
+func TestRenderToolCall_BlankOutputHasNoResultRow(t *testing.T) {
+	view := ToolCallView{Name: "Bash", PrimaryArg: "go build ./...", Status: CallOK, ResultLines: []string{"", " "}, TotalLines: 2, HasTotalLines: true}
+	for _, l := range RenderToolCall(view) {
+		if strings.Contains(stripANSI(l), "→") {
+			t.Errorf("blank output rendered a result row: %q", stripANSI(l))
+		}
+	}
+}

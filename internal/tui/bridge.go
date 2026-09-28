@@ -17,6 +17,7 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/claude/permission"
 	"github.com/andrepato/harness/internal/compaction"
+	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
 )
@@ -1378,7 +1379,17 @@ func (b *Bridge) SubagentSink() func(agent.SubagentEvent) {
 
 // HookNotice renders a hook activity line, matching app.ts's onHookNotices
 // (app.ts:634-637): a dim aside the user needs to see; the model does not.
+//
+// A PreToolUse rewrite ("rewrote bash: …") goes to the debug log, not the
+// transcript: a hook that rewrites every command (a token-filtering proxy)
+// otherwise put a system block above nearly every bash call, repeating the
+// command the block below already shows. What a hook says itself, and a
+// block, still reach the transcript.
 func (b *Bridge) HookNotice(message string) {
+	if strings.HasPrefix(message, "rewrote ") {
+		diag.L().Info("hook rewrite", "detail", message)
+		return
+	}
 	b.CommitNote("hook: " + message)
 }
 

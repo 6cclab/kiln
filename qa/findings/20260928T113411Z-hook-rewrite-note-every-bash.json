@@ -1,0 +1,25 @@
+{
+ "id": "20260928T113411Z-hook-rewrite-note-every-bash",
+ "found_at": "2026-09-28T11:34:11Z",
+ "scenario": "crud-trial/t2-kiln-8",
+ "step": "006-progress",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "A system block for every hook rewrite of a bash command",
+ "observed": "'system ─── hook: rewrote bash: cd /Users/…/api && rtk go build …' above the bash block that already shows the command",
+ "expected": "Rewrites go to the debug log; a hook's own messages and blocks still show",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln-8/006-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestHookNotice_RewriteStaysOutOfTranscript",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T11:34:11Z"
+ }
+}

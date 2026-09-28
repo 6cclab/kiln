@@ -398,3 +398,28 @@ func TestSkipLeadingCd(t *testing.T) {
 		}
 	}
 }
+
+// TestHookNotice_RewriteStaysOutOfTranscript: a hook's input rewrite is
+// logged, not committed; a hook's own message still is.
+func TestHookNotice_RewriteStaysOutOfTranscript(t *testing.T) {
+	b := NewBridge(t.TempDir())
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	b.HookNotice("rewrote bash: rtk go build ./...")
+	time.Sleep(20 * time.Millisecond)
+	if printed, sent := f.snapshot(); len(printed)+len(sent) != 0 {
+		t.Fatalf("rewrite notice committed: printed=%v sent=%v", printed, sent)
+	}
+	b.HookNotice("lint hook: 2 warnings")
+	deadline := time.Now().Add(time.Second)
+	for {
+		if printed, sent := f.snapshot(); len(printed)+len(sent) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a hook's own message was not committed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

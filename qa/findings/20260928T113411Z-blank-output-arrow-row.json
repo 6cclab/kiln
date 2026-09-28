@@ -1,0 +1,25 @@
+{
+ "id": "20260928T113411Z-blank-output-arrow-row",
+ "found_at": "2026-09-28T11:34:11Z",
+ "scenario": "crud-trial/t2-kiln-8",
+ "step": "006-progress",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "Blank command output draws an empty → row",
+ "observed": "'cd api && go build ./... && echo BUILD_OK' then '→' with nothing after it",
+ "expected": "No result row when the output is only whitespace",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln-8/006-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestRenderToolCall_BlankOutputHasNoResultRow",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T11:34:11Z"
+ }
+}
