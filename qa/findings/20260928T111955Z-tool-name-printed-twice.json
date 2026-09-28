@@ -1,0 +1,25 @@
+{
+ "id": "20260928T111955Z-tool-name-printed-twice",
+ "found_at": "2026-09-28T11:19:55Z",
+ "scenario": "crud-trial/t2-kiln-7",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "medium",
+ "title": "Tool blocks print the tool name twice",
+ "observed": "Label rule 'read' then 'Read FEATURE.md' (same for bash, write and every other tool)",
+ "expected": "The label rule names the tool once; the row below shows only the argument",
+ "design_ref": "Terminal.dc.html:62 (design shows name + arg; Andre overrode)",
+ "evidence": [
+  "/Users/andrepato/Desktop/Screenshot 2026-09-28 at 7.12.35 AM.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestRenderGolden_ToolOKMeta,TestTUI_FixBug,TestTUI_ConsecutiveReadsCommitAsOneBlock",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T11:19:55Z"
+ }
+}

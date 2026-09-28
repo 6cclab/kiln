@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -108,7 +109,7 @@ func TestTUI_Fullscreen_FixBug(t *testing.T) {
 	// Phase 2.1); the diff block has no separate "Update <path>" head
 	// line any more (Phase 2.2) — see TestTUI_FixBug's identical
 	// assertion in tui_test.go for the full rationale.
-	if !strings.Contains(joined, "read ") || !strings.Contains(joined, "Read src/math.js") {
+	if !regexp.MustCompile(`read ─+[^\n]*\n\s*src/math\.js`).MatchString(joined) {
 		t.Errorf("transcript missing the full \"read\" tool block:\n%s", joined)
 	}
 	if !strings.Contains(joined, "src/math.js") || !strings.Contains(joined, "+1") || !strings.Contains(joined, "−1") {

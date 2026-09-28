@@ -5,7 +5,7 @@
   I'll look at the file.                                                                            
                                                                                                     
   [fg=#9bc46e]read[/] [fg=#2f2920]─────────────────────────────────────────────────────────────────────────────────────[/]  [fg=#a39781]1.0s[/]  
-  [fg=#9bc46e]Read[/] [fg=#a39781]src/math.js[/]                                                                                  
+  [fg=#ece4d4]src/math.js[/]                                                                                       
   [fg=#a39781]→[/] [fg=#a39781]function add(a, b) {[/]                                                                            
     [fg=#a39781]  return a - b;[/]                                                                                 
     [fg=#a39781]}[/]                                                                                               

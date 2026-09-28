@@ -17,7 +17,7 @@
      8   };
 
   bash ──────────────────────────────────────────────────────────────────────────  approved · 1.0s
-  Bash ./scripts/npm test -- upload
+  ./scripts/npm test -- upload
   → PASS test/upload.test.ts
     Tests: 16 passed, 16 total
 

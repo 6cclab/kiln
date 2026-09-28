@@ -45,8 +45,8 @@ steps:
 	if !regexp.MustCompile(`read ─+\s+2 files`).MatchString(collapsed) {
 		t.Errorf("no grouped read block with \"2 files\":\n%s", collapsed)
 	}
-	if n := strings.Count(collapsed, "Read src/math.js · 7 lines"); n != 2 {
-		t.Errorf("want 2 rows \"Read src/math.js · 7 lines\", got %d:\n%s", n, collapsed)
+	if n := strings.Count(collapsed, "src/math.js · 7 lines"); n != 2 {
+		t.Errorf("want 2 rows \"src/math.js · 7 lines\", got %d:\n%s", n, collapsed)
 	}
 	if strings.Contains(collapsed, proj) {
 		t.Errorf("collapsed view shows the absolute project path:\n%s", collapsed)

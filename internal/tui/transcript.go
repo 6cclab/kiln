@@ -307,15 +307,16 @@ func clipResultLines(lines []string, max int, status CallStatus) []string {
 //	   2 + module.exports = { add }
 //
 //	bash ──────────────────────────────────  approved · 4.1s
-//	bash npm test -- upload
+//	npm test -- upload
 //	→ 12 passed
 //
 // A call with a Diff renders the "edit" label rule (blue, filename meta)
-// and the panel header row instead of the "Name arg" line and result rows.
+// and the panel header row instead of the argument line and result rows.
 // Otherwise the label rule is the tool name lowercased in the status
 // colour (running amber, ok green, err red) with Meta (e.g.
-// "approved · 4.1s") as the rule's own meta, and the body is "Name arg"
-// followed by the result.
+// "approved · 4.1s") as the rule's own meta, and the body is the argument
+// followed by the result. The design repeats the tool name before the
+// argument; Andre dropped it as printing the name twice.
 func RenderToolCall(view ToolCallView) []string {
 	gl := G()
 	statusColor := toolStatusColor(view.Status)
@@ -325,7 +326,11 @@ func RenderToolCall(view ToolCallView) []string {
 		lines = append(lines, labelRule("edit", KilnBlue, path.Base(view.PrimaryArg), width))
 	} else {
 		lines = append(lines, labelRule(strings.ToLower(view.Name), statusColor, view.Meta, width))
-		lines = append(lines, fmt.Sprintf("%s %s", statusColor(view.Name), Muted(view.PrimaryArg)))
+		// The label rule already names the tool; repeating it on the row
+		// below ("read ───" then "Read FEATURE.md") printed it twice.
+		if view.PrimaryArg != "" {
+			lines = append(lines, Ink(view.PrimaryArg))
+		}
 	}
 
 	if view.Diff != nil {
@@ -389,13 +394,13 @@ func CompactReadGroup(views []ToolCallView, verbose bool) bool {
 }
 
 // RenderReadGroup renders consecutive read-only calls as one "read" block:
-// the label rule with the call count as meta, then one "Name arg · size"
+// the label rule with the call count as meta, then one "arg · size"
 // row per call. Four file reads were four blocks of five rows each, each
 // previewing the first lines of a file nobody asked to see.
 //
 //	read ─────────────────────────────────────────────  4 files
-//	Read web/src/api.ts · 56 lines
-//	Read web/src/App.tsx · 293 lines
+//	web/src/api.ts · 56 lines
+//	web/src/App.tsx · 293 lines
 func RenderReadGroup(views []ToolCallView) []string {
 	allRead := true
 	for _, v := range views {
@@ -409,7 +414,12 @@ func RenderReadGroup(views []ToolCallView) []string {
 	}
 	lines := []string{labelRule("read", toolStatusColor(CallOK), meta, ruleWidth())}
 	for _, v := range views {
-		row := fmt.Sprintf("%s %s", toolStatusColor(CallOK)(v.Name), Muted(v.PrimaryArg))
+		// A Read row is just its path under the "read" label; a Grep or
+		// Glob row keeps its name, which the label does not say.
+		row := Ink(v.PrimaryArg)
+		if !strings.EqualFold(v.Name, "read") {
+			row = fmt.Sprintf("%s %s", toolStatusColor(CallOK)(v.Name), Ink(v.PrimaryArg))
+		}
 		if size := readGroupSize(v); size != "" {
 			row += Faint(" · " + size)
 		}

@@ -79,7 +79,7 @@ func TestTUI_VerboseToggle_ExpandsInPlace(t *testing.T) {
 
 	beforeRows := s.Rows()
 	before := strings.Join(beforeRows, "\n")
-	if !strings.Contains(before, "Read") || !strings.Contains(before, "package.json") {
+	if !strings.Contains(before, "read ─") || !strings.Contains(before, "package.json") {
 		t.Fatalf("collapsed transcript missing the read tool block:\n%s", before)
 	}
 	if !strings.Contains(before, "name") {

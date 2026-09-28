@@ -5,7 +5,7 @@
   I'll look at the file.
 
   read -------------------------------------------------------------------------------------  1.0s
-  Read src/math.js
+  src/math.js
   -> function add(a, b) {
       return a - b;
     }

@@ -814,13 +814,13 @@ func TestTUI_FixBug(t *testing.T) {
 	// pass Phase 2.1): the live region still shows the collapsed
 	// "Reading N files…" row while the group is in flight, but once it
 	// flushes each call commits its own full "tool" block — so the
-	// committed transcript shows a "read" label rule and a "Read
-	// src/math.js" head line instead of "Read 1 file". Edit renders as
+	// committed transcript shows a "read" label rule with the path on the
+	// row below it (no repeated "Read" name) instead of "Read 1 file". Edit renders as
 	// kiln's "edit" block: an "edit" label rule with the filename as meta,
 	// then a panel header row carrying the path and +N/−N counts — there
 	// is no separate "Update <path>" head line any more (Phase 2.2 drops
 	// it; see transcript.go's RenderToolCall doc comment).
-	if !strings.Contains(joined, "read ") || !strings.Contains(joined, "Read src/math.js") {
+	if !regexp.MustCompile(`read ─+[^\n]*\n\s*src/math\.js`).MatchString(joined) {
 		t.Errorf("transcript missing the full \"read\" tool block:\n%s", joined)
 	}
 	if !strings.Contains(joined, "src/math.js") || !strings.Contains(joined, "+1") || !strings.Contains(joined, "−1") {
@@ -1153,11 +1153,10 @@ func TestTUI_CtrlO_Verbose(t *testing.T) {
 	// Verbose mode shows the absolute path, not the cwd-relative one
 	// (RenderToolCall/MapToolName). kiln's "tool" block anatomy has no
 	// "Name(arg)" parenthesized header any more — it's a label rule
-	// ("read") above a plain "Read" line, with the (possibly wrapped)
-	// path as Muted continuation text. The "edit" block for a diff has no
+	// ("read") above the (possibly wrapped) path. The "edit" block for a diff has no
 	// "Update <path>" head line at all (Phase 2.2 drops it) — the path
 	// instead shows on the panel header row alongside its +N/−N counts.
-	if !strings.Contains(joined, "Read") || !strings.Contains(joined, "edit ") || !strings.Contains(joined, "math.js") {
+	if !strings.Contains(joined, "read ─") || !strings.Contains(joined, "edit ") || !strings.Contains(joined, "math.js") {
 		t.Errorf("verbose transcript missing tool calls:\n%s", joined)
 	}
 	// kiln's result-line marker is "→" (Action glyph), not Claude Code's
