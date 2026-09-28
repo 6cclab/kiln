@@ -249,9 +249,19 @@ func DisplayArg(name, arg, cwd string, verbose bool) string {
 // command runs there anyway) and one into a directory below it is written
 // relative. Models open most commands with "cd /abs/project && …", which
 // spent the row on a path the status line already shows.
+//
+// Elsewhere in the command, the working directory itself is written "."
+// and a path below it relative ("ls -A /abs/project" -> "ls -A .").
 func displayCommand(cmd, cwd string) string {
+	if cwd == "" {
+		return cmd
+	}
+	return relativizeCwd(shortenLeadingCd(cmd, cwd), cwd)
+}
+
+func shortenLeadingCd(cmd, cwd string) string {
 	loc := leadingCd.FindStringSubmatchIndex(cmd)
-	if loc == nil || cwd == "" || loc[1] == len(cmd) {
+	if loc == nil || loc[1] == len(cmd) {
 		return cmd
 	}
 	dir := strings.Trim(cmd[loc[2]:loc[3]], `'"`)
@@ -266,6 +276,41 @@ func displayCommand(cmd, cwd string) string {
 		return cmd[loc[1]:]
 	}
 	return "cd " + rel + cmd[loc[3]:]
+}
+
+// relativizeCwd rewrites the working directory where it appears as a whole
+// path: followed by "/" (a path below it) or by the end of a word. A
+// longer path that merely starts with it ("/work/proj2") is left alone.
+func relativizeCwd(cmd, cwd string) string {
+	cwd = strings.TrimSuffix(cwd, "/")
+	var b strings.Builder
+	for {
+		i := strings.Index(cmd, cwd)
+		if i < 0 {
+			b.WriteString(cmd)
+			return b.String()
+		}
+		b.WriteString(cmd[:i])
+		rest := cmd[i+len(cwd):]
+		switch {
+		case strings.HasPrefix(rest, "/") && len(rest) > 1 && !strings.ContainsRune(" \t'\"", rune(rest[1])):
+			rest = rest[1:] // "/abs/proj/web" -> "web"
+			// In command position a bare relative name reads as a program
+			// on PATH: "/abs/proj/run.sh" -> "./run.sh".
+			if before := strings.TrimRight(b.String(), " \t"); before == "" || strings.HasSuffix(before, "&&") ||
+				strings.HasSuffix(before, ";") || strings.HasSuffix(before, "|") || strings.HasSuffix(before, "(") {
+				b.WriteString("./")
+			}
+		case rest == "" || strings.ContainsRune(" \t'\";&|)/", rune(rest[0])):
+			b.WriteString(".")
+			if strings.HasPrefix(rest, "/") {
+				rest = rest[1:] // "/abs/proj/" -> "."
+			}
+		default:
+			b.WriteString(cwd) // "/abs/proj2": not the working directory
+		}
+		cmd = rest
+	}
 }
 
 // isPathTool reports whether a tool's primary argument is a file path.

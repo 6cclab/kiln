@@ -1,0 +1,25 @@
+{
+ "id": "20260928T115731Z-bash-row-shows-cwd-path",
+ "found_at": "2026-09-28T11:57:31Z",
+ "scenario": "real/smoke",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "Bash rows show the working directory as an absolute path",
+ "observed": "'ls -A /tmp/kiln-qa-…/proj' — the cwd inside the command, not in a leading cd",
+ "expected": "Collapsed view writes the cwd as '.', paths below it relative (./ in command position); verbose shows the command as run",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real/iterm-dark/real-smoke-140x45/02-answered.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/replay.go"
+  ],
+  "regression_test": "TestDisplayCommand",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T11:57:31Z"
+ }
+}
