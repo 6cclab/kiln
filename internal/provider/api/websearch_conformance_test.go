@@ -115,3 +115,31 @@ func TestAnthropicClientFauxRoundTrip_WebSearch(t *testing.T) {
 		t.Fatalf("second request body missing replayed web_search_tool_result: %s", body)
 	}
 }
+
+// TestAnthropicConsecutiveTextBlocksJoin: cited text arrives as text blocks
+// split at each citation; they continue one another, so the parsed message
+// holds one text block reading as the sentence, not broken lines.
+func TestAnthropicConsecutiveTextBlocksJoin(t *testing.T) {
+	addr, _ := fauxtest.Start(t, `
+model: faux-1
+steps:
+  - raw_blocks:
+      - {type: text, text: "The latest release is "}
+      - {type: text, text: "go1.27.1", citations: [{type: web_search_result_location, url: "https://go.dev/dl"}]}
+      - {type: text, text: "."}
+`)
+	client := &AnthropicClient{}
+	transcript := []msg.Message{msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("latest go?")}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events, wait := client.Stream(ctx, fauxModel(provider.ApiAnthropicMessages, "http://"+addr), transcript, provider.StreamOptions{}, Auth{APIKey: "k"})
+	for range events {
+	}
+	final, err := wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := msg.TextOf(final.Content); got != "The latest release is go1.27.1." {
+		t.Errorf("text = %q, want the blocks joined into one sentence", got)
+	}
+}

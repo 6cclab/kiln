@@ -647,6 +647,19 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 			}
 			switch cb.ContentBlock.Type {
 			case "text":
+				// Cited text arrives as consecutive text blocks split at each
+				// citation; kept as separate blocks they read as broken lines
+				// (TextOf joins blocks with newlines). A text block right after
+				// another continues it.
+				if n := len(partial.Content); n > 0 {
+					if prev, ok := partial.Content[n-1].(msg.TextContent); ok {
+						prev.Text += cb.ContentBlock.Text
+						partial.Content[n-1] = prev
+						indexOf[cb.Index] = n - 1
+						blocks[cb.Index] = &blockInfo{kind: "text"}
+						break
+					}
+				}
 				partial.Content = append(partial.Content, msg.Text(cb.ContentBlock.Text))
 				pos := len(partial.Content) - 1
 				indexOf[cb.Index] = pos
