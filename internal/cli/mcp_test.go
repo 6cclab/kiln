@@ -137,7 +137,7 @@ func TestRun_PrintTools_ListsResident(t *testing.T) {
 		t.Fatalf("exit code %d, stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"bash", "read", "edit", "write", "todo_write", "tool_search"} {
+	for _, want := range []string{"bash", "read", "edit", "write", "todo write", "tool search"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("/tools output missing %q:\n%s", want, out)
 		}
@@ -357,7 +357,7 @@ func TestDoctor_ReportsMCP(t *testing.T) {
 	if strings.Contains(out, "phase 5") {
 		t.Errorf("doctor output still mentions phase 5: %q", out)
 	}
-	if !strings.Contains(out, "resident, strategy") {
+	if !strings.Contains(out, "always available · MCP index") || strings.Contains(out, "resident") {
 		t.Errorf("doctor output missing resident tool/strategy line: %q", out)
 	}
 }

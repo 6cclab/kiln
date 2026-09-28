@@ -3,6 +3,7 @@ package settings
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -201,10 +202,16 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 		if strings.HasPrefix(bare, "mcp__") {
 			return strings.HasPrefix(tool, bare)
 		}
-		return bare == tool
+		return sameTool(bare, tool)
 	}
-	if strings.ToLower(m[1]) != tool {
+	if !sameTool(strings.ToLower(m[1]), tool) {
 		return false
+	}
+
+	// Claude Code's WebFetch rules name a host: `WebFetch(domain:x.com)`.
+	// kiln's web_fetch argument is the whole URL, so compare its host.
+	if d, ok := strings.CutPrefix(strings.TrimSpace(m[2]), "domain:"); ok && sameTool(tool, "webfetch") {
+		return strings.EqualFold(urlHost(primaryArg), d)
 	}
 
 	// `find:*` means "the find command, any arguments". Normalize the
@@ -233,6 +240,22 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 		return false
 	}
 	return re.MatchString(strings.TrimSpace(primaryArg))
+}
+
+// sameTool compares a rule's tool name with a tool's, both lower-cased,
+// ignoring underscores: Claude Code spells tools WebFetch and TodoWrite
+// where kiln's are web_fetch and todo_write.
+func sameTool(a, b string) bool {
+	return strings.ReplaceAll(a, "_", "") == strings.ReplaceAll(b, "_", "")
+}
+
+// urlHost is the host of a URL argument, or "" when it has none.
+func urlHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // ReadOnly is the set of tools that cannot change anything.

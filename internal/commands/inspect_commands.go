@@ -223,7 +223,7 @@ func InspectCommands(deps InspectDeps) Source {
 			Run: func(ctx context.Context, args string) (Result, error) {
 				lines := []string{
 					fmt.Sprintf("model      %s", deps.ModelLabel),
-					fmt.Sprintf("tier       %s · %s window", deps.Tier.Name, formatTokens(deps.Tier.ContextWindow)),
+					"tier       " + TierSummary(deps.Tier),
 				}
 
 				var active []string
@@ -234,7 +234,7 @@ func InspectCommands(deps InspectDeps) Source {
 						return Result{}, err
 					}
 				}
-				lines = append(lines, fmt.Sprintf(`tools      %d resident, strategy "%s"`, len(active), deps.Tier.ToolStrategy))
+				lines = append(lines, "tools      "+ToolsSummary(len(active), deps.Tier))
 
 				var statuses []ServerStatus
 				if deps.MCPStatuses != nil {
@@ -259,7 +259,7 @@ func InspectCommands(deps InspectDeps) Source {
 				lines = append(lines, mcpLine)
 
 				total, eventsUsed := hookCount(deps.Hooks)
-				lines = append(lines, fmt.Sprintf("hooks      %d across %d events", total, eventsUsed))
+				lines = append(lines, "hooks      "+HooksSummary(total, eventsUsed))
 				lines = append(lines, fmt.Sprintf("agents     %d available", len(deps.Agents)))
 				lines = append(lines, fmt.Sprintf("settings   %s", joinOrNone(deps.SettingsLoadedFrom)))
 
@@ -268,7 +268,7 @@ func InspectCommands(deps InspectDeps) Source {
 					problems = append(problems, fmt.Sprintf(`mcp "%s" is down: %s`, s.Name, truncate(orDefault(s.Error, "unknown"), 100)))
 				}
 				if len(active) == 0 {
-					problems = append(problems, "no tools are resident - the model cannot act")
+					problems = append(problems, "no tools are available: the model cannot act")
 				}
 				if deps.Gate != nil && deps.Gate.Mode() == settings.ModeBypassPermissions {
 					problems = append(problems, "permission mode is bypassPermissions: every tool call runs unchecked")
@@ -303,4 +303,22 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// TierSummary, ToolsSummary and HooksSummary are the doctor report's rows,
+// shared by /doctor, `kiln doctor` and the /config dialog so their wording
+// cannot drift apart.
+func TierSummary(t budget.Tier) string {
+	return fmt.Sprintf("%s · %s window", t.Name, formatTokens(t.ContextWindow))
+}
+
+func ToolsSummary(available int, t budget.Tier) string {
+	return fmt.Sprintf("%s always available · %s", plural.Count(available, "tool"), t.ToolStrategy.Describe())
+}
+
+func HooksSummary(hooks, events int) string {
+	if hooks == 0 {
+		return "none"
+	}
+	return plural.Count(hooks, "hook") + " on " + plural.Count(events, "event")
 }

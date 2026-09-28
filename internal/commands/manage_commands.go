@@ -11,6 +11,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/writesettings"
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // modes is the cycle order /permissions' "m" action steps through.
@@ -121,11 +122,12 @@ func permissionsModal(deps ManageDeps) *ModalSpec {
 	return &ModalSpec{
 		Title:         "Permissions",
 		Kind:          "permissions",
+		Empty:         "No permission rules yet. Rules come from settings.json, and from answering a prompt with \"don't ask again\".",
 		Header:        header(),
 		RefreshHeader: header,
 		Items:         items,
 		Actions: []Action{
-			{Key: "m", Label: "cycle mode"},
+			{Key: "m", Label: "cycle mode", Global: true},
 			{Key: "d", Label: "delete rule"},
 			{Key: "p", Label: "promote to deny"},
 		},
@@ -338,7 +340,7 @@ func agentsModal(deps ManageDeps) *ModalSpec {
 		}
 		tools := "all tools"
 		if a.Tools != nil {
-			tools = fmt.Sprintf("%d tools", len(a.Tools))
+			tools = plural.Count(len(a.Tools), "tool")
 		}
 		// The dialog wraps descriptions to the terminal; only the first
 		// line is kept, capped, since Claude Code agent descriptions often
@@ -347,7 +349,7 @@ func agentsModal(deps ManageDeps) *ModalSpec {
 		items = append(items, Item{Value: a.Name, Label: a.Name, Description: fmt.Sprintf("%s · %s · %s", model, tools, truncate(desc, 240))})
 	}
 	return &ModalSpec{
-		Title:  "Subagents",
+		Title:  "Agents",
 		Kind:   "agents",
 		Header: []string{"dispatched with the task tool · defined in .claude/agents"},
 		Items:  items,
@@ -396,7 +398,7 @@ func configModal(deps ManageDeps) *ModalSpec {
 		{Value: "workspace", Label: "workspace roots", Description: strings.Join(deps.Gate.Roots(), ", ")},
 		{Value: "settings", Label: "settings loaded from", Description: joinOrNone(deps.SettingsLoadedFrom)},
 		{Value: "rules", Label: "permission rules", Description: fmt.Sprintf("%d allow · %d deny · %d ask", len(p.Allow), len(p.Deny), len(p.Ask))},
-		{Value: "hooks", Label: "hooks", Description: fmt.Sprintf("%d across %d events", total, eventsUsed)},
+		{Value: "hooks", Label: "hooks", Description: HooksSummary(total, eventsUsed)},
 		{Value: "agents", Label: "subagents", Description: fmt.Sprintf("%d available", len(deps.Agents))},
 		{Value: "mcp", Label: "mcp servers", Description: fmt.Sprintf("%d/%d connected", mcpOK, mcpTotal)},
 		{Value: "cwd", Label: "working directory", Description: deps.Cwd},

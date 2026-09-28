@@ -9,9 +9,9 @@
 WAITFOR /describe a task/ 20
 TYPE /agents
 KEY enter
-WAITFOR /Subagents/ 20
+WAITFOR /agents ─/ 20
 SHOT agents
-EXPECT /Subagents/
+EXPECT /agents ─/
 EXPECT /reader/
 KEY esc
 EXPECT_NOT /panic|goroutine/

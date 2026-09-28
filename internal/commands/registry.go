@@ -61,6 +61,9 @@ type Item struct {
 type Action struct {
 	Key   string
 	Label string
+	// Global marks an action that does not act on the selected row, so
+	// the dialog still offers it when the list is empty.
+	Global bool
 }
 
 // ModalSpec is a TUI-neutral description of a panel a command wants to
@@ -68,8 +71,10 @@ type Action struct {
 // business importing the TUI; a command that returns one in print mode
 // simply falls back to its Output.
 type ModalSpec struct {
-	Title   string
-	Header  []string
+	Title  string
+	Header []string
+	// Empty is shown in place of the list when Items is empty.
+	Empty   string
 	Items   []Item
 	Actions []Action
 

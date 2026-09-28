@@ -193,7 +193,7 @@ func (d *dialogMCP) renderList(width, height int) []string {
 		// swap in a different one).
 		out = append(out, dialogIndent+Faint("Run kiln --debug to see error logs"))
 	}
-	out = append(out, dialogIndent+Faint("kiln doctor for details"))
+	out = append(out, dialogIndent+Faint("Run kiln doctor for details"))
 
 	if d.status != "" {
 		colour := KilnGreen

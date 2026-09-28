@@ -17,6 +17,7 @@ SHOT last-countdown-before-attempt-4
 WAITFOR /Overloaded \(529\)/ 20
 SHOT final-error
 EXPECT /Overloaded \(529\)/
+EXPECT /Send again shortly, or switch with \/model/
 EXPECT_NOT /overloaded_error/
 EXPECT_NOT /Reconnected on attempt 4/
 EXPECT_NOT /Retrying in \ds · attempt 5 of 4/

@@ -327,6 +327,9 @@ type GuardOptions struct {
 // GuardResult is the outcome of GuardToolCall.
 type GuardResult struct {
 	Blocked *Blocked
+	// ByHook reports that a PreToolUse hook, not the permission gate,
+	// blocked the call.
+	ByHook bool
 	// Args is present only when a hook rewrote the call.
 	Args map[string]any
 }
@@ -357,7 +360,7 @@ func GuardToolCall(opts GuardOptions) (GuardResult, error) {
 	})
 
 	if hookResult.Blocked != nil {
-		return GuardResult{Blocked: hookResult.Blocked}, nil
+		return GuardResult{Blocked: hookResult.Blocked, ByHook: true}, nil
 	}
 
 	if hookResult.UpdatedInput != nil {

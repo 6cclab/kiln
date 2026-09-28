@@ -30,6 +30,20 @@ const (
 	StrategyFullSchemas ToolStrategy = "full-schemas"
 )
 
+// Describe is the strategy in words, for the reports people read (/usage,
+// /doctor, /context); the identifier itself stays in settings and logs.
+func (s ToolStrategy) Describe() string {
+	switch s {
+	case StrategyPostureIndex:
+		return "MCP index of this posture's servers, tools loaded on demand"
+	case StrategyFullIndex:
+		return "MCP index of every server, tools loaded on demand"
+	case StrategyFullSchemas:
+		return "every MCP tool loaded up front"
+	}
+	return string(s)
+}
+
 // CompactionSettings mirrors pi-agent-core's CompactionSettings, the subset
 // the tier computes.
 type CompactionSettings struct {

@@ -30,6 +30,11 @@ func TestMatchesRule(t *testing.T) {
 		{"bare mcp__ prefix rejects other server", "mcp__homelab", "mcp__grafana__query", "", false},
 		{"regex metachar escaped: dot not wildcard", "Bash(npm run build.sh)", "bash", "npm run buildXsh", false},
 		{"regex metachar escaped: literal dot matches", "Bash(npm run build.sh)", "bash", "npm run build.sh", true},
+		{"Claude Code CamelCase name matches snake_case tool", "WebFetch", "web_fetch", "https://go.dev", true},
+		{"CamelCase with argument", "TodoWrite", "todo_write", "", true},
+		{"WebFetch domain rule matches the URL's host", "WebFetch(domain:go.dev)", "web_fetch", "https://go.dev/doc/", true},
+		{"WebFetch domain rule rejects another host", "WebFetch(domain:go.dev)", "web_fetch", "https://evil.dev/go.dev", false},
+		{"WebFetch domain rule is not a subdomain wildcard", "WebFetch(domain:go.dev)", "web_fetch", "https://pkg.go.dev/", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

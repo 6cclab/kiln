@@ -18,6 +18,7 @@ KEY enter
 WAITFOR /Unauthorized \(401\)/ 20
 SHOT auth-error
 EXPECT /Unauthorized \(401\)/
+EXPECT /\/login shows how to sign in/
 EXPECT /Unauthorized \(401\): invalid api key/
 EXPECT /invalid api\s+key/
 EXPECT_NOT /Retrying in|attempt \d of \d/

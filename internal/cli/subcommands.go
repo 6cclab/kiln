@@ -24,6 +24,7 @@ import (
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
+	slashcommands "github.com/andrepato/harness/internal/commands"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/provider"
@@ -296,7 +297,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 			lines = append(lines, fmt.Sprintf("tier       unresolvable: %v", err))
 		} else {
 			strategy = resolved.Tier.ToolStrategy
-			lines = append(lines, fmt.Sprintf("tier       %s (%d tokens)", resolved.Tier.Name, resolved.Tier.ContextWindow))
+			lines = append(lines, "tier       "+slashcommands.TierSummary(resolved.Tier))
 		}
 	}
 
@@ -368,7 +369,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		_ = s.Close()
 	}
 	residentNow := residentToolNames(hasSessionSearch, webSearchAllowed(settings.Permissions))
-	lines = append(lines, fmt.Sprintf(`tools      %d resident, strategy "%s"`, len(residentNow), strategy))
+	lines = append(lines, "tools      "+slashcommands.ToolsSummary(len(residentNow), budget.Tier{ToolStrategy: strategy}))
 
 	hookConfig := claudehooks.LoadHooks(cwd)
 	hookCount := 0
@@ -383,7 +384,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		}
 		hookCount += n
 	}
-	lines = append(lines, fmt.Sprintf("hooks      %d across %d events", hookCount, eventsWithHooks))
+	lines = append(lines, "hooks      "+slashcommands.HooksSummary(hookCount, eventsWithHooks))
 
 	agentsList := append([]claudeagents.Definition{agent.GeneralPurpose}, claudeagents.LoadAgents(cwd)...)
 	lines = append(lines, fmt.Sprintf("agents     %d available", len(agentsList)))

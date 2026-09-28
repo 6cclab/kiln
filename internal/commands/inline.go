@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // Posture is one MCP search posture /posture can switch to (coding, ops,
@@ -64,7 +65,7 @@ func InlineCommands(deps InlineDeps) Source {
 					if deps.PostureToolCount != nil {
 						count = deps.PostureToolCount(p.Name)
 					}
-					out = append(out, Completion{Value: p.Name, Label: p.Name, Description: fmt.Sprintf("%d tools", count)})
+					out = append(out, Completion{Value: p.Name, Label: p.Name, Description: plural.Count(count, "tool")})
 				}
 				return out
 			},
@@ -75,18 +76,21 @@ func InlineCommands(deps InlineDeps) Source {
 					active = deps.ActivePosture()
 				}
 				if trimmed == "" {
-					lines := []string{fmt.Sprintf("active: %s", active), ""}
+					// The current posture is marked the way /model marks the
+					// current model: a check after its name.
+					lines := []string{"Postures decide which MCP servers tool search reaches.", ""}
 					for _, p := range deps.Postures {
-						mark := " "
+						name := p.Name
 						if p.Name == active {
-							mark = "*"
+							name += " ✓"
 						}
 						count := 0
 						if deps.PostureToolCount != nil {
 							count = deps.PostureToolCount(p.Name)
 						}
-						lines = append(lines, fmt.Sprintf("%s %-8s %3d tools  %s", mark, p.Name, count, p.Description))
+						lines = append(lines, fmt.Sprintf("  %-10s %9s  %s", name, plural.Count(count, "tool"), p.Description))
 					}
+					lines = append(lines, "", "Switch with /posture <name>.")
 					return Result{Output: lines}, nil
 				}
 

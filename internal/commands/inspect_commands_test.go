@@ -118,7 +118,7 @@ func TestDoctorFlagsNoResidentTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(res.Output, "\n")
-	if !strings.Contains(joined, "no tools are resident") {
+	if !strings.Contains(joined, "no tools are available") {
 		t.Fatalf("got %q", joined)
 	}
 }

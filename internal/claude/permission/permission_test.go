@@ -346,3 +346,16 @@ func TestReadOnlyBashInWorkspaceDoesNotAsk(t *testing.T) {
 		t.Errorf("an ask rule for git log was overridden by the read-only allowance")
 	}
 }
+
+func TestGrantRuleUsesClaudeCodeSyntax(t *testing.T) {
+	for key, want := range map[string]string{
+		"bash::npm test":         "Bash(npm test)",
+		"web_fetch::example.com": "WebFetch(example.com)",
+		"edit::src/a.go":         "Edit(src/a.go)",
+		"mcp__grafana__query::":  "mcp__grafana__query",
+	} {
+		if got := grantRule(key); got != want {
+			t.Errorf("grantRule(%q) = %q, want %q", key, got, want)
+		}
+	}
+}

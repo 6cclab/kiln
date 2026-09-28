@@ -1050,9 +1050,9 @@ func TestTUI_Permission_Allow(t *testing.T) {
 // checked by its title text instead.
 var panelTitles = map[string]string{
 	"model":       "Select model",
-	"permissions": "Permissions",
+	"permissions": "permissions ─",
 	"mcp":         "Manage MCP",
-	"agents":      "Subagents",
+	"agents":      "agents ─",
 	"config":      "Configuration",
 }
 

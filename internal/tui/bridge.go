@@ -852,6 +852,12 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 			return
 		}
 		text := assistantText(ev.Message)
+		if text == "" && ev.Message.StopReason == msg.StopStop && !hasVisibleContent(ev.Message.Content) {
+			// A turn that ended normally with nothing in it left no trace
+			// on screen, which read as a dropped message.
+			b.CommitNote("The model ended its turn without replying.")
+			return
+		}
 		if text != "" {
 			// The final state always sends regardless of streamThrottle —
 			// a throttled-away last delta must not be the one dropped, or
@@ -1060,6 +1066,30 @@ type msgCommitMarkdown struct{ Text string }
 // current width and commit it.
 type msgCommitToolCall struct{ View ToolCallView }
 
+// faultStatus reads the HTTP status off a provider error, which
+// provider/api's StatusError writes as "<Status Text> (<code>)…".
+var faultStatus = regexp.MustCompile(`^[A-Z][A-Za-z '-]* \((\d{3})\)`)
+
+// faultHint is the next step for a failed turn, by the provider's HTTP
+// status: the error line says what happened, this says what to do.
+func faultHint(message string) string {
+	m := faultStatus.FindStringSubmatch(message)
+	if m == nil {
+		return ""
+	}
+	switch code := m[1]; {
+	case code == "401" || code == "403":
+		return "Check this provider's credentials: /login shows how to sign in."
+	case code == "404":
+		return "This provider may not offer the model: /model lists the ones it does."
+	case code == "429":
+		return "Still rate limited after retrying. Wait a minute, then send again."
+	case code >= "500":
+		return "The provider kept failing after retries. Send again shortly, or switch with /model."
+	}
+	return ""
+}
+
 // msgCommitFault asks the app to commit a turn's error block, in order with
 // the tool calls committed before it.
 type msgCommitFault struct{ Message string }
@@ -1163,6 +1193,8 @@ func toolMeta(ts *turnState, ev harness.Event) string {
 		parts = append(parts, "approved")
 	case string(permission.OutcomeAuto):
 		parts = append(parts, "auto-approved")
+	case string(permission.OutcomeHookBlocked):
+		parts = append(parts, "blocked by hook")
 	}
 	if elapsed, ok := toolElapsed(ts, ev.ToolCallID); ok {
 		parts = append(parts, elapsed)
@@ -1499,6 +1531,23 @@ func assistantText(m *msg.AssistantMessage) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, ""))
+}
+
+// hasVisibleContent reports whether an assistant message holds anything
+// the transcript shows besides its text: a tool call, thinking, or a
+// provider block such as a web search.
+func hasVisibleContent(content msg.Blocks) bool {
+	for _, c := range content {
+		switch cv := c.(type) {
+		case msg.ToolCall, msg.ProviderBlock:
+			return true
+		case msg.ThinkingContent:
+			if strings.TrimSpace(cv.Thinking) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // hasSearchBlocks reports whether m's content carries an Anthropic

@@ -13,6 +13,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/writesettings"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/provider"
 )
 
@@ -436,7 +437,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				out := []string{
 					fmt.Sprintf("window        %d", t.ContextWindow),
 					fmt.Sprintf("tier          %s", t.Name),
-					fmt.Sprintf("tools         %s (%d tokens)", t.ToolStrategy, budget.ToolStrategyCost[t.ToolStrategy]),
+					fmt.Sprintf("tools         %s (%s tokens)", t.ToolStrategy.Describe(), formatTokens(budget.ToolStrategyCost[t.ToolStrategy])),
 					fmt.Sprintf("system prompt %d max", t.SystemPromptTokens),
 					fmt.Sprintf("reserved      %d", t.Compaction.ReserveTokens),
 					fmt.Sprintf("available     %d for conversation", budget.UsableTokens(t)),
@@ -656,18 +657,34 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "tools",
-			Description: "Show which tools are currently resident",
+			Description: "Show the tools the model can use right now",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.Lane == nil {
-					return Result{Output: []string{"0 resident:"}}, nil
+					return Result{Output: []string{"No tools available yet."}}, nil
 				}
 				active, err := deps.Lane.GetActiveTools()
 				if err != nil {
 					return Result{}, err
 				}
-				lines := []string{fmt.Sprintf("%d resident:", len(active))}
-				for _, t := range active {
-					lines = append(lines, "  "+t)
+				// Names as the transcript labels them ("bash background"),
+				// in a grid rather than one per row.
+				names := make([]string, len(active))
+				col := 0
+				for i, t := range active {
+					names[i] = strings.ReplaceAll(t, "_", " ")
+					col = max(col, len([]rune(names[i])))
+				}
+				const perRow = 4
+				lines := []string{plural.Count(len(active), "tool") + " available to the model:", ""}
+				for i := 0; i < len(names); i += perRow {
+					var row strings.Builder
+					for j := i; j < min(i+perRow, len(names)); j++ {
+						row.WriteString(names[j])
+						if j < min(i+perRow, len(names))-1 {
+							row.WriteString(strings.Repeat(" ", col-len([]rune(names[j]))+3))
+						}
+					}
+					lines = append(lines, "  "+row.String())
 				}
 				return Result{Output: lines}, nil
 			},

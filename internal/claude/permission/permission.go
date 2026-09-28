@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -68,6 +69,9 @@ const (
 	// answered No. The interface has already reported the refusal (with
 	// any feedback), so it need not render the call's result as well.
 	OutcomeDeclined Outcome = "declined"
+	// OutcomeHookBlocked means a PreToolUse hook refused the call before
+	// the gate saw it.
+	OutcomeHookBlocked Outcome = "blocked by hook"
 )
 
 // GateOptions configures a Gate.
@@ -273,15 +277,40 @@ func (g *Gate) RemoveRule(list RuleList, rule string) {
 }
 
 // SessionGrants returns grants made by "yes, don't ask again" this
-// session, surfaced because they are invisible otherwise.
+// session, surfaced because they are invisible otherwise. Each is written
+// as a Claude Code permission rule ("Bash(npm test)"), the form a person
+// reads in settings.json and the form /permissions saves when one is
+// promoted to a deny rule. Sorted, so the list does not reshuffle.
 func (g *Gate) SessionGrants() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	out := make([]string, 0, len(g.sessionAllows))
 	for k := range g.sessionAllows {
-		out = append(out, k)
+		out = append(out, grantRule(k))
 	}
+	sort.Strings(out)
 	return out
+}
+
+// grantRule turns a session-grant key ("bash::npm test") into rule syntax
+// ("Bash(npm test)"). Tool names take Claude Code's spelling: snake_case
+// becomes CamelCase ("web_fetch" → "WebFetch"); MCP tool names
+// ("mcp__server__tool") are already in that form and stay as they are.
+func grantRule(k string) string {
+	tool, arg, _ := strings.Cut(k, "::")
+	if !strings.HasPrefix(tool, "mcp__") {
+		var b strings.Builder
+		for _, part := range strings.Split(tool, "_") {
+			if part != "" {
+				b.WriteString(strings.ToUpper(part[:1]) + part[1:])
+			}
+		}
+		tool = b.String()
+	}
+	if arg == "" {
+		return tool
+	}
+	return tool + "(" + arg + ")"
 }
 
 // Blocked returns the refusal log, for /permissions-style reporting.

@@ -39,6 +39,9 @@ const replayResultLines = 50
 // first entry") — see SyntheticCommit's doc comment. It is what Ctrl+O,
 // Ctrl+F and Rewind redraw the screen from.
 func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, cwd string, synthetics []SyntheticCommit) []string {
+	// Each block opens with one blank row and none after it, as the live
+	// commit path does; a blank on both sides doubled every gap in the
+	// ctrl+o view.
 	var out []string
 	calls := map[string]msg.ToolCall{}
 	renderer := NewMarkdownRenderer(width, IsPlain())
@@ -59,12 +62,10 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 		if CompactReadGroup(pending, verbose) {
 			out = append(out, "")
 			out = append(out, FitLines(RenderReadGroup(pending), width, "     ")...)
-			out = append(out, "")
 		} else {
 			for _, view := range pending {
 				out = append(out, "")
 				out = append(out, FitLines(RenderToolCall(view), width, "     ")...)
-				out = append(out, "")
 			}
 		}
 		pending = nil
@@ -103,7 +104,6 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 					if view, ok := searchResultView(cv, searchQueries); ok {
 						out = append(out, "")
 						out = append(out, FitLines(RenderToolCall(view), width, resultIndent)...)
-						out = append(out, "")
 					}
 				case msg.ThinkingContent:
 					// A committed thinking block replays exactly like the
@@ -131,7 +131,6 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 				flush()
 				out = append(out, "")
 				out = append(out, RenderAssistantText(renderer.Render(text))...)
-				out = append(out, "")
 			}
 		case msg.ToolResultMessage:
 			call := calls[m.ToolCallID]
@@ -162,7 +161,6 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 				flush()
 				out = append(out, "")
 				out = append(out, FitLines(RenderToolCall(view), width, "     ")...)
-				out = append(out, "")
 			}
 		}
 		emitSynthetics(e.ID)

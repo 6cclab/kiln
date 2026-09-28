@@ -457,7 +457,13 @@ type msgResizeRewrap struct{ gen int }
 // msgReplayTranscript follows the tea.ClearScreen a Ctrl+O toggle returns:
 // once the clear has been applied, the transcript so far is re-committed at
 // the new verbosity (see replayTranscript and Bridge.MsgClearAndReplay).
-type msgReplayTranscript struct{}
+type msgReplayTranscript struct {
+	// then runs after the replay has been queued: a note that must land
+	// under the redrawn history. A tea.Sequence step after this message
+	// runs as soon as the message is returned, before Update replays, and
+	// so committed its note above the redrawn transcript.
+	then func()
+}
 
 // msgExecDone reports that a program a command handed the terminal to (the
 // editor /memory opens) has exited, with the note to show for it.
@@ -784,12 +790,15 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			return nil
 		}
 		if msg.replay {
-			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} }, note)
+			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{then: func() { note() }} })
 		}
 		return m, note
 
 	case msgReplayTranscript:
 		m.replayTranscript()
+		if msg.then != nil {
+			msg.then()
+		}
 		return m, nil
 
 	case msgExecDone:
@@ -1707,6 +1716,13 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		return m, m.runMode(classified)
 	}
 
+	// A bare /rewind opens the same picker as esc esc; the command's text
+	// listing is for print mode, where there is no picker.
+	if strings.TrimSpace(line) == "/rewind" && m.cfg.Lane != nil {
+		m.editor.SetValue("")
+		return m.openRewind(), nil
+	}
+
 	ctx := context.Background()
 	var handled *commands.Result
 	if m.cfg.Registry != nil {
@@ -1726,11 +1742,12 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			// The conversation was reset: redraw the (now empty)
 			// transcript, then show the command's note under it.
 			note := strings.Join(handled.Output, " ")
-			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} }, func() tea.Msg {
-				if m.cfg.Bridge != nil && note != "" {
-					m.cfg.Bridge.CommitNote(note)
-				}
-				return nil
+			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg {
+				return msgReplayTranscript{then: func() {
+					if m.cfg.Bridge != nil && note != "" {
+						m.cfg.Bridge.CommitNote(note)
+					}
+				}}
 			})
 		}
 		if handled.Modal != nil {

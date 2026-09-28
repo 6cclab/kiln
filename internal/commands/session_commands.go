@@ -138,7 +138,7 @@ func SessionCommands(deps SessionCommandDeps) Source {
 					}
 					out = append(out, Completion{
 						Value:       m.ID,
-						Label:       fmt.Sprintf("%s  %s", ago(m.ModifiedAt), m.ID[:min(8, len(m.ID))]),
+						Label:       fmt.Sprintf("%s  %s", ago(m.ModifiedAt), shortID(m.ID)),
 						Description: orDefault(prompt, "(no prompt yet)"),
 					})
 				}
@@ -187,7 +187,7 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				}
 				lines := []string{plural.Count(len(found), "past session") + ":", ""}
 				for _, m := range top {
-					lines = append(lines, fmt.Sprintf("  %s  %8s  %s", m.ID[:min(8, len(m.ID))], ago(m.ModifiedAt), truncate(orDefault(jsonl.FirstPrompt(m.Path), "(no prompt yet)"), 70)))
+					lines = append(lines, fmt.Sprintf("  %s  %8s  %s", shortID(m.ID), ago(m.ModifiedAt), truncate(orDefault(jsonl.FirstPrompt(m.Path), "(no prompt yet)"), 70)))
 				}
 				lines = append(lines, "", "Switch with /resume <id> (type /resume and a space to pick one)")
 				return Result{Output: lines}, nil
@@ -239,33 +239,51 @@ func SessionCommands(deps SessionCommandDeps) Source {
 					return Result{}, err
 				}
 
+				var turns []session.Entry
+				for _, e := range entries {
+					if role, _, ok := entryText(e); ok && role == "user" {
+						turns = append(turns, e)
+					}
+				}
 				trimmed := strings.TrimSpace(args)
 				if trimmed == "" {
-					var turns []session.Entry
-					for _, e := range entries {
-						if role, _, ok := entryText(e); ok && role == "user" {
-							turns = append(turns, e)
-						}
-					}
 					if len(turns) > 10 {
 						turns = turns[len(turns)-10:]
 					}
 					if len(turns) == 0 {
 						return Result{Output: []string{"Nothing to rewind to yet."}}, nil
 					}
-					lines := []string{"Rewind to which turn?", ""}
+					lines := []string{"Rewind to before which message?", ""}
 					for _, e := range turns {
 						_, text, _ := entryText(e)
-						lines = append(lines, fmt.Sprintf("  %s  %s", e.ID, truncateRunes(collapseSpace(text), 60)))
+						lines = append(lines, fmt.Sprintf("  %s  %s", shortID(e.ID), truncateRunes(collapseSpace(text), 60)))
 					}
-					lines = append(lines, "", "Use: /rewind <entry-id>")
+					lines = append(lines, "", "Rewind with /rewind <id>, or press esc twice for a picker.")
 					return Result{Output: lines}, nil
 				}
 
-				if err := deps.Lane.NavigateTree(ctx, &trimmed); err != nil {
+				// An id, or any unique prefix of one (the list shows 8
+				// characters), naming one of your messages. Like the
+				// picker, this goes back to just before that message.
+				var match *session.Entry
+				for i, e := range turns {
+					if strings.HasPrefix(e.ID, trimmed) {
+						if match != nil {
+							return Result{}, fmt.Errorf("%q matches more than one message; use more of the id", trimmed)
+						}
+						match = &turns[i]
+					}
+				}
+				if match == nil {
+					return Result{}, fmt.Errorf("no message of yours has an id starting %q; /rewind lists them", trimmed)
+				}
+				if err := deps.Lane.NavigateTree(ctx, match.ParentID); err != nil {
 					return Result{}, err
 				}
-				return Result{Output: []string{fmt.Sprintf("Rewound to %s.", trimmed)}}, nil
+				_, text, _ := entryText(*match)
+				// Clear redraws the transcript as it now stands, then shows
+				// this note under it.
+				return Result{Output: []string{"Rewound to before: " + truncateRunes(collapseSpace(text), 60)}, Clear: true}, nil
 			},
 		},
 		{
@@ -292,7 +310,7 @@ func SessionCommands(deps SessionCommandDeps) Source {
 
 				target := strings.TrimSpace(args)
 				if target == "" {
-					target = fmt.Sprintf("transcript-%d.md", time.Now().UnixMilli())
+					target = "kiln-transcript-" + time.Now().Format("2006-01-02-150405") + ".md"
 				}
 				if !filepath.IsAbs(target) {
 					target = filepath.Join(deps.Cwd, target)
@@ -504,4 +522,10 @@ func resolveSessionID(deps SessionCommandDeps, prefix string) (id, problem strin
 		return "", fmt.Sprintf("%q matches %d sessions; type more of the id.", prefix, len(matches)), nil
 	}
 	return "", fmt.Sprintf("No session %q in this directory. Type /resume and a space to pick one.", prefix), nil
+}
+
+// shortID is the 8-character form of a session or entry id the listings
+// show; commands taking an id accept any unique prefix of it.
+func shortID(id string) string {
+	return id[:min(8, len(id))]
 }

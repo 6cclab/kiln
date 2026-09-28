@@ -391,7 +391,11 @@ func (d *commandDialog) selected() (commands.Item, bool) {
 
 func (d *commandDialog) Render(width, height int) []string {
 	var out []string
-	out = append(out, renderTitleAndDescription(d.spec.Title, "", width)...)
+	// The label rule above already names the dialog; a title that only
+	// repeats it ("permissions ───", then "Permissions") is dropped.
+	if !strings.EqualFold(d.spec.Title, d.FrameLabel()) {
+		out = append(out, renderTitleAndDescription(d.spec.Title, "", width)...)
+	}
 	for _, h := range d.spec.Header {
 		out = append(out, dialogIndent+h)
 	}
@@ -412,6 +416,11 @@ func (d *commandDialog) Render(width, height int) []string {
 	if maxRows < 1 {
 		maxRows = len(options)
 	}
+	if len(options) == 0 && d.spec.Empty != "" {
+		for _, line := range wrapMultiline(d.spec.Empty, max(width-len(dialogIndent), 20)) {
+			out = append(out, dialogIndent+Muted(line))
+		}
+	}
 	out = append(out, renderOptionRows(options, d.cursor, width, maxRows)...)
 
 	out = append(out, "")
@@ -428,6 +437,9 @@ func (d *commandDialog) Render(width, height int) []string {
 		keys = append(keys, "Enter to select")
 	}
 	for _, a := range d.spec.Actions {
+		if len(d.spec.Items) == 0 && !a.Global {
+			continue
+		}
 		keys = append(keys, a.Key+" "+a.Label)
 	}
 	keys = append(keys, "Esc to cancel")

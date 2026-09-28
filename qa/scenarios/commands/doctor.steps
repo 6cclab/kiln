@@ -4,11 +4,11 @@
 WAITFOR /describe a task/ 20
 TYPE /doctor
 KEY enter
-WAITFOR /resident, strategy/ 20
+WAITFOR /always available/ 20
 SHOT doctor
 EXPECT /model\s+faux\/faux-1/
 EXPECT /tier\s+/
-EXPECT /hooks\s+\d+ across \d+ events/
+EXPECT /hooks\s+(none|\d+ hooks? on \d+ events?)/
 # 2, not 1: kiln always injects a built-in "general-purpose" agent
 # (internal/agent/subagent.go) alongside the fixture's reader.md.
 EXPECT /agents\s+2 available/

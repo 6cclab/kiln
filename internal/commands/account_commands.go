@@ -142,7 +142,7 @@ func AccountCommands(deps AccountDeps) Source {
 					fmt.Sprintf("tier       %s", deps.Tier.Name),
 					"window     " + formatTokens(deps.Tier.ContextWindow) + " tokens",
 					"budget     " + formatTokens(budgetTokens) + " usable after reserves",
-					fmt.Sprintf("tools      %s", deps.Tier.ToolStrategy),
+					"tools      " + deps.Tier.ToolStrategy.Describe(),
 					"per result " + formatTokens(deps.Tier.ToolOutputTokens) + " token ceiling",
 				}
 				if deps.ContextUsed != nil {

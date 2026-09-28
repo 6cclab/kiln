@@ -761,6 +761,12 @@ func RenderError(message string) []string {
 	for _, line := range lines {
 		out = append(out, KilnRed(line))
 	}
+	// A provider failure also says what to do about it (faultHint).
+	if hint := faultHint(message); hint != "" {
+		for _, line := range wrapMultiline(hint, ruleWidth()) {
+			out = append(out, Muted(line))
+		}
+	}
 	return out
 }
 
