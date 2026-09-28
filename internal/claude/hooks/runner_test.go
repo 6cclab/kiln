@@ -335,3 +335,12 @@ func TestGuardToolCallHooksThenGate(t *testing.T) {
 		}
 	})
 }
+
+func TestRunHooksSetsClaudeProjectDir(t *testing.T) {
+	dir := t.TempDir()
+	path := writeScript(t, dir, "project-dir.sh", `printf '%s' "$CLAUDE_PROJECT_DIR"`)
+	out := run(cfg(path, 0), nil, dir)
+	if len(out.Context) != 1 || out.Context[0] != dir {
+		t.Errorf("CLAUDE_PROJECT_DIR = %v, want %q", out.Context, dir)
+	}
+}

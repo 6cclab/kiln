@@ -84,6 +84,13 @@ func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv 
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "CLAUDE_HOOK=1", "HARNESS_HOOK=1")
+	if cwd != "" {
+		// Claude Code gives hooks the project root this way, and project
+		// hook configs name their scripts through it
+		// ("$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh); unset, that path
+		// resolves to /.claude/hooks/x.sh and the hook fails.
+		cmd.Env = append(cmd.Env, "CLAUDE_PROJECT_DIR="+cwd)
+	}
 	for k, v := range extraEnv {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
