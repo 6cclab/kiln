@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -186,5 +187,24 @@ func TestBashTimeout(t *testing.T) {
 		if got != c.want || ok != c.ok {
 			t.Errorf("bashTimeout(%v) = %s, %v; want %s, %v", c.in, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+// TestBashToolNamesLeftoverJobGroup: a command that leaves a job running
+// says so, with the exact command that stops it. Without a handle, a model
+// cleaned up its server with pkill -f "go run", which kills any other
+// "go run" on the machine too.
+func TestBashToolNamesLeftoverJobGroup(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	bt := BashTool(env)
+	t.Cleanup(execenv.KillLeftoverJobs)
+	result := execTool(t, bt, map[string]any{"command": "sleep 30 & echo $! > pid"})
+	m := regexp.MustCompile(`kill -- -(\d+)`).FindStringSubmatch(resultText(result))
+	if m == nil {
+		t.Fatalf("no stop command in result: %q", resultText(result))
+	}
+	stop := execTool(t, bt, map[string]any{"command": "kill -- -" + m[1] + `; sleep 0.2; kill -0 "$(cat pid)" 2>/dev/null && echo alive || echo gone`})
+	if got := strings.TrimSpace(resultText(stop)); got != "gone" {
+		t.Fatalf("after the named kill the job is %q, want gone", got)
 	}
 }

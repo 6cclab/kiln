@@ -1,0 +1,26 @@
+{
+ "id": "20260928T000259Z-model-pkills-broadly-without-job-handle",
+ "found_at": "2026-09-28T00:02:59Z",
+ "scenario": "crud-trial/t2-kiln-4",
+ "step": "012-finished",
+ "terminals": [],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Model cleans up its server with pkill -f, killing unrelated processes",
+ "observed": "The bash note said a job was still running but gave no handle; the model ran pkill -f \"go run\" and pkill -f exe/api, which match any such process on the machine",
+ "expected": "The note names the job's process group and the exact kill -- -<pgid> command",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln-4/012-finished.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/execenv/exec.go",
+   "internal/tools/bash.go"
+  ],
+  "regression_test": "TestBashToolNamesLeftoverJobGroup",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T00:02:59Z"
+ }
+}

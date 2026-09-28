@@ -48,8 +48,10 @@ type ExecResult struct {
 	SpillPath  string
 	// JobsLeft reports that the command left background jobs running
 	// ("server &"): its process group outlived the shell. They are
-	// stopped by KillLeftoverJobs when the session ends.
-	JobsLeft bool
+	// stopped by KillLeftoverJobs when the session ends. JobsGroup is
+	// their process group, so they can be stopped precisely before that.
+	JobsLeft  bool
+	JobsGroup int
 }
 
 // leftoverGroups holds the process groups of commands whose background
@@ -260,6 +262,7 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 		Truncation: final.Truncation,
 		SpillPath:  final.SpillPath,
 		JobsLeft:   jobsLeft,
+		JobsGroup:  pgid,
 	}, nil
 }
 
