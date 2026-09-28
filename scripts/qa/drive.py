@@ -44,8 +44,8 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     KEY <name> [name...]         enter esc tab backspace delete up down left
                                  right home end pgup pgdown, shift+tab,
                                  shift+enter, ctrl+<x>, alt+<x>, shift+<arrow>
-    SCROLL <up|down> <n>         mouse wheel over the window centre (iTerm2
-                                 only; moves the pointer there and back)
+    SCROLL <up|down> <n>         mouse wheel over the window centre (moves
+                                 the pointer there and back)
     CLICK <x> <y>                click at window-local points
     RESIZE <cols> <rows>         resize the window
     WAIT <seconds>               sleep
@@ -273,6 +273,12 @@ class TerminalApp:
         # the tab's whole buffer (scrollback plus the visible screen).
         return self._tab("     return history of t")
 
+    def centre(self):
+        """The window's centre in global screen points (top-left origin)."""
+        b = self._tab("     return bounds of w")
+        x1, y1, x2, y2 = (int(v) for v in b.split(","))
+        return (x1 + x2) // 2, (y1 + y2) // 2
+
     def close(self):
         try:
             self._tab('     close w saving no\n     return "ok"')
@@ -347,6 +353,16 @@ class Warp:
     def activate(self):
         osa('tell application "Warp" to activate\n'
             'tell application "System Events" to tell process "Warp" to perform action "AXRaise" of front window')
+
+    def centre(self):
+        """The front window's centre in global screen points, via System
+        Events (Warp has no AppleScript dictionary)."""
+        r = osa('tell application "System Events" to tell process "Warp"\n'
+                ' set {x, y} to position of front window\n set {w, h} to size of front window\n'
+                ' return (x as text) & "," & (y as text) & "," & (w as text) & "," & (h as text)\n'
+                'end tell')
+        x, y, w, h = (int(float(v)) for v in r.split(","))
+        return x + w // 2, y + h // 2
 
     def resize(self, cols, rows):
         w0, h0, c0, r0 = self.base
@@ -795,8 +811,6 @@ class Run:
                 direction, n = arg.split()[:2]
                 self.term.activate()
                 time.sleep(0.2)
-                if not hasattr(self.term, "centre"):
-                    raise DriveError("SCROLL needs the window's screen position, which only the iTerm2 adapter reads")
                 x, y = self.term.centre()
                 p = run([wheel_binary(), str(x), str(y), direction, n])
                 if p.returncode != 0:
