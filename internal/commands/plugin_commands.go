@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"github.com/andrepato/harness/internal/plural"
 	"sort"
 	"strings"
 
@@ -39,18 +40,18 @@ func renderPluginReport(cwd string, active []claudeplugins.Plugin) []string {
 	if len(active) == 0 {
 		lines = append(lines, "No active plugins.")
 	} else {
-		lines = append(lines, fmt.Sprintf("%s active:", countOf(len(active), "plugin")))
+		lines = append(lines, fmt.Sprintf("%s active:", plural.Count(len(active), "plugin")))
 		for _, p := range active {
 			lines = append(lines, fmt.Sprintf("  %s@%s%s  (%s)", p.Name, p.Marketplace, versionTag(p.Version), p.Scope))
 			var contributions []string
 			if n := len(claudeplugins.Skills(p)); n > 0 {
-				contributions = append(contributions, countOf(n, "skill"))
+				contributions = append(contributions, plural.Count(n, "skill"))
 			}
 			if n := len(claudeplugins.Commands(p)); n > 0 {
-				contributions = append(contributions, countOf(n, "command"))
+				contributions = append(contributions, plural.Count(n, "command"))
 			}
 			if n := len(claudeplugins.Agents(p)); n > 0 {
-				contributions = append(contributions, countOf(n, "agent"))
+				contributions = append(contributions, plural.Count(n, "agent"))
 			}
 			hookCount := 0
 			for _, groups := range claudeplugins.Hooks(p) {
@@ -59,10 +60,10 @@ func renderPluginReport(cwd string, active []claudeplugins.Plugin) []string {
 				}
 			}
 			if hookCount > 0 {
-				contributions = append(contributions, countOf(hookCount, "hook"))
+				contributions = append(contributions, plural.Count(hookCount, "hook"))
 			}
 			if n := len(claudeplugins.MCPServers(p)); n > 0 {
-				contributions = append(contributions, countOf(n, "MCP server"))
+				contributions = append(contributions, plural.Count(n, "MCP server"))
 			}
 			if len(contributions) == 0 {
 				lines = append(lines, "    (contributes nothing kiln loads)")
@@ -80,7 +81,7 @@ func renderPluginReport(cwd string, active []claudeplugins.Plugin) []string {
 	}
 	if len(disabled) > 0 {
 		sort.Slice(disabled, func(i, j int) bool { return disabled[i].Key < disabled[j].Key })
-		lines = append(lines, "", fmt.Sprintf("%s installed but not active:", countOf(len(disabled), "plugin")))
+		lines = append(lines, "", fmt.Sprintf("%s installed but not active:", plural.Count(len(disabled), "plugin")))
 		for _, ins := range disabled {
 			why := "disabled"
 			if ins.Enabled && !ins.Applicable {
@@ -92,14 +93,6 @@ func renderPluginReport(cwd string, active []claudeplugins.Plugin) []string {
 
 	lines = append(lines, "", "Installs and enabled/disabled state are managed with Claude Code's own /plugin — kiln reads the same files, it does not write them.")
 	return lines
-}
-
-// countOf renders "1 skill" / "6 skills".
-func countOf(n int, word string) string {
-	if n == 1 {
-		return "1 " + word
-	}
-	return fmt.Sprintf("%d %ss", n, word)
 }
 
 // versionTag is "  v1.2.0", or nothing for a plugin Claude Code recorded

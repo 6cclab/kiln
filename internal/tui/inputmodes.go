@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -86,11 +88,18 @@ func RunBang(ctx context.Context, command string, env *execenv.Env) []string {
 }
 
 // AddMemory appends note to project or user memory (memory.AddMemory picks
-// which) and returns the transcript lines to commit.
-func AddMemory(note, cwd string) []string {
+// which) and returns the one-line system note reporting it, and whether it
+// failed.
+func AddMemory(note, cwd string) (string, bool) {
 	target, err := memory.AddMemory(note, cwd)
 	if err != nil {
-		return []string{Red("# " + err.Error())}
+		return "Could not save the note: " + err.Error(), false
 	}
-	return []string{Green("#") + " added to " + target, Dim("  applies from the next session")}
+	shown := target
+	if rel, err := filepath.Rel(cwd, target); err == nil && !strings.HasPrefix(rel, "..") {
+		shown = rel
+	} else if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(target, home+string(filepath.Separator)) {
+		shown = "~" + strings.TrimPrefix(target, home)
+	}
+	return "Saved to " + shown + " · applies from the next session", true
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/andrepato/harness/internal/plural"
 	"os"
 
 	"github.com/andrepato/harness/internal/execenv"
@@ -127,7 +128,7 @@ func EditTool(env *execenv.Env) *tool.Tool {
 				}
 				detailsJSON, _ := json.Marshal(details)
 
-				text := fmt.Sprintf("Successfully replaced %d block(s) in %s.", len(in.Edits), in.Path)
+				text := fmt.Sprintf("Successfully replaced %s in %s.", plural.Count(len(in.Edits), "block"), in.Path)
 				return tool.Result{Content: msg.Blocks{msg.Text(text)}, Details: detailsJSON}, nil
 			})
 		},

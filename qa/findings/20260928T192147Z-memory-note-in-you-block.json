@@ -1,0 +1,25 @@
+{
+ "id": "20260928T192147Z-memory-note-in-you-block",
+ "found_at": "2026-09-28T19:21:47Z",
+ "scenario": "real/ext-onboarding",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "medium",
+ "title": "# memory-note confirmation rendered inside the user's you block",
+ "observed": "'# added to …/CLAUDE.md' and 'applies from the next session' as rows under 'you'",
+ "expected": "A system note: Saved to <path> · applies from the next session",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-ext-onboarding-140x45/06-memory-note.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/inputmodes.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_MemoryNote",
+  "updated_at": "2026-09-28T19:21:47Z"
+ }
+}

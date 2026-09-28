@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"github.com/andrepato/harness/internal/plural"
 	"strings"
 
 	"github.com/andrepato/harness/internal/budget"
@@ -297,7 +298,7 @@ func InspectCommands(deps InspectDeps) Source {
 				if len(problems) == 0 {
 					lines = append(lines, "No problems found.")
 				} else {
-					lines = append(lines, fmt.Sprintf("%d problem(s):", len(problems)))
+					lines = append(lines, plural.Count(len(problems), "problem")+":")
 				}
 				for _, p := range problems {
 					lines = append(lines, "  - "+p)

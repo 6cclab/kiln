@@ -1096,27 +1096,6 @@ func (m Model) commitNote(text string) {
 	m.cfg.Bridge.CommitNote(text)
 }
 
-// declinedFollowupText is the assistant text block that follows a
-// declined tool call (Terminal.dc.html line 303's pick(2): the note
-// "✕ Declined …" plus this exact sentence, copied literally from the
-// design source — a plain ASCII apostrophe in "won't", not a typographic
-// one).
-const declinedFollowupText = "Okay, I won't run it. What should I do instead?"
-
-// commitAssistantText commits text as an ordinary "kiln" assistant text
-// block (RenderAssistantText), the same rendering msgCommitMarkdown uses
-// for a real streamed reply — used for declinedFollowupText, which is
-// synthesized locally rather than streamed from the model, but must read
-// the same as one that was.
-func (m Model) commitAssistantText(text string) {
-	if m.cfg.Bridge == nil {
-		return
-	}
-	renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
-	lines := append([]string{""}, RenderAssistantText(renderer.Render(text))...)
-	m.commit(lines)
-}
-
 // commitCommandResult is commit's CommitCommandResult counterpart.
 func (m Model) commitCommandResult(name string, lines []string) {
 	if m.cfg.Bridge == nil {
@@ -1541,18 +1520,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if denied := m.prompt.lastDenied; denied != nil {
 		m.prompt.lastDenied = nil
 		m.commitNote(declinedNoteText(*denied))
-		// The design's decline-only path (Terminal.dc.html line 303)
-		// also commits an assistant text block asking what to do
-		// instead — but not when this decline is really an Esc-driven
-		// interrupt (promptEscInterrupt, defect 5): the user is
-		// stopping the whole turn, not redirecting the one declined
-		// call, and finishTurn's own "■ Interrupted…" note is about to
-		// answer that same "what now" beat once the abort actually
-		// lands. Showing both would read as two different, competing
-		// answers to the same moment, so the interrupt note wins.
-		if !promptEscInterrupt {
-			m.commitAssistantText(declinedFollowupText)
-		}
+		// The design prototype follows this note with a scripted "Okay, I
+		// won't run it. What should I do instead?" from kiln. There a
+		// script plays the model; here the model answers the refusal
+		// itself, so a scripted line would put words in its mouth (it
+		// said "run" of an edit, and landed before the real reply).
 	}
 	// "Yes, and switch to auto mode" (Bash) / "Yes, and switch to accept
 	// edits" (Edit/Write) both allow the pending call AND change the
@@ -1874,8 +1846,13 @@ func (m Model) runMode(c Classified) tea.Cmd {
 			return nil
 		}
 	case ModeMemory:
-		lines := AddMemory(c.Body, m.cfg.Cwd)
-		m.commit(lines)
+		// A system note of its own, not rows under the user's "you" block.
+		note, ok := AddMemory(c.Body, m.cfg.Cwd)
+		if !ok {
+			m.commit(RenderError(note))
+			break
+		}
+		m.commitNote(note)
 	}
 	return nil
 }

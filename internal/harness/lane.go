@@ -341,6 +341,25 @@ func (l *Lane) Compact(ctx context.Context, custom *string) error {
 	return l.runCompaction(ctx, pathEntries, model, cfg, custom)
 }
 
+// EstimateConversationTokens estimates the tokens of the conversation the
+// model is sent next (after any compaction), not counting the system
+// prompt or tools. An estimate (compaction.EstimateTokens), for reports.
+func (l *Lane) EstimateConversationTokens() (int, error) {
+	tip, _ := l.GetTipID()
+	if tip == "" {
+		return 0, nil
+	}
+	entries, err := l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "oldestFirst"})
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, m := range entriesToTranscript(entries) {
+		total += compaction.EstimateTokens(m)
+	}
+	return total, nil
+}
+
 // entriesToTranscript projects entries (already oldest-first, as
 // ScanBranch with Order "oldestFirst" returns them) onto the messages the
 // model sees. It is compaction-aware: history before the last compaction

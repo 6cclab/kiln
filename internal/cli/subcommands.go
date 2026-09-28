@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/andrepato/harness/internal/diag"
+	"github.com/andrepato/harness/internal/plural"
 	"io"
 	"os"
 	"os/signal"
@@ -414,7 +415,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	if len(problems) == 0 {
 		lines = append(lines, "No problems found.")
 	} else {
-		lines = append(lines, fmt.Sprintf("%d problem(s):", len(problems)))
+		lines = append(lines, plural.Count(len(problems), "problem")+":")
 		for _, p := range problems {
 			lines = append(lines, "  - "+p)
 		}

@@ -159,6 +159,7 @@ func (l *Lane) opSettings() OpSettings {
 func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	l.invokeBeforeDrive(ctx)
 	firstIteration := true
+	compactFirst := true
 	for {
 		if err := ctx.Err(); err != nil {
 			return l.finishAborted(operationID, tip)
@@ -191,6 +192,14 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		var drainErr error
 		if tip, _, drainErr = l.drainInbox(tip); drainErr != nil {
 			return l.finishFailed(operationID, tip, drainErr)
+		}
+
+		// Before an operation's first request, too: the end-of-turn check
+		// below only runs between tool steps, so a conversation whose
+		// turns end in text never compacted however full it got.
+		if compactFirst {
+			compactFirst = false
+			tip = l.autoCompact(ctx, tip)
 		}
 
 		_, cfg, err := l.resolveModel()

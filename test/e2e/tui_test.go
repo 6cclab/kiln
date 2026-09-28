@@ -953,7 +953,7 @@ func TestTUI_Permission_DenyWithFeedback(t *testing.T) {
 
 	// Declining commits a "✕ Declined Update <path>" system note ahead of
 	// the model's own reply (Phase 3's C item).
-	if err := s.WaitFor("Declined Update src/math.js", 2*time.Second); err != nil {
+	if err := s.WaitFor("Declined Edit src/math.js", 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.WaitFor("declined. Ask what they would prefer", 5*time.Second); err != nil {
@@ -1377,8 +1377,13 @@ func TestTUI_MemoryNote(t *testing.T) {
 
 	s.Send("#remember to use tabs")
 	s.SendKey("enter")
-	if err := s.WaitFor("added to", 3*time.Second); err != nil {
+	if err := s.WaitFor("Saved to ~/.claude/CLAUDE.md · applies from the next session", 3*time.Second); err != nil {
 		t.Fatal(err)
+	}
+	// The note is a system note of its own, not rows under "you".
+	rows := strings.Join(s.Rows(), "\n")
+	if !regexp.MustCompile(`system ─+\n\s*Saved to`).MatchString(rows) {
+		t.Errorf("the saved note is not its own system block:\n%s", rows)
 	}
 
 	// scratchProject's dir has no CLAUDE.md yet, so AddMemory (see

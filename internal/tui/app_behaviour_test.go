@@ -159,31 +159,32 @@ func TestRetryKey_ConsumedOnlyWithPendingRetryAndEmptyInput(t *testing.T) {
 	})
 }
 
-// TestDeclinedPrompt_CommitsFollowupText pins defect 3: declining a
-// tool-permission prompt through its explicit "No" option must, in
-// addition to the existing "✕ Declined …" note, commit an assistant text
-// block reading exactly declinedFollowupText (Terminal.dc.html line 303's
-// pick(2): the note plus "Okay, I won't run it. What should I do
-// instead?").
-func TestDeclinedPrompt_CommitsFollowupText(t *testing.T) {
+// TestDeclinedPrompt_CommitsNoteButNoScriptedReply: declining a
+// tool-permission prompt through its "No" option commits the "✕ Declined …"
+// note and nothing that reads as the model's reply: the model answers the
+// refusal itself.
+func TestDeclinedPrompt_CommitsNoteButNoScriptedReply(t *testing.T) {
 	m, f := newTestModelWithBridge(t)
 	m.prompt.pending = &pendingPermission{
 		request: PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload"},
 		reply:   make(chan PromptChoice, 1),
 	}
 
-	// "4" is the Bash prompt's "No" option (promptOptionsFor("bash"):
-	// Yes / don't-ask-again / switch-to-auto / No) — an outright decline,
-	// not the feedback-then-Enter path, so this also checks the plain
-	// "No" option commits the follow-up, not just Esc.
 	next, _ := m.handleKey(charKey('4'))
-	_ = next.(Model)
+	nm := next.(Model)
 
 	declineNote := waitForPrinted(t, f, "Declined npm test -- upload")
 	if !strings.Contains(declineNote, "✕") {
 		t.Errorf("decline note = %q, want the ✕ marker", declineNote)
 	}
-	waitForPrinted(t, f, declinedFollowupText)
+	nm.commitNote("sentinel-after-decline")
+	waitForPrinted(t, f, "sentinel-after-decline")
+	printed, _ := f.snapshot()
+	for _, p := range printed {
+		if strings.Contains(p, "What should I do instead") {
+			t.Errorf("committed a scripted reply %q in the model's name", p)
+		}
+	}
 }
 
 // TestEscInterruptsBusyPrompt_SuppressesFollowupText pins defect 5 (Esc
@@ -218,7 +219,7 @@ func TestEscInterruptsBusyPrompt_SuppressesFollowupText(t *testing.T) {
 
 	printed, _ := f.snapshot()
 	for _, p := range printed {
-		if strings.Contains(p, declinedFollowupText) {
+		if strings.Contains(p, "What should I do instead") {
 			t.Errorf("committed %q; an Esc-driven interrupt must not also show the decline follow-up text", p)
 		}
 	}

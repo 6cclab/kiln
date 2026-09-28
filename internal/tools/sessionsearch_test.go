@@ -69,7 +69,7 @@ func TestSessionSearchToolResultFormat(t *testing.T) {
 		t.Fatalf("Execute returned an error result: %+v", res)
 	}
 	text := msg.TextOf(res.Content)
-	if !strings.Contains(text, "prior session(s):") {
+	if !strings.Contains(text, "prior session") {
 		t.Errorf("result text missing summary line: %q", text)
 	}
 	if !strings.Contains(text, "session: 2026-09-23T11-37-47-498Z_01a0ce0e-bcea-7701-a97e-cc374e8c56d1") {

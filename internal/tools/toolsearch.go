@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/andrepato/harness/internal/plural"
 	"sort"
 	"strings"
 
@@ -134,7 +135,7 @@ func ToolSearchTool(tools []mcpgate.McpTool, posture mcpgate.Posture, state *mcp
 			// them: repeating every schema here would keep a second copy
 			// in the conversation for the rest of the session.
 			var b strings.Builder
-			fmt.Fprintf(&b, "Enabled %d tool(s); call them directly:\n", len(candidates))
+			fmt.Fprintf(&b, "Enabled %s; call them directly:\n", plural.Count(len(candidates), "tool"))
 			for _, c := range candidates {
 				fmt.Fprintf(&b, "\n- %s", c.tool.QualifiedName)
 				if d := firstSentence(c.tool.Description); d != "" {

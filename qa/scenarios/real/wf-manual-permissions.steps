@@ -12,8 +12,10 @@ SHOT first-prompt
 KEY tab
 TYPE Don't touch that file yet, just tell me your plan first.
 KEY enter
-WAIT 3
+WAITFOR /describe a task/ 120
 SHOT after-decline
+EXPECT_NOT /What should I do instead/
+SEND Plan looks good, go ahead.
 WAITFOR /Allow kiln to/ 120
 SHOT second-prompt
 KEY 2

@@ -1,0 +1,26 @@
+{
+ "id": "20260928T192147Z-compact-no-sizes",
+ "found_at": "2026-09-28T19:21:47Z",
+ "scenario": "real/wf-sessions",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "low",
+ "title": "/compact says only 'Context compacted.'",
+ "observed": "No before/after size; with nothing old to summarise it still called the model and claimed to compact",
+ "expected": "'conversation ~X → ~Y tokens', or 'Nothing to compact yet' with no model call",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-wf-sessions-140x45/08-compacted.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/builtins.go",
+   "internal/harness/lane.go",
+   "internal/harness/compaction.go"
+  ],
+  "regression_test": "TestCompactCommandReportsSizes",
+  "updated_at": "2026-09-28T19:21:47Z"
+ }
+}

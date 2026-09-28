@@ -173,14 +173,11 @@ type ToolCallView struct {
 	Meta string
 }
 
-// MapToolName title-cases a tool id for the call header, with the one
-// documented exception: edit renders as "Update"
-// (docs/claude-code-reference.md §3: "Tool names are title-cased from the
-// tool id except edit → Update").
+// MapToolName title-cases a tool id for the call header. Edit is not
+// renamed to Claude Code's "Update": a successful edit renders as the
+// design's "edit" diff block, and a failed or refused one must read as the
+// same tool.
 func MapToolName(id string) string {
-	if strings.EqualFold(id, "edit") {
-		return "Update"
-	}
 	return titleCase(id)
 }
 

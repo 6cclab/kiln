@@ -154,9 +154,9 @@ func TestRenderToolCallDiffNewFileTag(t *testing.T) {
 	}
 }
 
-func TestMapToolNameEditBecomesUpdate(t *testing.T) {
-	if got := MapToolName("edit"); got != "Update" {
-		t.Errorf("MapToolName(edit) = %q, want Update", got)
+func TestMapToolNameKeepsEditAsEdit(t *testing.T) {
+	if got := MapToolName("edit"); got != "Edit" {
+		t.Errorf("MapToolName(edit) = %q, want Edit (the same name its diff block uses)", got)
 	}
 	if got := MapToolName("bash"); got != "Bash" {
 		t.Errorf("MapToolName(bash) = %q, want Bash", got)

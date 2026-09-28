@@ -66,6 +66,9 @@ func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, m
 	if prep == nil {
 		return nil // nothing to compact (empty branch, or tip is already a compaction entry)
 	}
+	if len(prep.MessagesToSummarize) == 0 && len(prep.TurnPrefixMessages) == 0 {
+		return nil // everything is recent and kept verbatim: no summary call to pay for
+	}
 	p, ok := l.h.opts.Registry.Provider(cfg.Model.Provider)
 	if !ok {
 		return fmt.Errorf("harness: unknown provider %q", cfg.Model.Provider)

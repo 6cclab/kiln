@@ -379,10 +379,18 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				if deps.Lane == nil {
 					return Result{Output: []string{"No active lane to compact."}}, nil
 				}
+				before, _ := deps.Lane.EstimateConversationTokens()
 				if err := deps.Lane.Compact(ctx, nil); err != nil {
 					return Result{}, err
 				}
-				return Result{Output: []string{"Context compacted."}}, nil
+				after, err := deps.Lane.EstimateConversationTokens()
+				if err != nil || before == 0 {
+					return Result{Output: []string{"Context compacted."}}, nil
+				}
+				if after >= before {
+					return Result{Output: []string{fmt.Sprintf("Nothing to compact yet: the conversation (~%s tokens) is all recent turns, which are kept as they are.", formatTokens(before))}}, nil
+				}
+				return Result{Output: []string{fmt.Sprintf("Context compacted: conversation ~%s → ~%s tokens.", formatTokens(before), formatTokens(after))}}, nil
 			},
 		},
 		{

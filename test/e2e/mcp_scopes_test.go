@@ -61,7 +61,7 @@ func TestMCP_AddListRemove_ClaudeCodeScopes(t *testing.T) {
 	// A session in the untrusted folder says why the server did not start.
 	addr, _ := startFaux(t, mcpPlainTextScript)
 	res = runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "say hi")
-	if !strings.Contains(res.Stderr, "not starting 1 MCP server(s) from "+filepath.Join(proj, ".mcp.json")) {
+	if !strings.Contains(res.Stderr, "not starting 1 MCP server from "+filepath.Join(proj, ".mcp.json")) {
 		t.Errorf("print mode in an untrusted folder, stderr:\n%s", res.Stderr)
 	}
 }
