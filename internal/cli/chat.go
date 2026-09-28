@@ -587,6 +587,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	extraTools = append(extraTools, mcpExtras...)
 	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool)
 	extraTools = append(extraTools, bgShellTools...)
+	extraTools = append(extraTools, tools.WebFetchTool(nil))
 	if sessionSearch != nil {
 		extraTools = append(extraTools, tools.SessionSearchTool(sessionSearch))
 	}

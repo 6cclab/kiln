@@ -34,6 +34,7 @@ var residentAll = []string{
 	"task",
 	"bash_background",
 	"bash_output",
+	"web_fetch",
 	"kill_shell",
 }
 

@@ -298,7 +298,7 @@ func TestRun_PrintFormats(t *testing.T) {
 
 const bashCallScript = `model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "echo hi"}, id: tc1}
+  - tool_call: {name: bash, args: {command: "echo hi | tee hi.txt"}, id: tc1}
   - on_tool_result: tc1
     then:
       - text: "done"

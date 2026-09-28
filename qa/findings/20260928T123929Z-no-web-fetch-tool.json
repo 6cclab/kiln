@@ -1,0 +1,28 @@
+{
+ "id": "20260928T123929Z-no-web-fetch-tool",
+ "found_at": "2026-09-28T12:39:29Z",
+ "scenario": "real/wf-web-research",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "medium",
+ "title": "No built-in way to read a web page",
+ "observed": "kiln has no web_fetch/web_search; the model only reached the web because this machine has an MCP server with a fetch tool",
+ "expected": "A built-in web_fetch that returns a page's readable text",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-wf-web-research-140x45"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tools/webfetch.go",
+   "internal/cli/chat.go",
+   "internal/cli/mcp.go",
+   "internal/claude/settings/settings.go"
+  ],
+  "regression_test": "TestWebFetch_HTMLToReadableText,TestPrint_WebFetchReadsAPage",
+  "note": "Awaiting a live re-drive; web_search still absent.",
+  "updated_at": "2026-09-28T12:39:29Z"
+ }
+}

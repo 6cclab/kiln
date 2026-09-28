@@ -306,6 +306,12 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 		if ReadOnly[toolName] || (toolName == "bash" && IsReadOnlyCommand(primaryArg)) {
 			return Allow
 		}
+		// Fetching a page changes nothing locally and is how a plan gets
+		// researched, but the URL can carry data out, so it asks rather
+		// than being refused or allowed.
+		if toolName == "web_fetch" {
+			return Ask
+		}
 		return Deny
 	case ModeAcceptEdits:
 		// task is also auto-approved: dispatching a subagent is not itself
