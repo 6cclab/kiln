@@ -517,7 +517,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 					if deps.OnModelChanged != nil {
 						deps.OnModelChanged(label, tier)
 					}
-					return fmt.Sprintf("now on %s — %s tier, %s usable", label, tier.Name, formatTokens(budget.UsableTokens(tier))), nil
+					return fmt.Sprintf("Now on %s · %s tier · %s usable", label, tier.Name, formatTokens(budget.UsableTokens(tier))), nil
 				}
 
 				trimmed := strings.TrimSpace(args)
@@ -582,14 +582,19 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						if !ok {
 							return "", fmt.Errorf(`"%s" is not provider/model`, value)
 						}
-						return apply(providerID + "/" + mID)
+						msg, err := apply(providerID + "/" + mID)
+						if err != nil {
+							return "", err
+						}
+						return msg + " (this session only)", nil
 					},
 					SelectDefault: func(value string) (string, error) {
 						providerID, mID, ok := splitProviderModel(value)
 						if !ok {
 							return "", fmt.Errorf(`"%s" is not provider/model`, value)
 						}
-						if _, err := apply(providerID + "/" + mID); err != nil {
+						now, err := apply(providerID + "/" + mID)
+						if err != nil {
 							return "", err
 						}
 						label := providerID + "/" + mID
@@ -607,7 +612,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						// one leaked a box-drawing character into plain/
 						// screen-reader mode (defect *screen-reader-mode-
 						// leaves-box-drawing-rules).
-						return fmt.Sprintf("Model set to %s (default for new sessions)", label), nil
+						return now + " (default for new sessions)", nil
 					},
 				}
 				return Result{Output: lines, Modal: modal}, nil

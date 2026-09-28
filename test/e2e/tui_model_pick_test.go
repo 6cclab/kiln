@@ -50,10 +50,13 @@ func TestTUI_ModelPickShowsSelectionAndConfirms(t *testing.T) {
 	}
 
 	s.SendKey("enter")
-	if err := s.WaitFor("Model set to faux/faux-2 (default for new sessions)", 5*time.Second); err != nil {
+	if err := s.WaitFor(regexp.MustCompile(`Now on faux/faux-2 · small tier · [\d.]+k usable \(default for new sessions\)`), 5*time.Second); err != nil {
 		t.Fatalf("no confirmation after picking: %v\n%s", err, strings.Join(s.Rows(), "\n"))
 	}
 	waitTurnSettled(t, s)
+	if n := strings.Count(strings.Join(s.Rows(), "\n"), "faux/faux-2 ·"); n != 1 {
+		t.Errorf("the switch is confirmed %d times, want once:\n%s", n, strings.Join(s.Rows(), "\n"))
+	}
 	if strings.Contains(strings.Join(s.Rows(), "\n"), "Select model") {
 		t.Errorf("the dialog stayed open after the pick:\n%s", strings.Join(s.Rows(), "\n"))
 	}

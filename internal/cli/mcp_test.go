@@ -262,8 +262,8 @@ func TestRun_PrintModel_SwitchesAndPrints(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "now on faux/faux-1") {
-		t.Errorf("stdout = %q, want it to contain \"now on faux/faux-1\"", stdout.String())
+	if !strings.Contains(stdout.String(), "Now on faux/faux-1") {
+		t.Errorf("stdout = %q, want it to contain \"Now on faux/faux-1\"", stdout.String())
 	}
 }
 

@@ -8,8 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrepato/harness/internal/harness"
-
-	"github.com/andrepato/harness/internal/commands"
 )
 
 // newTestModelWithBridge is newTestModel with a real Bridge wired to a
@@ -252,35 +250,5 @@ func TestLiveTail_HidesToolGroupRowWhileBusy(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("idle liveTail dropped the group row entirely; want it still rendered when not busy")
-	}
-}
-
-// TestModelSwitchNote_WaitsForDialogEcho: a switch made from /model's open
-// dialog used to commit its "Model: …" note straight away, above the
-// "/model" echo the app commits only when the dialog closes
-// (qa/findings *model-dialog-stale-state). The note now lands after it.
-func TestModelSwitchNote_WaitsForDialogEcho(t *testing.T) {
-	m, f := newTestModelWithBridge(t)
-	m.dialogEcho = "/model"
-	m.dialog = NewCommandDialog(commands.ModalSpec{Title: "Select model"})
-	next, _ := m.Update(msgModelSwitchNote{Text: "Model: faux/faux-2 · small tier · 32.8k usable"})
-	m = next.(Model)
-	if printed, _ := f.snapshot(); len(printed) != 0 {
-		t.Fatalf("note committed while the dialog was open: %q", printed)
-	}
-	m = m.closeDialog()
-	waitForPrinted(t, f, "Model: faux/faux-2")
-	printed, _ := f.snapshot()
-	echo, note := -1, -1
-	for i, p := range printed {
-		if strings.Contains(p, "/model") && echo < 0 {
-			echo = i
-		}
-		if strings.Contains(p, "Model: faux/faux-2") {
-			note = i
-		}
-	}
-	if echo < 0 || note < echo {
-		t.Errorf("want the /model echo before the switch note, got echo=%d note=%d in %q", echo, note, printed)
 	}
 }

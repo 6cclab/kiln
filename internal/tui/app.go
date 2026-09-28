@@ -222,10 +222,6 @@ type Model struct {
 	// closes (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
 	// model as …").
 	dialogEcho string
-	// dialogNotes are notes raised while dialogEcho's dialog was open (a
-	// model switch from /model); closeDialog commits them after the echo
-	// so the transcript reads in the order things happened.
-	dialogNotes []string
 	// group is the in-flight collapsed row for consecutive read-only tool
 	// calls ("  Reading 2 files…", docs/claude-code-reference.md §3). It is
 	// live (redrawn every frame) until a non-grouped commit or the turn's
@@ -832,14 +828,6 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.footer.Apply(StatusPatch{ContextUsed: msg.ContextUsed, Cost: &cost})
 		return m, nil
 
-	case msgModelSwitchNote:
-		if m.dialog != nil && m.dialogEcho != "" {
-			m.dialogNotes = append(m.dialogNotes, msg.Text)
-			return m, nil
-		}
-		m.commitNote(msg.Text)
-		return m, nil
-
 	case MsgModelInfo:
 		label := msg.Label
 		window := msg.ContextWindow
@@ -1124,9 +1112,6 @@ func (m Model) closeDialog() Model {
 	m.dialog = nil
 	if m.dialogEcho != "" && m.cfg.Bridge != nil {
 		m.commit(RenderUserMessage(m.dialogEcho, m.contentWidth()))
-		for _, note := range m.dialogNotes {
-			m.cfg.Bridge.CommitNote(note)
-		}
 		if outcome != "" {
 			// A dialog's outcome is always one line ("Kept model as …",
 			// "Compacted history · context 38% → 8%") — the kiln "note"
@@ -1135,7 +1120,6 @@ func (m Model) closeDialog() Model {
 		}
 	}
 	m.dialogEcho = ""
-	m.dialogNotes = nil
 	return m
 }
 
