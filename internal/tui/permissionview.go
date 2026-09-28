@@ -35,6 +35,9 @@ type PromptState struct {
 	// note the same way RenderToolCall would name the call ("bash npm
 	// test -- upload", "Update src/math.js").
 	lastDenied *PermissionRequest
+	// lastDeniedFeedback is what the user typed with that "no", shown on
+	// the same note.
+	lastDeniedFeedback string
 	// switchMode is set by chooseOption when the option picked is "switch
 	// to <mode> then allow" (Bash's "switch to auto mode", Edit/Write's
 	// "switch to accept edits"). app.go's handleKey reads it right after
@@ -162,6 +165,7 @@ func (p *PromptState) finishTool(choice PromptChoice) {
 		if choice.Kind == ChoiceDeny {
 			req := pending.request
 			p.lastDenied = &req
+			p.lastDeniedFeedback = strings.TrimSpace(choice.Feedback)
 		}
 		pending.reply <- choice
 	}

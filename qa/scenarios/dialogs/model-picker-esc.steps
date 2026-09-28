@@ -18,8 +18,6 @@ KEY esc
 WAITFOR /Kept model as faux\/faux-1/ 20
 SHOT model-dialog-cancelled
 EXPECT /Kept model as faux\/faux-1/
-# The apply confirmation text is "Model: faux/faux-2 · ..." (see
-# model-picker.steps); check that string didn't leak in instead of the
-# stale "now on ..." wording that never matched anything real.
-EXPECT_NOT /Model: faux\/faux-2/
+# Esc must not switch: no "Now on faux/faux-2" confirmation.
+EXPECT_NOT /Now on faux\/faux-2/
 EXPECT_NOT /panic|goroutine/

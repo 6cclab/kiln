@@ -127,8 +127,8 @@ func TestModelCompletionsEmptyForNoMatch(t *testing.T) {
 
 func TestFormatTokens(t *testing.T) {
 	cases := map[int]string{
-		1_000_000: "1.0m",
-		200_000:   "200.0k",
+		1_000_000: "1m",
+		200_000:   "200k",
 		49_152:    "49.2k",
 		999:       "999",
 	}
@@ -358,7 +358,7 @@ func TestCostCommand_OneLineNoteForSingleModel(t *testing.T) {
 	if len(res.Output) != 1 {
 		t.Fatalf("Output = %v, want exactly one line (renders as the design's note) with a single model tracked", res.Output)
 	}
-	want := "Session: $0.27 · 66.0k tokens in context · 71s"
+	want := "Session: $0.27 · 66k tokens in context · 71s"
 	if res.Output[0] != want {
 		t.Errorf("Output[0] = %q, want %q", res.Output[0], want)
 	}

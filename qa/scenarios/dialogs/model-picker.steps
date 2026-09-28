@@ -28,22 +28,12 @@ SHOT model-dialog-open
 EXPECT /Select model/
 EXPECT /Switch between models\. Your pick becomes the default for new sessions\. For other names, specify with --model\./
 EXPECT /1\. faux\/faux-1[\s\S]*2\. faux\/faux-2/
-EXPECT /Medium effort ←\/→ to adjust/
+EXPECT /auto effort ←\/→ to adjust/
 KEY down
 SHOT model-dialog-selected
-# Actual confirmation text (dialog_model.go) is "Model: faux/faux-2 ·
-# small tier · 32.8k usable", not the "now on <model> — <tier> tier"
-# wording this scenario originally assumed.
 KEY enter
-# While the dialog is open the switch shows as its status line and the ✓
-# moves to faux-2; the "Model: …" note waits for the /model echo, which
-# commits when the dialog closes.
-WAITFOR /Model set to faux\/faux-2/ 20
-SHOT model-dialog-applied
-EXPECT /2\. faux\/faux-2 ✓/
-EXPECT_NOT /1\. faux\/faux-1 ✓/
-EXPECT_NOT /Model: faux\/faux-2 · small tier/
-KEY esc
-WAITFOR /you ─+\s+\/model\s+system ─+\s+Model: faux\/faux-2 · small tier/ 20
+# Picking a model closes the dialog and confirms the switch in one note.
+WAITFOR /you ─+\s+\/model\s+system ─+\s+Now on faux\/faux-2 · small tier/ 20
 SHOT model-dialog-closed
+EXPECT_NOT /Select model/
 EXPECT_NOT /panic|goroutine/

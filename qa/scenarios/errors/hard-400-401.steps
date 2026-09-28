@@ -7,18 +7,18 @@ WAITFOR /describe a task/ 20
 SHOT welcome
 TYPE trigger a bad request
 KEY enter
-WAITFOR /status=400/ 20
+WAITFOR /Bad Request \(400\)/ 20
 SHOT bad-request-error
-EXPECT /status=400/
-EXPECT /invalid_request_error/
+EXPECT /Bad Request \(400\)/
+EXPECT /Bad Request \(400\): bad request shape/
 EXPECT /bad request\s+shape/
 EXPECT_NOT /Retrying in|attempt \d of \d/
 TYPE trigger an auth failure
 KEY enter
-WAITFOR /status=401/ 20
+WAITFOR /Unauthorized \(401\)/ 20
 SHOT auth-error
-EXPECT /status=401/
-EXPECT /authentication_error/
+EXPECT /Unauthorized \(401\)/
+EXPECT /Unauthorized \(401\): invalid api key/
 EXPECT /invalid api\s+key/
 EXPECT_NOT /Retrying in|attempt \d of \d/
 EXPECT_NOT /panic|goroutine/

@@ -977,7 +977,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if guard.Blocked != nil {
 			primary, _ := permission.PrimaryArgOf(call.Arguments)
 			recordBlocked(call.Name, primary, guard.Blocked.Reason)
-			return harness.BeforeToolResult{Block: &harness.ToolBlock{Reason: guard.Blocked.Reason}}, nil
+			return harness.BeforeToolResult{Block: &harness.ToolBlock{Reason: guard.Blocked.Reason}, PermissionOutcome: string(outcome)}, nil
 		}
 		if guard.Args != nil {
 			raw, err := json.Marshal(guard.Args)

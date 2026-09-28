@@ -9,7 +9,7 @@ SHOT bash-prompt
 EXPECT /Allow kiln to run this command\?/
 EXPECT /echo approved/
 EXPECT /Yes/
-EXPECT /Yes, and don.t ask again for: echo approved \*/
+EXPECT /Yes, and don.t ask again for: sh/
 EXPECT /Yes, and switch to auto mode/
 EXPECT /No/
 EXPECT /tab to amend/

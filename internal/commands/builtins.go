@@ -101,16 +101,16 @@ type BuiltinDeps struct {
 	OnExit  func()
 }
 
-// formatTokens renders a token count the way tui/transcript.ts's
-// formatTokens does: millions get "m", thousands get "k", both with one
-// decimal; anything under 1,000 is printed plain. "1000.0k" reads as a
-// mistake, and million-token windows are ordinary.
+// formatTokens renders a token count compactly: millions get "m",
+// thousands get "k", with one decimal only when it says something
+// ("200k", "49.2k", "1m"); anything under 1,000 is printed plain.
+// "1000.0k" reads as a mistake, and million-token windows are ordinary.
 func formatTokens(n int) string {
 	switch {
 	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fm", float64(n)/1_000_000)
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000_000), ".0") + "m"
 	case n >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000), ".0") + "k"
 	default:
 		return strconv.Itoa(n)
 	}

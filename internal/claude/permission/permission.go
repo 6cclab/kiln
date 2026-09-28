@@ -54,7 +54,7 @@ type Outcome string
 
 const (
 	// OutcomeNone means no gate decision applies to this call worth
-	// surfacing: a read-only tool, or a call that was blocked/denied.
+	// surfacing: a read-only tool, or a call a rule or mode blocked.
 	OutcomeNone Outcome = ""
 	// OutcomeApproved means the call reached a human prompt and was
 	// answered Yes or Yes-always, this time.
@@ -64,6 +64,10 @@ const (
 	// that skips prompting (bypassPermissions, dontAsk, auto, acceptEdits
 	// for edit/write).
 	OutcomeAuto Outcome = "auto-approved"
+	// OutcomeDeclined means the call reached a human prompt and was
+	// answered No. The interface has already reported the refusal (with
+	// any feedback), so it need not render the call's result as well.
+	OutcomeDeclined Outcome = "declined"
 )
 
 // GateOptions configures a Gate.
@@ -449,7 +453,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 		if choice.Kind == PromptDeny {
 			r := g.record(req, "the user declined access to a path outside the workspace.")
-			return &r, OutcomeNone, nil
+			return &r, OutcomeDeclined, nil
 		}
 		if choice.Kind == PromptAllowAlways {
 			g.grantSession(k)
@@ -512,5 +516,5 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		reason = fmt.Sprintf("the user declined and said: %s", choice.Feedback)
 	}
 	r := g.record(req, reason)
-	return &r, OutcomeNone, nil
+	return &r, OutcomeDeclined, nil
 }

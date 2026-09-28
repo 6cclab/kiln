@@ -13,7 +13,7 @@ func TestStatusErrorReadsAsSentence(t *testing.T) {
 		{"openai envelope", StatusError{Status: 401, Body: `{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}`},
 			"Unauthorized (401): Incorrect API key provided"},
 		{"overloaded", StatusError{Status: 529, Body: `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`},
-			"Overloaded (529): Overloaded"},
+			"Overloaded (529)"},
 		{"html page", StatusError{Status: 502, Body: "<html>\n  <body>Bad gateway</body>\n</html>"},
 			"Bad Gateway (502): <html> <body>Bad gateway</body> </html>"},
 		{"empty body", StatusError{Status: 503}, "Service Unavailable (503)"},

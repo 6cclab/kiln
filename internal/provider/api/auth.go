@@ -46,7 +46,8 @@ func (e *StatusError) Error() string {
 		}
 	}
 	out := head
-	if message != "" {
+	// "Overloaded (529): Overloaded" says nothing twice.
+	if message != "" && !strings.EqualFold(strings.TrimRight(message, "."), statusText(e.Status)) {
 		out += ": " + message
 	}
 	if requestID != "" {

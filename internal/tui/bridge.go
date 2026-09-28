@@ -422,7 +422,7 @@ type MsgTranscriptAppend struct{ Text string }
 
 // RenderCommandResult renders a slash command's multi-line result as a
 // labelled block named after the command ("status ───", "cost ───", …),
-// each row indented by the same continuationIndent so the key/value
+// every row starting at the same column so the key/value
 // columns the command itself already aligned (e.g. /status's
 // "model     faux/faux-1", "auth      configured") stay aligned instead of
 // zig-zagging (qa/findings/20260927T000712Z-command-output-elbow-
@@ -438,8 +438,11 @@ func RenderCommandResult(name string, lines []string, width int) []string {
 	}
 	out := make([]string, 0, len(lines)+1)
 	out = append(out, labelRule(label, Muted, "", width))
+	// Rows start at the block's own margin, like a reply's text or
+	// /context's legend under their label rules; the command's own
+	// columns (key/value pairs, nested lists) carry through unchanged.
 	for _, l := range lines {
-		out = append(out, FitStatus(continuationIndent+l, width))
+		out = append(out, FitStatus(l, width))
 	}
 	return out
 }
@@ -894,6 +897,13 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		// see InFlightTools' doc comment). Committing again here would
 		// double the block in the transcript — skip it, but still clean
 		// up toolStarts so a stale entry cannot leak into the next turn.
+		// A call the user declined at the prompt is already reported by
+		// the "✕ Declined …" note (app.go); its result is the
+		// model-facing refusal text, which would say it a second time.
+		if ev.PermissionOutcome == string(permission.OutcomeDeclined) {
+			delete(ts.toolStarts, ev.ToolCallID)
+			return
+		}
 		if ts.abortCommitted != nil && ts.abortCommitted[ev.ToolCallID] {
 			delete(ts.abortCommitted, ev.ToolCallID)
 			delete(ts.toolStarts, ev.ToolCallID)

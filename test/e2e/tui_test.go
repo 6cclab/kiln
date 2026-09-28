@@ -956,8 +956,14 @@ func TestTUI_Permission_DenyWithFeedback(t *testing.T) {
 	if err := s.WaitFor("Declined Edit src/math.js", 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WaitFor("declined. Ask what they would prefer", 5*time.Second); err != nil {
+	// The model still receives the refusal (checked below), but the screen
+	// reports it once: the note, with no edit block repeating the
+	// model-facing "the user declined…" result.
+	if err := s.WaitFor(turnSummaryPattern, 5*time.Second); err != nil {
 		t.Fatal(err)
+	}
+	if screen := strings.Join(s.Rows(), "\n"); strings.Contains(screen, "the user declined") {
+		t.Errorf("the decline is reported twice:\n%s", screen)
 	}
 
 	found := false

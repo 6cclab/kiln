@@ -16,7 +16,7 @@ KEY enter
 WAITFOR /Second turn reply from kiln/ 20
 SHOT turn-two
 KEY esc esc
-WAITFOR /Restore the code and\/or conversation to the point before/ 20
+WAITFOR /Go back in the conversation to before one of your messages/ 20
 SHOT rewind-dialog-open
 EXPECT /Rewind/
 EXPECT /run this shell command and report its output: echo turn-one/

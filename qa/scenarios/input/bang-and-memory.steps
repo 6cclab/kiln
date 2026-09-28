@@ -15,9 +15,9 @@ EXPECT /hi/
 EXPECT_NOT /Hello from faux/
 TYPE #remember to run tests
 KEY enter
-WAITFOR /added to/ 20
+WAITFOR /Saved to .*CLAUDE\.md/ 20
 SHOT memory-note
-EXPECT /added to/
+EXPECT /Saved to .*CLAUDE\.md/
 EXPECT /applies from the next session/
 EXPECT_NOT /Hello from faux/
 EXPECT_NOT /panic|goroutine/

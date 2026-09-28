@@ -8,7 +8,7 @@ TYPE /usage
 KEY enter
 WAITFOR /No plan limits apply/ 20
 SHOT usage
-EXPECT /window\s+\d+ tokens/
-EXPECT /budget\s+\d+ usable after reserves/
+EXPECT /window\s+[\d.]+k? tokens/
+EXPECT /budget\s+[\d.]+k? usable after reserves/
 EXPECT /No plan limits apply: usage here is context, not billing\./
 EXPECT_NOT /panic|goroutine/

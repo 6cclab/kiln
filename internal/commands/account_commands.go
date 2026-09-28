@@ -140,10 +140,10 @@ func AccountCommands(deps AccountDeps) Source {
 				lines := []string{
 					fmt.Sprintf("model      %s", deps.ModelLabel),
 					fmt.Sprintf("tier       %s", deps.Tier.Name),
-					fmt.Sprintf("window     %d tokens", deps.Tier.ContextWindow),
-					fmt.Sprintf("budget     %d usable after reserves", budgetTokens),
+					"window     " + formatTokens(deps.Tier.ContextWindow) + " tokens",
+					"budget     " + formatTokens(budgetTokens) + " usable after reserves",
 					fmt.Sprintf("tools      %s", deps.Tier.ToolStrategy),
-					fmt.Sprintf("per result %d token ceiling", deps.Tier.ToolOutputTokens),
+					"per result " + formatTokens(deps.Tier.ToolOutputTokens) + " token ceiling",
 				}
 				if deps.ContextUsed != nil {
 					if used, ok := deps.ContextUsed(); ok {
@@ -151,7 +151,7 @@ func AccountCommands(deps AccountDeps) Source {
 						if budgetTokens > 0 {
 							percent = used * 100 / budgetTokens
 						}
-						lines = append(lines, fmt.Sprintf("used       %d (%d%% of budget)", used, percent))
+						lines = append(lines, fmt.Sprintf("used       %s (%d%% of budget)", formatTokens(used), percent))
 					}
 				}
 				lines = append(lines, "", "No plan limits apply: usage here is context, not billing.")

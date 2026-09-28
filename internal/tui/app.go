@@ -1508,7 +1508,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// ending), matching docs/kiln-design-handoff/README.md's "note" row.
 	if denied := m.prompt.lastDenied; denied != nil {
 		m.prompt.lastDenied = nil
-		m.commitNote(declinedNoteText(*denied))
+		m.commitNote(declinedNoteText(*denied, m.prompt.lastDeniedFeedback))
+		m.prompt.lastDeniedFeedback = ""
 		// The design prototype follows this note with a scripted "Okay, I
 		// won't run it. What should I do instead?" from kiln. There a
 		// script plays the model; here the model answers the refusal

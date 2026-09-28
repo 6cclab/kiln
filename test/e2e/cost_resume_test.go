@@ -27,7 +27,7 @@ steps:
 	if res.Code != 0 {
 		t.Fatalf("/cost: exit %d, stderr=%s", res.Code, res.Stderr)
 	}
-	if !strings.Contains(res.Stdout, "15.0k tokens in context") {
+	if !strings.Contains(res.Stdout, "15k tokens in context") {
 		t.Errorf("/cost after -c does not include the earlier run:\n%s", res.Stdout)
 	}
 }

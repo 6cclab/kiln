@@ -19,5 +19,5 @@ EXPECT /please explain what this does first/
 KEY enter
 WAITFOR /Ran the probe command|Declined/ 20
 SHOT after-enter
-EXPECT /✕ Declined echo tab-amend-probe/
+EXPECT /✕ Declined .*echo tab-amend-probe/
 EXPECT_NOT /panic|goroutine/

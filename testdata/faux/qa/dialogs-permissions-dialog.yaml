@@ -1,6 +1,6 @@
 model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "echo qa-alpha"}, id: tc1}
+  - tool_call: {name: bash, args: {command: "touch qa-alpha.txt"}, id: tc1}
   - on_tool_result: tc1
     then:
       - text: "First task done."

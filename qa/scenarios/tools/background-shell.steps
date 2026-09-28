@@ -13,9 +13,9 @@ EXPECT /Started bash_1: sleep 30/
 EXPECT /Started it in the background/
 TYPE /bashes
 KEY enter
-WAITFOR /shell\(s\)/ 20
+WAITFOR /shells?,/ 20
 SHOT bashes-list
-EXPECT /1 shell\(s\), 1 running/
+EXPECT /1 shell, 1 running/
 EXPECT /bash_1\s+running/
 EXPECT /sleep 30/
 EXPECT_NOT /panic|goroutine/

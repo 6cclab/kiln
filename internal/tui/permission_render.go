@@ -32,12 +32,17 @@ type PermissionRequest struct {
 // bash reads as just the declined command ("✕ Declined npm test -- upload",
 // no "Bash" prefix — the command already reads as an action); every other
 // tool keeps its mapped name ahead of the argument ("✕ Declined Update
-// src/math.js").
-func declinedNoteText(req PermissionRequest) string {
+// src/math.js"). Feedback typed with the "no" follows as a quote, since
+// this note is the only record of it on screen.
+func declinedNoteText(req PermissionRequest, feedback string) string {
+	text := "✕ Declined " + MapToolName(req.ToolName) + " " + req.PrimaryArg
 	if strings.EqualFold(req.ToolName, "bash") {
-		return "✕ Declined " + req.PrimaryArg
+		text = "✕ Declined " + req.PrimaryArg
 	}
-	return "✕ Declined " + MapToolName(req.ToolName) + " " + req.PrimaryArg
+	if feedback != "" {
+		text += " · “" + feedback + "”"
+	}
+	return text
 }
 
 // SummarizeArg truncates a long argument for display without hiding what

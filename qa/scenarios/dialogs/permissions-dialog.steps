@@ -11,7 +11,7 @@
 WAITFOR /describe a task/ 20
 TYPE run the command
 KEY enter
-WAITFOR /echo qa-alpha/ 20
+WAITFOR /touch qa-alpha.txt/ 20
 SHOT permission-prompt
 KEY a
 WAITFOR /First task done/ 20
@@ -25,7 +25,7 @@ KEY enter
 WAITFOR /Permissions/ 20
 SHOT permissions-dialog-open
 EXPECT /mode\s+manual/
-EXPECT /bash::echo qa-alpha/
+EXPECT /bash::touch qa-alpha\.txt/
 EXPECT /session only/
 KEY down
 SHOT permissions-navigated
@@ -36,7 +36,7 @@ EXPECT /mode is now acceptEdits/
 KEY p
 WAITFOR /is now denied/ 20
 SHOT permissions-promoted
-EXPECT /bash::echo qa-alpha is now denied/
+EXPECT /bash::touch qa-alpha\.txt is now denied/
 KEY d
 WAITFOR /nothing to delete/ 20
 SHOT permissions-delete-session

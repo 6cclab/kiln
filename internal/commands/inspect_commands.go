@@ -223,7 +223,7 @@ func InspectCommands(deps InspectDeps) Source {
 			Run: func(ctx context.Context, args string) (Result, error) {
 				lines := []string{
 					fmt.Sprintf("model      %s", deps.ModelLabel),
-					fmt.Sprintf("tier       %s (%d tokens)", deps.Tier.Name, deps.Tier.ContextWindow),
+					fmt.Sprintf("tier       %s · %s window", deps.Tier.Name, formatTokens(deps.Tier.ContextWindow)),
 				}
 
 				var active []string
