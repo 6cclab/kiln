@@ -1,0 +1,12 @@
+# Print mode (non-interactive): drive `kiln -p` directly via RUN steps, not
+# the TUI. The window is launched only so the scenario has a project set up
+# under @real the normal way; no keys are sent into it.
+@real
+@size 140x45
+@fixture qa/fixtures/real/wf-print-pipeline
+WAITFOR /describe a task/ 30
+SHOT ready
+RUN cd {PROJ} && {ROOT}/bin/kiln -p "In one line, what does the Add function in add.go do?" --output-format json --model anthropic/claude-opus-4-8 > out1.json
+RUN cd {PROJ} && python3 -c "import json; d=json.load(open('out1.json')); assert d.get('ok') is True, d; assert d.get('text', '').strip(), d; print('ok:', d['text'][:200])"
+RUN cd {PROJ} && {ROOT}/bin/kiln -p "List the files in this project, one per line." --output-format stream-json --model anthropic/claude-opus-4-8 > out2.jsonl
+RUN cd {PROJ} && python3 -c "import json; lines=[l for l in open('out2.jsonl') if l.strip()]; assert lines, 'no stream-json lines produced'; [json.loads(l) for l in lines]; print('ok:', len(lines), 'events')"

@@ -1,0 +1,29 @@
+# Real-user job: someone who already has MCP servers configured in their
+# real ~/.claude.json opens kiln in a fresh project, browses what's
+# available via /mcp, switches to the "ops" posture, and asks a strictly
+# read-only question against one of their real servers (Grafana). Uses the
+# real HOME (no @home scratch) on purpose, since the point is to exercise
+# whatever the user already has configured; it writes nothing to user
+# scope, only reads and asks read-only questions.
+@real
+@size 140x45
+WAITFOR /describe a task/ 30
+SHOT ready
+TYPE /mcp
+KEY enter
+SHOT mcp-dialog
+KEY down
+SHOT mcp-dialog-nav
+KEY enter
+SHOT mcp-dialog-detail
+KEY esc
+KEY esc
+SHOT mcp-dialog-closed
+TYPE /posture ops
+KEY enter
+SHOT posture-ops
+TURN Using the Grafana MCP, list the configured datasources and say whether each is healthy. Read-only: do not create, update or delete anything.
+SHOT investigated
+TYPE /posture coding
+KEY enter
+SHOT posture-coding

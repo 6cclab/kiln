@@ -1,0 +1,11 @@
+# Expected gap: kiln has no web_fetch/web_search tool, unlike Claude Code's
+# WebFetch/WebSearch, so a research request like this cannot be fulfilled
+# from live web pages.
+@real
+@size 140x45
+WAITFOR /describe a task/ 30
+NOTE kiln has no web_fetch/web_search tool (a known gap versus Claude Code); expect it to say so, answer from training knowledge only, or refuse -- not to actually browse.
+SHOT ready
+TURN Look up the Go 1.23 release notes and summarize what range-over-func iterators are, with a link to the release notes.
+SHOT answered
+EXPECT_NOT /web_fetch|web_search/

@@ -1,0 +1,30 @@
+# A Claude Code user opens an existing, untrusted repo that has no
+# CLAUDE.md yet: trust dialog, /help, /init, a memory note, /memory, then a
+# small real task.
+@real
+@untrusted
+@home scratch
+@size 140x45
+@fixture qa/fixtures/real/ext-onboarding
+@env EDITOR=true
+
+WAITFOR /Accessing workspace/ 30
+SHOT trust-dialog
+KEY 2
+WAITFOR /describe a task/ 30
+SEND /help
+WAIT 1
+SHOT help-palette
+EXPECT /init/
+TURN /init
+RUN test -f {PROJ}/CLAUDE.md
+SHOT after-init
+SEND # Always run the tests with -v
+WAIT 1
+SHOT memory-note
+SEND /memory
+WAIT 1
+SHOT memory-command
+TURN Add a -version flag to the CLI that prints "greeter v1.0" and exit.
+SHOT task-done
+RUN grep -q 'Always run the tests with -v' {PROJ}/CLAUDE.md

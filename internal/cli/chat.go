@@ -438,7 +438,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	todos := agent.NewTodoStore()
 
 	hub := mcpgate.NewHub()
-	mcpConfigs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
+	// Every scope Claude Code reads (user, local, .mcp.json) plus
+	// --mcp-config. A project's .mcp.json runs commands a clone can ship,
+	// so its servers start only in a trusted folder: now, when it already
+	// is, or (interactive) once the trust dialog is accepted.
+	resolvedMCP := mcpgate.Resolve(mcpgate.ResolveOptions{Cwd: cwd, Path: args.MCPConfig, Strict: args.StrictMCPConfig})
+	mcpConfigs := resolvedMCP.Servers
+	pendingMCP := resolvedMCP.Project
+	if folderTrusted(cwd) {
+		mcpConfigs, pendingMCP = resolvedMCP.All(), nil
+	}
 	mcpCtx, cancelMCP := context.WithCancel(ctx)
 	connectMCP := func(ctx context.Context) {
 		phase("mcp connect start", "servers", len(mcpConfigs))
@@ -451,6 +460,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		// is up (internal/cli/tui.go) and registers the tools when done.
 		connectMCP(mcpCtx)
 		warnFailedServers(stderr, hub.Statuses())
+		if len(pendingMCP) > 0 {
+			fmt.Fprintf(stderr, "kiln: not starting %d MCP server(s) from %s: this folder is not trusted (start kiln here interactively and trust it)\n",
+				len(pendingMCP), resolvedMCP.ProjectFile)
+		}
 	}
 	defer hub.Close(context.Background())
 	defer cancelMCP()
@@ -1024,6 +1037,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				connectMCP(mcpCtx)
 				applyMCP()
 				return hub.Statuses()
+			},
+			PendingMCPCount: len(pendingMCP),
+			ConnectPendingMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
+				hub.OnServer = progress
+				before := len(hub.Statuses())
+				phase("mcp project connect start", "servers", len(pendingMCP))
+				hub.ConnectAll(mcpCtx, pendingMCP)
+				applyMCP()
+				return hub.Statuses()[before:]
 			},
 			LogPath:         logPath,
 			Debug:           args.Debug,

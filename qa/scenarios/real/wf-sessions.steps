@@ -1,0 +1,39 @@
+# Session continuity: make a small change, relaunch with -c, confirm kiln
+# remembers, then walk /resume, /context, /cost, /export, /compact and
+# rewind.
+@real
+@size 140x45
+@fixture qa/fixtures/real/wf-sessions
+WAITFOR /describe a task/ 30
+SHOT ready
+TURN Add a doc comment above the Greet function in greeter.go explaining what it does, in one short sentence.
+SHOT changed
+RUN cd {PROJ} && go build ./... && go test ./...
+RELAUNCH -c
+WAITFOR /describe a task/ 30
+TURN What did we change last time, in one line?
+SHOT recall
+EXPECT /[Gg]reet/
+SEND /resume
+WAIT 2
+SHOT resume-list
+EXPECT /session\(s\)/
+SEND /context
+WAIT 2
+SHOT context
+EXPECT /window/
+SEND /cost
+WAIT 2
+SHOT cost
+EXPECT /Session:/
+SEND /export
+WAIT 2
+SHOT export
+EXPECT /Wrote .* entries to/
+RUN ls transcript-*.md
+TURN /compact
+SHOT compacted
+EXPECT /[Cc]ompact/
+KEY esc esc
+SHOT rewind-menu
+KEY esc

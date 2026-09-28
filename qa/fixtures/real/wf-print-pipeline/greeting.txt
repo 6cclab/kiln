@@ -1,0 +1,2 @@
+This project has a small text file and a short Go program.
+kiln is driven here only through `kiln -p` (print mode), never the TUI.

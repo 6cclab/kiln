@@ -342,6 +342,11 @@ commands:
   models                             list models, tiers and budgets
   login <provider>                   log in with an API key or subscription
   logout <provider>                  drop a stored credential
+  mcp add <name> -- <cmd> [args]     add an MCP server (-s local|project|user,
+                                     -t http <url>, -e K=V, -H "K: V")
+  mcp list | get <name> | remove     list with a live check, show, remove
+  mcp                                connect every server and report
+  doctor                             check config, credentials and servers
 
 session:
   -c, --continue                     continue the most recent session here

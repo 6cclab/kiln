@@ -1,0 +1,19 @@
+# A Claude Code user with a couple of custom slash commands: a plain one
+# taking $ARGUMENTS/$1, and a namespaced one under commands/git/.
+@real
+@home scratch
+@size 140x45
+@fixture qa/fixtures/real/ext-commands
+
+WAITFOR /describe a task/ 30
+TYPE /
+WAIT 1
+SHOT slash-palette
+EXPECT /review/
+EXPECT /git:changelog/
+KEY backspace
+TURN /review calc.py focus on the arithmetic
+SHOT review-done
+TURN /git:changelog
+SHOT changelog-done
+RUN test -f {PROJ}/calc.py

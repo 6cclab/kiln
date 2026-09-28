@@ -34,6 +34,13 @@ func run(argv []string) int {
 		return evalCommand(context.Background(), argv[1:], os.Stdout, os.Stderr)
 	}
 
+	// `kiln mcp add|remove|list|...` carry their own flags (-s, -e, -H, --)
+	// that the global parser would reject, so they are dispatched first,
+	// like eval. A bare `kiln mcp` stays the connection report below.
+	if len(argv) > 1 && argv[0] == "mcp" && cli.MCPSubcommands[argv[1]] {
+		return cli.MCPCommand(context.Background(), argv[1:], os.Stdout, os.Stderr)
+	}
+
 	args := cli.Parse(argv)
 
 	// These two answer before anything else, deliberately ahead of the

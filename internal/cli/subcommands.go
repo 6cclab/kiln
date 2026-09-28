@@ -349,7 +349,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	}
 
 	hub := mcpgate.NewHub()
-	mcpConfigs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
+	mcpConfigs := resolveForReport(args)
 	hub.ConnectAll(ctx, mcpConfigs)
 	defer hub.Close(ctx)
 	statuses := hub.Statuses()
@@ -430,7 +430,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 // chat.go's Run does) and renders mcp.RenderMCPReport's connected/failed
 // summary, rather than listing configuration only.
 func MCP(ctx context.Context, args Args, stdout, stderr io.Writer) int {
-	configs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
+	configs := resolveForReport(args)
 	hub := mcpgate.NewHub()
 	hub.ConnectAll(ctx, configs)
 	defer hub.Close(ctx)
@@ -473,4 +473,15 @@ func versionLabel(v string) string {
 		return "v" + strings.TrimPrefix(v, "v")
 	}
 	return v
+}
+
+// resolveForReport is every MCP server a session here would start: all
+// scopes (project ones only in a trusted folder) plus --mcp-config.
+func resolveForReport(args Args) map[string]mcpgate.ServerConfig {
+	cwd, _ := os.Getwd()
+	r := mcpgate.Resolve(mcpgate.ResolveOptions{Cwd: cwd, Path: args.MCPConfig, Strict: args.StrictMCPConfig})
+	if folderTrusted(cwd) {
+		return r.All()
+	}
+	return r.Servers
 }

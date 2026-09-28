@@ -60,6 +60,12 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
                                  again" or yes, a dangerous command -> esc);
                                  progress shots every 60s (default 1200s)
     TURN <text>                  SEND then IDLE
+    RUN <shell command>          run in the project (after {PROJ}/{HOME}/
+                                 {ROOT} expansion) and record pass/fail on its
+                                 exit status, output in the run log
+    RELAUNCH [kiln args...]      exit kiln like a user (ctrl+c twice), then
+                                 start it again in a new window in the same
+                                 project with these extra args (e.g. -c)
 
 Output: <out>/<terminal>/<scenario>/ holding NN-<name>.png, NN-<name>.txt,
 run.log and result.json.
@@ -566,20 +572,29 @@ class Run:
             p = run(kiln[:1] + [expand(a) for a in shlex.split(pre)], cwd=proj,
                     env={**os.environ, **env, "PWD": str(proj)}, timeout=120)
             self.log("pre `%s` exit=%d %s" % (pre, p.returncode, (p.stdout + p.stderr).strip()[:300]))
+        self._real_launch = (env, kiln + args, expand)
+        self._start_real([])
+        self.log("launched real %s in %s window=%s tty=%s" % (model, proj, self.term.wid, self.term.tty))
+
+    def _start_real(self, extra):
+        env, argv, expand = self._real_launch
         launcher = self.work / "run.sh"
         exports = "".join("export %s=%s\n" % (k, shlex.quote(v)) for k, v in env.items())
         launcher.write_text("#!/bin/sh\ncd %s || exit 1\n%sexec %s\n" % (
-            shlex.quote(str(proj)), exports, " ".join(shlex.quote(a) for a in kiln + args)))
+            shlex.quote(str(self.proj)), exports, " ".join(shlex.quote(a) for a in argv + [expand(e) for e in extra])))
         launcher.chmod(0o755)
         self.term = make_terminal(self.terminal_name, self.work)
         self.term.launch(str(launcher), self.cols, self.rows)
-        self.log("launched real %s in %s window=%s tty=%s" % (model, proj, self.term.wid, self.term.tty))
 
     # ---- @real turn handling
 
     READY = re.compile(r"describe a task|queue a follow-up")
     BUSY = re.compile(r"esc to stop")
-    DANGER = re.compile(r"\bsudo\b|rm -rf (/|~)|\|\s*(ba|z)?sh\b|git push|brew install|npm (i|install) -g")
+    # A dangerous shell command, or an MCP tool whose name says it changes
+    # something (scenarios on the real HOME only ever ask read-only
+    # questions of the user's own servers).
+    DANGER = re.compile(r"\bsudo\b|rm -rf (/|~)|\|\s*(ba|z)?sh\b|git push|brew install|npm (i|install) -g"
+                        r"|mcp__\w*(create|update|delete|remove|sync|run|install|restart|write|set|add|patch|post)", re.I)
 
     def decide(self, s):
         tail = "\n".join(s.split("\n")[-40:])
@@ -800,6 +815,27 @@ class Run:
                     self.idle(1200)
             elif verb == "IDLE":
                 self.idle(float(arg) if arg else 1200)
+            elif verb == "RUN":
+                cmd = arg.replace("{ROOT}", str(ROOT)).replace("{PROJ}", str(self.proj)).replace("{HOME}", str(self.home))
+                p = run(["/bin/sh", "-c", cmd], cwd=self.proj, env={**os.environ, "HOME": str(self.home)}, timeout=600)
+                ok = p.returncode == 0
+                self.expects.append({"line": lineno, "verb": "RUN", "pattern": arg, "ok": ok})
+                self.log("  -> %s (exit %d) %s" % ("pass" if ok else "FAIL", p.returncode, (p.stdout + p.stderr).strip()[-400:]))
+            elif verb == "RELAUNCH":
+                if not getattr(self, "real", False):
+                    raise DriveError("RELAUNCH needs @real")
+                self.key("ctrl+c")
+                time.sleep(0.4)
+                self.key("ctrl+c")
+                deadline = time.time() + 15
+                while self.kiln_running() and time.time() < deadline:
+                    time.sleep(0.5)
+                if self.kiln_running():
+                    raise DriveError("kiln did not exit on ctrl+c ctrl+c")
+                self.term.close()
+                time.sleep(0.5)
+                self._start_real(shlex.split(arg))
+                self.log("  relaunched window=%s tty=%s args=%s" % (self.term.wid, self.term.tty, arg))
             else:
                 raise DriveError("line %d: unknown verb %s" % (lineno, verb))
 
@@ -817,7 +853,7 @@ class Run:
 
 
 VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE",
-         "SEND", "IDLE", "TURN"}
+         "SEND", "IDLE", "TURN", "RUN", "RELAUNCH"}
 FAUX_TOP = {"model", "steps", "models"}
 FAUX_STEP = {"text", "thinking", "tool_call", "tool_calls", "on_tool_result", "on_tool_results",
              "then", "usage", "error", "delay", "disconnect_after", "end_turn", "chunk_delay"}

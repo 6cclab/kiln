@@ -74,6 +74,11 @@ type InteractiveDeps struct {
 	// failures become one dim transcript line pointing at /mcp.
 	MCPServerCount int
 	ConnectMCP     func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus
+	// PendingMCPCount and ConnectPendingMCP are a project's .mcp.json
+	// servers when the folder was not yet trusted at startup: they connect
+	// only once the trust dialog is accepted.
+	PendingMCPCount   int
+	ConnectPendingMCP func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus
 	// Effort is the reasoning effort label shown in the banner ("medium");
 	// AuthKind is how the model's provider is authenticated ("Claude
 	// subscription", "API key", "Ollama").
@@ -93,6 +98,22 @@ type InteractiveDeps struct {
 	// onPlanApprover/onHookNotices callbacks do. Either may be nil.
 	SetPlanApprover func(tools.PlanApprover)
 	SetHookNotice   func(func(string))
+}
+
+// connectInBackground connects n MCP servers off the UI goroutine,
+// reporting progress in the footer and any failures as one transcript note
+// pointing at /mcp.
+func connectInBackground(bridge *tui.Bridge, n int, connect func(func(mcpgate.ServerStatus)) []mcpgate.ServerStatus) {
+	done := 0
+	bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: connecting %d servers…", n)})
+	statuses := connect(func(mcpgate.ServerStatus) {
+		done++
+		bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: %d/%d servers…", done, n)})
+	})
+	bridge.Send(tui.MsgFooterNote{Text: ""})
+	if notice := mcpFailureNotice(statuses); notice != "" {
+		bridge.CommitNote(notice)
+	}
 }
 
 // RunInteractive drives the Bubbletea v2 program and blocks until the
@@ -237,6 +258,9 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			if err := store.Trust(deps.Cwd); err != nil {
 				diag.L().Warn("trust store", "err", err)
 			}
+			if deps.ConnectPendingMCP != nil && deps.PendingMCPCount > 0 {
+				go connectInBackground(bridge, deps.PendingMCPCount, deps.ConnectPendingMCP)
+			}
 		}
 	}
 
@@ -280,19 +304,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		bridge.Commit([]string{tui.Muted("  debug log: " + deps.LogPath)})
 	}
 	if deps.ConnectMCP != nil && deps.MCPServerCount > 0 {
-		go func() {
-			n := deps.MCPServerCount
-			done := 0
-			bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: connecting %d servers…", n)})
-			statuses := deps.ConnectMCP(func(mcpgate.ServerStatus) {
-				done++
-				bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: %d/%d servers…", done, n)})
-			})
-			bridge.Send(tui.MsgFooterNote{Text: ""})
-			if notice := mcpFailureNotice(statuses); notice != "" {
-				bridge.CommitNote(notice)
-			}
-		}()
+		go connectInBackground(bridge, deps.MCPServerCount, deps.ConnectMCP)
 	}
 
 	deps.Started.OnModelChanged = func(ctx context.Context, resolved provider.Resolved) {

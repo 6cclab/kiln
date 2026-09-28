@@ -1,0 +1,24 @@
+# A Claude Code user with PostToolUse (format notice), PreToolUse (blocks
+# edits under migrations/), UserPromptSubmit (context note) and Stop
+# (marker file) hooks configured in .claude/settings.json.
+@real
+@home scratch
+@size 140x45
+@fixture qa/fixtures/real/ext-hooks
+
+WAITFOR /describe a task/ 30
+SEND /hooks
+WAIT 1
+SHOT hooks-list
+EXPECT /PostToolUse/
+EXPECT /PreToolUse/
+EXPECT /UserPromptSubmit/
+EXPECT /Stop/
+TURN Fix the bug in calc.py: add(a, b) should return a + b, not a - b.
+SHOT normal-edit-done
+EXPECT /(?i)formatter: reformatted/
+RUN test -f {PROJ}/.kiln-stop-marker
+TURN Add a "status" column to migrations/001_init.sql's users table.
+SHOT protected-edit-attempt
+EXPECT /(?i)protected|migrations.*locked|blocked/
+RUN grep -q 'status' {PROJ}/migrations/001_init.sql && exit 1 || exit 0

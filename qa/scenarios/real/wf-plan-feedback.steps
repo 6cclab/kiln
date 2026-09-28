@@ -1,0 +1,20 @@
+# Plan mode: request a feature, send it back for a change, then approve the
+# revised plan and check the resulting code still passes tests.
+@real
+@size 140x45
+@fixture qa/fixtures/real/wf-plan-feedback
+@args --permission-mode plan
+WAITFOR /describe a task/ 30
+SHOT ready
+SEND Add a Complete(i int) error method to List that marks item i done, returning ErrOutOfRange for a bad index.
+WAITFOR /Would you like to proceed\?/ 180
+SHOT plan-first
+KEY 3
+TYPE Also add a CountDone() int method that returns how many items are done, and cover it with a test.
+KEY enter
+WAITFOR /Would you like to proceed\?/ 180
+SHOT plan-revised
+KEY 1
+IDLE 300
+SHOT after-apply
+RUN cd {PROJ} && go build ./... && go test ./...

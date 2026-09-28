@@ -1,0 +1,20 @@
+# Busy-state interrupts: queue a follow-up while kiln is working, then
+# cancel mid-turn with esc, then redirect the next turn.
+@real
+@size 140x45
+@fixture qa/fixtures/real/wf-interrupts
+WAITFOR /describe a task/ 30
+SHOT ready
+SEND Write a paragraph (at least 150 words) in notes.md explaining, from first principles, how a hash table resolves collisions with open addressing versus chaining, with a worked example of each.
+WAITFOR /esc to stop/ 30
+SHOT busy
+SEND Also mention Robin Hood hashing in a short final paragraph.
+WAIT 2
+SHOT queued-followup
+EXPECT /queue a follow-up/
+KEY esc
+WAIT 2
+SHOT after-esc
+TURN Actually, stop that and just create an empty file called done.txt instead.
+SHOT redirected
+RUN test -f {PROJ}/done.txt

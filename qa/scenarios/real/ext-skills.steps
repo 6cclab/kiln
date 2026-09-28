@@ -1,0 +1,22 @@
+# A Claude Code user with two skills: one user-invocable (a slash command)
+# and one meant only for the model to consult (user-invocable: false).
+# Kiln invokes skills only as slash commands, so the model-only skill is an
+# expected gap.
+@real
+@home scratch
+@size 140x45
+@fixture qa/fixtures/real/ext-skills
+
+WAITFOR /describe a task/ 30
+TYPE /
+WAIT 1
+SHOT slash-palette
+EXPECT /release-notes/
+EXPECT_NOT /api-conventions/
+KEY backspace
+TURN /release-notes
+SHOT release-notes-done
+TURN Add a GET /health endpoint to app.py that returns {"status": "ok"}, following our API conventions.
+SHOT health-endpoint-done
+RUN grep -q 'X-Api-Version' {PROJ}/app.py
+NOTE expected gap: api-conventions is user-invocable:false, meant for the model to consult on its own, but kiln only exposes skills as slash commands (the model cannot invoke a skill itself) — the RUN check above (the convention the skill alone states) is expected to fail.
