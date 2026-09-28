@@ -17,7 +17,10 @@ import (
 // mcp.ServerStatus onto this shape when wiring InspectDeps.MCPStatuses --
 // see doc.go and the phase report for this deviation.
 type ServerStatus struct {
-	Name      string
+	Name string
+	// Scope is where the server is configured: user, local, project or
+	// flag (--mcp-config); "" when unknown.
+	Scope     string
 	OK        bool
 	ToolCount int
 	Ms        int64

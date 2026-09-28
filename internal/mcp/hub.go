@@ -66,6 +66,9 @@ type ServerStatus struct {
 	Detail    string
 	ToolCount int
 	Ms        int64
+	// Scope is the configuration scope the server came from
+	// (ServerConfig.Scope: user, local, project, flag), for /mcp's sections.
+	Scope string
 }
 
 // describeConnectError turns the SDK's and exec's error chains into the
@@ -129,6 +132,7 @@ type Hub struct {
 
 	tools    []McpTool
 	statuses []ServerStatus
+	scopes   map[string]string // server name -> ServerConfig.Scope
 
 	// OnServer, if set before ConnectAll, is called after each server's
 	// connect attempt finishes, so a UI can show progress while the
@@ -138,12 +142,13 @@ type Hub struct {
 
 // NewHub builds an empty, unconnected Hub.
 func NewHub() *Hub {
-	return &Hub{conns: map[string]*serverConn{}}
+	return &Hub{conns: map[string]*serverConn{}, scopes: map[string]string{}}
 }
 
 // record appends a server's outcome, logs it, and reports it to OnServer.
 func (h *Hub) record(st ServerStatus) {
 	h.mu.Lock()
+	st.Scope = h.scopes[st.Name]
 	h.statuses = append(h.statuses, st)
 	cb := h.OnServer
 	h.mu.Unlock()
@@ -186,9 +191,12 @@ func (h *Hub) Statuses() []ServerStatus {
 // since each server is independent.
 func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 	names := make([]string, 0, len(configs))
-	for name := range configs {
+	h.mu.Lock()
+	for name, cfg := range configs {
 		names = append(names, name)
+		h.scopes[name] = cfg.Scope
 	}
+	h.mu.Unlock()
 	sort.Strings(names)
 
 	timeout := connectTimeout()

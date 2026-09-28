@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -235,9 +236,32 @@ func mcpModal(deps ManageDeps) *ModalSpec {
 		}
 	}
 
-	group := "User MCPs"
-	if deps.MCPConfigPath != "" {
-		group = fmt.Sprintf("User MCPs (%s)", deps.MCPConfigPath)
+	// One section per configuration scope, in the order they win on a
+	// name clash, each naming the file it lives in.
+	order := map[string]int{"project": 0, "local": 1, "user": 2, "flag": 3}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		oi, ok := order[sorted[i].Scope]
+		if !ok {
+			oi = len(order)
+		}
+		oj, ok := order[sorted[j].Scope]
+		if !ok {
+			oj = len(order)
+		}
+		return oi < oj
+	})
+	groupFor := func(scope string) string {
+		switch scope {
+		case "project":
+			return fmt.Sprintf("Project MCPs (%s)", filepath.Join(deps.Cwd, ".mcp.json"))
+		case "local":
+			return "Local MCPs (~/.claude.json, this project only)"
+		case "flag":
+			return fmt.Sprintf("MCPs from --mcp-config (%s)", deps.MCPConfigPath)
+		case "user", "":
+			return "User MCPs (~/.claude.json)"
+		}
+		return strings.ToUpper(scope[:1]) + scope[1:] + " MCPs"
 	}
 
 	items := make([]Item, 0, len(sorted))
@@ -245,7 +269,7 @@ func mcpModal(deps ManageDeps) *ModalSpec {
 		it := Item{
 			Value: s.Name,
 			Label: s.Name,
-			Group: group,
+			Group: groupFor(s.Scope),
 			Ms:    s.Ms,
 			Tools: toolsByServer[s.Name],
 		}

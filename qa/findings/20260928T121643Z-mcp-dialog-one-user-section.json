@@ -1,0 +1,27 @@
+{
+ "id": "20260928T121643Z-mcp-dialog-one-user-section",
+ "found_at": "2026-09-28T12:16:43Z",
+ "scenario": "real/mcp-project-config",
+ "step": "02-mcp-dialog",
+ "terminals": [],
+ "category": "bug",
+ "severity": "low",
+ "title": "/mcp lists every server under User MCPs",
+ "observed": "incidents (from the project's .mcp.json) listed under 'User MCPs (~/.claude.json)'",
+ "expected": "Sections per scope: Project (.mcp.json), Local, User, --mcp-config",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-mcp-project-config-140x45/02-mcp-dialog.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/mcp/hub.go",
+   "internal/commands/manage_commands.go",
+   "internal/cli/commands.go"
+  ],
+  "regression_test": "TestManageMcpModalSectionsByScope",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T12:16:43Z"
+ }
+}

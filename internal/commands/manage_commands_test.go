@@ -129,7 +129,7 @@ func TestManageMcpModalCarriesToolsAndMarker(t *testing.T) {
 	if grafana.Marker != "✔" {
 		t.Errorf("grafana marker = %q, want ✔", grafana.Marker)
 	}
-	if grafana.Group != "User MCPs (/Users/andrepato/.claude.json)" {
+	if grafana.Group != "User MCPs (~/.claude.json)" {
 		t.Errorf("grafana group = %q", grafana.Group)
 	}
 	if !strings.Contains(grafana.Description, "2") {
@@ -158,4 +158,37 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestManageMcpModalSectionsByScope: servers are grouped by where they are
+// configured, project first (the order they win on a name clash), so a
+// server from the repo's .mcp.json is not presented as a user server.
+func TestManageMcpModalSectionsByScope(t *testing.T) {
+	source := ManageCommands(ManageDeps{
+		Gate: &fakeManageGate{},
+		Cwd:  "/work/proj",
+		MCPStatuses: func() []ServerStatus {
+			return []ServerStatus{
+				{Name: "grafana", Scope: "user", OK: true},
+				{Name: "incidents", Scope: "project", OK: true},
+				{Name: "mine", Scope: "local", OK: true},
+			}
+		},
+	})
+	res, err := findCmd(t, source, "mcp").Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range res.Modal.Items {
+		got = append(got, it.Value+" | "+it.Group)
+	}
+	want := []string{
+		"incidents | Project MCPs (/work/proj/.mcp.json)",
+		"mine | Local MCPs (~/.claude.json, this project only)",
+		"grafana | User MCPs (~/.claude.json)",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("items:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
 }

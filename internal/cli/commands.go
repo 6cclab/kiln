@@ -91,7 +91,7 @@ func mcpStatusesOf(hub *mcpgate.Hub) func() []slashcommands.ServerStatus {
 		statuses := hub.Statuses()
 		out := make([]slashcommands.ServerStatus, len(statuses))
 		for i, s := range statuses {
-			out[i] = slashcommands.ServerStatus{Name: s.Name, OK: s.OK, ToolCount: s.ToolCount, Ms: s.Ms, Error: s.Error, Detail: s.Detail}
+			out[i] = slashcommands.ServerStatus{Name: s.Name, Scope: s.Scope, OK: s.OK, ToolCount: s.ToolCount, Ms: s.Ms, Error: s.Error, Detail: s.Detail}
 		}
 		return out
 	}
