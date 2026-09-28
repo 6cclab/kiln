@@ -10,8 +10,12 @@ TYPE /re
 WAIT 1
 SHOT slash-palette
 EXPECT /review/
+KEY backspace backspace
+TYPE /git
+WAIT 1
+SHOT slash-palette-git
 EXPECT /git:changelog/
-KEY backspace
+KEY backspace backspace backspace backspace
 TURN /review calc.py focus on the arithmetic
 SHOT review-done
 TURN /git:changelog

@@ -13,7 +13,7 @@ WAIT 1
 SHOT slash-palette
 EXPECT /release-notes/
 EXPECT_NOT /api-conventions/
-KEY backspace
+KEY backspace backspace backspace backspace
 TURN /release-notes
 SHOT release-notes-done
 TURN Add a GET /health endpoint to app.py that returns {"status": "ok"}, following our API conventions.
