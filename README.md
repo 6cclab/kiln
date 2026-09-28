@@ -45,7 +45,7 @@ on provider; only the budget tier differs.
 Requires Go 1.26.
 
 ```bash
-make build                 # bin/kiln
+make build                 # bin/kiln, installed to Go's bin dir (~/go/bin)
 go install ./cmd/kiln      # or: puts `kiln` on $GOBIN / ~/go/bin
 ```
 

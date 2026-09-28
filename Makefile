@@ -9,9 +9,21 @@ BIN_DIR := bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/andrepato/harness/internal/cli.Version=$(VERSION)
 
+# build also installs kiln where shells find it: Go's bin directory
+# ($GOBIN, else $GOPATH/bin, normally ~/go/bin). The copy is renamed into
+# place, so a kiln already running keeps its old binary. Skip the install
+# with `make build INSTALL_DIR=`.
+INSTALL_DIR ?= $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
+
 build:
 	mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/kiln ./cmd/kiln
+	@if [ -n "$(INSTALL_DIR)" ]; then \
+		mkdir -p "$(INSTALL_DIR)" && \
+		cp $(BIN_DIR)/kiln "$(INSTALL_DIR)/.kiln.tmp" && \
+		mv -f "$(INSTALL_DIR)/.kiln.tmp" "$(INSTALL_DIR)/kiln" && \
+		echo "installed $(INSTALL_DIR)/kiln ($(VERSION))"; \
+	fi
 
 check:
 	@echo "==> gofmt"
