@@ -222,6 +222,15 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent: create main lane: %w", err)
 	}
+	// The level this run asks for (--effort, or Claude Code's effortLevel)
+	// applies to a resumed session too: effort is a setting, not part of
+	// the conversation. Sessions saved before the unset level stopped
+	// meaning "off" would otherwise keep thinking pinned off.
+	if opts.ThinkingLevel != "" {
+		if err := lane.SetThinkingLevel(opts.ThinkingLevel); err != nil {
+			return nil, fmt.Errorf("agent: set thinking level: %w", err)
+		}
+	}
 
 	return &Started{
 		Harness:        h,

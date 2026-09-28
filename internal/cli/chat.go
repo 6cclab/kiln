@@ -680,7 +680,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		SessionID:       args.SessionID,
 		ForkSession:     args.ForkSession,
 		Name:            args.Name,
-		ThinkingLevel:   args.Effort,
+		ThinkingLevel:   effortOrSetting(args.Effort, settings.EffortLevel, resolved.Model.Api == provider.ApiAnthropicMessages),
 		SystemPrompt:    systemPrompt,
 		Env:             env,
 		ExtraTools:      extraTools,
@@ -1529,4 +1529,20 @@ func environmentPrompt(ctx context.Context, cwd string, now time.Time) string {
 	}
 	return fmt.Sprintf("<env>\nWorking directory: %s\nIs a git repository: %s\nPlatform: %s/%s\nToday's date: %s\n</env>",
 		cwd, repo, runtime.GOOS, runtime.GOARCH, now.Format("2006-01-02"))
+}
+
+// effortOrSetting is the thinking level for a session: --effort, else the
+// effortLevel from Claude Code's settings (as Claude Code itself reads it)
+// for a Claude model, else unset, which leaves the model's own default.
+// The setting is Claude Code's, so it is not applied to other providers:
+// on some local Qwen models any thinking at all makes them loop
+// (provider/reasoning.go).
+func effortOrSetting(flag, setting string, claudeModel bool) string {
+	if flag != "" {
+		return flag
+	}
+	if !claudeModel {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(setting))
 }

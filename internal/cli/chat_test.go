@@ -740,3 +740,23 @@ func BenchmarkSystemPromptAssembly(b *testing.B) {
 		_ = strings.Join(nonEmpty(promptParts), "\n\n")
 	}
 }
+
+// TestEffortOrSetting: --effort wins; else Claude Code's effortLevel
+// applies to a Claude model only; else the level is unset.
+func TestEffortOrSetting(t *testing.T) {
+	cases := []struct {
+		flag, setting string
+		claude        bool
+		want          string
+	}{
+		{"high", "medium", true, "high"},
+		{"", "Medium", true, "medium"},
+		{"", "medium", false, ""},
+		{"", "", true, ""},
+	}
+	for _, c := range cases {
+		if got := effortOrSetting(c.flag, c.setting, c.claude); got != c.want {
+			t.Errorf("effortOrSetting(%q, %q, %v) = %q, want %q", c.flag, c.setting, c.claude, got, c.want)
+		}
+	}
+}

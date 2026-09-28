@@ -45,8 +45,9 @@ func TestAdaptiveThinkingModelsGetEffortNotBudgets(t *testing.T) {
 			t.Errorf("%s at %q: sends a thinking budget", c.model.ID, c.level)
 		}
 	}
+	// No level asked for: adaptive, with the effort left to the model.
 	body, _ := json.Marshal(buildAnthropicRequest(opus55, user, provider.StreamOptions{}, Auth{}))
-	if strings.Contains(string(body), `"thinking"`) {
-		t.Errorf("no level asked for, but the request sets thinking:\n%s", body)
+	if !strings.Contains(string(body), `"thinking":{"type":"adaptive"}`) || strings.Contains(string(body), "output_config") {
+		t.Errorf("no level asked for: want adaptive thinking with no effort pinned:\n%s", body)
 	}
 }

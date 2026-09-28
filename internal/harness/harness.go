@@ -73,9 +73,10 @@ func New(opts Options) (*Harness, error) {
 		opts.Now = time.Now
 	}
 	opts.Retry = opts.Retry.normalized()
-	if opts.ThinkingLevel == "" {
-		opts.ThinkingLevel = "off"
-	}
+	// An unset ThinkingLevel stays unset: the provider applies the model's
+	// own default (adaptive thinking on models that have it). It used to
+	// become "off", pi's default, which ran every session without --effort
+	// with thinking disabled.
 	return &Harness{
 		opts:   opts,
 		events: NewEvents(),

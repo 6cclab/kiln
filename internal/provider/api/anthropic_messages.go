@@ -260,8 +260,13 @@ func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts 
 	}
 
 	switch {
-	case !model.Reasoning, opts.ThinkingLevel == "":
-		// No level asked for: the model's own default applies.
+	case !model.Reasoning:
+	case boolDefault(compat.ForceAdaptiveThinking, false) && opts.ThinkingLevel == "":
+		// No level asked for: adaptive thinking with no effort pinned, so
+		// the model decides how much to think.
+		req.Thinking = &anthropicThinking{Type: "adaptive"}
+	case opts.ThinkingLevel == "":
+		// Budget-thinking model, no level asked for: its own default.
 	case boolDefault(compat.ForceAdaptiveThinking, false):
 		// Adaptive-only models (Opus 4.8 and later) reject budget-based
 		// thinking and, when the catalog maps "off" to null, "disabled"

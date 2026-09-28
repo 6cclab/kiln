@@ -193,3 +193,33 @@ func TestSession_Inspect(t *testing.T) {
 		t.Errorf("entryCountByType.message = %d, want > 0; report = %s", report.EntryCountByType["message"], res2.Stdout)
 	}
 }
+
+// TestSession_ResumeTakesTheRequestedEffort: a session saved at one
+// thinking level and resumed with --effort runs at the new level (effort is
+// a setting, not part of the conversation), and a run without --effort or
+// a setting no longer records "off".
+func TestSession_ResumeTakesTheRequestedEffort(t *testing.T) {
+	addr, _ := startFaux(t, `model: faux-1
+steps:
+  - text: "one"
+    end_turn: true
+  - text: "two"
+`)
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	env := baseEnv(home, sessDir, addr)
+	if res := runHarness(t, proj, env, "-p", "hello", "--output-format", "text"); res.Code != 0 {
+		t.Fatalf("first run: exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	sess := sessionFile(t, sessDir, proj)
+	if b, _ := os.ReadFile(sess); strings.Contains(string(b), `"thinkingLevel":"off"`) {
+		t.Errorf("a run with no --effort recorded thinking off")
+	}
+	if res := runHarness(t, proj, env, "-c", "--effort", "high", "-p", "again", "--output-format", "text"); res.Code != 0 {
+		t.Fatalf("resume: exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	b, _ := os.ReadFile(sess)
+	if !strings.Contains(string(b), `"thinkingLevel":"high"`) {
+		t.Errorf("resumed with --effort high, but the session's level was not updated")
+	}
+}
