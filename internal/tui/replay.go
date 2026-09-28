@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -52,6 +53,37 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 		}
 	}
 
+	// Consecutive read-only calls are held and committed together, the way
+	// the live path's flushGroup does, so a replay renders them exactly as
+	// they were committed (RenderReadGroup when CompactReadGroup allows it,
+	// one block each otherwise). Anything else that renders flushes first.
+	var pending []ToolCallView
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		if CompactReadGroup(pending, verbose) {
+			out = append(out, "")
+			out = append(out, FitLines(RenderReadGroup(pending), width, "     ")...)
+			out = append(out, "")
+		} else {
+			for _, view := range pending {
+				out = append(out, "")
+				out = append(out, FitLines(RenderToolCall(view), width, "     ")...)
+				out = append(out, "")
+			}
+		}
+		pending = nil
+	}
+	emitSynthetics = func(afterID string) {
+		if len(bySynthetic[afterID]) > 0 {
+			flush()
+		}
+		for _, sc := range bySynthetic[afterID] {
+			out = append(out, sc.Lines...)
+		}
+	}
+
 	emitSynthetics("")
 	for _, e := range entries {
 		if e.Type != session.EntryMessage || e.Message == nil {
@@ -60,6 +92,7 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 		switch m := e.Message.(type) {
 		case msg.UserMessage:
 			if text := textOf(m.Content); strings.TrimSpace(text) != "" {
+				flush()
 				out = append(out, RenderUserMessage(text, width)...)
 			}
 		case msg.AssistantMessage:
@@ -76,6 +109,7 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 					// same way it toggles a tool block's collapsed output
 					// (defect 20260926T232657Z-thinking-invisible).
 					view := ThinkingView{Text: cv.Thinking, Expanded: verbose}
+					flush()
 					out = append(out, "")
 					out = append(out, FitLines(RenderThinking(view), width, resultIndent)...)
 				}
@@ -89,6 +123,7 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 				// blank row (the ToolResultMessage branch above had the
 				// same gap; a plain user-message-then-text turn, with no
 				// tool call in between, hits this branch directly instead).
+				flush()
 				out = append(out, "")
 				out = append(out, RenderAssistantText(renderer.Render(text))...)
 				out = append(out, "")
@@ -111,12 +146,23 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 			// one) — this replay used to omit it, dropping the blank row
 			// before whatever followed.
 			view := toolCallViewFor(name, call, &m, verbose, cwd)
-			out = append(out, "")
-			out = append(out, FitLines(RenderToolCall(view), width, "     ")...)
-			out = append(out, "")
+			if kind, grouped := groupKindFor(view.Name); grouped && !verbose {
+				if len(pending) > 0 {
+					if prev, _ := groupKindFor(pending[0].Name); prev != kind {
+						flush()
+					}
+				}
+				pending = append(pending, view)
+			} else {
+				flush()
+				out = append(out, "")
+				out = append(out, FitLines(RenderToolCall(view), width, "     ")...)
+				out = append(out, "")
+			}
 		}
 		emitSynthetics(e.ID)
 	}
+	flush()
 	// The turn summary row is gone (kiln design: the busy line just
 	// disappears at turn end, docs/kiln-design-handoff/README.md
 	// "Interactions"); a Ctrl+O replay no longer re-appends one.
@@ -131,12 +177,7 @@ func toolCallViewFor(name string, call msg.ToolCall, result *msg.ToolResultMessa
 	if verbose {
 		max = replayResultLines
 	}
-	primary := PrimaryArg(call.Arguments)
-	// Paths are relative in the collapsed view, absolute in verbose
-	// (docs/claude-code-reference.md §3).
-	if verbose && primary != "" && !filepath.IsAbs(primary) && isPathTool(name) {
-		primary = filepath.Join(cwd, primary)
-	}
+	primary := DisplayArg(name, PrimaryArg(call.Arguments), cwd, verbose)
 	// Read's result summarises the same way live does (bridge.go's
 	// EventToolEnd handler, summarizeToolResult): the actual content
 	// preview, clipped to the tier's line budget. A replay used to
@@ -164,6 +205,40 @@ func toolCallViewFor(name string, call msg.ToolCall, result *msg.ToolResultMessa
 		}
 	}
 	return view
+}
+
+// DisplayArg is how a tool call's primary argument shows in its block.
+// Paths are relative to the working directory in the collapsed view and
+// absolute in verbose (docs/claude-code-reference.md §3). Models pass
+// absolute paths, which filled the row with the project's own prefix
+// ("Read /Users/…/t2-kiln/web/src/api.ts"); a path outside the working
+// directory but under the home directory shows as ~/…, any other stays
+// absolute. Only absolute arguments are rewritten, so a grep pattern is
+// never mistaken for a path.
+func DisplayArg(name, arg, cwd string, verbose bool) string {
+	if arg == "" || !isPathTool(name) {
+		return arg
+	}
+	if verbose {
+		if !filepath.IsAbs(arg) && cwd != "" {
+			return filepath.Join(cwd, arg)
+		}
+		return arg
+	}
+	if !filepath.IsAbs(arg) {
+		return arg
+	}
+	if cwd != "" {
+		if rel, err := filepath.Rel(cwd, arg); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+			return rel
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if rel, err := filepath.Rel(home, arg); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
+			return "~/" + rel
+		}
+	}
+	return arg
 }
 
 // isPathTool reports whether a tool's primary argument is a file path.

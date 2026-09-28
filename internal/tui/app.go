@@ -1093,9 +1093,13 @@ func (m Model) flushGroup() Model {
 	if m.cfg.Bridge != nil {
 		width := m.contentWidth()
 		m.cfg.Bridge.FreezeBefore()
-		for _, view := range m.group.views {
-			lines := append([]string{""}, FitLines(RenderToolCall(view), width, "     ")...)
-			m.cfg.Bridge.Commit(lines)
+		if CompactReadGroup(m.group.views, m.cfg.Bridge.Verbose()) {
+			m.cfg.Bridge.Commit(append([]string{""}, FitLines(RenderReadGroup(m.group.views), width, "     ")...))
+		} else {
+			for _, view := range m.group.views {
+				lines := append([]string{""}, FitLines(RenderToolCall(view), width, "     ")...)
+				m.cfg.Bridge.Commit(lines)
+			}
 		}
 	}
 	m.group = nil

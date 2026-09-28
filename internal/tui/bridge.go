@@ -889,7 +889,7 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		}
 
 		name := MapToolName(ev.ToolName)
-		primary := PrimaryArg(ev.ToolArgs)
+		primary := DisplayArg(ev.ToolName, PrimaryArg(ev.ToolArgs), b.cwd, b.Verbose())
 		summary := summarizeToolResult(ev.ToolResult)
 		// The committed block shows a short output summary and a
 		// "… +N lines (ctrl+o to expand)" tail (design: "tool" row);
@@ -1164,7 +1164,13 @@ func toolElapsed(ts *turnState, callID string) (string, bool) {
 	if _, testClock := os.LookupEnv("HARNESS_TEST_CLOCK"); testClock {
 		return "1.0s", true
 	}
-	return fmt.Sprintf("%.1fs", time.Since(start.At).Seconds()), true
+	// A call that took under a tenth of a second reads as "0.0s" on every
+	// file read: noise, not information.
+	d := time.Since(start.At)
+	if d < 100*time.Millisecond {
+		return "", false
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds()), true
 }
 
 // toolStart is one call's identity and start time, recorded on

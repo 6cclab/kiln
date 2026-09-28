@@ -1,0 +1,26 @@
+{
+ "id": "20260928T111203Z-tool-args-show-absolute-paths",
+ "found_at": "2026-09-28T11:12:03Z",
+ "scenario": "crud-trial/t2-kiln",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "Tool blocks show absolute paths",
+ "observed": "Read /Users/andrepato/projects/crud-trial/t2-kiln/web/src/api.ts: the project prefix fills the row; collapsed view was documented as relative but only relative->absolute was implemented",
+ "expected": "Paths relative to the working directory (~/ under home) in the collapsed view, absolute in verbose",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/Desktop/Screenshot 2026-09-27 at 5.58.01 PM.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/replay.go",
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestDisplayArg,TestTUI_ConsecutiveReadsCommitAsOneBlock",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T11:12:03Z"
+ }
+}

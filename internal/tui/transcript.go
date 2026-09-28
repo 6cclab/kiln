@@ -370,6 +370,79 @@ func RenderToolCall(view ToolCallView) []string {
 	return lines
 }
 
+// CompactReadGroup reports whether a run of consecutive read-only calls
+// commits as one block (RenderReadGroup) rather than one block each: two
+// or more calls, every one a read-kind tool that succeeded. A failed call
+// keeps its full block so its error stays visible; verbose mode (ctrl+o)
+// never compacts, so expanding shows every call's own output.
+func CompactReadGroup(views []ToolCallView, verbose bool) bool {
+	if verbose || len(views) < 2 {
+		return false
+	}
+	for _, v := range views {
+		kind, ok := groupKindFor(v.Name)
+		if !ok || kind != GroupRead || v.Status != CallOK || v.Diff != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// RenderReadGroup renders consecutive read-only calls as one "read" block:
+// the label rule with the call count as meta, then one "Name arg · size"
+// row per call. Four file reads were four blocks of five rows each, each
+// previewing the first lines of a file nobody asked to see.
+//
+//	read ─────────────────────────────────────────────  4 files
+//	Read web/src/api.ts · 56 lines
+//	Read web/src/App.tsx · 293 lines
+func RenderReadGroup(views []ToolCallView) []string {
+	allRead := true
+	for _, v := range views {
+		if !strings.EqualFold(v.Name, "read") {
+			allRead = false
+		}
+	}
+	meta := fmt.Sprintf("%d calls", len(views))
+	if allRead {
+		meta = fmt.Sprintf("%d files", len(views))
+	}
+	lines := []string{labelRule("read", toolStatusColor(CallOK), meta, ruleWidth())}
+	for _, v := range views {
+		row := fmt.Sprintf("%s %s", toolStatusColor(CallOK)(v.Name), Muted(v.PrimaryArg))
+		if size := readGroupSize(v); size != "" {
+			row += Faint(" · " + size)
+		}
+		lines = append(lines, row)
+	}
+	return lines
+}
+
+// readGroupSize is a grouped call's one-word result: the file's line count
+// for a read, the number of result lines for a search or listing.
+func readGroupSize(v ToolCallView) string {
+	n := len(v.ResultLines)
+	if v.HasTotalLines {
+		n = v.TotalLines
+	}
+	plural := func(n int, one, many string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return fmt.Sprintf("%d %s", n, many)
+	}
+	switch strings.ToLower(v.Name) {
+	case "read":
+		return plural(n, "line", "lines")
+	case "grep", "glob", "ls":
+		if n == 0 {
+			return "no results"
+		}
+		return plural(n, "result", "results")
+	}
+	return ""
+}
+
 // GroupKind is which read-only grouping a collapsed row summarizes.
 type GroupKind string
 
