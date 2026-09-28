@@ -28,11 +28,12 @@ func TestTUI_ModelPickShowsSelectionAndConfirms(t *testing.T) {
 	}
 
 	s.SendKey("right")
-	if err := s.WaitFor("Effort set to high for this session", 3*time.Second); err != nil {
+	// The scale starts at auto (unset); → steps to low.
+	if err := s.WaitFor("Effort set to low for this session", 3*time.Second); err != nil {
 		t.Fatalf("←/→ did not change the effort: %v\n%s", err, strings.Join(s.Rows(), "\n"))
 	}
-	if err := s.WaitFor("high effort", 2*time.Second); err != nil {
-		t.Errorf("the effort row did not update: %v", err)
+	if err := s.WaitFor("effort  auto · low · medium · high · xhigh · max", 2*time.Second); err != nil {
+		t.Errorf("the effort scale is missing: %v", err)
 	}
 
 	s.SendKey("down")

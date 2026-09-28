@@ -20,6 +20,6 @@
   › 1. faux/faux-1 ✓  128k context · medium tier
     2. faux/faux-2    32.8k context · small tier
 
-  ◐ auto effort ←/→ to adjust
+  effort  auto · low · medium · high · xhigh · max   ←/→ to adjust
 
   Enter to set as default · s to use this session only · Esc to cancel

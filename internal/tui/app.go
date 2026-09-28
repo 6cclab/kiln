@@ -1799,7 +1799,12 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			// "/help" info form — docs/kiln-design-handoff/README.md's
 			// "note" row example copy), not a "⎿ " continuation under
 			// the echo.
-			m.commitNote(handled.Output[0])
+			if handled.Mistake && m.cfg.Bridge != nil {
+				m.cfg.Bridge.FreezeBefore()
+				m.cfg.Bridge.CommitMistakeNote(handled.Output[0])
+			} else {
+				m.commitNote(handled.Output[0])
+			}
 		case len(handled.Output) > 0:
 			m.commitCommandResult(handled.Name, handled.Output)
 		}

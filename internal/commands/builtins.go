@@ -594,7 +594,9 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 					id := modelID(m)
 					it := Item{
 						Value:       id,
-						Label:       fmt.Sprintf("%d. %s", i+1, id),
+						// Numbers right-aligned, so "10." does not push its
+						// name a column right of " 9.".
+						Label:       fmt.Sprintf("%*d. %s", len(strconv.Itoa(len(models))), i+1, id),
 						Description: modelDialogDescription(m),
 					}
 					if id == currentID {
@@ -848,8 +850,16 @@ func setEffort(lane *harness.Lane) func(string) (string, error) {
 		return nil
 	}
 	return func(level string) (string, error) {
-		if err := lane.SetThinkingLevel(level); err != nil {
+		// "auto" is the unset level: the model decides how much to think.
+		stored := level
+		if level == "auto" {
+			stored = ""
+		}
+		if err := lane.SetThinkingLevel(stored); err != nil {
 			return "", err
+		}
+		if level == "auto" {
+			return "Effort set to auto (the model decides) for this session", nil
 		}
 		return "Effort set to " + level + " for this session", nil
 	}

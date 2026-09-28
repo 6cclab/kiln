@@ -123,7 +123,7 @@ func AccountCommands(deps AccountDeps) Source {
 			Run: func(ctx context.Context, args string) (Result, error) {
 				wanted := strings.TrimSpace(args)
 				if wanted == "" {
-					return Result{Output: []string{"usage: /logout <provider>"}}, nil
+					return Result{Output: []string{"Name the provider to log out of: /logout <provider>."}, Mistake: true}, nil
 				}
 				return Result{Output: []string{
 					"Run this outside the session:",

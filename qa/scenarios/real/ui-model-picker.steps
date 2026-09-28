@@ -11,15 +11,16 @@ TYPE /model
 KEY enter
 WAIT 1
 SHOT picker-open
-EXPECT /› \d+\. \S+ ✓/
+EXPECT /›\s+\d+\. \S+ ✓/
 KEY right
 WAIT 1
 SHOT effort-changed
-EXPECT /Effort set to high/
+EXPECT /Effort set to (low|medium|high|xhigh|max) for this session/
+EXPECT /effort  auto · low · medium · high · xhigh · max/
 KEY down
 WAIT 1
 SHOT cursor-moved
-EXPECT /› \d+\. \S+\s{2,}/
+EXPECT /›\s+\d+\. \S+\s{2,}/
 KEY enter
 WAIT 2
 SHOT picked

@@ -123,6 +123,10 @@ type Result struct {
 	// Output is the text to display in the transcript, as lines. Nil means
 	// nothing to print.
 	Output []string
+	// Mistake marks Output as telling the user they used the command
+	// wrong (an unknown command, a missing argument): shown in red, where
+	// an ordinary result is dim.
+	Mistake bool
 	// Prompt is text to send to the model as a prompt, if the command
 	// expands to one (e.g. /init).
 	Prompt string
@@ -317,7 +321,7 @@ func (r *Registry) Execute(ctx context.Context, line string) (*Result, error) {
 	name, rest := m[1], strings.TrimSpace(m[2])
 	cmd, ok := r.Get(name)
 	if !ok {
-		return &Result{Output: []string{"Unknown command: /" + name + ". Type / to see what is available."}}, nil
+		return &Result{Output: []string{"Unknown command: /" + name + ". Type / to see what is available."}, Mistake: true}, nil
 	}
 	res, err := cmd.Run(ctx, rest)
 	if err != nil {

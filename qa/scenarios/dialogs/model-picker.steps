@@ -28,7 +28,7 @@ SHOT model-dialog-open
 EXPECT /Select model/
 EXPECT /Switch between models\. Your pick becomes the default for new sessions\. For other names, specify with --model\./
 EXPECT /1\. faux\/faux-1[\s\S]*2\. faux\/faux-2/
-EXPECT /auto effort ←\/→ to adjust/
+EXPECT /effort  auto · low · medium · high · xhigh · max   ←\/→ to adjust/
 KEY down
 SHOT model-dialog-selected
 KEY enter

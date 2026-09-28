@@ -12,15 +12,15 @@ package tui
 // wraps (a note is meant to read as a single aside, docs/kiln-design-
 // handoff/README.md: "One dim line, e.g. …").
 func RenderNote(text string, width int) []string {
-	return append([]string{labelRule("system", Muted, "", width)}, noteBody(text, width)...)
+	return append([]string{labelRule("system", Muted, "", width)}, noteBody(text, width, Muted)...)
 }
 
 // noteBody is a note's text, wrapped to the width rather than clipped: a
 // note is often the one line saying what just happened.
-func noteBody(text string, width int) []string {
+func noteBody(text string, width int, colour func(string) string) []string {
 	var out []string
 	for _, line := range wrapMultiline(text, width) {
-		out = append(out, Muted(line))
+		out = append(out, colour(line))
 	}
 	return out
 }
@@ -37,14 +37,25 @@ func noteBody(text string, width int) []string {
 // opening a second "system" rule: "✕ Declined …" then "■ Interrupted …"
 // read as one account of what happened.
 func (b *Bridge) CommitNote(text string) {
+	b.commitNote(text, Muted)
+}
+
+// CommitMistakeNote is CommitNote for a note telling the user they used
+// something wrong (an unknown command, a missing argument): red text,
+// same block.
+func (b *Bridge) CommitMistakeNote(text string) {
+	b.commitNote(text, KilnRed)
+}
+
+func (b *Bridge) commitNote(text string, colour func(string) string) {
 	b.FreezeBefore()
 	width := ruleWidth()
 	b.mu.Lock()
 	follows := b.lastWasNote
 	b.mu.Unlock()
-	lines := append([]string{""}, RenderNote(text, width)...)
+	lines := append([]string{"", labelRule("system", Muted, "", width)}, noteBody(text, width, colour)...)
 	if follows {
-		lines = noteBody(text, width)
+		lines = noteBody(text, width, colour)
 	}
 	b.CommitSynthetic(lines)
 	b.mu.Lock()
