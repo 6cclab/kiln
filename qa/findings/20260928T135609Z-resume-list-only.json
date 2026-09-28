@@ -1,0 +1,26 @@
+{
+ "id": "20260928T135609Z-resume-list-only",
+ "found_at": "2026-09-28T13:56:09Z",
+ "scenario": "real/wf-sessions",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "medium",
+ "title": "/resume cannot switch sessions from inside kiln",
+ "observed": "/resume <id> printed 'kiln --resume <id>' and asked the user to restart; the picker showed only ids and ages",
+ "expected": "Picking a session switches to it in the same terminal; sessions show their first prompt",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "cmd/kiln/main.go",
+   "internal/cli/args.go",
+   "internal/cli/commands.go",
+   "internal/commands/session_commands.go",
+   "internal/session/jsonl/firstprompt.go"
+  ],
+  "regression_test": "TestTUI_ResumeSwitchesSessionInPlace,TestResumeWithArg,TestRelaunchArgv,TestFirstPromptReadsTheFirstUserMessage",
+  "updated_at": "2026-09-28T13:56:09Z"
+ }
+}

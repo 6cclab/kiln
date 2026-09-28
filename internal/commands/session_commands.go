@@ -36,6 +36,12 @@ type SessionCommandDeps struct {
 	Cwd  string
 	// SessionsDir is shown in /resume's hint text.
 	SessionsDir string
+	// CurrentID is this session's id, left out of /resume's choices.
+	CurrentID string
+	// Relaunch, when set, makes /resume <id> switch sessions: it records
+	// the id and the command exits, and the process restarts resuming it.
+	// Nil keeps /resume to naming the restart command.
+	Relaunch func(id string)
 }
 
 // ago renders a millisecond timestamp as "<n><unit> ago".
@@ -96,16 +102,16 @@ func truncateRunes(s string, max int) string {
 // SessionCommands returns the source for /resume, /rewind, /export,
 // /memory, /add-dir, /init and /config.
 //
-// /resume deliberately lists rather than swaps: resuming replaces the
-// session, tools, model and gate, effectively rebuilding everything the
-// process holds. Doing that in place would leave half-torn-down state on
-// any failure, so the session id is printed and the restart flag named
-// instead. "kiln --resume <id>" is the supported path.
+// /resume <id> does not swap sessions inside the process: resuming
+// replaces the session, tools, model and gate, and doing that in place
+// would leave half-torn-down state on any failure. It hands the id to
+// deps.Relaunch and exits instead; the process then re-executes itself
+// with --resume <id> after its normal exit path has run (cmd/kiln).
 func SessionCommands(deps SessionCommandDeps) Source {
 	cmds := []Command{
 		{
 			Name:         "resume",
-			Description:  "List past sessions in this directory",
+			Description:  "Switch to a past session in this directory",
 			ArgumentHint: "[session-id]",
 			ArgumentCompletions: func(prefix string) []Completion {
 				if deps.Repo == nil {
@@ -122,24 +128,39 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				wanted := strings.ToLower(strings.TrimSpace(prefix))
 				var out []Completion
 				for _, m := range found {
-					if wanted != "" && !strings.Contains(strings.ToLower(m.ID), wanted) {
+					if m.ID == deps.CurrentID {
+						continue
+					}
+					prompt := jsonl.FirstPrompt(m.Path)
+					if wanted != "" && !strings.Contains(strings.ToLower(m.ID), wanted) && !strings.Contains(strings.ToLower(prompt), wanted) {
 						continue
 					}
 					out = append(out, Completion{
 						Value:       m.ID,
 						Label:       fmt.Sprintf("%s  %s", ago(m.ModifiedAt), m.ID[:min(8, len(m.ID))]),
-						Description: m.ID,
+						Description: orDefault(prompt, "(no prompt yet)"),
 					})
 				}
 				return out
 			},
 			Run: func(ctx context.Context, args string) (Result, error) {
-				if args != "" {
-					return Result{Output: []string{
-						"Resuming replaces the session, tools and model, so it happens at startup:",
-						"",
-						fmt.Sprintf("  kiln --resume %s", args),
-					}}, nil
+				if args = strings.TrimSpace(args); args != "" {
+					id, problem, err := resolveSessionID(deps, args)
+					if err != nil {
+						return Result{}, err
+					}
+					if problem != "" {
+						return Result{Output: []string{problem}}, nil
+					}
+					if deps.Relaunch == nil {
+						return Result{Output: []string{
+							"Resuming replaces the session, tools and model, so it happens at startup:",
+							"",
+							fmt.Sprintf("  kiln --resume %s", id),
+						}}, nil
+					}
+					deps.Relaunch(id)
+					return Result{Output: []string{"Resuming " + id + "…"}, Exit: true}, nil
 				}
 				if deps.Repo == nil {
 					return Result{Output: []string{"No past sessions in this directory."}}, nil
@@ -158,9 +179,9 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				}
 				lines := []string{fmt.Sprintf("%d session(s):", len(found)), ""}
 				for _, m := range top {
-					lines = append(lines, fmt.Sprintf("  %s  %8s", m.ID, ago(m.ModifiedAt)))
+					lines = append(lines, fmt.Sprintf("  %s  %8s  %s", m.ID[:min(8, len(m.ID))], ago(m.ModifiedAt), truncate(orDefault(jsonl.FirstPrompt(m.Path), "(no prompt yet)"), 70)))
 				}
-				lines = append(lines, "", "Resume: kiln --resume <id>")
+				lines = append(lines, "", "Switch with /resume <id> (type /resume and a space to pick one)")
 				return Result{Output: lines}, nil
 			},
 		},
@@ -443,4 +464,36 @@ func modTime(path string) time.Time {
 		return info.ModTime()
 	}
 	return time.Time{}
+}
+
+// resolveSessionID finds the past session in this directory whose id is,
+// or starts with, prefix. problem explains an unknown, ambiguous or current
+// session to the user; err is a failure to list sessions at all.
+func resolveSessionID(deps SessionCommandDeps, prefix string) (id, problem string, err error) {
+	if deps.Repo == nil {
+		return "", "No past sessions in this directory.", nil
+	}
+	found, err := deps.Repo.List(deps.Cwd)
+	if err != nil {
+		return "", "", err
+	}
+	var matches []string
+	for _, m := range found {
+		if m.ID == prefix {
+			matches = []string{m.ID}
+			break
+		}
+		if strings.HasPrefix(m.ID, prefix) {
+			matches = append(matches, m.ID)
+		}
+	}
+	switch {
+	case len(matches) == 1 && matches[0] == deps.CurrentID:
+		return "", matches[0] + " is this session.", nil
+	case len(matches) == 1:
+		return matches[0], "", nil
+	case len(matches) > 1:
+		return "", fmt.Sprintf("%q matches %d sessions; type more of the id.", prefix, len(matches)), nil
+	}
+	return "", fmt.Sprintf("No session %q in this directory. Type /resume and a space to pick one.", prefix), nil
 }

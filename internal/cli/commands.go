@@ -42,6 +42,9 @@ import (
 type registryDeps struct {
 	Cwd     string
 	Started *agent.Started
+	// Interactive enables commands that only make sense in the TUI, such
+	// as /resume switching sessions by relaunching.
+	Interactive bool
 
 	Registry *provider.Registry
 	Gate     *permission.Gate
@@ -228,6 +231,8 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		Gate:        gate,
 		Cwd:         deps.Cwd,
 		SessionsDir: deps.SessionsDir,
+		CurrentID:   started.SessionID,
+		Relaunch:    relaunchFor(deps.Interactive),
 	}))
 
 	registry.Add(slashcommands.AccountCommands(slashcommands.AccountDeps{
@@ -298,4 +303,13 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 	registry.Add(slashcommands.PluginReportCommand(deps.Cwd, deps.Plugins))
 
 	return registry
+}
+
+// relaunchFor is /resume's Relaunch hook: nil in print mode, which runs one
+// prompt and exits rather than switching sessions.
+func relaunchFor(interactive bool) func(string) {
+	if !interactive {
+		return nil
+	}
+	return func(id string) { pendingRelaunch = id }
 }

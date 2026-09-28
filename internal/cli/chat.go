@@ -890,6 +890,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	registry := buildCommandRegistry(registryDeps{
 		Cwd:                cwd,
 		Started:            started,
+		Interactive:        !args.Print,
 		Registry:           reg,
 		Gate:               gate,
 		Hooks:              hookConfig,

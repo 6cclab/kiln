@@ -386,3 +386,46 @@ output:
 
   -v, --version
   -h, --help`
+
+// relaunchDropped are the flags RelaunchArgv leaves out: they choose or
+// name the session (the relaunch picks its own) or run a one-shot prompt.
+var relaunchDropped = map[string]bool{
+	"-c": true, "--continue": true, "-r": true, "--resume": true,
+	"--session-id": true, "--fork-session": true, "-n": true, "--name": true,
+	"-p": true, "--print": true,
+}
+
+// RelaunchArgv rebuilds argv (without the program name) to resume
+// sessionID: every flag is kept as given except the session-choosing ones
+// in relaunchDropped, and positional arguments are dropped so an initial
+// prompt is not sent again. Tokenised exactly as Parse does.
+func RelaunchArgv(argv []string, sessionID string) []string {
+	var out []string
+	for i := 0; i < len(argv); i++ {
+		token := argv[i]
+		if !strings.HasPrefix(token, "-") {
+			continue
+		}
+		flag := token
+		hasValue := strings.IndexByte(token, '=') != -1
+		if hasValue {
+			flag = token[:strings.IndexByte(token, '=')]
+		}
+		keep := []string{token}
+		if !hasValue && valued[flag] && i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+			keep = append(keep, argv[i+1])
+			i++
+		}
+		if !relaunchDropped[flag] {
+			out = append(out, keep...)
+		}
+	}
+	return append(out, "--resume", sessionID)
+}
+
+// pendingRelaunch is the session /resume chose, set by the command and read
+// by main once Run has returned and every exit path has run.
+var pendingRelaunch string
+
+// PendingRelaunch returns the session id /resume asked to switch to, or "".
+func PendingRelaunch() string { return pendingRelaunch }
