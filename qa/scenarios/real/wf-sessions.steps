@@ -17,11 +17,11 @@ EXPECT /[Gg]reet/
 SEND /resume
 WAIT 2
 SHOT resume-list
-EXPECT /session\(s\)/
+EXPECT /past session|No past sessions/
 SEND /context
 WAIT 2
 SHOT context
-EXPECT /window/
+EXPECT /\d+(\.\d+)?k of \d+k tokens/
 SEND /cost
 WAIT 2
 SHOT cost

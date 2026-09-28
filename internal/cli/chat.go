@@ -738,7 +738,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// fields; this reads the same one the status meter does, so /context
 	// and the pinned meter now always agree.
 	var usageMu sync.Mutex
-	var lastUsageRow *msg.Usage
+	lastUsageRow := started.Harness.LastUsage() // a resumed session's last request
 	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
 		usageMu.Lock()
 		defer usageMu.Unlock()
@@ -791,7 +791,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// print mode's subagentEventSink nor the TUI's bridge.SubagentSink
 	// (internal/tui/bridge.go) ever overwrites.
 	var usageByModelMu sync.Mutex
-	usageByModel := map[string]msg.Usage{}
+	// Seeded from the session's own usage rows: a resumed session's /cost
+	// covers its earlier runs too, as the footer's cost already does.
+	usageByModel := started.Harness.UsageByModel(started.Model.Provider + "/" + started.Model.ID)
 	addUsage := func(providerID, modelID string, u msg.Usage) {
 		if u.TotalTokens == 0 && u.Input == 0 && u.Output == 0 {
 			return

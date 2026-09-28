@@ -169,6 +169,13 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				if err != nil {
 					return Result{}, err
 				}
+				others := found[:0]
+				for _, m := range found {
+					if m.ID != deps.CurrentID {
+						others = append(others, m)
+					}
+				}
+				found = others
 				if len(found) == 0 {
 					return Result{Output: []string{"No past sessions in this directory."}}, nil
 				}
@@ -177,7 +184,7 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				if len(top) > 15 {
 					top = top[:15]
 				}
-				lines := []string{fmt.Sprintf("%d session(s):", len(found)), ""}
+				lines := []string{countOf(len(found), "past session") + ":", ""}
 				for _, m := range top {
 					lines = append(lines, fmt.Sprintf("  %s  %8s  %s", m.ID[:min(8, len(m.ID))], ago(m.ModifiedAt), truncate(orDefault(jsonl.FirstPrompt(m.Path), "(no prompt yet)"), 70)))
 				}

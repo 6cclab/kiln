@@ -1,0 +1,24 @@
+{
+ "id": "20260928T140845Z-rewind-says-no-code-changes",
+ "found_at": "2026-09-28T14:08:45Z",
+ "scenario": "real/wf-sessions",
+ "step": "09-rewind-menu",
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Rewind says 'No code changes' for turns that edited files, and promises to restore code",
+ "observed": "The Greet turn, which edited greeter.go, read 'No code changes'; the header said 'Restore the code and/or conversation' though rewind never restores files",
+ "expected": "Each row counts the files its turn edited; the header says files are not restored",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-wf-sessions-140x45/09-rewind-menu.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/dialog_rewind.go"
+  ],
+  "regression_test": "TestRewindEntriesCountEditedFiles",
+  "updated_at": "2026-09-28T14:08:45Z"
+ }
+}

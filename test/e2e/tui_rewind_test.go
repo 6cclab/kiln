@@ -32,7 +32,7 @@ steps:
 	}
 	s.SendKey("esc")
 	s.SendKey("esc")
-	if err := s.WaitFor("Restore the code", 3*time.Second); err != nil {
+	if err := s.WaitFor("Files are not restored", 3*time.Second); err != nil {
 		t.Fatalf("rewind dialog did not open:\n%s", strings.Join(s.Rows(), "\n"))
 	}
 	// Selection is colour-only (no marker glyph), so there is no text to

@@ -199,3 +199,33 @@ steps:
 		}
 	}
 }
+
+// TestUsageByModelReadsStoredRows: the session's recorded usage is summed
+// per provider/model from its assistant entries, and LastUsage is the most
+// recent request's row.
+func TestUsageByModelReadsStoredRows(t *testing.T) {
+	rig := newTestRig(t, `
+model: faux-1
+steps:
+  - text: "hi"
+    usage: {input: 12000, output: 3000}
+`, []string{"read"})
+	lane := rig.mustLane("main")
+	if _, err := lane.Prompt(context.Background(), "go", nil); err != nil {
+		t.Fatal(err)
+	}
+	by := rig.H.UsageByModel("fallback/x")
+	var total msg.Usage
+	for k, u := range by {
+		if k == "fallback/x" {
+			t.Errorf("usage keyed by the fallback, not the entry's model: %v", by)
+		}
+		total = total.Add(u)
+	}
+	if total.Input != 12000 || total.Output != 3000 {
+		t.Errorf("summed usage = %+v, want 12000 in / 3000 out", total)
+	}
+	if last := rig.H.LastUsage(); last == nil || last.Input != 12000 {
+		t.Errorf("LastUsage = %+v", last)
+	}
+}
