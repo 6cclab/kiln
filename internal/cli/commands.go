@@ -104,6 +104,9 @@ func mcpStatusesOf(hub *mcpgate.Hub) func() []slashcommands.ServerStatus {
 		for i, s := range statuses {
 			out[i] = slashcommands.ServerStatus{Name: s.Name, Scope: s.Scope, OK: s.OK, ToolCount: s.ToolCount, Ms: s.Ms, Error: s.Error, Detail: s.Detail}
 		}
+		for _, s := range hub.Pending() {
+			out = append(out, slashcommands.ServerStatus{Name: s.Name, Scope: s.Scope, Connecting: true})
+		}
 		return out
 	}
 }

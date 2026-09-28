@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -137,7 +138,14 @@ func (p *Popup) Render(width, maxRows int) []string {
 		return []string{padTo(Muted("  No matching commands"), width)}
 	}
 
-	start, end := visibleRange(p.Selected, len(p.Items), maxRows)
+	// A clipped list gives its last row to a count of what is hidden, so
+	// the list never reads as complete when it is not.
+	items := maxRows
+	clipped := len(p.Items) > maxRows && maxRows >= 3
+	if clipped {
+		items = maxRows - 1
+	}
+	start, end := visibleRange(p.Selected, len(p.Items), items)
 	var lines []string
 	for i := start; i < end; i++ {
 		selected := i == p.Selected
@@ -157,6 +165,10 @@ func (p *Popup) Render(width, maxRows int) []string {
 			}
 			lines = append(lines, row)
 		}
+	}
+	if clipped {
+		hidden := len(p.Items) - (end - start)
+		lines = append(lines, padTo(Faint(fmt.Sprintf("  %d more · keep typing to narrow", hidden)), width))
 	}
 	return lines
 }

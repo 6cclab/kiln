@@ -295,7 +295,7 @@ type Model struct {
 	// scrolling is driven explicitly from handleKey/Update instead.
 	viewport viewport.Model
 	// resizeGen guards the debounced re-wrap a width change schedules
-	// (msgFullscreenRewrap): only the most recent WindowSizeMsg's tick may
+	// (msgResizeRewrap): only the most recent WindowSizeMsg's tick may
 	// trigger the clear+replay, so a burst of resizes during a drag
 	// rewraps once, not once per event.
 	resizeGen int
@@ -447,13 +447,13 @@ type toolGroup struct {
 	views []ToolCallView
 }
 
-// msgFullscreenRewrap follows a debounced width change in fullscreen mode:
+// msgResizeRewrap follows a debounced width change in fullscreen mode:
 // once 150ms have passed with no further WindowSizeMsg, the transcript is
 // cleared and replayed at the new width (the same tea.ClearScreen +
 // msgReplayTranscript sequence Ctrl+O uses), so history re-wraps instead of
 // staying wrapped to a stale width. gen must match Model.resizeGen at the
 // time the tick fires, or a later resize already superseded this one.
-type msgFullscreenRewrap struct{ gen int }
+type msgResizeRewrap struct{ gen int }
 
 // msgReplayTranscript follows the tea.ClearScreen a Ctrl+O toggle returns:
 // once the clear has been applied, the transcript so far is re-committed at
@@ -530,7 +530,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.appendTranscript(strings.Split(msg.Text, "\n"))
 		return m, nil
 
-	case msgFullscreenRewrap:
+	case msgResizeRewrap:
 		if msg.gen != m.resizeGen {
 			return m, nil
 		}
@@ -590,11 +590,16 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.fullscreen {
 			m = m.layoutViewport()
-			if prevWidth != 0 && prevWidth != m.width {
-				m.resizeGen++
-				gen := m.resizeGen
-				return m, tea.Batch(bannerCmd, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return msgFullscreenRewrap{gen: gen} }))
-			}
+		}
+		// A width change redraws the transcript at the new width once the
+		// resize settles. Inline mode needs it as much as fullscreen: a
+		// frame painted at the old width between the terminal's resize and
+		// this message wraps, the renderer loses count of the rows it owns,
+		// and pieces of the old frame stay on screen.
+		if prevWidth != 0 && prevWidth != m.width && (m.fullscreen || m.bannerDone) {
+			m.resizeGen++
+			gen := m.resizeGen
+			return m, tea.Batch(bannerCmd, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return msgResizeRewrap{gen: gen} }))
 		}
 		return m, bannerCmd
 
@@ -2326,15 +2331,16 @@ func (m Model) transcriptIsEmpty() bool {
 // scrollback and cannot be repainted, so a verbosity change redraws from
 // the session log, the same source Claude Code redraws from.
 //
-// In fullscreen the banner needs the same treatment: it is part of the
-// transcript buffer (not native scrollback), so a clear wipes it along with
-// everything else, and it must be re-committed first — ahead of the
-// entries — or Ctrl+O/toggle/resize-rewrap would each drop it.
+// The banner needs the same treatment: a clear wipes it along with
+// everything else on screen (in fullscreen it is part of the transcript
+// buffer), so it is re-committed first — ahead of the entries — or
+// Ctrl+O, /clear and the resize rewrap would each drop it. commitBanner's
+// own replay runs before bannerDone is set, so it is not committed twice.
 func (m Model) replayTranscript() {
 	if m.cfg.Bridge == nil || m.cfg.Lane == nil {
 		return
 	}
-	if m.fullscreen && m.bannerDone && len(m.cfg.Banner) > 0 {
+	if m.bannerDone && len(m.cfg.Banner) > 0 {
 		m.cfg.Bridge.Commit(m.bannerRows())
 	}
 	entries, err := m.cfg.Lane.FindEntries(context.Background())

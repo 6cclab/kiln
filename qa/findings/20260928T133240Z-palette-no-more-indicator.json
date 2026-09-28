@@ -1,0 +1,22 @@
+{
+ "id": "20260928T133240Z-palette-no-more-indicator",
+ "found_at": "2026-09-28T13:32:40Z",
+ "scenario": "real/ext-commands",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "low",
+ "title": "Slash palette gives no sign more commands exist",
+ "observed": "Palette shows 5 rows with nothing marking the list as clipped",
+ "expected": "A faint 'N more · keep typing to narrow' row when clipped",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/autocomplete.go"
+  ],
+  "regression_test": "TestPopup_ClippedListCountsHiddenItems",
+  "updated_at": "2026-09-28T13:32:40Z"
+ }
+}

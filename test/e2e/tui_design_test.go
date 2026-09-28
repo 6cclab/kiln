@@ -671,6 +671,10 @@ func TestTUI_Design_Permission_60cols(t *testing.T) {
 	driveDesignTo(t, s, "permission")
 	s.Resize(60, 30)
 	mustSee(t, s, designPermAnchor, 3*time.Second)
+	// A frame painted at 100 columns just before kiln hears of the resize
+	// wraps at 60 and leaves the old prompt's top rows above the new frame;
+	// the rewrap after the resize settles must clear them.
+	waitSingle(t, s, designPermAnchor, 3*time.Second)
 	assertGoldenTail(t, s, "design-permission-60", designPermAnchor)
 	assertGoldenStyles(t, s, "design-permission-60", stylesOpts{anchor: designPermAnchor})
 }
@@ -1098,5 +1102,24 @@ func TestTUI_Design_FullSession(t *testing.T) {
 	// handback report for the full observed sequence.
 	if labels[0] != "you" {
 		t.Errorf("first committed block is %q, want \"you\":\n%v", labels[0], labels)
+	}
+}
+
+// waitSingle waits until text appears exactly once on screen and the
+// screen has settled, failing with the screen if it never does.
+func waitSingle(t *testing.T, s *screen.Screen, text string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		rows := strings.Join(s.Viewport(), "\n")
+		if strings.Count(rows, text) == 1 {
+			if err := s.WaitFor(text, time.Until(deadline)); err == nil && strings.Count(strings.Join(s.Viewport(), "\n"), text) == 1 {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q is on screen %d times, want once:\n%s", text, strings.Count(rows, text), rows)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

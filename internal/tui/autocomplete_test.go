@@ -389,3 +389,23 @@ func TestFuzzyMatch_NoMatch(t *testing.T) {
 		t.Fatal("expected no match")
 	}
 }
+
+// TestPopup_ClippedListCountsHiddenItems: a list longer than the rows it
+// is given ends in a count of the hidden items, and stays within maxRows.
+func TestPopup_ClippedListCountsHiddenItems(t *testing.T) {
+	var items []AutocompleteItem
+	for _, name := range []string{"agents", "bashes", "clear", "compact", "config", "context", "cost", "doctor"} {
+		items = append(items, AutocompleteItem{Value: name, Label: name})
+	}
+	p := &Popup{Kind: KindSlashCommand, Items: items}
+	lines := p.Render(80, 5)
+	if len(lines) != 5 {
+		t.Fatalf("got %d rows, want 5:\n%s", len(lines), stripANSI(strings.Join(lines, "\n")))
+	}
+	if last := stripANSI(lines[4]); !strings.Contains(last, "4 more · keep typing to narrow") {
+		t.Errorf("last row = %q, want the hidden count", last)
+	}
+	if short := (&Popup{Kind: KindSlashCommand, Items: items[:3]}).Render(80, 5); strings.Contains(stripANSI(strings.Join(short, "\n")), "more") {
+		t.Errorf("an unclipped list shows a count:\n%s", stripANSI(strings.Join(short, "\n")))
+	}
+}

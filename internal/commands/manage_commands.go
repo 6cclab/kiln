@@ -194,9 +194,12 @@ func mcpStatusesText(statuses []ServerStatus) []string {
 	}
 	lines := []string{fmt.Sprintf("%d/%d connected, %d tools", len(ok), len(statuses), tools), ""}
 	for _, s := range statuses {
-		if s.OK {
+		switch {
+		case s.Connecting:
+			lines = append(lines, fmt.Sprintf("  %-22s connecting…", s.Name))
+		case s.OK:
 			lines = append(lines, fmt.Sprintf("  %-22s %4d tools  %dms", s.Name, s.ToolCount, s.Ms))
-		} else {
+		default:
 			lines = append(lines, fmt.Sprintf("  %-22s failed: %s", s.Name, truncate(orDefault(s.Error, "unknown"), 90)))
 		}
 	}
@@ -220,6 +223,9 @@ func mcpStatusesText(statuses []ServerStatus) []string {
 // failed server's marker carries no trailing text, matching
 // dialog-mcp.txt's plain ✘ rows (its ⚠ rows are the ones with the "needs
 // authentication" suffix, which the harness cannot distinguish).
+// MarkerConnecting is /mcp's Item.Marker for a server still connecting.
+const MarkerConnecting = "connecting"
+
 func mcpModal(deps ManageDeps) *ModalSpec {
 	var statuses []ServerStatus
 	if deps.MCPStatuses != nil {
@@ -273,10 +279,14 @@ func mcpModal(deps ManageDeps) *ModalSpec {
 			Ms:    s.Ms,
 			Tools: toolsByServer[s.Name],
 		}
-		if s.OK {
+		switch {
+		case s.Connecting:
+			it.Marker = MarkerConnecting
+			it.Description = "connecting…"
+		case s.OK:
 			it.Marker = "✔"
 			it.Description = fmt.Sprintf("%d tools", s.ToolCount)
-		} else {
+		default:
 			it.Marker = "✘"
 			it.Error = s.Error
 			it.Detail = s.Detail

@@ -130,9 +130,10 @@ type Hub struct {
 	mu    sync.Mutex
 	conns map[string]*serverConn
 
-	tools    []McpTool
+	tools    map[string][]McpTool // by server; Tools() orders them by server name
 	statuses []ServerStatus
 	scopes   map[string]string // server name -> ServerConfig.Scope
+	pending  map[string]bool   // servers ConnectAll is still connecting
 
 	// OnServer, if set before ConnectAll, is called after each server's
 	// connect attempt finishes, so a UI can show progress while the
@@ -142,7 +143,7 @@ type Hub struct {
 
 // NewHub builds an empty, unconnected Hub.
 func NewHub() *Hub {
-	return &Hub{conns: map[string]*serverConn{}, scopes: map[string]string{}}
+	return &Hub{conns: map[string]*serverConn{}, tools: map[string][]McpTool{}, scopes: map[string]string{}, pending: map[string]bool{}}
 }
 
 // record appends a server's outcome, logs it, and reports it to OnServer.
@@ -150,6 +151,7 @@ func (h *Hub) record(st ServerStatus) {
 	h.mu.Lock()
 	st.Scope = h.scopes[st.Name]
 	h.statuses = append(h.statuses, st)
+	delete(h.pending, st.Name)
 	cb := h.OnServer
 	h.mu.Unlock()
 	if st.OK {
@@ -166,7 +168,16 @@ func (h *Hub) record(st ServerStatus) {
 func (h *Hub) Tools() []McpTool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return append([]McpTool(nil), h.tools...)
+	servers := make([]string, 0, len(h.tools))
+	for name := range h.tools {
+		servers = append(servers, name)
+	}
+	sort.Strings(servers)
+	var out []McpTool
+	for _, name := range servers {
+		out = append(out, h.tools[name]...)
+	}
+	return out
 }
 
 // Statuses returns the connect outcome of every configured server, in the
@@ -175,6 +186,19 @@ func (h *Hub) Statuses() []ServerStatus {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]ServerStatus(nil), h.statuses...)
+}
+
+// Pending returns the servers ConnectAll is still connecting, by name,
+// with their scopes, so /mcp can list them before they finish.
+func (h *Hub) Pending() []ServerStatus {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]ServerStatus, 0, len(h.pending))
+	for name := range h.pending {
+		out = append(out, ServerStatus{Name: name, Scope: h.scopes[name]})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // ConnectAll connects to every configured server and collects their
@@ -195,69 +219,82 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 	for name, cfg := range configs {
 		names = append(names, name)
 		h.scopes[name] = cfg.Scope
+		h.pending[name] = true
 	}
 	h.mu.Unlock()
 	sort.Strings(names)
 
+	// Servers connect concurrently: one slow or dead server costs its own
+	// timeout, not everyone's behind it.
 	timeout := connectTimeout()
+	var wg sync.WaitGroup
 	for _, name := range names {
-		cfg := configs[name]
-		started := time.Now()
-
-		transport, cmd, err := buildTransport(cfg)
-		if err != nil {
-			h.record(ServerStatus{Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: err.Error(), Ms: elapsedMs(started)})
-			continue
-		}
-
-		client := sdk.NewClient(&sdk.Implementation{Name: "harness", Version: "0.0.0"}, nil)
-
-		connectCtx, cancel := context.WithTimeout(ctx, timeout)
-		session, err := client.Connect(connectCtx, transport, nil)
-		cancel()
-		if err != nil {
-			// Client.Connect already closes the session (and, for stdio, the
-			// child process) on its own error paths; killGroup is a defensive
-			// second pass for a process group's other members (e.g. `npx`
-			// spawning `node`), which the SDK's Close only ever reaches for
-			// the direct child.
-			killGroup(cmd)
-			h.record(ServerStatus{
-				Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: fmt.Sprintf("connect: %s", err), Ms: elapsedMs(started),
-			})
-			continue
-		}
-
-		listCtx, listCancel := context.WithTimeout(ctx, timeout)
-		res, err := session.ListTools(listCtx, nil)
-		listCancel()
-		if err != nil {
-			_ = session.Close()
-			killGroup(cmd)
-			h.record(ServerStatus{
-				Name: name, OK: false, Error: "connected, but listing its tools failed: " + describeConnectError(cfg, err), Detail: fmt.Sprintf("listTools: %s", err), Ms: elapsedMs(started),
-			})
-			continue
-		}
-
-		var tools []McpTool
-		for _, t := range res.Tools {
-			schema, _ := json.Marshal(t.InputSchema)
-			tools = append(tools, McpTool{
-				Server:        name,
-				Name:          t.Name,
-				QualifiedName: fmt.Sprintf("mcp__%s__%s", name, t.Name),
-				Description:   t.Description,
-				InputSchema:   schema,
-			})
-		}
-
-		h.mu.Lock()
-		h.conns[name] = &serverConn{session: session, cmd: cmd}
-		h.tools = append(h.tools, tools...)
-		h.mu.Unlock()
-		h.record(ServerStatus{Name: name, OK: true, ToolCount: len(tools), Ms: elapsedMs(started)})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.connectOne(ctx, name, configs[name], timeout)
+		}()
 	}
+	wg.Wait()
+}
+
+// connectOne connects one server, lists its tools and records the outcome.
+func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, timeout time.Duration) {
+	started := time.Now()
+
+	transport, cmd, err := buildTransport(cfg)
+	if err != nil {
+		h.record(ServerStatus{Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: err.Error(), Ms: elapsedMs(started)})
+		return
+	}
+
+	client := sdk.NewClient(&sdk.Implementation{Name: "harness", Version: "0.0.0"}, nil)
+
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
+	session, err := client.Connect(connectCtx, transport, nil)
+	cancel()
+	if err != nil {
+		// Client.Connect already closes the session (and, for stdio, the
+		// child process) on its own error paths; killGroup is a defensive
+		// second pass for a process group's other members (e.g. `npx`
+		// spawning `node`), which the SDK's Close only ever reaches for
+		// the direct child.
+		killGroup(cmd)
+		h.record(ServerStatus{
+			Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: fmt.Sprintf("connect: %s", err), Ms: elapsedMs(started),
+		})
+		return
+	}
+
+	listCtx, listCancel := context.WithTimeout(ctx, timeout)
+	res, err := session.ListTools(listCtx, nil)
+	listCancel()
+	if err != nil {
+		_ = session.Close()
+		killGroup(cmd)
+		h.record(ServerStatus{
+			Name: name, OK: false, Error: "connected, but listing its tools failed: " + describeConnectError(cfg, err), Detail: fmt.Sprintf("listTools: %s", err), Ms: elapsedMs(started),
+		})
+		return
+	}
+
+	var tools []McpTool
+	for _, t := range res.Tools {
+		schema, _ := json.Marshal(t.InputSchema)
+		tools = append(tools, McpTool{
+			Server:        name,
+			Name:          t.Name,
+			QualifiedName: fmt.Sprintf("mcp__%s__%s", name, t.Name),
+			Description:   t.Description,
+			InputSchema:   schema,
+		})
+	}
+
+	h.mu.Lock()
+	h.conns[name] = &serverConn{session: session, cmd: cmd}
+	h.tools[name] = tools
+	h.mu.Unlock()
+	h.record(ServerStatus{Name: name, OK: true, ToolCount: len(tools), Ms: elapsedMs(started)})
 }
 
 func elapsedMs(started time.Time) int64 { return time.Since(started).Milliseconds() }
@@ -266,10 +303,12 @@ func elapsedMs(started time.Time) int64 { return time.Since(started).Millisecond
 func (h *Hub) Call(ctx context.Context, qualifiedName string, args map[string]any) (*sdk.CallToolResult, error) {
 	h.mu.Lock()
 	var found *McpTool
-	for i := range h.tools {
-		if h.tools[i].QualifiedName == qualifiedName {
-			found = &h.tools[i]
-			break
+	for _, tools := range h.tools {
+		for i := range tools {
+			if tools[i].QualifiedName == qualifiedName {
+				found = &tools[i]
+				break
+			}
 		}
 	}
 	var conn *serverConn

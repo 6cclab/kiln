@@ -192,3 +192,33 @@ func TestManageMcpModalSectionsByScope(t *testing.T) {
 		t.Errorf("items:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+// TestManageMcpModalListsConnectingServers: /mcp opened while servers are
+// still connecting lists them as connecting, not as failed or missing.
+func TestManageMcpModalListsConnectingServers(t *testing.T) {
+	source := ManageCommands(ManageDeps{
+		Gate: &fakeManageGate{},
+		MCPStatuses: func() []ServerStatus {
+			return []ServerStatus{
+				{Name: "grafana", Scope: "user", OK: true, ToolCount: 3},
+				{Name: "slow", Scope: "user", Connecting: true},
+			}
+		},
+	})
+	res, err := findCmd(t, source, "mcp").Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var slow *Item
+	for i := range res.Modal.Items {
+		if res.Modal.Items[i].Value == "slow" {
+			slow = &res.Modal.Items[i]
+		}
+	}
+	if slow == nil {
+		t.Fatalf("connecting server missing from /mcp: %+v", res.Modal.Items)
+	}
+	if slow.Marker != MarkerConnecting || slow.Description != "connecting…" {
+		t.Errorf("connecting server row = marker %q, description %q", slow.Marker, slow.Description)
+	}
+}

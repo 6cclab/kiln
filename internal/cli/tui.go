@@ -104,11 +104,10 @@ type InteractiveDeps struct {
 // reporting progress in the footer and any failures as one transcript note
 // pointing at /mcp.
 func connectInBackground(bridge *tui.Bridge, n int, connect func(func(mcpgate.ServerStatus)) []mcpgate.ServerStatus) {
-	done := 0
+	var done atomic.Int32 // servers connect concurrently; progress arrives from each
 	bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: connecting %d servers…", n)})
 	statuses := connect(func(mcpgate.ServerStatus) {
-		done++
-		bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: %d/%d servers…", done, n)})
+		bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: %d/%d servers…", done.Add(1), n)})
 	})
 	bridge.Send(tui.MsgFooterNote{Text: ""})
 	if notice := mcpFailureNotice(statuses); notice != "" {

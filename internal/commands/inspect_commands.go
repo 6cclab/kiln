@@ -20,11 +20,14 @@ type ServerStatus struct {
 	Name string
 	// Scope is where the server is configured: user, local, project or
 	// flag (--mcp-config); "" when unknown.
-	Scope     string
-	OK        bool
-	ToolCount int
-	Ms        int64
-	Error     string
+	Scope string
+	// Connecting is true while the server's first connect attempt is still
+	// running; OK and Error are unset until it finishes.
+	Connecting bool
+	OK         bool
+	ToolCount  int
+	Ms         int64
+	Error      string
 	// Detail is the failure's full underlying text (mcp.ServerStatus.Detail),
 	// shown dim in /mcp's per-server detail view. Empty unless the
 	// integrator's mcpStatusesOf adapter (internal/cli/commands.go) maps
@@ -128,13 +131,16 @@ func InspectCommands(deps InspectDeps) Source {
 				if len(statuses) == 0 {
 					return Result{Output: []string{"No MCP servers configured. They are read from ~/.claude.json"}}, nil
 				}
-				var ok, failed []ServerStatus
+				var ok, failed, connecting []ServerStatus
 				tools := 0
 				for _, s := range statuses {
-					if s.OK {
+					switch {
+					case s.Connecting:
+						connecting = append(connecting, s)
+					case s.OK:
 						ok = append(ok, s)
 						tools += s.ToolCount
-					} else {
+					default:
 						failed = append(failed, s)
 					}
 				}
@@ -144,6 +150,9 @@ func InspectCommands(deps InspectDeps) Source {
 				}
 				for _, s := range failed {
 					lines = append(lines, fmt.Sprintf("  %-22s failed: %s", s.Name, truncate(orDefault(s.Error, "unknown"), 90)))
+				}
+				for _, s := range connecting {
+					lines = append(lines, fmt.Sprintf("  %-22s connecting…", s.Name))
 				}
 				return Result{Output: lines}, nil
 			},
@@ -251,12 +260,22 @@ func InspectCommands(deps InspectDeps) Source {
 					statuses = deps.MCPStatuses()
 				}
 				var failed []ServerStatus
+				connected, connecting := 0, 0
 				for _, s := range statuses {
-					if !s.OK {
+					switch {
+					case s.Connecting:
+						connecting++
+					case s.OK:
+						connected++
+					default:
 						failed = append(failed, s)
 					}
 				}
-				lines = append(lines, fmt.Sprintf("mcp        %d/%d connected", len(statuses)-len(failed), len(statuses)))
+				mcpLine := fmt.Sprintf("mcp        %d/%d connected", connected, len(statuses))
+				if connecting > 0 {
+					mcpLine += fmt.Sprintf(", %d connecting", connecting)
+				}
+				lines = append(lines, mcpLine)
 
 				total, eventsUsed := hookCount(deps.Hooks)
 				lines = append(lines, fmt.Sprintf("hooks      %d across %d events", total, eventsUsed))

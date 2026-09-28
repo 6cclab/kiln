@@ -132,6 +132,8 @@ func mcpStatusGlyph(marker string) string {
 		return KilnGreen(G().OK)
 	case "✘":
 		return KilnRed(G().Fail)
+	case commands.MarkerConnecting:
+		return Faint(G().PlanTodo)
 	default:
 		return Faint(marker)
 	}
@@ -230,6 +232,8 @@ func (d *dialogMCP) renderDetail(width, height int) []string {
 			status += " · " + strconv.FormatInt(item.Ms, 10) + "ms"
 		}
 		out = append(out, dialogIndent+KilnGreen(status))
+	case commands.MarkerConnecting:
+		out = append(out, dialogIndent+Muted("connecting… reopen /mcp once it finishes"))
 	default:
 		reason := item.Error
 		if reason == "" {
