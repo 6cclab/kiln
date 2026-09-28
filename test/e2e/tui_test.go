@@ -455,13 +455,23 @@ const bannerCwdMarker = " · model "
 // normalizeBannerCwdRow's other cases already stabilize.
 var statusRowCwdPattern = regexp.MustCompile(`⇧⇥ {2}\S+\s+ctx`)
 
+// bannerCwdPrefix is what precedes the path on the banner's repo row: the
+// kiln art beside it, when the banner draws it (the art has no "/", "~" or
+// the "…" a shortened path starts with).
+func bannerCwdPrefix(r string) string {
+	if i := strings.IndexAny(r, "/~…"); i > 0 {
+		return r[:i]
+	}
+	return ""
+}
+
 func normalizeBannerCwdRow(rows []string) []string {
 	out := make([]string, len(rows))
 	for i, r := range rows {
 		switch {
 		case strings.Contains(r, bannerCwdMarker):
 			// Wide enough that "<cwd> · [branch B ·] model M" survives.
-			out[i] = "<cwd>" + bannerCwdMarker + "…"
+			out[i] = bannerCwdPrefix(r) + "<cwd>" + bannerCwdMarker + "…"
 		case (strings.HasPrefix(r, "/") || strings.HasPrefix(r, "~")) && !strings.Contains(r, "commands"):
 			// The banner's cwd row, truncated so hard that the " · model "
 			// marker itself was cut off — a run-varying temp dir, so mask
@@ -606,7 +616,7 @@ func maskStyledRows(rows []string, styles [][]screen.CellStyle, mask func(string
 func maskBannerCwdRowStyled(r string) (string, bool) {
 	switch {
 	case strings.Contains(r, bannerCwdMarker):
-		return "<cwd>" + bannerCwdMarker + "…", true
+		return bannerCwdPrefix(r) + "<cwd>" + bannerCwdMarker + "…", true
 	case (strings.HasPrefix(r, "/") || strings.HasPrefix(r, "~")) && !strings.Contains(r, "commands"):
 		return "<cwd>…", true
 	case statusRowCwdPattern.MatchString(r):
@@ -731,28 +741,39 @@ func TestTUI_Startup_NoDuplicateRows(t *testing.T) {
 				}
 			}
 
-			// Order: banner rows (wordmark, cwd/branch/model, tips —
-			// consecutive, no blank rows between them per the design), one
-			// blank row, the banner's own closing rule, the input box's own
-			// [rule, input, rule], then the one status row. Every screen
-			// here is the empty-box startup screen (no "Recent sessions"
-			// block: a fresh scratchProject/scratchHome has no prior
-			// sessions).
+			// Order: the banner (the kiln art with the wordmark, version
+			// and repo line beside it — consecutive, no blank rows), one
+			// blank row, the tips row, one blank row, the banner's own
+			// closing rule, the input box's own [rule, input, rule], then
+			// the one status row. Every screen here is the empty-box
+			// startup screen (no "Recent sessions" block: a fresh
+			// scratchProject/scratchHome has no prior sessions).
 			var got []string
 			for _, r := range rows {
 				got = append(got, strings.TrimRight(r, " "))
 			}
-			wantNonBlank := []int{0, 1, 2}
-			for _, i := range wantNonBlank {
-				if i >= len(got) || got[i] == "" {
-					t.Errorf("row %d = %q, want banner content (wordmark/cwd/tips must be consecutive, no blanks between them)", i, safeRow(got, i))
+			tips := -1
+			for i, r := range got {
+				if strings.Contains(r, "/ commands") {
+					tips = i
+					break
 				}
 			}
-			if safeRow(got, 3) != "" {
-				t.Errorf("row 3 = %q, want blank (one blank row after the banner's tips row)", safeRow(got, 3))
+			if tips < 2 {
+				t.Fatalf("tips row at %d, want it below the banner:\n%s", tips, strings.Join(got, "\n"))
 			}
-			wantRule := []int{4, 6}
-			for _, i := range wantRule {
+			for i := 0; i < tips-1; i++ {
+				if got[i] == "" {
+					t.Errorf("row %d is blank, want banner content (the art and its text are consecutive)", i)
+				}
+			}
+			if got[tips-1] != "" {
+				t.Errorf("row %d = %q, want blank (one blank row above the tips row)", tips-1, got[tips-1])
+			}
+			if safeRow(got, tips+1) != "" {
+				t.Errorf("row %d = %q, want blank (one blank row after the banner's tips row)", tips+1, safeRow(got, tips+1))
+			}
+			for _, i := range []int{tips + 2, tips + 4} {
 				if i >= len(got) || !isRule(got[i]) {
 					t.Errorf("row %d = %q, want a full-width rule row", i, safeRow(got, i))
 				}

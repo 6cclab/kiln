@@ -717,6 +717,15 @@ func SetPlainMode(on bool) {
 	}
 }
 
+// Paint renders text in a fixed hex colour: for artwork whose colours are
+// part of the drawing (the banner's kiln) rather than theme tokens.
+func Paint(hex, text string) string {
+	if !enabled {
+		return text
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(hex)).Render(text)
+}
+
 // IsPlain reports whether decorative glyphs should be avoided.
 func IsPlain() bool {
 	return plain

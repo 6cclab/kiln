@@ -83,14 +83,19 @@ Every block except the banner has a **label rule**:
 - Free: `#2f2920`
 
 **Banner** (no label; the welcome block at the top of every session; sits above a `─` rule):
-- `KILN` in amber, weight 600, letter-spaced (render as `K I L N` or a larger figlet). After it, dim: `v0.9.2 · coding agent`.
+- ANSI-art kiln on the left: 9 rows, 19 columns, made of block characters. Copy it verbatim from `Terminal.dc.html`. Colors:
+  - body `#b86a45`
+  - smoke `#6f6555`
+  - door lintel `#3a3228`
+  - flames `#e9a64b`
+  - glow `#f3c27f`
+  - base `#5a4a3a`
+- To the right, stacked: `KILN` in amber bold and letter-spaced, `v0.9.2 · coding agent` (dim), then the repo line.
 - Dim line: `~/src/relay-api · branch main · model kiln-large`.
 - Shortcut row, keys in amber and descriptions dim: `/ commands   @ add files   ⇧⇥ cycle mode   esc stop`.
 - `Recent sessions` list, shown only before the first message: when (10 columns, dim) and title (ink).
 
-**Other layouts in the file** (not chosen, kept for reference):
-- 1a Gutter: a 2-column glyph column replaces the label rules.
-- 1c Rail: status bar on top, timestamps on the left.
+Only layout 1b is in scope. `Terminal.dc.html` still accepts `gutter` and `rail`, but ignore them.
 
 ## Interactions & behavior
 **Input**
@@ -173,6 +178,6 @@ Type sizes: body 14px, meta and labels 12px, diff 13px, banner wordmark 22px. In
 None. All glyphs are Unicode: `› • · ✓ ✕ ± ? ≡ ∥ ! ◧ ▸ ○ ━ ─ ■ ▍ ◐◓◑◒ ↺ → ⇧⇥`. The traffic-light dots in the window chrome are presentation only.
 
 ## Files
-- `Kiln TUI.dc.html`: overview canvas with the three layout directions, the interactive prototype (set to layout `ruled`), and 9 key-state screens. Open it in a browser.
+- `Kiln TUI.dc.html`: overview page with the interactive prototype and 9 key-state screens, all in layout 1b (`ruled`). Open it in a browser.
 - `Terminal.dc.html`: the terminal component. Its props are `layout` (`gutter` | `ruled` | `rail`) and `scene` (`live` | `welcome` | `plan` | `agents` | `streaming` | `diff` | `permission` | `error` | `palette` | `context` | `done`). The logic class contains all copy, the scripted session, block styling rules (`deco()`), and keyboard handling (`onKey`).
 - `support.js`: runtime needed to open the `.dc.html` files.

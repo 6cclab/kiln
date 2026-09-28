@@ -511,9 +511,18 @@ func bannerRows(deps InteractiveDeps, width int) []string {
 func newBanner(deps InteractiveDeps, width int) func() []string {
 	verLabel := versionLabel(Version)
 
-	// Row 1 per the design: "<cwd> · branch <b> · model <m>", cwd with the
-	// home dir abbreviated to ~ and, when the row is tight, left-truncated
-	// so the branch/model suffix survives intact.
+	// The kiln art sits left of the text when there is room for it and
+	// a usable repo line beside it; a narrow terminal (or screen-reader
+	// mode, where block art is noise read aloud) gets the text alone.
+	art := !tui.IsPlain() && width-kilnArtWidth-kilnArtGap >= kilnArtMinText
+	textWidth := width
+	if art {
+		textWidth = width - kilnArtWidth - kilnArtGap
+	}
+
+	// The repo line per the design: "<cwd> · branch <b> · model <m>", cwd
+	// with the home dir abbreviated to ~ and, when the row is tight,
+	// left-truncated so the branch/model suffix survives intact.
 	cwd := abbrevHome(deps.Cwd)
 	suffix := ""
 	if st, ok := readGitStatus(context.Background()); ok && st.Branch != "" {
@@ -521,7 +530,7 @@ func newBanner(deps InteractiveDeps, width int) func() []string {
 	}
 	suffix += " · model " + deps.ModelLabel
 
-	maxCwd := width - tui.VisibleWidth(suffix)
+	maxCwd := textWidth - tui.VisibleWidth(suffix)
 	if maxCwd < 1 {
 		maxCwd = 1
 	}
@@ -539,24 +548,79 @@ func newBanner(deps InteractiveDeps, width int) func() []string {
 		recent = recentSessionRows(deps.Cwd, currentSessionID)
 	}
 
-	return func() []string { return styleBanner(verLabel, loc, recent) }
+	return func() []string { return styleBanner(verLabel, loc, recent, art) }
 }
+
+// The banner's kiln, copied from the design (docs/kiln-design-handoff/
+// Terminal.dc.html, the banner block): 9 rows, 19 columns of block
+// characters. Each row is a run of (colour, text) segments.
+const (
+	kilnArtWidth = 19
+	// kilnArtGap separates the art from the text column.
+	kilnArtGap = 3
+	// kilnArtMinText is the narrowest text column worth drawing the art
+	// for: below it the repo line would be cut to almost nothing.
+	kilnArtMinText = 36
+)
+
+type artSegment struct{ hex, text string }
+
+const (
+	artBody   = "#b86a45"
+	artSmoke  = "#6f6555"
+	artLintel = "#3a3228"
+	artFlame  = "#e9a64b"
+	artGlow   = "#f3c27f"
+	artBase   = "#5a4a3a"
+)
+
+var kilnArt = [][]artSegment{
+	{{artBody, "        "}, {artSmoke, "░▒░"}},
+	{{artBody, "        ▐█▌"}},
+	{{artBody, "    ▄▄▄▄▄█▄▄▄▄▄"}},
+	{{artBody, "  ▄█▀▀▀▀▀▀▀▀▀▀▀█▄"}},
+	{{artBody, " ██ █"}, {artLintel, "▀▀▀▀▀▀▀▀▀"}, {artBody, "█ ██"}},
+	{{artBody, " ██ █"}, {artFlame, " ▲ ▲▲▲ ▲ "}, {artBody, "█ ██"}},
+	{{artBody, " ██ █"}, {artGlow, "▒▓█████▓▒"}, {artBody, "█ ██"}},
+	{{artBody, " ██ █▄▄▄▄▄▄▄▄▄█ ██"}},
+	{{artBase, "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"}},
+}
+
+// kilnArtTextRow is the art row the text column starts on: the three text
+// rows sit centred against the nine art rows, as in the design.
+const kilnArtTextRow = 3
 
 // styleBanner renders the banner rows from newBanner's data with the
 // current theme tokens.
-func styleBanner(verLabel, loc string, recent []recentSession) []string {
+func styleBanner(verLabel, loc string, recent []recentSession, art bool) []string {
 	tips := tui.KilnAmber("/") + " " + tui.Muted("commands") + "   " +
 		tui.KilnAmber("@") + " " + tui.Muted("add files") + "   " +
 		tui.KilnAmber("⇧⇥") + " " + tui.Muted("cycle mode") + "   " +
 		tui.KilnAmber("esc") + " " + tui.Muted("stop")
 
-	// Row 0: "K I L N" spaced letters (the design's wordmark, one line
-	// rather than the old figlet block art) amber bold, then the version
-	// and tagline dim.
-	rows := []string{
-		tui.KilnAmber(tui.Bold("K I L N")) + "  " + tui.Muted(verLabel+" · coding agent"),
+	// The wordmark, letter-spaced amber bold; the version and tagline and
+	// the repo line under it, dim.
+	text := []string{
+		tui.KilnAmber(tui.Bold("K I L N")),
+		tui.Muted(verLabel + " · coding agent"),
 		tui.Muted(loc),
-		tips,
+	}
+
+	var rows []string
+	if art {
+		for i, segs := range kilnArt {
+			row := ""
+			for _, seg := range segs {
+				row += tui.Paint(seg.hex, seg.text)
+			}
+			if t := i - kilnArtTextRow; t >= 0 && t < len(text) {
+				row += strings.Repeat(" ", kilnArtWidth-artRowWidth(segs)+kilnArtGap) + text[t]
+			}
+			rows = append(rows, row)
+		}
+		rows = append(rows, "", tips)
+	} else {
+		rows = append(rows, text[0]+"  "+text[1], text[2], tips)
 	}
 
 	if len(recent) > 0 {
@@ -569,6 +633,14 @@ func styleBanner(verLabel, loc string, recent []recentSession) []string {
 	// `─` divider after these and pins the input box below.
 	rows = append(rows, "")
 	return rows
+}
+
+func artRowWidth(segs []artSegment) int {
+	w := 0
+	for _, seg := range segs {
+		w += tui.VisibleWidth(seg.text)
+	}
+	return w
 }
 
 // recentSessionRowLimit is how many past sessions the banner lists.

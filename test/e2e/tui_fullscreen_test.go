@@ -76,7 +76,8 @@ func TestTUI_Fullscreen_Startup(t *testing.T) {
 	if tipRow < 0 {
 		t.Fatalf("banner tip row (\"/ commands\") not found on screen:\n%s", strings.Join(rows, "\n"))
 	}
-	if tipRow > 8 {
+	// Below the banner's 9-row kiln art and one blank row.
+	if tipRow > 11 {
 		t.Errorf("banner tip row at %d, want it near the top of the screen", tipRow)
 	}
 
