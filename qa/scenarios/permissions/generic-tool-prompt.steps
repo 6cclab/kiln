@@ -11,7 +11,7 @@ TYPE start the dev server in the background
 KEY enter
 WAITFOR /approval needed/ 20
 SHOT generic-prompt
-EXPECT /Allow kiln to use bash_background\?/
+EXPECT /Allow kiln to use bash background\?/
 EXPECT /npm run dev/
 EXPECT /Yes/
 EXPECT /Yes, and don.t ask again for this/

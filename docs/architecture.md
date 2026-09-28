@@ -365,8 +365,9 @@ checks deny rules first (absolute, never overridable), then
 then falls through to mode defaults: `plan` allows only `settings.ReadOnly`
 tools and denies everything else outright, never asking; `acceptEdits`
 allows `edit`/`write`/read-only tools and asks for the rest; `dontAsk`
-allows everything; `auto` is a blanket allow still subject to deny rules and
-the workspace boundary.
+answers like `manual`, and the gate then denies whatever `manual` would have
+asked about; `auto` is a blanket allow still subject to deny rules and the
+workspace boundary.
 
 **Rule syntax** (`MatchesRule`): a bare rule is an exact tool-name match
 (`mcp__`-prefixed rules match by prefix); a parenthesized rule

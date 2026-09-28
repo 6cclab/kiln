@@ -323,7 +323,7 @@ steps:
 	addr, srv := startFaux(t, script)
 	env := baseEnv(home, sessDir, addr)
 	env["HARNESS_MODEL"] = "faux/faux-2"
-	res := runHarness(t, proj, env, "-p", "run the command", "--output-format", "json", "--permission-mode", "dontAsk")
+	res := runHarness(t, proj, env, "-p", "run the command", "--output-format", "json", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("run: exit %d, stderr=%s", res.Code, res.Stderr)
 	}

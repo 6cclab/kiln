@@ -2,51 +2,74 @@ package tui
 
 import "strings"
 
-// shortcutColumns are the `?` panel's three columns, in Claude Code's order
-// (docs/claude-code-reference.md §6, shortcuts.txt). Only entries the
-// harness implements are listed; dead entries are omitted.
-var shortcutColumns = [3][]string{
+// shortcut is one `?` panel entry: the key, drawn amber like the banner's
+// shortcut row, and what it does, dim.
+type shortcut struct{ key, does string }
+
+// shortcutColumns are the `?` panel's columns: input prefixes on the left,
+// keys on the right. Only what kiln implements is listed (keys.go and
+// inputmodes.go).
+var shortcutColumns = [2][]shortcut{
 	{
-		"! for shell mode",
-		"/ for commands",
-		"@ for file paths",
+		{"!", "run a shell command"},
+		{"/", "commands"},
+		{"@", "add files"},
+		{"#", "save a memory note"},
+		{"shift+⏎", "new line"},
 	},
 	{
-		"double tap esc to clear input",
-		"shift + tab to auto-accept edits",
-		"ctrl + o for verbose output",
-		"shift + ⏎ for newline",
+		{"⇧⇥", "cycle permission mode"},
+		{"esc esc", "rewind the conversation"},
+		{"ctrl+o", "verbose transcript"},
+		{"ctrl+f", "fullscreen or inline"},
+		{"ctrl+c ×2", "exit"},
 	},
-	{},
 }
 
-// shortcutColumnStarts are the columns each list starts at in shortcuts.txt
-// (2, 26, 61).
-var shortcutColumnStarts = [3]int{2, 26, 61}
+// shortcutGap separates the two columns.
+const shortcutGap = 4
 
 // RenderShortcuts renders the shortcuts panel shown under the mode line
-// while `?` is active, one row per line of the tallest column, each column
-// starting at its reference offset. Rows are fitted to width.
+// while `?` is active: two columns, each a key column padded to its widest
+// key and a description. Widths are counted in cells, so a multi-byte glyph
+// (⇧, ⏎) does not push its row out of line. Rows are fitted to width.
 func RenderShortcuts(width int) []string {
-	rows := 0
-	for _, col := range shortcutColumns {
-		if len(col) > rows {
-			rows = len(col)
+	keyWidth := func(col []shortcut) int {
+		w := 0
+		for _, s := range col {
+			w = max(w, VisibleWidth(s.key))
 		}
+		return w
+	}
+	cellWidth := func(col []shortcut, kw int) int {
+		w := 0
+		for _, s := range col {
+			w = max(w, kw+2+VisibleWidth(s.does))
+		}
+		return w
+	}
+	rows := max(len(shortcutColumns[0]), len(shortcutColumns[1]))
+	kw0, kw1 := keyWidth(shortcutColumns[0]), keyWidth(shortcutColumns[1])
+	leftWidth := cellWidth(shortcutColumns[0], kw0)
+
+	cell := func(s shortcut, kw int) string {
+		return KilnAmber(s.key) + strings.Repeat(" ", kw-VisibleWidth(s.key)+2) + Muted(s.does)
 	}
 	out := make([]string, 0, rows)
 	for i := 0; i < rows; i++ {
 		var b strings.Builder
-		for c, col := range shortcutColumns {
-			if i >= len(col) {
-				continue
-			}
-			for b.Len() < shortcutColumnStarts[c] {
-				b.WriteByte(' ')
-			}
-			b.WriteString(col[i])
+		b.WriteString("  ")
+		used := 0
+		if i < len(shortcutColumns[0]) {
+			s := shortcutColumns[0][i]
+			b.WriteString(cell(s, kw0))
+			used = kw0 + 2 + VisibleWidth(s.does)
 		}
-		out = append(out, FitStatus(Muted(b.String()), width))
+		if i < len(shortcutColumns[1]) {
+			b.WriteString(strings.Repeat(" ", leftWidth-used+shortcutGap))
+			b.WriteString(cell(shortcutColumns[1][i], kw1))
+		}
+		out = append(out, FitStatus(b.String(), width))
 	}
 	return out
 }

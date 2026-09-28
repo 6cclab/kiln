@@ -473,7 +473,7 @@ func TestRun_PreToolUseHook_Rewrites(t *testing.T) {
 	args.Print = true
 	args.PrintPrompt = "run a command"
 	args.OutputFormat = "text"
-	args.PermissionMode = "dontAsk"
+	args.PermissionMode = "bypassPermissions"
 
 	var stdout, stderr bytes.Buffer
 	_ = Run(context.Background(), args, &stdout, &stderr, strings.NewReader(""))

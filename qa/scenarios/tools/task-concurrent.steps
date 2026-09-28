@@ -16,20 +16,21 @@
 @faux testdata/faux/qa/tools-task-concurrent.yaml
 @fixture testdata/behaviour/qa/model-roles-fast-heavy
 @args --permission-mode acceptEdits
+@env HARNESS_FAUX_EXTRA_MODELS=faux-3
 
 WAITFOR /describe a task/ 20
 TYPE scout the upload path with three subagents
 KEY enter
-WAITFOR /subagents running in parallel/ 20
+WAITFOR /subagents? running/ 20
 SHOT three-live
-EXPECT /3 subagents running in parallel/
+EXPECT /3 subagents? running/
 EXPECT /check the auth middleware/
 EXPECT /check the upload route/
 EXPECT /check the redis mock/
 EXPECT /gen-1/
 EXPECT /gen-2/
 EXPECT /gen-3/
-WAITFOR /3 subagents finished/ 20
+WAITFOR /3 subagents? finished/ 20
 SHOT three-done
 EXPECT /All three scouted/
 EXPECT_NOT /panic|goroutine/

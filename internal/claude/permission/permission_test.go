@@ -359,3 +359,46 @@ func TestGrantRuleUsesClaudeCodeSyntax(t *testing.T) {
 		}
 	}
 }
+
+// TestDontAskDeniesWhatWouldPrompt: Claude Code's dontAsk mode never
+// prompts. What runs without asking in manual mode still runs, allow rules
+// still apply, and everything that would have prompted is refused. kiln
+// once treated dontAsk as a blanket allow.
+func TestDontAskDeniesWhatWouldPrompt(t *testing.T) {
+	ctx := context.Background()
+	root := work(t)
+	g := NewGate(GateOptions{
+		Mode:        settings.ModeDontAsk,
+		Roots:       []string{root},
+		Permissions: settings.Permissions{Allow: []string{"Bash(npm test)"}, Ask: []string{"Bash(git push:*)"}},
+	})
+	prompted := false
+	g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) {
+		prompted = true
+		return PromptChoice{Kind: PromptAllow}, nil
+	})
+	cases := []struct {
+		name    string
+		req     Request
+		allowed bool
+	}{
+		{"read-only tool runs", Request{ToolName: "read", PrimaryArg: filepath.Join(root, "a.go"), Args: map[string]any{"path": filepath.Join(root, "a.go")}}, true},
+		{"read-only bash runs", Request{ToolName: "bash", PrimaryArg: "ls", Args: map[string]any{"command": "ls"}}, true},
+		{"allow rule runs", Request{ToolName: "bash", PrimaryArg: "npm test", Args: map[string]any{"command": "npm test"}}, true},
+		{"other bash is refused", Request{ToolName: "bash", PrimaryArg: "rm -rf build", Args: map[string]any{"command": "rm -rf build"}}, false},
+		{"an edit is refused", Request{ToolName: "edit", PrimaryArg: filepath.Join(root, "a.go"), Args: map[string]any{"path": filepath.Join(root, "a.go")}}, false},
+		{"an ask rule is refused, not asked", Request{ToolName: "bash", PrimaryArg: "git push origin", Args: map[string]any{"command": "git push origin"}}, false},
+	}
+	for _, c := range cases {
+		blocked, err := g.Check(ctx, c.req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (blocked == nil) != c.allowed {
+			t.Errorf("%s: blocked=%v, want allowed=%v", c.name, blocked, c.allowed)
+		}
+	}
+	if prompted {
+		t.Error("dontAsk mode prompted")
+	}
+}

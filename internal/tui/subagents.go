@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // maxSubagentRows caps how many dispatch rows the panel draws before
@@ -79,6 +80,18 @@ type SubagentPanelState struct {
 	// out of the live region; Apply clears it, so a new subagent event
 	// makes the panel live again with its (now updated) full state.
 	frozen bool
+}
+
+// Has reports whether the panel has a row for the dispatch with this tool
+// call id.
+func (p *SubagentPanelState) Has(id string) bool {
+	if p == nil || id == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.rows[id]
+	return ok
 }
 
 // NewSubagentPanelState returns an empty panel.
@@ -275,9 +288,12 @@ func (p *SubagentPanelState) renderLocked(width int) []string {
 	p.assignDisplayNamesLocked()
 	live, done := p.countsLocked()
 	total := live + done
-	header := fmt.Sprintf("%d subagents running in parallel", total)
-	if live == 0 {
-		header = fmt.Sprintf("%d subagents finished", total)
+	header := plural.Count(total, "subagent") + " running in parallel"
+	switch {
+	case total == 1 && live == 1:
+		header = "1 subagent running"
+	case live == 0:
+		header = plural.Count(total, "subagent") + " finished"
 	}
 	lines := []string{
 		labelRule("subagents", Muted, fmt.Sprintf("%d/%d done", done, total), width),

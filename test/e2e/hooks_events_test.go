@@ -55,7 +55,7 @@ func TestHooks_SubagentStop_FiresPerSubagent(t *testing.T) {
 	writeHookSettings(t, proj, "SubagentStop", "", fmt.Sprintf("HARNESS_TEST_PAYLOAD_FILE=%s %s", stopFile, hook))
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
-		"-p", "look something up for me", "--output-format", "text", "--permission-mode", "dontAsk")
+		"-p", "look something up for me", "--output-format", "text", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}

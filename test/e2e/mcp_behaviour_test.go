@@ -319,7 +319,7 @@ func TestMCP_FailureReportedOnce(t *testing.T) {
 	res := runHarness(t, proj, env,
 		"-p", "run two commands then report",
 		"--output-format", "text",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 		"--strict-mcp-config", "--mcp-config", cfg,
 	)
 	if res.Code != 0 {
@@ -369,7 +369,7 @@ func TestMCP_PostureIndexSizing(t *testing.T) {
 		proj := scratchProject(t)
 		env := baseEnv(home, sessDir, addr)
 		env["HARNESS_MODEL"] = model
-		res := runHarness(t, proj, env, "-p", "hello", "--output-format", "text", "--permission-mode", "dontAsk",
+		res := runHarness(t, proj, env, "-p", "hello", "--output-format", "text", "--permission-mode", "bypassPermissions",
 			"--strict-mcp-config", "--mcp-config", cfg)
 		if res.Code != 0 {
 			t.Fatalf("model %s: exit code %d, stderr=%s", model, res.Code, res.Stderr)
@@ -476,7 +476,7 @@ func TestMCP_ToolSearchThenCall(t *testing.T) {
 	res := runHarness(t, proj, env,
 		"-p", "search for an echo tool and use it",
 		"--output-format", "text",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 		"--strict-mcp-config", "--mcp-config", cfg,
 	)
 	if res.Code != 0 {
@@ -585,7 +585,7 @@ func TestMCP_PreToolUseRewriteReachesFixture(t *testing.T) {
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "echo the original value",
 		"--output-format", "text",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 		"--strict-mcp-config", "--mcp-config", cfg,
 	)
 	if res.Code != 0 {

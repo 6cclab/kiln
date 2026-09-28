@@ -10,6 +10,7 @@ package faux
 import (
 	"context"
 	"os"
+	"strings"
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
@@ -81,7 +82,18 @@ func New() (*Provider, bool) {
 		},
 	}
 
-	return &Provider{models: []provider.Model{model, model2}}, true
+	models := []provider.Model{model, model2}
+	// HARNESS_FAUX_EXTRA_MODELS ("faux-3,faux-4") adds more faux-1-shaped
+	// models, for scripts that give each of several concurrent subagents
+	// its own queue. Opt-in, so the default model list stays two long.
+	for _, id := range strings.Split(os.Getenv("HARNESS_FAUX_EXTRA_MODELS"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			extra := model
+			extra.ID, extra.Name = id, id
+			models = append(models, extra)
+		}
+	}
+	return &Provider{models: models}, true
 }
 
 // Provider is the faux provider.Provider implementation.

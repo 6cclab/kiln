@@ -8,10 +8,10 @@
 WAITFOR /describe a task/ 20
 TYPE !echo hi
 KEY enter
-WAITFOR /! echo hi/ 20
+WAITFOR /shell ─/ 20
 SHOT bang-echo
-EXPECT /! echo hi/
-EXPECT /hi/
+EXPECT /shell ─+\s+→ hi/
+EXPECT_NOT /! echo hi/
 EXPECT_NOT /Hello from faux/
 TYPE #remember to run tests
 KEY enter

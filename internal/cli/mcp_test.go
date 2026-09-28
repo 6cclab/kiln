@@ -175,7 +175,7 @@ steps:
 	args.Print = true
 	args.PrintPrompt = "look up echo and use it"
 	args.OutputFormat = "stream-json"
-	args.PermissionMode = "dontAsk"
+	args.PermissionMode = "bypassPermissions"
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), args, &stdout, &stderr, strings.NewReader(""))

@@ -102,7 +102,7 @@ func designProject(t *testing.T) string {
 // test -- upload` call — but every non-read-only tool call asks for
 // approval under --permission-mode manual (settings.Decide's ModeManual
 // case), and no single global mode allows task/write/edit while still
-// asking for bash (dontAsk/bypassPermissions/auto allow bash too;
+// asking for bash (bypassPermissions/auto allow bash too;
 // acceptEdits still asks for task). settings.Permissions.Allow rules are
 // checked before the mode switch (settings.Decide), so naming task/write/
 // edit here — while the session still runs in manual mode — reproduces

@@ -414,7 +414,15 @@ func SessionCommands(deps SessionCommandDeps) Source {
 					if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || !strings.HasPrefix(e.Name(), leaf) {
 						continue
 					}
-					out = append(out, Completion{Value: filepath.Join(root, e.Name()), Label: e.Name(), Description: root})
+					// The per-row fact worth showing: whether the directory is
+					// already inside the workspace (every row repeating the
+					// parent path said nothing).
+					dir := filepath.Join(root, e.Name())
+					desc := ""
+					if deps.Gate != nil && withinAny(dir, deps.Gate.Roots()) {
+						desc = "already in the workspace"
+					}
+					out = append(out, Completion{Value: dir, Label: e.Name() + "/", Description: desc})
 					if len(out) >= 50 {
 						break
 					}
@@ -528,4 +536,14 @@ func resolveSessionID(deps SessionCommandDeps, prefix string) (id, problem strin
 // show; commands taking an id accept any unique prefix of it.
 func shortID(id string) string {
 	return id[:min(8, len(id))]
+}
+
+// withinAny reports whether dir is one of roots or below one of them.
+func withinAny(dir string, roots []string) bool {
+	for _, r := range roots {
+		if rel, err := filepath.Rel(r, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+			return true
+		}
+	}
+	return false
 }

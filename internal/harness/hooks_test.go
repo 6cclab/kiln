@@ -186,7 +186,7 @@ steps:
 		t.Fatalf("toolResult.IsError = false, want true")
 	}
 	got := msg.TextOf(tr.Content)
-	want := `unknown tool "frobnicate"`
+	want := `There is no tool named frobnicate, so the call did not run.`
 	if got != want {
 		t.Fatalf("toolResult content = %q, want %q", got, want)
 	}

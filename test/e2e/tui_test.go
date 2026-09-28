@@ -1378,8 +1378,13 @@ func TestTUI_BangCommand(t *testing.T) {
 
 	s.Send("!echo hi")
 	s.SendKey("enter")
-	if err := s.WaitFor("hi", 3*time.Second); err != nil {
+	// The output lands in its own "shell" block, without repeating the
+	// command the "you" block already shows.
+	if err := s.WaitFor(regexp.MustCompile(`shell ─+\s+→ hi`), 3*time.Second); err != nil {
 		t.Fatal(err)
+	}
+	if screen := strings.Join(s.Rows(), "\n"); strings.Count(screen, "echo hi") != 1 {
+		t.Errorf("the command should appear once (in the you block):\n%s", screen)
 	}
 	if got := len(requests()); got != 0 {
 		t.Errorf("!echo hi sent %d requests to faux, want 0 (a bang command never reaches the model)", got)
@@ -1524,7 +1529,7 @@ func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
 	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 

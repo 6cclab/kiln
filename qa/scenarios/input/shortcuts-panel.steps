@@ -7,14 +7,12 @@
 WAITFOR /describe a task/ 20
 TYPE ?
 SHOT shortcuts-panel
-EXPECT /! for shell mode/
-EXPECT /\/ for commands/
-EXPECT /@ for file paths/
-EXPECT /double tap esc to clear input/
-EXPECT /shift \+ tab to auto-accept edits/
-EXPECT /ctrl \+ o for verbose output/
-EXPECT /shift \+ . for newline/
+EXPECT /!\s+run a shell command\s+⇧⇥\s+cycle permission mode/
+EXPECT /\/\s+commands\s+esc esc\s+rewind the conversation/
+EXPECT /@\s+add files\s+ctrl\+o\s+verbose transcript/
+EXPECT /#\s+save a memory note\s+ctrl\+f\s+fullscreen or inline/
+EXPECT /shift\+⏎\s+new line\s+ctrl\+c ×2\s+exit/
 KEY a
 SHOT shortcuts-dismissed
-EXPECT_NOT /for shell mode/
+EXPECT_NOT /run a shell command/
 EXPECT_NOT /panic|goroutine/

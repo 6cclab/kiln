@@ -3,6 +3,7 @@ package faux
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,5 +65,21 @@ steps:
 	}
 	if msg.TextOf(final.Content) != "hello from faux" {
 		t.Fatalf("text = %q", msg.TextOf(final.Content))
+	}
+}
+
+func TestNewAddsExtraModels(t *testing.T) {
+	t.Setenv("HARNESS_FAUX_ADDR", "127.0.0.1:1")
+	t.Setenv("HARNESS_FAUX_EXTRA_MODELS", "faux-3, faux-4")
+	p, ok := New()
+	if !ok {
+		t.Fatal("faux not configured")
+	}
+	var ids []string
+	for _, m := range p.Models() {
+		ids = append(ids, m.ID)
+	}
+	if got := strings.Join(ids, " "); got != "faux-1 faux-2 faux-3 faux-4" {
+		t.Errorf("models = %s", got)
 	}
 }

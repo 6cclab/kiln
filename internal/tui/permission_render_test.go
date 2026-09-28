@@ -199,7 +199,7 @@ func TestRenderEditPermissionPrompt_MatchesReference(t *testing.T) {
 		strings.Repeat("\u254c", 100),
 		" 1  Yes",
 		" 2  Yes, and switch to accept edits (auto-approve file edits and common file commands) for this",
-		"      session (shift+tab)",
+		"    session (shift+tab)",
 		" 3  No",
 		"",
 		" \u2191\u2193 select \u00b7 enter confirm \u00b7 esc decline \u00b7 tab to amend",

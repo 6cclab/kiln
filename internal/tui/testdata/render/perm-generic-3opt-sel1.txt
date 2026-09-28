@@ -1,13 +1,13 @@
 
 approval needed ────────────────────────────────────────────────────────────────
 ────────────────────────────────────────────────────────────────────────────────
+ Allow kiln to use grep?
 
-  Allow kiln to use grep?
-  $ TODO                                                                      
+ $ TODO                                                                        
 
-  1  Yes
-  2  Yes, and don't ask again for this                                          
-  3  No, and tell kiln what to do instead
+ 1  Yes
+ 2  Yes, and don't ask again for this                                           
+ 3  No, and tell kiln what to do instead
 
-  ↑↓ select · enter confirm · esc decline
+ ↑↓ select · enter confirm · esc decline
 ────────────────────────────────────────────────────────────────────────────────

@@ -56,35 +56,47 @@ const (
 )
 
 // RunBang runs command in env directly — the user's own shell, not a tool
-// call — and returns the transcript lines to commit. The output is never
-// sent to the model: if the user wants the model to see it, they reference
-// it in their next message.
-func RunBang(ctx context.Context, command string, env *execenv.Env) []string {
+// call — and returns the transcript lines to commit: a "shell" block, its
+// label rule carrying the exit status when it failed, then the output the
+// way a tool block shows a result. The command itself is not repeated:
+// the "you" block above already shows it. The output is never sent to the
+// model: if the user wants the model to see it, they reference it in
+// their next message.
+func RunBang(ctx context.Context, command string, env *execenv.Env, width int) []string {
+	block := func(meta string, colour func(string) string, body []string) []string {
+		out := []string{"", labelRule("shell", Muted, meta, width)}
+		for i, l := range body {
+			prefix := continuationIndent
+			if i == 0 {
+				prefix = Muted("→") + " "
+			}
+			out = append(out, prefix+colour(l))
+		}
+		return out
+	}
 	if env == nil {
-		return []string{Red("! " + command), Red("  no shell available")}
+		return block("", KilnRed, []string{"no shell available"})
 	}
 	result, err := env.Exec(ctx, command, execenv.ExecOptions{
 		Capture: execenv.CaptureLimits{MaxBytes: bangCaptureMaxBytes, MaxLines: bangCaptureMaxLines},
 	})
 	if err != nil {
-		return []string{Red("! " + command), Red("  " + err.Error())}
+		return block("", KilnRed, []string{err.Error()})
 	}
 
-	lines := []string{Dim("!") + " " + command}
 	body := strings.TrimRight(result.Text, "\n")
+	var lines []string
 	if body != "" {
-		for _, l := range strings.Split(body, "\n") {
-			lines = append(lines, "  "+l)
-		}
+		lines = strings.Split(body, "\n")
 	} else {
 		// A silent success is ambiguous — say so rather than leaving a
 		// bare prompt.
-		lines = append(lines, Dim("  (no output)"))
+		lines = []string{Muted("(no output)")}
 	}
 	if result.ExitCode != 0 {
-		lines = append(lines, Red("  exit "+strconv.Itoa(result.ExitCode)))
+		return block("exit "+strconv.Itoa(result.ExitCode), func(s string) string { return s }, lines)
 	}
-	return lines
+	return block("", func(s string) string { return s }, lines)
 }
 
 // AddMemory appends note to project or user memory (memory.AddMemory picks

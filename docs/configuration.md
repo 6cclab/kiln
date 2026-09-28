@@ -275,7 +275,7 @@ Order: deny rules first (absolute — deny wins even under `bypassPermissions`) 
 |---|---|
 | `plan` | allow if the tool is read-only; otherwise **deny outright**, not ask |
 | `acceptEdits` | allow if `edit`, `write`, or read-only; otherwise ask |
-| `dontAsk` | allow everything |
+| `dontAsk` | allow if read-only or matched by an allow rule; otherwise **deny**, never ask (Claude Code's meaning: for CI and locked-down runs) |
 | `auto` | allow everything (still subject to deny rules and the outside-workspace check) |
 | `manual` | allow if read-only; otherwise ask |
 | (unrecognized) | ask |

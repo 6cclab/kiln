@@ -340,10 +340,11 @@ func TestPopup_RenderClampsToMaxRows(t *testing.T) {
 	}
 }
 
-// TestPopup_RenderMatchesReferenceColumns pins the slash layout to the
-// kiln design handoff's palette: two-space indent, command padded to 10
-// columns (%-10s; a longer command overflows by one space), then the
-// description on the same row, truncated (not wrapped) to fit.
+// TestPopup_RenderMatchesReferenceColumns pins the slash layout: two-space
+// indent, the command column at least the design's 10 columns (%-10s) and
+// widened to the longest command in the list so every description starts
+// at one column, then the description on the same row, truncated (not
+// wrapped) to fit.
 func TestPopup_RenderMatchesReferenceColumns(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
@@ -353,7 +354,7 @@ func TestPopup_RenderMatchesReferenceColumns(t *testing.T) {
 	}}
 	got := p.Render(100, 5)
 	want := []string{
-		"  /model    Set the AI model for Claude Code (currently Opus 5 (1M context))",
+		"  /model      Set the AI model for Claude Code (currently Opus 5 (1M context))",
 		"  /track-work Track work as epics and stories in the self-hosted Task Tracker.",
 	}
 	if len(got) != len(want) {
@@ -414,7 +415,7 @@ func TestPopup_ClippedListCountsHiddenItems(t *testing.T) {
 // in "…" rather than stopping mid-word.
 func TestSlashItemMarksTruncatedDescription(t *testing.T) {
 	item := AutocompleteItem{Value: "review", Description: "Uses Chrome DevTools MCP for accessibility debugging and auditing based on the page"}
-	rows := renderSlashCommandItem(item, false, 40, func(s string) string { return s }, func(s string) string { return s })
+	rows := renderSlashCommandItem(item, false, 40, slashCommandColumn, func(s string) string { return s }, func(s string) string { return s })
 	if got := stripANSI(rows[0]); !strings.HasSuffix(got, "…") || VisibleWidth(got) > 40 {
 		t.Errorf("row = %q (width %d), want it cut to 40 columns ending in …", got, VisibleWidth(got))
 	}

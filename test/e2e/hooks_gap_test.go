@@ -91,7 +91,7 @@ func TestHooks_PostToolUse_ReceivesResultAndCanAddContext(t *testing.T) {
 	)
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
-		"-p", "read the file", "--output-format", "text", "--permission-mode", "dontAsk")
+		"-p", "read the file", "--output-format", "text", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}
@@ -254,7 +254,7 @@ func TestHooks_SubagentStop_PerDepth(t *testing.T) {
 		fmt.Sprintf("HARNESS_TEST_PAYLOAD_FILE=%s %s", payloadFile, hookScript(t, "gap-record-payload-append.sh")))
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
-		"-p", "dispatch two levels deep", "--output-format", "text", "--permission-mode", "dontAsk")
+		"-p", "dispatch two levels deep", "--output-format", "text", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}

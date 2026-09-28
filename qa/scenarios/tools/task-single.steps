@@ -7,7 +7,7 @@
 WAITFOR /describe a task/ 20
 TYPE survey the redis mock with a subagent
 KEY enter
-WAITFOR /subagents running in parallel|subagents finished/ 20
+WAITFOR /subagents? running|subagents? finished/ 20
 SHOT subagent-live
 EXPECT /subagents/
 # A single dispatch of a type keeps that type's plain short name
@@ -18,5 +18,5 @@ EXPECT /subagents/
 EXPECT /general/
 WAITFOR /Confirmed: the mock is missing/ 20
 SHOT subagent-done
-EXPECT /1 subagents finished/
+EXPECT /1 subagents? finished/
 EXPECT_NOT /panic|goroutine/

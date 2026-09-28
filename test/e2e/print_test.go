@@ -374,7 +374,7 @@ func TestPrint_ResultCarriesUsageAndTurns(t *testing.T) {
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "look around then report",
 		"--output-format", "json",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -457,7 +457,7 @@ func TestPrint_MaxTurns_StopsRun(t *testing.T) {
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "run several commands",
 		"--output-format", "json",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 		"--max-turns", "2",
 	)
 	if res.Code != 1 {

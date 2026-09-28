@@ -178,6 +178,10 @@ type ToolCallView struct {
 // design's "edit" diff block, and a failed or refused one must read as the
 // same tool.
 func MapToolName(id string) string {
+	if strings.EqualFold(id, "exit_plan_mode") {
+		// The call that presents a plan; its block records the verdict.
+		return "Plan"
+	}
 	return titleCase(id)
 }
 
@@ -275,8 +279,24 @@ func diffCountsRow(d *ToolDiff) string {
 // shows it all). Everything else is unchanged. The live and replay block
 // builders both call this, so a toggle renders the same block.
 func collapsedSummary(toolName string, summary []string, failed, verbose bool) []string {
-	if !verbose && !failed && strings.EqualFold(toolName, "skill") && len(summary) > 0 {
+	if verbose || failed || len(summary) == 0 {
+		return summary
+	}
+	switch strings.ToLower(toolName) {
+	case "skill":
 		return []string{fmt.Sprintf("loaded · %d lines", len(summary))}
+	case "bash_background":
+		// The result tells the model how to read the output
+		// (bash_output({id: …})); the person gets where to look instead.
+		if id, _, ok := strings.Cut(strings.TrimPrefix(summary[0], "Started "), ":"); ok && strings.HasPrefix(summary[0], "Started ") {
+			return []string{"running in the background as " + id + " · /bashes to check on it"}
+		}
+	case "exit_plan_mode":
+		// The verdict, not the instructions that follow it for the model
+		// ("You may now make changes. Permission mode is …").
+		if first, _, ok := strings.Cut(summary[0], ". "); ok {
+			return []string{first + "."}
+		}
 	}
 	return summary
 }

@@ -211,7 +211,8 @@ kiln --strict-mcp-config --mcp-config ./project-mcp.json
 
 Modes (`internal/claude/settings/settings.go`): `manual` (default,
 read-only free else ask), `acceptEdits` (edit/write + read-only free else
-ask), `auto`/`dontAsk` (blanket allow), `bypassPermissions` (allow
+ask), `auto` (blanket allow), `dontAsk` (read-only free, allow rules
+apply, everything else denied without asking), `bypassPermissions` (allow
 everything else), `plan` (read-only allowed, everything else denied
 outright, no prompt). An explicit `deny` rule wins over every mode,
 `bypassPermissions` included — see Precedence below.

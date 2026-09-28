@@ -82,19 +82,19 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 		"",
 		labelRule("approval needed", KilnAmber, "", width),
 		amberRule,
-		"",
-		"  " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to use %s?", promptToolName(req.ToolName)))),
+		" " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to use %s?", promptToolName(req.ToolName)))),
 	}
 	if req.PrimaryArg != "" {
-		for _, row := range raisedCommandRows(SummarizeArg(req, cwd), maxInt(width-4, 1)) {
-			lines = append(lines, "  "+row)
+		lines = append(lines, "")
+		for _, row := range raisedCommandRows(SummarizeArg(req, cwd), maxInt(width-2, 1)) {
+			lines = append(lines, " "+row)
 		}
 	}
 
 	// The reason for the prompt changes what the answer should be, so say
 	// it.
 	if req.OutsideWorkspace {
-		lines = append(lines, "  "+Muted("outside the workspace"))
+		lines = append(lines, " "+Muted("outside the workspace"))
 	}
 
 	// Show the actual change for edits and writes. A path alone says
@@ -107,23 +107,23 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 
 	if feedbackMode {
 		lines = append(lines,
-			"  "+Muted("What should be done instead?"),
-			fmt.Sprintf("  %s %s%s", KilnAmber(">"), feedback, Faint("▌")),
-			"  "+Muted("enter to send · esc to decline without a reason"),
+			" "+Muted("What should be done instead?"),
+			fmt.Sprintf(" %s %s%s", KilnAmber(">"), feedback, Faint("▌")),
+			" "+Muted("enter to send · esc to decline without a reason"),
 			amberRule,
 		)
-		return FitLines(lines, width, "    ")
+		return FitLines(lines, width, "   ")
 	}
 
 	lines = append(lines,
-		"  "+permissionOptionRow("1", "Yes", selected == 0, maxInt(width-2, 1)),
-		"  "+permissionOptionRow("2", "Yes, and don't ask again for this", selected == 1, maxInt(width-2, 1)),
-		"  "+permissionOptionRow("3", "No, and tell kiln what to do instead", selected == 2, maxInt(width-2, 1)),
+		" "+permissionOptionRow("1", "Yes", selected == 0, maxInt(width-1, 1)),
+		" "+permissionOptionRow("2", "Yes, and don't ask again for this", selected == 1, maxInt(width-1, 1)),
+		" "+permissionOptionRow("3", "No, and tell kiln what to do instead", selected == 2, maxInt(width-1, 1)),
 		"",
-		"  "+Muted("↑↓ select · enter confirm · esc decline"),
+		" "+Muted("↑↓ select · enter confirm · esc decline"),
 		amberRule,
 	)
-	return FitLines(lines, width, "    ")
+	return FitLines(lines, width, "   ")
 }
 
 // permissionOptionRow renders one numbered permission option per kiln's
@@ -389,7 +389,7 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 
 	opts := []string{
 		"Yes",
-		"Yes, and switch to accept edits (auto-approve file edits and common file commands) for this\n      session (shift+tab)",
+		"Yes, and switch to accept edits (auto-approve file edits and common file commands) for this\n    session (shift+tab)",
 		"No",
 	}
 	for i, opt := range opts {
@@ -788,7 +788,7 @@ func raisedCommand(cmd string, width int) string {
 func promptToolName(name string) string {
 	rest, ok := strings.CutPrefix(name, "mcp__")
 	if !ok {
-		return name
+		return strings.ReplaceAll(name, "_", " ")
 	}
 	server, tool, ok := strings.Cut(rest, "__")
 	if !ok || server == "" || tool == "" {

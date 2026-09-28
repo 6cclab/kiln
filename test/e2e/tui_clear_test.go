@@ -20,7 +20,7 @@ steps:
   - text: "Second reply."
 `
 	proj, home, sessDir, addr, requests := tuiFixture(t, script)
-	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--fullscreen", "--permission-mode", "dontAsk")
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--fullscreen", "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 	s.Send("remember the word pelican")
 	s.SendKey("enter")

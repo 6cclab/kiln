@@ -351,7 +351,17 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 		}
 		return Ask
 	case ModeDontAsk:
-		return Allow
+		// Claude Code's dontAsk (docs: permission-modes, "Allow only
+		// pre-approved tools with dontAsk mode"): what runs without asking
+		// in manual mode still runs, allow rules still apply (above), and
+		// everything that would prompt is denied instead. Decide reports
+		// that as Ask, as manual does; the gate turns it into a denial,
+		// after its own read-only bash check, so the two modes cannot
+		// drift apart on what "would prompt" means.
+		if ReadOnly[toolName] {
+			return Allow
+		}
+		return Ask
 	case ModeAuto:
 		// Blanket allow, still subject to deny rules above and to the
 		// workspace boundary enforced separately by the gate.

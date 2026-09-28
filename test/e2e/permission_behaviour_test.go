@@ -125,8 +125,9 @@ func TestPermission_ModesAgainstEditAndBash(t *testing.T) {
 		{mode: "acceptEdits", wantEditBlocked: false, wantBashBlocked: true, blockReasonHas: "requires confirmation"},
 		// auto: blanket allow (still subject to deny rules, none set here).
 		{mode: "auto", wantEditBlocked: false, wantBashBlocked: false},
-		// dontAsk: blanket allow.
-		{mode: "dontAsk", wantEditBlocked: false, wantBashBlocked: false},
+		// dontAsk (Claude Code's meaning): nothing prompts; what would have
+		// prompted is refused. Edit and a non-read-only bash both would.
+		{mode: "dontAsk", wantEditBlocked: true, wantBashBlocked: true, blockReasonHas: "don't-ask mode refuses"},
 		// bypassPermissions: allow (only an explicit deny rule would stop it).
 		{mode: "bypassPermissions", wantEditBlocked: false, wantBashBlocked: false},
 		// plan: read-only tools allowed, everything else refused outright
@@ -356,9 +357,9 @@ func TestPermission_AllowAlwaysWithinSessionNotAcross(t *testing.T) {
 // otherwise auto-allow (auto's blanket allow).
 //
 // Proved able to fail: swapping the deny-beats-allow case's mode from
-// "dontAsk" (blanket allow) to a mode where bash would already be
-// blocked made the assertion pass vacuously; using dontAsk (which by
-// itself allows everything) is what actually exercises deny > mode.
+// "auto" (blanket allow) to a mode where bash would already be blocked
+// made the assertion pass vacuously; using auto (which by itself allows
+// everything) is what actually exercises deny > mode.
 func TestPermission_RulePrecedence(t *testing.T) {
 	const bashOnlyScript = `model: faux-1
 steps:
@@ -374,7 +375,7 @@ steps:
 		permWriteRules(t, proj, []string{"Bash"}, []string{"Bash"}, nil)
 
 		run := runHarness(t, proj, baseEnv(home, sessDir, addr),
-			"-p", "run a command", "--output-format", "json", "--permission-mode", "dontAsk")
+			"-p", "run a command", "--output-format", "json", "--permission-mode", "auto")
 		if run.Code != 0 {
 			t.Fatalf("exit code %d, stderr=%s", run.Code, run.Stderr)
 		}
@@ -385,7 +386,7 @@ steps:
 			t.Fatalf("parse json: %v\n%s", err, run.Stdout)
 		}
 		if !permBlockedFor(res.Blocked, "bash(") {
-			t.Errorf("blocked=%v, want bash blocked (deny beats allow, and dontAsk alone would have allowed it)", res.Blocked)
+			t.Errorf("blocked=%v, want bash blocked (deny beats allow, and auto alone would have allowed it)", res.Blocked)
 		}
 	})
 

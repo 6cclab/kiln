@@ -58,7 +58,7 @@ steps:
 	proj, home, sessDir, addr, requests := tuiFixture(t, script)
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 
@@ -129,7 +129,7 @@ steps:
   - text: "Got both follow-ups."
 `
 	proj, home, sessDir, addr, requests := tuiFixture(t, script)
-	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 
 	s.Send("first")
@@ -178,7 +178,7 @@ steps:
       - text: "Made done.txt."
 `
 	proj, home, sessDir, addr, requests := tuiFixture(t, script)
-	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 
 	s.Send("first")

@@ -152,7 +152,9 @@ func modeLabel(mode string) (label string, colour func(string) string) {
 	case "auto":
 		return "auto mode", KilnGreen
 	case "bypassPermissions":
-		return "bypass permissions", KilnGreen
+		// Red: every call runs unchecked, and the mode line is where that
+		// has to be impossible to miss.
+		return "bypass permissions", KilnRed
 	case "dontAsk":
 		return "don't ask", KilnGreen
 	case "plan":

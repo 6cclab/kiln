@@ -62,8 +62,8 @@ const (
 	OutcomeApproved Outcome = "approved"
 	// OutcomeAuto means the call proceeded without asking: an existing
 	// session "always allow" grant, a permission-rules allow, or a mode
-	// that skips prompting (bypassPermissions, dontAsk, auto, acceptEdits
-	// for edit/write).
+	// that skips prompting (bypassPermissions, auto, acceptEdits for
+	// edit/write).
 	OutcomeAuto Outcome = "auto-approved"
 	// OutcomeDeclined means the call reached a human prompt and was
 	// answered No. The interface has already reported the refusal (with
@@ -454,7 +454,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// or "git log" was pure friction. Rules still win: Decide has already
 	// returned Deny or an explicit Ask for anything a rule names.
 	if verdict == settings.Ask && strings.EqualFold(req.ToolName, "bash") &&
-		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits) &&
+		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits || mode == settings.ModeDontAsk) &&
 		settings.IsReadOnlyCommand(req.PrimaryArg) && !g.explicitAsk(permissions, req.PrimaryArg) &&
 		g.commandWithinRoots(req.PrimaryArg) {
 		return nil, OutcomeAuto, nil
@@ -465,6 +465,10 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	path, hasPath := PathArgOf(req.Args)
 	escaped := hasPath && !g.WithinRoots(path)
 	if escaped && verdict == settings.Allow && mode != settings.ModeBypassPermissions {
+		if mode == settings.ModeDontAsk {
+			r := g.record(req, fmt.Sprintf("%s is outside the workspace, and don't-ask mode refuses anything that would need approval.", path))
+			return &r, OutcomeNone, nil
+		}
 		if g.prompter == nil {
 			r := g.record(req, fmt.Sprintf("%s is outside the workspace and cannot be confirmed.", path))
 			return &r, OutcomeNone, nil
@@ -510,6 +514,10 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 
 	// verdict == ask
+	if mode == settings.ModeDontAsk {
+		r := g.record(req, "don't-ask mode refuses anything that would need approval. Add an allow rule for it, or switch modes.")
+		return &r, OutcomeNone, nil
+	}
 	if g.prompter == nil {
 		// Headless with no way to ask. Refusing beats proceeding: an
 		// unattended run must not silently take an action the policy said

@@ -20,7 +20,7 @@ steps:
   - text: "Second turn reply."
 `
 	proj, home, sessDir, addr, _ := tuiFixture(t, script)
-	s := startTUI(t, 120, 40, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 	for _, p := range []struct{ in, out string }{{"turn one", "First turn reply."}, {"turn two", "Second turn reply."}} {
 		s.Send(p.in)
@@ -54,7 +54,7 @@ model: faux-1
 steps:
   - text: "First turn reply."
 `)
-	s := startTUI(t, 120, 40, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 	s.Send("turn one")
 	s.SendKey("enter")

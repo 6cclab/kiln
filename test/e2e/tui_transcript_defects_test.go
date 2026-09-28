@@ -275,7 +275,7 @@ steps:
   - text: "Checked the login route and updated the tests."
 `
 	proj, home, sessDir, addr, requests := tuiFixture(t, script)
-	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 
 	s.Send("start the rate limiter work")
@@ -371,7 +371,7 @@ func TestTUI_BashFailure_ExitStatusSurvivesCollapse(t *testing.T) {
 	addr, _ := startFaux(t, bashFailSixLinesScript)
 
 	s := startTUI(t, 120, 40, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 

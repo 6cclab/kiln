@@ -178,7 +178,7 @@ func TestMapToolNameSnakeCaseTitleCased(t *testing.T) {
 		"bash_background":    "Bash background",
 		"kill_shell":         "Kill shell",
 		"tool_search":        "Tool search",
-		"exit_plan_mode":     "Exit plan mode",
+		"exit_plan_mode":     "Plan",
 		"session_search":     "Session search",
 		"todo_write":         "Todo write",
 		"mcp__fixture__echo": "Mcp fixture echo",
@@ -384,5 +384,19 @@ func TestSummarizeLinesDropsLeadingBlankLines(t *testing.T) {
 	got := summarizeLines("\n\n{\"total\":3}\n")
 	if len(got) != 1 || got[0] != `{"total":3}` {
 		t.Errorf("summarizeLines = %q, want the JSON as the first row", got)
+	}
+}
+
+func TestCollapsedSummaryHidesModelInstructions(t *testing.T) {
+	bg := collapsedSummary("bash_background", []string{"Started bash_1: npm run dev", `Read it with bash_output({id: "bash_1"}).`}, false, false)
+	if len(bg) != 1 || bg[0] != "running in the background as bash_1 · /bashes to check on it" {
+		t.Errorf("bash_background summary = %q", bg)
+	}
+	plan := collapsedSummary("exit_plan_mode", []string{`Plan approved. You may now make changes. Permission mode is "manual".`}, false, false)
+	if len(plan) != 1 || plan[0] != "Plan approved." {
+		t.Errorf("exit_plan_mode summary = %q", plan)
+	}
+	if v := collapsedSummary("bash_background", []string{"Started bash_1: x", "Read it"}, false, true); len(v) != 2 {
+		t.Errorf("verbose keeps the whole result, got %q", v)
 	}
 }

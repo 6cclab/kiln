@@ -253,7 +253,7 @@ func TestTUI_CostByModel(t *testing.T) {
 	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 
@@ -333,8 +333,8 @@ func TestTUI_ModelRolesView(t *testing.T) {
 // (subagent_type/description/prompt/model) never assemble into a
 // "role:<name>" token. That variant is NOT reachable with faux and is not
 // tested here. What IS real and reachable: any `task` dispatch in
-// permission-mode "manual" (the default gate; not bypassPermissions/
-// dontAsk, which the rest of this suite mostly uses) falls through
+// permission-mode "manual" (the default gate; not bypassPermissions,
+// which the rest of this suite mostly uses) falls through
 // RenderPermissionPrompt's generic path (permission_render.go line ~65:
 // `Allow kiln to use %s?` with req.ToolName), since the task tool has no
 // dedicated command/edit rendering — this test drives exactly that.
@@ -388,7 +388,7 @@ func TestTUI_FullscreenWithSubagentsPanel(t *testing.T) {
 
 	// Start inline (no --fullscreen yet).
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 
@@ -467,7 +467,7 @@ func TestTUI_ResizeDuringLiveSubagentRow(t *testing.T) {
 	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 
@@ -524,7 +524,7 @@ func TestTUI_AxScreenReaderSubagentEvents(t *testing.T) {
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
 		"--ax-screen-reader",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	if err := s.WaitFor(">", 5*time.Second); err != nil {
 		t.Fatal(err)
@@ -544,7 +544,7 @@ func TestTUI_AxScreenReaderSubagentEvents(t *testing.T) {
 	if !strings.Contains(joined, "look something up") {
 		t.Errorf("ax-screen-reader transcript missing the dispatch's description:\n%s", joined)
 	}
-	if !strings.Contains(joined, "subagents finished") {
+	if !regexp.MustCompile(`subagents? finished`).MatchString(joined) {
 		t.Errorf("ax-screen-reader transcript missing the finished panel header:\n%s", joined)
 	}
 	for _, glyph := range []string{"⏺", "›", "✻", "∴"} {

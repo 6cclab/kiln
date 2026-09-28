@@ -732,6 +732,13 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cfg.Bridge == nil {
 			return m, nil
 		}
+		// A dispatch the subagents panel shows (its row carries the
+		// outcome, success or failure) gets no task block of its own: the
+		// design's agents block is the one record of a dispatch. A task
+		// call that failed before dispatching has no row and still shows.
+		if strings.EqualFold(msg.View.Name, "task") && m.subagents.Has(msg.CallID) && !m.cfg.Bridge.Verbose() {
+			return m, nil
+		}
 		if kind, grouped := groupKindFor(msg.View.Name); grouped && !m.cfg.Bridge.Verbose() {
 			if m.group != nil && m.group.kind != kind {
 				m = m.flushGroup()
@@ -1604,12 +1611,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // open (MsgPermissionPrompt/MsgPlanPrompt).
 func (m Model) syncPromptPlaceholder() Model {
 	switch {
-	case m.prompt.pending != nil:
-		if m.prompt.feedback == nil {
-			m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request.ToolName))))
+	case m.prompt.feedback != nil:
+		// The prompt's own field is taking the typing; saying "press 1, 2
+		// or 3" here pointed at a choice that is no longer open. Esc means
+		// different things in the two fields (permissionview.go).
+		if m.prompt.plan != nil {
+			m.editor.SetPlaceholder("typing in the prompt above · enter to send · esc to go back")
 		} else {
-			m.editor.SetPlaceholder("press 1, 2 or 3")
+			m.editor.SetPlaceholder("typing in the prompt above · enter to send · esc to decline")
 		}
+	case m.prompt.pending != nil:
+		m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request.ToolName))))
 	case m.prompt.plan != nil:
 		m.editor.SetPlaceholder("press 1, 2 or 3")
 	case m.busy:
@@ -1840,8 +1852,9 @@ func (m Model) runMode(c Classified) tea.Cmd {
 		env := m.cfg.Env
 		cwd := m.cfg.Cwd
 		bridge := m.cfg.Bridge
+		width := m.contentWidth()
 		return func() tea.Msg {
-			lines := RunBang(context.Background(), c.Body, env)
+			lines := RunBang(context.Background(), c.Body, env, width)
 			if bridge != nil {
 				// Runs on its own Cmd goroutine, not Update's — Bridge's
 				// own freeze helper (not the Model one, which needs the

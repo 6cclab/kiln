@@ -672,7 +672,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		// hallucinated tool, not an access restriction, and the two read
 		// very differently to a user watching the transcript.
 		diag.L().Info("tool refused: unknown", "lane", l.name, "tool", call.Name)
-		r := tool.Errorf("unknown tool %q", call.Name)
+		r := tool.Errorf("There is no tool named %s, so the call did not run.", call.Name)
 		refusal = &r
 	} else if !l.toolActive(call.Name) {
 		active, _ := l.GetActiveTools()
@@ -707,7 +707,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	} else if call.InvalidArgs != "" {
 		// The provider could not parse the call's arguments; running the
 		// tool with empty arguments would silently do the wrong thing.
-		result = tool.Errorf("tool call arguments were not valid JSON: %s", call.InvalidArgs)
+		result = tool.Errorf("The call's arguments were not valid JSON, so it did not run. Received: %s", call.InvalidArgs)
 	} else {
 		// Registration was already confirmed above, so Get cannot miss
 		// here; it is repeated rather than threading the *tool.Tool

@@ -62,8 +62,11 @@ type Bridge struct {
 	// lastFault is the last EventFault message committed as an error
 	// block; see FaultCommitted.
 	lastFault string
-	mu        sync.Mutex
-	progSink  sink
+	// lastWasNote reports that the most recent commit was a system note,
+	// so the next note joins its block (CommitNote).
+	lastWasNote bool
+	mu          sync.Mutex
+	progSink    sink
 
 	queue chan bridgeItem
 	quit  chan struct{}
@@ -258,6 +261,9 @@ func (b *Bridge) Commit(lines []string) {
 		return
 	}
 	lines = padMargin(lines, ruleMargin())
+	b.mu.Lock()
+	b.lastWasNote = false
+	b.mu.Unlock()
 	select {
 	case b.queue <- bridgeItem{text: strings.Join(lines, "\n")}:
 	case <-b.quit:
@@ -980,7 +986,7 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		// Rendered on the Update goroutine (like markdown) so result lines
 		// are fitted to the live width, and so tool calls and assistant
 		// text commit in the order they were sent.
-		b.Send(msgCommitToolCall{View: view})
+		b.Send(msgCommitToolCall{View: view, CallID: ev.ToolCallID})
 		if ev.ToolName == "exit_plan_mode" {
 			// Approving a plan moves the gate's mode; the footer re-reads it.
 			b.Send(MsgRefreshMode{})
@@ -1064,7 +1070,12 @@ type msgCommitMarkdown struct{ Text string }
 
 // msgCommitToolCall asks the app to render a finished tool call at the
 // current width and commit it.
-type msgCommitToolCall struct{ View ToolCallView }
+type msgCommitToolCall struct {
+	View ToolCallView
+	// CallID is the tool call's id, so a task call the subagents panel
+	// already reports can be left out.
+	CallID string
+}
 
 // faultStatus reads the HTTP status off a provider error, which
 // provider/api's StatusError writes as "<Status Text> (<code>)…".

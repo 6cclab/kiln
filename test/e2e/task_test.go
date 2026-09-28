@@ -35,7 +35,7 @@ func TestPrint_StreamJSON_Task(t *testing.T) {
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "look something up for me",
 		"--output-format", "stream-json",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -134,7 +134,7 @@ func TestPrint_StreamJSON_TaskConcurrent(t *testing.T) {
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "dispatch two tasks",
 		"--output-format", "stream-json",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)

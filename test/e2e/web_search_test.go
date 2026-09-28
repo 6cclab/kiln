@@ -32,7 +32,7 @@ func TestTUI_WebSearch(t *testing.T) {
 	home, sessDir := scratchHome(t)
 	addr, srv := startFaux(t, string(script))
 
-	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 
 	s.Send("what's new in go generics")

@@ -3,7 +3,7 @@
 # mode, which raises the shown-lines budget (bridge.go's toolOutputTokens
 # budget), so more of the 40 lines become visible.
 @faux testdata/faux/qa/tools-bash-long-output.yaml
-@args --permission-mode dontAsk
+@args --permission-mode bypassPermissions
 
 WAITFOR /describe a task/ 20
 TYPE count to forty
