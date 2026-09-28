@@ -9,13 +9,14 @@
 @real
 @size 140x45
 @fixture qa/fixtures/real/mcp-orders-svc
-@setup mkdir -p {PROJ}/../bin && go build -o {PROJ}/../bin/incidents {ROOT}/qa/fixtures/incident-mcp && printf '{"mcpServers":{"incidents":{"command":"%s"}}}' "{PROJ}/../bin/incidents" > {PROJ}/.mcp.json
+@setup mkdir -p {PROJ}/../bin && go -C {ROOT} build -o {PROJ}/../bin/incidents ./qa/fixtures/incident-mcp && printf '{"mcpServers":{"incidents":{"command":"%s"}}}' "{PROJ}/../bin/incidents" > {PROJ}/.mcp.json
 WAITFOR /describe a task/ 30
 SHOT ready
+WAIT 4
 TYPE /mcp
 KEY enter
 SHOT mcp-dialog
-NOTE expected gap: kiln does not read project .mcp.json yet, so the incidents server should be missing here until that support lands
+EXPECT /incidents/
 KEY esc
 SHOT mcp-dialog-closed
 TURN orders-svc is paging... use the incidents MCP to figure out what's wrong, then fix it in this repo and add a regression test

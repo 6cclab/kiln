@@ -8,15 +8,16 @@
 @real
 @home scratch
 @size 140x45
-@setup mkdir -p {PROJ}/../bin && go build -o {PROJ}/../bin/incidents {ROOT}/qa/fixtures/incident-mcp
+@setup mkdir -p {PROJ}/../bin && go -C {ROOT} build -o {PROJ}/../bin/incidents ./qa/fixtures/incident-mcp
 @pre mcp add incidents -- {PROJ}/../bin/incidents
 @pre mcp
 WAITFOR /describe a task/ 30
 SHOT ready
+WAIT 4
 TYPE /mcp
 KEY enter
 SHOT mcp-dialog
-NOTE expected gap: `kiln mcp add` does not exist yet, so incidents should be absent from this dialog until it lands
+EXPECT /incidents/
 KEY esc
 SHOT mcp-dialog-closed
 TURN any open incidents?
