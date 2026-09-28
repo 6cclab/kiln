@@ -391,6 +391,27 @@ An unrecognized action id is ignored. Global-router keys (`ctrl+o`, `shift+tab`,
 
 `~/.harness/trusted.json` — the harness's own trust store, explicitly not a read of Claude Code's trust state. Flat JSON array of trusted absolute paths, written atomically at mode 0600. Trusting a directory trusts every descendant (`isAncestorOrSelf`); symlinks are not resolved. The dialog fires on TUI startup when the cwd isn't already trusted and `HARNESS_TRUST_ALL != "1"`, because the harness reads the project's `.claude` settings and hooks before the first prompt.
 
+### Plugins
+
+`internal/claude/plugins`. kiln reads the same files Claude Code's own `/plugin` writes — it does not install, enable or disable a plugin itself.
+
+- **Installed:** `~/.claude/plugins/installed_plugins.json` — `{"version":2,"plugins":{"<plugin>@<marketplace>":[{"scope":"user"|"project","installPath":"<abs dir>","version":"...","projectPath":"<abs>"}]}}`. A `project`-scope install only applies when the current directory is `projectPath` or a descendant of it.
+- **Enabled:** `settings.json`'s `enabledPlugins` map (`"<plugin>@<marketplace>": true|false`), merged across the usual three scopes (later wins — `settings.LoadEnabledPlugins`). Absent or `false` both mean inactive: enabling is opt-in.
+- A plugin is **active** for a run only when both are true. `plugins.LoadPlugins(cwd)` returns the active set; `plugins.ListInstalled(cwd)` returns every installed entry (active or not), for `/plugin`'s full report.
+
+A plugin's install directory (`installPath`, `${CLAUDE_PLUGIN_ROOT}` in its own files) holds:
+
+- `.claude-plugin/plugin.json` — manifest: `name`, `version`, optional `mcpServers` (an inline object, or a string path to one relative to the root) and `hooks` (inline, or a string path). A manifest that fails to parse is skipped with a `diag` warning; the plugin is not counted as active.
+- `skills/<name>/SKILL.md`, `commands/**/*.md`, `agents/*.md` — same frontmatter rules as §7's skills/commands/agents, loaded by `plugins.Skills`/`Commands`/`Agents`. Every item is namespaced `<plugin>:<item>` (a nested command keeps its subdirectory too, e.g. `commands/git/changelog.md` → `<plugin>:git:changelog`), which is how it shows up in the `/` palette and in the `task` tool's `subagent_type` enum.
+- `hooks/hooks.json` (`{"hooks": {...}}`, same shape as `settings.json`'s own `hooks` key) and/or the manifest's own `hooks` field — merged into the session's hook config (`plugins.Hooks`, appended alongside `.claude/settings.json`'s hooks, not replacing them). Every plugin hook command gets `CLAUDE_PLUGIN_ROOT` in its environment, and any literal `${CLAUDE_PLUGIN_ROOT}` in the command string is expanded to the install directory first.
+- `.mcp.json` and/or the manifest's `mcpServers` — merged into the session's MCP servers (`plugins.MCPServers`), named `plugin_<plugin>_<server>` (so its tools read `mcp__plugin_<plugin>_<server>__<tool>`, matching Claude Code) and expanded the same way every other server is (`mcp.ExpandConfig`), after `${CLAUDE_PLUGIN_ROOT}` substitution. Plugin servers are not gated on folder trust like `.mcp.json` is — installing and enabling the plugin is the opt-in.
+
+`/plugin` reports the active set (version, marketplace, and how many skills/commands/agents/hooks/MCP servers each contributed) plus installed-but-inactive ones and why.
+
+### The `skill` tool
+
+`internal/tools/skill.go`. A model-invocable tool (`{"skill": "<name>", "args": "<optional>"}`) alongside the `/`-palette's skill commands — the two are independent: a skill's `user-invocable: false` only hides it from the palette, and `disable-model-invocation: true` only excludes it from this tool's catalog. The tool's own description lists every model-invocable skill (project, user and active-plugin) as `- <name>: <description>` (each description truncated to ~200 chars, since the list is sent on every turn). Invoking a listed name returns `Base directory for this skill: <dir>` followed by the SKILL.md body, so the skill's own relative file references resolve; an unlisted name is an error result naming what's available. It is resident (`internal/cli/mcp.go`'s `residentAll`) and read-only, so plan mode allows it (`settings.ReadOnly`).
+
 ## 8. MCP servers and postures
 
 `internal/mcp/config.go`, `internal/mcp/gating.go`, `internal/mcp/hub.go`, `internal/cli/mcp.go`
