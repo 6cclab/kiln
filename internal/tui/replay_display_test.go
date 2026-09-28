@@ -36,3 +36,28 @@ func TestDisplayArg(t *testing.T) {
 		}
 	}
 }
+
+// TestDisplayCommand: a leading cd into the working directory is dropped
+// and one below it made relative; anything else is shown as run.
+func TestDisplayCommand(t *testing.T) {
+	cwd := "/work/proj"
+	cases := map[string]string{
+		"cd /work/proj && ls -la":          "ls -la",
+		"cd '/work/proj' && ls":            "ls",
+		"cd /work/proj/web && npm install": "cd web && npm install",
+		"cd /work/proj/api; go test ./...": "cd api; go test ./...",
+		"cd /elsewhere && ls":              "cd /elsewhere && ls",
+		"cd api && go vet ./...":           "cd api && go vet ./...",
+		"go test ./...":                    "go test ./...",
+		"cd /work/proj":                    "cd /work/proj",
+		"cd /work/project2 && ls":          "cd /work/project2 && ls",
+	}
+	for in, want := range cases {
+		if got := DisplayArg("bash", in, cwd, false); got != want {
+			t.Errorf("collapsed %q = %q, want %q", in, got, want)
+		}
+		if got := DisplayArg("bash", in, cwd, true); got != in {
+			t.Errorf("verbose %q = %q, want it unchanged", in, got)
+		}
+	}
+}

@@ -21,7 +21,10 @@
    "internal/tui/replay.go"
   ],
   "regression_test": "TestTUI_ConsecutiveReadsCommitAsOneBlock",
-  "note": "Awaiting a live re-drive.",
-  "updated_at": "2026-09-28T11:12:03Z"
+  "note": "Verified live in iTerm2 (t2-kiln-7, build d6e9c04).",
+  "updated_at": "2026-09-28T11:23:08Z",
+  "after_evidence": [
+   "/Users/andrepato/projects/crud-trial/runs/t2-kiln-7/004-progress.png"
+  ]
  }
 }

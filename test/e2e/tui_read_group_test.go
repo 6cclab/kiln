@@ -67,3 +67,39 @@ steps:
 		t.Fatalf("toggling back lost the grouped block: %v\n%s", err, strings.Join(s.Rows(), "\n"))
 	}
 }
+
+// TestTUI_BashRowDropsCdIntoProject: a committed bash block shows the
+// command without its leading "cd <project> &&" — the command runs there
+// anyway — and ctrl+o shows it exactly as run.
+func TestTUI_BashRowDropsCdIntoProject(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	addr, _ := startFaux(t, fmt.Sprintf(`model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: %q}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Ran it."
+`, "cd "+proj+" && echo hi"))
+
+	s := startTUI(t, 100, 40, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
+	defer s.Close()
+	waitReady(t, s)
+	s.Send("run it")
+	s.SendKey("enter")
+	if err := s.WaitFor("Ran it.", 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	waitTurnSettled(t, s)
+	collapsed := strings.Join(s.Rows(), "\n")
+	if !regexp.MustCompile(`bash ─+[^\n]*\n\s*echo hi\s*\n`).MatchString(collapsed) {
+		t.Errorf("bash row is not just \"echo hi\":\n%s", collapsed)
+	}
+	s.SendKey("ctrl+o")
+	if err := s.WaitFor("Showing detailed transcript · ctrl+o to toggle", 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if verbose := strings.Join(s.Rows(), "\n"); !strings.Contains(verbose, "&& echo hi") {
+		t.Errorf("verbose view lost the command as run:\n%s", verbose)
+	}
+}

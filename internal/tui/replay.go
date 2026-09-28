@@ -216,6 +216,9 @@ func toolCallViewFor(name string, call msg.ToolCall, result *msg.ToolResultMessa
 // absolute. Only absolute arguments are rewritten, so a grep pattern is
 // never mistaken for a path.
 func DisplayArg(name, arg, cwd string, verbose bool) string {
+	if strings.EqualFold(name, "bash") && !verbose {
+		return displayCommand(arg, cwd)
+	}
 	if arg == "" || !isPathTool(name) {
 		return arg
 	}
@@ -239,6 +242,30 @@ func DisplayArg(name, arg, cwd string, verbose bool) string {
 		}
 	}
 	return arg
+}
+
+// displayCommand shortens a bash command's leading absolute cd for the
+// collapsed view: a cd into the working directory itself is dropped (the
+// command runs there anyway) and one into a directory below it is written
+// relative. Models open most commands with "cd /abs/project && …", which
+// spent the row on a path the status line already shows.
+func displayCommand(cmd, cwd string) string {
+	loc := leadingCd.FindStringSubmatchIndex(cmd)
+	if loc == nil || cwd == "" || loc[1] == len(cmd) {
+		return cmd
+	}
+	dir := strings.Trim(cmd[loc[2]:loc[3]], `'"`)
+	if !filepath.IsAbs(dir) {
+		return cmd
+	}
+	rel, err := filepath.Rel(cwd, filepath.Clean(dir))
+	switch {
+	case err != nil || rel == ".." || strings.HasPrefix(rel, "../"):
+		return cmd
+	case rel == ".":
+		return cmd[loc[1]:]
+	}
+	return "cd " + rel + cmd[loc[3]:]
 }
 
 // isPathTool reports whether a tool's primary argument is a file path.
