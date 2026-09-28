@@ -240,3 +240,29 @@ func TestTUI_PromptDigitDoesNotLeakIntoEditor(t *testing.T) {
 		}
 	}
 }
+
+// TestTUI_BadModelRoleShowsAsNote: a model role that does not resolve is
+// reported inside the TUI, under the banner. It used to go to stderr before
+// the fullscreen TUI started, where it stayed hidden until exit.
+func TestTUI_BadModelRoleShowsAsNote(t *testing.T) {
+	proj, home, sessDir, addr, _ := tuiFixture(t, "model: faux-1\nsteps:\n  - text: \"ok\"\n")
+	writeModelRolesSettings(t, proj, map[string]string{"heavy": "faux/faux-9"})
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr)
+	waitReady(t, s)
+	if err := s.WaitFor(regexp.MustCompile(`Model role heavy: faux/faux-9 is not among the available models; subagents asking for it run on the current model\.`), 5*time.Second); err != nil {
+		t.Fatalf("no startup note for the bad role:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+}
+
+// TestPrint_BadModelRoleWarnsOnStderr: print mode has no TUI, so the same
+// warning still goes to stderr.
+func TestPrint_BadModelRoleWarnsOnStderr(t *testing.T) {
+	addr, _ := startFaux(t, "model: faux-1\nsteps:\n  - text: \"ok\"\n")
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeModelRolesSettings(t, proj, map[string]string{"heavy": "faux/faux-9"})
+	res := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "hi")
+	if !strings.Contains(res.Stderr, "kiln: Model role heavy: faux/faux-9") {
+		t.Errorf("stderr = %q, want the role warning", res.Stderr)
+	}
+}

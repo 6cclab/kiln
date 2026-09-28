@@ -98,6 +98,11 @@ type InteractiveDeps struct {
 	// onPlanApprover/onHookNotices callbacks do. Either may be nil.
 	SetPlanApprover func(tools.PlanApprover)
 	SetHookNotice   func(func(string))
+	// StartupNotes are warnings found while starting (a model role that
+	// does not resolve, memory over budget). Printed to stderr they sat
+	// behind the fullscreen TUI until exit; they show as system notes
+	// under the banner instead.
+	StartupNotes []string
 }
 
 // connectInBackground connects n MCP servers off the UI goroutine,
@@ -231,6 +236,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		ModelID:        deps.Resolved.Model.ID,
 		Banner:         banner(),
 		BannerFunc:     banner,
+		StartupNotes:   deps.StartupNotes,
 		SessionID:      deps.Started.SessionID,
 		TranscriptPath: deps.Started.TranscriptPath,
 		Version:        Version,

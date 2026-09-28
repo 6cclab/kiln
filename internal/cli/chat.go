@@ -386,7 +386,19 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return 1
 	}
 
-	// modelRoles warnings: printed once, up front, so a broken role is
+	// startupWarn reports a problem found while starting: to stderr in
+	// print mode, and as a note under the banner interactively, where
+	// stderr is hidden behind the fullscreen TUI until exit.
+	var startupNotes []string
+	startupWarn := func(msg string) {
+		if args.Print {
+			fmt.Fprintln(stderr, "kiln: "+msg)
+			return
+		}
+		startupNotes = append(startupNotes, msg)
+	}
+
+	// modelRoles warnings: reported once, up front, so a broken role is
 	// visible before it silently falls back to the parent model mid-run
 	// (agents.ResolveModel never errors, it only falls back - see its doc
 	// comment). Not fatal: a bad role is a misconfiguration to fix, not a
@@ -401,7 +413,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				}
 			}
 			for _, problem := range claudeagents.ValidateRoles(settings.ModelRoles, candidates) {
-				fmt.Fprintf(stderr, "kiln: role %s\n", problem)
+				startupWarn("Model role " + problem + "; subagents asking for it run on the current model.")
 			}
 		}
 	}
@@ -414,7 +426,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		diag.L().Info("memory: rules indexed, not loaded in full", "count", n, "budget", resolved.Tier.SystemPromptTokens, "paths", memory.Indexed)
 	}
 	if memory.OverBudget {
-		fmt.Fprintf(stderr, "kiln: CLAUDE.md files use ~%dk tokens, over this model's %dk memory budget; loaded anyway\n", memory.EstimatedTokens/1000, resolved.Tier.SystemPromptTokens/1000)
+		startupWarn(fmt.Sprintf("CLAUDE.md files use ~%dk tokens, over this model's %dk memory budget; loaded anyway.", memory.EstimatedTokens/1000, resolved.Tier.SystemPromptTokens/1000))
 	}
 
 	// --add-dir may be repeated, matching Claude Code's flag.
@@ -1101,6 +1113,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 		phase("tui start")
 		exitCode := RunInteractive(ctx, InteractiveDeps{
+			StartupNotes:   startupNotes,
 			Cwd:            cwd,
 			Effort:         args.Effort,
 			AuthKind:       authKindLabel(ctx, reg, providerID),

@@ -106,6 +106,10 @@ type Config struct {
 	// use the text tokens fitted to the terminal's reported background
 	// rather than the design defaults Banner was styled with at startup.
 	BannerFunc func() []string
+	// StartupNotes are committed as system notes right after the banner,
+	// once the terminal's width is known (committed any earlier, a note
+	// wrapped at the fallback width).
+	StartupNotes []string
 	// ModelID is the provider/model id the verbose transcript's model row
 	// shows after a turn's last tool call (docs/claude-code-reference.md
 	// §3); empty falls back to ModelLabel.
@@ -2375,6 +2379,9 @@ func (m Model) commitBanner() Model {
 		// transcriptIsEmpty then reports true, exactly as for a fresh
 		// start (*qa/findings/20260927T022144Z-inline-stacked-rules.json*).
 		m.replayTranscript()
+	}
+	for _, note := range m.cfg.StartupNotes {
+		m.commitNote(note)
 	}
 	m.bannerDone = true
 	return m
