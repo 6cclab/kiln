@@ -147,6 +147,7 @@ a multi-line paste never submits early. Source: `internal/tui/editor`.
 | `Esc` | interrupt a running turn; twice within 1s on an idle, empty input opens Rewind |
 | `?` | open the shortcuts panel (idle, empty input only) |
 | `PgUp`/`PgDn`, `Shift+↑`/`↓`, mouse wheel | scroll the transcript (full-screen mode only) |
+| drag with the mouse | select transcript text and copy it to the clipboard on release (full-screen mode; inline mode leaves selection to the terminal) |
 
 While a permission or plan prompt is open, it owns every key until answered
 (§6). Source: `internal/tui/keys.go`, `internal/tui/editor`.

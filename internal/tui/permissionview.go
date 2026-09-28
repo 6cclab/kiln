@@ -213,6 +213,19 @@ func (p *PromptState) finishPlan(reply PlanReply) {
 //     cancels (deny outright for a tool prompt; back to the menu for a
 //     plan).
 //   - Anything else is swallowed while a prompt is up.
+//
+// Paste appends pasted text to the reason being typed after a "no", and
+// reports whether the prompt took it. Outside feedback mode a prompt has no
+// text field, so the paste is not the prompt's to take.
+func (p *PromptState) Paste(text string) bool {
+	if p.feedback == nil {
+		return false
+	}
+	f := *p.feedback + strings.ReplaceAll(text, "\r\n", "\n")
+	p.feedback = &f
+	return true
+}
+
 func (p *PromptState) HandleKey(msg tea.KeyPressMsg) bool {
 	if p.plan != nil {
 		return p.handlePlanKey(msg)

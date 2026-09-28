@@ -290,6 +290,9 @@ type Model struct {
 	// on ClearScreen/toggle/resize-rewrap — see appendTranscript and
 	// replayTranscript.
 	transcript []string
+	// sel is the fullscreen transcript selection being dragged or last
+	// copied (selection.go); nil when there is none.
+	sel *selection
 	// viewport renders transcript, scrolled. Its own KeyMap is emptied in
 	// NewModel (see there) so it never intercepts a keypress on its own;
 	// scrolling is driven explicitly from handleKey/Update instead.
@@ -536,6 +539,16 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
 
+	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
+		next, cmd, _ := m.handleMouseSelect(msg)
+		return next, cmd
+
+	case msgCopied:
+		m.modeHintGen++
+		gen := m.modeHintGen
+		m.modeHintText = copiedNote(msg)
+		return m, tea.Tick(copiedNoteDuration, func(time.Time) tea.Msg { return msgClearModeHint{gen: gen} })
+
 	case tea.MouseWheelMsg:
 		if !m.fullscreen {
 			return m, nil
@@ -611,7 +624,25 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyPressMsg:
+		m.sel = nil
 		return m.handleKey(msg)
+
+	case tea.PasteMsg:
+		// Terminals deliver a paste as one bracketed block, not keys; it
+		// goes to whatever text field is active: a permission prompt's
+		// reason, else the input. Dialogs have no text fields.
+		m.shortcuts = false
+		if m.dialog != nil {
+			return m, nil
+		}
+		if m.prompt.Active() {
+			m.prompt.Paste(msg.Content)
+			return m, nil
+		}
+		ed, cmd, _ := m.editor.Update(msg)
+		m.editor = ed
+		m = m.refreshPopup()
+		return m, cmd
 
 	case msgSpinnerTick:
 		if !m.busy {
@@ -1288,6 +1319,14 @@ func (m Model) fullscreenView() tea.View {
 	// one case that could violate it.
 	for len(vpRows) < vp.Height() {
 		vpRows = append(vpRows, "")
+	}
+	if m.sel != nil {
+		top := vp.YOffset()
+		for i := range vpRows {
+			if from, to, ok := m.sel.span(top+i, m.width); ok {
+				vpRows[i] = highlightRow(vpRows[i], from, to)
+			}
+		}
 	}
 
 	content := append(append([]string{}, vpRows...), chrome...)
