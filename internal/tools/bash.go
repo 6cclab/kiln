@@ -27,7 +27,9 @@ var bashDescription = fmt.Sprintf(
 		"Output is truncated to last %d lines or %dKB (whichever is hit first). If truncated, full output is saved to a temp file. "+
 		"Commands time out after 120 seconds unless a timeout (in seconds, up to 600) is given; "+
 		"pass a longer one for slow builds or test suites. To leave a server running, background it "+
-		"with its output redirected to a file (server >log 2>&1 &).",
+		"with its output redirected to a file (server >log 2>&1 &). "+
+		"Stop a process by its PID or process group (kill -- -PGID), never by name pattern "+
+		"(pkill -f, killall): a pattern also kills the user's own unrelated processes.",
 	execenv.DefaultMaxLines, execenv.DefaultMaxBytes/1024,
 )
 
