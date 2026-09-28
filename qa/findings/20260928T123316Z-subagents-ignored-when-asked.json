@@ -1,0 +1,26 @@
+{
+ "id": "20260928T123316Z-subagents-ignored-when-asked",
+ "found_at": "2026-09-28T12:33:16Z",
+ "scenario": "real/wf-subagents",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Model ignores an explicit request to use subagents",
+ "observed": "'Use parallel subagents ... one subagent per package' -> 6 read + 2 bash calls, no task call; the task description told it to read small files itself",
+ "expected": "Explicit requests for subagents are honoured, dispatched in parallel from one message",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-wf-subagents-140x45/02-waitfor-timeout-line10.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tools/task.go",
+   "internal/agent/subagent.go"
+  ],
+  "regression_test": "real/wf-subagents (live)",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T12:33:16Z"
+ }
+}

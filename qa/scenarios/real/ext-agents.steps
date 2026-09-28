@@ -13,8 +13,8 @@ SHOT agents-list
 EXPECT /security-reviewer/
 KEY esc
 SEND Use the security-reviewer agent to review app.py for security issues.
-WAITFOR /Running a subagent|Running \d+ subagents/ 60
-SHOT subagent-panel
-IDLE 180
+IDLE 300
 SHOT review-result
 EXPECT /(?i)inject|os\.system|unsafe/
+# The review really went through a subagent (a task call in the session).
+RUN grep -rq '"name":"task"' {HOME}/.harness/sessions

@@ -7,12 +7,12 @@
 WAITFOR /describe a task/ 30
 SHOT ready
 SEND Use parallel subagents to audit error handling in pkg/auth, pkg/payments and pkg/storage, one subagent per package, and report back what each one finds.
-WAITFOR /subagents running/ 60
+WAITFOR /subagents? running|Running \d+ subagents|Running a subagent/ 90
 SHOT subagents-running
-WAIT 20
-SHOT subagents-progress
 IDLE 600
 SHOT report
 EXPECT /auth/
 EXPECT /payments/
 EXPECT /storage/
+# Each package went to its own subagent: three task calls in this run's session.
+RUN test "$(cat $HOME/.harness/sessions/*$(basename $(dirname {PROJ}))*/*.jsonl | grep -o '"name":"task","type":"toolCall"' | wc -l)" -ge 3

@@ -10,3 +10,5 @@ except Exception:
 
 path = (payload.get("tool_input") or {}).get("file_path") or (payload.get("tool_input") or {}).get("path") or "?"
 print("formatter: reformatted %s" % path)
+with open(".kiln-format-marker", "a") as f:
+    f.write(path + "\n")

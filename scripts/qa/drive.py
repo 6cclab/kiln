@@ -824,14 +824,17 @@ class Run:
             elif verb == "RELAUNCH":
                 if not getattr(self, "real", False):
                     raise DriveError("RELAUNCH needs @real")
-                self.key("ctrl+c")
-                time.sleep(0.4)
-                self.key("ctrl+c")
+                # /exit, like a user; Orca's key round trip (~0.6s each) is
+                # too slow to land two ctrl+c presses inside kiln's 1s window.
+                self._orca_input("type-text", "--text", "/exit")
+                time.sleep(0.3)
+                self.key("enter")
                 deadline = time.time() + 15
                 while self.kiln_running() and time.time() < deadline:
                     time.sleep(0.5)
                 if self.kiln_running():
-                    raise DriveError("kiln did not exit on ctrl+c ctrl+c")
+                    self.shot("exit-stuck")
+                    raise DriveError("kiln did not exit on /exit within 15s")
                 self.term.close()
                 time.sleep(0.5)
                 self._start_real(shlex.split(arg))

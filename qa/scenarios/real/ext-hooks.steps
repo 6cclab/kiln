@@ -16,7 +16,9 @@ EXPECT /UserPromptSubmit/
 EXPECT /Stop/
 TURN Fix the bug in calc.py: add(a, b) should return a + b, not a - b.
 SHOT normal-edit-done
-EXPECT /(?i)formatter: reformatted/
+# PostToolUse stdout on success is not shown in the transcript (as in
+# Claude Code); the hook's marker file proves it ran with the edited path.
+RUN grep -q calc.py {PROJ}/.kiln-format-marker
 RUN test -f {PROJ}/.kiln-stop-marker
 TURN Add a "status" column to migrations/001_init.sql's users table.
 SHOT protected-edit-attempt
