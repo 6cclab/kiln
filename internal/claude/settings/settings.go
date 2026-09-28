@@ -252,6 +252,10 @@ var ReadOnly = map[string]bool{
 	// todo_write only edits the in-memory todo list.
 	"exit_plan_mode": true,
 	"todo_write":     true,
+	// skill only reads a SKILL.md's own content; it changes nothing on
+	// disk, so plan mode (and manual mode) allow it the same way Read
+	// does.
+	"skill": true,
 }
 
 // Decision is the outcome of Decide.

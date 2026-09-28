@@ -23,8 +23,10 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
+	claudecommands "github.com/andrepato/harness/internal/claude/commands"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/permission"
+	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	claudeskills "github.com/andrepato/harness/internal/claude/skills"
 	"github.com/andrepato/harness/internal/claude/writesettings"
 	slashcommands "github.com/andrepato/harness/internal/commands"
@@ -46,9 +48,18 @@ type registryDeps struct {
 	Hooks    claudehooks.Config
 	Agents   []claudeagents.Definition
 	Skills   []claudeskills.Skill
-	MCP      *mcpSession
-	Todos    *agent.TodoStore
-	Shells   *agent.BackgroundShells
+	// Plugins is the active (installed and enabled) plugin set for this
+	// run, for /plugin's report.
+	Plugins []claudeplugins.Plugin
+	// PluginCommands is every active plugin's own commands/**/*.md,
+	// already namespaced "<plugin>:<name>" (internal/claude/plugins.
+	// Commands) — registered as their own Source so a plugin's commands
+	// and its palette entries update independently of Claude's own
+	// .claude/commands (see slashcommands.PluginCommandSource).
+	PluginCommands []claudecommands.CommandFile
+	MCP            *mcpSession
+	Todos          *agent.TodoStore
+	Shells         *agent.BackgroundShells
 
 	SettingsLoadedFrom []string
 	// ModelRoles is settings.json's modelRoles map, threaded through to
@@ -279,6 +290,9 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 	for _, s := range slashcommands.ClaudeCommandSources(deps.Cwd) {
 		registry.Add(s)
 	}
+	registry.Add(slashcommands.PluginCommandSource(deps.PluginCommands))
+
+	registry.Add(slashcommands.PluginReportCommand(deps.Cwd, deps.Plugins))
 
 	return registry
 }

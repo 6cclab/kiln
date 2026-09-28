@@ -78,3 +78,30 @@ func ClaudeCommandSources(cwd string) []Source {
 		load(claudecommands.Project, OriginProject),
 	}
 }
+
+// PluginCommandSource wraps every active plugin's own commands/**/*.md
+// (internal/claude/plugins.Commands, already namespaced "<plugin>:<name>"
+// via Namespace/Name) as a Source, matching ClaudeCommandSources' shape
+// for the built-in .claude/commands ones.
+func PluginCommandSource(files []claudecommands.CommandFile) Source {
+	return Source{
+		Origin: OriginPlugin,
+		Load: func() ([]Command, error) {
+			var out []Command
+			for _, f := range files {
+				f := f
+				out = append(out, Command{
+					Name:         f.Name,
+					Namespace:    f.Namespace,
+					Description:  f.Description,
+					ArgumentHint: f.ArgumentHint,
+					Origin:       OriginPlugin,
+					Run: func(ctx context.Context, args string) (Result, error) {
+						return Result{Prompt: f.Render(args)}, nil
+					},
+				})
+			}
+			return out, nil
+		},
+	}
+}

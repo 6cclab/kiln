@@ -17,6 +17,9 @@ type Origin string
 const (
 	Personal Origin = "personal"
 	Project  Origin = "project"
+	// Plugin marks a CommandFile built from a plugin's commands/**/*.md by
+	// internal/claude/plugins, rather than loaded here by LoadCommands.
+	Plugin Origin = "plugin"
 )
 
 // Frontmatter is the parsed YAML header of a command file.
@@ -133,6 +136,23 @@ type CommandFile struct {
 // does.
 func (c CommandFile) Render(args string) string {
 	return ApplyArguments(strings.TrimSpace(c.body), args)
+}
+
+// ParseCommandFile builds a CommandFile from one already-read .md file's
+// content, applying the same frontmatter rules loadFrom does. Exported so
+// internal/claude/plugins can build namespaced CommandFiles for a
+// plugin's commands/**/*.md without duplicating SplitFrontmatter's rules.
+func ParseCommandFile(source, name, namespace string, origin Origin, path string) CommandFile {
+	fm, body := SplitFrontmatter(source)
+	return CommandFile{
+		Name:         name,
+		Namespace:    namespace,
+		Description:  fm.Description,
+		ArgumentHint: fm.ArgumentHint,
+		Origin:       origin,
+		Path:         path,
+		body:         body,
+	}
 }
 
 func walkMarkdown(dir string) []string {

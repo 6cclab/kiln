@@ -16,6 +16,10 @@ const (
 	ScopeUser    Scope = "user"
 	ScopeProject Scope = "project"
 	ScopeLocal   Scope = "local"
+	// ScopePlugin marks an item (today, a skill) contributed by an active
+	// Claude Code plugin rather than loaded from a .claude root directly.
+	// See internal/claude/plugins.
+	ScopePlugin Scope = "plugin"
 )
 
 // ClaudeRoot is one `.claude` directory and the scope it belongs to.

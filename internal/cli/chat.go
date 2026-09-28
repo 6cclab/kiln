@@ -31,11 +31,13 @@ import (
 	"github.com/andrepato/harness/internal/auth/login"
 	"github.com/andrepato/harness/internal/budget"
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
+	claudecommands "github.com/andrepato/harness/internal/claude/commands"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	claudekeybindings "github.com/andrepato/harness/internal/claude/keybindings"
 	claudememory "github.com/andrepato/harness/internal/claude/memory"
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/permission"
+	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/skills"
 	slashcommands "github.com/andrepato/harness/internal/commands"
@@ -412,7 +414,47 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	env := execenv.New(cwd)
 
 	skillList := skills.LoadSkills(cwd)
-	skillsIndex := formatSkillsIndex(skillList)
+
+	// Active plugins (installed and enabled — internal/claude/plugins).
+	// Loaded once here so skills, commands, agents, hooks and MCP servers
+	// all see the same set for this run.
+	activePlugins := claudeplugins.LoadPlugins(cwd)
+	var pluginSkills []skills.Skill
+	var pluginCommands []claudecommands.CommandFile
+	var pluginAgents []claudeagents.Definition
+	pluginHooks := claudehooks.Config{}
+	pluginMCPServers := map[string]mcpgate.ServerConfig{}
+	for _, p := range activePlugins {
+		pluginSkills = append(pluginSkills, claudeplugins.Skills(p)...)
+		pluginCommands = append(pluginCommands, claudeplugins.Commands(p)...)
+		pluginAgents = append(pluginAgents, claudeplugins.Agents(p)...)
+		for event, groups := range claudeplugins.Hooks(p) {
+			pluginHooks[event] = append(pluginHooks[event], groups...)
+		}
+		for name, cfg := range claudeplugins.MCPServers(p) {
+			pluginMCPServers[name] = cfg
+		}
+	}
+	allSkills := append(append([]skills.Skill{}, skillList...), pluginSkills...)
+	skillsIndex := formatSkillsIndex(allSkills)
+
+	// The `skill` tool's catalog: every project/user/plugin skill except
+	// ones marked disable-model-invocation:true (deliverable 3 —
+	// UserInvocable:false skills ARE included here; that flag only hides
+	// a skill from the slash palette, wired separately below).
+	var skillRecords []tools.SkillRecord
+	for _, s := range allSkills {
+		if s.DisableModelInvocation {
+			continue
+		}
+		skillRecords = append(skillRecords, tools.SkillRecord{
+			Name:        s.Name,
+			Description: s.Description,
+			Body:        s.Content,
+			Dir:         tools.SkillDir(s.FilePath),
+		})
+	}
+	skillTool := tools.SkillTool(skillRecords)
 
 	permissionMode := resolvePermissionMode(args, settings)
 	perms := settings.Permissions
@@ -443,6 +485,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// so its servers start only in a trusted folder: now, when it already
 	// is, or (interactive) once the trust dialog is accepted.
 	resolvedMCP := mcpgate.Resolve(mcpgate.ResolveOptions{Cwd: cwd, Path: args.MCPConfig, Strict: args.StrictMCPConfig})
+	// Plugin servers belong alongside the ones the user added by hand
+	// (mcpgate.ScopePlugin): the user already opted in by installing and
+	// enabling the plugin, so — unlike .mcp.json — they are not gated on
+	// folder trust.
+	for name, cfg := range pluginMCPServers {
+		resolvedMCP.Servers[name] = cfg
+	}
 	mcpConfigs := resolvedMCP.Servers
 	pendingMCP := resolvedMCP.Project
 	if folderTrusted(cwd) {
@@ -510,6 +559,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// tool list so `task`'s catalog and schema enum are correct on the
 	// first turn.
 	agentsList := append([]claudeagents.Definition{agent.GeneralPurpose}, claudeagents.LoadAgents(cwd)...)
+	agentsList = append(agentsList, pluginAgents...)
 
 	// sessionsDirEnv mirrors agent.Options.SessionsRoot's own default
 	// resolution (internal/agent/session.go's unexported
@@ -585,7 +635,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	mcpExtras, mcpIndexText := buildMCPExtras(mcpTools)
 	extraTools := make([]*tool.Tool, 0, len(mcpExtras)+7)
 	extraTools = append(extraTools, mcpExtras...)
-	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool)
+	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool)
 	extraTools = append(extraTools, bgShellTools...)
 	extraTools = append(extraTools, tools.WebFetchTool(nil))
 	if sessionSearch != nil {
@@ -767,8 +817,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		settingsLoadedFrom = append(settingsLoadedFrom, string(s))
 	}
 
-	// Hooks from .claude/settings.json, accumulated across scopes.
+	// Hooks from .claude/settings.json, accumulated across scopes, plus
+	// every active plugin's own hooks (each already carrying
+	// CLAUDE_PLUGIN_ROOT — see claudeplugins.Hooks).
 	hookConfig := claudehooks.LoadHooks(cwd)
+	for event, groups := range pluginHooks {
+		hookConfig[event] = append(hookConfig[event], groups...)
+	}
 
 	// The four events the TS parsed but never fired. Stop runs when the
 	// parent's run ends; a blocking Stop hook is reported to the user, not
@@ -834,7 +889,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Gate:               gate,
 		Hooks:              hookConfig,
 		Agents:             agentsList,
-		Skills:             skillList,
+		Skills:             allSkills,
+		Plugins:            activePlugins,
+		PluginCommands:     pluginCommands,
 		MCP:                mcpSess,
 		Todos:              todos,
 		Shells:             shells,

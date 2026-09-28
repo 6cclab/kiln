@@ -41,6 +41,12 @@ const (
 	ScopeUser = "user"
 	// ScopeFlag is the file passed with --mcp-config.
 	ScopeFlag = "flag"
+	// ScopePlugin is a server contributed by an active Claude Code plugin
+	// (internal/claude/plugins.MCPServers). Reported in Resolved.Servers,
+	// not a scope Resolve itself reads: the user installed and enabled
+	// the plugin, so its servers belong alongside the ones they added by
+	// hand.
+	ScopePlugin = "plugin"
 )
 
 // TransportType returns the transport cfg implies: the explicit "type" if
@@ -244,6 +250,15 @@ func expandString(s string) string {
 		return ""
 	})
 }
+
+// ExpandConfig applies the same ${VAR}/${VAR:-default} environment
+// expansion Resolve applies to every server it reads. Exported for
+// internal/claude/plugins, which builds ServerConfig values for a
+// plugin's mcpServers outside of Resolve's own file-reading path (after
+// substituting its own ${CLAUDE_PLUGIN_ROOT} token, which is not a real
+// environment variable) and still wants ${VAR} references inside them
+// (e.g. an API key) expanded the same way.
+func ExpandConfig(cfg ServerConfig) ServerConfig { return expandConfig(cfg) }
 
 func expandConfig(cfg ServerConfig) ServerConfig {
 	cfg.Command = expandString(cfg.Command)

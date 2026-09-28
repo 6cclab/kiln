@@ -30,6 +30,12 @@ type Command struct {
 	Command string `json:"command"`
 	// Timeout is in seconds. Claude Code's default is 60. Zero means unset.
 	Timeout int `json:"timeout,omitempty"`
+	// Env is extra environment variables set for this hook's process, on
+	// top of the ambient environment and CLAUDE_HOOK/HARNESS_HOOK.
+	// Unmarshaled from settings.json's own hooks (always nil there) and
+	// set by internal/claude/plugins for a plugin's hooks, whose commands
+	// get CLAUDE_PLUGIN_ROOT the same way Claude Code sets it.
+	Env map[string]string `json:"-"`
 }
 
 // Matcher groups hook commands under a regex over the tool name. Matcher

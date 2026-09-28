@@ -35,8 +35,11 @@ type AccountDeps struct {
 // and /terminal-setup.
 //
 // Deliberately absent, per docs/claude-code-parity.md and
-// account-commands.ts: /vim, /statusline, /plugin. A command that exists
-// only to say "not implemented" is noise in /help on every session.
+// account-commands.ts: /vim, /statusline. A command that exists only to
+// say "not implemented" is noise in /help on every session. /plugin is a
+// real command now — see plugin_commands.go, registered separately in
+// internal/cli/commands.go (it needs the active plugin set, which
+// AccountDeps doesn't carry).
 func AccountCommands(deps AccountDeps) Source {
 	cmds := []Command{
 		{

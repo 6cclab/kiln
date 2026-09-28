@@ -80,10 +80,13 @@ type runOutput struct {
 // timeout can kill the whole tree: a plain child.Kill only kills the shell
 // itself, leaving grandchildren alive holding the stdout pipe open, which
 // means Wait never returns and the timeout never actually times out.
-func runCommand(command, input string, timeoutSeconds int, cwd string) runOutput {
+func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv map[string]string) runOutput {
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "CLAUDE_HOOK=1", "HARNESS_HOOK=1")
+	for k, v := range extraEnv {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var stdout, stderr bytes.Buffer
@@ -272,7 +275,7 @@ func RunHooks(opts RunOptions) Outcome {
 			timeout = DefaultTimeoutSeconds
 		}
 
-		out := runCommand(h.Command, string(data), timeout, opts.Payload.Cwd)
+		out := runCommand(h.Command, string(data), timeout, opts.Payload.Cwd, h.Env)
 
 		before := len(outcome.Notices)
 		label := h.Command
