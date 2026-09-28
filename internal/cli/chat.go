@@ -281,11 +281,16 @@ func subagentEventSink(stderr io.Writer) func(agent.SubagentEvent) {
 // internal/harness/turn.go), not a single row at all — a figure that
 // only grows and was observed at 959.6k/1000k (96%) in a session whose
 // pinned status meter simultaneously and correctly read 2%.
+//
+// Cached input counts: with prompt caching almost the whole conversation
+// is CacheRead (and the newest turn CacheWrite), so Input alone is a few
+// dozen tokens — /context reported "53 of 1000k" for a session whose meter
+// read 1%. This is the meter's own sum (bridge.go's EventUsage handler).
 func usageRowContextTokens(row *msg.Usage) (int, bool) {
 	if row == nil {
 		return 0, false
 	}
-	return row.Input + row.Output, true
+	return row.Input + row.CacheRead + row.CacheWrite + row.Output, true
 }
 
 // fileReadTokensFromToolEnd reports the tokens attributable to one

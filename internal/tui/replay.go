@@ -47,12 +47,6 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 	for _, sc := range synthetics {
 		bySynthetic[sc.AfterEntryID] = append(bySynthetic[sc.AfterEntryID], sc)
 	}
-	emitSynthetics := func(afterID string) {
-		for _, sc := range bySynthetic[afterID] {
-			out = append(out, sc.Lines...)
-		}
-	}
-
 	// Consecutive read-only calls are held and committed together, the way
 	// the live path's flushGroup does, so a replay renders them exactly as
 	// they were committed (RenderReadGroup when CompactReadGroup allows it,
@@ -75,7 +69,7 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 		}
 		pending = nil
 	}
-	emitSynthetics = func(afterID string) {
+	emitSynthetics := func(afterID string) {
 		if len(bySynthetic[afterID]) > 0 {
 			flush()
 		}
@@ -303,9 +297,7 @@ func relativizeCwd(cmd, cwd string) string {
 			}
 		case rest == "" || strings.ContainsRune(" \t'\";&|)/", rune(rest[0])):
 			b.WriteString(".")
-			if strings.HasPrefix(rest, "/") {
-				rest = rest[1:] // "/abs/proj/" -> "."
-			}
+			rest = strings.TrimPrefix(rest, "/") // "/abs/proj/" -> "."
 		default:
 			b.WriteString(cwd) // "/abs/proj2": not the working directory
 		}

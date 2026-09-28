@@ -1,0 +1,26 @@
+{
+ "id": "20260928T125239Z-context-excludes-cache",
+ "found_at": "2026-09-28T12:52:39Z",
+ "scenario": "real/wf-sessions",
+ "step": "05-context",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "/context total excludes cached tokens",
+ "observed": "After a resumed turn /context reported '53 of 1000k tokens' while the meter showed ~1%: cache read/write tokens were left out",
+ "expected": "/context reports the same occupancy as the meter: input + cache read + cache write + output of the last request",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T083329/iterm-dark/real-wf-sessions-140x45/05-context.png"
+ ],
+ "status": "open",
+ "fix": {
+  "files": [
+   "internal/cli/chat.go"
+  ],
+  "regression_test": "TestUsageRowContextTokens_MatchesTheMeter",
+  "updated_at": "2026-09-28T12:52:51Z"
+ }
+}

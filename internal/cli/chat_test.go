@@ -659,21 +659,19 @@ func benchClaudeMD() string {
 	return b.String()
 }
 
-// TestUsageRowContextTokens_ReadsInputPlusOutputNotTotalTokens is defect
-// 1's regression test: /context and the TUI's pinned status meter must
-// report the same context-occupancy figure. The status meter
-// (internal/tui/bridge.go) computes it as UsageRow.Input+UsageRow.Output;
-// this must match exactly, not fall back to TotalTokens (which, for the
-// anthropic provider, also folds in CacheRead+CacheWrite and would
-// disagree with the meter even for a single row).
-func TestUsageRowContextTokens_ReadsInputPlusOutputNotTotalTokens(t *testing.T) {
+// TestUsageRowContextTokens_MatchesTheMeter: /context and the TUI's pinned
+// status meter report the same occupancy — the last request's input,
+// cached input and output (bridge.go's EventUsage sum) — never the
+// session's running totals. With prompt caching nearly all input is
+// cached, so leaving it out reported "53 of 1000k" beside a 1% meter.
+func TestUsageRowContextTokens_MatchesTheMeter(t *testing.T) {
 	row := &msg.Usage{Input: 3_000, Output: 500, CacheRead: 900_000, CacheWrite: 50_000, TotalTokens: 953_500}
 	got, ok := usageRowContextTokens(row)
 	if !ok {
 		t.Fatal("ok = false, want true for a non-nil row")
 	}
-	if got != 3_500 {
-		t.Errorf("usageRowContextTokens = %d, want Input+Output = 3500 (not TotalTokens = %d)", got, row.TotalTokens)
+	if got != 953_500 {
+		t.Errorf("usageRowContextTokens = %d, want Input+CacheRead+CacheWrite+Output = 953500", got)
 	}
 }
 

@@ -10,7 +10,7 @@ TYPE /re
 WAIT 1
 SHOT slash-palette
 EXPECT /review/
-KEY backspace backspace
+KEY backspace backspace backspace
 TYPE /git
 WAIT 1
 SHOT slash-palette-git

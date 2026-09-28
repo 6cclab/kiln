@@ -337,7 +337,10 @@ func TestReadOnlyBashInWorkspaceDoesNotAsk(t *testing.T) {
 
 	g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{root}, Permissions: settings.Permissions{Ask: []string{"Bash(git log:*)"}}})
 	asked := 0
-	g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) { asked++; return PromptChoice{Kind: PromptAllow}, nil })
+	g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) {
+		asked++
+		return PromptChoice{Kind: PromptAllow}, nil
+	})
 	g.CheckWithOutcome(context.Background(), Request{ToolName: "bash", PrimaryArg: "git log -3", Args: map[string]any{}})
 	if asked != 1 {
 		t.Errorf("an ask rule for git log was overridden by the read-only allowance")
