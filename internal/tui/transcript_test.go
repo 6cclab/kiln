@@ -379,3 +379,10 @@ func TestSkillBlockNamesTheSkillAndCollapsesItsText(t *testing.T) {
 		t.Errorf("failed = %q, want the error", got)
 	}
 }
+
+func TestSummarizeLinesDropsLeadingBlankLines(t *testing.T) {
+	got := summarizeLines("\n\n{\"total\":3}\n")
+	if len(got) != 1 || got[0] != `{"total":3}` {
+		t.Errorf("summarizeLines = %q, want the JSON as the first row", got)
+	}
+}

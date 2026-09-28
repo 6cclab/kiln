@@ -997,6 +997,9 @@ func Summarize(result any) []string {
 // newline produces. Command output almost always ends in a newline;
 // kept, it renders as a blank row under every tool call.
 func summarizeLines(text string) []string {
+	// Leading blank lines too: a result that starts with one otherwise
+	// shows a bare "→" row above its first real line.
+	text = strings.TrimLeft(text, "\r\n")
 	out := strings.Split(text, "\n")
 	if len(out) > 1 && out[len(out)-1] == "" {
 		out = out[:len(out)-1]
