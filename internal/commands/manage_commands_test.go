@@ -245,3 +245,14 @@ func TestManageAgentsKeepsTheDescriptionsFirstLine(t *testing.T) {
 		t.Errorf("description = %q carries the examples after the first line", got)
 	}
 }
+
+// TestMcpDisplayNameForPluginServers: a plugin's server reads as the server
+// and its plugin, not the internal plugin_<p>_<s> id.
+func TestMcpDisplayNameForPluginServers(t *testing.T) {
+	if got := mcpDisplayName("plugin_chrome-devtools-mcp_chrome-devtools", "plugin"); got != "chrome-devtools · chrome-devtools-mcp" {
+		t.Errorf("plugin server = %q", got)
+	}
+	if got := mcpDisplayName("plugin_like_name", "user"); got != "plugin_like_name" {
+		t.Errorf("a user server named like a plugin id was renamed: %q", got)
+	}
+}

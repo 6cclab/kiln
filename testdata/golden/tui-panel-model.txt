@@ -3,6 +3,7 @@
   / commands   @ add files   ⇧⇥ cycle mode   esc stop
 
   ────────────────────────────────────────────────────────────────────────────────────────────────
+
   model ──────────────────────────────────────────────────────────────────────────────────────────
   Select model
   Switch between models. Your pick becomes the default for new sessions. For other names, specify

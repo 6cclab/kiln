@@ -223,6 +223,18 @@ func mcpStatusesText(statuses []ServerStatus) []string {
 // failed server's marker carries no trailing text, matching
 // dialog-mcp.txt's plain ✘ rows (its ⚠ rows are the ones with the "needs
 // authentication" suffix, which the harness cannot distinguish).
+// mcpDisplayName is how /mcp names a server. A plugin's server is
+// registered as plugin_<plugin>_<server> (plugin names are kebab-case, so
+// the first underscore separates them); it reads "<server> · <plugin>".
+func mcpDisplayName(name, scope string) string {
+	if rest, ok := strings.CutPrefix(name, "plugin_"); ok && scope == "plugin" {
+		if plugin, server, ok := strings.Cut(rest, "_"); ok && plugin != "" && server != "" {
+			return server + " · " + plugin
+		}
+	}
+	return name
+}
+
 // MarkerConnecting is /mcp's Item.Marker for a server still connecting.
 const MarkerConnecting = "connecting"
 
@@ -266,6 +278,8 @@ func mcpModal(deps ManageDeps) *ModalSpec {
 			return fmt.Sprintf("MCPs from --mcp-config (%s)", deps.MCPConfigPath)
 		case "user", "":
 			return "User MCPs (~/.claude.json)"
+		case "plugin":
+			return "Plugin MCPs (enabled Claude Code plugins)"
 		}
 		return strings.ToUpper(scope[:1]) + scope[1:] + " MCPs"
 	}
@@ -274,7 +288,7 @@ func mcpModal(deps ManageDeps) *ModalSpec {
 	for _, s := range sorted {
 		it := Item{
 			Value: s.Name,
-			Label: s.Name,
+			Label: mcpDisplayName(s.Name, s.Scope),
 			Group: groupFor(s.Scope),
 			Ms:    s.Ms,
 			Tools: toolsByServer[s.Name],

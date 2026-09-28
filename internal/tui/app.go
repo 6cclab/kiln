@@ -2292,11 +2292,13 @@ func (m Model) liveLines(width int) (lines []string, editorTop int, ruleSuppress
 // left of the terminal below linesAbove.
 func (m Model) dialogRows(width, linesAbove int) []string {
 	height := m.frameHeight()
-	room := height - linesAbove - 1
+	room := height - linesAbove - 2
 	if room < 4 {
 		room = 4
 	}
-	rows := []string{DialogTopRule(m.dialog, width)}
+	// A blank row first, as between any two blocks: the rule otherwise sat
+	// directly under the last line of the reply above it.
+	rows := []string{"", DialogTopRule(m.dialog, width)}
 	for _, r := range m.dialog.Render(width, room) {
 		rows = append(rows, FitStatus(r, width))
 	}

@@ -1,0 +1,24 @@
+{
+ "id": "20260928T193159Z-dialog-no-blank-row",
+ "found_at": "2026-09-28T19:31:59Z",
+ "scenario": "real/wf-manual-permissions",
+ "step": "07-permissions-dialog",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "Dialogs open flush under the last transcript line",
+ "observed": "'permissions ───' directly under the reply's last line",
+ "expected": "One blank row before the dialog, as between blocks",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T192211/iterm-dark/real-wf-manual-permissions-140x45/07-permissions-dialog.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_Panels_OpenClose",
+  "updated_at": "2026-09-28T19:31:59Z"
+ }
+}

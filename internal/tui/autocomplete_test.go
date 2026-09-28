@@ -409,3 +409,13 @@ func TestPopup_ClippedListCountsHiddenItems(t *testing.T) {
 		t.Errorf("an unclipped list shows a count:\n%s", stripANSI(strings.Join(short, "\n")))
 	}
 }
+
+// TestSlashItemMarksTruncatedDescription: a description cut to fit ends
+// in "…" rather than stopping mid-word.
+func TestSlashItemMarksTruncatedDescription(t *testing.T) {
+	item := AutocompleteItem{Value: "review", Description: "Uses Chrome DevTools MCP for accessibility debugging and auditing based on the page"}
+	rows := renderSlashCommandItem(item, false, 40, func(s string) string { return s }, func(s string) string { return s })
+	if got := stripANSI(rows[0]); !strings.HasSuffix(got, "…") || VisibleWidth(got) > 40 {
+		t.Errorf("row = %q (width %d), want it cut to 40 columns ending in …", got, VisibleWidth(got))
+	}
+}

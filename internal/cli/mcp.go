@@ -151,6 +151,10 @@ type mcpSession struct {
 	// same as cli.ts's `session` variable, captured by closure before it is
 	// assigned.
 	lane laneSetter
+	// rebuild regenerates what is built from the posture — tool_search's
+	// scope and gate state, and the server index in the system prompt —
+	// after a /posture switch. Nil until the session wires it.
+	rebuild func()
 }
 
 // laneSetter is the minimal surface mcpSession.regate needs from
@@ -233,5 +237,12 @@ func switchPosture(mcpSess *mcpSession, name string) error {
 	}
 	mcpSess.posture = p
 	mcpSess.state = mcpgate.NewGateState()
+	// tool_search and the prompt's server index were built for the old
+	// posture and hold the old gate state: without a rebuild, a search
+	// after the switch saw the old posture's servers and admitted tools
+	// into a state nothing read.
+	if mcpSess.rebuild != nil {
+		mcpSess.rebuild()
+	}
 	return mcpSess.regate()
 }

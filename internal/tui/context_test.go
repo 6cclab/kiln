@@ -126,3 +126,21 @@ func TestRenderContextBar_EachNonEmptySegmentAtLeastOneCell(t *testing.T) {
 		t.Errorf("expected at least 1 cell per non-zero segment (4 segments), got %q", plain)
 	}
 }
+
+// TestSegmentPercentsSumTo100: shares of a fully covered window add to
+// 100 (rounding each on its own read 101%), and a small non-empty segment
+// reads "<1%".
+func TestSegmentPercentsSumTo100(t *testing.T) {
+	b := commands.ContextBreakdown{Window: 1_000_000, Segments: []commands.ContextSegment{
+		{Label: "System prompt", Tokens: 6_400}, {Label: "Tools", Tokens: 3_000},
+		{Label: "Files read", Tokens: 0}, {Label: "Conversation", Tokens: 5_400},
+		{Label: "Free", Tokens: 985_200},
+	}}
+	got := segmentPercents(b)
+	want := []string{"1%", "<1%", "0%", "1%", "98%"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("segment %d = %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}

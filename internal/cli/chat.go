@@ -554,7 +554,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// list so they can be rebuilt once the background connect finishes.
 	buildMCPExtras := func(mcpTools []mcpgate.McpTool) ([]*tool.Tool, string) {
 		scope := mcpSess.indexScope()
-		extras := []*tool.Tool{tools.ToolSearchTool(mcpTools, scope, gateState, onAdmit)}
+		extras := []*tool.Tool{tools.ToolSearchTool(mcpTools, scope, mcpSess.state, onAdmit)}
 		for _, t := range mcpTools {
 			extras = append(extras, mcpgate.ToHarnessTool(hub, t))
 		}
@@ -714,6 +714,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 		phase("mcp applied", "tools", len(mcpTools))
 	}
+	mcpSess.rebuild = applyMCP
 	// dispatcher.Parent is read only once a subagent is actually dispatched
 	// (during a turn, from taskTool's Execute), by which point started is
 	// always set — see the dispatcher construction above.

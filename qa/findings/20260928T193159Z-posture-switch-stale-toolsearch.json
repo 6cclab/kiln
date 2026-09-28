@@ -1,0 +1,25 @@
+{
+ "id": "20260928T193159Z-posture-switch-stale-toolsearch",
+ "found_at": "2026-09-28T19:31:59Z",
+ "scenario": "real/mcp-user-servers",
+ "step": "07-investigated",
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "After /posture, tool_search searched the old posture and enabled tools stayed unusable",
+ "observed": "With /posture ops, a Grafana request found no Grafana tools and the model said no Grafana MCP was connected (81 tools connected); tool_search kept the startup posture and a gate state /posture had replaced, so tools it enabled were refused",
+ "expected": "tool_search and the prompt's server index follow the current posture; enabled tools are callable",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-mcp-user-servers-140x45/07-investigated.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/mcp.go",
+   "internal/cli/chat.go"
+  ],
+  "regression_test": "TestTUI_PostureSwitchReachesToolSearch",
+  "updated_at": "2026-09-28T19:31:59Z"
+ }
+}

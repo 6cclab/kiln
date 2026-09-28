@@ -24,6 +24,6 @@ SHOT after-permissions
 SEND /permissions
 WAIT 2
 SHOT permissions-dialog
-EXPECT /mode\s+manual/
+EXPECT /mode\s+acceptEdits/
 KEY esc
 IDLE 30

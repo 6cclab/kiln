@@ -1,0 +1,22 @@
+{
+ "id": "20260928T193159Z-mcp-plugin-raw-id",
+ "found_at": "2026-09-28T19:31:59Z",
+ "scenario": "real/mcp-project-config",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "/mcp lists plugin servers by their internal id",
+ "observed": "plugin_chrome-devtools-mcp_chrome-devtools under User MCPs",
+ "expected": "chrome-devtools · chrome-devtools-mcp under Plugin MCPs",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/manage_commands.go"
+  ],
+  "regression_test": "TestMcpDisplayNameForPluginServers",
+  "updated_at": "2026-09-28T19:31:59Z"
+ }
+}

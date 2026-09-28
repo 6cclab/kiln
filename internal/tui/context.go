@@ -7,6 +7,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/andrepato/harness/internal/commands"
@@ -51,14 +52,11 @@ func RenderContext(b commands.ContextBreakdown, width int) []string {
 
 	lines = append(lines, renderContextBar(b, width))
 
-	for _, seg := range b.Segments {
-		pct := 0.0
-		if b.Window > 0 {
-			pct = float64(seg.Tokens) / float64(b.Window) * 100
-		}
+	pcts := segmentPercents(b)
+	for i, seg := range b.Segments {
 		swatch := contextSegmentColor(seg.Label)(G().Segment)
 		row := fmt.Sprintf("%s %s", swatch, Ink(seg.Label))
-		right := fmt.Sprintf("%s %s", Muted(FormatTokens(seg.Tokens)), Muted(fmt.Sprintf("%5s", fmt.Sprintf("%.0f%%", pct))))
+		right := fmt.Sprintf("%s %s", Muted(FormatTokens(seg.Tokens)), Muted(fmt.Sprintf("%5s", pcts[i])))
 		pad := width - VisibleWidth(row) - VisibleWidth(right)
 		if pad < 1 {
 			lines = append(lines, FitStatus(row+" "+right, width))
@@ -142,5 +140,57 @@ func formatK(n int) string {
 	if n < 1000 {
 		return fmt.Sprintf("%d", n)
 	}
-	return fmt.Sprintf("%dk", n/1000)
+	return fmt.Sprintf("%dk", (n+500)/1000) // rounded: 14.8k reads 15k, not 14k
+}
+
+// segmentPercents renders each segment's share of the window as whole
+// percentages that sum to 100 (largest remainder: rounding each on its own
+// read 1+0+0+1+99 = 101%). A segment with tokens whose share rounds to 0
+// reads "<1%" rather than claiming nothing.
+func segmentPercents(b commands.ContextBreakdown) []string {
+	out := make([]string, len(b.Segments))
+	if b.Window <= 0 {
+		for i := range out {
+			out[i] = "0%"
+		}
+		return out
+	}
+	floors := make([]int, len(b.Segments))
+	rems := make([]float64, len(b.Segments))
+	total := 0
+	for i, seg := range b.Segments {
+		exact := float64(seg.Tokens) / float64(b.Window) * 100
+		floors[i] = int(exact)
+		rems[i] = exact - float64(floors[i])
+		total += floors[i]
+	}
+	target := 0
+	for _, seg := range b.Segments {
+		target += seg.Tokens
+	}
+	// The segments normally cover the whole window (Free included); only
+	// then must the shares add to exactly 100.
+	want := total
+	if target >= b.Window {
+		want = 100
+	} else {
+		want = int(float64(target)/float64(b.Window)*100 + 0.5)
+	}
+	order := make([]int, len(b.Segments))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, c int) bool { return rems[order[a]] > rems[order[c]] })
+	for k := 0; total < want && k < len(order); k++ {
+		floors[order[k]]++
+		total++
+	}
+	for i, seg := range b.Segments {
+		if floors[i] == 0 && seg.Tokens > 0 {
+			out[i] = "<1%"
+		} else {
+			out[i] = fmt.Sprintf("%d%%", floors[i])
+		}
+	}
+	return out
 }

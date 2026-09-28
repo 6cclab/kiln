@@ -283,7 +283,10 @@ func renderSlashCommandItem(item AutocompleteItem, selected bool, width int, pai
 	if descWidth < 1 {
 		return []string{line}
 	}
-	return []string{line + paintDesc(truncateToWidth(desc, descWidth))}
+	if VisibleWidth(desc) > descWidth {
+		desc = ansi.Truncate(desc, descWidth, "…") // cut, and say so
+	}
+	return []string{line + paintDesc(desc)}
 }
 
 // truncateMiddle keeps the last path segment and clips the front with "…"
