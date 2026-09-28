@@ -1355,10 +1355,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// one keypress, as Claude Code does — the popup does not eat the
 			// Enter to merely re-insert what is already there. A partial name
 			// (or Tab) still completes first; a second Enter then submits.
+			// The same goes for anything else already typed in full — an
+			// argument ("/posture ops"), a file mention — when accepting
+			// would leave the line as it is: Enter used to be swallowed there,
+			// so the next message was typed onto the end of the command.
 			item, hasItem := m.popup.SelectedItem()
 			line, _ := m.editor.CursorLine()
-			if msg.String() == "enter" && hasItem && m.popup.Kind == KindSlashCommand &&
-				strings.TrimSpace(line) == "/"+item.Value {
+			replacement, _ := m.popup.Accept()
+			accepted := line
+			if m.popup.Start >= 0 && m.popup.Start <= m.popup.End && m.popup.End <= len(line) {
+				accepted = line[:m.popup.Start] + replacement + line[m.popup.End:]
+			}
+			if msg.String() == "enter" && hasItem && (strings.TrimSpace(line) == "/"+item.Value ||
+				strings.TrimRight(accepted, " ") == strings.TrimRight(line, " ")) {
 				m.popup = nil
 				m.editor.PopupActive = false
 				// Fall through to the editor's submit pipeline below.

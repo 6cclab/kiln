@@ -103,3 +103,27 @@ steps:
 		t.Errorf("verbose view lost the command as run:\n%s", verbose)
 	}
 }
+
+// TestTUI_EnterRunsFullyTypedArgument: "/posture ops" typed in full runs on
+// one Enter. The argument popup used to take that Enter to accept "ops"
+// again, leaving the command in the input, so the user's next message was
+// typed onto its end ("/posture opsUsing the Grafana MCP…").
+func TestTUI_EnterRunsFullyTypedArgument(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	addr, _ := startFaux(t, mcpPlainTextScript)
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr)
+	defer s.Close()
+	waitReady(t, s)
+	s.Send("/posture ops")
+	if err := s.WaitFor("ops", 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	s.SendKey("enter")
+	if err := s.WaitFor(regexp.MustCompile(`(?i)posture[^\n]*ops`), 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WaitFor("describe a task", 3*time.Second); err != nil {
+		t.Fatalf("input not cleared after one Enter:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+}

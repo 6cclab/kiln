@@ -3,6 +3,7 @@ package permission
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -343,6 +344,43 @@ func PrimaryArgOf(args map[string]any) (string, bool) {
 	return "", false
 }
 
+// explicitAsk reports whether an ask rule names this bash command, which
+// the read-only allowance must not override.
+func (g *Gate) explicitAsk(permissions settings.Permissions, cmd string) bool {
+	return len(permissions.Ask) > 0 && settings.Decide(settings.Permissions{Ask: permissions.Ask}, "bash", cmd, settings.ModeAuto) == settings.Ask
+}
+
+// commandWithinRoots reports whether every path a command names stays in
+// the workspace: absolute and ~ paths must lie inside a root (/dev/null
+// aside), and a relative one must not climb out with "..". A cd target is
+// a path like any other, so "cd /elsewhere && cat x" is outside.
+func (g *Gate) commandWithinRoots(cmd string) bool {
+	words, ok := settings.CommandWords(cmd)
+	if !ok {
+		return false
+	}
+	home, _ := os.UserHomeDir()
+	for _, w := range words {
+		if _, v, ok := strings.Cut(w, "="); ok && strings.HasPrefix(w, "-") {
+			w = v // --output=/x
+		}
+		switch {
+		case w == "/dev/null":
+		case strings.HasPrefix(w, "~"):
+			if home == "" || !g.WithinRoots(filepath.Join(home, strings.TrimPrefix(w, "~"))) {
+				return false
+			}
+		case filepath.IsAbs(w):
+			if !g.WithinRoots(w) {
+				return false
+			}
+		case w == ".." || strings.HasPrefix(w, "../") || strings.Contains(w, "/../") || strings.HasSuffix(w, "/.."):
+			return false
+		}
+	}
+	return true
+}
+
 // Check decides, prompting if necessary. A nil result means proceed; a
 // non-nil BlockResult carries the reason, written for the model.
 //
@@ -376,6 +414,18 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	g.mu.Unlock()
 
 	verdict := settings.Decide(permissions, req.ToolName, req.PrimaryArg, mode)
+
+	// A bash command that provably only reads, and only inside the
+	// workspace, runs without asking in the modes that otherwise ask about
+	// bash — the way the read tool never asks. Asking before "cat app.py"
+	// or "git log" was pure friction. Rules still win: Decide has already
+	// returned Deny or an explicit Ask for anything a rule names.
+	if verdict == settings.Ask && strings.EqualFold(req.ToolName, "bash") &&
+		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits) &&
+		settings.IsReadOnlyCommand(req.PrimaryArg) && !g.explicitAsk(permissions, req.PrimaryArg) &&
+		g.commandWithinRoots(req.PrimaryArg) {
+		return nil, OutcomeAuto, nil
+	}
 
 	// A path outside the workspace always warrants a question, even when a
 	// rule would otherwise allow the tool.

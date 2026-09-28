@@ -221,7 +221,7 @@ func TestConcurrentCheckPromptsOnce(t *testing.T) {
 		return PromptChoice{Kind: PromptAllowAlways}, nil
 	})
 
-	req := Request{ToolName: "bash", PrimaryArg: "echo hi", Args: map[string]any{}}
+	req := Request{ToolName: "bash", PrimaryArg: "touch made.txt", Args: map[string]any{}}
 
 	var wg sync.WaitGroup
 	results := make([]*BlockResult, 2)
@@ -293,5 +293,53 @@ func TestGateBashDontAskGrantsThePrefixItNames(t *testing.T) {
 	}
 	if check("npm test && rm -rf build") || len(asked) != 2 {
 		t.Errorf("a line with an unnamed command must still ask; asked=%q", asked)
+	}
+}
+
+// TestReadOnlyBashInWorkspaceDoesNotAsk: in the modes that ask about bash,
+// a command that only reads, and only inside the workspace, runs without a
+// prompt; one that reads outside it, writes, or is named by an ask rule
+// still asks.
+func TestReadOnlyBashInWorkspaceDoesNotAsk(t *testing.T) {
+	root := work(t)
+	for _, mode := range []settings.PermissionMode{settings.ModeManual, settings.ModeAcceptEdits} {
+		g := NewGate(GateOptions{Mode: mode, Roots: []string{root}})
+		asked := 0
+		g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) {
+			asked++
+			return PromptChoice{Kind: PromptAllow}, nil
+		})
+		cases := []struct {
+			cmd  string
+			asks bool
+		}{
+			{"cat app.py | head -5; ls -la app.py 2>/dev/null", false},
+			{"cat " + filepath.Join(root, "app.py"), false},
+			{"cd " + root + " && git log --oneline -3", false},
+			{"cat /etc/passwd", true},
+			{"cat ../secrets.txt", true},
+			{"cd /tmp && ls", true},
+			{"ls ~/.ssh", true},
+			{"touch x", true},
+			{"cat app.py > copy.py", true},
+		}
+		for _, c := range cases {
+			asked = 0
+			_, outcome, err := g.CheckWithOutcome(context.Background(), Request{ToolName: "bash", PrimaryArg: c.cmd, Args: map[string]any{"command": c.cmd}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := asked > 0; got != c.asks {
+				t.Errorf("%s: %q asked=%v, want %v (outcome %v)", mode, c.cmd, got, c.asks, outcome)
+			}
+		}
+	}
+
+	g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{root}, Permissions: settings.Permissions{Ask: []string{"Bash(git log:*)"}}})
+	asked := 0
+	g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) { asked++; return PromptChoice{Kind: PromptAllow}, nil })
+	g.CheckWithOutcome(context.Background(), Request{ToolName: "bash", PrimaryArg: "git log -3", Args: map[string]any{}})
+	if asked != 1 {
+		t.Errorf("an ask rule for git log was overridden by the read-only allowance")
 	}
 }

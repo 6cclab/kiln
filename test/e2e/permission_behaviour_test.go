@@ -281,11 +281,11 @@ func sprintfScript(format, path string) string {
 
 const permBashPromptScript = `model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "echo hi"}, id: b1}
+  - tool_call: {name: bash, args: {command: "echo hi | tee hi.txt"}, id: b1}
   - on_tool_result: b1
     then:
       - text: "first done"
-  - tool_call: {name: bash, args: {command: "echo hi"}, id: b2}
+  - tool_call: {name: bash, args: {command: "echo hi | tee hi.txt"}, id: b2}
   - on_tool_result: b2
     then:
       - text: "second done"
@@ -449,5 +449,36 @@ func TestPermission_PlanModeAllowsReadOnlyBash(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(proj, "build")); err == nil {
 		t.Errorf("plan mode let mkdir run")
+	}
+}
+
+// TestPermission_ReadOnlyBashInWorkspaceRunsWithoutPrompt: in manual mode a
+// command that only reads project files runs straight away, as the read
+// tool does; one that reads outside the workspace still asks.
+func TestPermission_ReadOnlyBashInWorkspaceRunsWithoutPrompt(t *testing.T) {
+	proj, home, sessDir, addr, _ := tuiFixture(t, `model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "cat src/math.js | head -2"}, id: r1}
+  - on_tool_result: r1
+    then:
+      - tool_call: {name: bash, args: {command: "cat /etc/hosts"}, id: r2}
+  - on_tool_result: r2
+    then:
+      - text: "read both"
+`)
+	s := startTUI(t, 100, 40, proj, home, sessDir, addr, "--permission-mode", "manual")
+	defer s.Close()
+	waitReady(t, s)
+	s.Send("look around")
+	s.SendKey("enter")
+	if err := s.WaitFor("Allow kiln to run this command", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	screen := strings.Join(s.Rows(), "\n")
+	if !strings.Contains(screen, "function add") {
+		t.Errorf("the in-workspace cat did not run before the prompt:\n%s", screen)
+	}
+	if !strings.Contains(screen, "cat /etc/hosts") {
+		t.Errorf("the prompt is not for the outside-workspace read:\n%s", screen)
 	}
 }

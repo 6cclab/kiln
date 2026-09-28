@@ -30,6 +30,20 @@ func IsReadOnlyCommand(cmd string) bool {
 	return true
 }
 
+// CommandWords is every word of a command line IsReadOnlyCommand can parse
+// (quotes removed, operators dropped), for a caller that must check the
+// paths a read-only command touches; ok is false when it cannot be parsed.
+func CommandWords(cmd string) (words []string, ok bool) {
+	segments, ok := splitCommandLine(cmd)
+	if !ok {
+		return nil, false
+	}
+	for _, seg := range segments {
+		words = append(words, seg...)
+	}
+	return words, true
+}
+
 // splitCommandLine tokenizes cmd into the word lists of its individual
 // commands, splitting on &&, ||, ; and |. Quotes group words; the quotes
 // themselves are dropped. It fails (ok=false) on every construct the

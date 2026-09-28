@@ -1,0 +1,25 @@
+{
+ "id": "20260928T122615Z-enter-swallowed-by-argument-popup",
+ "found_at": "2026-09-28T12:26:15Z",
+ "scenario": "real/mcp-user-servers",
+ "step": "06-posture-ops",
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Enter on a fully typed slash-command argument does nothing",
+ "observed": "'/posture ops' + Enter left the command in the input (the popup accepted 'ops' again); the next message was appended: '/posture opsUsing the Grafana MCP…' -> Unknown posture",
+ "expected": "Enter runs a command whose argument is already typed in full",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-mcp-user-servers-140x45/07-investigated.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_EnterRunsFullyTypedArgument",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T12:26:15Z"
+ }
+}
