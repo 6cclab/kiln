@@ -764,6 +764,11 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case msgDialogResult:
 		if applier, ok := m.dialog.(interface{ Apply(msgDialogResult) }); ok {
 			applier.Apply(msg)
+			// A dialog whose choice is final (a model picked) closes once
+			// it has applied, leaving its outcome as the confirmation.
+			if d, ok := m.dialog.(interface{ Done() bool }); ok && d.Done() {
+				m = m.closeDialog()
+			}
 			// A dialog action can move the gate's mode (/permissions' "m");
 			// the footer re-reads it so it agrees once the panel closes.
 			return m.refreshMode(), nil

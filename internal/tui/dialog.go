@@ -103,7 +103,9 @@ func selectionGutter(selected bool) string {
 	if !IsColorEnabled() {
 		return "> "
 	}
-	return "  "
+	// The raised background alone is too faint on many terminal themes
+	// to tell which row is selected; the prompt glyph says it plainly.
+	return KilnAmber("›") + " "
 }
 
 // renderTitleAndDescription renders the bold title row followed by the
@@ -226,13 +228,13 @@ func renderOptionRows(options []DialogOption, selected int, width, maxRows int) 
 			row += strings.Repeat(" ", pad) + Muted(descLines[0])
 		}
 		if i == selected {
-			row = OnRaise(padTo(row, width))
+			row = RaiseRow(row, width)
 		}
 		out = append(out, row)
 		for _, cont := range descLines[1:] {
 			contRow := strings.Repeat(" ", descCol) + Muted(cont)
 			if i == selected {
-				contRow = OnRaise(padTo(contRow, width))
+				contRow = RaiseRow(contRow, width)
 			}
 			out = append(out, contRow)
 		}

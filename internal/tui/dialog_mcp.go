@@ -164,7 +164,7 @@ func renderMCPListRows(items []commands.Item, cursor, width int) []string {
 			row += "   " + desc
 		}
 		if i == cursor {
-			row = OnRaise(padTo(row, width))
+			row = RaiseRow(row, width)
 		}
 		out = append(out, row)
 	}

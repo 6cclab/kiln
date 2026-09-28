@@ -572,15 +572,11 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 					Kind:   "model",
 					Header: []string{fmt.Sprintf("current    %s", orUnknown(currentID))},
 					Items:  items,
-					// Effort is a static "Medium" label: the harness has
-					// no reasoning-effort concept anywhere else in the
-					// codebase (no field on provider.Model, no setting,
-					// nothing budget/tier tracks), so there is nothing
-					// real to report or adjust. SetEffort is left nil,
-					// which internal/tui's dialogModel renders as a
-					// static row (←/→ a no-op) — see the handback
-					// report.
-					Effort: "Medium",
+					// The session's thinking effort; ←/→ changes it for
+					// this session. "auto" is an unset level: the model
+					// decides how much to think.
+					Effort:    currentEffort(deps.Lane),
+					SetEffort: setEffort(deps.Lane),
 					Select: func(value string) (string, error) {
 						providerID, mID, ok := splitProviderModel(value)
 						if !ok {
@@ -756,4 +752,32 @@ func orUnknown(s string) string {
 		return "unknown"
 	}
 	return s
+}
+
+// currentEffort is /model's effort label: the lane's level, or "auto".
+func currentEffort(lane *harness.Lane) string {
+	if lane == nil {
+		return ""
+	}
+	level, err := lane.ThinkingLevel()
+	if err != nil {
+		return ""
+	}
+	if level == "" || level == "off" {
+		return "auto"
+	}
+	return level
+}
+
+// setEffort is /model's ←/→ effort change, applied to this session.
+func setEffort(lane *harness.Lane) func(string) (string, error) {
+	if lane == nil {
+		return nil
+	}
+	return func(level string) (string, error) {
+		if err := lane.SetThinkingLevel(level); err != nil {
+			return "", err
+		}
+		return "Effort set to " + level + " for this session", nil
+	}
 }

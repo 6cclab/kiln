@@ -9,9 +9,9 @@
   Switch between models. Your pick becomes the default for new sessions. For other names, specify
   with --model.
 
-    1. faux/faux-1 ✓  128.0k context · medium tier
+  › 1. faux/faux-1 ✓  128.0k context · medium tier
     2. faux/faux-2    32.8k context · small tier
 
-  ◐ Medium effort ←/→ to adjust
+  ◐ auto effort ←/→ to adjust
 
   Enter to set as default · s to use this session only · Esc to cancel

@@ -128,6 +128,16 @@ func (l *Lane) GetActiveTools() ([]string, error) {
 	return cfg.ActiveToolNames, nil
 }
 
+// ThinkingLevel is the lane's recorded thinking level; "" means the model
+// decides (adaptive thinking, or the model's default).
+func (l *Lane) ThinkingLevel() (string, error) {
+	cfg, err := l.config()
+	if err != nil {
+		return "", err
+	}
+	return cfg.ThinkingLevel, nil
+}
+
 // SetThinkingLevel records the lane's thinking level, leaving its model as
 // it is. A no-op when the level is already set to it.
 func (l *Lane) SetThinkingLevel(level string) error {

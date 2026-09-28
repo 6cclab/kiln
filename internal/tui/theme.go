@@ -769,3 +769,20 @@ func labelRule(label string, labelColor func(string) string, meta string, width 
 	}
 	return out
 }
+
+// RaiseRow puts row, padded to width, on the raised (selected-row)
+// background across its whole width. Wrapping already-coloured text in
+// OnRaise lost the background at the text's first colour reset, so a
+// selected dialog row showed the highlight on its first cell or two
+// only; this re-applies it after every reset.
+func RaiseRow(row string, width int) string {
+	row = padTo(row, width)
+	on, off, ok := strings.Cut(OnRaise("\x00"), "\x00")
+	if !ok || on == "" {
+		return OnRaise(row)
+	}
+	for _, reset := range []string{"\x1b[0m", "\x1b[m", "\x1b[49m"} {
+		row = strings.ReplaceAll(row, reset, reset+on)
+	}
+	return on + row + off
+}

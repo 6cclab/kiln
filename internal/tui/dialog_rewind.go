@@ -147,7 +147,7 @@ func (d *rewindDialog) Render(width, height int) []string {
 		}
 		row := dialogIndent + marker + label
 		if selected {
-			row = OnRaise(padTo(row, width))
+			row = RaiseRow(row, width)
 		}
 		out = append(out, row)
 
@@ -157,7 +157,7 @@ func (d *rewindDialog) Render(width, height int) []string {
 		}
 		subRow := subIndent + Muted(sub)
 		if selected {
-			subRow = OnRaise(padTo(subRow, width))
+			subRow = RaiseRow(subRow, width)
 		}
 		out = append(out, subRow)
 	}
@@ -171,7 +171,7 @@ func (d *rewindDialog) Render(width, height int) []string {
 	}
 	currentRow := dialogIndent + currentMarker + currentText
 	if currentSelected {
-		currentRow = OnRaise(padTo(currentRow, width))
+		currentRow = RaiseRow(currentRow, width)
 	}
 	out = append(out, currentRow)
 

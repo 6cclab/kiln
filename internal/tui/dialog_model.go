@@ -28,7 +28,16 @@ type dialogModel struct {
 	// picking is the item value an in-flight Select/SelectDefault was
 	// run for; Apply moves the current-model mark to it on success.
 	picking string
+	// effortPending is the level an in-flight SetEffort was run for;
+	// Apply shows it on the effort row once it succeeds.
+	effortPending string
+	// done is set once a pick has applied: the dialog closes, and its
+	// Outcome is the confirmation left in the transcript.
+	done bool
 }
+
+// Done reports that a model was picked and applied.
+func (d *dialogModel) Done() bool { return d.done }
 
 // NewDialogModel builds the /model Dialog. Called by
 // internal/tui.NewCommandDialog when spec.Kind == "model" — see this
@@ -66,15 +75,13 @@ func (d *dialogModel) HandleKey(msg tea.KeyPressMsg) (consumed, closeIt bool, cm
 		return true, false, nil
 	case "left", "right":
 		if d.spec.SetEffort == nil {
-			// No dep wired: the row is static, arrows are a no-op. This
-			// is the harness's actual state today — see the handback
-			// report, there is no effort concept behind ModalSpec.Effort
-			// yet.
+			// No effort to change (no session lane): arrows do nothing.
 			return true, false, nil
 		}
 		next := nextEffortLevel(d.spec.Effort, key == "right")
 		d.status, d.statusOK = "…", true
 		d.picking = ""
+		d.effortPending = next
 		setEffort := d.spec.SetEffort
 		return true, false, func() tea.Msg {
 			label, err := setEffort(next)
@@ -142,7 +149,11 @@ func (d *dialogModel) Apply(r msgDialogResult) {
 		return
 	}
 	d.status, d.statusOK = r.msg, true
+	if d.effortPending != "" {
+		d.spec.Effort, d.effortPending = d.effortPending, ""
+	}
 	if picked != "" {
+		d.done = true
 		// The ✓ marks the model in use; after a switch that is the pick.
 		items := append([]commands.Item(nil), d.spec.Items...)
 		for i := range items {
@@ -162,7 +173,7 @@ func (d *dialogModel) Apply(r msgDialogResult) {
 var effortLevels = []string{"low", "medium", "high", "xhigh", "max"}
 
 func nextEffortLevel(current string, forward bool) string {
-	idx := 1 // default to "medium" if current is unrecognized/empty
+	idx := 1 // "auto" (unset) or unrecognised: step from "medium"
 	for i, l := range effortLevels {
 		if strings.EqualFold(l, current) {
 			idx = i
@@ -249,13 +260,13 @@ func renderModelOptionRows(items []commands.Item, cursor, width int) []string {
 			row += strings.Repeat(" ", pad) + Muted(lines[0])
 		}
 		if i == cursor {
-			row = OnRaise(padTo(row, width))
+			row = RaiseRow(row, width)
 		}
 		out = append(out, row)
 		for _, cont := range lines[1:] {
 			contRow := strings.Repeat(" ", descCol) + Muted(cont)
 			if i == cursor {
-				contRow = OnRaise(padTo(contRow, width))
+				contRow = RaiseRow(contRow, width)
 			}
 			out = append(out, contRow)
 		}

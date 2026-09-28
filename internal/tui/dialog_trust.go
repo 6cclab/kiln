@@ -60,7 +60,7 @@ func (d *trustDialog) Render(width, height int) []string {
 		}
 		row := marker + text
 		if selected {
-			row = OnRaise(padTo(row, width))
+			row = RaiseRow(row, width)
 		}
 		out = append(out, row)
 	}
