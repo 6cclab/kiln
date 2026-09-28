@@ -674,7 +674,17 @@ class Run:
             except subprocess.TimeoutExpired:
                 self.faux.kill()
         if self.work and not self.keep:
-            shutil.rmtree(self.work, ignore_errors=True)
+            # A scenario that runs go leaves a read-only module cache in its
+            # scratch HOME; make entries writable and retry, and report what
+            # still could not be removed instead of ignoring it.
+            def writable_retry(func, path, _exc):
+                os.chmod(os.path.dirname(path), 0o755)
+                os.chmod(path, 0o755)
+                func(path)
+            try:
+                shutil.rmtree(self.work, onerror=writable_retry)
+            except OSError as e:
+                self.log(f"cleanup: could not remove {self.work}: {e}")
 
     def kiln_running(self):
         return bool(self._kiln_pids())
