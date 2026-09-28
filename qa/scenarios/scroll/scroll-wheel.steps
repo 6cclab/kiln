@@ -16,6 +16,10 @@ EXPECT_NOT /panic|goroutine/
 
 SCROLL up 5
 SHOT after-scroll-up
+# Five notches at 3 lines each bring the reply's opening back into view
+# and push its end off the bottom.
+EXPECT /SCROLL-TOP-MARKER/
+EXPECT_NOT /SCROLL-BOTTOM-MARKER/
 EXPECT_NOT /panic|goroutine/
 
 SCROLL down 5

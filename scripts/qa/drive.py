@@ -44,7 +44,8 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     KEY <name> [name...]         enter esc tab backspace delete up down left
                                  right home end pgup pgdown, shift+tab,
                                  shift+enter, ctrl+<x>, alt+<x>, shift+<arrow>
-    SCROLL <up|down> <n>         mouse wheel over the window centre
+    SCROLL <up|down> <n>         mouse wheel over the window centre (iTerm2
+                                 only; moves the pointer there and back)
     CLICK <x> <y>                click at window-local points
     RESIZE <cols> <rows>         resize the window
     WAIT <seconds>               sleep
@@ -126,6 +127,18 @@ def orca_windows(bundle):
     return [w["id"] for w in d["result"]["windows"]]
 
 
+def wheel_binary():
+    """Compile scripts/qa/wheel.swift once (rebuilt when the source changes)."""
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wheel.swift")
+    out = os.path.join(os.path.expanduser("~/Library/Caches/kiln-qa"), "wheel")
+    if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src):
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        p = run(["swiftc", "-O", "-o", out, src])
+        if p.returncode != 0:
+            raise DriveError("wheel.swift failed to compile: " + p.stderr.strip()[:300])
+    return out
+
+
 # Named keys -> (orca action, orca key)
 PRESS = {
     "enter": "Return", "return": "Return", "esc": "Escape", "escape": "Escape",
@@ -201,6 +214,12 @@ class Iterm:
 
     def text(self):
         return self._session("      return contents of s")
+
+    def centre(self):
+        """The window's centre in global screen points (top-left origin)."""
+        b = self._session("      return bounds of w")
+        x1, y1, x2, y2 = (int(v) for v in b.split(","))
+        return (x1 + x2) // 2, (y1 + y2) // 2
 
     def close(self):
         try:
@@ -771,17 +790,18 @@ class Run:
                     time.sleep(0.12)
             elif verb == "SCROLL":
                 # Orca's scroll reports ok but delivers no wheel event to the
-                # terminal (probed with SGR mouse reporting on: clicks arrive,
-                # scrolls never do), so a SCROLL step would silently test
-                # nothing. Fail it until a real wheel path exists.
-                raise DriveError("SCROLL blocked: orca scroll delivers no wheel event to the terminal")
+                # terminal, so SCROLL posts real wheel events itself
+                # (scripts/qa/wheel.swift) over the window's centre.
                 direction, n = arg.split()[:2]
-                for _ in range(int(n)):
-                    self.term.activate()
-                    d = orca("scroll", "--app", self.term.bundle, "--window-id", str(self.term.wid),
-                             "--x", "400", "--y", "300", "--direction", direction)
-                    if not d.get("ok"):
-                        raise DriveError("scroll failed: %s" % json.dumps(d.get("error"))[:200])
+                self.term.activate()
+                time.sleep(0.2)
+                if not hasattr(self.term, "centre"):
+                    raise DriveError("SCROLL needs the window's screen position, which only the iTerm2 adapter reads")
+                x, y = self.term.centre()
+                p = run([wheel_binary(), str(x), str(y), direction, n])
+                if p.returncode != 0:
+                    raise DriveError("SCROLL failed: " + (p.stderr or p.stdout).strip())
+                time.sleep(0.3)
             elif verb == "CLICK":
                 x, y = arg.split()[:2]
                 self.term.activate()
