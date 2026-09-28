@@ -279,6 +279,10 @@ type DiffHunk struct {
 	New       string
 	OldAbsent bool
 	NewAbsent bool
+	// Context marks an unchanged line (Old == New), shown dim with no
+	// sign; Gap marks the space between two separate edits.
+	Context bool
+	Gap     bool
 }
 
 // EditPermissionRequest describes an Edit or Write call awaiting approval.
@@ -332,6 +336,14 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 	// committed (finding diff-sign-spacing-prompt-vs-committed).
 	var hunkLines []string
 	for _, h := range req.Hunks {
+		if h.Gap {
+			hunkLines = append(hunkLines, " "+Faint(strings.Repeat(" ", numWidth-1)+"…"))
+			continue
+		}
+		if h.Context {
+			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+"   "+Muted(h.New))
+			continue
+		}
 		if !h.OldAbsent {
 			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnRed("− "+h.Old))
 		}
@@ -433,26 +445,67 @@ func diffHunksFromEditFile(cwd string, args map[string]any) []DiffHunk {
 		firstNum := strings.Count(content[:lineStart], "\n") + 1
 		oldLines := strings.Split(content[lineStart:lineEnd], "\n")
 		newLines := strings.Split(content[lineStart:idx]+e.NewText+content[end:lineEnd], "\n")
-		n := len(oldLines)
-		if len(newLines) > n {
-			n = len(newLines)
+		if len(hunks) > 0 {
+			hunks = append(hunks, DiffHunk{Gap: true})
 		}
-		for i := 0; i < n; i++ {
-			h := DiffHunk{LineNum: firstNum + i}
-			if i < len(oldLines) {
-				h.Old = oldLines[i]
-			} else {
-				h.OldAbsent = true
-			}
-			if i < len(newLines) {
-				h.New = newLines[i]
-			} else {
-				h.NewAbsent = true
-			}
-			hunks = append(hunks, h)
-		}
+		hunks = append(hunks, lineDiffHunks(oldLines, newLines, firstNum)...)
 	}
 	return hunks
+}
+
+// lineDiffHunks diffs two runs of lines (an edit's region before and
+// after) into DiffHunks: unchanged lines as Context, the rest as removed
+// or added. Pairing old and new line by line instead showed every line of
+// a region as removed and re-added whenever the edit also inserted lines,
+// so an approval for "append an endpoint" read as rewriting the existing
+// ones. Removed lines carry their old line numbers, added and unchanged
+// lines their new ones, like the committed diff.
+func lineDiffHunks(oldLines, newLines []string, firstNum int) []DiffHunk {
+	n, m := len(oldLines), len(newLines)
+	if n*m > 250000 {
+		// Too large to diff cheaply: show it as a plain replacement.
+		var out []DiffHunk
+		for i, l := range oldLines {
+			out = append(out, DiffHunk{LineNum: firstNum + i, Old: l, NewAbsent: true})
+		}
+		for i, l := range newLines {
+			out = append(out, DiffHunk{LineNum: firstNum + i, New: l, OldAbsent: true})
+		}
+		return out
+	}
+	// lcs[i][j] = length of the longest common subsequence of
+	// oldLines[i:] and newLines[j:].
+	lcs := make([][]int, n+1)
+	for i := range lcs {
+		lcs[i] = make([]int, m+1)
+	}
+	for i := n - 1; i >= 0; i-- {
+		for j := m - 1; j >= 0; j-- {
+			if oldLines[i] == newLines[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
+		}
+	}
+	var out []DiffHunk
+	i, j := 0, 0
+	for i < n || j < m {
+		switch {
+		case i < n && j < m && oldLines[i] == newLines[j]:
+			out = append(out, DiffHunk{LineNum: firstNum + j, Old: oldLines[i], New: newLines[j], Context: true})
+			i++
+			j++
+		case i < n && (j == m || lcs[i+1][j] >= lcs[i][j+1]):
+			// Removals before additions, as a unified diff orders them.
+			out = append(out, DiffHunk{LineNum: firstNum + i, Old: oldLines[i], NewAbsent: true})
+			i++
+		default:
+			out = append(out, DiffHunk{LineNum: firstNum + j, New: newLines[j], OldAbsent: true})
+			j++
+		}
+	}
+	return out
 }
 
 // diffHunksFromEditArgs builds DiffHunk rows from an Edit call's "edits"

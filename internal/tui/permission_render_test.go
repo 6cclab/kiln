@@ -556,3 +556,35 @@ func TestRenderPlanApproval_RendersMarkdown(t *testing.T) {
 		}
 	}
 }
+
+// TestLineDiffHunks_KeepsUnchangedLinesAsContext: an edit that keeps
+// three lines and appends a new function must not show the kept lines as
+// removed and re-added (qa/findings *edit-preview-rewrites-unchanged-lines).
+func TestLineDiffHunks_KeepsUnchangedLinesAsContext(t *testing.T) {
+	old := []string{`@app.route("/users")`, `def users():`, `    return jsonify({"id": 1})`}
+	next := append(append([]string{}, old...), "", `@app.route("/health")`, `def health():`)
+	hunks := lineDiffHunks(old, next, 11)
+	var got []string
+	for _, h := range hunks {
+		switch {
+		case h.Context:
+			got = append(got, fmt.Sprintf("%d  %s", h.LineNum, h.New))
+		case h.OldAbsent:
+			got = append(got, fmt.Sprintf("%d+ %s", h.LineNum, h.New))
+		default:
+			got = append(got, fmt.Sprintf("%d- %s", h.LineNum, h.Old))
+		}
+	}
+	want := []string{
+		`11  @app.route("/users")`, `12  def users():`, `13      return jsonify({"id": 1})`,
+		`14+ `, `15+ @app.route("/health")`, `16+ def health():`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// A changed line is a removal and an addition around shared context.
+	h := lineDiffHunks([]string{"a", "b - x", "c"}, []string{"a", "b + x", "c"}, 1)
+	if len(h) != 4 || !h[0].Context || !h[1].NewAbsent || h[1].Old != "b - x" || !h[2].OldAbsent || !h[3].Context {
+		t.Errorf("single-line change: %+v", h)
+	}
+}
