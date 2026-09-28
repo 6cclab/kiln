@@ -227,6 +227,41 @@ steps:
 	}
 }
 
+// TestRefusedToolSkipsBeforeToolHooks: a call to an unknown or inactive
+// tool is refused before the before-tool hooks run. Those hooks include
+// the permission gate, and asking the user to approve a call that is then
+// refused anyway wastes their answer.
+func TestRefusedToolSkipsBeforeToolHooks(t *testing.T) {
+	rig := newTestRig(t, `
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "true"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - tool_call: {name: frobnicate, args: {}, id: tc2}
+  - on_tool_result: tc2
+    then:
+      - text: "done"
+`, []string{"read"})
+	var consulted []string
+	rig.H.Hooks().OnBeforeTool(func(ctx context.Context, call msg.ToolCall) (BeforeToolResult, error) {
+		consulted = append(consulted, call.Name)
+		return BeforeToolResult{}, nil
+	})
+	lane := rig.mustLane("main")
+	if _, err := lane.Prompt(context.Background(), "go", nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(consulted) != 0 {
+		t.Errorf("before-tool hooks consulted for refused calls: %v", consulted)
+	}
+	for _, id := range []string{"tc1", "tc2"} {
+		if tr := findToolResult(t, lane, id); !tr.IsError {
+			t.Errorf("%s: IsError = false, want the refusal", id)
+		}
+	}
+}
+
 // findToolResult locates the toolResult entry for toolCallID on lane's
 // branch, failing the test if it is not present.
 func findToolResult(t *testing.T, lane *Lane, toolCallID string) msg.ToolResultMessage {

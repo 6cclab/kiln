@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	mcpgate "github.com/andrepato/harness/internal/mcp"
-	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/tool"
 )
 
@@ -39,12 +38,6 @@ type toolSearchArgs struct {
 	MaxResults *int   `json:"maxResults"`
 }
 
-type toolSearchPayloadEntry struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-}
-
 // ToolSearchTool builds the `tool_search` tool: it searches the MCP tools
 // scoped to posture by keyword, admits the top matches into state
 // permanently for the session, and returns their full schemas. Mirrors
@@ -65,7 +58,7 @@ func ToolSearchTool(tools []mcpgate.McpTool, posture mcpgate.Posture, state *mcp
 	description := fmt.Sprintf(
 		"Search %d available MCP tools by keyword and enable the matches for this session. "+
 			"Use this when you need a capability you do not already have a tool for, such as querying Grafana, "+
-			"reading secrets, or managing deployments. Returns the tools' full schemas.",
+			"reading secrets, or managing deployments. The matches become callable tools from your next step on.",
 		len(searchable),
 	)
 
@@ -126,15 +119,9 @@ func ToolSearchTool(tools []mcpgate.McpTool, posture mcpgate.Posture, state *mcp
 			}
 
 			names := make([]string, len(candidates))
-			payload := make([]toolSearchPayloadEntry, len(candidates))
 			for i, c := range candidates {
 				state.Admit(c.tool.QualifiedName)
 				names[i] = c.tool.QualifiedName
-				payload[i] = toolSearchPayloadEntry{
-					Name:        c.tool.QualifiedName,
-					Description: c.tool.Description,
-					Parameters:  c.tool.InputSchema,
-				}
 			}
 			if onAdmit != nil {
 				if err := onAdmit(ctx, names); err != nil {
@@ -142,11 +129,35 @@ func ToolSearchTool(tools []mcpgate.McpTool, posture mcpgate.Posture, state *mcp
 				}
 			}
 
-			body, err := json.MarshalIndent(payload, "", "  ")
-			if err != nil {
-				return tool.Result{}, fmt.Errorf("tool_search: encoding payload: %w", err)
+			// The admitted tools join the request's tool list from the
+			// next step on, schemas included, so the result only names
+			// them: repeating every schema here would keep a second copy
+			// in the conversation for the rest of the session.
+			var b strings.Builder
+			fmt.Fprintf(&b, "Enabled %d tool(s); call them directly:\n", len(candidates))
+			for _, c := range candidates {
+				fmt.Fprintf(&b, "\n- %s", c.tool.QualifiedName)
+				if d := firstSentence(c.tool.Description); d != "" {
+					b.WriteString(": " + d)
+				}
 			}
-			return tool.Result{Content: msg.Blocks{msg.Text(fmt.Sprintf("Enabled %d tool(s):\n\n%s", len(candidates), body))}}, nil
+			return tool.Text(b.String()), nil
 		},
 	}
+}
+
+// firstSentence is the first line of d, cut at its first sentence end and
+// at 160 characters: enough to tell matched tools apart.
+func firstSentence(d string) string {
+	d = strings.TrimSpace(d)
+	if i := strings.IndexByte(d, '\n'); i >= 0 {
+		d = d[:i]
+	}
+	if i := strings.Index(d, ". "); i >= 0 {
+		d = d[:i+1]
+	}
+	if r := []rune(d); len(r) > 160 {
+		d = string(r[:159]) + "…"
+	}
+	return d
 }

@@ -78,7 +78,7 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 		labelRule("approval needed", KilnAmber, "", width),
 		amberRule,
 		"",
-		"  " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to use %s?", req.ToolName))),
+		"  " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to use %s?", promptToolName(req.ToolName)))),
 	}
 	if req.PrimaryArg != "" {
 		for _, row := range raisedCommandRows(SummarizeArg(req, cwd), maxInt(width-4, 1)) {
@@ -775,4 +775,19 @@ func raisedCommand(cmd string, width int) string {
 	}
 	tx := CurrentTextHex()
 	return onRaiseSpan(tx.Dim, plain[:2]) + onRaiseSpan(tx.Ink, plain[2:])
+}
+
+// promptToolName names a tool for the approval question: an MCP tool's
+// qualified id ("mcp__incidents__list_incidents") reads as the tool and
+// the server it belongs to.
+func promptToolName(name string) string {
+	rest, ok := strings.CutPrefix(name, "mcp__")
+	if !ok {
+		return name
+	}
+	server, tool, ok := strings.Cut(rest, "__")
+	if !ok || server == "" || tool == "" {
+		return name
+	}
+	return fmt.Sprintf("%s from the %s MCP server", tool, server)
 }

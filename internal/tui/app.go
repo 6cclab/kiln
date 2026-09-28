@@ -460,6 +460,10 @@ type msgFullscreenRewrap struct{ gen int }
 // the new verbosity (see replayTranscript and Bridge.MsgClearAndReplay).
 type msgReplayTranscript struct{}
 
+// msgExecDone reports that a program a command handed the terminal to (the
+// editor /memory opens) has exited, with the note to show for it.
+type msgExecDone struct{ note string }
+
 // bannerBackgroundGrace is how long the first WindowSizeMsg's handler waits
 // for tea.BackgroundColorMsg before committing the banner (and, for a
 // resumed session, replaying the transcript) with whatever theme tokens are
@@ -737,6 +741,12 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgReplayTranscript:
 		m.replayTranscript()
+		return m, nil
+
+	case msgExecDone:
+		if msg.note != "" {
+			m.commitNote(msg.note)
+		}
 		return m, nil
 
 	case msgCommitBanner:
@@ -1694,6 +1704,18 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		echo()
+		if handled.Exec != nil {
+			// Hand the terminal to the program (an editor for /memory):
+			// the TUI suspends, the program runs in the foreground, and
+			// the note lands once it exits.
+			done := handled.ExecDone
+			return m, tea.ExecProcess(handled.Exec, func(err error) tea.Msg {
+				if done == nil {
+					return nil
+				}
+				return msgExecDone{note: done(err)}
+			})
+		}
 		switch {
 		case handled.Context != nil:
 			// /context gets the structured "context" block

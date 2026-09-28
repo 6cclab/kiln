@@ -643,7 +643,34 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	}
 	l.h.events.Emit(Event{Type: EventToolStart, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
 
-	before := l.invokeBeforeTool(ctx, call)
+	// A call that cannot run is refused before the before-tool hooks: they
+	// include the permission gate, and asking the user to approve a call
+	// that is then refused anyway wastes their answer.
+	var refusal *tool.Result
+	if _, registered := l.h.opts.Tools.Get(call.Name); !registered {
+		// Distinct from the "not in the active tool set" branch below: a
+		// name that was never registered anywhere is a typo or a
+		// hallucinated tool, not an access restriction, and the two read
+		// very differently to a user watching the transcript.
+		diag.L().Info("tool refused: unknown", "lane", l.name, "tool", call.Name)
+		r := tool.Errorf("unknown tool %q", call.Name)
+		refusal = &r
+	} else if !l.toolActive(call.Name) {
+		active, _ := l.GetActiveTools()
+		diag.L().Info("tool refused: not active", "lane", l.name, "tool", call.Name, "active", active)
+		// The active set is not only what the model is offered: a subagent
+		// restricted to Read must not run bash because its model guessed
+		// the name, and a gated MCP tool must be activated through
+		// tool_search before it executes. Refusing here, not just in the
+		// schema, is what makes an allowlist an allowlist.
+		r := tool.Errorf("tool %q is not available to this agent: it is not in the active tool set", call.Name)
+		refusal = &r
+	}
+
+	var before BeforeToolResult
+	if refusal == nil {
+		before = l.invokeBeforeTool(ctx, call)
+	}
 
 	args := call.Arguments
 	if before.RewrittenArgs != nil {
@@ -654,24 +681,10 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	}
 
 	var result tool.Result
-	if before.Block != nil {
+	if refusal != nil {
+		result = *refusal
+	} else if before.Block != nil {
 		result = tool.Result{Content: msg.Blocks{msg.Text(before.Block.Reason)}, IsError: true}
-	} else if _, registered := l.h.opts.Tools.Get(call.Name); !registered {
-		// Distinct from the "not in the active tool set" branch below: a
-		// name that was never registered anywhere is a typo or a
-		// hallucinated tool, not an access restriction, and the two read
-		// very differently to a user watching the transcript.
-		diag.L().Info("tool refused: unknown", "lane", l.name, "tool", call.Name)
-		result = tool.Errorf("unknown tool %q", call.Name)
-	} else if !l.toolActive(call.Name) {
-		active, _ := l.GetActiveTools()
-		diag.L().Info("tool refused: not active", "lane", l.name, "tool", call.Name, "active", active)
-		// The active set is not only what the model is offered: a subagent
-		// restricted to Read must not run bash because its model guessed
-		// the name, and a gated MCP tool must be activated through
-		// tool_search before it executes. Refusing here, not just in the
-		// schema, is what makes an allowlist an allowlist.
-		result = tool.Errorf("tool %q is not available to this agent: it is not in the active tool set", call.Name)
 	} else if call.InvalidArgs != "" {
 		// The provider could not parse the call's arguments; running the
 		// tool with empty arguments would silently do the wrong thing.

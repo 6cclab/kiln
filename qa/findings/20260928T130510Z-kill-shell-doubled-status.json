@@ -1,0 +1,22 @@
+{
+ "id": "20260928T130510Z-kill-shell-doubled-status",
+ "found_at": "2026-09-28T13:05:10Z",
+ "scenario": "real/wf-devserver-debug",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "kill_shell says 'Killed bash_1  killed'",
+ "observed": "Killed bash_1  killed  3s  npm run dev",
+ "expected": "Killed bash_1 after 3s  npm run dev",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tools/backgroundshell.go"
+  ],
+  "regression_test": "TestKillShellVerbDistinguishesRunningFromFinished",
+  "updated_at": "2026-09-28T13:05:10Z"
+ }
+}

@@ -1,0 +1,24 @@
+{
+ "id": "20260928T130510Z-memory-editor-shares-tty",
+ "found_at": "2026-09-28T13:05:10Z",
+ "scenario": "real/ext-onboarding",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "/memory starts $EDITOR beside the running TUI",
+ "observed": "/memory spawned the editor detached while kiln kept the terminal in raw mode; a terminal editor (vim, nano) would fight kiln for keys and screen. Surfaced as 'Opened … in true.' under EDITOR=true",
+ "expected": "kiln suspends, runs the editor in the foreground, then notes Saved/No changes",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/session_commands.go",
+   "internal/commands/registry.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_MemoryHandsTheTerminalToTheEditor",
+  "updated_at": "2026-09-28T13:05:10Z"
+ }
+}

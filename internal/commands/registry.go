@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -135,6 +136,12 @@ type Result struct {
 	// other command. -p/print mode ignores it and uses Output, same as
 	// every other command's plain-text form.
 	Context *ContextBreakdown
+	// Exec is a program to hand the terminal to (an editor, for /memory).
+	// The interactive shell suspends itself, runs it in the foreground and
+	// shows ExecDone's note after it exits; Output is the fallback for
+	// print mode, which never runs it.
+	Exec     *exec.Cmd
+	ExecDone func(err error) string
 }
 
 // ContextBreakdown is /context's structured result: how many tokens are

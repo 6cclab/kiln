@@ -91,17 +91,21 @@ type ShellManager interface {
 
 // describe renders one shell as background-shell.ts's describe() does:
 // "bash_1  running (exit 0)  3s  sleep 5".
-func describe(s Shell) string {
+// shellRuntime is how long s ran (or has run so far), in whole seconds.
+func shellRuntime(s Shell) string {
 	end := time.Now()
 	if s.EndedAt != nil {
 		end = *s.EndedAt
 	}
-	seconds := int(math.Round(end.Sub(s.StartedAt).Seconds()))
+	return fmt.Sprintf("%ds", int(math.Round(end.Sub(s.StartedAt).Seconds())))
+}
+
+func describe(s Shell) string {
 	code := ""
 	if s.ExitCode != nil {
 		code = fmt.Sprintf(" (exit %d)", *s.ExitCode)
 	}
-	return fmt.Sprintf("%s  %s%s  %ds  %s", s.ID, s.Status, code, seconds, s.Command)
+	return fmt.Sprintf("%s  %s%s  %s  %s", s.ID, s.Status, code, shellRuntime(s), s.Command)
 }
 
 func idParam(args json.RawMessage) (string, error) {
@@ -181,11 +185,11 @@ func KillShellTool(shells ShellManager) *tool.Tool {
 			}
 			// "Killed" a shell that had already exited is a small lie that
 			// sends the model looking for a cause it will not find.
-			verb := "Already finished:"
 			if hadBefore && before.Status == ShellRunning {
-				verb = "Killed"
+				// describe would repeat the status ("Killed bash_1  killed").
+				return tool.Text(fmt.Sprintf("Killed %s after %s  %s", shell.ID, shellRuntime(shell), shell.Command)), nil
 			}
-			return tool.Text(fmt.Sprintf("%s %s", verb, describe(shell))), nil
+			return tool.Text("Already finished: " + describe(shell)), nil
 		},
 	}
 }

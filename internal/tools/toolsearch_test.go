@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	mcpgate "github.com/andrepato/harness/internal/mcp"
@@ -60,9 +61,14 @@ func TestToolSearchAdmitsMatchesAndCallsOnAdmit(t *testing.T) {
 		t.Fatalf("onAdmit calls = %+v", admittedCalls)
 	}
 
+	// The schema reaches the model through the next request's tool list;
+	// the result names the tool and does not carry a second copy.
 	text := msg.TextOf(res.Content)
-	if text == "" {
-		t.Fatal("expected non-empty result text")
+	if want := "- mcp__fixture__echo: echo back the given text"; !strings.Contains(text, want) {
+		t.Errorf("result %q does not name the tool as %q", text, want)
+	}
+	if strings.Contains(text, "properties") {
+		t.Errorf("result %q repeats the tool's schema", text)
 	}
 }
 

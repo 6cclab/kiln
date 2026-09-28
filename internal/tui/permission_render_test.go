@@ -588,3 +588,16 @@ func TestLineDiffHunks_KeepsUnchangedLinesAsContext(t *testing.T) {
 		t.Errorf("single-line change: %+v", h)
 	}
 }
+
+// TestRenderPermissionPromptNamesMCPToolAndServer: an MCP tool's qualified
+// id reads as the tool and its server in the approval question.
+func TestRenderPermissionPromptNamesMCPToolAndServer(t *testing.T) {
+	req := PermissionRequest{ToolName: "mcp__incidents__list_incidents"}
+	full := stripANSI(strings.Join(RenderPermissionPrompt(req, "/", 100, 0, false, ""), "\n"))
+	if !strings.Contains(full, "Allow kiln to use list_incidents from the incidents MCP server?") {
+		t.Errorf("prompt does not name the tool and server:\n%s", full)
+	}
+	if strings.Contains(full, "mcp__") {
+		t.Errorf("prompt shows the raw qualified id:\n%s", full)
+	}
+}

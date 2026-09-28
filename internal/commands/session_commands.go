@@ -313,15 +313,30 @@ func SessionCommands(deps SessionCommandDeps) Source {
 					return Result{Output: []string{"No $EDITOR set. Edit manually:", "  " + path}}, nil
 				}
 
-				cmd := exec.Command(editor, path)
-				cmd.Stdin = os.Stdin
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
-				if err := cmd.Start(); err != nil {
-					return Result{}, err
+				// $EDITOR may carry flags ("code --wait"), so it runs through
+				// the shell with the path as a positional argument.
+				cmd := exec.Command("/bin/sh", "-c", editor+` "$1"`, "sh", path)
+				before := modTime(path)
+				shown := path
+				if rel, err := filepath.Rel(deps.Cwd, path); err == nil && !strings.HasPrefix(rel, "..") {
+					shown = rel
+				} else if home := userHome(); strings.HasPrefix(path, home+string(filepath.Separator)) {
+					shown = "~" + strings.TrimPrefix(path, home)
 				}
-				go func() { _ = cmd.Wait() }() // detached: do not hold the harness hostage
-				return Result{Output: []string{fmt.Sprintf("Opened %s in %s.", path, editor)}}, nil
+				return Result{
+					Output: []string{"Memory file: " + path},
+					Exec:   cmd,
+					ExecDone: func(err error) string {
+						switch {
+						case err != nil:
+							return fmt.Sprintf("%s exited with an error: %s", editor, err)
+						case modTime(path).Equal(before):
+							return "No changes to " + shown + "."
+						default:
+							return "Saved " + shown + "."
+						}
+					},
+				}, nil
 			},
 		},
 		{
@@ -420,4 +435,12 @@ func userHome() string {
 		return ""
 	}
 	return h
+}
+
+// modTime is path's modification time, zero when it does not exist.
+func modTime(path string) time.Time {
+	if info, err := os.Stat(path); err == nil {
+		return info.ModTime()
+	}
+	return time.Time{}
 }

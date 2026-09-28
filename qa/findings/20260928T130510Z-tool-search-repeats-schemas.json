@@ -1,0 +1,24 @@
+{
+ "id": "20260928T130510Z-tool-search-repeats-schemas",
+ "found_at": "2026-09-28T13:05:10Z",
+ "scenario": "real/mcp-user-servers",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "tool_search result repeats every schema as JSON",
+ "observed": "Result was 'Enabled 4 tool(s):' plus 155 lines of schema JSON (collapsed preview a bare '['); the same schemas are sent in the next request's tool list, so a second copy stayed in history",
+ "expected": "Result names the enabled tools with one-line descriptions",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T083329/iterm-dark/real-mcp-user-servers-140x45/07-investigated.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tools/toolsearch.go"
+  ],
+  "regression_test": "TestToolSearchAdmitsMatchesAndCallsOnAdmit",
+  "updated_at": "2026-09-28T13:05:10Z"
+ }
+}
