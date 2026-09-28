@@ -593,7 +593,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				for i, m := range models {
 					id := modelID(m)
 					it := Item{
-						Value:       id,
+						Value: id,
 						// Numbers right-aligned, so "10." does not push its
 						// name a column right of " 9.".
 						Label:       fmt.Sprintf("%*d. %s", len(strconv.Itoa(len(models))), i+1, id),
