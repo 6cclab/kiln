@@ -29,7 +29,10 @@ func contextSegmentColor(label string) func(string) string {
 	case "Conversation":
 		return KilnGreen
 	default: // "Free"
-		return Rule
+		// The empty-meter token, not the hairline one: "Free" is usually
+		// most of the bar, and in the hairline colour a light profile
+		// showed it (and its legend square) as blank page.
+		return BarEmpty
 	}
 }
 

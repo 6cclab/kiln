@@ -198,10 +198,11 @@ func resetSurfaceTokensToDesign() {
 
 // surfaceHex holds the hexes the surface tokens were last built from, so
 // tests can check them against the background they sit on.
-var surfaceHex struct{ rule, ruleStrong, raise string }
+var surfaceHex struct{ rule, ruleStrong, raise, barEmpty, diffAdd, diffDel string }
 
 func setSurfaceTokens(rule, ruleStrong, barEmpty, raise, panel, diffAdd, diffDel string) {
 	surfaceHex.rule, surfaceHex.ruleStrong, surfaceHex.raise = rule, ruleStrong, raise
+	surfaceHex.barEmpty, surfaceHex.diffAdd, surfaceHex.diffDel = barEmpty, diffAdd, diffDel
 	Rule = style(lipgloss.NewStyle().Foreground(lipgloss.Color(rule)))
 	RuleStrong = style(lipgloss.NewStyle().Foreground(lipgloss.Color(ruleStrong)))
 	BarEmpty = style(lipgloss.NewStyle().Foreground(lipgloss.Color(barEmpty)))
@@ -289,12 +290,15 @@ func CurrentTextHex() TextHex { return textHex }
 // hexRuleStrong/... consts, which are only ever the unadjusted dark-design
 // values — see CurrentTextHex's own doc comment for the parallel case.
 type SurfaceHex struct {
-	Rule, RuleStrong, Raise string
+	Rule, RuleStrong, Raise, BarEmpty, DiffAdd, DiffDel string
 }
 
 // CurrentSurfaceHex returns the active surface tokens' hex strings.
 func CurrentSurfaceHex() SurfaceHex {
-	return SurfaceHex{Rule: surfaceHex.rule, RuleStrong: surfaceHex.ruleStrong, Raise: surfaceHex.raise}
+	return SurfaceHex{
+		Rule: surfaceHex.rule, RuleStrong: surfaceHex.ruleStrong, Raise: surfaceHex.raise,
+		BarEmpty: surfaceHex.barEmpty, DiffAdd: surfaceHex.diffAdd, DiffDel: surfaceHex.diffDel,
+	}
 }
 
 // rgb8 is an 8-bit-per-channel colour, the precision every hex token and
@@ -345,23 +349,36 @@ func (c rgb8) distance(o rgb8) float64 {
 // perceptual colour space) — the design handoff specifies each surface
 // token as "mix(bg, x, t)" in exactly these terms.
 // matchDesignSeparation blends bg toward fg until the result stands off bg
-// by the same contrast ratio the design's own surface hex has against the
-// design background: a hairline stays exactly as faint, and a raised
-// surface exactly as raised, on whatever background the terminal has. A
-// fixed blend ratio does not do that — luminance is not linear, so the
-// same blend reads far weaker on a light background than on a dark one.
+// by the same perceived lightness step (CIELAB ΔL*) the design's own
+// surface hex has against the design background: a hairline stays as
+// faint, and a raised surface as raised, on whatever background the
+// terminal has. Neither a fixed blend ratio nor a matched WCAG contrast
+// ratio does that: a ratio of 1.15 that reads as a clear raise near black
+// is nearly invisible near white (a light-profile review measured raised
+// rows and hairlines at 1.18:1 and 1.36:1 against the page).
 func matchDesignSeparation(bg, fg rgb8, designHex string) rgb8 {
-	target := contrastRatio(parseHex(hexDesignBg), parseHex(designHex))
+	target := math.Abs(lightness(parseHex(designHex)) - lightness(parseHex(hexDesignBg)))
+	base := lightness(bg)
 	lo, hi := 0.0, 1.0
 	for i := 0; i < 24; i++ {
 		m := (lo + hi) / 2
-		if contrastRatio(bg, mix(bg, fg, m)) < target {
+		if math.Abs(lightness(mix(bg, fg, m))-base) < target {
 			lo = m
 		} else {
 			hi = m
 		}
 	}
 	return mix(bg, fg, hi)
+}
+
+// lightness is a colour's CIELAB L* (0 black - 100 white), a perceptually
+// even lightness scale.
+func lightness(c rgb8) float64 {
+	y := relLuminance(c)
+	if y > 216.0/24389 {
+		return 116*math.Cbrt(y) - 16
+	}
+	return y * 24389 / 27
 }
 
 func mix(bg, fg rgb8, t float64) rgb8 {
@@ -428,13 +445,13 @@ func SetTerminalBackground(c color.Color) {
 		matchDesignSeparation(bg, ink, hexBarEmpty).hex(),
 		matchDesignSeparation(bg, ink, hexRaise).hex(),
 		matchDesignSeparation(bg, ink, hexPanel).hex(),
-		mix(bg, green, 0.12).hex(),
-		mix(bg, red, 0.14).hex(),
+		matchDesignSeparation(bg, green, hexDiffAddBg).hex(),
+		matchDesignSeparation(bg, red, hexDiffDelBg).hex(),
 	)
 	setTextTokens(
 		ink.hex(),
 		ensureContrast(bg, parseHex(hexDim), dimMinContrast).hex(),
-		ensureContrast(bg, parseHex(hexFaint), dimMinContrast).hex(),
+		ensureContrast(bg, parseHex(hexFaint), faintMinContrast).hex(),
 		ensureContrast(bg, parseHex(hexAmber), accentMinContrast).hex(),
 		ensureContrast(bg, green, accentMinContrast).hex(),
 		ensureContrast(bg, red, accentMinContrast).hex(),
@@ -457,9 +474,14 @@ func SetTerminalBackground(c color.Color) {
 // single-glyph markers, or decorative, so 3:1 — not 4.5:1 — is the
 // applicable bar, and holding accents to 4.5:1 would wash out their hue
 // more than legibility requires.
+//
+// Dim text carries descriptions and meta at normal size, so it takes the
+// small-text bar (4.5:1); faint stays at 3:1 so it still reads as a step
+// below dim (line numbers, unselected keys).
 const (
 	bodyMinContrast   = 7.0
-	dimMinContrast    = 3.0
+	dimMinContrast    = 4.5
+	faintMinContrast  = 3.0
 	accentMinContrast = 3.0
 )
 
