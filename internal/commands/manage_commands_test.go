@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrepato/harness/internal/claude/agents"
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/writesettings"
 )
@@ -220,5 +221,27 @@ func TestManageMcpModalListsConnectingServers(t *testing.T) {
 	}
 	if slow.Marker != MarkerConnecting || slow.Description != "connecting…" {
 		t.Errorf("connecting server row = marker %q, description %q", slow.Marker, slow.Description)
+	}
+}
+
+// TestManageAgentsKeepsTheDescriptionsFirstLine: /agents shows an agent's
+// whole first description line (the dialog wraps it), not a 60-character
+// cut, and leaves out the example dialogues that follow it.
+func TestManageAgentsKeepsTheDescriptionsFirstLine(t *testing.T) {
+	first := "Reviews code for security issues. Use proactively whenever a task touches authentication, user input, shell commands, or SQL."
+	source := ManageCommands(ManageDeps{
+		Gate:   &fakeManageGate{},
+		Agents: []agents.Definition{{Name: "security-reviewer", Description: first + "\n<example>user: check login</example>"}},
+	})
+	res, err := findCmd(t, source, "agents").Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Modal.Items[0].Description
+	if !strings.HasSuffix(got, first) {
+		t.Errorf("description = %q, want it to end with the whole first line", got)
+	}
+	if strings.Contains(got, "example") {
+		t.Errorf("description = %q carries the examples after the first line", got)
 	}
 }

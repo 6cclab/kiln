@@ -227,6 +227,44 @@ func (l *Lane) Steer(text string) error {
 	return nil
 }
 
+// ClearInbox withdraws every follow-up queued via Steer that the run loop
+// has not drained yet and returns their texts, oldest first. The entries
+// stay in the log, off the branch, like any other undelivered steer. Used
+// when the user interrupts a turn: the queued text goes back to them to
+// edit or send, instead of riding along with whatever they say next.
+func (l *Lane) ClearInbox() ([]string, error) {
+	st, err := l.laneState()
+	if err != nil {
+		return nil, err
+	}
+	if len(st.Inbox) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, len(st.Inbox))
+	for i, item := range st.Inbox {
+		ids[i] = item.EntryID
+	}
+	entries := l.h.opts.Storage.GetEntries(ids)
+	var texts []string
+	for _, id := range ids {
+		if e, ok := entries[id]; ok {
+			if um, ok := e.Message.(msg.UserMessage); ok {
+				texts = append(texts, msg.TextOf(um.Content))
+			}
+		}
+	}
+	st.Inbox = nil
+	w, err := session.SetValue(session.LaneStateValue(l.name), st)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := l.h.opts.Storage.Commit([]session.Write{w}); err != nil {
+		return nil, err
+	}
+	l.h.events.Emit(Event{Type: EventQueueUpdate, Lane: l.name, QueueLen: 0})
+	return texts, nil
+}
+
 // NavigateTree moves the lane's branch tip to targetID (nil for the root).
 // It refuses while an operation is running: pi's navigation.ready_to_commit
 // non-run path (rewriting history under a live operation) is not

@@ -326,7 +326,11 @@ func agentsModal(deps ManageDeps) *ModalSpec {
 		if a.Tools != nil {
 			tools = fmt.Sprintf("%d tools", len(a.Tools))
 		}
-		items = append(items, Item{Value: a.Name, Label: a.Name, Description: fmt.Sprintf("%s · %s · %s", model, tools, truncate(a.Description, 60))})
+		// The dialog wraps descriptions to the terminal; only the first
+		// line is kept, capped, since Claude Code agent descriptions often
+		// carry whole example dialogues after it.
+		desc, _, _ := strings.Cut(strings.TrimSpace(a.Description), "\n")
+		items = append(items, Item{Value: a.Name, Label: a.Name, Description: fmt.Sprintf("%s · %s · %s", model, tools, truncate(desc, 240))})
 	}
 	return &ModalSpec{
 		Title:  "Subagents",

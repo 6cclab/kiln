@@ -638,6 +638,18 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m = m.commitReconnectNote()
+		// Text after a held read group ends the group: commit it now, or
+		// the calls stay off screen while the reply that follows them
+		// streams in.
+		// The reply streaming is also when "Running <tool>" stops being
+		// true (the design's busy label returns to the turn's gerund once
+		// text resumes).
+		if m.streamText == "" {
+			if m.group != nil {
+				m = m.flushGroup()
+			}
+			m.spinner.ResetLabel()
+		}
 		m.streamText = msg.Text
 		return m, nil
 
@@ -969,9 +981,27 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 	}
 	m.subagents.Reset()
 	if msg.result.Status == harness.StatusAborted && m.cfg.Bridge != nil {
+		// Follow-ups queued during the interrupted turn go back into the
+		// input rather than riding along with whatever the user says
+		// next: the interrupt usually means the plan changed. m.queued is
+		// cleared first, so ClearInbox's MsgQueue{Len:0} commits nothing.
+		note := "■ Interrupted. Tell kiln what to do instead."
+		if len(m.queued) > 0 && m.cfg.Lane != nil {
+			restored := strings.Join(m.queued, "\n")
+			m.queued = nil
+			m.spinner.SetQueueLen(0)
+			if _, err := m.cfg.Lane.ClearInbox(); err != nil {
+				m.commit(RenderError(err.Error()))
+			}
+			if typed := m.editor.Value(); typed != "" {
+				restored += "\n" + typed
+			}
+			m.editor.SetValue(restored)
+			note = "■ Interrupted. Your queued message is back in the input: edit it or press enter to send."
+		}
 		// Last, so it reads as the final word on what happened
 		// (docs/kiln-design-handoff/README.md's "note" row).
-		m.cfg.Bridge.CommitNote("■ Interrupted. Tell kiln what to do instead.")
+		m.cfg.Bridge.CommitNote(note)
 	}
 	m.footer.SetNote("")
 	m.editor.SetPlaceholder(editor.DefaultPlaceholder)

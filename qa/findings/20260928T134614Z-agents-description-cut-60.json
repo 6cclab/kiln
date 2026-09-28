@@ -1,0 +1,24 @@
+{
+ "id": "20260928T134614Z-agents-description-cut-60",
+ "found_at": "2026-09-28T13:46:14Z",
+ "scenario": "real/ext-agents",
+ "step": "01-agents-list",
+ "terminals": [],
+ "category": "usability",
+ "severity": "low",
+ "title": "/agents cuts descriptions at 60 characters",
+ "observed": "security-reviewer  inherit · 2 tools · Reviews code for security issues. Use proactively whenever … on a 140-column terminal",
+ "expected": "The first description line in full, wrapped by the dialog",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T083329/iterm-dark/real-ext-agents-140x45/01-agents-list.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/manage_commands.go"
+  ],
+  "regression_test": "TestManageAgentsKeepsTheDescriptionsFirstLine",
+  "updated_at": "2026-09-28T13:46:14Z"
+ }
+}

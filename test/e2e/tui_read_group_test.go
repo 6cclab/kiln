@@ -127,3 +127,42 @@ func TestTUI_EnterRunsFullyTypedArgument(t *testing.T) {
 		t.Fatalf("input not cleared after one Enter:\n%s", strings.Join(s.Rows(), "\n"))
 	}
 }
+
+// TestTUI_ReadGroupCommitsBeforeStreamedReply: a held read group commits as
+// soon as the reply after it starts streaming, so the calls are on screen
+// above the text arriving, and the busy line no longer names the finished
+// tool.
+func TestTUI_ReadGroupCommitsBeforeStreamedReply(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	addr, _ := startFaux(t, `model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "cat src/math.js"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "The file exports one function that adds two numbers together and nothing else at all, which is the whole module."
+        chunk_delay: 250ms
+`)
+	s := startTUI(t, 100, 40, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
+	defer s.Close()
+	waitReady(t, s)
+	s.Send("what is in math.js")
+	s.SendKey("enter")
+	if err := s.WaitFor("The file", 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	rows := strings.Join(s.Rows(), "\n")
+	if strings.Contains(rows, "the whole module.") {
+		t.Fatalf("reply finished before the mid-stream check; slow the stream down:\n%s", rows)
+	}
+	if !regexp.MustCompile(`bash ─+`).MatchString(rows) || !strings.Contains(rows, "cat src/math.js") {
+		t.Errorf("the bash call is not on screen while the reply after it streams:\n%s", rows)
+	}
+	if strings.Contains(rows, "Running cat") {
+		t.Errorf("the busy line still names the finished command:\n%s", rows)
+	}
+	waitTurnSettled(t, s)
+	if n := strings.Count(strings.Join(s.Rows(), "\n"), "cat src/math.js"); n != 1 {
+		t.Errorf("the bash call is on screen %d times after the turn, want 1:\n%s", n, strings.Join(s.Rows(), "\n"))
+	}
+}
