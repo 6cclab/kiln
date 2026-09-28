@@ -1,0 +1,24 @@
+{
+ "id": "20260928T140101Z-plugin-report-wording",
+ "found_at": "2026-09-28T14:01:01Z",
+ "scenario": "real/ext-plugins",
+ "step": "01-plugin-command",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "/plugin shows 'vunknown' and 'skill(s)'",
+ "observed": "skill-creator@claude-plugins-official  vunknown; one contribution per row as '6 skill(s)'",
+ "expected": "No version tag when unknown; '6 skills · 1 MCP server' on one row",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-ext-plugins-140x45/01-plugin-command.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/plugin_commands.go"
+  ],
+  "regression_test": "TestPlugins_ReportCommand",
+  "updated_at": "2026-09-28T14:01:01Z"
+ }
+}

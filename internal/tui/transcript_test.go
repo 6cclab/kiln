@@ -360,3 +360,22 @@ func TestRenderToolCall_BlankOutputHasNoResultRow(t *testing.T) {
 		}
 	}
 }
+
+// TestSkillBlockNamesTheSkillAndCollapsesItsText: a skill call shows the
+// skill's name as its argument and "loaded · N lines" instead of the
+// skill's instructions, except in verbose mode or on failure.
+func TestSkillBlockNamesTheSkillAndCollapsesItsText(t *testing.T) {
+	if got := PrimaryArg(map[string]any{"skill": "rubber-ducky:rubber-ducky"}); got != "rubber-ducky:rubber-ducky" {
+		t.Errorf("PrimaryArg = %q, want the skill name", got)
+	}
+	text := []string{"Base directory for this skill: /x", "# Rubber Ducky", "Ask one question at a time."}
+	if got := collapsedSummary("skill", text, false, false); len(got) != 1 || got[0] != "loaded · 3 lines" {
+		t.Errorf("collapsed = %q", got)
+	}
+	if got := collapsedSummary("skill", text, false, true); len(got) != 3 {
+		t.Errorf("verbose = %q, want the full text", got)
+	}
+	if got := collapsedSummary("skill", []string{"unknown skill"}, true, false); got[0] != "unknown skill" {
+		t.Errorf("failed = %q, want the error", got)
+	}
+}

@@ -891,7 +891,7 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 
 		name := MapToolName(ev.ToolName)
 		primary := DisplayArg(ev.ToolName, PrimaryArg(ev.ToolArgs), b.cwd, b.Verbose())
-		summary := summarizeToolResult(ev.ToolResult)
+		summary := collapsedSummary(ev.ToolName, summarizeToolResult(ev.ToolResult), ev.ToolResult != nil && ev.ToolResult.IsError, b.Verbose())
 		// The committed block shows a short output summary and a
 		// "… +N lines (ctrl+o to expand)" tail (design: "tool" row);
 		// verbose mode gets the tool-output budget instead.

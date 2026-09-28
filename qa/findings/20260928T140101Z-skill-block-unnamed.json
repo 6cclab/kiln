@@ -1,0 +1,26 @@
+{
+ "id": "20260928T140101Z-skill-block-unnamed",
+ "found_at": "2026-09-28T14:01:01Z",
+ "scenario": "real/ext-plugins",
+ "step": "03-rubber-duck-attempt",
+ "terminals": [],
+ "category": "usability",
+ "severity": "low",
+ "title": "skill block does not say which skill ran",
+ "observed": "skill ─── then '→ Base directory for this skill: …' and the skill's first lines; no skill name",
+ "expected": "skill ─── rubber-ducky:rubber-ducky, 'loaded · N lines'",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-ext-plugins-140x45/03-rubber-duck-attempt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go",
+   "internal/tui/bridge.go",
+   "internal/tui/replay.go"
+  ],
+  "regression_test": "TestSkillBlockNamesTheSkillAndCollapsesItsText",
+  "updated_at": "2026-09-28T14:01:01Z"
+ }
+}

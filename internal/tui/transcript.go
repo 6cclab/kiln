@@ -269,6 +269,18 @@ func diffCountsRow(d *ToolDiff) string {
 	return fmt.Sprintf("%s  %s", KilnGreen("+"+strconv.Itoa(d.Added)), KilnRed("−"+strconv.Itoa(d.Removed)))
 }
 
+// collapsedSummary is the result summary a committed tool block shows
+// outside verbose mode. A loaded skill's text is instructions for the
+// model, not output for the reader: it reads "loaded · N lines" (ctrl+o
+// shows it all). Everything else is unchanged. The live and replay block
+// builders both call this, so a toggle renders the same block.
+func collapsedSummary(toolName string, summary []string, failed, verbose bool) []string {
+	if !verbose && !failed && strings.EqualFold(toolName, "skill") && len(summary) > 0 {
+		return []string{fmt.Sprintf("loaded · %d lines", len(summary))}
+	}
+	return summary
+}
+
 // clipResultLines clips a tool result's summary lines to max the same way
 // every committed tool block does (kiln's "tool" row: first N lines, then
 // "… +N lines (ctrl+o to expand)") — except for a failed call, where the
@@ -922,7 +934,7 @@ func PrimaryArg(args any) string {
 	if !ok {
 		return ""
 	}
-	for _, key := range []string{"path", "file_path", "filePath", "command", "pattern", "query", "url"} {
+	for _, key := range []string{"path", "file_path", "filePath", "command", "pattern", "query", "url", "skill", "id"} {
 		if v, ok := obj[key]; ok {
 			if s, ok := v.(string); ok {
 				return s

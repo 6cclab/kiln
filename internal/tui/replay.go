@@ -166,7 +166,7 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 // toolCallViewFor builds the ToolCallView for a replayed call, sharing the
 // bridge's own result summarising and Edit diff extraction.
 func toolCallViewFor(name string, call msg.ToolCall, result *msg.ToolResultMessage, verbose bool, cwd string) ToolCallView {
-	summary := summarizeToolResult(result)
+	summary := collapsedSummary(name, summarizeToolResult(result), result != nil && result.IsError, verbose)
 	max := 3
 	if verbose {
 		max = replayResultLines

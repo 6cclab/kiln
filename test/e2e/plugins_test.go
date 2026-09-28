@@ -177,7 +177,7 @@ func TestPlugins_ReportCommand(t *testing.T) {
 	if !strings.Contains(res.Stdout, "demo@market") {
 		t.Errorf("/plugin output missing the active plugin:\n%s", res.Stdout)
 	}
-	if !strings.Contains(res.Stdout, "1 skill(s)") || !strings.Contains(res.Stdout, "1 command(s)") || !strings.Contains(res.Stdout, "1 MCP server(s)") {
+	if !strings.Contains(res.Stdout, "1 skill · 1 command") || !strings.Contains(res.Stdout, "1 MCP server") || strings.Contains(res.Stdout, "(s)") {
 		t.Errorf("/plugin output missing expected contribution counts:\n%s", res.Stdout)
 	}
 }
