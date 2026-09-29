@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>kiln headless QA terminal</title>
+<link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
+<link rel="stylesheet" href="node_modules/@fontsource/jetbrains-mono/400.css">
+<link rel="stylesheet" href="node_modules/@fontsource/jetbrains-mono/700.css">
+<style>
+  html, body { margin: 0; padding: 0; background: #000; }
+  #terminal { display: inline-block; padding: 8px; }
+  .xterm { padding: 0; }
+  /* JetBrains Mono ships programming ligatures ("===", "!==", ...); a real
+     terminal always draws one glyph per cell, so kiln's diff/code output
+     must too — otherwise operators fuse into a single wide glyph that
+     doesn't match the character grid (found via a real diff-scenario
+     screenshot: "===" rendered as "═══", three box-drawing double lines,
+     not three separate equals signs). Disabling ligatures on every
+     terminal-owned element is the fix that actually reached the canvas
+     text renderer in testing (font-feature-settings passed through xterm's
+     own `fontFamily`/`ctx.font` string did not). */
+  #terminal, #terminal * {
+    font-variant-ligatures: none !important;
+    font-feature-settings: "liga" 0, "calt" 0, "dlig" 0, "clig" 0 !important;
+  }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script>
+// Drives kiln's real PTY output/input over a local WebSocket bridge
+// (scripts/qa/headless.py). See that module's docstring for the protocol:
+// binary frames PTY -> page (raw bytes, written straight into xterm.js so
+// multi-byte UTF-8 never crosses a text-frame re-encode), text frames
+// page -> PTY (xterm.js's own onData string, UTF-8 encoded by the browser
+// like the standard xterm-addon-attach convention).
+//
+// OSC 11 (background colour query) is answered by the Python bridge
+// directly against the raw PTY byte stream, not here: kiln's grace period
+// for that reply (internal/tui/app.go's bannerBackgroundGrace) is 30ms,
+// too tight to survive an extra WebSocket + page round trip reliably.
+(function () {
+  const params = new URLSearchParams(location.search);
+  const cols = parseInt(params.get("cols") || "120", 10);
+  const rows = parseInt(params.get("rows") || "40", 10);
+  const port = params.get("port");
+  const bg = "#" + (params.get("bg") || "14110d");
+  const fg = "#" + (params.get("fg") || "e8e3d8");
+
+  const term = new Terminal({
+    cols: cols,
+    rows: rows,
+    fontFamily: "\"JetBrains Mono\", monospace",
+    fontSize: 15,
+    lineHeight: 1,
+    allowProposedApi: true,
+    theme: { background: bg, foreground: fg, cursor: fg },
+    scrollback: 5000,
+    cursorBlink: false,
+  });
+  term.open(document.getElementById("terminal"));
+  term.focus();
+  window.__term = term;
+
+  window.__wsReady = false;
+  const ws = new WebSocket("ws://127.0.0.1:" + port + "/");
+  ws.binaryType = "arraybuffer";
+  window.__ws = ws;
+  ws.addEventListener("open", function () { window.__wsReady = true; });
+  ws.addEventListener("message", function (ev) {
+    const data = typeof ev.data === "string" ? ev.data : new Uint8Array(ev.data);
+    term.write(data);
+  });
+  term.onData(function (data) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(data);
+  });
+
+  window.__resize = function (c, r) { term.resize(c, r); };
+
+  // Everything the session holds: scrollback plus the visible screen, the
+  // same shape as iTerm2's `contents` (drive.py's Iterm.text()). Trailing
+  // whitespace is trimmed per line via translateToString's trimRight arg.
+  window.__bufferText = function () {
+    const buf = term.buffer.active;
+    const lines = [];
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      lines.push(line ? line.translateToString(true) : "");
+    }
+    return lines.join("\n");
+  };
+
+  // Read one cell's resolved foreground colour (RGB) through the xterm.js
+  // buffer API, for verifying kiln actually picked light-theme tokens
+  // under xterm-light rather than assuming it from the requested theme.
+  window.__cellFg = function (row, col) {
+    const buf = term.buffer.active;
+    const line = buf.getLine(row);
+    if (!line) return null;
+    const cell = line.getCell(col);
+    if (!cell) return null;
+    if (cell.isFgRGB()) {
+      const v = cell.getFgColor();
+      return [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff];
+    }
+    return null;
+  };
+})();
+</script>
+</body>
+</html>
