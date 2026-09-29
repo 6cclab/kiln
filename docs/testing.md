@@ -275,6 +275,81 @@ fail; and under kiln's kitty keyboard protocol Orca's synthetic
 Option/Ctrl+arrow events arrive without their modifier (a physical keypress
 works). Warp has no screen text, so its checks run on OCR and are advisory.
 
+## Headless QA — `make qa-headless`
+
+Most of `qa/scenarios/` (everything except `qa/scenarios/real/`, which
+drives a real model interactively) also runs against `--terminal xterm-dark`
+or `xterm-light`: a real PTY running `bin/kiln`, rendered by xterm.js in
+headless Chromium via Playwright instead of a real terminal window
+(`scripts/qa/headless.py`; the static page is `scripts/qa/xterm/`). It needs
+no window manager, no Orca and no macOS, so it runs in CI
+(`.github/workflows/qa-headless.yml`) as well as locally on a Mac or Linux
+box. Input still goes through a real key encoder — xterm.js's own, driven
+by Playwright's `keyboard`/`mouse` API — never bytes written straight to the
+PTY, the same rule `.claude/rules/real-terminal-drives.md` states for the
+Orca path.
+
+**What it covers**: startup, commands, dialogs, content rendering, input,
+modes, palette, permissions, queueing, resize, scroll (xterm.js's own mouse
+wheel reporting, matching kiln's SGR mouse mode) and tools — the full
+`.steps`/`EXPECT`/`SHOT` scenario format, unchanged from the macOS driver.
+
+**What it cannot cover** (still needs a real terminal — `make qa`): a real
+terminal's own key encoder quirks (Terminal.app's, iTerm2's, Warp's — each
+can differ from xterm.js's for a given key combo; the kitty keyboard
+protocol limitation noted above is one of these), 256-colour rounding
+specific to Terminal.app's palette, natural-scroll direction on macOS, real
+window chrome (titlebar, traffic lights, Dock interaction), and font
+rendering exactly as the user's own terminal + font would draw it (headless
+Chromium uses `@fontsource/jetbrains-mono`, pinned in
+`scripts/qa/xterm/package.json`, plus the OS's own fallback font for
+glyphs outside that font's subsets — box-drawing and some arrow glyphs are
+outside it; verified visually against iTerm2's rendering rather than
+assumed, see this feature's own delivery report for the comparison).
+Programming ligatures ("===", "!==", ...) are explicitly disabled
+(`scripts/qa/xterm/index.html`'s `font-variant-ligatures: none`): the
+reference iTerm2 screenshots this backend was checked against render them
+fused into one wide glyph (the user's own iTerm2 font has ligatures on),
+which reads as a rendering defect in a screenshot meant to show the actual
+characters, so headless deliberately does not reproduce it — a real
+terminal's own ligature setting is still worth checking separately if it
+ever matters to a scenario.
+
+**OSC 11 (background colour detection)**: kiln asks the terminal for its
+background colour (`internal/tui/app.go`'s `tea.RequestBackgroundColor`) and
+adapts its surface tokens to it (`internal/tui/theme.go`'s
+`SetTerminalBackground`) within a 30ms grace window
+(`bannerBackgroundGrace`). xterm.js does not answer this query on its own
+(checked against its source: it fires an internal event, not a wire reply),
+so `scripts/qa/headless.py`'s bridge answers it directly against the raw PTY
+byte stream, before Chromium has even launched — answering from the page
+would add a WebSocket + browser round trip that risks missing the 30ms
+window entirely.
+
+**Local setup** (gitignored, run once per checkout):
+
+```bash
+python3 -m venv .venv-qa
+.venv-qa/bin/pip install -r scripts/qa/requirements.txt
+.venv-qa/bin/python -m playwright install chromium   # add --with-deps on a fresh Linux box
+cd scripts/qa/xterm && npm ci && cd -
+```
+
+Then, with `bin/kiln` and `bin/faux` built (`make build && go build -o
+bin/faux ./cmd/faux`):
+
+```bash
+.venv-qa/bin/python scripts/qa/drive.py --terminal xterm-dark qa/scenarios/startup/smoke.steps
+make qa-headless                          # every non-real scenario, xterm-dark, -j 4
+make qa-headless TERMINAL_HEADLESS=xterm-light J=1
+```
+
+`-j N` (headless terminals only) spawns one `drive.py` subprocess per
+scenario, up to `N` at a time — Playwright's sync API is not thread-safe, so
+this is real process parallelism, not threads sharing one Chromium.
+`--shard i/n` runs only the i-th of n deterministic shards of the given
+scenario list (used by the CI matrix to split the suite across jobs).
+
 ## Record/replay via `kiln-drive --record`
 
 Like the TypeScript layer's `HARNESS_RECORD_TTY`/`npm run replay`,
