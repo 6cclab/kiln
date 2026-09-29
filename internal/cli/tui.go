@@ -593,9 +593,10 @@ var kilnArt = [][]artSegment{
 }
 
 // kilnArtTextRow is the art row the text column starts on: the wordmark's
-// two rows, the version and the repo line sit against the kiln's body, as
-// in the design.
-const kilnArtTextRow = 3
+// two rows, a blank row (the design's gap; without it the wordmark's
+// bottom half-blocks sit on the version line), the version and the repo
+// line, centred against the nine art rows.
+const kilnArtTextRow = 2
 
 // kilnWordmark is the banner's "KILN" beside the art. The design sets it
 // at 26px against 14px body text (Terminal.dc.html, the banner block); a
@@ -625,13 +626,13 @@ func styleBanner(verLabel, loc string, recent []recentSession, art bool) []strin
 
 	var rows []string
 	if art {
-		text = append([]string{tui.KilnAmber(kilnWordmark[0]), tui.KilnAmber(kilnWordmark[1])}, text[1:]...)
+		text = append([]string{tui.KilnAmber(kilnWordmark[0]), tui.KilnAmber(kilnWordmark[1]), ""}, text[1:]...)
 		for i, segs := range kilnArt {
 			row := ""
 			for _, seg := range segs {
 				row += tui.Paint(seg.hex, seg.text)
 			}
-			if t := i - kilnArtTextRow; t >= 0 && t < len(text) {
+			if t := i - kilnArtTextRow; t >= 0 && t < len(text) && text[t] != "" {
 				row += strings.Repeat(" ", kilnArtWidth-artRowWidth(segs)+kilnArtGap) + text[t]
 			}
 			rows = append(rows, row)
