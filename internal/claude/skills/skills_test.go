@@ -108,3 +108,20 @@ func TestLoadFromSkipsNonSkillEntries(t *testing.T) {
 		t.Fatalf("loadFrom = %+v, want only the greet skill", got)
 	}
 }
+
+// ParseSkill is the entry point plugins use; it applies the same
+// frontmatter rules as the loader, including rejecting a skill with no
+// description and honouring disable-model-invocation.
+func TestParseSkill(t *testing.T) {
+	src := "---\nname: deploy\ndescription: Ship it\ndisable-model-invocation: true\n---\nSteps here.\n"
+	sk, ok := ParseSkill(src, "/p/deploy/SKILL.md", paths.ScopePlugin)
+	if !ok {
+		t.Fatal("ParseSkill rejected a valid skill")
+	}
+	if sk.Name != "deploy" || sk.Content != "Steps here." || !sk.UserInvocable || !sk.DisableModelInvocation {
+		t.Errorf("ParseSkill = %+v", sk)
+	}
+	if _, ok := ParseSkill("---\nname: x\n---\nbody", "f", paths.ScopePlugin); ok {
+		t.Error("ParseSkill accepted a skill without a description")
+	}
+}

@@ -105,3 +105,26 @@ func TestRequireTierForWindowOK(t *testing.T) {
 		t.Errorf("tier.Name = %q, want medium", tier.Name)
 	}
 }
+
+// Describe is what /usage, /doctor and /context print; every strategy has
+// words, and an unknown identifier falls back to itself.
+func TestToolStrategyDescribe(t *testing.T) {
+	for s, want := range map[ToolStrategy]string{
+		StrategyPostureIndex: "MCP index of this posture's servers, tools loaded on demand",
+		StrategyFullIndex:    "MCP index of every server, tools loaded on demand",
+		StrategyFullSchemas:  "every MCP tool loaded up front",
+		"custom":             "custom",
+	} {
+		if got := s.Describe(); got != want {
+			t.Errorf("%s.Describe() = %q, want %q", s, got, want)
+		}
+	}
+}
+
+func TestTierForMatchesTierForWindow(t *testing.T) {
+	for _, w := range []int{8_192, 32_768, 200_000} {
+		if got, want := TierFor(w), TierForWindow(w); got != want {
+			t.Errorf("TierFor(%d) = %+v, want %+v", w, got, want)
+		}
+	}
+}

@@ -1,9 +1,26 @@
 model: faux-2
 steps:
-  - text: "I'll take a look at the file."
-  - tool_call: {name: read, args: {path: bigfile.txt}, id: tc1}
-    usage: {input: 31000, output: 120}
+  - text: "I'll read the file in chunks."
+  - tool_call: {name: read, args: {path: bigfile.txt, offset: 1, limit: 15}, id: tc1}
+    usage: {input: 8000, output: 60}
   - on_tool_result: tc1
+    then:
+      - tool_call: {name: read, args: {path: bigfile.txt, offset: 16, limit: 15}, id: tc2}
+        usage: {input: 16000, output: 60}
+  - on_tool_result: tc2
+    then:
+      - tool_call: {name: read, args: {path: bigfile.txt, offset: 31, limit: 15}, id: tc3}
+        usage: {input: 24000, output: 60}
+  - on_tool_result: tc3
+    then:
+      # This response puts the conversation past the small tier's
+      # threshold. The tier keeps ~8k tokens of recent history verbatim and
+      # caps each read near 4k, so the first chunks are old enough to
+      # summarise; with fewer chunks everything is recent and compaction
+      # rightly has nothing to do.
+      - tool_call: {name: read, args: {path: bigfile.txt, offset: 46, limit: 15}, id: tc4}
+        usage: {input: 31000, output: 60}
+  - on_tool_result: tc4
     then:
       - text: "bigfile.txt repeats one sentence about a fox many times."
         usage: {input: 500, output: 30}
