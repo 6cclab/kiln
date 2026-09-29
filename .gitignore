@@ -24,3 +24,9 @@ eval/results/runs/
 # findings (qa/findings) and scenarios (qa/scenarios) are committed.
 qa/runs/
 __pycache__/
+
+# Headless QA backend: local Python venv, and the xterm.js/font packages
+# npm installs (scripts/qa/xterm/package-lock.json is committed so the
+# pinned versions are; the installed files are not).
+.venv-qa/
+scripts/qa/xterm/node_modules/
