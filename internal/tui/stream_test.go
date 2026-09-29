@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -53,7 +54,40 @@ func TestModel_StreamLive_HiddenInPlainMode(t *testing.T) {
 
 	m := newTestModel()
 	m.streamText = "hello world"
-	if rows := m.renderStreamLive(40); rows != nil {
+	if rows := m.renderStreamLive(40, maxStreamRows); rows != nil {
 		t.Errorf("renderStreamLive in plain mode = %v, want nil", rows)
+	}
+}
+
+// TestModel_StreamLive_UsesTheRoomItHas: a reply longer than
+// maxStreamRows shows whole while it fits above the chrome (it used to keep
+// only the last 8 rows, so a streaming heading and list vanished above a
+// screen of empty rows and came back when the block committed). One longer
+// than the frame keeps its newest rows and leaves the chrome on screen.
+func TestModel_StreamLive_UsesTheRoomItHas(t *testing.T) {
+	m := newTestModel()
+	m.width, m.height = 80, 40
+	var src []string
+	for i := 1; i <= 14; i++ {
+		src = append(src, fmt.Sprintf("line %02d", i))
+	}
+	m.streamText = strings.Join(src, "\n")
+	joined := stripANSI(strings.Join(m.liveTail(80), "\n"))
+	for _, want := range []string{"line 01", "line 14"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("14 streamed lines on a 40-row screen: %q missing\n%s", want, joined)
+		}
+	}
+
+	for i := 15; i <= 80; i++ {
+		src = append(src, fmt.Sprintf("line %02d", i))
+	}
+	m.streamText = strings.Join(src, "\n")
+	joined = stripANSI(strings.Join(m.liveTail(80), "\n"))
+	if !strings.Contains(joined, "line 80") || strings.Contains(joined, "line 01") {
+		t.Errorf("80 streamed lines: want the newest rows only\n%s", joined)
+	}
+	if n := len(viewLines(m)); n > m.height {
+		t.Errorf("frame is %d rows on a %d-row screen", n, m.height)
 	}
 }
