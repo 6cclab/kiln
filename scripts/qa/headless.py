@@ -39,8 +39,8 @@ answer, kiln's own reply window (`bannerBackgroundGrace` in
 `internal/tui/app.go`, 30ms) is short enough that an extra WebSocket +
 Chromium round trip risked missing it. Replying from the bridge thread,
 right where the query is read off the PTY, is the fastest and most
-deterministic path — see the "Verify" section of this feature's own report
-for the evidence kiln actually picked light tokens under xterm-light.
+deterministic path. Headless.cell_fg reads a cell's resolved colour, to check
+that the theme's tokens reached the screen.
 
 Requires (kept optional so macOS terminals still work with nothing
 installed): `pip install -r scripts/qa/requirements.txt` (playwright,
@@ -153,6 +153,7 @@ class Headless:
         self._browser = None
         self._page = None
         self._closed = False
+        self._exited = False
 
     # ---- PTY -------------------------------------------------------------
 
@@ -329,11 +330,7 @@ class Headless:
             except OSError:
                 pass
         self.kill()
-        if self.pid:
-            try:
-                os.waitpid(self.pid, os.WNOHANG)
-            except ChildProcessError:
-                pass
+        self.alive()  # reap the child
 
     # ---- native input/capture (preferred by drive.py over the Orca path) --
 
@@ -402,14 +399,18 @@ class Headless:
     # ---- process tracking ---------------------------------------------------
 
     def alive(self):
-        if not self.pid:
+        """Whether kiln is still running. An exited child stays a zombie
+        (and os.kill(pid, 0) keeps succeeding) until it is reaped, so reap
+        it here."""
+        if not self.pid or self._exited:
             return False
         try:
-            os.kill(self.pid, 0)
-        except ProcessLookupError:
+            done, _ = os.waitpid(self.pid, os.WNOHANG)
+        except ChildProcessError:
+            done = self.pid
+        if done == self.pid:
+            self._exited = True
             return False
-        except PermissionError:
-            return True
         return True
 
     def child_pid(self):
