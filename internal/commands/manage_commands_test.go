@@ -256,3 +256,29 @@ func TestMcpDisplayNameForPluginServers(t *testing.T) {
 		t.Errorf("a user server named like a plugin id was renamed: %q", got)
 	}
 }
+
+// /plan is Claude Code's: it switches to plan mode, says so, and sends any
+// text after it to the model as the prompt.
+func TestPlanCommandEntersPlanMode(t *testing.T) {
+	gate := &fakeManageGate{fakeInspectGate{mode: settings.ModeManual}}
+	plan := findCmd(t, ManageCommands(ManageDeps{Gate: gate}), "plan")
+
+	res, err := plan.Run(context.Background(), "  add a login page  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.mode != settings.ModePlan {
+		t.Errorf("mode = %q, want plan", gate.mode)
+	}
+	if len(res.Output) != 1 || res.Output[0] != "Enabled plan mode" {
+		t.Errorf("Output = %q", res.Output)
+	}
+	if res.Prompt != "add a login page" {
+		t.Errorf("Prompt = %q, want the text after /plan", res.Prompt)
+	}
+
+	res, _ = plan.Run(context.Background(), "")
+	if res.Prompt != "" || len(res.Output) != 1 || res.Output[0] != "Already in plan mode" {
+		t.Errorf("bare /plan in plan mode = %+v", res)
+	}
+}

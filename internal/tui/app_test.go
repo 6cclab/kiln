@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/commands"
 )
 
 // newTestModelWithGate builds a Model with a real *permission.Gate seeded
@@ -727,4 +729,24 @@ func indexContaining(lines []string, needle string) int {
 		}
 	}
 	return -1
+}
+
+// A slash command that changes the permission mode (/plan) shows the new
+// mode in the status row at once, not after the next turn ends.
+func TestSlashCommandModeChangeUpdatesStatusRow(t *testing.T) {
+	gate := permission.NewGate(permission.GateOptions{Mode: claudesettings.ModeManual})
+	reg := commands.NewRegistry()
+	reg.Add(commands.StaticSource(commands.OriginBuiltin, []commands.Command{{
+		Name: "plan",
+		Run: func(ctx context.Context, args string) (commands.Result, error) {
+			gate.SetMode(claudesettings.ModePlan)
+			return commands.Result{Output: []string{"Enabled plan mode"}}, nil
+		},
+	}}))
+	m := NewModel(Config{Cwd: "/tmp", ModelLabel: "faux/faux-1", InitialMode: "manual", StartedAt: time.Unix(0, 0), Gate: gate, Registry: reg})
+	m.width, m.height = 100, 30
+	next, _ := m.handleSubmit("/plan")
+	if got := ansiStrip(next.(Model).renderStatusRow(200)); !strings.Contains(got, "plan only") {
+		t.Errorf("status row after /plan = %q, want plan only", got)
+	}
 }

@@ -1808,6 +1808,8 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		case len(handled.Output) > 0:
 			m.commitCommandResult(handled.Name, handled.Output)
 		}
+		// A command can change the permission mode (/plan).
+		m = m.refreshMode()
 		if handled.Prompt == "" {
 			return m, nil
 		}

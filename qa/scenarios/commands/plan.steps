@@ -1,0 +1,16 @@
+# /plan switches to plan mode like Claude Code's, and the status row shows
+# it at once; a second /plan says it already is.
+@faux testdata/faux/qa/commands-baseline.yaml
+
+WAITFOR /describe a task/ 20
+EXPECT /ask before edits/
+TYPE /plan
+KEY enter
+WAITFOR /Enabled plan mode/ 20
+SHOT plan-enabled
+EXPECT /plan only/
+TYPE /plan
+KEY enter
+WAITFOR /Already in plan mode/ 20
+SHOT plan-again
+EXPECT_NOT /panic|goroutine/
