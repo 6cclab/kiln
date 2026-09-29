@@ -4,8 +4,10 @@
 # launches bin/kiln for every scenario, so a rebuild mid-run tests a mix of
 # two binaries and its results mean nothing.
 cmd=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))')
-# Only the kiln binary itself: -o bin/kiln-drive or bin/faux are fine.
-if ! printf '%s\n' "$cmd" | grep -Eq 'make (build|qa)|-o (\./)?bin/kiln( |$|;|&)'; then
+# Only commands that run: `make build|qa` at the start of a command (not
+# the words inside a commit message or a string), and `-o bin/kiln` itself
+# (-o bin/kiln-drive or bin/faux are fine).
+if ! printf '%s\n' "$cmd" | grep -Eq '(^|[;&|(]|then|do)[[:space:]]*make([[:space:]]+-[^[:space:]]+)*[[:space:]]+(build|qa)([[:space:]]|$|;|&)|-o (\./)?bin/kiln( |$|;|&)'; then
   exit 0
 fi
 # A Python process running the driver, not any process whose command line
