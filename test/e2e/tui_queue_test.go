@@ -30,6 +30,7 @@ package e2e
 // goroutine, the same one Commit already uses for Println).
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -57,7 +58,7 @@ steps:
 	proj, home, sessDir, addr, requests := tuiFixture(t, script)
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 
@@ -128,7 +129,7 @@ steps:
   - text: "Got both follow-ups."
 `
 	proj, home, sessDir, addr, requests := tuiFixture(t, script)
-	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 
 	s.Send("first")
@@ -160,5 +161,65 @@ steps:
 	last := string(reqs[1])
 	if !strings.Contains(last, `"second"`) || !strings.Contains(last, `"third"`) {
 		t.Errorf("second request lacks one of the follow-ups: %s", last)
+	}
+}
+
+// TestTUI_QueueRestoredOnInterrupt: esc during a turn with a follow-up
+// queued puts the follow-up back in the input instead of leaving it
+// pending, so it does not ride along with the next thing the user says.
+func TestTUI_QueueRestoredOnInterrupt(t *testing.T) {
+	script := `
+model: faux-1
+steps:
+  - text: "working on it"
+    delay: 5s
+  - on_tool_result: none
+    then:
+      - text: "Made done.txt."
+`
+	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
+	waitReady(t, s)
+
+	s.Send("first")
+	s.SendKey("enter")
+	deadline := time.Now().Add(3 * time.Second)
+	for !anyRowMatches(s, spinnerFramePattern) {
+		if time.Now().After(deadline) {
+			t.Fatalf("spinner never appeared:\n%s", strings.Join(s.Rows(), "\n"))
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	s.Send("stale follow-up")
+	s.SendKey("enter")
+	if err := s.WaitFor("queued", 2*time.Second); err != nil {
+		t.Fatalf("queued block never appeared:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+
+	s.SendKey("esc")
+	if err := s.WaitFor("back in the input", 3*time.Second); err != nil {
+		t.Fatalf("no note that the queued message was restored:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+	rows := strings.Join(s.Rows(), "\n")
+	if regexp.MustCompile(`─ +queued`).MatchString(rows) {
+		t.Errorf("a queued tag is still on screen after the interrupt:\n%s", rows)
+	}
+	if !strings.Contains(rows, "› stale follow-up") && !strings.Contains(rows, "›  stale follow-up") {
+		t.Errorf("the queued text is not in the input:\n%s", rows)
+	}
+
+	// Replace it with a different instruction: only that one is sent.
+	for range len("stale follow-up") {
+		s.SendKey("backspace")
+	}
+	s.Send("make done.txt")
+	s.SendKey("enter")
+	if err := s.WaitFor("Made done.txt.", 5*time.Second); err != nil {
+		t.Fatalf("redirected turn never answered:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+	for _, msgs := range requests() {
+		if strings.Contains(string(msgs), "stale follow-up") {
+			t.Errorf("the withdrawn follow-up still reached the model: %s", msgs)
+		}
 	}
 }

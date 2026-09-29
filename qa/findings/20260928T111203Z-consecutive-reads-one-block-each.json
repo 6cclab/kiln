@@ -1,0 +1,30 @@
+{
+ "id": "20260928T111203Z-consecutive-reads-one-block-each",
+ "found_at": "2026-09-28T11:12:03Z",
+ "scenario": "crud-trial/t2-kiln",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Consecutive reads commit as a full block each",
+ "observed": "Four quick reads took ~20 rows: a label rule, path and 3-line content preview each",
+ "expected": "One read block for a run of successful reads: one row per file with its size; ctrl+o shows each call in full",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/Desktop/Screenshot 2026-09-27 at 5.58.01 PM.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go",
+   "internal/tui/app.go",
+   "internal/tui/replay.go"
+  ],
+  "regression_test": "TestTUI_ConsecutiveReadsCommitAsOneBlock",
+  "note": "Verified live in iTerm2 (t2-kiln-7, build d6e9c04).",
+  "updated_at": "2026-09-28T11:23:08Z",
+  "after_evidence": [
+   "/Users/andrepato/projects/crud-trial/runs/t2-kiln-7/004-progress.png"
+  ]
+ }
+}

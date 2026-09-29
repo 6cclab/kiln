@@ -1,6 +1,6 @@
 # A successful bash call: green "bash" label rule, "→ " output line.
 @faux testdata/faux/qa/tools-bash-success.yaml
-@args --permission-mode dontAsk
+@args --permission-mode bypassPermissions
 
 WAITFOR /describe a task/ 20
 TYPE say hi with bash

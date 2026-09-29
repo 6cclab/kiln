@@ -1,0 +1,26 @@
+{
+ "id": "20260928T122615Z-readonly-bash-prompts-in-default-mode",
+ "found_at": "2026-09-28T12:26:15Z",
+ "scenario": "real/ext-agents",
+ "step": "02-waitfor-timeout-line16",
+ "terminals": [],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Read-only bash commands prompt in the default mode",
+ "observed": "'cat app.py | head -5; ls -la app.py' asked for approval in ask-before-edits mode",
+ "expected": "Read-only commands inside the workspace run without asking (as the read tool does); outside paths, writes and ask rules still ask",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-ext-agents-140x45/02-waitfor-timeout-line16.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/permission/permission.go",
+   "internal/claude/settings/readonly_bash.go"
+  ],
+  "regression_test": "TestReadOnlyBashInWorkspaceDoesNotAsk,TestPermission_ReadOnlyBashInWorkspaceRunsWithoutPrompt",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T12:26:15Z"
+ }
+}

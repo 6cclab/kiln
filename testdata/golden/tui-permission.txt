@@ -2,7 +2,7 @@
   I'll look at the file.
 
   read ─────────────────────────────────────────────────────────────────────────────────────  1.0s
-  Read src/math.js
+  src/math.js
   → function add(a, b) {
       return a - b;
     }
@@ -17,13 +17,13 @@
   ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
    1  Yes
    2  Yes, and switch to accept edits (auto-approve file edits and common file commands) for this
-        session (shift+tab)
+      session (shift+tab)
    3  No
 
    ↑↓ select · enter confirm · esc decline · tab to amend
   ────────────────────────────────────────────────────────────────────────────────────────────────
 
-  ◐ Waiting for approval…  0s · 300 tokens                                            esc to stop
+  ◐ Waiting for approval…  0s · 150 tokens                                            esc to stop
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ›  press 1, 2 or 3
   ────────────────────────────────────────────────────────────────────────────────────────────────

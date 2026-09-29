@@ -1,0 +1,23 @@
+{
+ "id": "20260928T154235Z-fullscreen-no-copy",
+ "found_at": "2026-09-28T15:42:35Z",
+ "scenario": "user-report",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "high",
+ "title": "Cannot select and copy transcript text in fullscreen",
+ "observed": "Fullscreen enables mouse reporting for wheel scrolling, so drags go to kiln and the terminal cannot select (only Option-drag in iTerm2 works)",
+ "expected": "Dragging selects transcript text and copies it on release",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/selection.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_FullscreenDragCopiesSelection",
+  "updated_at": "2026-09-28T15:42:35Z"
+ }
+}

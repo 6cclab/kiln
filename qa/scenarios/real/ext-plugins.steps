@@ -1,0 +1,23 @@
+# A Claude Code user relying on an installed plugin (rubber-ducky, from
+# ~/.claude/plugins, which contributes skills). Real HOME on purpose, read
+# only: kiln reads the same installed_plugins.json and enabledPlugins
+# Claude Code writes, and must never write them.
+@real
+@size 140x45
+@fixture qa/fixtures/real/ext-plugins
+
+WAITFOR /describe a task/ 30
+SEND /plugin
+WAIT 1
+SHOT plugin-command
+EXPECT /rubber-ducky@apato-plugins/
+EXPECT_NOT /\(s\)|vunknown/
+TYPE /rubber
+WAIT 1
+SHOT slash-palette
+EXPECT /rubber-ducky:/
+KEY backspace backspace backspace backspace backspace backspace backspace
+TURN Use the rubber-duck skill to help me think through why our CI flakes about 1 in 20 runs (see notes.txt). Do not change any files, just talk it through.
+SHOT rubber-duck-attempt
+EXPECT /skill ─+/
+EXPECT /loaded · \d+ lines/

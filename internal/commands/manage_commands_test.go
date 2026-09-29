@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrepato/harness/internal/claude/agents"
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/writesettings"
 )
@@ -129,7 +130,7 @@ func TestManageMcpModalCarriesToolsAndMarker(t *testing.T) {
 	if grafana.Marker != "✔" {
 		t.Errorf("grafana marker = %q, want ✔", grafana.Marker)
 	}
-	if grafana.Group != "User MCPs (/Users/andrepato/.claude.json)" {
+	if grafana.Group != "User MCPs (~/.claude.json)" {
 		t.Errorf("grafana group = %q", grafana.Group)
 	}
 	if !strings.Contains(grafana.Description, "2") {
@@ -158,4 +159,100 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestManageMcpModalSectionsByScope: servers are grouped by where they are
+// configured, project first (the order they win on a name clash), so a
+// server from the repo's .mcp.json is not presented as a user server.
+func TestManageMcpModalSectionsByScope(t *testing.T) {
+	source := ManageCommands(ManageDeps{
+		Gate: &fakeManageGate{},
+		Cwd:  "/work/proj",
+		MCPStatuses: func() []ServerStatus {
+			return []ServerStatus{
+				{Name: "grafana", Scope: "user", OK: true},
+				{Name: "incidents", Scope: "project", OK: true},
+				{Name: "mine", Scope: "local", OK: true},
+			}
+		},
+	})
+	res, err := findCmd(t, source, "mcp").Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range res.Modal.Items {
+		got = append(got, it.Value+" | "+it.Group)
+	}
+	want := []string{
+		"incidents | Project MCPs (/work/proj/.mcp.json)",
+		"mine | Local MCPs (~/.claude.json, this project only)",
+		"grafana | User MCPs (~/.claude.json)",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("items:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestManageMcpModalListsConnectingServers: /mcp opened while servers are
+// still connecting lists them as connecting, not as failed or missing.
+func TestManageMcpModalListsConnectingServers(t *testing.T) {
+	source := ManageCommands(ManageDeps{
+		Gate: &fakeManageGate{},
+		MCPStatuses: func() []ServerStatus {
+			return []ServerStatus{
+				{Name: "grafana", Scope: "user", OK: true, ToolCount: 3},
+				{Name: "slow", Scope: "user", Connecting: true},
+			}
+		},
+	})
+	res, err := findCmd(t, source, "mcp").Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var slow *Item
+	for i := range res.Modal.Items {
+		if res.Modal.Items[i].Value == "slow" {
+			slow = &res.Modal.Items[i]
+		}
+	}
+	if slow == nil {
+		t.Fatalf("connecting server missing from /mcp: %+v", res.Modal.Items)
+	}
+	if slow.Marker != MarkerConnecting || slow.Description != "connecting…" {
+		t.Errorf("connecting server row = marker %q, description %q", slow.Marker, slow.Description)
+	}
+}
+
+// TestManageAgentsKeepsTheDescriptionsFirstLine: /agents shows an agent's
+// whole first description line (the dialog wraps it), not a 60-character
+// cut, and leaves out the example dialogues that follow it.
+func TestManageAgentsKeepsTheDescriptionsFirstLine(t *testing.T) {
+	first := "Reviews code for security issues. Use proactively whenever a task touches authentication, user input, shell commands, or SQL."
+	source := ManageCommands(ManageDeps{
+		Gate:   &fakeManageGate{},
+		Agents: []agents.Definition{{Name: "security-reviewer", Description: first + "\n<example>user: check login</example>"}},
+	})
+	res, err := findCmd(t, source, "agents").Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := res.Modal.Items[0].Description
+	if !strings.HasSuffix(got, first) {
+		t.Errorf("description = %q, want it to end with the whole first line", got)
+	}
+	if strings.Contains(got, "example") {
+		t.Errorf("description = %q carries the examples after the first line", got)
+	}
+}
+
+// TestMcpDisplayNameForPluginServers: a plugin's server reads as the server
+// and its plugin, not the internal plugin_<p>_<s> id.
+func TestMcpDisplayNameForPluginServers(t *testing.T) {
+	if got := mcpDisplayName("plugin_chrome-devtools-mcp_chrome-devtools", "plugin"); got != "chrome-devtools · chrome-devtools-mcp" {
+		t.Errorf("plugin server = %q", got)
+	}
+	if got := mcpDisplayName("plugin_like_name", "user"); got != "plugin_like_name" {
+		t.Errorf("a user server named like a plugin id was renamed: %q", got)
+	}
 }

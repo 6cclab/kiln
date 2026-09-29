@@ -1,0 +1,26 @@
+{
+ "id": "20260927T190525Z-plan-mode-denies-read-only-bash",
+ "found_at": "2026-09-27T19:05:25Z",
+ "scenario": "CRUD trial (Opus 4.8, plan mode), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Plan mode refuses every bash command, including read-only ones",
+ "observed": "The model's first planning step, cat SPEC.md && ls -la, was refused: 'plan mode is read-only, so bash is not available'. Claude Code allows read-only commands while planning.",
+ "expected": "Decision needed: allow read-only bash in plan mode (needs a conservative read-only classifier) or ask instead of refusing.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/settings/readonly_bash.go",
+   "internal/claude/settings/settings.go"
+  ],
+  "regression_test": "TestIsReadOnlyCommand,TestDecidePlanModeBash,TestPermission_PlanModeAllowsReadOnlyBash",
+  "note": "Verified in the kiln-3 CRUD-trial rerun: 7.9 min, 0 prompts, $1.96 (Claude Code $2.70), 34/34 grade.",
+  "updated_at": "2026-09-27T21:24:12Z"
+ }
+}

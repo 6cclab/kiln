@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/andrepato/harness/internal/msg"
 )
 
 // TestSteerDelivery is a real-mechanism check for the TUI's queued
@@ -157,4 +159,73 @@ func containsAll(s string, subs ...string) bool {
 		}
 	}
 	return true
+}
+
+// TestClearInboxWithdrawsQueuedSteers: ClearInbox returns the queued texts
+// in order and empties the inbox, so the next Prompt does not deliver them.
+func TestClearInboxWithdrawsQueuedSteers(t *testing.T) {
+	rig := newTestRig(t, `
+model: faux-1
+steps:
+  - text: "ok"
+`, []string{"read"})
+	lane := rig.mustLane("main")
+	for _, text := range []string{"one", "two"} {
+		if err := lane.Steer(text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := lane.ClearInbox()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "one,two" {
+		t.Errorf("ClearInbox = %q, want [one two]", got)
+	}
+	st, err := lane.laneState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Inbox) != 0 {
+		t.Errorf("inbox after ClearInbox = %d items, want 0", len(st.Inbox))
+	}
+	if _, err := lane.Prompt(context.Background(), "go", nil); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := lane.FindEntries(context.Background())
+	for _, e := range entries {
+		if um, ok := e.Message.(msg.UserMessage); ok && (msg.TextOf(um.Content) == "one" || msg.TextOf(um.Content) == "two") {
+			t.Errorf("withdrawn steer %q reached the branch", msg.TextOf(um.Content))
+		}
+	}
+}
+
+// TestUsageByModelReadsStoredRows: the session's recorded usage is summed
+// per provider/model from its assistant entries, and LastUsage is the most
+// recent request's row.
+func TestUsageByModelReadsStoredRows(t *testing.T) {
+	rig := newTestRig(t, `
+model: faux-1
+steps:
+  - text: "hi"
+    usage: {input: 12000, output: 3000}
+`, []string{"read"})
+	lane := rig.mustLane("main")
+	if _, err := lane.Prompt(context.Background(), "go", nil); err != nil {
+		t.Fatal(err)
+	}
+	by := rig.H.UsageByModel("fallback/x")
+	var total msg.Usage
+	for k, u := range by {
+		if k == "fallback/x" {
+			t.Errorf("usage keyed by the fallback, not the entry's model: %v", by)
+		}
+		total = total.Add(u)
+	}
+	if total.Input != 12000 || total.Output != 3000 {
+		t.Errorf("summed usage = %+v, want 12000 in / 3000 out", total)
+	}
+	if last := rig.H.LastUsage(); last == nil || last.Input != 12000 {
+		t.Errorf("LastUsage = %+v", last)
+	}
 }

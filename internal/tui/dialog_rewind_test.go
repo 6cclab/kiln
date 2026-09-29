@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/session"
 	"strings"
 	"testing"
 
@@ -45,7 +47,9 @@ func TestRewindDialog_MatchesReferenceRows(t *testing.T) {
 
 	want := []string{
 		"Rewind",
-		"Restore the code and/or conversation to the point before…",
+		// kiln's rewind moves the conversation only; the reference's
+		// "Restore the code and/or conversation" would promise more.
+		"Go back in the conversation to before one of your messages. Files are not restored.",
 		"  run this shell command and report its output: echo parity-check",
 		"  No code changes",
 		"> (current)",
@@ -183,5 +187,30 @@ func TestRewindEntriesFromSession_FilesChangedIsAlwaysZero(t *testing.T) {
 		if e.FilesChanged != 0 {
 			t.Errorf("FilesChanged = %d, want 0 (not implemented)", e.FilesChanged)
 		}
+	}
+}
+
+// TestRewindEntriesCountEditedFiles: each message's row counts the distinct
+// files the turn after it edited or wrote, up to the next message.
+func TestRewindEntriesCountEditedFiles(t *testing.T) {
+	user := func(id string, seq int64, text string) session.Entry {
+		return session.Entry{ID: id, Seq: seq, Type: session.EntryMessage, Message: msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(text)}}}
+	}
+	calls := func(id string, seq int64, cs ...msg.ToolCall) session.Entry {
+		var b msg.Blocks
+		for _, c := range cs {
+			b = append(b, c)
+		}
+		return session.Entry{ID: id, Seq: seq, Type: session.EntryMessage, Message: msg.AssistantMessage{Content: b}}
+	}
+	entries := []session.Entry{
+		user("u1", 1, "add a doc comment"),
+		calls("a1", 2, msg.ToolCall{Name: "read", Arguments: map[string]any{"path": "g.go"}}, msg.ToolCall{Name: "edit", Arguments: map[string]any{"path": "g.go"}}),
+		calls("a2", 3, msg.ToolCall{Name: "edit", Arguments: map[string]any{"path": "g.go"}}, msg.ToolCall{Name: "write", Arguments: map[string]any{"path": "h.go"}}),
+		user("u2", 4, "what changed?"),
+	}
+	got := RewindEntriesFromSession(entries)
+	if len(got) != 2 || got[0].FilesChanged != 2 || got[1].FilesChanged != 0 {
+		t.Errorf("entries = %+v, want 2 files for the first turn and 0 for the second", got)
 	}
 }

@@ -275,6 +275,9 @@ func buildCodexReasoning(model provider.Model, level provider.ThinkingLevel) *co
 func convertCodexTools(tools []provider.ToolDef, supportsStrictMode bool) []map[string]any {
 	out := make([]map[string]any, 0, len(tools))
 	for _, td := range tools {
+		if len(td.ServerTool) > 0 {
+			continue
+		}
 		schema := td.Parameters
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)

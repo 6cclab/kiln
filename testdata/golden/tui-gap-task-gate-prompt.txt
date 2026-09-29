@@ -1,5 +1,9 @@
-  K I L N  dev · coding agent
-<cwd> · model …
+   ██ █▀▀▀▀▀▀▀▀▀█ ██    dev · coding agent
+   ██ █ ▲ ▲▲▲ ▲ █ ██    <cwd> · model …
+   ██ █▒▓█████▓▒█ ██
+   ██ █▄▄▄▄▄▄▄▄▄█ ██
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
   / commands   @ add files   ⇧⇥ cycle mode   esc stop
 
   ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -10,14 +14,13 @@
 
   approval needed ────────────────────────────────────────────────────────────────────────────────
   ────────────────────────────────────────────────────────────────────────────────────────────────
+   Allow kiln to use task?
 
-    Allow kiln to use task?
+   1  Yes
+   2  Yes, and don't ask again for this
+   3  No, and tell kiln what to do instead
 
-    1  Yes
-    2  Yes, and don't ask again for this
-    3  No, and tell kiln what to do instead
-
-    ↑↓ select · enter confirm · esc decline
+   ↑↓ select · enter confirm · esc decline
   ────────────────────────────────────────────────────────────────────────────────────────────────
 
   ◐ Waiting for approval…  0s · 150 tokens                                            esc to stop

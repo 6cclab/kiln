@@ -199,7 +199,7 @@ func TestRenderEditPermissionPrompt_MatchesReference(t *testing.T) {
 		strings.Repeat("\u254c", 100),
 		" 1  Yes",
 		" 2  Yes, and switch to accept edits (auto-approve file edits and common file commands) for this",
-		"      session (shift+tab)",
+		"    session (shift+tab)",
 		" 3  No",
 		"",
 		" \u2191\u2193 select \u00b7 enter confirm \u00b7 esc decline \u00b7 tab to amend",
@@ -507,5 +507,97 @@ func TestBashPromptFeedbackKeepsFrame(t *testing.T) {
 	}
 	if strings.Contains(joined, "Yes") {
 		t.Errorf("options still shown in feedback view:\n%s", joined)
+	}
+}
+
+// TestRaisedCommandRows_WrapsNeverClips: a multi-line command's second line
+// was clipped mid-token ("-w \"%{h") with no marker
+// (qa/findings *prompt-command-clipped). Every character now survives,
+// wrapped within width, and a very long command ends in a marked summary.
+func TestRaisedCommandRows_WrapsNeverClips(t *testing.T) {
+	SetColorEnabled(false)
+	defer SetColorEnabled(true)
+	cmd := `echo "=== dev server serves index ==="; curl -s http://localhost:5173/ | head -20` + "\n" +
+		`echo "=== main.tsx ==="; rtk curl -s -o /dev/null -w "%{http_code}" http://localhost:5173/src/main.tsx`
+	rows := raisedCommandRows(cmd, 60)
+	var joined string
+	for _, r := range rows {
+		if w := VisibleWidth(r); w != 60 {
+			t.Errorf("row width %d, want 60: %q", w, r)
+		}
+		joined += strings.TrimSpace(r) + " "
+	}
+	for _, want := range []string{`-w "%{http_code}"`, "src/main.tsx", "head -20"} {
+		if !strings.Contains(strings.ReplaceAll(joined, " ", ""), strings.ReplaceAll(want, " ", "")) {
+			t.Errorf("command text %q lost:\n%s", want, strings.Join(rows, "\n"))
+		}
+	}
+	long := strings.Repeat("echo line\n", 20)
+	rows = raisedCommandRows(long, 60)
+	if len(rows) != maxCommandRows || !strings.Contains(rows[len(rows)-1], "… +13 more lines") {
+		t.Errorf("long command: %d rows, last %q; want %d rows ending in a marked summary", len(rows), rows[len(rows)-1], maxCommandRows)
+	}
+}
+
+// TestRenderPlanApproval_RendersMarkdown: the plan is the model's markdown
+// and renders like its replies, not as raw source (qa/findings
+// *plan-approval-raw-markdown).
+func TestRenderPlanApproval_RendersMarkdown(t *testing.T) {
+	plan := "### Backend\n\n**api/store.go** - add `List(q, limit, offset)`\n\n- first step\n- second step"
+	out := stripANSI(strings.Join(RenderPlanApproval(plan, "", 80, 0, 0, false, ""), "\n"))
+	for _, raw := range []string{"###", "**", "`", "- first"} {
+		if strings.Contains(out, raw) {
+			t.Errorf("plan shows raw markdown %q:\n%s", raw, out)
+		}
+	}
+	for _, text := range []string{"Backend", "api/store.go", "List(q, limit, offset)", "first step"} {
+		if !strings.Contains(out, text) {
+			t.Errorf("plan lost %q:\n%s", text, out)
+		}
+	}
+}
+
+// TestLineDiffHunks_KeepsUnchangedLinesAsContext: an edit that keeps
+// three lines and appends a new function must not show the kept lines as
+// removed and re-added (qa/findings *edit-preview-rewrites-unchanged-lines).
+func TestLineDiffHunks_KeepsUnchangedLinesAsContext(t *testing.T) {
+	old := []string{`@app.route("/users")`, `def users():`, `    return jsonify({"id": 1})`}
+	next := append(append([]string{}, old...), "", `@app.route("/health")`, `def health():`)
+	hunks := lineDiffHunks(old, next, 11)
+	var got []string
+	for _, h := range hunks {
+		switch {
+		case h.Context:
+			got = append(got, fmt.Sprintf("%d  %s", h.LineNum, h.New))
+		case h.OldAbsent:
+			got = append(got, fmt.Sprintf("%d+ %s", h.LineNum, h.New))
+		default:
+			got = append(got, fmt.Sprintf("%d- %s", h.LineNum, h.Old))
+		}
+	}
+	want := []string{
+		`11  @app.route("/users")`, `12  def users():`, `13      return jsonify({"id": 1})`,
+		`14+ `, `15+ @app.route("/health")`, `16+ def health():`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// A changed line is a removal and an addition around shared context.
+	h := lineDiffHunks([]string{"a", "b - x", "c"}, []string{"a", "b + x", "c"}, 1)
+	if len(h) != 4 || !h[0].Context || !h[1].NewAbsent || h[1].Old != "b - x" || !h[2].OldAbsent || !h[3].Context {
+		t.Errorf("single-line change: %+v", h)
+	}
+}
+
+// TestRenderPermissionPromptNamesMCPToolAndServer: an MCP tool's qualified
+// id reads as the tool and its server in the approval question.
+func TestRenderPermissionPromptNamesMCPToolAndServer(t *testing.T) {
+	req := PermissionRequest{ToolName: "mcp__incidents__list_incidents"}
+	full := stripANSI(strings.Join(RenderPermissionPrompt(req, "/", 100, 0, false, ""), "\n"))
+	if !strings.Contains(full, "Allow kiln to use list_incidents from the incidents MCP server?") {
+		t.Errorf("prompt does not name the tool and server:\n%s", full)
+	}
+	if strings.Contains(full, "mcp__") {
+		t.Errorf("prompt shows the raw qualified id:\n%s", full)
 	}
 }

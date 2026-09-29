@@ -1,0 +1,28 @@
+{
+ "id": "20260927T231810Z-plan-approval-raw-markdown",
+ "found_at": "2026-09-27T23:18:10Z",
+ "scenario": "crud-trial/t2-kiln-2",
+ "step": "005-prompt",
+ "terminals": [],
+ "category": "style",
+ "severity": "medium",
+ "title": "Plan approval shows the plan as raw markdown",
+ "observed": "Plan rows printed verbatim: literal **bold**, ### headings and backticks",
+ "expected": "The plan renders through the same markdown renderer as assistant replies",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln-2/005-prompt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go"
+  ],
+  "regression_test": "TestRenderPlanApproval_RendersMarkdown",
+  "note": "Verified live in iTerm2 (t2-kiln-4, build 9285da7).",
+  "updated_at": "2026-09-27T23:36:28Z",
+  "after_evidence": [
+   "/Users/andrepato/projects/crud-trial/runs/t2-kiln-4/005-prompt.png"
+  ]
+ }
+}

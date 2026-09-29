@@ -1,0 +1,24 @@
+{
+ "id": "20260928T130510Z-approval-raw-mcp-id",
+ "found_at": "2026-09-28T13:05:10Z",
+ "scenario": "real/mcp-cli-add",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "low",
+ "title": "Approval prompt shows the raw MCP tool id",
+ "observed": "Allow kiln to use mcp__incidents__list_incidents?",
+ "expected": "Allow kiln to use list_incidents from the incidents MCP server?",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-mcp-cli-add-140x45/04-prompt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go"
+  ],
+  "regression_test": "TestRenderPermissionPromptNamesMCPToolAndServer",
+  "updated_at": "2026-09-28T13:05:10Z"
+ }
+}

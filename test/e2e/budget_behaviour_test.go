@@ -98,17 +98,13 @@ func TestBudget_SystemPromptFitsTier(t *testing.T) {
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
 
-	// A large CLAUDE.md plus rule files: several KB of content, comfortably
-	// more than either tier's SystemPromptTokens ceiling if all of it were
-	// embedded unbudgeted.
-	var claudeMD strings.Builder
-	claudeMD.WriteString("# Project notes\n\n")
-	for i := 0; i < 80; i++ {
-		fmt.Fprintf(&claudeMD, "Paragraph %d: %s\n\n", i, strings.Repeat("lorem ipsum dolor sit amet ", 8))
-	}
-	budgetWriteFile(t, filepath.Join(proj, "CLAUDE.md"), claudeMD.String())
+	// A short CLAUDE.md plus rule files: several KB of rules, comfortably
+	// more than the small tier's SystemPromptTokens ceiling if all of them
+	// were embedded. CLAUDE.md files always load in full; rules are what
+	// the budget governs.
+	budgetWriteFile(t, filepath.Join(proj, "CLAUDE.md"), "# Project notes\n\nKeep it simple.\n")
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 8; i++ {
 		var rule strings.Builder
 		fmt.Fprintf(&rule, "# Rule %d\n\n", i)
 		for j := 0; j < 20; j++ {
@@ -134,6 +130,13 @@ func TestBudget_SystemPromptFitsTier(t *testing.T) {
 	}
 	if len(mem2) >= len(mem1) {
 		t.Errorf("faux-2 (small tier) embedded memory (%d chars) not shorter than faux-1's (%d chars)", len(mem2), len(mem1))
+	}
+	// What did not fit is listed, not lost.
+	if !strings.Contains(sys2, "<memory-index>") || !strings.Contains(sys2, filepath.Join(".claude", "rules", "rule")) {
+		t.Errorf("faux-2 (small tier): rules left out are not listed in a <memory-index>")
+	}
+	if strings.Contains(sys1, "<memory-index>") {
+		t.Errorf("faux-1 (large tier): every rule fits, but some were indexed")
 	}
 	if tier2.SystemPromptTokens >= tier1.SystemPromptTokens {
 		t.Fatalf("test setup invalid: tier2.SystemPromptTokens=%d not < tier1's %d", tier2.SystemPromptTokens, tier1.SystemPromptTokens)
@@ -163,71 +166,62 @@ func budgetExtractMemoryBlocks(sys string) string {
 	return out.String()
 }
 
-// TestBudget_MemoryDroppedLeastSpecificFirst writes a user-scope CLAUDE.md
-// (under the scratch HOME) and a project-scope CLAUDE.md, sized so that on
-// faux-2 (small tier, tight SystemPromptTokens budget) only the project file
-// fits -- internal/claude/memory.LoadMemory spends its budget most-specific
-// first (project before user) -- while on faux-1 (large tier) both fit.
-//
-// Proved able to fail: temporarily inverted the "user marker dropped on
-// faux-2" assertion (`if strings.Contains(sys2, userMarker)` to
-// `if !strings.Contains(...)`) -- went red with "expected user CLAUDE.md
-// (least specific) to be dropped, but it is present" -- confirming the test
-// observes real drop behaviour against the actual binary, not a tautology
-// -- then reverted.
-func TestBudget_MemoryDroppedLeastSpecificFirst(t *testing.T) {
+// TestBudget_ClaudeMDAlwaysLoadsRulesIndexed: on faux-2 (small tier) both
+// CLAUDE.md files still load in full, and a large user rule that does not
+// fit is listed by path and heading in the <memory-index> instead of being
+// dropped; on faux-1 (large tier) the rule loads in full. A small model
+// used to lose the user's global CLAUDE.md outright.
+func TestBudget_ClaudeMDAlwaysLoadsRulesIndexed(t *testing.T) {
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
 
 	const userMarker = "USER-SCOPE-MARKER-fdb3a1"
 	const projectMarker = "PROJECT-SCOPE-MARKER-9c7e2f"
+	const ruleMarker = "RULE-BODY-MARKER-77aa10"
 
-	// Project CLAUDE.md alone is sized to consume most of faux-2's budget
-	// (tier2.SystemPromptTokens is small; see TestBudget_SystemPromptFitsTier's
-	// comment on its floor), leaving no room for the user file.
-	// Sized (measured empirically against the memory package's len/4
-	// estimate) to land just under faux-2's ~3,277-token SystemPromptTokens
-	// budget on its own, leaving too little room for the user file below.
-	var projectMD strings.Builder
-	fmt.Fprintf(&projectMD, "# Project\n\n%s\n\n", projectMarker)
-	for i := 0; i < 44; i++ {
-		fmt.Fprintf(&projectMD, "Project paragraph %d: %s\n\n", i, strings.Repeat("project content words here ", 10))
+	budgetWriteFile(t, filepath.Join(proj, "CLAUDE.md"), "# Project\n\n"+projectMarker+"\n")
+	budgetWriteFile(t, filepath.Join(home, ".claude", "CLAUDE.md"), "# User\n\n"+userMarker+"\n")
+	var rule strings.Builder
+	fmt.Fprintf(&rule, "---\ndescription: Evidence before claims\n---\n\n# Evidence\n\n%s\n", ruleMarker)
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&rule, "Line %d: %s\n", i, strings.Repeat("evidence words ", 10))
 	}
-	budgetWriteFile(t, filepath.Join(proj, "CLAUDE.md"), projectMD.String())
-
-	var userMD strings.Builder
-	fmt.Fprintf(&userMD, "# User\n\n%s\n\n", userMarker)
-	for i := 0; i < 10; i++ {
-		fmt.Fprintf(&userMD, "Personal preference %d: %s\n\n", i, strings.Repeat("user preference words ", 10))
-	}
-	budgetWriteFile(t, filepath.Join(home, ".claude", "CLAUDE.md"), userMD.String())
+	budgetWriteFile(t, filepath.Join(home, ".claude", "rules", "evidence.md"), rule.String())
 
 	sys1 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "", nil)
 	sys2 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-2", "", nil)
 
-	if !strings.Contains(sys1, projectMarker) || !strings.Contains(sys1, userMarker) {
-		t.Errorf("faux-1 (large tier): expected both memory files present; project=%v user=%v",
-			strings.Contains(sys1, projectMarker), strings.Contains(sys1, userMarker))
+	for name, sys := range map[string]string{"faux-1": sys1, "faux-2": sys2} {
+		if !strings.Contains(sys, projectMarker) || !strings.Contains(sys, userMarker) {
+			t.Errorf("%s: a CLAUDE.md is missing; project=%v user=%v", name, strings.Contains(sys, projectMarker), strings.Contains(sys, userMarker))
+		}
 	}
-	if !strings.Contains(sys2, projectMarker) {
-		t.Errorf("faux-2 (small tier): expected project CLAUDE.md (most specific) to survive budgeting; System=%q", sys2)
+	if !strings.Contains(sys1, ruleMarker) {
+		t.Errorf("faux-1 (large tier): the rule did not load in full")
 	}
-	if strings.Contains(sys2, userMarker) {
-		t.Errorf("faux-2 (small tier): expected user CLAUDE.md (least specific) to be dropped, but it is present")
+	if strings.Contains(sys2, ruleMarker) {
+		t.Errorf("faux-2 (small tier): the oversized rule loaded in full")
+	}
+	if !strings.Contains(sys2, filepath.Join(home, ".claude", "rules", "evidence.md")+": Evidence before claims") {
+		t.Errorf("faux-2 (small tier): the rule is not listed with its description in the memory index")
 	}
 }
 
-// TestBudget_ToolStrategyPerWindow proves the tool strategy changes what
-// the model is offered. An MCP server named "grafana" (known to the
-// built-in postures and excluded from the default "coding" one) is wired
-// to the fixture binary. On faux-1 (128k, full-index) the system prompt
-// indexes every server, grafana included; on faux-2 (32k, posture-index)
-// the posture keeps grafana out (internal/mcp/gating.go IndexScope). Break
-// to verify: make IndexScope return the posture for every strategy.
+// TestBudget_ToolStrategyPerWindow proves the tool strategy no longer
+// depends on window size at all -- posture-index at every size, per
+// budget.StrategyForWindow -- and that the posture is what actually gates
+// what the model is offered. An MCP server named "grafana" (known to the
+// built-in postures and excluded from the default "coding" one) is wired to
+// the fixture binary. Both faux-1 (128k) and faux-2 (32k) must resolve to
+// posture-index and must both keep grafana out of the system prompt: a
+// bigger window used to earn full-index/full-schemas and index (or fully
+// resident-schema) every server regardless of posture, which is exactly the
+// resident-MCP-schema cost this change removes. Break to verify: restore
+// the old window-based StrategyForWindow.
 func TestBudget_ToolStrategyPerWindow(t *testing.T) {
 	tier1 := budget.TierForWindow(128_000)
-	if tier1.ToolStrategy != budget.StrategyFullIndex {
-		t.Fatalf("faux-1 (128k) tier strategy = %v, want full-index", tier1.ToolStrategy)
+	if tier1.ToolStrategy != budget.StrategyPostureIndex {
+		t.Fatalf("faux-1 (128k) tier strategy = %v, want posture-index", tier1.ToolStrategy)
 	}
 	tier2 := budget.TierForWindow(32_768)
 	if tier2.ToolStrategy != budget.StrategyPostureIndex {
@@ -241,11 +235,11 @@ func TestBudget_ToolStrategyPerWindow(t *testing.T) {
 	sys1 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "", nil, "--mcp-config", mcpConfig)
 	sys2 := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-2", "", nil, "--mcp-config", mcpConfig)
 
-	if !strings.Contains(sys1, "mcp__grafana__") {
-		t.Errorf("full-index (faux-1) system prompt does not index the grafana server:\n%s", sys1)
+	if strings.Contains(sys1, "mcp__grafana__") {
+		t.Errorf("faux-1 (128k, posture-index) system prompt indexes grafana, which the coding posture excludes:\n%s", sys1)
 	}
 	if strings.Contains(sys2, "mcp__grafana__") {
-		t.Errorf("posture-index (faux-2) system prompt indexes grafana, which the coding posture excludes:\n%s", sys2)
+		t.Errorf("faux-2 (32k, posture-index) system prompt indexes grafana, which the coding posture excludes:\n%s", sys2)
 	}
 }
 
@@ -329,7 +323,7 @@ steps:
 	addr, srv := startFaux(t, script)
 	env := baseEnv(home, sessDir, addr)
 	env["HARNESS_MODEL"] = "faux/faux-2"
-	res := runHarness(t, proj, env, "-p", "run the command", "--output-format", "json", "--permission-mode", "dontAsk")
+	res := runHarness(t, proj, env, "-p", "run the command", "--output-format", "json", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("run: exit %d, stderr=%s", res.Code, res.Stderr)
 	}

@@ -17,7 +17,7 @@ KEY enter
 WAITFOR /blocked: bash is disabled for this scenario/ 20
 SHOT blocked
 EXPECT /blocked: bash is disabled for this scenario/
-EXPECT /Bash/
+EXPECT /bash ─.*blocked by hook/
 WAITFOR /Noted, the call was blocked/ 10
 SHOT reply
 EXPECT_NOT /blocked by hook:/

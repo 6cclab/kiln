@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -47,6 +48,10 @@ type AutocompleteItem struct {
 	Value       string
 	Label       string
 	Description string
+	// Hint is a slash command's argument hint ("<path>"), drawn dim after
+	// the name in the name column so every description starts at the
+	// same column.
+	Hint string
 }
 
 // Popup is the pure, TUI-framework-free autocomplete state: which items
@@ -137,11 +142,19 @@ func (p *Popup) Render(width, maxRows int) []string {
 		return []string{padTo(Muted("  No matching commands"), width)}
 	}
 
-	start, end := visibleRange(p.Selected, len(p.Items), maxRows)
+	// A clipped list gives its last row to a count of what is hidden, so
+	// the list never reads as complete when it is not.
+	items := maxRows
+	clipped := len(p.Items) > maxRows && maxRows >= 3
+	if clipped {
+		items = maxRows - 1
+	}
+	start, end := visibleRange(p.Selected, len(p.Items), items)
+	column := slashColumnFor(p.Items)
 	var lines []string
 	for i := start; i < end; i++ {
 		selected := i == p.Selected
-		for _, row := range renderItem(p.Kind, p.Items[i], selected, width) {
+		for _, row := range renderItem(p.Kind, p.Items[i], selected, width, column) {
 			if !selected {
 				lines = append(lines, padTo(row, width))
 				continue
@@ -157,6 +170,10 @@ func (p *Popup) Render(width, maxRows int) []string {
 			}
 			lines = append(lines, row)
 		}
+	}
+	if clipped {
+		hidden := len(p.Items) - (end - start)
+		lines = append(lines, padTo(Faint(fmt.Sprintf("  %d more · keep typing to narrow", hidden)), width))
 	}
 	return lines
 }
@@ -190,7 +207,7 @@ const popupDescRows = 2
 // since the value and the description are two different foreground
 // colours over that background); unselected rows show the command in ink
 // and the description dimmed, no background.
-func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, width int) []string {
+func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, width, column int) []string {
 	paintValue := func(s string) string {
 		if selected {
 			return onRaiseSpan(textHex.Amber, s)
@@ -208,7 +225,7 @@ func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, wid
 		return []string{lead + paintValue("+ "+truncateMiddle(displayValue(item), width-4))}
 	}
 	if kind == KindSlashCommand {
-		return renderSlashCommandItem(item, selected, width, paintValue, paintDesc)
+		return renderSlashCommandItem(item, selected, width, column, paintValue, paintDesc)
 	}
 
 	value := displayValue(item)
@@ -239,30 +256,53 @@ func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, wid
 	return rows
 }
 
-// slashCommandColumn is where a slash command's description starts: two
-// columns of indent plus a 10-column command column
-// (docs/kiln-design-handoff/README.md "Palette": command padded to 10
-// columns, `%-10s`; a longer command overflows by one space instead of
-// pushing the description off a fixed column).
-const slashCommandColumn = 10
+// slashCommandColumn is the narrowest command column: the design pads the
+// command to 10 columns (docs/kiln-design-handoff/README.md "Palette",
+// `%-10s`). slashColumnFor widens it to the longest command-and-hint in
+// the list, up to slashCommandColumnMax, so descriptions share one column
+// instead of each long name (or "<path>" hint) pushing its own out.
+const (
+	slashCommandColumn    = 10
+	slashCommandColumnMax = 28
+)
+
+// slashColumnFor is the command column for a list of slash items.
+func slashColumnFor(items []AutocompleteItem) int {
+	col := slashCommandColumn
+	for _, it := range items {
+		w := 1 + VisibleWidth(strings.TrimPrefix(displayValue(it), "/"))
+		if it.Hint != "" {
+			w += 1 + VisibleWidth(it.Hint)
+		}
+		if w+1 <= slashCommandColumnMax {
+			col = max(col, w+1)
+		}
+	}
+	return col
+}
 
 // renderSlashCommandItem renders one `/` popup row: two-space indent, the
 // command padded to slashCommandColumn (amber when selected, ink
 // otherwise), then the description (dim), truncated — never wrapped — to
 // fit width. When selected, paintValue/paintDesc (renderItem) already carry
 // the raised background themselves.
-func renderSlashCommandItem(item AutocompleteItem, selected bool, width int, paintValue, paintDesc func(string) string) []string {
+func renderSlashCommandItem(item AutocompleteItem, selected bool, width, column int, paintValue, paintDesc func(string) string) []string {
 	value := displayValue(item)
 	if !strings.HasPrefix(value, "/") {
 		value = "/" + value
 	}
-	padded := value
-	if w := VisibleWidth(value); w < slashCommandColumn {
-		padded += strings.Repeat(" ", slashCommandColumn-w)
-	} else {
-		padded += " " // overflow: one space before the description
+	shown := VisibleWidth(value)
+	line := raiseGap(selected, 2) + paintValue(value)
+	if item.Hint != "" {
+		line += raiseGap(selected, 1) + paintDesc(item.Hint)
+		shown += 1 + VisibleWidth(item.Hint)
 	}
-	line := raiseGap(selected, 2) + paintValue(padded)
+	gap := 1 // overflow: one space before the description
+	if shown < column {
+		gap = column - shown
+	}
+	line += raiseGap(selected, gap)
+	padded := strings.Repeat(" ", shown+gap)
 	desc := normalizeToSingleLine(item.Description)
 	if desc == "" {
 		return []string{line}
@@ -271,7 +311,10 @@ func renderSlashCommandItem(item AutocompleteItem, selected bool, width int, pai
 	if descWidth < 1 {
 		return []string{line}
 	}
-	return []string{line + paintDesc(truncateToWidth(desc, descWidth))}
+	if VisibleWidth(desc) > descWidth {
+		desc = ansi.Truncate(desc, descWidth, "…") // cut, and say so
+	}
+	return []string{line + paintDesc(desc)}
 }
 
 // truncateMiddle keeps the last path segment and clips the front with "…"
@@ -489,15 +532,7 @@ func slashCommandSuggestions(reg *commands.Registry, prefix string) []Autocomple
 		if prefix != "" && !strings.HasPrefix(strings.ToLower(getText(name)), lowerPrefix) {
 			continue
 		}
-		desc := c.Description
-		if c.ArgumentHint != "" {
-			if desc != "" {
-				desc = c.ArgumentHint + " — " + desc
-			} else {
-				desc = c.ArgumentHint
-			}
-		}
-		out = append(out, AutocompleteItem{Value: name, Label: name, Description: desc})
+		out = append(out, AutocompleteItem{Value: name, Label: name, Description: c.Description, Hint: c.ArgumentHint})
 	}
 	return out
 }

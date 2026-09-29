@@ -1,0 +1,21 @@
+{
+ "id": "20260928T134614Z-mcp-unavailable-note-after-prompt",
+ "found_at": "2026-09-28T13:46:14Z",
+ "scenario": "real/wf-interrupts",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "'N MCP servers unavailable' note lands after the user's first prompt",
+ "observed": "The failure note from the background connect committed below a prompt the user sent during startup",
+ "expected": "Note where the user sees it",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-wf-interrupts-140x45/03-queued-followup.png"
+ ],
+ "status": "wontfix",
+ "fix": {
+  "note": "Chronological: the connect finished after the prompt was sent. Servers now connect concurrently (f69f765), so the note arrives within one connect timeout of startup; moving it above the prompt would misstate when it happened.",
+  "updated_at": "2026-09-28T13:46:14Z"
+ }
+}

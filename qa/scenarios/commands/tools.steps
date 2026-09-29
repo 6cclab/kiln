@@ -6,7 +6,7 @@ KEY enter
 WAITFOR /Sure, working on it/ 20
 TYPE /tools
 KEY enter
-WAITFOR /resident:/ 20
+WAITFOR /available to the model:/ 20
 SHOT tools
-EXPECT /\d+ resident:/
+EXPECT /\d+ tools available to the model:/
 EXPECT_NOT /panic|goroutine/

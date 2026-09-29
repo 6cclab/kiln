@@ -31,7 +31,7 @@ func TestTUI_PlanBlock_Live(t *testing.T) {
 	proj, home, sessDir, addr, _ := tuiFixture(t, string(script))
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 

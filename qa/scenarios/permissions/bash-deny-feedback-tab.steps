@@ -14,10 +14,12 @@ SHOT after-tab
 EXPECT /approval needed/
 TYPE please explain what this does first
 SHOT after-typing
+EXPECT /typing in the prompt above · enter to send · esc to decline/
+EXPECT_NOT /press 1, 2/
 # The reason appears in the prompt's feedback field, not in the editor.
 EXPECT /please explain what this does first/
 KEY enter
 WAITFOR /Ran the probe command|Declined/ 20
 SHOT after-enter
-EXPECT /✕ Declined echo tab-amend-probe/
+EXPECT /✕ Declined .*echo tab-amend-probe/
 EXPECT_NOT /panic|goroutine/

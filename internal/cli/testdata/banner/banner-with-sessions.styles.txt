@@ -1,5 +1,13 @@
-K I L N  v0.9.2 · coding agent
-/home/dev/relay-api · model kiln-large
+        ░▒░
+        ▐█▌
+    ▄▄▄▄▄█▄▄▄▄▄
+  ▄█▀▀▀▀▀▀▀▀▀▀▀█▄     K I L N
+ ██ █▀▀▀▀▀▀▀▀▀█ ██    v0.9.2 · coding agent
+ ██ █ ▲ ▲▲▲ ▲ █ ██    /home/dev/relay-api · model kiln-large
+ ██ █▒▓█████▓▒█ ██
+ ██ █▄▄▄▄▄▄▄▄▄█ ██
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
 / commands   @ add files   ⇧⇥ cycle mode   esc stop
 
 Recent sessions

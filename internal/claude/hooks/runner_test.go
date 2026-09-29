@@ -323,6 +323,16 @@ func TestGuardToolCallHooksThenGate(t *testing.T) {
 		if len(seen) != 0 {
 			t.Error("the gate ran after a hook block")
 		}
+		if !result.ByHook {
+			t.Error("a hook block is not reported as one")
+		}
+	})
+
+	t.Run("a gate block is not reported as a hook block", func(t *testing.T) {
+		result, _ := guard("", "git")
+		if result.Blocked == nil || result.ByHook {
+			t.Errorf("got blocked=%v byHook=%v", result.Blocked, result.ByHook)
+		}
 	})
 
 	t.Run("returns no args when nothing rewrote, so the call is untouched", func(t *testing.T) {
@@ -334,4 +344,13 @@ func TestGuardToolCallHooksThenGate(t *testing.T) {
 			t.Errorf("expected no block, got %v", result.Blocked)
 		}
 	})
+}
+
+func TestRunHooksSetsClaudeProjectDir(t *testing.T) {
+	dir := t.TempDir()
+	path := writeScript(t, dir, "project-dir.sh", `printf '%s' "$CLAUDE_PROJECT_DIR"`)
+	out := run(cfg(path, 0), nil, dir)
+	if len(out.Context) != 1 || out.Context[0] != dir {
+		t.Errorf("CLAUDE_PROJECT_DIR = %v, want %q", out.Context, dir)
+	}
 }

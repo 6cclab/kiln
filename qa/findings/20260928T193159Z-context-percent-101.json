@@ -1,0 +1,24 @@
+{
+ "id": "20260928T193159Z-context-percent-101",
+ "found_at": "2026-09-28T19:31:59Z",
+ "scenario": "real/wf-sessions",
+ "step": "05-context",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "/context percentages sum to 101%; header truncates",
+ "observed": "1+0+0+1+99 = 101%; header '14k' beside rows summing 14.8k; a 3k Tools row read 0%",
+ "expected": "Shares sum to 100, small non-empty ones read <1%, header rounds",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-wf-sessions-140x45/05-context.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/context.go"
+  ],
+  "regression_test": "TestSegmentPercentsSumTo100",
+  "updated_at": "2026-09-28T19:31:59Z"
+ }
+}

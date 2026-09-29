@@ -13,12 +13,12 @@ func TestRenderGolden_NoteInterrupted(t *testing.T) {
 
 func TestRenderGolden_NoteDeclined(t *testing.T) {
 	withRenderEnv(t, 80)
-	assertRenderGolden(t, "note-declined", RenderNote(declinedNoteText(PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload"}), 80))
+	assertRenderGolden(t, "note-declined", RenderNote(declinedNoteText(PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload"}, ""), 80))
 }
 
 func TestRenderGolden_NoteDeclinedEdit(t *testing.T) {
 	withRenderEnv(t, 80)
-	assertRenderGolden(t, "note-declined-edit", RenderNote(declinedNoteText(PermissionRequest{ToolName: "edit", PrimaryArg: "src/math.js"}), 80))
+	assertRenderGolden(t, "note-declined-edit", RenderNote(declinedNoteText(PermissionRequest{ToolName: "edit", PrimaryArg: "src/math.js"}, ""), 80))
 }
 
 func TestRenderGolden_NoteReconnected(t *testing.T) {
@@ -29,4 +29,11 @@ func TestRenderGolden_NoteReconnected(t *testing.T) {
 func TestRenderGolden_UserQueued(t *testing.T) {
 	withRenderEnv(t, 80)
 	assertRenderGolden(t, "user-queued", RenderUserMessageMeta("check the other file too", "queued", 80))
+}
+
+func TestDeclinedNoteCarriesFeedback(t *testing.T) {
+	got := declinedNoteText(PermissionRequest{ToolName: "bash", PrimaryArg: "rm -rf build"}, "explain first")
+	if got != "✕ Declined rm -rf build · “explain first”" {
+		t.Errorf("note = %q", got)
+	}
 }

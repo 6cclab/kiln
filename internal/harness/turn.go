@@ -159,6 +159,7 @@ func (l *Lane) opSettings() OpSettings {
 func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	l.invokeBeforeDrive(ctx)
 	firstIteration := true
+	compactFirst := true
 	for {
 		if err := ctx.Err(); err != nil {
 			return l.finishAborted(operationID, tip)
@@ -191,6 +192,14 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		var drainErr error
 		if tip, _, drainErr = l.drainInbox(tip); drainErr != nil {
 			return l.finishFailed(operationID, tip, drainErr)
+		}
+
+		// Before an operation's first request, too: the end-of-turn check
+		// below only runs between tool steps, so a conversation whose
+		// turns end in text never compacted however full it got.
+		if compactFirst {
+			compactFirst = false
+			tip = l.autoCompact(ctx, tip)
 		}
 
 		_, cfg, err := l.resolveModel()
@@ -273,6 +282,16 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		tip = responseEntryID
 
 		if len(toolCalls) == 0 {
+			if final.StopReason == msg.StopPause {
+				// Anthropic's pause_turn: a long server-tool turn (e.g. an
+				// extended web search) was cut for interim delivery, not
+				// finished. The partial assistant message was already
+				// committed to the branch tip above, so the next loop
+				// iteration's transcript scan includes it verbatim; simply
+				// looping back re-requests exactly as Anthropic's docs
+				// prescribe, without treating this as the end of the turn.
+				continue
+			}
 			l.h.events.Emit(Event{Type: EventTurnEnd, Lane: l.name, OperationID: operationID})
 			// The model finished before the next loop iteration's own
 			// checkpoint got a chance to drain the inbox. A queued
@@ -532,7 +551,7 @@ func buildStreamOptions(opts Options, cfg session.LaneConfiguration) provider.St
 		if !ok {
 			continue
 		}
-		toolDefs = append(toolDefs, provider.ToolDef{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
+		toolDefs = append(toolDefs, provider.ToolDef{Name: t.Name, Description: t.Description, Parameters: t.Parameters, ServerTool: t.ServerTool})
 	}
 	return provider.StreamOptions{
 		ThinkingLevel: provider.ThinkingLevel(thinking),
@@ -643,7 +662,34 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	}
 	l.h.events.Emit(Event{Type: EventToolStart, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
 
-	before := l.invokeBeforeTool(ctx, call)
+	// A call that cannot run is refused before the before-tool hooks: they
+	// include the permission gate, and asking the user to approve a call
+	// that is then refused anyway wastes their answer.
+	var refusal *tool.Result
+	if _, registered := l.h.opts.Tools.Get(call.Name); !registered {
+		// Distinct from the "not in the active tool set" branch below: a
+		// name that was never registered anywhere is a typo or a
+		// hallucinated tool, not an access restriction, and the two read
+		// very differently to a user watching the transcript.
+		diag.L().Info("tool refused: unknown", "lane", l.name, "tool", call.Name)
+		r := tool.Errorf("There is no tool named %s, so the call did not run.", call.Name)
+		refusal = &r
+	} else if !l.toolActive(call.Name) {
+		active, _ := l.GetActiveTools()
+		diag.L().Info("tool refused: not active", "lane", l.name, "tool", call.Name, "active", active)
+		// The active set is not only what the model is offered: a subagent
+		// restricted to Read must not run bash because its model guessed
+		// the name, and a gated MCP tool must be activated through
+		// tool_search before it executes. Refusing here, not just in the
+		// schema, is what makes an allowlist an allowlist.
+		r := tool.Errorf("tool %q is not available to this agent: it is not in the active tool set", call.Name)
+		refusal = &r
+	}
+
+	var before BeforeToolResult
+	if refusal == nil {
+		before = l.invokeBeforeTool(ctx, call)
+	}
 
 	args := call.Arguments
 	if before.RewrittenArgs != nil {
@@ -654,28 +700,14 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	}
 
 	var result tool.Result
-	if before.Block != nil {
+	if refusal != nil {
+		result = *refusal
+	} else if before.Block != nil {
 		result = tool.Result{Content: msg.Blocks{msg.Text(before.Block.Reason)}, IsError: true}
-	} else if _, registered := l.h.opts.Tools.Get(call.Name); !registered {
-		// Distinct from the "not in the active tool set" branch below: a
-		// name that was never registered anywhere is a typo or a
-		// hallucinated tool, not an access restriction, and the two read
-		// very differently to a user watching the transcript.
-		diag.L().Info("tool refused: unknown", "lane", l.name, "tool", call.Name)
-		result = tool.Errorf("unknown tool %q", call.Name)
-	} else if !l.toolActive(call.Name) {
-		active, _ := l.GetActiveTools()
-		diag.L().Info("tool refused: not active", "lane", l.name, "tool", call.Name, "active", active)
-		// The active set is not only what the model is offered: a subagent
-		// restricted to Read must not run bash because its model guessed
-		// the name, and a gated MCP tool must be activated through
-		// tool_search before it executes. Refusing here, not just in the
-		// schema, is what makes an allowlist an allowlist.
-		result = tool.Errorf("tool %q is not available to this agent: it is not in the active tool set", call.Name)
 	} else if call.InvalidArgs != "" {
 		// The provider could not parse the call's arguments; running the
 		// tool with empty arguments would silently do the wrong thing.
-		result = tool.Errorf("tool call arguments were not valid JSON: %s", call.InvalidArgs)
+		result = tool.Errorf("The call's arguments were not valid JSON, so it did not run. Received: %s", call.InvalidArgs)
 	} else {
 		// Registration was already confirmed above, so Get cannot miss
 		// here; it is repeated rather than threading the *tool.Tool

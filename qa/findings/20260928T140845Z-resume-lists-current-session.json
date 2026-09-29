@@ -1,0 +1,24 @@
+{
+ "id": "20260928T140845Z-resume-lists-current-session",
+ "found_at": "2026-09-28T14:08:45Z",
+ "scenario": "real/wf-sessions",
+ "step": "04-resume-list",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "/resume lists the current session and says 'session(s)'",
+ "observed": "1 session(s): listing the session already open",
+ "expected": "Only other sessions, '1 past session:'",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-wf-sessions-140x45/04-resume-list.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/session_commands.go"
+  ],
+  "regression_test": "TestResumeWithArg",
+  "updated_at": "2026-09-28T14:08:45Z"
+ }
+}

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/andrepato/harness/internal/cli"
 	"github.com/andrepato/harness/internal/session"
@@ -23,7 +24,30 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	code := run(os.Args[1:])
+	if id := cli.PendingRelaunch(); id != "" {
+		// /resume <id>: every exit path above (shells, hooks, MCP) has run;
+		// replace this process with one resuming the chosen session.
+		code = relaunch(id)
+	}
+	os.Exit(code)
+}
+
+// relaunch execs kiln again with the same flags, resuming sessionID. It
+// returns only if the exec fails.
+func relaunch(sessionID string) int {
+	// The old session's last frame is still on screen; start the resumed
+	// one on a clear screen, as a fresh launch would (scrollback is kept).
+	if fi, serr := os.Stdout.Stat(); serr == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		fmt.Fprint(os.Stdout, "\x1b[H\x1b[2J")
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		argv := append([]string{os.Args[0]}, cli.RelaunchArgv(os.Args[1:], sessionID)...)
+		err = syscall.Exec(exe, argv, os.Environ())
+	}
+	fmt.Fprintf(os.Stderr, "kiln: could not relaunch to resume %s: %v\nRun: kiln --resume %s\n", sessionID, err, sessionID)
+	return 1
 }
 
 func run(argv []string) int {
@@ -32,6 +56,13 @@ func run(argv []string) int {
 	// does not know and would otherwise reject as unknown flags.
 	if len(argv) > 0 && argv[0] == "eval" {
 		return evalCommand(context.Background(), argv[1:], os.Stdout, os.Stderr)
+	}
+
+	// `kiln mcp add|remove|list|...` carry their own flags (-s, -e, -H, --)
+	// that the global parser would reject, so they are dispatched first,
+	// like eval. A bare `kiln mcp` stays the connection report below.
+	if len(argv) > 1 && argv[0] == "mcp" && cli.MCPSubcommands[argv[1]] {
+		return cli.MCPCommand(context.Background(), argv[1:], os.Stdout, os.Stderr)
 	}
 
 	args := cli.Parse(argv)

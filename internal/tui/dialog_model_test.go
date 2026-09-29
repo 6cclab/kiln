@@ -60,7 +60,7 @@ func TestDialogModel_MatchesReferenceStructure(t *testing.T) {
 		"  4. Sonnet                 Sonnet 5 · Efficient for routine tasks",
 		"  5. Haiku                  Haiku 4.5 · Fastest for quick answers",
 		"",
-		"\u25d0 Medium effort \u2190/\u2192 to adjust",
+		"effort  auto · low · medium · high · xhigh · max   ←/→ to adjust",
 		"",
 		"Enter to set as default \u00b7 s to use this session only \u00b7 Esc to cancel",
 	}
@@ -167,5 +167,27 @@ func TestDialogModel_PickMovesCurrentMark(t *testing.T) {
 	}
 	if spec.Items[1].Marker != "✔" {
 		t.Errorf("Apply mutated the caller's items slice")
+	}
+}
+
+func TestNextEffortLevelReachesAutoAndStopsAtEnds(t *testing.T) {
+	steps := []struct {
+		from    string
+		forward bool
+		want    string
+	}{
+		{"auto", true, "low"},
+		{"low", false, "auto"},
+		{"auto", false, "auto"},
+		{"max", true, "max"},
+		{"medium", true, "high"},
+	}
+	for _, s := range steps {
+		if got := nextEffortLevel(s.from, s.forward); got != s.want {
+			t.Errorf("nextEffortLevel(%q, forward=%v) = %q, want %q", s.from, s.forward, got, s.want)
+		}
+	}
+	if row := renderEffortScale("high", 30); VisibleWidth(row) > 30 {
+		t.Errorf("narrow effort row overflows: %q", row)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ var bashParameters = json.RawMessage(`{
 	"type": "object",
 	"properties": {
 		"command": {"type": "string", "description": "Bash command to execute"},
-		"timeout": {"type": "number", "description": "Timeout in seconds (optional, no default timeout)"}
+		"timeout": {"type": "number", "description": "Timeout in seconds (optional, default 120, max 600)"}
 	},
 	"required": ["command"]
 }`)
@@ -24,9 +25,39 @@ var bashParameters = json.RawMessage(`{
 var bashDescription = fmt.Sprintf(
 	"Execute a bash command in the current working directory. Returns combined stdout and stderr. "+
 		"Output is truncated to last %d lines or %dKB (whichever is hit first). If truncated, full output is saved to a temp file. "+
-		"Optionally provide a timeout in seconds.",
+		"Commands time out after 120 seconds unless a timeout (in seconds, up to 600) is given; "+
+		"pass a longer one for slow builds or test suites. To leave a server running, background it "+
+		"with its output redirected to a file (server >log 2>&1 &). "+
+		"Stop a process by its PID or process group (kill -- -PGID), never by name pattern "+
+		"(pkill -f, killall): a pattern also kills the user's own unrelated processes.",
 	execenv.DefaultMaxLines, execenv.DefaultMaxBytes/1024,
 )
+
+// A command runs at most bashDefaultTimeout unless the model asks for
+// longer, and never longer than bashMaxTimeout: with no bound, one
+// command that never exits (a dev server started in the foreground)
+// stalls the whole session.
+const (
+	bashDefaultTimeout = 120 * time.Second
+	bashMaxTimeout     = 600 * time.Second
+)
+
+// bashTimeout resolves the model's timeout argument: the default when it
+// gave none, capped at the maximum, and not ok when it is not a positive
+// finite number of seconds.
+func bashTimeout(seconds *float64) (time.Duration, bool) {
+	if seconds == nil {
+		return bashDefaultTimeout, true
+	}
+	s := *seconds
+	if math.IsNaN(s) || s <= 0 {
+		return 0, false
+	}
+	if s >= bashMaxTimeout.Seconds() {
+		return bashMaxTimeout, true // also keeps a huge value from overflowing
+	}
+	return time.Duration(s * float64(time.Second)), true
+}
 
 type bashArgs struct {
 	Command string   `json:"command"`
@@ -89,12 +120,9 @@ func BashTool(env *execenv.Env) *tool.Tool {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return tool.Errorf("invalid arguments: %s", err), nil
 			}
-			var timeout time.Duration
-			if in.Timeout != nil {
-				if *in.Timeout <= 0 {
-					return tool.Errorf("Invalid timeout: must be a finite number of seconds"), nil
-				}
-				timeout = time.Duration(*in.Timeout * float64(time.Second))
+			timeout, ok := bashTimeout(in.Timeout)
+			if !ok {
+				return tool.Errorf("Invalid timeout: must be a finite number of seconds"), nil
 			}
 
 			onUpdate(tool.Result{})
@@ -170,6 +198,11 @@ func BashTool(env *execenv.Env) *tool.Tool {
 			}
 			if outputText == "" {
 				outputText = "(no output)"
+			}
+			if result.JobsLeft {
+				outputText += fmt.Sprintf("\n\n[A background job this command started is still running (process group %d). "+
+					"It is stopped when the session ends; to stop it sooner, run: kill -- -%d. "+
+					"Use bash_background for a process you need to check on.]", result.JobsGroup, result.JobsGroup)
 			}
 			return tool.Result{Content: msg.Blocks{msg.Text(outputText)}, Details: detailsJSON}, nil
 		},

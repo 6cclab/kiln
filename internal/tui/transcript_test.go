@@ -154,9 +154,9 @@ func TestRenderToolCallDiffNewFileTag(t *testing.T) {
 	}
 }
 
-func TestMapToolNameEditBecomesUpdate(t *testing.T) {
-	if got := MapToolName("edit"); got != "Update" {
-		t.Errorf("MapToolName(edit) = %q, want Update", got)
+func TestMapToolNameKeepsEditAsEdit(t *testing.T) {
+	if got := MapToolName("edit"); got != "Edit" {
+		t.Errorf("MapToolName(edit) = %q, want Edit (the same name its diff block uses)", got)
 	}
 	if got := MapToolName("bash"); got != "Bash" {
 		t.Errorf("MapToolName(bash) = %q, want Bash", got)
@@ -178,7 +178,7 @@ func TestMapToolNameSnakeCaseTitleCased(t *testing.T) {
 		"bash_background":    "Bash background",
 		"kill_shell":         "Kill shell",
 		"tool_search":        "Tool search",
-		"exit_plan_mode":     "Exit plan mode",
+		"exit_plan_mode":     "Plan",
 		"session_search":     "Session search",
 		"todo_write":         "Todo write",
 		"mcp__fixture__echo": "Mcp fixture echo",
@@ -332,5 +332,71 @@ func TestRenderToolCallFailedHintBeforeKeptTail(t *testing.T) {
 	}
 	if hint < 0 || tail < 0 || hint != tail-1 {
 		t.Errorf("hint at %d, exit line at %d; want the hint directly above the exit line:\n%s", hint, tail, strings.Join(lines, "\n"))
+	}
+}
+
+func TestParseUnifiedDiffMarksGapBetweenHunks(t *testing.T) {
+	patch := "@@ -2,1 +2,1 @@\n-a\n+b\n@@ -40,1 +40,1 @@\n-c\n+d\n"
+	d := ParseUnifiedDiff(patch, 1)
+	if len(d.Lines) != 5 || d.Lines[2].Sign != '~' {
+		t.Fatalf("got %+v, want a '~' gap row between the two hunks", d.Lines)
+	}
+	if d.Added != 2 || d.Removed != 2 {
+		t.Fatalf("gap row counted as a change: Added=%d Removed=%d", d.Added, d.Removed)
+	}
+	out := RenderDiffLines(d.Lines)
+	if got := stripANSI(out[2]); !strings.Contains(got, "…") || strings.ContainsAny(got, "+−") {
+		t.Errorf("gap row renders as %q, want a dim … row", got)
+	}
+}
+
+// TestRenderToolCall_BlankOutputHasNoResultRow: a command whose output was
+// only whitespace draws no "→" row with nothing after it.
+func TestRenderToolCall_BlankOutputHasNoResultRow(t *testing.T) {
+	view := ToolCallView{Name: "Bash", PrimaryArg: "go build ./...", Status: CallOK, ResultLines: []string{"", " "}, TotalLines: 2, HasTotalLines: true}
+	for _, l := range RenderToolCall(view) {
+		if strings.Contains(stripANSI(l), "→") {
+			t.Errorf("blank output rendered a result row: %q", stripANSI(l))
+		}
+	}
+}
+
+// TestSkillBlockNamesTheSkillAndCollapsesItsText: a skill call shows the
+// skill's name as its argument and "loaded · N lines" instead of the
+// skill's instructions, except in verbose mode or on failure.
+func TestSkillBlockNamesTheSkillAndCollapsesItsText(t *testing.T) {
+	if got := PrimaryArg(map[string]any{"skill": "rubber-ducky:rubber-ducky"}); got != "rubber-ducky:rubber-ducky" {
+		t.Errorf("PrimaryArg = %q, want the skill name", got)
+	}
+	text := []string{"Base directory for this skill: /x", "# Rubber Ducky", "Ask one question at a time."}
+	if got := collapsedSummary("skill", text, false, false); len(got) != 1 || got[0] != "loaded · 3 lines" {
+		t.Errorf("collapsed = %q", got)
+	}
+	if got := collapsedSummary("skill", text, false, true); len(got) != 3 {
+		t.Errorf("verbose = %q, want the full text", got)
+	}
+	if got := collapsedSummary("skill", []string{"unknown skill"}, true, false); got[0] != "unknown skill" {
+		t.Errorf("failed = %q, want the error", got)
+	}
+}
+
+func TestSummarizeLinesDropsLeadingBlankLines(t *testing.T) {
+	got := summarizeLines("\n\n{\"total\":3}\n")
+	if len(got) != 1 || got[0] != `{"total":3}` {
+		t.Errorf("summarizeLines = %q, want the JSON as the first row", got)
+	}
+}
+
+func TestCollapsedSummaryHidesModelInstructions(t *testing.T) {
+	bg := collapsedSummary("bash_background", []string{"Started bash_1: npm run dev", `Read it with bash_output({id: "bash_1"}).`}, false, false)
+	if len(bg) != 1 || bg[0] != "running in the background as bash_1 · /bashes to check on it" {
+		t.Errorf("bash_background summary = %q", bg)
+	}
+	plan := collapsedSummary("exit_plan_mode", []string{`Plan approved. You may now make changes. Permission mode is "manual".`}, false, false)
+	if len(plan) != 1 || plan[0] != "Plan approved." {
+		t.Errorf("exit_plan_mode summary = %q", plan)
+	}
+	if v := collapsedSummary("bash_background", []string{"Started bash_1: x", "Read it"}, false, true); len(v) != 2 {
+		t.Errorf("verbose keeps the whole result, got %q", v)
 	}
 }

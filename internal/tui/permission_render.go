@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+
+	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 )
 
 // Inline permission prompt rendering, ported from the render half of
@@ -29,12 +32,17 @@ type PermissionRequest struct {
 // bash reads as just the declined command ("✕ Declined npm test -- upload",
 // no "Bash" prefix — the command already reads as an action); every other
 // tool keeps its mapped name ahead of the argument ("✕ Declined Update
-// src/math.js").
-func declinedNoteText(req PermissionRequest) string {
+// src/math.js"). Feedback typed with the "no" follows as a quote, since
+// this note is the only record of it on screen.
+func declinedNoteText(req PermissionRequest, feedback string) string {
+	text := "✕ Declined " + MapToolName(req.ToolName) + " " + req.PrimaryArg
 	if strings.EqualFold(req.ToolName, "bash") {
-		return "✕ Declined " + req.PrimaryArg
+		text = "✕ Declined " + req.PrimaryArg
 	}
-	return "✕ Declined " + MapToolName(req.ToolName) + " " + req.PrimaryArg
+	if feedback != "" {
+		text += " · “" + feedback + "”"
+	}
+	return text
 }
 
 // SummarizeArg truncates a long argument for display without hiding what
@@ -74,17 +82,19 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 		"",
 		labelRule("approval needed", KilnAmber, "", width),
 		amberRule,
-		"",
-		"  " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to use %s?", req.ToolName))),
+		" " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to use %s?", promptToolName(req.ToolName)))),
 	}
 	if req.PrimaryArg != "" {
-		lines = append(lines, "  "+raisedCommand(SummarizeArg(req, cwd), maxInt(width-4, 1)))
+		lines = append(lines, "")
+		for _, row := range raisedCommandRows(SummarizeArg(req, cwd), maxInt(width-2, 1)) {
+			lines = append(lines, " "+row)
+		}
 	}
 
 	// The reason for the prompt changes what the answer should be, so say
 	// it.
 	if req.OutsideWorkspace {
-		lines = append(lines, "  "+Muted("outside the workspace"))
+		lines = append(lines, " "+Muted("outside the workspace"))
 	}
 
 	// Show the actual change for edits and writes. A path alone says
@@ -97,23 +107,23 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 
 	if feedbackMode {
 		lines = append(lines,
-			"  "+Muted("What should be done instead?"),
-			fmt.Sprintf("  %s %s%s", KilnAmber(">"), feedback, Faint("▌")),
-			"  "+Muted("enter to send · esc to decline without a reason"),
+			" "+Muted("What should be done instead?"),
+			fmt.Sprintf(" %s %s%s", KilnAmber(">"), feedback, Faint("▌")),
+			" "+Muted("enter to send · esc to decline without a reason"),
 			amberRule,
 		)
-		return FitLines(lines, width, "    ")
+		return FitLines(lines, width, "   ")
 	}
 
 	lines = append(lines,
-		"  "+permissionOptionRow("1", "Yes", selected == 0, maxInt(width-2, 1)),
-		"  "+permissionOptionRow("2", "Yes, and don't ask again for this", selected == 1, maxInt(width-2, 1)),
-		"  "+permissionOptionRow("3", "No, and tell kiln what to do instead", selected == 2, maxInt(width-2, 1)),
+		" "+permissionOptionRow("1", "Yes", selected == 0, maxInt(width-1, 1)),
+		" "+permissionOptionRow("2", "Yes, and don't ask again for this", selected == 1, maxInt(width-1, 1)),
+		" "+permissionOptionRow("3", "No, and tell kiln what to do instead", selected == 2, maxInt(width-1, 1)),
 		"",
-		"  "+Muted("↑↓ select · enter confirm · esc decline"),
+		" "+Muted("↑↓ select · enter confirm · esc decline"),
 		amberRule,
 	)
-	return FitLines(lines, width, "    ")
+	return FitLines(lines, width, "   ")
 }
 
 // permissionOptionRow renders one numbered permission option per kiln's
@@ -174,18 +184,10 @@ type BashPermissionRequest struct {
 	Feedback *string
 }
 
-// bashDontAskRule is the gate expression option 2 offers: the first two
-// words of the command plus " *", matching Bash(<prefix> *) semantics —
-// e.g. "openssl rand -hex 4" -> "openssl rand *".
+// bashDontAskRule is the rule option 2 grants and names; the gate grants
+// exactly this (claudesettings.BashDontAskRule).
 func bashDontAskRule(command string) string {
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return "*"
-	}
-	if len(fields) == 1 {
-		return fields[0] + " *"
-	}
-	return fields[0] + " " + fields[1] + " *"
+	return claudesettings.BashDontAskRule(command)
 }
 
 // RenderBashPermissionPrompt renders the Bash command permission prompt
@@ -208,7 +210,9 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 		amberRule,
 		" " + KilnAmber(Bold("Allow kiln to run this command?")),
 		"",
-		" " + raisedCommand(req.Command, maxInt(width-2, 1)),
+	}
+	for _, row := range raisedCommandRows(req.Command, maxInt(width-2, 1)) {
+		lines = append(lines, " "+row)
 	}
 	if req.Description != "" {
 		lines = append(lines, "   "+Muted(req.Description))
@@ -280,6 +284,10 @@ type DiffHunk struct {
 	New       string
 	OldAbsent bool
 	NewAbsent bool
+	// Context marks an unchanged line (Old == New), shown dim with no
+	// sign; Gap marks the space between two separate edits.
+	Context bool
+	Gap     bool
 }
 
 // EditPermissionRequest describes an Edit or Write call awaiting approval.
@@ -333,6 +341,14 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 	// committed (finding diff-sign-spacing-prompt-vs-committed).
 	var hunkLines []string
 	for _, h := range req.Hunks {
+		if h.Gap {
+			hunkLines = append(hunkLines, " "+Faint(strings.Repeat(" ", numWidth-1)+"…"))
+			continue
+		}
+		if h.Context {
+			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+"   "+Muted(h.New))
+			continue
+		}
 		if !h.OldAbsent {
 			hunkLines = append(hunkLines, " "+Faint(fmt.Sprintf("%*d", numWidth, h.LineNum))+" "+KilnRed("− "+h.Old))
 		}
@@ -373,7 +389,7 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 
 	opts := []string{
 		"Yes",
-		"Yes, and switch to accept edits (auto-approve file edits and common file commands) for this\n      session (shift+tab)",
+		"Yes, and switch to accept edits (auto-approve file edits and common file commands) for this\n    session (shift+tab)",
 		"No",
 	}
 	for i, opt := range opts {
@@ -434,26 +450,67 @@ func diffHunksFromEditFile(cwd string, args map[string]any) []DiffHunk {
 		firstNum := strings.Count(content[:lineStart], "\n") + 1
 		oldLines := strings.Split(content[lineStart:lineEnd], "\n")
 		newLines := strings.Split(content[lineStart:idx]+e.NewText+content[end:lineEnd], "\n")
-		n := len(oldLines)
-		if len(newLines) > n {
-			n = len(newLines)
+		if len(hunks) > 0 {
+			hunks = append(hunks, DiffHunk{Gap: true})
 		}
-		for i := 0; i < n; i++ {
-			h := DiffHunk{LineNum: firstNum + i}
-			if i < len(oldLines) {
-				h.Old = oldLines[i]
-			} else {
-				h.OldAbsent = true
-			}
-			if i < len(newLines) {
-				h.New = newLines[i]
-			} else {
-				h.NewAbsent = true
-			}
-			hunks = append(hunks, h)
-		}
+		hunks = append(hunks, lineDiffHunks(oldLines, newLines, firstNum)...)
 	}
 	return hunks
+}
+
+// lineDiffHunks diffs two runs of lines (an edit's region before and
+// after) into DiffHunks: unchanged lines as Context, the rest as removed
+// or added. Pairing old and new line by line instead showed every line of
+// a region as removed and re-added whenever the edit also inserted lines,
+// so an approval for "append an endpoint" read as rewriting the existing
+// ones. Removed lines carry their old line numbers, added and unchanged
+// lines their new ones, like the committed diff.
+func lineDiffHunks(oldLines, newLines []string, firstNum int) []DiffHunk {
+	n, m := len(oldLines), len(newLines)
+	if n*m > 250000 {
+		// Too large to diff cheaply: show it as a plain replacement.
+		var out []DiffHunk
+		for i, l := range oldLines {
+			out = append(out, DiffHunk{LineNum: firstNum + i, Old: l, NewAbsent: true})
+		}
+		for i, l := range newLines {
+			out = append(out, DiffHunk{LineNum: firstNum + i, New: l, OldAbsent: true})
+		}
+		return out
+	}
+	// lcs[i][j] = length of the longest common subsequence of
+	// oldLines[i:] and newLines[j:].
+	lcs := make([][]int, n+1)
+	for i := range lcs {
+		lcs[i] = make([]int, m+1)
+	}
+	for i := n - 1; i >= 0; i-- {
+		for j := m - 1; j >= 0; j-- {
+			if oldLines[i] == newLines[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
+		}
+	}
+	var out []DiffHunk
+	i, j := 0, 0
+	for i < n || j < m {
+		switch {
+		case i < n && j < m && oldLines[i] == newLines[j]:
+			out = append(out, DiffHunk{LineNum: firstNum + j, Old: oldLines[i], New: newLines[j], Context: true})
+			i++
+			j++
+		case i < n && (j == m || lcs[i+1][j] >= lcs[i][j+1]):
+			// Removals before additions, as a unified diff orders them.
+			out = append(out, DiffHunk{LineNum: firstNum + i, Old: oldLines[i], NewAbsent: true})
+			i++
+		default:
+			out = append(out, DiffHunk{LineNum: firstNum + j, New: newLines[j], OldAbsent: true})
+			j++
+		}
+	}
+	return out
 }
 
 // diffHunksFromEditArgs builds DiffHunk rows from an Edit call's "edits"
@@ -561,15 +618,14 @@ func RenderPlanApproval(plan, planPath string, width, height, selected int, feed
 	if wrapWidth < 10 {
 		wrapWidth = 10
 	}
+	// The plan is the model's markdown, rendered like its replies; raw, it
+	// showed literal **, ### and backticks.
 	var planRows []string
-	for _, raw := range strings.Split(plan, "\n") {
-		if raw == "" {
-			planRows = append(planRows, "")
-			continue
+	for _, l := range planRenderer(wrapWidth).Render(plan) {
+		if l != "" {
+			l = " " + l
 		}
-		for _, wl := range wrapHard(raw, wrapWidth) {
-			planRows = append(planRows, " "+Ink(wl))
-		}
+		planRows = append(planRows, l)
 	}
 
 	visible := planRows
@@ -633,6 +689,20 @@ func RenderPlanApproval(plan, planPath string, width, height, selected int, feed
 	return FitLines(lines, width, " ")
 }
 
+// planRenderers holds one markdown renderer per width, so the plan prompt,
+// redrawn every frame, renders its markdown once per width rather than on
+// every View (the renderer caches by text).
+var planRenderers sync.Map // [width, plain] -> *MarkdownRenderer
+
+func planRenderer(width int) *MarkdownRenderer {
+	key := [2]any{width, IsPlain()}
+	if r, ok := planRenderers.Load(key); ok {
+		return r.(*MarkdownRenderer)
+	}
+	r, _ := planRenderers.LoadOrStore(key, NewMarkdownRenderer(width, IsPlain()))
+	return r.(*MarkdownRenderer)
+}
+
 // wrapHard word-wraps like wrapPlain, then splits any word longer than
 // limit (a URL, a path) so no row exceeds it.
 func wrapHard(s string, limit int) []string {
@@ -655,6 +725,54 @@ func wrapHard(s string, limit int) []string {
 // width columns. Each span carries the background itself: wrapping
 // already-coloured text in OnRaise loses the background at the first
 // colour reset, which left only "$ " raised.
+// maxCommandRows caps the command box so the options stay on screen; the
+// rest is summarised, never silently cut.
+const maxCommandRows = 8
+
+// raisedCommandRows renders a command as raised "$ <command>" rows: each of
+// its lines hard-wrapped to width (continuations indented under the
+// command, not clipped), at most maxCommandRows, then a "… +N more lines"
+// row. A multi-line command used to go through raisedCommand as one
+// string, and its second line was clipped mid-token with no marker.
+func raisedCommandRows(cmd string, width int) []string {
+	var rows []string
+	for i, line := range strings.Split(strings.TrimRight(cmd, "\n"), "\n") {
+		for j, part := range wrapHard(line, maxInt(width-2, 1)) {
+			if i == 0 && j == 0 {
+				rows = append(rows, part)
+			} else {
+				rows = append(rows, "\x00"+part) // continuation marker
+			}
+		}
+	}
+	hidden := 0
+	if len(rows) > maxCommandRows {
+		hidden = len(rows) - (maxCommandRows - 1)
+		rows = rows[:maxCommandRows-1]
+	}
+	out := make([]string, 0, len(rows)+1)
+	for _, r := range rows {
+		if strings.HasPrefix(r, "\x00") {
+			out = append(out, raisedContinuation(r[1:], width))
+		} else {
+			out = append(out, raisedCommand(r, width))
+		}
+	}
+	if hidden > 0 {
+		out = append(out, raisedContinuation(fmt.Sprintf("… +%d more lines", hidden), width))
+	}
+	return out
+}
+
+// raisedContinuation is a raised row indented under the command text.
+func raisedContinuation(text string, width int) string {
+	plain := padTo("  "+text, width)
+	if !IsColorEnabled() {
+		return plain
+	}
+	return onRaiseSpan(CurrentTextHex().Ink, plain)
+}
+
 func raisedCommand(cmd string, width int) string {
 	plain := padTo("$ "+cmd, width)
 	if !IsColorEnabled() || VisibleWidth(plain) < 2 {
@@ -662,4 +780,19 @@ func raisedCommand(cmd string, width int) string {
 	}
 	tx := CurrentTextHex()
 	return onRaiseSpan(tx.Dim, plain[:2]) + onRaiseSpan(tx.Ink, plain[2:])
+}
+
+// promptToolName names a tool for the approval question: an MCP tool's
+// qualified id ("mcp__incidents__list_incidents") reads as the tool and
+// the server it belongs to.
+func promptToolName(name string) string {
+	rest, ok := strings.CutPrefix(name, "mcp__")
+	if !ok {
+		return strings.ReplaceAll(name, "_", " ")
+	}
+	server, tool, ok := strings.Cut(rest, "__")
+	if !ok || server == "" || tool == "" {
+		return name
+	}
+	return fmt.Sprintf("%s from the %s MCP server", tool, server)
 }

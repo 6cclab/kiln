@@ -16,7 +16,7 @@ func TestPostureListsWithActiveMarked(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(res.Output, "\n")
-	if !strings.Contains(joined, "active: ops") || !strings.Contains(joined, "* ops") {
+	if !strings.Contains(joined, "ops ✓") || strings.Contains(joined, "coding ✓") {
 		t.Fatalf("got %q", joined)
 	}
 }

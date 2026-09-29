@@ -298,7 +298,7 @@ func TestRun_PrintFormats(t *testing.T) {
 
 const bashCallScript = `model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "echo hi"}, id: tc1}
+  - tool_call: {name: bash, args: {command: "echo hi | tee hi.txt"}, id: tc1}
   - on_tool_result: tc1
     then:
       - text: "done"
@@ -473,7 +473,7 @@ func TestRun_PreToolUseHook_Rewrites(t *testing.T) {
 	args.Print = true
 	args.PrintPrompt = "run a command"
 	args.OutputFormat = "text"
-	args.PermissionMode = "dontAsk"
+	args.PermissionMode = "bypassPermissions"
 
 	var stdout, stderr bytes.Buffer
 	_ = Run(context.Background(), args, &stdout, &stderr, strings.NewReader(""))
@@ -659,21 +659,19 @@ func benchClaudeMD() string {
 	return b.String()
 }
 
-// TestUsageRowContextTokens_ReadsInputPlusOutputNotTotalTokens is defect
-// 1's regression test: /context and the TUI's pinned status meter must
-// report the same context-occupancy figure. The status meter
-// (internal/tui/bridge.go) computes it as UsageRow.Input+UsageRow.Output;
-// this must match exactly, not fall back to TotalTokens (which, for the
-// anthropic provider, also folds in CacheRead+CacheWrite and would
-// disagree with the meter even for a single row).
-func TestUsageRowContextTokens_ReadsInputPlusOutputNotTotalTokens(t *testing.T) {
+// TestUsageRowContextTokens_MatchesTheMeter: /context and the TUI's pinned
+// status meter report the same occupancy — the last request's input,
+// cached input and output (bridge.go's EventUsage sum) — never the
+// session's running totals. With prompt caching nearly all input is
+// cached, so leaving it out reported "53 of 1000k" beside a 1% meter.
+func TestUsageRowContextTokens_MatchesTheMeter(t *testing.T) {
 	row := &msg.Usage{Input: 3_000, Output: 500, CacheRead: 900_000, CacheWrite: 50_000, TotalTokens: 953_500}
 	got, ok := usageRowContextTokens(row)
 	if !ok {
 		t.Fatal("ok = false, want true for a non-nil row")
 	}
-	if got != 3_500 {
-		t.Errorf("usageRowContextTokens = %d, want Input+Output = 3500 (not TotalTokens = %d)", got, row.TotalTokens)
+	if got != 953_500 {
+		t.Errorf("usageRowContextTokens = %d, want Input+CacheRead+CacheWrite+Output = 953500", got)
 	}
 }
 
@@ -740,5 +738,25 @@ func BenchmarkSystemPromptAssembly(b *testing.B) {
 		mcpIndexText := mcpgate.IndexPromptText(scoped)
 		promptParts := []string{defaultSystemPrompt, appendSystemPrompt, memoryText, skillsIndex, mcpIndexText}
 		_ = strings.Join(nonEmpty(promptParts), "\n\n")
+	}
+}
+
+// TestEffortOrSetting: --effort wins; else Claude Code's effortLevel
+// applies to a Claude model only; else the level is unset.
+func TestEffortOrSetting(t *testing.T) {
+	cases := []struct {
+		flag, setting string
+		claude        bool
+		want          string
+	}{
+		{"high", "medium", true, "high"},
+		{"", "Medium", true, "medium"},
+		{"", "medium", false, ""},
+		{"", "", true, ""},
+	}
+	for _, c := range cases {
+		if got := effortOrSetting(c.flag, c.setting, c.claude); got != c.want {
+			t.Errorf("effortOrSetting(%q, %q, %v) = %q, want %q", c.flag, c.setting, c.claude, got, c.want)
+		}
 	}
 }

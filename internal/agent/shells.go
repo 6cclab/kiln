@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/tools"
 )
 
@@ -403,7 +404,7 @@ func RenderShellList(shells []Shell) string {
 		}
 	}
 	lines := make([]string, 0, len(shells)+2)
-	lines = append(lines, strconv.Itoa(len(shells))+" shell(s), "+strconv.Itoa(running)+" running", "")
+	lines = append(lines, plural.Count(len(shells), "shell")+", "+strconv.Itoa(running)+" running", "")
 	for _, s := range shells {
 		lines = append(lines, "  "+describeShell(s))
 	}

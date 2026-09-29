@@ -1,0 +1,24 @@
+{
+ "id": "20260928T130510Z-approval-for-refused-tool",
+ "found_at": "2026-09-28T13:05:10Z",
+ "scenario": "real/mcp-cli-add",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Approval asked for a tool call that is then refused",
+ "observed": "User approved mcp__incidents__list_incidents, then the call failed 'not in the active tool set'",
+ "expected": "Unknown/inactive tools are refused before the permission gate asks",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-mcp-cli-add-140x45/05-answered.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/turn.go"
+  ],
+  "regression_test": "TestRefusedToolSkipsBeforeToolHooks",
+  "updated_at": "2026-09-28T13:05:10Z"
+ }
+}

@@ -127,8 +127,8 @@ func TestModelCompletionsEmptyForNoMatch(t *testing.T) {
 
 func TestFormatTokens(t *testing.T) {
 	cases := map[int]string{
-		1_000_000: "1.0m",
-		200_000:   "200.0k",
+		1_000_000: "1m",
+		200_000:   "200k",
 		49_152:    "49.2k",
 		999:       "999",
 	}
@@ -358,7 +358,7 @@ func TestCostCommand_OneLineNoteForSingleModel(t *testing.T) {
 	if len(res.Output) != 1 {
 		t.Fatalf("Output = %v, want exactly one line (renders as the design's note) with a single model tracked", res.Output)
 	}
-	want := "Session: $0.27 · 66.0k tokens in context · 71s"
+	want := "Session: $0.27 · 66k tokens in context · 71s"
 	if res.Output[0] != want {
 		t.Errorf("Output[0] = %q, want %q", res.Output[0], want)
 	}
@@ -708,5 +708,18 @@ func TestContextBreakdown_NeverExceedsMeasuredUsed(t *testing.T) {
 	}
 	if sum+free != tier.ContextWindow {
 		t.Errorf("segments sum to %d, want the full window %d", sum+free, tier.ContextWindow)
+	}
+}
+
+func TestWithoutDatedAliases(t *testing.T) {
+	m := func(id string) provider.Model { return provider.Model{Provider: "anthropic", ID: id} }
+	in := []provider.Model{m("claude-haiku-4-5"), m("claude-haiku-4-5-20251001"), m("claude-opus-4-5-20251101"), m("claude-sonnet-4-5"), m("claude-sonnet-4-5-20250929")}
+	var got []string
+	for _, x := range withoutDatedAliases(in, "anthropic/claude-sonnet-4-5-20250929") {
+		got = append(got, x.ID)
+	}
+	want := "claude-haiku-4-5 claude-opus-4-5-20251101 claude-sonnet-4-5 claude-sonnet-4-5-20250929"
+	if strings.Join(got, " ") != want {
+		t.Errorf("got %v, want %s (dated alias hidden unless current or alone)", got, want)
 	}
 }

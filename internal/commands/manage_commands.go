@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/writesettings"
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // modes is the cycle order /permissions' "m" action steps through.
@@ -120,11 +122,12 @@ func permissionsModal(deps ManageDeps) *ModalSpec {
 	return &ModalSpec{
 		Title:         "Permissions",
 		Kind:          "permissions",
+		Empty:         "No permission rules yet. Rules come from settings.json, and from answering a prompt with \"don't ask again\".",
 		Header:        header(),
 		RefreshHeader: header,
 		Items:         items,
 		Actions: []Action{
-			{Key: "m", Label: "cycle mode"},
+			{Key: "m", Label: "cycle mode", Global: true},
 			{Key: "d", Label: "delete rule"},
 			{Key: "p", Label: "promote to deny"},
 		},
@@ -193,9 +196,12 @@ func mcpStatusesText(statuses []ServerStatus) []string {
 	}
 	lines := []string{fmt.Sprintf("%d/%d connected, %d tools", len(ok), len(statuses), tools), ""}
 	for _, s := range statuses {
-		if s.OK {
+		switch {
+		case s.Connecting:
+			lines = append(lines, fmt.Sprintf("  %-22s connecting…", s.Name))
+		case s.OK:
 			lines = append(lines, fmt.Sprintf("  %-22s %4d tools  %dms", s.Name, s.ToolCount, s.Ms))
-		} else {
+		default:
 			lines = append(lines, fmt.Sprintf("  %-22s failed: %s", s.Name, truncate(orDefault(s.Error, "unknown"), 90)))
 		}
 	}
@@ -219,6 +225,21 @@ func mcpStatusesText(statuses []ServerStatus) []string {
 // failed server's marker carries no trailing text, matching
 // dialog-mcp.txt's plain ✘ rows (its ⚠ rows are the ones with the "needs
 // authentication" suffix, which the harness cannot distinguish).
+// mcpDisplayName is how /mcp names a server. A plugin's server is
+// registered as plugin_<plugin>_<server> (plugin names are kebab-case, so
+// the first underscore separates them); it reads "<server> · <plugin>".
+func mcpDisplayName(name, scope string) string {
+	if rest, ok := strings.CutPrefix(name, "plugin_"); ok && scope == "plugin" {
+		if plugin, server, ok := strings.Cut(rest, "_"); ok && plugin != "" && server != "" {
+			return server + " · " + plugin
+		}
+	}
+	return name
+}
+
+// MarkerConnecting is /mcp's Item.Marker for a server still connecting.
+const MarkerConnecting = "connecting"
+
 func mcpModal(deps ManageDeps) *ModalSpec {
 	var statuses []ServerStatus
 	if deps.MCPStatuses != nil {
@@ -235,24 +256,53 @@ func mcpModal(deps ManageDeps) *ModalSpec {
 		}
 	}
 
-	group := "User MCPs"
-	if deps.MCPConfigPath != "" {
-		group = fmt.Sprintf("User MCPs (%s)", deps.MCPConfigPath)
+	// One section per configuration scope, in the order they win on a
+	// name clash, each naming the file it lives in.
+	order := map[string]int{"project": 0, "local": 1, "user": 2, "flag": 3}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		oi, ok := order[sorted[i].Scope]
+		if !ok {
+			oi = len(order)
+		}
+		oj, ok := order[sorted[j].Scope]
+		if !ok {
+			oj = len(order)
+		}
+		return oi < oj
+	})
+	groupFor := func(scope string) string {
+		switch scope {
+		case "project":
+			return fmt.Sprintf("Project MCPs (%s)", filepath.Join(deps.Cwd, ".mcp.json"))
+		case "local":
+			return "Local MCPs (~/.claude.json, this project only)"
+		case "flag":
+			return fmt.Sprintf("MCPs from --mcp-config (%s)", deps.MCPConfigPath)
+		case "user", "":
+			return "User MCPs (~/.claude.json)"
+		case "plugin":
+			return "Plugin MCPs (enabled Claude Code plugins)"
+		}
+		return strings.ToUpper(scope[:1]) + scope[1:] + " MCPs"
 	}
 
 	items := make([]Item, 0, len(sorted))
 	for _, s := range sorted {
 		it := Item{
 			Value: s.Name,
-			Label: s.Name,
-			Group: group,
+			Label: mcpDisplayName(s.Name, s.Scope),
+			Group: groupFor(s.Scope),
 			Ms:    s.Ms,
 			Tools: toolsByServer[s.Name],
 		}
-		if s.OK {
+		switch {
+		case s.Connecting:
+			it.Marker = MarkerConnecting
+			it.Description = "connecting…"
+		case s.OK:
 			it.Marker = "✔"
 			it.Description = fmt.Sprintf("%d tools", s.ToolCount)
-		} else {
+		default:
 			it.Marker = "✘"
 			it.Error = s.Error
 			it.Detail = s.Detail
@@ -290,12 +340,16 @@ func agentsModal(deps ManageDeps) *ModalSpec {
 		}
 		tools := "all tools"
 		if a.Tools != nil {
-			tools = fmt.Sprintf("%d tools", len(a.Tools))
+			tools = plural.Count(len(a.Tools), "tool")
 		}
-		items = append(items, Item{Value: a.Name, Label: a.Name, Description: fmt.Sprintf("%s · %s · %s", model, tools, truncate(a.Description, 60))})
+		// The dialog wraps descriptions to the terminal; only the first
+		// line is kept, capped, since Claude Code agent descriptions often
+		// carry whole example dialogues after it.
+		desc, _, _ := strings.Cut(strings.TrimSpace(a.Description), "\n")
+		items = append(items, Item{Value: a.Name, Label: a.Name, Description: fmt.Sprintf("%s · %s · %s", model, tools, truncate(desc, 240))})
 	}
 	return &ModalSpec{
-		Title:  "Subagents",
+		Title:  "Agents",
 		Kind:   "agents",
 		Header: []string{"dispatched with the task tool · defined in .claude/agents"},
 		Items:  items,
@@ -344,7 +398,7 @@ func configModal(deps ManageDeps) *ModalSpec {
 		{Value: "workspace", Label: "workspace roots", Description: strings.Join(deps.Gate.Roots(), ", ")},
 		{Value: "settings", Label: "settings loaded from", Description: joinOrNone(deps.SettingsLoadedFrom)},
 		{Value: "rules", Label: "permission rules", Description: fmt.Sprintf("%d allow · %d deny · %d ask", len(p.Allow), len(p.Deny), len(p.Ask))},
-		{Value: "hooks", Label: "hooks", Description: fmt.Sprintf("%d across %d events", total, eventsUsed)},
+		{Value: "hooks", Label: "hooks", Description: HooksSummary(total, eventsUsed)},
 		{Value: "agents", Label: "subagents", Description: fmt.Sprintf("%d available", len(deps.Agents))},
 		{Value: "mcp", Label: "mcp servers", Description: fmt.Sprintf("%d/%d connected", mcpOK, mcpTotal)},
 		{Value: "cwd", Label: "working directory", Description: deps.Cwd},

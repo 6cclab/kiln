@@ -84,3 +84,25 @@ func TestRenderTranscriptEntries_SyntheticBeforeFirstEntry(t *testing.T) {
 		t.Fatalf("expected the pre-first-entry synthetic ahead of entry A; got:\n%s", joined)
 	}
 }
+
+// TestRenderTranscriptEntries_OneBlankRowBetweenBlocks: a replay (ctrl+o,
+// resume) separates blocks by one blank row, as the live view does; the
+// verbose view used to show two between every block.
+func TestRenderTranscriptEntries_OneBlankRowBetweenBlocks(t *testing.T) {
+	call := msg.ToolCall{ID: "c1", Name: "read", Arguments: map[string]any{"path": "/tmp/p/a.txt"}}
+	entries := []session.Entry{
+		{ID: "1", Type: session.EntryMessage, Message: msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("read it")}}},
+		{ID: "2", Type: session.EntryMessage, Message: msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.Text("Reading."), call}}},
+		{ID: "3", Type: session.EntryMessage, Message: msg.ToolResultMessage{Role: msg.RoleToolResult, ToolCallID: "c1", ToolName: "read", Content: msg.Blocks{msg.Text("hello")}}},
+		{ID: "4", Type: session.EntryMessage, Message: msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.Text("Done.")}}},
+	}
+	for _, verbose := range []bool{false, true} {
+		out := RenderTranscriptEntries(entries, 80, verbose, "/tmp/p", nil)
+		for i := 1; i < len(out); i++ {
+			if strings.TrimSpace(stripANSI(out[i])) == "" && strings.TrimSpace(stripANSI(out[i-1])) == "" {
+				t.Errorf("verbose=%v: two blank rows at %d:\n%s", verbose, i, strings.Join(out, "\n"))
+				break
+			}
+		}
+	}
+}

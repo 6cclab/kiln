@@ -152,3 +152,52 @@ func TestExecContextCancelKillsProcessGroup(t *testing.T) {
 	}
 	t.Fatalf("background sleep 3.%s survived context cancellation", marker)
 }
+
+// TestExecReturnsWhileBackgroundJobHoldsPipes: a job the command
+// backgrounded inherits stdout, so reading to EOF waited on the job. A
+// trial's "go run . >log 2>&1 & ... curl ..." hung the bash tool for 30
+// minutes that way (qa/findings *bash-hangs-on-background-job).
+func TestExecReturnsWhileBackgroundJobHoldsPipes(t *testing.T) {
+	env := New(t.TempDir())
+	start := time.Now()
+	t.Cleanup(KillLeftoverJobs)
+	res, err := env.Exec(context.Background(), "sleep 20 & echo started; echo done", ExecOptions{})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Exec took %s; it waited on the background job", elapsed)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Text, "started") || !strings.Contains(res.Text, "done") {
+		t.Fatalf("got exit %d, text %q; want 0 with both lines", res.ExitCode, res.Text)
+	}
+}
+
+// TestExecKillLeftoverJobs: a job a command left running is reported and
+// stopped by KillLeftoverJobs, so a dev server does not outlive the session.
+func TestExecKillLeftoverJobs(t *testing.T) {
+	env := New(t.TempDir())
+	res, err := env.Exec(context.Background(), "sleep 30 & echo $! > pid", ExecOptions{})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if !res.JobsLeft {
+		t.Fatal("JobsLeft = false, want true for a command that backgrounded sleep")
+	}
+	quiet, err := env.Exec(context.Background(), "echo hi", ExecOptions{})
+	if err != nil || quiet.JobsLeft {
+		t.Fatalf("plain command: JobsLeft=%v err=%v, want false", quiet.JobsLeft, err)
+	}
+	KillLeftoverJobs()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		check, _ := env.Exec(context.Background(), `kill -0 "$(cat pid)" 2>/dev/null && echo alive || echo gone`, ExecOptions{})
+		if strings.TrimSpace(check.Text) == "gone" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background sleep still running after KillLeftoverJobs")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}

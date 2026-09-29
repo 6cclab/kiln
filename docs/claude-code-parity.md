@@ -225,7 +225,7 @@ shows in the footer when it is not the default.
 | `manual` | ask before every tool use |
 | `acceptEdits` | file edits auto-approved, other tools still prompt |
 | `auto` | read-only tools allowed, anything that can change something still asks |
-| `dontAsk` | never prompt, but still enforce deny rules |
+| `dontAsk` | never prompt: reads and allow-rule matches run, anything that would prompt is denied |
 | `bypassPermissions` | skip all checks |
 | `plan` | read-only; no edits or mutations, produce a plan |
 

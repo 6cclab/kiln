@@ -28,6 +28,7 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -79,7 +80,7 @@ func TestTUI_VerboseToggle_ExpandsInPlace(t *testing.T) {
 
 	beforeRows := s.Rows()
 	before := strings.Join(beforeRows, "\n")
-	if !strings.Contains(before, "Read") || !strings.Contains(before, "package.json") {
+	if !strings.Contains(before, "read ─") || !strings.Contains(before, "package.json") {
 		t.Fatalf("collapsed transcript missing the read tool block:\n%s", before)
 	}
 	if !strings.Contains(before, "name") {
@@ -114,7 +115,9 @@ func TestTUI_VerboseToggle_ExpandsInPlace(t *testing.T) {
 	// No stray per-message time/model row of its own (defect's "stray
 	// '7:00 PM faux/faux-1' row" — dropped outright, see transcript.go's
 	// RenderVerboseModelRow removal note).
-	if strings.Contains(verbose, "faux/faux-1") {
+	// (The banner, redrawn after the clear, names the model too; the
+	// stray row was a time followed by the model.)
+	if regexp.MustCompile(`\d{1,2}:\d{2} ?[AP]M +faux/faux-1`).MatchString(verbose) {
 		t.Errorf("verbose transcript must not show a stray per-message model row:\n%s", verbose)
 	}
 	assertBlankRowAfter(t, verboseRows, "what dependencies does this project have")
@@ -272,7 +275,7 @@ steps:
   - text: "Checked the login route and updated the tests."
 `
 	proj, home, sessDir, addr, requests := tuiFixture(t, script)
-	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 
 	s.Send("start the rate limiter work")
@@ -368,7 +371,7 @@ func TestTUI_BashFailure_ExitStatusSurvivesCollapse(t *testing.T) {
 	addr, _ := startFaux(t, bashFailSixLinesScript)
 
 	s := startTUI(t, 120, 40, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 

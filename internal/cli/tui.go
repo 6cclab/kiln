@@ -15,8 +15,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -71,6 +74,11 @@ type InteractiveDeps struct {
 	// failures become one dim transcript line pointing at /mcp.
 	MCPServerCount int
 	ConnectMCP     func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus
+	// PendingMCPCount and ConnectPendingMCP are a project's .mcp.json
+	// servers when the folder was not yet trusted at startup: they connect
+	// only once the trust dialog is accepted.
+	PendingMCPCount   int
+	ConnectPendingMCP func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus
 	// Effort is the reasoning effort label shown in the banner ("medium");
 	// AuthKind is how the model's provider is authenticated ("Claude
 	// subscription", "API key", "Ollama").
@@ -90,6 +98,26 @@ type InteractiveDeps struct {
 	// onPlanApprover/onHookNotices callbacks do. Either may be nil.
 	SetPlanApprover func(tools.PlanApprover)
 	SetHookNotice   func(func(string))
+	// StartupNotes are warnings found while starting (a model role that
+	// does not resolve, memory over budget). Printed to stderr they sat
+	// behind the fullscreen TUI until exit; they show as system notes
+	// under the banner instead.
+	StartupNotes []string
+}
+
+// connectInBackground connects n MCP servers off the UI goroutine,
+// reporting progress in the footer and any failures as one transcript note
+// pointing at /mcp.
+func connectInBackground(bridge *tui.Bridge, n int, connect func(func(mcpgate.ServerStatus)) []mcpgate.ServerStatus) {
+	var done atomic.Int32 // servers connect concurrently; progress arrives from each
+	bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: connecting %d servers…", n)})
+	statuses := connect(func(mcpgate.ServerStatus) {
+		bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: %d/%d servers…", done.Add(1), n)})
+	})
+	bridge.Send(tui.MsgFooterNote{Text: ""})
+	if notice := mcpFailureNotice(statuses); notice != "" {
+		bridge.CommitNote(notice)
+	}
 }
 
 // RunInteractive drives the Bubbletea v2 program and blocks until the
@@ -208,6 +236,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		ModelID:        deps.Resolved.Model.ID,
 		Banner:         banner(),
 		BannerFunc:     banner,
+		StartupNotes:   deps.StartupNotes,
 		SessionID:      deps.Started.SessionID,
 		TranscriptPath: deps.Started.TranscriptPath,
 		Version:        Version,
@@ -233,6 +262,9 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			}
 			if err := store.Trust(deps.Cwd); err != nil {
 				diag.L().Warn("trust store", "err", err)
+			}
+			if deps.ConnectPendingMCP != nil && deps.PendingMCPCount > 0 {
+				go connectInBackground(bridge, deps.PendingMCPCount, deps.ConnectPendingMCP)
 			}
 		}
 	}
@@ -277,19 +309,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		bridge.Commit([]string{tui.Muted("  debug log: " + deps.LogPath)})
 	}
 	if deps.ConnectMCP != nil && deps.MCPServerCount > 0 {
-		go func() {
-			n := deps.MCPServerCount
-			done := 0
-			bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: connecting %d servers…", n)})
-			statuses := deps.ConnectMCP(func(mcpgate.ServerStatus) {
-				done++
-				bridge.Send(tui.MsgFooterNote{Text: fmt.Sprintf("mcp: %d/%d servers…", done, n)})
-			})
-			bridge.Send(tui.MsgFooterNote{Text: ""})
-			if notice := mcpFailureNotice(statuses); notice != "" {
-				bridge.CommitNote(notice)
-			}
-		}()
+		go connectInBackground(bridge, deps.MCPServerCount, deps.ConnectMCP)
 	}
 
 	deps.Started.OnModelChanged = func(ctx context.Context, resolved provider.Resolved) {
@@ -338,10 +358,39 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	// Program.shutdown via this function's line (then) 321. Removing the
 	// duplicate handler removes the race.
 
+	// Closing the terminal window sends SIGHUP, which bubbletea does not
+	// handle and which otherwise ends the process on the spot: no
+	// background-shell cleanup, no SessionEnd hook, and a dev server the
+	// session started left holding its port. Stop the program instead so
+	// the caller's exit path runs. (SIGINT and SIGTERM are bubbletea's;
+	// see above for why they get no second handler here.)
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	runDone := make(chan struct{})
+	var hungUp atomic.Bool
+	go func() {
+		select {
+		case <-hup:
+			diag.L().Info("sighup: stopping")
+			hungUp.Store(true)
+			// With SIGHUP caught, nothing else ends the process: if
+			// shutdown ever blocked on the dead terminal it would linger
+			// forever, so bound it.
+			time.AfterFunc(10*time.Second, func() { os.Exit(129) })
+			program.Kill()
+		case <-runDone:
+		}
+	}()
+
 	diag.L().Info("phase tui run", "elapsed", diag.Since())
 	_, err := program.Run()
+	signal.Stop(hup)
+	close(runDone)
 	diag.L().Info("phase tui exit", "elapsed", diag.Since(), "err", err)
 	bridge.Stop()
+	if hungUp.Load() {
+		return 129 // 128 + SIGHUP: the terminal went away
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "harness:", err)
 		return 1
@@ -359,6 +408,11 @@ func readGitStatus(ctx context.Context) (tui.GitStatus, bool) {
 	if err != nil {
 		return tui.GitStatus{}, false
 	}
+	return readGitStatusAt(ctx, cwd)
+}
+
+// readGitStatusAt is readGitStatus for an explicit directory.
+func readGitStatusAt(ctx context.Context, cwd string) (tui.GitStatus, bool) {
 	tctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
@@ -463,9 +517,18 @@ func bannerRows(deps InteractiveDeps, width int) []string {
 func newBanner(deps InteractiveDeps, width int) func() []string {
 	verLabel := versionLabel(Version)
 
-	// Row 1 per the design: "<cwd> · branch <b> · model <m>", cwd with the
-	// home dir abbreviated to ~ and, when the row is tight, left-truncated
-	// so the branch/model suffix survives intact.
+	// The kiln art sits left of the text when there is room for it and
+	// a usable repo line beside it; a narrow terminal (or screen-reader
+	// mode, where block art is noise read aloud) gets the text alone.
+	art := !tui.IsPlain() && width-kilnArtWidth-kilnArtGap >= kilnArtMinText
+	textWidth := width
+	if art {
+		textWidth = width - kilnArtWidth - kilnArtGap
+	}
+
+	// The repo line per the design: "<cwd> · branch <b> · model <m>", cwd
+	// with the home dir abbreviated to ~ and, when the row is tight,
+	// left-truncated so the branch/model suffix survives intact.
 	cwd := abbrevHome(deps.Cwd)
 	suffix := ""
 	if st, ok := readGitStatus(context.Background()); ok && st.Branch != "" {
@@ -473,7 +536,7 @@ func newBanner(deps InteractiveDeps, width int) func() []string {
 	}
 	suffix += " · model " + deps.ModelLabel
 
-	maxCwd := width - tui.VisibleWidth(suffix)
+	maxCwd := textWidth - tui.VisibleWidth(suffix)
 	if maxCwd < 1 {
 		maxCwd = 1
 	}
@@ -491,24 +554,79 @@ func newBanner(deps InteractiveDeps, width int) func() []string {
 		recent = recentSessionRows(deps.Cwd, currentSessionID)
 	}
 
-	return func() []string { return styleBanner(verLabel, loc, recent) }
+	return func() []string { return styleBanner(verLabel, loc, recent, art) }
 }
+
+// The banner's kiln, copied from the design (docs/kiln-design-handoff/
+// Terminal.dc.html, the banner block): 9 rows, 19 columns of block
+// characters. Each row is a run of (colour, text) segments.
+const (
+	kilnArtWidth = 19
+	// kilnArtGap separates the art from the text column.
+	kilnArtGap = 3
+	// kilnArtMinText is the narrowest text column worth drawing the art
+	// for: below it the repo line would be cut to almost nothing.
+	kilnArtMinText = 36
+)
+
+type artSegment struct{ hex, text string }
+
+const (
+	artBody   = "#b86a45"
+	artSmoke  = "#6f6555"
+	artLintel = "#3a3228"
+	artFlame  = "#e9a64b"
+	artGlow   = "#f3c27f"
+	artBase   = "#5a4a3a"
+)
+
+var kilnArt = [][]artSegment{
+	{{artBody, "        "}, {artSmoke, "░▒░"}},
+	{{artBody, "        ▐█▌"}},
+	{{artBody, "    ▄▄▄▄▄█▄▄▄▄▄"}},
+	{{artBody, "  ▄█▀▀▀▀▀▀▀▀▀▀▀█▄"}},
+	{{artBody, " ██ █"}, {artLintel, "▀▀▀▀▀▀▀▀▀"}, {artBody, "█ ██"}},
+	{{artBody, " ██ █"}, {artFlame, " ▲ ▲▲▲ ▲ "}, {artBody, "█ ██"}},
+	{{artBody, " ██ █"}, {artGlow, "▒▓█████▓▒"}, {artBody, "█ ██"}},
+	{{artBody, " ██ █▄▄▄▄▄▄▄▄▄█ ██"}},
+	{{artBase, "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"}},
+}
+
+// kilnArtTextRow is the art row the text column starts on: the three text
+// rows sit centred against the nine art rows, as in the design.
+const kilnArtTextRow = 3
 
 // styleBanner renders the banner rows from newBanner's data with the
 // current theme tokens.
-func styleBanner(verLabel, loc string, recent []recentSession) []string {
+func styleBanner(verLabel, loc string, recent []recentSession, art bool) []string {
 	tips := tui.KilnAmber("/") + " " + tui.Muted("commands") + "   " +
 		tui.KilnAmber("@") + " " + tui.Muted("add files") + "   " +
 		tui.KilnAmber("⇧⇥") + " " + tui.Muted("cycle mode") + "   " +
 		tui.KilnAmber("esc") + " " + tui.Muted("stop")
 
-	// Row 0: "K I L N" spaced letters (the design's wordmark, one line
-	// rather than the old figlet block art) amber bold, then the version
-	// and tagline dim.
-	rows := []string{
-		tui.KilnAmber(tui.Bold("K I L N")) + "  " + tui.Muted(verLabel+" · coding agent"),
+	// The wordmark, letter-spaced amber bold; the version and tagline and
+	// the repo line under it, dim.
+	text := []string{
+		tui.KilnAmber(tui.Bold("K I L N")),
+		tui.Muted(verLabel + " · coding agent"),
 		tui.Muted(loc),
-		tips,
+	}
+
+	var rows []string
+	if art {
+		for i, segs := range kilnArt {
+			row := ""
+			for _, seg := range segs {
+				row += tui.Paint(seg.hex, seg.text)
+			}
+			if t := i - kilnArtTextRow; t >= 0 && t < len(text) {
+				row += strings.Repeat(" ", kilnArtWidth-artRowWidth(segs)+kilnArtGap) + text[t]
+			}
+			rows = append(rows, row)
+		}
+		rows = append(rows, "", tips)
+	} else {
+		rows = append(rows, text[0]+"  "+text[1], text[2], tips)
 	}
 
 	if len(recent) > 0 {
@@ -521,6 +639,14 @@ func styleBanner(verLabel, loc string, recent []recentSession) []string {
 	// `─` divider after these and pins the input box below.
 	rows = append(rows, "")
 	return rows
+}
+
+func artRowWidth(segs []artSegment) int {
+	w := 0
+	for _, seg := range segs {
+		w += tui.VisibleWidth(seg.text)
+	}
+	return w
 }
 
 // recentSessionRowLimit is how many past sessions the banner lists.

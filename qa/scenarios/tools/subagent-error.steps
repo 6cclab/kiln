@@ -10,9 +10,9 @@
 WAITFOR /describe a task/ 20
 TYPE check the deploy config with a subagent
 KEY enter
-WAITFOR /subagents finished/ 20
+WAITFOR /subagents? finished/ 20
 SHOT subagent-error-row
-EXPECT /1 subagents finished/
+EXPECT /1 subagents? finished/
 EXPECT /✕/
 EXPECT /boom, subagent misbehaved|Subagent .*failed/
 WAITFOR /I'll check the deploy config myself instead/ 20

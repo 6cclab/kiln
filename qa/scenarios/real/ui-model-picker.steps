@@ -1,0 +1,28 @@
+# /model as a user drives it: the selected row is visibly marked, ←/→
+# changes effort, and picking a model closes the dialog with a
+# confirmation. Scratch HOME: a pick writes the default model to user
+# settings.
+@real
+@home scratch
+@size 140x45
+@fixture qa/fixtures/real/ext-commands
+WAITFOR /describe a task/ 30
+TYPE /model
+KEY enter
+WAIT 1
+SHOT picker-open
+EXPECT /›\s+\d+\. \S+ ✓/
+KEY right
+WAIT 1
+SHOT effort-changed
+EXPECT /Effort set to (low|medium|high|xhigh|max) for this session/
+EXPECT /effort  auto · low · medium · high · xhigh · max/
+KEY down
+WAIT 1
+SHOT cursor-moved
+EXPECT /›\s+\d+\. \S+\s{2,}/
+KEY enter
+WAIT 2
+SHOT picked
+EXPECT /Now on \S+ · \S+ tier · .* \(default for new sessions\)/
+EXPECT_NOT /Select model/

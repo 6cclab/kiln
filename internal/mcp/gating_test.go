@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/andrepato/harness/internal/budget"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
@@ -92,9 +93,31 @@ func TestBuildIndex(t *testing.T) {
 	if lines[0] != "mcp__github__search: search repos" {
 		t.Errorf("first-line-only truncation failed: %q", lines[0])
 	}
-	wantSecond := "mcp__grafana__query: " + strings.Repeat("x", 160)
+	wantSecond := "mcp__grafana__query: " + strings.Repeat("x", 80) + "…"
 	if lines[1] != wantSecond {
-		t.Errorf("160-char truncation failed: got %d chars of description", len(lines[1])-len("mcp__grafana__query: "))
+		t.Errorf("80-rune truncation failed: got %q", lines[1])
+	}
+}
+
+// TestBuildIndex_TruncatesByRunesNotBytes guards the fix: a byte-length cut
+// at 80 can land inside a multi-byte rune and emit invalid UTF-8. Using a
+// description of multi-byte runes whose byte length would be cut mid-rune at
+// 80 bytes but whose rune length is exactly at the boundary at 80 runes
+// verifies the cut counts runes. Break to verify: cut with desc[:80] on the
+// byte string instead of a rune slice.
+func TestBuildIndex_TruncatesByRunesNotBytes(t *testing.T) {
+	// "€" is 3 bytes, 1 rune. 100 of them is 300 bytes / 100 runes: a byte
+	// cut at 80 would land mid-rune (byte 80 is inside the 27th "€"), while
+	// a rune cut at 80 lands cleanly and appends the ellipsis.
+	desc := strings.Repeat("€", 100)
+	tools := []mcpgate.McpTool{mkTool("github", "search", desc)}
+	idx := mcpgate.BuildIndex(tools)
+	want := "mcp__github__search: " + strings.Repeat("€", 80) + "…"
+	if idx != want {
+		t.Fatalf("rune truncation failed:\n got %q\nwant %q", idx, want)
+	}
+	if !utf8.ValidString(idx) {
+		t.Fatal("BuildIndex produced invalid UTF-8")
 	}
 }
 
@@ -228,7 +251,7 @@ func benchTools(n int) []mcpgate.McpTool {
 	for i := 0; i < n; i++ {
 		server := fmt.Sprintf("server-%02d", i%9)
 		name := fmt.Sprintf("tool_%03d", i)
-		tools[i] = mkTool(server, name, "Does thing "+name+": a realistic one-paragraph description of what this tool does, its inputs, and when to call it, matching the length of real MCP tool descriptions found in production catalogs, running well past the 160-rune truncation this index applies.")
+		tools[i] = mkTool(server, name, "Does thing "+name+": a realistic one-paragraph description of what this tool does, its inputs, and when to call it, matching the length of real MCP tool descriptions found in production catalogs, running well past the 80-rune truncation this index applies.")
 	}
 	return tools
 }

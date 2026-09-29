@@ -13,12 +13,12 @@
 @faux testdata/faux/qa/resize-subagents.yaml
 @fixture testdata/behaviour/qa/model-roles-fast-heavy
 @size 120x40
-@args --permission-mode dontAsk
+@args --permission-mode bypassPermissions
 
 WAITFOR /describe a task/ 20
 TYPE dispatch two tasks
 KEY enter
-WAITFOR /2 subagents running in parallel/ 20
+WAITFOR /2 subagents? running/ 20
 SHOT subagents-running
 EXPECT /look something up/
 EXPECT /do the fast lookup/
@@ -31,7 +31,7 @@ RESIZE 90 30
 SHOT subagents-after-resize
 EXPECT_NOT /panic|goroutine/
 
-WAITFOR /2 subagents finished/ 20
+WAITFOR /2 subagents? finished/ 20
 SHOT subagents-finished
-EXPECT /2 subagents finished/
+EXPECT /2 subagents? finished/
 EXPECT_NOT /panic|goroutine/

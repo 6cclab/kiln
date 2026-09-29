@@ -25,6 +25,14 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     @env KEY=VAL                 extra environment (repeatable)
     @untrusted                   do not pre-trust the project
     @nogit                       do not git-init the project
+    @real                        drive the real model instead of faux (no
+                                 @faux); HOME is the real one unless
+                                 `@home scratch` (a scratch HOME holding a
+                                 copy of kiln's credentials only)
+    @model <provider/model>      model for @real (default
+                                 anthropic/claude-opus-4-8, effort medium)
+    @setup <shell command>       run in the project before launch
+                                 (repeatable; {PROJ}/{HOME}/{ROOT} expand)
     @pre <kiln args...>          run `kiln <args>` once before launch, same
                                  env (e.g. -p "task" to seed a recent session);
                                  it consumes faux steps like any other request
@@ -36,7 +44,8 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     KEY <name> [name...]         enter esc tab backspace delete up down left
                                  right home end pgup pgdown, shift+tab,
                                  shift+enter, ctrl+<x>, alt+<x>, shift+<arrow>
-    SCROLL <up|down> <n>         mouse wheel over the window centre
+    SCROLL <up|down> <n>         mouse wheel over the window centre (moves
+                                 the pointer there and back)
     CLICK <x> <y>                click at window-local points
     RESIZE <cols> <rows>         resize the window
     WAIT <seconds>               sleep
@@ -45,6 +54,19 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     EXPECT /regex/               record a pass/fail against the screen text
     EXPECT_NOT /regex/           the inverse
     NOTE <text>                  write a line to the run log
+    SEND <text>                  type text, then enter
+    IDLE [seconds]               @real: wait until the turn is done,
+                                 answering prompts like a user who trusts the
+                                 plan (plan -> 1, permission -> "don't ask
+                                 again" or yes, a dangerous command -> esc);
+                                 progress shots every 60s (default 1200s)
+    TURN <text>                  SEND then IDLE
+    RUN <shell command>          run in the project (after {PROJ}/{HOME}/
+                                 {ROOT} expansion) and record pass/fail on its
+                                 exit status, output in the run log
+    RELAUNCH [kiln args...]      exit kiln like a user (ctrl+c twice), then
+                                 start it again in a new window in the same
+                                 project with these extra args (e.g. -c)
 
 Output: <out>/<terminal>/<scenario>/ holding NN-<name>.png, NN-<name>.txt,
 run.log and result.json.
@@ -103,6 +125,18 @@ def orca_windows(bundle):
     if not d.get("ok"):
         return []
     return [w["id"] for w in d["result"]["windows"]]
+
+
+def wheel_binary():
+    """Compile scripts/qa/wheel.swift once (rebuilt when the source changes)."""
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wheel.swift")
+    out = os.path.join(os.path.expanduser("~/Library/Caches/kiln-qa"), "wheel")
+    if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src):
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        p = run(["swiftc", "-O", "-o", out, src])
+        if p.returncode != 0:
+            raise DriveError("wheel.swift failed to compile: " + p.stderr.strip()[:300])
+    return out
 
 
 # Named keys -> (orca action, orca key)
@@ -181,6 +215,12 @@ class Iterm:
     def text(self):
         return self._session("      return contents of s")
 
+    def centre(self):
+        """The window's centre in global screen points (top-left origin)."""
+        b = self._session("      return bounds of w")
+        x1, y1, x2, y2 = (int(v) for v in b.split(","))
+        return (x1 + x2) // 2, (y1 + y2) // 2
+
     def close(self):
         try:
             self._session("      tell s to close\n      return \"ok\"")
@@ -232,6 +272,12 @@ class TerminalApp:
         # the loop variable and returns "tab 1 of window id N". `history` is
         # the tab's whole buffer (scrollback plus the visible screen).
         return self._tab("     return history of t")
+
+    def centre(self):
+        """The window's centre in global screen points (top-left origin)."""
+        b = self._tab("     return bounds of w")
+        x1, y1, x2, y2 = (int(v) for v in b.split(","))
+        return (x1 + x2) // 2, (y1 + y2) // 2
 
     def close(self):
         try:
@@ -307,6 +353,16 @@ class Warp:
     def activate(self):
         osa('tell application "Warp" to activate\n'
             'tell application "System Events" to tell process "Warp" to perform action "AXRaise" of front window')
+
+    def centre(self):
+        """The front window's centre in global screen points, via System
+        Events (Warp has no AppleScript dictionary)."""
+        r = osa('tell application "System Events" to tell process "Warp"\n'
+                ' set {x, y} to position of front window\n set {w, h} to size of front window\n'
+                ' return (x as text) & "," & (y as text) & "," & (w as text) & "," & (h as text)\n'
+                'end tell')
+        x, y, w, h = (int(float(v)) for v in r.split(","))
+        return x + w // 2, y + h // 2
 
     def resize(self, cols, rows):
         w0, h0, c0, r0 = self.base
@@ -390,7 +446,7 @@ def make_terminal(name, work):
 
 
 def parse_scenario(path):
-    directives = {"env": [], "pre": [], "args": []}
+    directives = {"env": [], "pre": [], "args": [], "setup": []}
     steps = []
     for lineno, raw in enumerate(Path(path).read_text().splitlines(), 1):
         line = raw.strip()
@@ -398,7 +454,7 @@ def parse_scenario(path):
             continue
         if line.startswith("@"):
             key, _, val = line[1:].partition(" ")
-            if key in ("env", "pre"):
+            if key in ("env", "pre", "setup"):
                 directives[key].append(val.strip())
             elif key == "args":
                 directives["args"] += shlex.split(val)
@@ -407,8 +463,8 @@ def parse_scenario(path):
             continue
         verb, _, rest = line.partition(" ")
         steps.append((lineno, verb.upper(), rest.strip()))
-    if "faux" not in directives:
-        raise DriveError("%s: @faux is required" % path)
+    if "faux" not in directives and "real" not in directives:
+        raise DriveError("%s: @faux (or @real) is required" % path)
     return directives, steps
 
 
@@ -448,21 +504,48 @@ class Run:
 
     def setup(self):
         self.work = Path(tempfile.mkdtemp(prefix="kiln-qa-", dir="/tmp"))
-        home = self.work / "home"
-        (home / ".harness").mkdir(parents=True)
+        self.real = "real" in self.directives
+        if self.real and self.directives.get("home") != "scratch":
+            home = Path(os.environ["HOME"])
+        else:
+            home = self.work / "home"
+            (home / ".harness").mkdir(parents=True)
+            if self.real:
+                creds = Path(os.environ["HOME"]) / ".harness" / "credentials.json"
+                if creds.exists():
+                    shutil.copy(creds, home / ".harness" / "credentials.json")
+        self.home = home
         proj = self.work / "proj"
+        self.proj = proj
         fixture = self.directives.get("fixture")
         if fixture and fixture is not True:
             shutil.copytree(ROOT / fixture, proj)
         else:
             proj.mkdir()
         if "untrusted" not in self.directives:
-            (home / ".harness" / "trusted.json").write_text(json.dumps([str(proj)]))
+            trusted = home / ".harness" / "trusted.json"
+            entries = json.loads(trusted.read_text()) if trusted.exists() else []
+            for p in (str(proj), str(proj.resolve())):
+                if p not in entries:
+                    entries.append(p)
+            trusted.write_text(json.dumps(entries, indent=2))
         if "nogit" not in self.directives:
             git = ["git", "-c", "user.name=kiln qa", "-c", "user.email=qa@example.invalid"]
             run(git + ["init", "-q", "-b", "main"], cwd=proj)
             run(git + ["add", "-A"], cwd=proj)
             run(git + ["commit", "-q", "--allow-empty", "-m", "fixture"], cwd=proj)
+
+        def expand(s):
+            return s.replace("{ROOT}", str(ROOT)).replace("{PROJ}", str(proj)).replace("{HOME}", str(home))
+
+        for cmd in self.directives["setup"]:
+            p = run(["/bin/sh", "-c", expand(cmd)], cwd=proj, env={**os.environ, "HOME": str(home)}, timeout=300)
+            self.log("setup `%s` exit=%d%s" % (cmd[:80], p.returncode, (" " + (p.stderr or p.stdout).strip()[:300]) if p.returncode else ""))
+            if p.returncode:
+                raise DriveError("setup failed: %s" % cmd)
+
+        if self.real:
+            return self._launch_real(home, proj, expand)
 
         faux_log = self.work / "faux.log"
         self.faux = subprocess.Popen([str(ROOT / "bin/faux"), str(ROOT / self.directives["faux"])],
@@ -510,6 +593,93 @@ class Run:
             self.terminal_name, self.term.wid, self.term.tty, self.cols, self.rows,
             (" (measured %dx%d)" % actual) if actual else ""))
 
+    def _launch_real(self, home, proj, expand):
+        env = {"HOME": str(home)} if home != Path(os.environ["HOME"]) else {}
+        for kv in self.directives["env"]:
+            k, _, v = kv.partition("=")
+            env[k] = expand(v)
+        model = self.directives.get("model") or "anthropic/claude-opus-4-8"
+        kiln = [str(ROOT / "bin/kiln"), "--model", model]
+        args = [expand(a) for a in self.directives["args"]]
+        if "--effort" not in args:
+            kiln += ["--effort", "medium"]
+        for pre in self.directives["pre"]:
+            p = run(kiln[:1] + [expand(a) for a in shlex.split(pre)], cwd=proj,
+                    env={**os.environ, **env, "PWD": str(proj)}, timeout=120)
+            self.log("pre `%s` exit=%d %s" % (pre, p.returncode, (p.stdout + p.stderr).strip()[:300]))
+        self._real_launch = (env, kiln + args, expand)
+        self._start_real([])
+        self.log("launched real %s in %s window=%s tty=%s" % (model, proj, self.term.wid, self.term.tty))
+
+    def _start_real(self, extra):
+        env, argv, expand = self._real_launch
+        launcher = self.work / "run.sh"
+        exports = "".join("export %s=%s\n" % (k, shlex.quote(v)) for k, v in env.items())
+        launcher.write_text("#!/bin/sh\ncd %s || exit 1\n%sexec %s\n" % (
+            shlex.quote(str(self.proj)), exports, " ".join(shlex.quote(a) for a in argv + [expand(e) for e in extra])))
+        launcher.chmod(0o755)
+        self.term = make_terminal(self.terminal_name, self.work)
+        self.term.launch(str(launcher), self.cols, self.rows)
+
+    # ---- @real turn handling
+
+    READY = re.compile(r"describe a task|queue a follow-up")
+    BUSY = re.compile(r"esc to stop")
+    # A dangerous shell command, or an MCP tool whose name says it changes
+    # something (scenarios on the real HOME only ever ask read-only
+    # questions of the user's own servers).
+    DANGER = re.compile(r"\bsudo\b|rm -rf (/|~)|\|\s*(ba|z)?sh\b|git push|brew install|npm (i|install) -g"
+                        r"|mcp__\w*(create|update|delete|remove|sync|run|install|restart|write|set|add|patch|post)", re.I)
+
+    def decide(self, s):
+        tail = "\n".join(s.split("\n")[-40:])
+        if re.search(r"trust (the files in )?this folder|Do you trust", tail, re.I):
+            return ("trust folder -> 2", ["2"])
+        if re.search(r"Would you like to proceed\?|Ready to code\?", tail):
+            return ("plan approval -> 1", ["1"])
+        if re.search(r"Allow kiln to|approval needed", tail) and re.search(r"press 1, 2", tail):
+            if self.DANGER.search(tail):
+                return ("DANGER -> esc", ["esc"])
+            if re.search(r"2\s+Yes, and don.t ask again", tail):
+                return ("permission -> 2", ["2"])
+            return ("permission -> 1", ["1"])
+        return None
+
+    def idle(self, timeout):
+        start = time.time()
+        busy_seen = False
+        quiet_since = None
+        last_shot = time.time()
+        while True:
+            if time.time() - start > timeout:
+                self.shot("idle-timeout")
+                raise DriveError("IDLE timed out after %ds" % timeout)
+            s = self.screen()
+            d = self.decide(s)
+            if d:
+                self.shot("prompt")
+                self.log("  answer: %s" % d[0])
+                for k in d[1]:
+                    self.key(k)
+                    time.sleep(0.3)
+                time.sleep(1.5)
+                quiet_since = None
+                continue
+            if self.BUSY.search(s):
+                busy_seen = True
+                quiet_since = None
+                if time.time() - last_shot > 60:
+                    self.shot("progress")
+                    last_shot = time.time()
+            else:
+                quiet_since = quiet_since or time.time()
+                # Done once it has been quiet long enough: 15s after real
+                # work, 6s for a turn that never went busy (a slash command).
+                if time.time() - quiet_since > (15 if busy_seen else 6):
+                    self.log("  idle after %.0fs" % (time.time() - start))
+                    return
+            time.sleep(1)
+
     def teardown(self):
         if self.term is not None:
             if self.kiln_running():
@@ -524,6 +694,14 @@ class Run:
                 run(["kill", pid])
             time.sleep(0.3)
             self.term.close()
+        if getattr(self, "real", False) and getattr(self, "home", None) == Path(os.environ["HOME"]):
+            trusted = self.home / ".harness" / "trusted.json"
+            try:
+                entries = json.loads(trusted.read_text())
+                keep = [e for e in entries if not e.startswith(str(self.work)) and not e.startswith(str(self.work.resolve()))]
+                trusted.write_text(json.dumps(keep, indent=2))
+            except (OSError, ValueError):
+                pass
         if self.faux is not None:
             self.faux.terminate()
             try:
@@ -531,7 +709,17 @@ class Run:
             except subprocess.TimeoutExpired:
                 self.faux.kill()
         if self.work and not self.keep:
-            shutil.rmtree(self.work, ignore_errors=True)
+            # A scenario that runs go leaves a read-only module cache in its
+            # scratch HOME; make entries writable and retry, and report what
+            # still could not be removed instead of ignoring it.
+            def writable_retry(func, path, _exc):
+                os.chmod(os.path.dirname(path), 0o755)
+                os.chmod(path, 0o755)
+                func(path)
+            try:
+                shutil.rmtree(self.work, onerror=writable_retry)
+            except OSError as e:
+                self.log(f"cleanup: could not remove {self.work}: {e}")
 
     def kiln_running(self):
         return bool(self._kiln_pids())
@@ -618,17 +806,16 @@ class Run:
                     time.sleep(0.12)
             elif verb == "SCROLL":
                 # Orca's scroll reports ok but delivers no wheel event to the
-                # terminal (probed with SGR mouse reporting on: clicks arrive,
-                # scrolls never do), so a SCROLL step would silently test
-                # nothing. Fail it until a real wheel path exists.
-                raise DriveError("SCROLL blocked: orca scroll delivers no wheel event to the terminal")
+                # terminal, so SCROLL posts real wheel events itself
+                # (scripts/qa/wheel.swift) over the window's centre.
                 direction, n = arg.split()[:2]
-                for _ in range(int(n)):
-                    self.term.activate()
-                    d = orca("scroll", "--app", self.term.bundle, "--window-id", str(self.term.wid),
-                             "--x", "400", "--y", "300", "--direction", direction)
-                    if not d.get("ok"):
-                        raise DriveError("scroll failed: %s" % json.dumps(d.get("error"))[:200])
+                self.term.activate()
+                time.sleep(0.2)
+                x, y = self.term.centre()
+                p = run([wheel_binary(), str(x), str(y), direction, n])
+                if p.returncode != 0:
+                    raise DriveError("SCROLL failed: " + (p.stderr or p.stdout).strip())
+                time.sleep(0.3)
             elif verb == "CLICK":
                 x, y = arg.split()[:2]
                 self.term.activate()
@@ -664,6 +851,38 @@ class Run:
                 self.log("  -> %s%s" % ("pass" if ok else "FAIL", " (ocr, advisory)" if advisory else ""))
             elif verb == "NOTE":
                 pass
+            elif verb in ("SEND", "TURN"):
+                self._orca_input("type-text", "--text", arg)
+                time.sleep(0.3)
+                self.key("enter")
+                if verb == "TURN":
+                    self.idle(1200)
+            elif verb == "IDLE":
+                self.idle(float(arg) if arg else 1200)
+            elif verb == "RUN":
+                cmd = arg.replace("{ROOT}", str(ROOT)).replace("{PROJ}", str(self.proj)).replace("{HOME}", str(self.home))
+                p = run(["/bin/sh", "-c", cmd], cwd=self.proj, env={**os.environ, "HOME": str(self.home)}, timeout=600)
+                ok = p.returncode == 0
+                self.expects.append({"line": lineno, "verb": "RUN", "pattern": arg, "ok": ok})
+                self.log("  -> %s (exit %d) %s" % ("pass" if ok else "FAIL", p.returncode, (p.stdout + p.stderr).strip()[-400:]))
+            elif verb == "RELAUNCH":
+                if not getattr(self, "real", False):
+                    raise DriveError("RELAUNCH needs @real")
+                # /exit, like a user; Orca's key round trip (~0.6s each) is
+                # too slow to land two ctrl+c presses inside kiln's 1s window.
+                self._orca_input("type-text", "--text", "/exit")
+                time.sleep(0.3)
+                self.key("enter")
+                deadline = time.time() + 15
+                while self.kiln_running() and time.time() < deadline:
+                    time.sleep(0.5)
+                if self.kiln_running():
+                    self.shot("exit-stuck")
+                    raise DriveError("kiln did not exit on /exit within 15s")
+                self.term.close()
+                time.sleep(0.5)
+                self._start_real(shlex.split(arg))
+                self.log("  relaunched window=%s tty=%s args=%s" % (self.term.wid, self.term.tty, arg))
             else:
                 raise DriveError("line %d: unknown verb %s" % (lineno, verb))
 
@@ -680,7 +899,8 @@ class Run:
         return result
 
 
-VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE"}
+VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE",
+         "SEND", "IDLE", "TURN", "RUN", "RELAUNCH"}
 FAUX_TOP = {"model", "steps", "models"}
 FAUX_STEP = {"text", "thinking", "tool_call", "tool_calls", "on_tool_result", "on_tool_results",
              "then", "usage", "error", "delay", "disconnect_after", "end_turn", "chunk_delay"}
@@ -739,11 +959,12 @@ def lint_scenario(path):
         directives, steps = parse_scenario(path)
     except DriveError as e:
         return [str(e)]
-    faux = ROOT / directives["faux"]
-    if not faux.exists():
-        problems.append("%s: @faux %s does not exist" % (path, directives["faux"]))
-    else:
-        problems += lint_faux(faux)
+    if "faux" in directives:
+        faux = ROOT / directives["faux"]
+        if not faux.exists():
+            problems.append("%s: @faux %s does not exist" % (path, directives["faux"]))
+        else:
+            problems += lint_faux(faux)
     fixture = directives.get("fixture")
     if fixture and fixture is not True and not (ROOT / fixture).is_dir():
         problems.append("%s: @fixture %s is not a directory" % (path, fixture))

@@ -132,6 +132,8 @@ func mcpStatusGlyph(marker string) string {
 		return KilnGreen(G().OK)
 	case "✘":
 		return KilnRed(G().Fail)
+	case commands.MarkerConnecting:
+		return Faint(G().PlanTodo)
 	default:
 		return Faint(marker)
 	}
@@ -162,7 +164,7 @@ func renderMCPListRows(items []commands.Item, cursor, width int) []string {
 			row += "   " + desc
 		}
 		if i == cursor {
-			row = OnRaise(padTo(row, width))
+			row = RaiseRow(row, width)
 		}
 		out = append(out, row)
 	}
@@ -191,7 +193,7 @@ func (d *dialogMCP) renderList(width, height int) []string {
 		// swap in a different one).
 		out = append(out, dialogIndent+Faint("Run kiln --debug to see error logs"))
 	}
-	out = append(out, dialogIndent+Faint("kiln doctor for details"))
+	out = append(out, dialogIndent+Faint("Run kiln doctor for details"))
 
 	if d.status != "" {
 		colour := KilnGreen
@@ -230,6 +232,8 @@ func (d *dialogMCP) renderDetail(width, height int) []string {
 			status += " · " + strconv.FormatInt(item.Ms, 10) + "ms"
 		}
 		out = append(out, dialogIndent+KilnGreen(status))
+	case commands.MarkerConnecting:
+		out = append(out, dialogIndent+Muted("connecting… reopen /mcp once it finishes"))
 	default:
 		reason := item.Error
 		if reason == "" {

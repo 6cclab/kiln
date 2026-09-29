@@ -19,16 +19,30 @@ type Skill struct {
 	Content       string
 	FilePath      string
 	UserInvocable bool
-	Scope         paths.Scope
+	// DisableModelInvocation is SKILL.md's `disable-model-invocation`
+	// frontmatter key: true excludes the skill from the model-invocable
+	// `skill` tool's catalog (internal/tools.SkillTool). Distinct from
+	// UserInvocable, which controls slash-palette visibility instead - the
+	// two are independent axes (Claude Code's skill frontmatter has both).
+	DisableModelInvocation bool
+	Scope                  paths.Scope
 }
 
 type frontmatter struct {
-	Name          string `yaml:"name"`
-	Description   string `yaml:"description"`
-	UserInvocable *bool  `yaml:"user-invocable"`
+	Name                   string `yaml:"name"`
+	Description            string `yaml:"description"`
+	UserInvocable          *bool  `yaml:"user-invocable"`
+	DisableModelInvocation *bool  `yaml:"disable-model-invocation"`
 }
 
 var frontmatterRe = regexp.MustCompile(`(?s)^---\r?\n(.*?)\r?\n---\r?\n?(.*)$`)
+
+// ParseSkill parses one SKILL.md file's content. Exported so
+// internal/claude/plugins can parse a plugin's skills with the exact same
+// frontmatter rules, rather than duplicating them.
+func ParseSkill(source, filePath string, scope paths.Scope) (Skill, bool) {
+	return parseSkill(source, filePath, scope)
+}
 
 func parseSkill(source, filePath string, scope paths.Scope) (Skill, bool) {
 	m := frontmatterRe.FindStringSubmatch(source)
@@ -51,13 +65,18 @@ func parseSkill(source, filePath string, scope paths.Scope) (Skill, bool) {
 	if data.UserInvocable != nil {
 		userInvocable = *data.UserInvocable
 	}
+	disableModelInvocation := false
+	if data.DisableModelInvocation != nil {
+		disableModelInvocation = *data.DisableModelInvocation
+	}
 	return Skill{
-		Name:          name,
-		Description:   description,
-		Content:       strings.TrimSpace(m[2]),
-		FilePath:      filePath,
-		UserInvocable: userInvocable,
-		Scope:         scope,
+		Name:                   name,
+		Description:            description,
+		Content:                strings.TrimSpace(m[2]),
+		FilePath:               filePath,
+		UserInvocable:          userInvocable,
+		DisableModelInvocation: disableModelInvocation,
+		Scope:                  scope,
 	}, true
 }
 

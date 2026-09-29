@@ -102,7 +102,7 @@ func designProject(t *testing.T) string {
 // test -- upload` call — but every non-read-only tool call asks for
 // approval under --permission-mode manual (settings.Decide's ModeManual
 // case), and no single global mode allows task/write/edit while still
-// asking for bash (dontAsk/bypassPermissions/auto allow bash too;
+// asking for bash (bypassPermissions/auto allow bash too;
 // acceptEdits still asks for task). settings.Permissions.Allow rules are
 // checked before the mode switch (settings.Decide), so naming task/write/
 // edit here — while the session still runs in manual mode — reproduces
@@ -671,6 +671,10 @@ func TestTUI_Design_Permission_60cols(t *testing.T) {
 	driveDesignTo(t, s, "permission")
 	s.Resize(60, 30)
 	mustSee(t, s, designPermAnchor, 3*time.Second)
+	// A frame painted at 100 columns just before kiln hears of the resize
+	// wraps at 60 and leaves the old prompt's top rows above the new frame;
+	// the rewrap after the resize settles must clear them.
+	waitSingle(t, s, designPermAnchor, 3*time.Second)
 	assertGoldenTail(t, s, "design-permission-60", designPermAnchor)
 	assertGoldenStyles(t, s, "design-permission-60", stylesOpts{anchor: designPermAnchor})
 }
@@ -720,8 +724,19 @@ func TestTUI_Design_Context(t *testing.T) {
 	if err := waitQuiescent(s, 150*time.Millisecond, 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	assertGoldenTail(t, s, "design-context", "faux/faux-1 ·")
-	assertGoldenStyles(t, s, "design-context", stylesOpts{anchor: "faux/faux-1 ·"})
+	// The system prompt's environment block includes the random project
+	// path, so the two rows derived from its size are masked.
+	rows := s.Rows()
+	start := 0
+	for i, r := range rows {
+		if strings.Contains(r, "faux/faux-1 ·") {
+			start = i
+			break
+		}
+	}
+	got := strings.Join(normalizeCwdTokenRows(normalizeSpinnerGlyph(normalizeStatusRowCwd(rows[start:]))), "\n")
+	assertGolden(t, goldenPath("design-context.txt"), got+"\n")
+	assertGoldenStyles(t, s, "design-context", stylesOpts{anchor: "faux/faux-1 ·", normalizeCwdTokens: true})
 }
 
 // --- done ------------------------------------------------------------------
@@ -773,8 +788,10 @@ func TestTUI_Design_Fullscreen_Welcome(t *testing.T) {
 			if len(rows) != sz.h {
 				t.Fatalf("Rows() returned %d rows, want %d", len(rows), sz.h)
 			}
-			if !strings.Contains(rows[0], "K I L N") {
-				t.Errorf("row 0 = %q, want the banner wordmark at the very top", rows[0])
+			// The banner opens the screen: the kiln art's smoke on row 0
+			// (the wordmark sits beside the art, a few rows down).
+			if !strings.Contains(rows[0], "░▒░") || !strings.Contains(strings.Join(rows[:9], "\n"), "K I L N") {
+				t.Errorf("rows 0-8 = %q, want the banner (art and wordmark) at the very top", rows[:9])
 			}
 			last := rows[len(rows)-1]
 			if !modeLinePattern.MatchString(last) {
@@ -1087,5 +1104,24 @@ func TestTUI_Design_FullSession(t *testing.T) {
 	// handback report for the full observed sequence.
 	if labels[0] != "you" {
 		t.Errorf("first committed block is %q, want \"you\":\n%v", labels[0], labels)
+	}
+}
+
+// waitSingle waits until text appears exactly once on screen and the
+// screen has settled, failing with the screen if it never does.
+func waitSingle(t *testing.T, s *screen.Screen, text string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		rows := strings.Join(s.Viewport(), "\n")
+		if strings.Count(rows, text) == 1 {
+			if err := s.WaitFor(text, time.Until(deadline)); err == nil && strings.Count(strings.Join(s.Viewport(), "\n"), text) == 1 {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q is on screen %d times, want once:\n%s", text, strings.Count(rows, text), rows)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

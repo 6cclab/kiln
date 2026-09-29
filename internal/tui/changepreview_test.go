@@ -37,7 +37,7 @@ func TestRenderChangePreviewWriteNewFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "does-not-exist.txt")
 	out := RenderChangePreview("write", map[string]any{"path": path, "content": "line1\nline2"})
 	joined := strings.Join(out, "\n")
-	if !strings.Contains(joined, "new file, 2 line(s)") {
+	if !strings.Contains(joined, "new file, 2 lines") {
 		t.Errorf("expected new-file marker, got %v", out)
 	}
 }
@@ -62,7 +62,7 @@ func TestRenderChangePreviewWriteOverwrites(t *testing.T) {
 	}
 	out := RenderChangePreview("write", map[string]any{"path": path, "content": "new content"})
 	joined := strings.Join(out, "\n")
-	if !strings.Contains(joined, "overwrites 2 existing line(s)") {
+	if !strings.Contains(joined, "overwrites 2 existing lines") {
 		t.Errorf("expected overwrite marker, got %v", out)
 	}
 }
@@ -78,7 +78,7 @@ func TestRenderChangePreviewClips(t *testing.T) {
 	if len(out) != maxPreviewLines+1 {
 		t.Fatalf("got %d lines, want %d (clipped + note)", len(out), maxPreviewLines+1)
 	}
-	if !strings.Contains(out[len(out)-1], "more line(s)") {
+	if !strings.Contains(out[len(out)-1], " more") {
 		t.Errorf("missing clip note: %v", out[len(out)-1])
 	}
 }

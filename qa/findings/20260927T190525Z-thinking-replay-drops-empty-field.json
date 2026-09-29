@@ -1,0 +1,25 @@
+{
+ "id": "20260927T190525Z-thinking-replay-drops-empty-field",
+ "found_at": "2026-09-27T19:05:25Z",
+ "scenario": "CRUD trial (Opus 4.8, plan mode), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Replayed thinking blocks with empty text lose their thinking field; every request after the first tool call fails",
+ "observed": "Opus 4.8 returns signed thinking blocks with thinking \"\". anthropicContentBlock.Thinking was json:\"thinking,omitempty\", so the replay omitted it and the API returned 400 messages.1.content.0.thinking.thinking: Field required (req_011CfUSYtweBteih4b1dGEwV). The session died on its second request.",
+ "expected": "Signed thinking blocks replay with an explicit thinking field, empty or not.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/provider/api/anthropic_messages.go"
+  ],
+  "regression_test": "TestConvertBlocksToAnthropic_EmptySignedThinking",
+  "note": "Verified in the kiln-3 CRUD-trial rerun: 7.9 min, 0 prompts, $1.96 (Claude Code $2.70), 34/34 grade.",
+  "updated_at": "2026-09-27T21:24:12Z"
+ }
+}

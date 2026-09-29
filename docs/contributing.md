@@ -12,7 +12,7 @@ kiln requires **Go 1.26** (`go.mod` pins `go 1.26.3`; CI's
 Build the binary:
 
 ```bash
-make build          # -> bin/kiln
+make build          # -> bin/kiln, also installed to ~/go/bin
 ```
 
 `Makefile`'s `build` target runs `go build` with `-ldflags` setting
@@ -66,7 +66,7 @@ All targets are defined in `Makefile`:
 
 | Target | What it does |
 |---|---|
-| `make build` | Builds `bin/kiln` with the version ldflags described above. |
+| `make build` | Builds `bin/kiln` with the version ldflags described above and installs it to `$GOBIN`, else `$GOPATH/bin` (normally `~/go/bin`, on your `PATH`). `make build INSTALL_DIR=` skips the install. |
 | `make check` | `gofmt -l .` (fails on any unformatted file), `go vet ./...`, staticcheck, `go test ./...`, then `go vet -tags e2e ./test/e2e/...` so a compile break in the e2e package fails the fast layer. |
 | `make e2e` | `go test -tags e2e ./test/e2e/... -count=1 -timeout 10m`. Gated behind the `e2e` build tag so it never runs as part of `go build ./...` or `make check`. |
 | `make e2e-live` | Same as `make e2e` plus `HARNESS_E2E_LIVE=1`, restricted to `-run Live`: the only target that talks to a real model/network. |

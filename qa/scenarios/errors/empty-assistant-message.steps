@@ -10,7 +10,7 @@ SHOT welcome
 TYPE say nothing back
 KEY enter
 WAITFOR /say nothing back/ 20
-WAIT 2
+WAITFOR /ended its turn without replying/ 10
 SHOT after-empty-reply
 EXPECT_NOT /panic|goroutine/
 TYPE are you still there

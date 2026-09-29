@@ -1,5 +1,5 @@
-     7   const router = express.Router();
      8   const upload = multer({ dest: 'uploads/' });
+     …
     20   //
     21   //
     22   //
@@ -23,7 +23,7 @@
    ↑↓ select · enter confirm · esc decline · tab to amend
   ────────────────────────────────────────────────────────────────────────────────────────────────
 
-  ◐ Waiting for approval…  2s · 750 tokens                                            esc to stop
+  ◐ Waiting for approval…  2s · 150 tokens                                            esc to stop
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ›  press 1, 2, 3 or 4
   ────────────────────────────────────────────────────────────────────────────────────────────────

@@ -41,16 +41,46 @@ func TestResumeWithNoSessionsSaysSo(t *testing.T) {
 	}
 }
 
-func TestResumeWithArgPrintsTheCLIInvocation(t *testing.T) {
+// TestResumeWithArg: /resume <id-prefix> resolves the session; with a
+// Relaunch hook it hands the id over and exits, without one it names the
+// restart command, and an unknown id says so.
+func TestResumeWithArg(t *testing.T) {
 	repo, _ := jsonl.NewRepo(t.TempDir())
-	source := SessionCommands(SessionCommandDeps{Repo: repo, Cwd: t.TempDir()})
-	res, err := findCmd(t, source, "resume").Run(context.Background(), "abc123")
+	cwd := t.TempDir()
+	_, meta, err := repo.Create(jsonl.CreateOptions{Cwd: cwd})
 	if err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(res.Output, "\n")
-	if !strings.Contains(joined, "kiln --resume abc123") {
-		t.Fatalf("got %q", joined)
+	prefix := meta.ID[:8]
+
+	res, err := findCmd(t, SessionCommands(SessionCommandDeps{Repo: repo, Cwd: cwd}), "resume").Run(context.Background(), prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(res.Output, "\n"); !strings.Contains(joined, "kiln --resume "+meta.ID) || res.Exit {
+		t.Errorf("without Relaunch: exit=%v output %q, want the restart command", res.Exit, joined)
+	}
+
+	var relaunched string
+	deps := SessionCommandDeps{Repo: repo, Cwd: cwd, Relaunch: func(id string) { relaunched = id }}
+	res, err = findCmd(t, SessionCommands(deps), "resume").Run(context.Background(), prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relaunched != meta.ID || !res.Exit {
+		t.Errorf("with Relaunch: relaunched %q exit=%v, want %q and exit", relaunched, res.Exit, meta.ID)
+	}
+
+	relaunched = ""
+	res, _ = findCmd(t, SessionCommands(deps), "resume").Run(context.Background(), "zzz")
+	if relaunched != "" || res.Exit || !strings.Contains(strings.Join(res.Output, " "), "No session") {
+		t.Errorf("unknown id: relaunched %q exit=%v output %q", relaunched, res.Exit, res.Output)
+	}
+
+	deps.CurrentID = meta.ID
+	res, _ = findCmd(t, SessionCommands(deps), "resume").Run(context.Background(), prefix)
+	if relaunched != "" || !strings.Contains(strings.Join(res.Output, " "), "is this session") {
+		t.Errorf("current session: relaunched %q output %q", relaunched, res.Output)
 	}
 }
 

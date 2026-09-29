@@ -35,8 +35,11 @@ type AccountDeps struct {
 // and /terminal-setup.
 //
 // Deliberately absent, per docs/claude-code-parity.md and
-// account-commands.ts: /vim, /statusline, /plugin. A command that exists
-// only to say "not implemented" is noise in /help on every session.
+// account-commands.ts: /vim, /statusline. A command that exists only to
+// say "not implemented" is noise in /help on every session. /plugin is a
+// real command now — see plugin_commands.go, registered separately in
+// internal/cli/commands.go (it needs the active plugin set, which
+// AccountDeps doesn't carry).
 func AccountCommands(deps AccountDeps) Source {
 	cmds := []Command{
 		{
@@ -120,7 +123,7 @@ func AccountCommands(deps AccountDeps) Source {
 			Run: func(ctx context.Context, args string) (Result, error) {
 				wanted := strings.TrimSpace(args)
 				if wanted == "" {
-					return Result{Output: []string{"usage: /logout <provider>"}}, nil
+					return Result{Output: []string{"Name the provider to log out of: /logout <provider>."}, Mistake: true}, nil
 				}
 				return Result{Output: []string{
 					"Run this outside the session:",
@@ -137,10 +140,10 @@ func AccountCommands(deps AccountDeps) Source {
 				lines := []string{
 					fmt.Sprintf("model      %s", deps.ModelLabel),
 					fmt.Sprintf("tier       %s", deps.Tier.Name),
-					fmt.Sprintf("window     %d tokens", deps.Tier.ContextWindow),
-					fmt.Sprintf("budget     %d usable after reserves", budgetTokens),
-					fmt.Sprintf("tools      %s", deps.Tier.ToolStrategy),
-					fmt.Sprintf("per result %d token ceiling", deps.Tier.ToolOutputTokens),
+					"window     " + formatTokens(deps.Tier.ContextWindow) + " tokens",
+					"budget     " + formatTokens(budgetTokens) + " usable after reserves",
+					"tools      " + deps.Tier.ToolStrategy.Describe(),
+					"per result " + formatTokens(deps.Tier.ToolOutputTokens) + " token ceiling",
 				}
 				if deps.ContextUsed != nil {
 					if used, ok := deps.ContextUsed(); ok {
@@ -148,7 +151,7 @@ func AccountCommands(deps AccountDeps) Source {
 						if budgetTokens > 0 {
 							percent = used * 100 / budgetTokens
 						}
-						lines = append(lines, fmt.Sprintf("used       %d (%d%% of budget)", used, percent))
+						lines = append(lines, fmt.Sprintf("used       %s (%d%% of budget)", formatTokens(used), percent))
 					}
 				}
 				lines = append(lines, "", "No plan limits apply: usage here is context, not billing.")

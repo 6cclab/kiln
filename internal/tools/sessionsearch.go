@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/search"
 	"github.com/andrepato/harness/internal/tool"
 )
@@ -103,7 +104,7 @@ func SessionSearchTool(s *search.Search) *tool.Tool {
 				lines = append(lines, fmt.Sprintf("[%s] %s\n  session: %s", when, snippet, hit.SessionID))
 			}
 
-			result := fmt.Sprintf("%d prior session(s):\n\n%s", len(hits), strings.Join(lines, "\n\n"))
+			result := fmt.Sprintf("%s:\n\n%s", plural.Count(len(hits), "prior session"), strings.Join(lines, "\n\n"))
 			return tool.Text(result), nil
 		},
 	}

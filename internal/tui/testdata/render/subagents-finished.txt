@@ -1,4 +1,4 @@
 subagents ────────────────────────────────────────────────────────────  1/1 done
-1 subagents finished
+1 subagent finished
  scout     survey the auth module                             ━━━━━━━━━━    1.2k
            ✓ finished

@@ -37,6 +37,7 @@ package e2e
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -47,8 +48,7 @@ import (
 // subagent-error.yaml (the qa campaign's own reproduction: a subagent
 // dispatch whose model turn returns a non-retryable 400) and checks the
 // failure appears exactly where the design wants it — the subagents
-// panel's row and the parent's own "task" tool-call result — and nowhere
-// else. Before the fix this screen also carried a third, contextless
+// panel's row — and nowhere else. Before the fix this screen also carried a third, contextless
 // "error ───" block with the identical text right under the user's
 // message; TestTUI_SubagentError_ReportsOnce would have failed against
 // the pre-fix bridge.go (verified manually: reverting SubagentSink to its
@@ -70,7 +70,7 @@ func TestTUI_SubagentError_ReportsOnce(t *testing.T) {
 	s.Send("check the deploy config with a subagent")
 	s.SendKey("enter")
 
-	if err := s.WaitFor("subagents finished", 20*time.Second); err != nil {
+	if err := s.WaitFor(regexp.MustCompile(`subagents? finished`), 20*time.Second); err != nil {
 		t.Fatalf("turn never reached a finished subagents panel: %v", err)
 	}
 	if err := s.WaitFor(turnSummaryPattern, 20*time.Second); err != nil {
@@ -92,10 +92,10 @@ func TestTUI_SubagentError_ReportsOnce(t *testing.T) {
 	if !regexp.MustCompile(`✕ .*boom, subagent misbehaved`).MatchString(joined) {
 		t.Errorf("subagents panel row missing its failure message:\n%s", joined)
 	}
-	// The task tool call's own result text still reports it too; the row
-	// wraps wherever the width puts it, so whitespace is matched loosely.
-	if !regexp.MustCompile(`(?s)Subagent "general-purpose" failed.*boom,\s+subagent\s+misbehaved`).MatchString(joined) {
-		t.Errorf("task tool result missing the subagent failure text:\n%s", joined)
+	// And only there: the task call the panel row stands for gets no
+	// block of its own repeating the failure.
+	if regexp.MustCompile(`(?m)^\s*task ─+`).MatchString(joined) || strings.Contains(joined, `Subagent "general-purpose" failed`) {
+		t.Errorf("the failure is repeated in a task block under the panel:\n%s", joined)
 	}
 }
 
@@ -165,5 +165,104 @@ func TestTUI_SubagentPanel_ShowsToolActionThenFinalAnswer(t *testing.T) {
 	}
 	if regexp.MustCompile(`✓\s+finished\b`).MatchString(joined) {
 		t.Errorf("done row still shows the generic \"finished\" instead of the final answer:\n%s", joined)
+	}
+}
+
+// faultAfterToolScript runs one bash call, then fails the follow-up
+// request with a hard 400 — the shape of the live Opus 4.8 failure, where
+// the second request of a turn was rejected after a tool had already run.
+const faultAfterToolScript = `model: faux-1
+steps:
+  - tool_call:
+      name: bash
+      args: {command: "echo ran-before-the-fault"}
+      id: b1
+  - on_tool_result: b1
+    then:
+      - error: {status: 400, type: invalid_request_error, message: "rejected after the tool ran"}
+`
+
+// TestTUI_FaultCommitsAfterPrecedingToolCall: the error block used to land
+// ABOVE the bash block for the call that ran before it. The tool block goes
+// through the app's Update loop while the fault was committed straight to
+// the output queue, so the fault overtook it
+// (qa/findings *error-block-above-preceding-tool). Both now go through
+// Update, in order.
+func TestTUI_FaultCommitsAfterPrecedingToolCall(t *testing.T) {
+	proj, home, sessDir, addr, _ := tuiFixture(t, faultAfterToolScript)
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
+	waitReady(t, s)
+
+	s.Send("run it")
+	s.SendKey("enter")
+	if err := s.WaitFor(regexp.MustCompile(`rejected after the tool\s+ran`), 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WaitFor(turnSummaryPattern, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(append(append([]string(nil), s.Scrollback()...), s.Rows()...), "\n")
+	tool := strings.Index(joined, "ran-before-the-fault")
+	fault := strings.Index(joined, "Bad Request (400)")
+	if tool < 0 || fault < 0 || tool > fault {
+		t.Fatalf("want the bash block (at %d) above the error (at %d):\n%s", tool, fault, joined)
+	}
+}
+
+// TestTUI_PromptDigitDoesNotLeakIntoEditor: answering a permission prompt
+// with a digit must not also type that digit into the input box. A live
+// run ended with "› 2" in the editor right after "2" answered an
+// outside-workspace read prompt.
+func TestTUI_PromptDigitDoesNotLeakIntoEditor(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := "model: faux-1\nsteps:\n  - tool_call: {name: read, args: {path: \"" + outside + "\"}, id: r1}\n  - on_tool_result: r1\n    then:\n      - text: \"read it\"\n"
+	proj, home, sessDir, addr, _ := tuiFixture(t, script)
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr)
+	waitReady(t, s)
+	s.Send("read the outside file")
+	s.SendKey("enter")
+	if err := s.WaitFor("outside the workspace", 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	s.Send("2")
+	if err := s.WaitFor("read it", 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WaitFor(turnSummaryPattern, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range s.Rows() {
+		if strings.Contains(row, "›") && strings.Contains(row, "2") && !strings.Contains(row, "describe a task") {
+			t.Fatalf("the prompt's answer leaked into the editor: %q\n%s", row, strings.Join(s.Rows(), "\n"))
+		}
+	}
+}
+
+// TestTUI_BadModelRoleShowsAsNote: a model role that does not resolve is
+// reported inside the TUI, under the banner. It used to go to stderr before
+// the fullscreen TUI started, where it stayed hidden until exit.
+func TestTUI_BadModelRoleShowsAsNote(t *testing.T) {
+	proj, home, sessDir, addr, _ := tuiFixture(t, "model: faux-1\nsteps:\n  - text: \"ok\"\n")
+	writeModelRolesSettings(t, proj, map[string]string{"heavy": "faux/faux-9"})
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr)
+	waitReady(t, s)
+	if err := s.WaitFor(regexp.MustCompile(`Model role heavy: faux/faux-9 is not among the available models; subagents asking for it run on the current model\.`), 5*time.Second); err != nil {
+		t.Fatalf("no startup note for the bad role:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+}
+
+// TestPrint_BadModelRoleWarnsOnStderr: print mode has no TUI, so the same
+// warning still goes to stderr.
+func TestPrint_BadModelRoleWarnsOnStderr(t *testing.T) {
+	addr, _ := startFaux(t, "model: faux-1\nsteps:\n  - text: \"ok\"\n")
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeModelRolesSettings(t, proj, map[string]string{"heavy": "faux/faux-9"})
+	res := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "hi")
+	if !strings.Contains(res.Stderr, "kiln: Model role heavy: faux/faux-9") {
+		t.Errorf("stderr = %q, want the role warning", res.Stderr)
 	}
 }

@@ -16,8 +16,16 @@ const (
 	EventToolCallStart EventType = "toolcall_start"
 	EventToolCallDelta EventType = "toolcall_delta"
 	EventToolCallEnd   EventType = "toolcall_end"
-	EventDone          EventType = "done"
-	EventError         EventType = "error"
+	// EventProviderBlockStart/End bracket a provider-native block (e.g.
+	// Anthropic's server_tool_use / web_search_tool_result) that the
+	// harness carries as msg.ProviderBlock rather than as its own typed
+	// content. Start fires as soon as the block begins (so a UI can show a
+	// busy label while it runs); End fires once the block's final JSON is
+	// known, with Content carrying that JSON text.
+	EventProviderBlockStart EventType = "provider_block_start"
+	EventProviderBlockEnd   EventType = "provider_block_end"
+	EventDone               EventType = "done"
+	EventError              EventType = "error"
 )
 
 // StreamEvent is one item of an assistant response stream. It mirrors

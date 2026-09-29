@@ -3,16 +3,18 @@ package budget
 import "testing"
 
 func TestTierForWindow(t *testing.T) {
+	// ToolStrategy is posture-index at every window size: see
+	// StrategyForWindow. Only the tier NAME still steps with window size.
 	cases := []struct {
 		window       int
 		wantName     string
 		wantStrategy ToolStrategy
 	}{
 		{32_768, "small", StrategyPostureIndex},
-		{49_152, "medium", StrategyFullIndex},
-		{131_072, "medium", StrategyFullIndex},
-		{200_000, "large", StrategyFullSchemas},
-		{1_000_000, "large", StrategyFullSchemas},
+		{49_152, "medium", StrategyPostureIndex},
+		{131_072, "medium", StrategyPostureIndex},
+		{200_000, "large", StrategyPostureIndex},
+		{1_000_000, "large", StrategyPostureIndex},
 	}
 	for _, c := range cases {
 		tier := TierForWindow(c.window)
@@ -24,6 +26,21 @@ func TestTierForWindow(t *testing.T) {
 		}
 		if tier.ContextWindow != c.window {
 			t.Errorf("window %d: ContextWindow = %d", c.window, tier.ContextWindow)
+		}
+	}
+}
+
+// TestStrategyForWindowAlwaysPostureIndex is the regression for the trial
+// finding: a 1,000,000-token window (Opus 4.8-sized) must resolve to
+// posture-index, not full-schemas. Picking a strategy from the window's
+// affordable share rather than the real catalog put every tool's full JSON
+// schema into every request on a real config (165 MCP tools, 81 of them
+// Grafana): a 74,395-token cache write on the first turn and 3x the cost of
+// an equivalent tool_search-based session.
+func TestStrategyForWindowAlwaysPostureIndex(t *testing.T) {
+	for _, w := range []int{1, 4_096, 32_768, 131_072, 200_000, 1_000_000, 10_000_000} {
+		if got := StrategyForWindow(w); got != StrategyPostureIndex {
+			t.Errorf("StrategyForWindow(%d) = %q, want %q", w, got, StrategyPostureIndex)
 		}
 	}
 }
@@ -86,5 +103,28 @@ func TestRequireTierForWindowOK(t *testing.T) {
 	}
 	if tier.Name != "medium" {
 		t.Errorf("tier.Name = %q, want medium", tier.Name)
+	}
+}
+
+// Describe is what /usage, /doctor and /context print; every strategy has
+// words, and an unknown identifier falls back to itself.
+func TestToolStrategyDescribe(t *testing.T) {
+	for s, want := range map[ToolStrategy]string{
+		StrategyPostureIndex: "MCP index of this posture's servers, tools loaded on demand",
+		StrategyFullIndex:    "MCP index of every server, tools loaded on demand",
+		StrategyFullSchemas:  "every MCP tool loaded up front",
+		"custom":             "custom",
+	} {
+		if got := s.Describe(); got != want {
+			t.Errorf("%s.Describe() = %q, want %q", s, got, want)
+		}
+	}
+}
+
+func TestTierForMatchesTierForWindow(t *testing.T) {
+	for _, w := range []int{8_192, 32_768, 200_000} {
+		if got, want := TierFor(w), TierForWindow(w); got != want {
+			t.Errorf("TierFor(%d) = %+v, want %+v", w, got, want)
+		}
 	}
 }

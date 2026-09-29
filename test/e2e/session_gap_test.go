@@ -223,7 +223,7 @@ func TestSession_CrashMidToolThenResume(t *testing.T) {
 	env := baseEnv(home, sessDir, addr)
 
 	cmd := startHarnessBackground(t, proj, env,
-		"-p", "run a slow command", "--output-format", "text", "--permission-mode", "dontAsk")
+		"-p", "run a slow command", "--output-format", "text", "--permission-mode", "bypassPermissions")
 
 	deadline := time.Now().Add(10 * time.Second)
 	for len(srv.Requests()) < 1 {

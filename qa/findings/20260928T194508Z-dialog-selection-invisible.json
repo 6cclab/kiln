@@ -1,0 +1,27 @@
+{
+ "id": "20260928T194508Z-dialog-selection-invisible",
+ "found_at": "2026-09-28T19:45:08Z",
+ "scenario": "user-report",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Dialogs show no visible selection; /model does not close or confirm a pick",
+ "observed": "The selected row's raised background died at its first colour reset, covering only the first cell; colour mode had no gutter marker. /model applied a pick but stayed open with no confirmation, and its effort row was a static 'Medium' whose arrows did nothing",
+ "expected": "A › marker and a full-width highlight on the selected row in every dialog; a /model pick closes the dialog and leaves 'Model set to …'; ←/→ changes the session's real effort",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/theme.go",
+   "internal/tui/dialog.go",
+   "internal/tui/dialog_model.go",
+   "internal/tui/app.go",
+   "internal/commands/builtins.go",
+   "internal/harness/lane.go"
+  ],
+  "regression_test": "TestTUI_ModelPickShowsSelectionAndConfirms",
+  "updated_at": "2026-09-28T19:45:08Z"
+ }
+}

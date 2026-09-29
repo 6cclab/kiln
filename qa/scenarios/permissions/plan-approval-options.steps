@@ -36,4 +36,5 @@ KEY 2
 WAITFOR /Plan approved, proceeding/ 20
 SHOT plan-approved
 EXPECT_NOT /Ready to code\?/
+EXPECT_NOT /You may now make changes/
 EXPECT_NOT /panic|goroutine/

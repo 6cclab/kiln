@@ -333,3 +333,93 @@ func TestBridge_CommitCommandResult_NoElbowGlyph(t *testing.T) {
 		t.Fatalf("CommitCommandResult should record exactly one synthetic (for Ctrl+O replay), got %d", len(syn))
 	}
 }
+
+// TestBridge_UsageContextCountsCachedTokens: the context meter counts every
+// token the request carried. It summed only uncached input and output, so
+// once the conversation was served from the prompt cache (2 uncached input
+// tokens, 47k cache-read) the footer read 0%
+// (qa/findings *context-meter-ignores-cache).
+func TestBridge_UsageContextCountsCachedTokens(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	ts := &turnState{toolStarts: map[string]toolStart{}}
+
+	b.handleEvent(harness.Event{Type: harness.EventUsage, UsageRow: &msg.Usage{Input: 2, CacheRead: 47336, CacheWrite: 346, Output: 281}}, ts, 4000)
+
+	got, ok := waitForOneSent(t, f).(MsgUsage)
+	if !ok || got.ContextUsed == nil {
+		t.Fatalf("sent %#v, want MsgUsage with ContextUsed", got)
+	}
+	if want := 2 + 47336 + 346 + 281; *got.ContextUsed != want {
+		t.Errorf("ContextUsed = %d, want %d (cached tokens are in context too)", *got.ContextUsed, want)
+	}
+	// The busy line reads the same figure; it showed "30 tokens" six
+	// minutes into a cached session (qa/findings *busy-line-token-figure).
+	if got.Tokens == nil || *got.Tokens != *got.ContextUsed {
+		t.Errorf("Tokens = %v, want the context figure %d", got.Tokens, *got.ContextUsed)
+	}
+	if ts.lastContext != *got.ContextUsed {
+		t.Errorf("lastContext = %d, want %d so streaming grows from it", ts.lastContext, *got.ContextUsed)
+	}
+}
+
+// TestBusyLabel_MultiLineBashStaysOneLine: a multi-line command put its
+// newline into the busy label, breaking the row and starting the rest at
+// column 0 (qa/findings *busy-line-multiline-command).
+func TestBusyLabel_MultiLineBashStaysOneLine(t *testing.T) {
+	label := busyLabelForToolStart(nil, harness.Event{ToolName: "bash", ToolArgs: map[string]any{
+		"command": "H='http://localhost:8080'\ncurl -s $H/api/tasks",
+	}})
+	if strings.ContainsAny(label, "\n\r\t") {
+		t.Fatalf("busy label %q contains a line break or tab", label)
+	}
+	if !strings.HasPrefix(label, "Running H='http://localhost:8080' curl") {
+		t.Errorf("busy label = %q, want the command joined onto one line", label)
+	}
+}
+
+// TestSkipLeadingCd: the busy line names the command, not the directory a
+// leading cd moves to (qa/findings *busy-line-shows-cd-path).
+func TestSkipLeadingCd(t *testing.T) {
+	cases := map[string]string{
+		"cd /a/b/c && npm run build":          "npm run build",
+		"cd '/a b' && cd api; go test ./...":  "go test ./...",
+		"go test ./...":                       "go test ./...",
+		"cd /a/b":                             "cd /a/b",
+		"cd /a && ":                           "cd /a && ",
+		"cdx /a && ls":                        "cdx /a && ls",
+		"cd api && go vet ./... && go test .": "go vet ./... && go test .",
+	}
+	for in, want := range cases {
+		if got := skipLeadingCd(in); got != want {
+			t.Errorf("skipLeadingCd(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestHookNotice_RewriteStaysOutOfTranscript: a hook's input rewrite is
+// logged, not committed; a hook's own message still is.
+func TestHookNotice_RewriteStaysOutOfTranscript(t *testing.T) {
+	b := NewBridge(t.TempDir())
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	b.HookNotice("rewrote bash: rtk go build ./...")
+	time.Sleep(20 * time.Millisecond)
+	if printed, sent := f.snapshot(); len(printed)+len(sent) != 0 {
+		t.Fatalf("rewrite notice committed: printed=%v sent=%v", printed, sent)
+	}
+	b.HookNotice("lint hook: 2 warnings")
+	deadline := time.Now().Add(time.Second)
+	for {
+		if printed, sent := f.snapshot(); len(printed)+len(sent) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a hook's own message was not committed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

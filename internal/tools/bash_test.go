@@ -3,8 +3,11 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"math"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
@@ -159,5 +162,49 @@ func TestBashToolInvalidTimeout(t *testing.T) {
 	result := execTool(t, bt, map[string]any{"command": "echo hi", "timeout": -1})
 	if !result.IsError {
 		t.Fatal("expected IsError for invalid timeout")
+	}
+}
+
+// TestBashTimeout: no timeout argument still bounds the command (a
+// foreground server otherwise stalls the session), and a huge one is
+// capped rather than overflowing into "no timeout".
+func TestBashTimeout(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	cases := []struct {
+		in   *float64
+		want time.Duration
+		ok   bool
+	}{
+		{nil, bashDefaultTimeout, true},
+		{f(5), 5 * time.Second, true},
+		{f(1e20), bashMaxTimeout, true},
+		{f(0), 0, false},
+		{f(-1), 0, false},
+		{f(math.NaN()), 0, false},
+	}
+	for _, c := range cases {
+		got, ok := bashTimeout(c.in)
+		if got != c.want || ok != c.ok {
+			t.Errorf("bashTimeout(%v) = %s, %v; want %s, %v", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// TestBashToolNamesLeftoverJobGroup: a command that leaves a job running
+// says so, with the exact command that stops it. Without a handle, a model
+// cleaned up its server with pkill -f "go run", which kills any other
+// "go run" on the machine too.
+func TestBashToolNamesLeftoverJobGroup(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	bt := BashTool(env)
+	t.Cleanup(execenv.KillLeftoverJobs)
+	result := execTool(t, bt, map[string]any{"command": "sleep 30 & echo $! > pid"})
+	m := regexp.MustCompile(`kill -- -(\d+)`).FindStringSubmatch(resultText(result))
+	if m == nil {
+		t.Fatalf("no stop command in result: %q", resultText(result))
+	}
+	stop := execTool(t, bt, map[string]any{"command": "kill -- -" + m[1] + `; sleep 0.2; kill -0 "$(cat pid)" 2>/dev/null && echo alive || echo gone`})
+	if got := strings.TrimSpace(resultText(stop)); got != "gone" {
+		t.Fatalf("after the named kill the job is %q, want gone", got)
 	}
 }

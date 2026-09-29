@@ -116,7 +116,7 @@ func TestSubagentsPanel_DoneRowShowsTokens(t *testing.T) {
 
 	rows := p.Render(100)
 	joined := strings.Join(rows, "\n")
-	if !strings.Contains(rows[1], "1 subagents finished") {
+	if !strings.Contains(rows[1], "1 subagent finished") {
 		t.Fatalf("header did not move the row to done: %q", rows[1])
 	}
 	if !strings.Contains(rows[0], "1/1 done") {
@@ -136,7 +136,7 @@ func TestSubagentsPanel_ErrorRowShowsMessage(t *testing.T) {
 
 	rows := p.Render(100)
 	joined := strings.Join(rows, "\n")
-	if !strings.Contains(rows[1], "1 subagents finished") {
+	if !strings.Contains(rows[1], "1 subagent finished") {
 		t.Fatalf("header did not move the errored row out of live: %q", rows[1])
 	}
 	if !strings.Contains(rows[0], "1/1 done") {

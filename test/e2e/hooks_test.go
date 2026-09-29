@@ -188,7 +188,7 @@ func TestHooks_PreToolUse_Rewrites(t *testing.T) {
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "run a command",
 		"--output-format", "text",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)

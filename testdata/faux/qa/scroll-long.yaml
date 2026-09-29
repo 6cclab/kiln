@@ -27,5 +27,5 @@ steps:
       Paragraph eight is the last stretch of padding before the reply
       wraps up, restating that none of this is meant to be read for
       content, only for length, so the scenario has real scrollback to
-      scroll through.\n\nSCROLL-BOTTOM-MARKER closes the reply."
+      scroll through.\n\nParagraph nine exists so the reply outgrows a 40-row window even with the banner's kiln art above it, which pushed the old ending back on screen.\n\nParagraph ten repeats the point about the flag: the limiter logged would-be rejections for a week before anyone let it reject a real request.\n\nParagraph eleven covers the config value again, because the threshold ended up differing per route and the single constant would never have held.\n\nParagraph twelve covers the dashboard again, and the alert that fires when one client dominates the rejections for a route.\n\nParagraph thirteen is more padding, still not meant to be read, only to make the transcript taller than any screen the scenarios use.\n\nParagraph fourteen is the final stretch before the closing marker.\n\nSCROLL-BOTTOM-MARKER closes the reply."
     usage: {input: 40, output: 320}

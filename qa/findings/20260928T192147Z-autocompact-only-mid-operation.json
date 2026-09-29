@@ -1,0 +1,22 @@
+{
+ "id": "20260928T192147Z-autocompact-only-mid-operation",
+ "found_at": "2026-09-28T19:21:47Z",
+ "scenario": "unit/TestAutoCompactionOnTinyWindow",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Auto-compaction never ran before a new prompt",
+ "observed": "autoCompact ran only between tool steps; a conversation whose turns end in text never compacted however full; the unit test passed only because an empty summary still wrote an entry",
+ "expected": "Compaction is checked before each operation's first request too",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/turn.go"
+  ],
+  "regression_test": "TestAutoCompactionOnTinyWindow",
+  "updated_at": "2026-09-28T19:21:47Z"
+ }
+}

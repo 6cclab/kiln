@@ -171,7 +171,7 @@ func TestSubagent_RoleRoutingKinds(t *testing.T) {
 		res, log := subagentRunLog(t, proj, env,
 			"-p", "dispatch a fast task",
 			"--output-format", "stream-json",
-			"--permission-mode", "dontAsk",
+			"--permission-mode", "bypassPermissions",
 		)
 		if res.Code != 0 {
 			t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -225,7 +225,7 @@ func TestSubagent_RoleRoutingKinds(t *testing.T) {
 		res, log := subagentRunLog(t, proj, env,
 			"-p", "dispatch an inherited task",
 			"--output-format", "stream-json",
-			"--permission-mode", "dontAsk",
+			"--permission-mode", "bypassPermissions",
 		)
 		if res.Code != 0 {
 			t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -251,7 +251,7 @@ func TestSubagent_RoleRoutingKinds(t *testing.T) {
 		res, log := subagentRunLog(t, proj, env,
 			"-p", "dispatch to sonnetagent",
 			"--output-format", "stream-json",
-			"--permission-mode", "dontAsk",
+			"--permission-mode", "bypassPermissions",
 		)
 		if res.Code != 0 {
 			t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -280,7 +280,7 @@ func TestSubagent_RoleRoutingKinds(t *testing.T) {
 		res, log := subagentRunLog(t, proj, env,
 			"-p", "dispatch to sonnetagent",
 			"--output-format", "stream-json",
-			"--permission-mode", "dontAsk",
+			"--permission-mode", "bypassPermissions",
 		)
 		if res.Code != 0 {
 			t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -325,7 +325,7 @@ func TestSubagent_ToolAllowlist(t *testing.T) {
 	res := runHarness(t, proj, env,
 		"-p", "dispatch to reader",
 		"--output-format", "stream-json",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -402,7 +402,7 @@ func TestSubagent_ContextIsolation(t *testing.T) {
 	res := runHarness(t, proj, env,
 		"-p", "dispatch an isolated task",
 		"--output-format", "stream-json",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -457,7 +457,7 @@ func TestSubagent_ContextIsolation_FilterSensitivity(t *testing.T) {
 	res := runHarness(t, proj, env,
 		"-p", "dispatch an isolated task",
 		"--output-format", "stream-json",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -509,7 +509,7 @@ func TestSubagent_RoleFallbackWarnsInLog(t *testing.T) {
 	res, log := subagentRunLog(t, proj, env,
 		"-p", "dispatch with an unresolvable role",
 		"--output-format", "stream-json",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
@@ -571,7 +571,7 @@ func TestTUI_RecentSessions_ExcludesSubagents(t *testing.T) {
 	// "excluded" apart from "coincidentally not shown".
 	const subagentPrompt = "find X"
 
-	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "dontAsk")
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 	s.Send(mainPrompt)
 	s.SendKey("enter")

@@ -1,0 +1,24 @@
+{
+ "id": "20260928T192147Z-edit-named-update",
+ "found_at": "2026-09-28T19:21:47Z",
+ "scenario": "real/ext-hooks",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "A refused edit is labelled 'update', a successful one 'edit'",
+ "observed": "blocked Edit renders as a red 'update' block; successful edits as 'edit'",
+ "expected": "One name: edit",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-ext-hooks-140x45/04-protected-edit-attempt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestMapToolNameKeepsEditAsEdit",
+  "updated_at": "2026-09-28T19:21:47Z"
+ }
+}

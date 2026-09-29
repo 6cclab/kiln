@@ -1,0 +1,24 @@
+{
+ "id": "20260928T192147Z-scripted-decline-reply",
+ "found_at": "2026-09-28T19:21:47Z",
+ "scenario": "real/wf-manual-permissions",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "A scripted 'Okay, I won't run it' reply appears in kiln's name after a decline",
+ "observed": "After declining an edit with feedback: 'kiln: Okay, I won't run it. What should I do instead?' committed before the edit block and before the model's real reply",
+ "expected": "Only the Declined note; the model answers for itself",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T190813/iterm-dark/real-wf-manual-permissions-140x45/04-waitfor-timeout-line17.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestDeclinedPrompt_CommitsNoteButNoScriptedReply",
+  "updated_at": "2026-09-28T19:21:47Z"
+ }
+}

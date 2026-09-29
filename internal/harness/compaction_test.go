@@ -84,6 +84,8 @@ steps:
     then:
       - text: "final"
   - text: "compaction summary"
+  - text: "second reply"
+  - text: "second compaction summary"
 `, []string{"bash"})
 	// ReserveTokens close to the faux model's ContextWindow (128000, pi-ai's
 	// fauxProvider default, see internal/provider/faux) so ShouldCompact
@@ -92,8 +94,12 @@ steps:
 	rig.H.SetCompactionSettings(compaction.Settings{Enabled: true, ReserveTokens: 127992, KeepRecentTokens: 1})
 	lane := rig.mustLane("main")
 
-	if _, err := lane.Prompt(context.Background(), "go", nil); err != nil {
-		t.Fatalf("Prompt: %v", err)
+	// Two turns: the first is history the second's compaction can
+	// summarise (a single turn is all "recent" and kept verbatim).
+	for _, p := range []string{"go", "again"} {
+		if _, err := lane.Prompt(context.Background(), p, nil); err != nil {
+			t.Fatalf("Prompt %q: %v", p, err)
+		}
 	}
 
 	entries, err := lane.FindEntries(context.Background())

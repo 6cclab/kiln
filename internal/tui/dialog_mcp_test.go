@@ -56,7 +56,7 @@ func TestDialogMCP_MatchesReferenceStructure(t *testing.T) {
 		"  \u2715 proxmox",
 		"",
 		"Run kiln --debug to see error logs",
-		"kiln doctor for details",
+		"Run kiln doctor for details",
 		"\u2191/\u2193 to navigate \u00b7 Enter to confirm \u00b7 Esc to cancel",
 	}
 

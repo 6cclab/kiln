@@ -2,20 +2,21 @@
 # returns immediately with an id; /bashes (internal/commands/inline.go,
 # rendered by agent.RenderShellList) lists it and its running status.
 @faux testdata/faux/qa/tools-background-shell.yaml
-@args --permission-mode dontAsk
+@args --permission-mode bypassPermissions
 
 WAITFOR /describe a task/ 20
 TYPE start a background sleep
 KEY enter
-WAITFOR /Started bash_1/ 20
+WAITFOR /running in the background as bash_1/ 20
 SHOT dispatched
-EXPECT /Started bash_1: sleep 30/
+EXPECT /bash background ─[\s\S]*sleep 30[\s\S]*running in the background as bash_1 · \/bashes to check on it/
+EXPECT_NOT /bash_output\(/
 EXPECT /Started it in the background/
 TYPE /bashes
 KEY enter
-WAITFOR /shell\(s\)/ 20
+WAITFOR /shells?,/ 20
 SHOT bashes-list
-EXPECT /1 shell\(s\), 1 running/
+EXPECT /1 shell, 1 running/
 EXPECT /bash_1\s+running/
 EXPECT /sleep 30/
 EXPECT_NOT /panic|goroutine/

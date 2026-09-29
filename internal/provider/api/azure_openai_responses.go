@@ -358,6 +358,9 @@ func buildAzureTools(model provider.Model, opts provider.StreamOptions) []azureT
 	supportsStrictGate := boolDefault(compat.SupportsStrictMode, true)
 	out := make([]azureToolWire, 0, len(opts.Tools))
 	for _, td := range opts.Tools {
+		if len(td.ServerTool) > 0 {
+			continue
+		}
 		schema := td.Parameters
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)

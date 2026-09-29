@@ -195,11 +195,16 @@ func (s *Server) respondAnthropicJSON(w http.ResponseWriter, model, msgID string
 				"name":  c.toolCall.Name,
 				"input": input,
 			})
+		case c.rawBlock != nil:
+			content = append(content, c.rawBlock)
 		}
 	}
 	stopReason := "end_turn"
 	if t.hasToolCall() {
 		stopReason = "tool_use"
+	}
+	if o := t.stopReasonOverride(); o != "" {
+		stopReason = o
 	}
 	usage := resolveUsage(t.lastUsage())
 
@@ -402,12 +407,49 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, model, msgID string, t t
 			}
 			sw.send("content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
 			index++
+
+		case c.rawBlock != nil:
+			blockType, _ := c.rawBlock["type"].(string)
+			if blockType == "server_tool_use" {
+				input, hasInput := c.rawBlock["input"]
+				start := map[string]any{}
+				for k, v := range c.rawBlock {
+					if k != "input" {
+						start[k] = v
+					}
+				}
+				start["input"] = map[string]any{}
+				sw.send("content_block_start", map[string]any{
+					"type": "content_block_start", "index": index, "content_block": start,
+				})
+				if hasInput {
+					inputJSON, _ := json.Marshal(input)
+					for _, chunk := range chunkString(string(inputJSON), chunkSize) {
+						sw.send("content_block_delta", map[string]any{
+							"type": "content_block_delta", "index": index,
+							"delta": map[string]any{"type": "input_json_delta", "partial_json": chunk},
+						})
+					}
+				}
+			} else {
+				// Complete blocks (e.g. web_search_tool_result) send their
+				// whole content in content_block_start, with no deltas,
+				// matching the real API.
+				sw.send("content_block_start", map[string]any{
+					"type": "content_block_start", "index": index, "content_block": c.rawBlock,
+				})
+			}
+			sw.send("content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
+			index++
 		}
 	}
 
 	stopReason := "end_turn"
 	if t.hasToolCall() {
 		stopReason = "tool_use"
+	}
+	if o := t.stopReasonOverride(); o != "" {
+		stopReason = o
 	}
 	sw.send("message_delta", map[string]any{
 		"type": "message_delta",

@@ -14,6 +14,7 @@ import (
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
+	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/provider"
 )
@@ -34,17 +35,44 @@ var residentAll = []string{
 	"task",
 	"bash_background",
 	"bash_output",
+	"web_fetch",
 	"kill_shell",
+	"skill",
+	"web_search",
 }
 
 // residentToolNames filters residentAll down to what this run actually
-// has: everything, except "session_search" when hasSessionSearch is false
+// has: "session_search" drops when hasSessionSearch is false
 // (internal/search failed to open — see chat.go's own comment on that
-// check).
-func residentToolNames(hasSessionSearch bool) []string {
+// check); "web_search" drops when webSearchAllowed is false (a permission
+// deny rule matched "WebSearch" — see chat.go's construction of that
+// bool). Dropping it here, from the resident/active list, is what keeps it
+// from ever being declared to Anthropic for this session: the tool is
+// still registered in the tool set (defensive Execute), just never
+// offered.
+// webSearchAllowed reports whether the resolved permission deny list
+// blocks declaring web_search: true unless a deny rule matches Claude
+// Code's name for it, "WebSearch" (case-insensitively, the same as any
+// other bare-tool-name deny rule -- see settings.MatchesRule). A deny rule
+// is the only thing checked here: plan mode is fine with the tool declared
+// since it is read-only, and settings.Decide's other mode branches are not
+// consulted for declaration, only for whether a call may execute.
+func webSearchAllowed(perms claudesettings.Permissions) bool {
+	for _, r := range perms.Deny {
+		if claudesettings.MatchesRule(r, "WebSearch", "") {
+			return false
+		}
+	}
+	return true
+}
+
+func residentToolNames(hasSessionSearch, webSearchAllowed bool) []string {
 	out := make([]string, 0, len(residentAll))
 	for _, name := range residentAll {
 		if name == "session_search" && !hasSessionSearch {
+			continue
+		}
+		if name == "web_search" && !webSearchAllowed {
 			continue
 		}
 		out = append(out, name)
@@ -123,6 +151,10 @@ type mcpSession struct {
 	// same as cli.ts's `session` variable, captured by closure before it is
 	// assigned.
 	lane laneSetter
+	// rebuild regenerates what is built from the posture — tool_search's
+	// scope and gate state, and the server index in the system prompt —
+	// after a /posture switch. Nil until the session wires it.
+	rebuild func()
 }
 
 // laneSetter is the minimal surface mcpSession.regate needs from
@@ -205,5 +237,12 @@ func switchPosture(mcpSess *mcpSession, name string) error {
 	}
 	mcpSess.posture = p
 	mcpSess.state = mcpgate.NewGateState()
+	// tool_search and the prompt's server index were built for the old
+	// posture and hold the old gate state: without a rebuild, a search
+	// after the switch saw the old posture's servers and admitted tools
+	// into a state nothing read.
+	if mcpSess.rebuild != nil {
+		mcpSess.rebuild()
+	}
 	return mcpSess.regate()
 }

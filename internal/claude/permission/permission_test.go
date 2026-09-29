@@ -221,7 +221,7 @@ func TestConcurrentCheckPromptsOnce(t *testing.T) {
 		return PromptChoice{Kind: PromptAllowAlways}, nil
 	})
 
-	req := Request{ToolName: "bash", PrimaryArg: "echo hi", Args: map[string]any{}}
+	req := Request{ToolName: "bash", PrimaryArg: "touch made.txt", Args: map[string]any{}}
 
 	var wg sync.WaitGroup
 	results := make([]*BlockResult, 2)
@@ -260,4 +260,145 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})()
+}
+
+// TestGateBashDontAskGrantsThePrefixItNames: "Yes, and don't ask again for:
+// npm test *" used to grant only the exact command string, so the next
+// "npm test -- other" asked again despite the label. It now grants the
+// named prefix, judged per segment, so it never covers a command it did
+// not name (qa/findings *bash-dont-ask-grants-exact-command).
+func TestGateBashDontAskGrantsThePrefixItNames(t *testing.T) {
+	g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{work(t)}})
+	var asked []string
+	g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) {
+		asked = append(asked, req.PrimaryArg)
+		if len(asked) == 1 {
+			return PromptChoice{Kind: PromptAllowAlways}, nil
+		}
+		return PromptChoice{Kind: PromptDeny}, nil
+	})
+	ctx := context.Background()
+	check := func(cmd string) bool {
+		r, err := g.Check(ctx, Request{ToolName: "bash", PrimaryArg: cmd})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r == nil
+	}
+	if !check("cd api && npm test -- upload") {
+		t.Fatal("first call: allow-always should approve it")
+	}
+	if !check("npm test -- download") || len(asked) != 1 {
+		t.Errorf("same prefix should be approved without asking; asked=%q", asked)
+	}
+	if check("npm test && rm -rf build") || len(asked) != 2 {
+		t.Errorf("a line with an unnamed command must still ask; asked=%q", asked)
+	}
+}
+
+// TestReadOnlyBashInWorkspaceDoesNotAsk: in the modes that ask about bash,
+// a command that only reads, and only inside the workspace, runs without a
+// prompt; one that reads outside it, writes, or is named by an ask rule
+// still asks.
+func TestReadOnlyBashInWorkspaceDoesNotAsk(t *testing.T) {
+	root := work(t)
+	for _, mode := range []settings.PermissionMode{settings.ModeManual, settings.ModeAcceptEdits} {
+		g := NewGate(GateOptions{Mode: mode, Roots: []string{root}})
+		asked := 0
+		g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) {
+			asked++
+			return PromptChoice{Kind: PromptAllow}, nil
+		})
+		cases := []struct {
+			cmd  string
+			asks bool
+		}{
+			{"cat app.py | head -5; ls -la app.py 2>/dev/null", false},
+			{"cat " + filepath.Join(root, "app.py"), false},
+			{"cd " + root + " && git log --oneline -3", false},
+			{"cat /etc/passwd", true},
+			{"cat ../secrets.txt", true},
+			{"cd /tmp && ls", true},
+			{"ls ~/.ssh", true},
+			{"touch x", true},
+			{"cat app.py > copy.py", true},
+		}
+		for _, c := range cases {
+			asked = 0
+			_, outcome, err := g.CheckWithOutcome(context.Background(), Request{ToolName: "bash", PrimaryArg: c.cmd, Args: map[string]any{"command": c.cmd}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := asked > 0; got != c.asks {
+				t.Errorf("%s: %q asked=%v, want %v (outcome %v)", mode, c.cmd, got, c.asks, outcome)
+			}
+		}
+	}
+
+	g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{root}, Permissions: settings.Permissions{Ask: []string{"Bash(git log:*)"}}})
+	asked := 0
+	g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) {
+		asked++
+		return PromptChoice{Kind: PromptAllow}, nil
+	})
+	g.CheckWithOutcome(context.Background(), Request{ToolName: "bash", PrimaryArg: "git log -3", Args: map[string]any{}})
+	if asked != 1 {
+		t.Errorf("an ask rule for git log was overridden by the read-only allowance")
+	}
+}
+
+func TestGrantRuleUsesClaudeCodeSyntax(t *testing.T) {
+	for key, want := range map[string]string{
+		"bash::npm test":         "Bash(npm test)",
+		"web_fetch::example.com": "WebFetch(example.com)",
+		"edit::src/a.go":         "Edit(src/a.go)",
+		"mcp__grafana__query::":  "mcp__grafana__query",
+	} {
+		if got := grantRule(key); got != want {
+			t.Errorf("grantRule(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// TestDontAskDeniesWhatWouldPrompt: Claude Code's dontAsk mode never
+// prompts. What runs without asking in manual mode still runs, allow rules
+// still apply, and everything that would have prompted is refused. kiln
+// once treated dontAsk as a blanket allow.
+func TestDontAskDeniesWhatWouldPrompt(t *testing.T) {
+	ctx := context.Background()
+	root := work(t)
+	g := NewGate(GateOptions{
+		Mode:        settings.ModeDontAsk,
+		Roots:       []string{root},
+		Permissions: settings.Permissions{Allow: []string{"Bash(npm test)"}, Ask: []string{"Bash(git push:*)"}},
+	})
+	prompted := false
+	g.SetPrompter(func(ctx context.Context, req Request) (PromptChoice, error) {
+		prompted = true
+		return PromptChoice{Kind: PromptAllow}, nil
+	})
+	cases := []struct {
+		name    string
+		req     Request
+		allowed bool
+	}{
+		{"read-only tool runs", Request{ToolName: "read", PrimaryArg: filepath.Join(root, "a.go"), Args: map[string]any{"path": filepath.Join(root, "a.go")}}, true},
+		{"read-only bash runs", Request{ToolName: "bash", PrimaryArg: "ls", Args: map[string]any{"command": "ls"}}, true},
+		{"allow rule runs", Request{ToolName: "bash", PrimaryArg: "npm test", Args: map[string]any{"command": "npm test"}}, true},
+		{"other bash is refused", Request{ToolName: "bash", PrimaryArg: "rm -rf build", Args: map[string]any{"command": "rm -rf build"}}, false},
+		{"an edit is refused", Request{ToolName: "edit", PrimaryArg: filepath.Join(root, "a.go"), Args: map[string]any{"path": filepath.Join(root, "a.go")}}, false},
+		{"an ask rule is refused, not asked", Request{ToolName: "bash", PrimaryArg: "git push origin", Args: map[string]any{"command": "git push origin"}}, false},
+	}
+	for _, c := range cases {
+		blocked, err := g.Check(ctx, c.req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (blocked == nil) != c.allowed {
+			t.Errorf("%s: blocked=%v, want allowed=%v", c.name, blocked, c.allowed)
+		}
+	}
+	if prompted {
+		t.Error("dontAsk mode prompted")
+	}
 }

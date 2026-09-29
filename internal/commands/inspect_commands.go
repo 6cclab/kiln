@@ -9,6 +9,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/agents"
 	"github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // ServerStatus is one MCP server's connection outcome. It stands in for a
@@ -17,11 +18,17 @@ import (
 // mcp.ServerStatus onto this shape when wiring InspectDeps.MCPStatuses --
 // see doc.go and the phase report for this deviation.
 type ServerStatus struct {
-	Name      string
-	OK        bool
-	ToolCount int
-	Ms        int64
-	Error     string
+	Name string
+	// Scope is where the server is configured: user, local, project or
+	// flag (--mcp-config); "" when unknown.
+	Scope string
+	// Connecting is true while the server's first connect attempt is still
+	// running; OK and Error are unset until it finishes.
+	Connecting bool
+	OK         bool
+	ToolCount  int
+	Ms         int64
+	Error      string
 	// Detail is the failure's full underlying text (mcp.ServerStatus.Detail),
 	// shown dim in /mcp's per-server detail view. Empty unless the
 	// integrator's mcpStatusesOf adapter (internal/cli/commands.go) maps
@@ -37,15 +44,6 @@ type InspectGate interface {
 	Permissions() settings.Permissions
 	SessionGrants() []string
 	Roots() []string
-}
-
-// defaultUnfiredHookEvents are the events the harness parses but does not
-// yet fire. Saying so beats implying otherwise.
-var defaultUnfiredHookEvents = map[hooks.Event]bool{
-	hooks.Stop:         true,
-	hooks.SubagentStop: true,
-	hooks.Notification: true,
-	hooks.PreCompact:   true,
 }
 
 // hookEventOrder is the fixed display order for /hooks and /doctor's count.
@@ -66,12 +64,10 @@ type InspectDeps struct {
 	MCPStatuses func() []ServerStatus
 	Gate        InspectGate
 	Hooks       hooks.Config
-	// UnfiredEvents overrides defaultUnfiredHookEvents when non-nil.
-	UnfiredEvents map[hooks.Event]bool
-	Agents        []agents.Definition
-	Tier          budget.Tier
-	Cwd           string
-	ModelLabel    string
+	Agents      []agents.Definition
+	Tier        budget.Tier
+	Cwd         string
+	ModelLabel  string
 	// ActiveTools returns the resident tool names, for /doctor's summary.
 	ActiveTools        func() ([]string, error)
 	SettingsLoadedFrom []string
@@ -108,11 +104,6 @@ func hookCount(cfg hooks.Config) (total int, eventsUsed int) {
 // integrator also registers ManageCommands, its versions of the same
 // names (which additionally open a panel) are registered later and win.
 func InspectCommands(deps InspectDeps) Source {
-	unfired := deps.UnfiredEvents
-	if unfired == nil {
-		unfired = defaultUnfiredHookEvents
-	}
-
 	cmds := []Command{
 		{
 			Name:        "mcp",
@@ -125,13 +116,16 @@ func InspectCommands(deps InspectDeps) Source {
 				if len(statuses) == 0 {
 					return Result{Output: []string{"No MCP servers configured. They are read from ~/.claude.json"}}, nil
 				}
-				var ok, failed []ServerStatus
+				var ok, failed, connecting []ServerStatus
 				tools := 0
 				for _, s := range statuses {
-					if s.OK {
+					switch {
+					case s.Connecting:
+						connecting = append(connecting, s)
+					case s.OK:
 						ok = append(ok, s)
 						tools += s.ToolCount
-					} else {
+					default:
 						failed = append(failed, s)
 					}
 				}
@@ -141,6 +135,9 @@ func InspectCommands(deps InspectDeps) Source {
 				}
 				for _, s := range failed {
 					lines = append(lines, fmt.Sprintf("  %-22s failed: %s", s.Name, truncate(orDefault(s.Error, "unknown"), 90)))
+				}
+				for _, s := range connecting {
+					lines = append(lines, fmt.Sprintf("  %-22s connecting…", s.Name))
 				}
 				return Result{Output: lines}, nil
 			},
@@ -198,11 +195,7 @@ func InspectCommands(deps InspectDeps) Source {
 				}
 				var lines []string
 				for _, event := range configured {
-					note := ""
-					if unfired[event] {
-						note = "  (parsed, not yet fired by this harness)"
-					}
-					lines = append(lines, fmt.Sprintf("%s%s", event, note))
+					lines = append(lines, string(event))
 					for _, group := range deps.Hooks[event] {
 						matcher := ""
 						if group.MatcherPattern != "" {
@@ -230,7 +223,7 @@ func InspectCommands(deps InspectDeps) Source {
 			Run: func(ctx context.Context, args string) (Result, error) {
 				lines := []string{
 					fmt.Sprintf("model      %s", deps.ModelLabel),
-					fmt.Sprintf("tier       %s (%d tokens)", deps.Tier.Name, deps.Tier.ContextWindow),
+					"tier       " + TierSummary(deps.Tier),
 				}
 
 				var active []string
@@ -241,22 +234,32 @@ func InspectCommands(deps InspectDeps) Source {
 						return Result{}, err
 					}
 				}
-				lines = append(lines, fmt.Sprintf(`tools      %d resident, strategy "%s"`, len(active), deps.Tier.ToolStrategy))
+				lines = append(lines, "tools      "+ToolsSummary(len(active), deps.Tier))
 
 				var statuses []ServerStatus
 				if deps.MCPStatuses != nil {
 					statuses = deps.MCPStatuses()
 				}
 				var failed []ServerStatus
+				connected, connecting := 0, 0
 				for _, s := range statuses {
-					if !s.OK {
+					switch {
+					case s.Connecting:
+						connecting++
+					case s.OK:
+						connected++
+					default:
 						failed = append(failed, s)
 					}
 				}
-				lines = append(lines, fmt.Sprintf("mcp        %d/%d connected", len(statuses)-len(failed), len(statuses)))
+				mcpLine := fmt.Sprintf("mcp        %d/%d connected", connected, len(statuses))
+				if connecting > 0 {
+					mcpLine += fmt.Sprintf(", %d connecting", connecting)
+				}
+				lines = append(lines, mcpLine)
 
 				total, eventsUsed := hookCount(deps.Hooks)
-				lines = append(lines, fmt.Sprintf("hooks      %d across %d events", total, eventsUsed))
+				lines = append(lines, "hooks      "+HooksSummary(total, eventsUsed))
 				lines = append(lines, fmt.Sprintf("agents     %d available", len(deps.Agents)))
 				lines = append(lines, fmt.Sprintf("settings   %s", joinOrNone(deps.SettingsLoadedFrom)))
 
@@ -265,7 +268,7 @@ func InspectCommands(deps InspectDeps) Source {
 					problems = append(problems, fmt.Sprintf(`mcp "%s" is down: %s`, s.Name, truncate(orDefault(s.Error, "unknown"), 100)))
 				}
 				if len(active) == 0 {
-					problems = append(problems, "no tools are resident - the model cannot act")
+					problems = append(problems, "no tools are available: the model cannot act")
 				}
 				if deps.Gate != nil && deps.Gate.Mode() == settings.ModeBypassPermissions {
 					problems = append(problems, "permission mode is bypassPermissions: every tool call runs unchecked")
@@ -275,7 +278,7 @@ func InspectCommands(deps InspectDeps) Source {
 				if len(problems) == 0 {
 					lines = append(lines, "No problems found.")
 				} else {
-					lines = append(lines, fmt.Sprintf("%d problem(s):", len(problems)))
+					lines = append(lines, plural.Count(len(problems), "problem")+":")
 				}
 				for _, p := range problems {
 					lines = append(lines, "  - "+p)
@@ -300,4 +303,22 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// TierSummary, ToolsSummary and HooksSummary are the doctor report's rows,
+// shared by /doctor, `kiln doctor` and the /config dialog so their wording
+// cannot drift apart.
+func TierSummary(t budget.Tier) string {
+	return fmt.Sprintf("%s · %s window", t.Name, formatTokens(t.ContextWindow))
+}
+
+func ToolsSummary(available int, t budget.Tier) string {
+	return fmt.Sprintf("%s always available · %s", plural.Count(available, "tool"), t.ToolStrategy.Describe())
+}
+
+func HooksSummary(hooks, events int) string {
+	if hooks == 0 {
+		return "none"
+	}
+	return plural.Count(hooks, "hook") + " on " + plural.Count(events, "event")
 }

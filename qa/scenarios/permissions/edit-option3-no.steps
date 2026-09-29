@@ -11,7 +11,7 @@ SHOT edit-prompt
 KEY 3
 WAITFOR /Declined/ 20
 SHOT edit-declined
-EXPECT /✕ Declined Update .*auth\.ts/
-EXPECT /Okay, I won.t run it\. What should I do instead\?/
+EXPECT /✕ Declined Edit .*auth\.ts/
+EXPECT_NOT /the user declined/
 EXPECT_NOT /approval needed/
 EXPECT_NOT /panic|goroutine/

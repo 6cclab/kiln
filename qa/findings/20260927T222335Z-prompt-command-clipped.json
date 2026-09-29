@@ -1,0 +1,27 @@
+{
+ "id": "20260927T222335Z-prompt-command-clipped",
+ "found_at": "2026-09-27T22:23:35Z",
+ "scenario": "real Opus 4.8 sessions (CRUD trial, workload 2), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "style",
+ "severity": "medium",
+ "title": "Permission prompt clips a multi-line command without a marker",
+ "observed": "The raised command box showed the second line cut at -w \"%{h with no ellipsis.",
+ "expected": "Every line wrapped inside the box; long commands capped with \"… +N more lines\".",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/kiln/018-prompt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go"
+  ],
+  "regression_test": "TestRaisedCommandRows_WrapsNeverClips",
+  "note": "Fixed in 7f8e470; regression test fails without the fix. Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T22:23:35Z"
+ }
+}

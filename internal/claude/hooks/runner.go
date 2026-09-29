@@ -80,10 +80,20 @@ type runOutput struct {
 // timeout can kill the whole tree: a plain child.Kill only kills the shell
 // itself, leaving grandchildren alive holding the stdout pipe open, which
 // means Wait never returns and the timeout never actually times out.
-func runCommand(command, input string, timeoutSeconds int, cwd string) runOutput {
+func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv map[string]string) runOutput {
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "CLAUDE_HOOK=1", "HARNESS_HOOK=1")
+	if cwd != "" {
+		// Claude Code gives hooks the project root this way, and project
+		// hook configs name their scripts through it
+		// ("$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh); unset, that path
+		// resolves to /.claude/hooks/x.sh and the hook fails.
+		cmd.Env = append(cmd.Env, "CLAUDE_PROJECT_DIR="+cwd)
+	}
+	for k, v := range extraEnv {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var stdout, stderr bytes.Buffer
@@ -272,7 +282,7 @@ func RunHooks(opts RunOptions) Outcome {
 			timeout = DefaultTimeoutSeconds
 		}
 
-		out := runCommand(h.Command, string(data), timeout, opts.Payload.Cwd)
+		out := runCommand(h.Command, string(data), timeout, opts.Payload.Cwd, h.Env)
 
 		before := len(outcome.Notices)
 		label := h.Command
@@ -317,6 +327,9 @@ type GuardOptions struct {
 // GuardResult is the outcome of GuardToolCall.
 type GuardResult struct {
 	Blocked *Blocked
+	// ByHook reports that a PreToolUse hook, not the permission gate,
+	// blocked the call.
+	ByHook bool
 	// Args is present only when a hook rewrote the call.
 	Args map[string]any
 }
@@ -347,7 +360,7 @@ func GuardToolCall(opts GuardOptions) (GuardResult, error) {
 	})
 
 	if hookResult.Blocked != nil {
-		return GuardResult{Blocked: hookResult.Blocked}, nil
+		return GuardResult{Blocked: hookResult.Blocked, ByHook: true}, nil
 	}
 
 	if hookResult.UpdatedInput != nil {

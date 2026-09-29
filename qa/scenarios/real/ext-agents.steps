@@ -1,0 +1,20 @@
+# A Claude Code user with a read-only subagent (security-reviewer, tools
+# restricted to Read+Bash) reviewing a file with an obvious command-
+# injection bug, invoked through the model's task tool.
+@real
+@home scratch
+@size 140x45
+@fixture qa/fixtures/real/ext-agents
+
+WAITFOR /describe a task/ 30
+SEND /agents
+WAIT 1
+SHOT agents-list
+EXPECT /security-reviewer/
+KEY esc
+SEND Use the security-reviewer agent to review app.py for security issues.
+IDLE 300
+SHOT review-result
+EXPECT /(?i)inject|os\.system|unsafe/
+# The review really went through a subagent (a task call in the session).
+RUN grep -rq '"name":"task"' {HOME}/.harness/sessions

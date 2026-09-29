@@ -1,0 +1,25 @@
+{
+ "id": "20260927T212412Z-context-meter-ignores-cache",
+ "found_at": "2026-09-27T21:24:12Z",
+ "scenario": "CRUD trial (Opus 4.8), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Context meter ignores cached tokens and reads ~0% on a cached conversation",
+ "observed": "kiln-3 ended with ~47.7k tokens in context (2 uncached + 47,682 cache-read per request) but the footer read ctx 0%: bridge.go summed UsageRow.Input + Output only.",
+ "expected": "The meter counts input, cache reads, cache writes and output.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestBridge_UsageContextCountsCachedTokens",
+  "note": "Unit-tested (TestBridge_UsageContextCountsCachedTokens fails without the fix). Not yet seen in a live session: the kiln-3 run predates this commit.",
+  "updated_at": "2026-09-27T21:24:20Z"
+ }
+}

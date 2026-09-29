@@ -151,3 +151,18 @@ func TestLoadCommands(t *testing.T) {
 		t.Errorf("render = %q", got)
 	}
 }
+
+// ParseCommandFile is how plugins build their commands; it keeps the
+// frontmatter out of the body and carries name, namespace and origin.
+func TestParseCommandFile(t *testing.T) {
+	c := ParseCommandFile("---\ndescription: Ship it\nargument-hint: <env>\n---\nDeploy to $ARGUMENTS.\n", "deploy", "ops", Plugin, "/p/commands/deploy.md")
+	if c.Name != "deploy" || c.Namespace != "ops" || c.Origin != Plugin || c.Path != "/p/commands/deploy.md" {
+		t.Errorf("identity = %+v", c)
+	}
+	if c.Description != "Ship it" || c.ArgumentHint != "<env>" {
+		t.Errorf("frontmatter = %q, %q", c.Description, c.ArgumentHint)
+	}
+	if got := c.Render("staging"); strings.Contains(got, "description:") || !strings.Contains(got, "Deploy to staging.") {
+		t.Errorf("Render = %q", got)
+	}
+}

@@ -128,6 +128,35 @@ func (l *Lane) GetActiveTools() ([]string, error) {
 	return cfg.ActiveToolNames, nil
 }
 
+// ThinkingLevel is the lane's recorded thinking level; "" means the model
+// decides (adaptive thinking, or the model's default).
+func (l *Lane) ThinkingLevel() (string, error) {
+	cfg, err := l.config()
+	if err != nil {
+		return "", err
+	}
+	return cfg.ThinkingLevel, nil
+}
+
+// SetThinkingLevel records the lane's thinking level, leaving its model as
+// it is. A no-op when the level is already set to it.
+func (l *Lane) SetThinkingLevel(level string) error {
+	cfg, err := l.config()
+	if err != nil {
+		return err
+	}
+	if cfg.ThinkingLevel == level {
+		return nil
+	}
+	cfg.ThinkingLevel = level
+	w, err := session.SetValue(session.LaneConfig(l.name), cfg)
+	if err != nil {
+		return err
+	}
+	_, err = l.h.opts.Storage.Commit([]session.Write{w})
+	return err
+}
+
 // SetModel updates the lane's model/thinking-level configuration.
 func (l *Lane) SetModel(model session.ModelRef, thinkingLevel string) error {
 	cfg, err := l.config()
@@ -227,6 +256,44 @@ func (l *Lane) Steer(text string) error {
 	return nil
 }
 
+// ClearInbox withdraws every follow-up queued via Steer that the run loop
+// has not drained yet and returns their texts, oldest first. The entries
+// stay in the log, off the branch, like any other undelivered steer. Used
+// when the user interrupts a turn: the queued text goes back to them to
+// edit or send, instead of riding along with whatever they say next.
+func (l *Lane) ClearInbox() ([]string, error) {
+	st, err := l.laneState()
+	if err != nil {
+		return nil, err
+	}
+	if len(st.Inbox) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, len(st.Inbox))
+	for i, item := range st.Inbox {
+		ids[i] = item.EntryID
+	}
+	entries := l.h.opts.Storage.GetEntries(ids)
+	var texts []string
+	for _, id := range ids {
+		if e, ok := entries[id]; ok {
+			if um, ok := e.Message.(msg.UserMessage); ok {
+				texts = append(texts, msg.TextOf(um.Content))
+			}
+		}
+	}
+	st.Inbox = nil
+	w, err := session.SetValue(session.LaneStateValue(l.name), st)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := l.h.opts.Storage.Commit([]session.Write{w}); err != nil {
+		return nil, err
+	}
+	l.h.events.Emit(Event{Type: EventQueueUpdate, Lane: l.name, QueueLen: 0})
+	return texts, nil
+}
+
 // NavigateTree moves the lane's branch tip to targetID (nil for the root).
 // It refuses while an operation is running: pi's navigation.ready_to_commit
 // non-run path (rewriting history under a live operation) is not
@@ -282,6 +349,25 @@ func (l *Lane) Compact(ctx context.Context, custom *string) error {
 		return err
 	}
 	return l.runCompaction(ctx, pathEntries, model, cfg, custom)
+}
+
+// EstimateConversationTokens estimates the tokens of the conversation the
+// model is sent next (after any compaction), not counting the system
+// prompt or tools. An estimate (compaction.EstimateTokens), for reports.
+func (l *Lane) EstimateConversationTokens() (int, error) {
+	tip, _ := l.GetTipID()
+	if tip == "" {
+		return 0, nil
+	}
+	entries, err := l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "oldestFirst"})
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, m := range entriesToTranscript(entries) {
+		total += compaction.EstimateTokens(m)
+	}
+	return total, nil
 }
 
 // entriesToTranscript projects entries (already oldest-first, as

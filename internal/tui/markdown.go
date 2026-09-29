@@ -127,14 +127,15 @@ func buildStyle(plain bool) glansi.StyleConfig {
 		// quote: (t) => dim(t), quoteBorder: (t) => gray(t) — glamour's
 		// nearest equivalent to a drawn quote border is the block's
 		// indent token, so the "│ " marker itself carries the gray colour
-		// and the quoted text is faint.
+		// and the quoted text takes the dim token. Not SGR faint: iTerm2
+		// draws faint text at full brightness, so a quote read as plain text.
 		BlockQuote: glansi.StyleBlock{
-			StylePrimitive: glansi.StylePrimitive{Faint: boolPtr(true)},
+			StylePrimitive: glansi.StylePrimitive{Color: strPtr(tx.Dim)},
 			Indent:         uintPtr(1),
 			IndentToken:    strPtr(Muted("│") + " "),
 		},
 		// hr: (t) => dim(t)
-		HorizontalRule: glansi.StylePrimitive{Faint: boolPtr(true), Format: "\n───\n"},
+		HorizontalRule: glansi.StylePrimitive{Color: strPtr(tx.Faint), Format: "\n───\n"},
 		// bold/italic/strikethrough
 		Strong:        glansi.StylePrimitive{Bold: boolPtr(true)},
 		Emph:          glansi.StylePrimitive{Italic: boolPtr(true)},

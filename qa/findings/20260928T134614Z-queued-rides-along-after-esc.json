@@ -1,0 +1,25 @@
+{
+ "id": "20260928T134614Z-queued-rides-along-after-esc",
+ "found_at": "2026-09-28T13:46:14Z",
+ "scenario": "real/wf-interrupts",
+ "step": "05-redirected",
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Queued follow-up stays pending after esc and rides along with the next prompt",
+ "observed": "After esc the queued message kept its 'queued' tag while the input read idle; the next prompt then sent both, the stale one after the redirect",
+ "expected": "esc puts queued follow-ups back in the input; only what the user sends next reaches the model",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-wf-interrupts-140x45/05-redirected.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/lane.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_QueueRestoredOnInterrupt,TestClearInboxWithdrawsQueuedSteers",
+  "updated_at": "2026-09-28T13:46:14Z"
+ }
+}

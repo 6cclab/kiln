@@ -1,0 +1,28 @@
+{
+ "id": "20260927T233412Z-busy-line-flush-under-blocks",
+ "found_at": "2026-09-27T23:34:12Z",
+ "scenario": "crud-trial/t2-kiln-3",
+ "step": "007-progress",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "Busy line sits flush under the last block",
+ "observed": "The busy line follows streamed text and tool blocks with no blank row; only after a permission prompt is there one",
+ "expected": "One blank row above the busy line everywhere (design: 10px transcript padding + 4px busy padding = the 14px block gap)",
+ "design_ref": "Terminal.dc.html:26,125",
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln-3/007-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestView_SpinnerRowWhileBusy",
+  "note": "Verified live in iTerm2 (t2-kiln-4, build 9285da7).",
+  "updated_at": "2026-09-27T23:41:32Z",
+  "after_evidence": [
+   "/Users/andrepato/projects/crud-trial/runs/t2-kiln-4/007-before-interrupt.png"
+  ]
+ }
+}

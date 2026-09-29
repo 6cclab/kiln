@@ -1,0 +1,26 @@
+{
+ "id": "20260928T155904Z-thinking-off-by-default",
+ "found_at": "2026-09-28T15:59:04Z",
+ "scenario": "user-report",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Every session without --effort ran with thinking off",
+ "observed": "harness.New turned an unset ThinkingLevel into \"off\" (pi's default), so Opus 4.8 ran with thinking disabled and Opus 5.5 was pinned to the lowest effort; Claude Code's effortLevel setting was parsed but never used; resumed sessions kept a saved \"off\"",
+ "expected": "Unset level: adaptive thinking with the effort left to the model; effortLevel from Claude Code settings applies to Claude models; --effort or the setting also applies on resume",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/harness.go",
+   "internal/harness/lane.go",
+   "internal/agent/session.go",
+   "internal/cli/chat.go",
+   "internal/provider/api/anthropic_messages.go"
+  ],
+  "regression_test": "TestAdaptiveThinkingModelsGetEffortNotBudgets,TestEffortOrSetting,TestSession_ResumeTakesTheRequestedEffort",
+  "updated_at": "2026-09-28T15:59:05Z"
+ }
+}

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // Render what a tool call will actually change, for the permission prompt.
@@ -34,7 +36,7 @@ func clipPreview(lines []string) []string {
 	}
 	hidden := len(lines) - maxPreviewLines
 	out := append([]string{}, lines[:maxPreviewLines]...)
-	out = append(out, Muted(fmt.Sprintf("  … %d more line(s)", hidden)))
+	out = append(out, Muted(fmt.Sprintf("  … %s more", plural.Count(hidden, "line"))))
 	return out
 }
 
@@ -176,7 +178,7 @@ func RenderChangePreview(toolName string, args map[string]any) []string {
 		contentLines := strings.Split(content, "\n")
 
 		if !exists {
-			out := []string{Muted(fmt.Sprintf("  new file, %d line(s)", len(contentLines)))}
+			out := []string{Muted(fmt.Sprintf("  new file, %s", plural.Count(len(contentLines), "line")))}
 			for _, l := range contentLines {
 				out = append(out, OnDiffAdd(padToWidth(KilnGreen("  + "+l), ruleWidth())))
 			}
@@ -187,7 +189,7 @@ func RenderChangePreview(toolName string, args map[string]any) []string {
 		}
 
 		existingLines := strings.Split(existing, "\n")
-		out := []string{Muted(fmt.Sprintf("  overwrites %d existing line(s)", len(existingLines)))}
+		out := []string{Muted(fmt.Sprintf("  overwrites %s", plural.Count(len(existingLines), "existing line")))}
 		for _, l := range firstN(existingLines, 6) {
 			out = append(out, OnDiffDel(padToWidth(KilnRed("  − "+l), ruleWidth())))
 		}

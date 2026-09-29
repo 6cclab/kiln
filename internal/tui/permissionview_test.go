@@ -276,13 +276,19 @@ func TestPromptState_EditNoDeniesOutright(t *testing.T) {
 	}
 }
 
-func TestPromptState_PlanApproveAcceptEdits(t *testing.T) {
-	p := NewPromptState("/tmp")
-	reply := p.AskPlan("do the thing", "~/.harness/plans/test.md")
-	p.HandleKey(key("1"))
-	decision := <-reply
-	if decision.Kind != PlanApprove || decision.Mode != "acceptEdits" {
-		t.Errorf("decision = %+v, want approve/acceptEdits", decision)
+// TestPromptState_PlanApproveAutoMode: option 1 reads "Yes, and use auto
+// mode" and must enter auto mode, by key or by enter on the default row. It
+// used to set acceptEdits, so the approved plan then stopped for every bash
+// command (qa/findings *plan-approval-auto-mode-sets-accept-edits).
+func TestPromptState_PlanApproveAutoMode(t *testing.T) {
+	for _, k := range []string{"1", "enter"} {
+		p := NewPromptState("/tmp")
+		reply := p.AskPlan("do the thing", "~/.harness/plans/test.md")
+		p.HandleKey(key(k))
+		decision := <-reply
+		if decision.Kind != PlanApprove || decision.Mode != "auto" {
+			t.Errorf("%s: decision = %+v, want approve/auto", k, decision)
+		}
 	}
 }
 

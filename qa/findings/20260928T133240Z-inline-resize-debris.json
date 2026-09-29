@@ -1,0 +1,22 @@
+{
+ "id": "20260928T133240Z-inline-resize-debris",
+ "found_at": "2026-09-28T13:32:40Z",
+ "scenario": "e2e/TestTUI_Design_Permission_60cols",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Narrowing the terminal leaves the old frame on screen",
+ "observed": "After a 100->60 column resize with a permission prompt open, the old frame's rules and prompt rows stayed above the new frame (5s later); flaked 4/10 runs",
+ "expected": "The transcript and frame redraw cleanly at the new width",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_Design_Permission_60cols",
+  "updated_at": "2026-09-28T13:32:40Z"
+ }
+}

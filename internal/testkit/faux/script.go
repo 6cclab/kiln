@@ -55,6 +55,19 @@ type Step struct {
 	// ChunkDelay sleeps between the streamed chunks of this step's text,
 	// so a live, still-arriving reply stays on screen long enough to see.
 	ChunkDelay string `yaml:"chunk_delay,omitempty"`
+	// RawBlocks emits each object verbatim as its own Anthropic content
+	// block (content_block_start/[input_json_delta]/content_block_stop),
+	// for scripting provider-native blocks this package has no first-class
+	// step for (server_tool_use, web_search_tool_result). A
+	// "server_tool_use"-typed block streams its "input" field via
+	// input_json_delta chunks, as the real API does; every other type is
+	// sent complete in content_block_start, with no deltas. Anthropic-only
+	// (the OpenAI handler ignores this field); always ends its own turn,
+	// like a tool_call.
+	RawBlocks []map[string]any `yaml:"raw_blocks,omitempty"`
+	// StopReason overrides this turn's stop_reason (e.g. "pause_turn"),
+	// in place of the normal end_turn/tool_use inference. Anthropic-only.
+	StopReason string `yaml:"stop_reason,omitempty"`
 }
 
 // ToolCallSpec describes a scripted tool call. Args and RawArgs are
@@ -130,6 +143,13 @@ type contentStep struct {
 	delay           time.Duration
 	chunkDelay      time.Duration
 	disconnectAfter *disconnectSpec
+	// rawBlock is one object from a raw_blocks step, sent verbatim as an
+	// Anthropic content block. See Step.RawBlocks.
+	rawBlock map[string]any
+	// stopReasonOverride, when set on any content step of a turn, replaces
+	// that turn's inferred stop_reason. See Step.StopReason and turn's
+	// stopReasonOverride method.
+	stopReasonOverride *string
 }
 
 // turn is one flattened unit of script execution: either a scripted
@@ -208,13 +228,34 @@ func flattenSteps(steps []Step) ([]turn, error) {
 			}
 			flushPending(nil)
 
+		case len(s.RawBlocks) > 0:
+			// Unlike a tool_call, a raw_blocks step does not itself force a
+			// turn boundary: a server tool (e.g. web_search) resolves
+			// without a client round-trip, so Anthropic can keep writing
+			// the same assistant message -- text, a search, more text --
+			// all in one turn. It merges with surrounding text/thinking
+			// steps exactly like they merge with each other, and only ends
+			// its turn when explicitly told to (end_turn/stop_reason), same
+			// as a text step.
+			for i, rb := range s.RawBlocks {
+				cs := contentStep{rawBlock: rb}
+				if i == len(s.RawBlocks)-1 && s.StopReason != "" {
+					sr := s.StopReason
+					cs.stopReasonOverride = &sr
+				}
+				pending = append(pending, cs)
+			}
+			if s.EndTurn || s.StopReason != "" {
+				flushPending(nil)
+			}
+
 		default:
 			cs, err := toContentStep(s)
 			if err != nil {
 				return nil, err
 			}
 			pending = append(pending, cs)
-			if s.ToolCall != nil || s.DisconnectAfter != nil || s.EndTurn {
+			if s.ToolCall != nil || s.DisconnectAfter != nil || s.EndTurn || s.StopReason != "" {
 				// A disconnect_after step, like a tool_call, always ends
 				// its own turn: it's a one-shot fault against a single
 				// request, and the cursor must move on to the next step
@@ -275,6 +316,10 @@ func toContentStep(s Step) (contentStep, error) {
 	if s.DisconnectAfter != nil {
 		cs.disconnectAfter = s.DisconnectAfter
 	}
+	if s.StopReason != "" {
+		sr := s.StopReason
+		cs.stopReasonOverride = &sr
+	}
 	return cs, nil
 }
 
@@ -318,4 +363,16 @@ func (t turn) disconnectSpec() *disconnectSpec {
 		}
 	}
 	return d
+}
+
+// stopReasonOverride returns the turn's scripted stop_reason override, if
+// any (the last one wins, mirroring lastUsage), empty otherwise.
+func (t turn) stopReasonOverride() string {
+	var s string
+	for _, c := range t.content {
+		if c.stopReasonOverride != nil {
+			s = *c.stopReasonOverride
+		}
+	}
+	return s
 }

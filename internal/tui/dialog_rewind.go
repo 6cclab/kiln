@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strconv"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -18,10 +19,6 @@ type RewindEntry struct {
 
 // RewindEntriesFromSession picks the user messages out of a lane's
 // entries, oldest first, for the Rewind dialog's option list.
-// FilesChanged is always 0 for now: entries carry no per-message file-diff
-// count today (Entry has no such field — see internal/session/types.go),
-// so every row renders "No code changes" until that data exists somewhere
-// to read.
 func RewindEntriesFromSession(entries []session.Entry) []RewindEntry {
 	// entries may be newest-first (Lane.FindEntries's contract) or
 	// oldest-first depending on the caller; sort defensively by Seq so the
@@ -34,21 +31,44 @@ func RewindEntriesFromSession(entries []session.Entry) []RewindEntry {
 		}
 	}
 
+	// FilesChanged counts the distinct files the turn after each message
+	// edited or wrote, read from the assistant's tool calls up to the next
+	// user message.
 	var out []RewindEntry
+	var files map[string]bool
+	closeTurn := func() {
+		if len(out) > 0 {
+			out[len(out)-1].FilesChanged = len(files)
+		}
+	}
 	for _, e := range sorted {
 		if e.Type != session.EntryMessage {
 			continue
 		}
-		um, ok := e.Message.(msg.UserMessage)
-		if !ok {
-			continue
+		switch m := e.Message.(type) {
+		case msg.UserMessage:
+			text := firstLineOf(m)
+			if text == "" {
+				continue
+			}
+			closeTurn()
+			files = map[string]bool{}
+			out = append(out, RewindEntry{ID: e.ID, Text: text})
+		case msg.AssistantMessage:
+			if files == nil {
+				continue
+			}
+			for _, call := range msg.ToolCallsOf(m.Content) {
+				if !strings.EqualFold(call.Name, "edit") && !strings.EqualFold(call.Name, "write") {
+					continue
+				}
+				if p := PrimaryArg(call.Arguments); p != "" {
+					files[p] = true
+				}
+			}
 		}
-		text := firstLineOf(um)
-		if text == "" {
-			continue
-		}
-		out = append(out, RewindEntry{ID: e.ID, Text: text, FilesChanged: 0})
 	}
+	closeTurn()
 	return out
 }
 
@@ -108,7 +128,9 @@ func (d *rewindDialog) FrameLabel() string { return "rewind" }
 func (d *rewindDialog) Render(width, height int) []string {
 	var out []string
 	out = append(out, dialogIndent+KilnAmber(Bold("Rewind")))
-	out = append(out, dialogIndent+Muted("Restore the code and/or conversation to the point before…"))
+	for _, line := range wrapPlain("Go back in the conversation to before one of your messages. Files are not restored.", max(width-len(dialogIndent), 10)) {
+		out = append(out, dialogIndent+Muted(line))
+	}
 
 	labelWidth := width - len(dialogIndent) - markerWidth
 	if labelWidth < 10 {
@@ -125,7 +147,7 @@ func (d *rewindDialog) Render(width, height int) []string {
 		}
 		row := dialogIndent + marker + label
 		if selected {
-			row = OnRaise(padTo(row, width))
+			row = RaiseRow(row, width)
 		}
 		out = append(out, row)
 
@@ -135,7 +157,7 @@ func (d *rewindDialog) Render(width, height int) []string {
 		}
 		subRow := subIndent + Muted(sub)
 		if selected {
-			subRow = OnRaise(padTo(subRow, width))
+			subRow = RaiseRow(subRow, width)
 		}
 		out = append(out, subRow)
 	}
@@ -149,7 +171,7 @@ func (d *rewindDialog) Render(width, height int) []string {
 	}
 	currentRow := dialogIndent + currentMarker + currentText
 	if currentSelected {
-		currentRow = OnRaise(padTo(currentRow, width))
+		currentRow = RaiseRow(currentRow, width)
 	}
 	out = append(out, currentRow)
 

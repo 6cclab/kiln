@@ -3,7 +3,7 @@
 # "Command timed out after N seconds" (bash.go's execErr/result.TimedOut
 # branch), rendered as an error block.
 @faux testdata/faux/qa/tools-bash-timeout.yaml
-@args --permission-mode dontAsk
+@args --permission-mode bypassPermissions
 
 WAITFOR /describe a task/ 20
 TYPE sleep past the timeout

@@ -1,0 +1,26 @@
+{
+ "id": "20260928T133240Z-mcp-dialog-omits-connecting",
+ "found_at": "2026-09-28T13:32:40Z",
+ "scenario": "real/mcp-user-servers",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "/mcp omits servers still connecting",
+ "observed": "Opening /mcp while servers were connecting listed only the finished ones; ConnectAll also connected servers one after another, so one dead server delayed the rest by its full timeout",
+ "expected": "Connecting servers listed as connecting…; servers connect concurrently",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/mcp/hub.go",
+   "internal/cli/commands.go",
+   "internal/commands/manage_commands.go",
+   "internal/commands/inspect_commands.go",
+   "internal/tui/dialog_mcp.go"
+  ],
+  "regression_test": "TestManageMcpModalListsConnectingServers,TestConnectAllConnectsServersConcurrently",
+  "updated_at": "2026-09-28T13:32:40Z"
+ }
+}

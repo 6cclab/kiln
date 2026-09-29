@@ -319,7 +319,7 @@ func TestMCP_FailureReportedOnce(t *testing.T) {
 	res := runHarness(t, proj, env,
 		"-p", "run two commands then report",
 		"--output-format", "text",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 		"--strict-mcp-config", "--mcp-config", cfg,
 	)
 	if res.Code != 0 {
@@ -351,14 +351,14 @@ const mcpEchoOnlyScript = `models:
     - text: "ok"
 `
 
-// TestMCP_PostureIndexSizing proves posture-index and full-index differ in
-// what they index. The fixture is registered under the server name
-// "grafana", which the default "coding" posture excludes: faux-1
-// (full-index) lists its four tools in the system prompt and tool_search
-// stays present; faux-2 (posture-index) lists none. Both tiers still gate
-// every MCP tool behind tool_search (no MCP schema in the first request's
-// Tools). Break to verify: make IndexScope return the posture for
-// full-index.
+// TestMCP_PostureIndexSizing proves posture-index applies at every window
+// size and that the posture, not the window, decides what gets indexed. The
+// fixture is registered under the server name "grafana", which the default
+// "coding" posture excludes: neither faux-1 (128k) nor faux-2 (32k) lists
+// its tools in the system prompt, and both still gate every MCP tool behind
+// tool_search (no MCP schema in the first request's Tools). Break to
+// verify: restore the old window-based StrategyForWindow, or make
+// IndexScope return the posture for every strategy.
 func TestMCP_PostureIndexSizing(t *testing.T) {
 	fixture := mcpBuildFixture(t)
 	cfg := mcpWriteConfig(t, map[string][]string{"grafana": {fixture}})
@@ -369,7 +369,7 @@ func TestMCP_PostureIndexSizing(t *testing.T) {
 		proj := scratchProject(t)
 		env := baseEnv(home, sessDir, addr)
 		env["HARNESS_MODEL"] = model
-		res := runHarness(t, proj, env, "-p", "hello", "--output-format", "text", "--permission-mode", "dontAsk",
+		res := runHarness(t, proj, env, "-p", "hello", "--output-format", "text", "--permission-mode", "bypassPermissions",
 			"--strict-mcp-config", "--mcp-config", cfg)
 		if res.Code != 0 {
 			t.Fatalf("model %s: exit code %d, stderr=%s", model, res.Code, res.Stderr)
@@ -390,7 +390,7 @@ func TestMCP_PostureIndexSizing(t *testing.T) {
 	for _, tc := range []struct {
 		label string
 		tools []string
-	}{{"faux-1 (full-index)", tools1}, {"faux-2 (posture-index)", tools2}} {
+	}{{"faux-1 (posture-index, 128k)", tools1}, {"faux-2 (posture-index, 32k)", tools2}} {
 		sawSearch := false
 		for _, name := range tc.tools {
 			if strings.HasPrefix(name, "mcp__") {
@@ -404,11 +404,11 @@ func TestMCP_PostureIndexSizing(t *testing.T) {
 			t.Errorf("%s: first request's Tools has no tool_search entry: %v", tc.label, tc.tools)
 		}
 	}
-	if count := strings.Count(sys1, "mcp__grafana__"); count != 4 {
-		t.Errorf("full-index (faux-1) indexes %d grafana tools, want 4:\n%s", count, sys1)
+	if count := strings.Count(sys1, "mcp__grafana__"); count != 0 {
+		t.Errorf("faux-1 (128k, posture-index) indexes %d grafana tools, want 0 (coding posture excludes grafana):\n%s", count, sys1)
 	}
 	if count := strings.Count(sys2, "mcp__grafana__"); count != 0 {
-		t.Errorf("posture-index (faux-2) indexes %d grafana tools, want 0 (coding posture excludes grafana):\n%s", count, sys2)
+		t.Errorf("faux-2 (32k, posture-index) indexes %d grafana tools, want 0 (coding posture excludes grafana):\n%s", count, sys2)
 	}
 }
 
@@ -476,7 +476,7 @@ func TestMCP_ToolSearchThenCall(t *testing.T) {
 	res := runHarness(t, proj, env,
 		"-p", "search for an echo tool and use it",
 		"--output-format", "text",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 		"--strict-mcp-config", "--mcp-config", cfg,
 	)
 	if res.Code != 0 {
@@ -585,7 +585,7 @@ func TestMCP_PreToolUseRewriteReachesFixture(t *testing.T) {
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "echo the original value",
 		"--output-format", "text",
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 		"--strict-mcp-config", "--mcp-config", cfg,
 	)
 	if res.Code != 0 {

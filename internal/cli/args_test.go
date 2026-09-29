@@ -249,3 +249,11 @@ func TestParseFullscreenIsDefault(t *testing.T) {
 		t.Error("--inline then --fullscreen should still be inline (Fullscreen=false)")
 	}
 }
+
+func TestRelaunchArgv(t *testing.T) {
+	got := RelaunchArgv([]string{"--model", "anthropic/x", "fix the bug", "-c", "--resume", "old", "--add-dir=/a", "--inline", "-n", "name"}, "new-id")
+	want := []string{"--model", "anthropic/x", "--add-dir=/a", "--inline", "--resume", "new-id"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("RelaunchArgv = %q, want %q", got, want)
+	}
+}

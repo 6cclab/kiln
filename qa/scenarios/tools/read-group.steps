@@ -9,7 +9,7 @@
 WAITFOR /describe a task/ 20
 TYPE map the upload path
 KEY enter
-WAITFOR /Read/ 20
+WAITFOR /read ─/ 20
 SHOT reads-committed
 EXPECT /auth\.ts/
 EXPECT /upload\.ts/

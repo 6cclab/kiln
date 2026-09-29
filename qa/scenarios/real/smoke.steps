@@ -1,0 +1,9 @@
+# Driver smoke test for @real: one question, one answer.
+@real
+@size 140x45
+@setup printf 'package main\n\nfunc main() {}\n' > main.go && git add -A && git -c user.name=qa -c user.email=qa@example.invalid commit -qm main
+WAITFOR /describe a task/ 30
+SHOT ready
+TURN What files are in this project? Answer in one line.
+SHOT answered
+EXPECT /main\.go/

@@ -455,13 +455,23 @@ const bannerCwdMarker = " · model "
 // normalizeBannerCwdRow's other cases already stabilize.
 var statusRowCwdPattern = regexp.MustCompile(`⇧⇥ {2}\S+\s+ctx`)
 
+// bannerCwdPrefix is what precedes the path on the banner's repo row: the
+// kiln art beside it, when the banner draws it (the art has no "/", "~" or
+// the "…" a shortened path starts with).
+func bannerCwdPrefix(r string) string {
+	if i := strings.IndexAny(r, "/~…"); i > 0 {
+		return r[:i]
+	}
+	return ""
+}
+
 func normalizeBannerCwdRow(rows []string) []string {
 	out := make([]string, len(rows))
 	for i, r := range rows {
 		switch {
 		case strings.Contains(r, bannerCwdMarker):
 			// Wide enough that "<cwd> · [branch B ·] model M" survives.
-			out[i] = "<cwd>" + bannerCwdMarker + "…"
+			out[i] = bannerCwdPrefix(r) + "<cwd>" + bannerCwdMarker + "…"
 		case (strings.HasPrefix(r, "/") || strings.HasPrefix(r, "~")) && !strings.Contains(r, "commands"):
 			// The banner's cwd row, truncated so hard that the " · model "
 			// marker itself was cut off — a run-varying temp dir, so mask
@@ -552,6 +562,31 @@ type stylesOpts struct {
 	anchor           string
 	normalizeBanner  bool
 	normalizeSpinner bool
+	// normalizeCwdTokens masks the /context rows whose token counts depend
+	// on the length of the (random) project path, which the system prompt's
+	// environment block includes.
+	normalizeCwdTokens bool
+}
+
+// cwdTokenRow matches /context's "System prompt" and "Conversation" rows,
+// capturing the label and the token count before the percentage.
+var cwdTokenRow = regexp.MustCompile(`^(\s*■ (?:System prompt|Conversation)\s+)(\S+)(\s+<?\d+%.*)$`)
+
+// maskCwdTokens replaces those rows' token counts with "N".
+func maskCwdTokens(row string) (string, bool) {
+	m := cwdTokenRow.FindStringSubmatch(row)
+	if m == nil {
+		return row, false
+	}
+	return m[1] + strings.Repeat(" ", len([]rune(m[2]))-1) + "N" + m[3], true
+}
+
+func normalizeCwdTokenRows(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i], _ = maskCwdTokens(r)
+	}
+	return out
 }
 
 // maskStyledRows replaces the text of every row mask matches with the
@@ -581,7 +616,7 @@ func maskStyledRows(rows []string, styles [][]screen.CellStyle, mask func(string
 func maskBannerCwdRowStyled(r string) (string, bool) {
 	switch {
 	case strings.Contains(r, bannerCwdMarker):
-		return "<cwd>" + bannerCwdMarker + "…", true
+		return bannerCwdPrefix(r) + "<cwd>" + bannerCwdMarker + "…", true
 	case (strings.HasPrefix(r, "/") || strings.HasPrefix(r, "~")) && !strings.Contains(r, "commands"):
 		return "<cwd>…", true
 	case statusRowCwdPattern.MatchString(r):
@@ -631,6 +666,9 @@ func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts styles
 
 	if opts.normalizeBanner {
 		rows, styles = maskStyledRows(rows, styles, maskBannerCwdRowStyled)
+	}
+	if opts.normalizeCwdTokens {
+		rows, styles = maskStyledRows(rows, styles, maskCwdTokens)
 	}
 	if opts.normalizeSpinner {
 		rows, styles = maskStyledRows(rows, styles, maskSpinnerRowStyled)
@@ -703,28 +741,39 @@ func TestTUI_Startup_NoDuplicateRows(t *testing.T) {
 				}
 			}
 
-			// Order: banner rows (wordmark, cwd/branch/model, tips —
-			// consecutive, no blank rows between them per the design), one
-			// blank row, the banner's own closing rule, the input box's own
-			// [rule, input, rule], then the one status row. Every screen
-			// here is the empty-box startup screen (no "Recent sessions"
-			// block: a fresh scratchProject/scratchHome has no prior
-			// sessions).
+			// Order: the banner (the kiln art with the wordmark, version
+			// and repo line beside it — consecutive, no blank rows), one
+			// blank row, the tips row, one blank row, the banner's own
+			// closing rule, the input box's own [rule, input, rule], then
+			// the one status row. Every screen here is the empty-box
+			// startup screen (no "Recent sessions" block: a fresh
+			// scratchProject/scratchHome has no prior sessions).
 			var got []string
 			for _, r := range rows {
 				got = append(got, strings.TrimRight(r, " "))
 			}
-			wantNonBlank := []int{0, 1, 2}
-			for _, i := range wantNonBlank {
-				if i >= len(got) || got[i] == "" {
-					t.Errorf("row %d = %q, want banner content (wordmark/cwd/tips must be consecutive, no blanks between them)", i, safeRow(got, i))
+			tips := -1
+			for i, r := range got {
+				if strings.Contains(r, "/ commands") {
+					tips = i
+					break
 				}
 			}
-			if safeRow(got, 3) != "" {
-				t.Errorf("row 3 = %q, want blank (one blank row after the banner's tips row)", safeRow(got, 3))
+			if tips < 2 {
+				t.Fatalf("tips row at %d, want it below the banner:\n%s", tips, strings.Join(got, "\n"))
 			}
-			wantRule := []int{4, 6}
-			for _, i := range wantRule {
+			for i := 0; i < tips-1; i++ {
+				if got[i] == "" {
+					t.Errorf("row %d is blank, want banner content (the art and its text are consecutive)", i)
+				}
+			}
+			if got[tips-1] != "" {
+				t.Errorf("row %d = %q, want blank (one blank row above the tips row)", tips-1, got[tips-1])
+			}
+			if safeRow(got, tips+1) != "" {
+				t.Errorf("row %d = %q, want blank (one blank row after the banner's tips row)", tips+1, safeRow(got, tips+1))
+			}
+			for _, i := range []int{tips + 2, tips + 4} {
 				if i >= len(got) || !isRule(got[i]) {
 					t.Errorf("row %d = %q, want a full-width rule row", i, safeRow(got, i))
 				}
@@ -786,13 +835,13 @@ func TestTUI_FixBug(t *testing.T) {
 	// pass Phase 2.1): the live region still shows the collapsed
 	// "Reading N files…" row while the group is in flight, but once it
 	// flushes each call commits its own full "tool" block — so the
-	// committed transcript shows a "read" label rule and a "Read
-	// src/math.js" head line instead of "Read 1 file". Edit renders as
+	// committed transcript shows a "read" label rule with the path on the
+	// row below it (no repeated "Read" name) instead of "Read 1 file". Edit renders as
 	// kiln's "edit" block: an "edit" label rule with the filename as meta,
 	// then a panel header row carrying the path and +N/−N counts — there
 	// is no separate "Update <path>" head line any more (Phase 2.2 drops
 	// it; see transcript.go's RenderToolCall doc comment).
-	if !strings.Contains(joined, "read ") || !strings.Contains(joined, "Read src/math.js") {
+	if !regexp.MustCompile(`read ─+[^\n]*\n\s*src/math\.js`).MatchString(joined) {
 		t.Errorf("transcript missing the full \"read\" tool block:\n%s", joined)
 	}
 	if !strings.Contains(joined, "src/math.js") || !strings.Contains(joined, "+1") || !strings.Contains(joined, "−1") {
@@ -925,11 +974,17 @@ func TestTUI_Permission_DenyWithFeedback(t *testing.T) {
 
 	// Declining commits a "✕ Declined Update <path>" system note ahead of
 	// the model's own reply (Phase 3's C item).
-	if err := s.WaitFor("Declined Update src/math.js", 2*time.Second); err != nil {
+	if err := s.WaitFor("Declined Edit src/math.js", 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WaitFor("declined. Ask what they would prefer", 5*time.Second); err != nil {
+	// The model still receives the refusal (checked below), but the screen
+	// reports it once: the note, with no edit block repeating the
+	// model-facing "the user declined…" result.
+	if err := s.WaitFor(turnSummaryPattern, 5*time.Second); err != nil {
 		t.Fatal(err)
+	}
+	if screen := strings.Join(s.Rows(), "\n"); strings.Contains(screen, "the user declined") {
+		t.Errorf("the decline is reported twice:\n%s", screen)
 	}
 
 	found := false
@@ -995,10 +1050,10 @@ func TestTUI_Permission_Allow(t *testing.T) {
 // checked by its title text instead.
 var panelTitles = map[string]string{
 	"model":       "Select model",
-	"permissions": "Permissions",
+	"permissions": "permissions ─",
 	"mcp":         "Manage MCP",
-	"agents":      "Subagents",
-	"config":      "Configuration",
+	"agents":      "agents ─",
+	"config":      "config ─",
 }
 
 func TestTUI_Panels_OpenClose(t *testing.T) {
@@ -1125,11 +1180,10 @@ func TestTUI_CtrlO_Verbose(t *testing.T) {
 	// Verbose mode shows the absolute path, not the cwd-relative one
 	// (RenderToolCall/MapToolName). kiln's "tool" block anatomy has no
 	// "Name(arg)" parenthesized header any more — it's a label rule
-	// ("read") above a plain "Read" line, with the (possibly wrapped)
-	// path as Muted continuation text. The "edit" block for a diff has no
+	// ("read") above the (possibly wrapped) path. The "edit" block for a diff has no
 	// "Update <path>" head line at all (Phase 2.2 drops it) — the path
 	// instead shows on the panel header row alongside its +N/−N counts.
-	if !strings.Contains(joined, "Read") || !strings.Contains(joined, "edit ") || !strings.Contains(joined, "math.js") {
+	if !strings.Contains(joined, "read ─") || !strings.Contains(joined, "edit ") || !strings.Contains(joined, "math.js") {
 		t.Errorf("verbose transcript missing tool calls:\n%s", joined)
 	}
 	// kiln's result-line marker is "→" (Action glyph), not Claude Code's
@@ -1324,8 +1378,13 @@ func TestTUI_BangCommand(t *testing.T) {
 
 	s.Send("!echo hi")
 	s.SendKey("enter")
-	if err := s.WaitFor("hi", 3*time.Second); err != nil {
+	// The output lands in its own "shell" block, without repeating the
+	// command the "you" block already shows.
+	if err := s.WaitFor(regexp.MustCompile(`shell ─+\s+→ hi`), 3*time.Second); err != nil {
 		t.Fatal(err)
+	}
+	if screen := strings.Join(s.Rows(), "\n"); strings.Count(screen, "echo hi") != 1 {
+		t.Errorf("the command should appear once (in the you block):\n%s", screen)
 	}
 	if got := len(requests()); got != 0 {
 		t.Errorf("!echo hi sent %d requests to faux, want 0 (a bang command never reaches the model)", got)
@@ -1350,8 +1409,13 @@ func TestTUI_MemoryNote(t *testing.T) {
 
 	s.Send("#remember to use tabs")
 	s.SendKey("enter")
-	if err := s.WaitFor("added to", 3*time.Second); err != nil {
+	if err := s.WaitFor("Saved to ~/.claude/CLAUDE.md · applies from the next session", 3*time.Second); err != nil {
 		t.Fatal(err)
+	}
+	// The note is a system note of its own, not rows under "you".
+	rows := strings.Join(s.Rows(), "\n")
+	if !regexp.MustCompile(`system ─+\n\s*Saved to`).MatchString(rows) {
+		t.Errorf("the saved note is not its own system block:\n%s", rows)
 	}
 
 	// scratchProject's dir has no CLAUDE.md yet, so AddMemory (see
@@ -1465,7 +1529,7 @@ func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
 	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
-		"--permission-mode", "dontAsk",
+		"--permission-mode", "bypassPermissions",
 	)
 	waitReady(t, s)
 

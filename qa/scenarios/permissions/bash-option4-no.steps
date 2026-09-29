@@ -1,8 +1,7 @@
 # Bash prompt, option 4 ("No"): declines outright — no feedback capture
 # for bash (promptOptionsFor("bash") has no optDenyFeedback) — and the
-# turn ends with the same "✕ Declined …" note plus the fixed
-# "Okay, I won't run it. What should I do instead?" text every declined
-# tool prompt gets (app.go's declinedFollowupText).
+# refusal shows once, as the "✕ Declined …" note: no bash block repeating
+# the model-facing "the user declined" result.
 @faux testdata/faux/qa/permissions-bash-option4.yaml
 
 WAITFOR /describe a task/ 20
@@ -15,6 +14,6 @@ KEY 4
 WAITFOR /Declined/ 20
 SHOT declined
 EXPECT /✕ Declined rm -rf something-important/
-EXPECT /Okay, I won.t run it\. What should I do instead\?/
+EXPECT_NOT /the user declined/
 EXPECT_NOT /approval needed/
 EXPECT_NOT /panic|goroutine/

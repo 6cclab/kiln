@@ -1,5 +1,6 @@
   Retrying in 1s · attempt 2 of 4 · r to retry now
-  ◐ Reconnecting…  2s · 750 tokens                                                    esc to stop
+
+  ◐ Reconnecting…  2s · 150 tokens                                                    esc to stop
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ›  queue a follow-up, or esc to stop
   ────────────────────────────────────────────────────────────────────────────────────────────────

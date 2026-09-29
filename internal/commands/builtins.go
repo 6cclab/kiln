@@ -13,6 +13,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/writesettings"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/provider"
 )
 
@@ -101,16 +102,16 @@ type BuiltinDeps struct {
 	OnExit  func()
 }
 
-// formatTokens renders a token count the way tui/transcript.ts's
-// formatTokens does: millions get "m", thousands get "k", both with one
-// decimal; anything under 1,000 is printed plain. "1000.0k" reads as a
-// mistake, and million-token windows are ordinary.
+// formatTokens renders a token count compactly: millions get "m",
+// thousands get "k", with one decimal only when it says something
+// ("200k", "49.2k", "1m"); anything under 1,000 is printed plain.
+// "1000.0k" reads as a mistake, and million-token windows are ordinary.
 func formatTokens(n int) string {
 	switch {
 	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fm", float64(n)/1_000_000)
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000_000), ".0") + "m"
 	case n >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000), ".0") + "k"
 	default:
 		return strconv.Itoa(n)
 	}
@@ -285,6 +286,41 @@ func (c *modelCache) get(ctx context.Context, reg *provider.Registry) ([]provide
 
 func modelID(m provider.Model) string { return m.Provider + "/" + m.ID }
 
+// withoutDatedAliases drops a dated snapshot ID ("claude-haiku-4-5-20251001")
+// when the same provider also lists its undated alias ("claude-haiku-4-5"):
+// the two are the same model, and listing both doubles the picker. The
+// dated ID stays when it is the current model, so the picker still marks
+// it, and it stays resolvable by name either way.
+func withoutDatedAliases(models []provider.Model, currentID string) []provider.Model {
+	has := make(map[string]bool, len(models))
+	for _, m := range models {
+		has[modelID(m)] = true
+	}
+	out := make([]provider.Model, 0, len(models))
+	for _, m := range models {
+		id := modelID(m)
+		if base, ok := strings.CutSuffix(id, dateSuffix(id)); ok && base != id && has[base] && id != currentID {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// dateSuffix is id's trailing "-YYYYMMDD", or "" when it has none.
+func dateSuffix(id string) string {
+	i := strings.LastIndexByte(id, '-')
+	if i < 0 || len(id)-i-1 != 8 {
+		return ""
+	}
+	for _, r := range id[i+1:] {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return id[i:]
+}
+
 func modelDescription(m provider.Model) string {
 	tier := budget.TierFor(m.ContextWindow)
 	return fmt.Sprintf("%s · %s · %s usable", formatTokens(m.ContextWindow), tier.Name, formatTokens(budget.UsableTokens(tier)))
@@ -379,10 +415,18 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				if deps.Lane == nil {
 					return Result{Output: []string{"No active lane to compact."}}, nil
 				}
+				before, _ := deps.Lane.EstimateConversationTokens()
 				if err := deps.Lane.Compact(ctx, nil); err != nil {
 					return Result{}, err
 				}
-				return Result{Output: []string{"Context compacted."}}, nil
+				after, err := deps.Lane.EstimateConversationTokens()
+				if err != nil || before == 0 {
+					return Result{Output: []string{"Context compacted."}}, nil
+				}
+				if after >= before {
+					return Result{Output: []string{fmt.Sprintf("Nothing to compact yet: the conversation (~%s tokens) is all recent turns, which are kept as they are.", formatTokens(before))}}, nil
+				}
+				return Result{Output: []string{fmt.Sprintf("Context compacted: conversation ~%s → ~%s tokens.", formatTokens(before), formatTokens(after))}}, nil
 			},
 		},
 		{
@@ -393,7 +437,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				out := []string{
 					fmt.Sprintf("window        %d", t.ContextWindow),
 					fmt.Sprintf("tier          %s", t.Name),
-					fmt.Sprintf("tools         %s (%d tokens)", t.ToolStrategy, budget.ToolStrategyCost[t.ToolStrategy]),
+					fmt.Sprintf("tools         %s (%s tokens)", t.ToolStrategy.Describe(), formatTokens(budget.ToolStrategyCost[t.ToolStrategy])),
 					fmt.Sprintf("system prompt %d max", t.SystemPromptTokens),
 					fmt.Sprintf("reserved      %d", t.Compaction.ReserveTokens),
 					fmt.Sprintf("available     %d for conversation", budget.UsableTokens(t)),
@@ -509,7 +553,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 					if deps.OnModelChanged != nil {
 						deps.OnModelChanged(label, tier)
 					}
-					return fmt.Sprintf("now on %s — %s tier, %s usable", label, tier.Name, formatTokens(budget.UsableTokens(tier))), nil
+					return fmt.Sprintf("Now on %s · %s tier · %s usable", label, tier.Name, formatTokens(budget.UsableTokens(tier))), nil
 				}
 
 				trimmed := strings.TrimSpace(args)
@@ -543,13 +587,16 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				// order, so numbering it in place reproduces /model's
 				// "grouped by provider via ordering, no section headers"
 				// contract with no extra sort here.
+				models = withoutDatedAliases(models, currentID)
 				items := make([]Item, 0, len(models))
 				lines := []string{fmt.Sprintf("current: %s", orUnknown(currentID)), ""}
 				for i, m := range models {
 					id := modelID(m)
 					it := Item{
-						Value:       id,
-						Label:       fmt.Sprintf("%d. %s", i+1, id),
+						Value: id,
+						// Numbers right-aligned, so "10." does not push its
+						// name a column right of " 9.".
+						Label:       fmt.Sprintf("%*d. %s", len(strconv.Itoa(len(models))), i+1, id),
 						Description: modelDialogDescription(m),
 					}
 					if id == currentID {
@@ -564,28 +611,29 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 					Kind:   "model",
 					Header: []string{fmt.Sprintf("current    %s", orUnknown(currentID))},
 					Items:  items,
-					// Effort is a static "Medium" label: the harness has
-					// no reasoning-effort concept anywhere else in the
-					// codebase (no field on provider.Model, no setting,
-					// nothing budget/tier tracks), so there is nothing
-					// real to report or adjust. SetEffort is left nil,
-					// which internal/tui's dialogModel renders as a
-					// static row (←/→ a no-op) — see the handback
-					// report.
-					Effort: "Medium",
+					// The session's thinking effort; ←/→ changes it for
+					// this session. "auto" is an unset level: the model
+					// decides how much to think.
+					Effort:    currentEffort(deps.Lane),
+					SetEffort: setEffort(deps.Lane),
 					Select: func(value string) (string, error) {
 						providerID, mID, ok := splitProviderModel(value)
 						if !ok {
 							return "", fmt.Errorf(`"%s" is not provider/model`, value)
 						}
-						return apply(providerID + "/" + mID)
+						msg, err := apply(providerID + "/" + mID)
+						if err != nil {
+							return "", err
+						}
+						return msg + " (this session only)", nil
 					},
 					SelectDefault: func(value string) (string, error) {
 						providerID, mID, ok := splitProviderModel(value)
 						if !ok {
 							return "", fmt.Errorf(`"%s" is not provider/model`, value)
 						}
-						if _, err := apply(providerID + "/" + mID); err != nil {
+						now, err := apply(providerID + "/" + mID)
+						if err != nil {
 							return "", err
 						}
 						label := providerID + "/" + mID
@@ -603,7 +651,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						// one leaked a box-drawing character into plain/
 						// screen-reader mode (defect *screen-reader-mode-
 						// leaves-box-drawing-rules).
-						return fmt.Sprintf("Model set to %s (default for new sessions)", label), nil
+						return now + " (default for new sessions)", nil
 					},
 				}
 				return Result{Output: lines, Modal: modal}, nil
@@ -611,18 +659,34 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "tools",
-			Description: "Show which tools are currently resident",
+			Description: "Show the tools the model can use right now",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.Lane == nil {
-					return Result{Output: []string{"0 resident:"}}, nil
+					return Result{Output: []string{"No tools available yet."}}, nil
 				}
 				active, err := deps.Lane.GetActiveTools()
 				if err != nil {
 					return Result{}, err
 				}
-				lines := []string{fmt.Sprintf("%d resident:", len(active))}
-				for _, t := range active {
-					lines = append(lines, "  "+t)
+				// Names as the transcript labels them ("bash background"),
+				// in a grid rather than one per row.
+				names := make([]string, len(active))
+				col := 0
+				for i, t := range active {
+					names[i] = strings.ReplaceAll(t, "_", " ")
+					col = max(col, len([]rune(names[i])))
+				}
+				const perRow = 4
+				lines := []string{plural.Count(len(active), "tool") + " available to the model:", ""}
+				for i := 0; i < len(names); i += perRow {
+					var row strings.Builder
+					for j := i; j < min(i+perRow, len(names)); j++ {
+						row.WriteString(names[j])
+						if j < min(i+perRow, len(names))-1 {
+							row.WriteString(strings.Repeat(" ", col-len([]rune(names[j]))+3))
+						}
+					}
+					lines = append(lines, "  "+row.String())
 				}
 				return Result{Output: lines}, nil
 			},
@@ -672,7 +736,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "exit",
-			Description: "Exit the harness",
+			Description: "Exit kiln",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.OnExit != nil {
 					deps.OnExit()
@@ -682,7 +746,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 		},
 		{
 			Name:        "quit",
-			Description: "Exit the harness",
+			Description: "Exit kiln",
 			Run: func(ctx context.Context, args string) (Result, error) {
 				if deps.OnExit != nil {
 					deps.OnExit()
@@ -711,14 +775,29 @@ func BindHelp(source Source, list func() []Command) Source {
 			for i, c := range cmds {
 				if c.Name == "help" {
 					c.Run = func(ctx context.Context, args string) (Result, error) {
-						lines := make([]string, 0)
-						for _, cc := range list() {
-							hint := ""
+						// Names in one column, descriptions in the next, the
+						// same shape as the / palette. An unusually long
+						// usage line does not push every description right:
+						// the column is capped and that one row overflows.
+						const maxNameCol = 28
+						cmds := list()
+						usage := make([]string, len(cmds))
+						col := 0
+						for i, cc := range cmds {
+							usage[i] = "/" + QualifiedName(cc)
 							if cc.ArgumentHint != "" {
-								hint = " " + cc.ArgumentHint
+								usage[i] += " " + cc.ArgumentHint
 							}
-							lines = append(lines, fmt.Sprintf("  /%s%s  %s", QualifiedName(cc), hint, cc.Description))
+							if n := len([]rune(usage[i])); n <= maxNameCol {
+								col = max(col, n)
+							}
 						}
+						lines := make([]string, 0, len(cmds)+2)
+						for i, cc := range cmds {
+							pad := max(col-len([]rune(usage[i])), 0)
+							lines = append(lines, usage[i]+strings.Repeat(" ", pad)+"  "+cc.Description)
+						}
+						lines = append(lines, "", "Press ? on an empty prompt for keyboard shortcuts.")
 						return Result{Output: lines}, nil
 					}
 				}
@@ -748,4 +827,40 @@ func orUnknown(s string) string {
 		return "unknown"
 	}
 	return s
+}
+
+// currentEffort is /model's effort label: the lane's level, or "auto".
+func currentEffort(lane *harness.Lane) string {
+	if lane == nil {
+		return ""
+	}
+	level, err := lane.ThinkingLevel()
+	if err != nil {
+		return ""
+	}
+	if level == "" || level == "off" {
+		return "auto"
+	}
+	return level
+}
+
+// setEffort is /model's ←/→ effort change, applied to this session.
+func setEffort(lane *harness.Lane) func(string) (string, error) {
+	if lane == nil {
+		return nil
+	}
+	return func(level string) (string, error) {
+		// "auto" is the unset level: the model decides how much to think.
+		stored := level
+		if level == "auto" {
+			stored = ""
+		}
+		if err := lane.SetThinkingLevel(stored); err != nil {
+			return "", err
+		}
+		if level == "auto" {
+			return "Effort set to auto (the model decides) for this session", nil
+		}
+		return "Effort set to " + level + " for this session", nil
+	}
 }

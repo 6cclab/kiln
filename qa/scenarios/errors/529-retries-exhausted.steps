@@ -14,10 +14,11 @@ WAITFOR /attempt 4 of 4/ 20
 SHOT last-countdown-before-attempt-4
 # The 4th attempt fails too; retry.go's loop bound means no 5th countdown
 # is ever scheduled — the fault commits directly instead.
-WAITFOR /status=529/ 20
+WAITFOR /Overloaded \(529\)/ 20
 SHOT final-error
-EXPECT /status=529/
-EXPECT /overloaded_error/
+EXPECT /Overloaded \(529\)/
+EXPECT /Send again shortly, or switch with \/model/
+EXPECT_NOT /overloaded_error/
 EXPECT_NOT /Reconnected on attempt 4/
 EXPECT_NOT /Retrying in \ds · attempt 5 of 4/
 EXPECT_NOT /panic|goroutine/

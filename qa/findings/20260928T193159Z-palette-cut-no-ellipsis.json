@@ -1,0 +1,24 @@
+{
+ "id": "20260928T193159Z-palette-cut-no-ellipsis",
+ "found_at": "2026-09-28T19:31:59Z",
+ "scenario": "real/ext-plugins",
+ "step": "02-slash-palette",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "Palette descriptions cut mid-word without …",
+ "observed": "Description stops at the right edge mid-word",
+ "expected": "Cut descriptions end in …",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-ext-plugins-140x45/02-slash-palette.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/autocomplete.go"
+  ],
+  "regression_test": "TestSlashItemMarksTruncatedDescription",
+  "updated_at": "2026-09-28T19:31:59Z"
+ }
+}

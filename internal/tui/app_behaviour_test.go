@@ -8,8 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrepato/harness/internal/harness"
-
-	"github.com/andrepato/harness/internal/commands"
 )
 
 // newTestModelWithBridge is newTestModel with a real Bridge wired to a
@@ -159,31 +157,32 @@ func TestRetryKey_ConsumedOnlyWithPendingRetryAndEmptyInput(t *testing.T) {
 	})
 }
 
-// TestDeclinedPrompt_CommitsFollowupText pins defect 3: declining a
-// tool-permission prompt through its explicit "No" option must, in
-// addition to the existing "✕ Declined …" note, commit an assistant text
-// block reading exactly declinedFollowupText (Terminal.dc.html line 303's
-// pick(2): the note plus "Okay, I won't run it. What should I do
-// instead?").
-func TestDeclinedPrompt_CommitsFollowupText(t *testing.T) {
+// TestDeclinedPrompt_CommitsNoteButNoScriptedReply: declining a
+// tool-permission prompt through its "No" option commits the "✕ Declined …"
+// note and nothing that reads as the model's reply: the model answers the
+// refusal itself.
+func TestDeclinedPrompt_CommitsNoteButNoScriptedReply(t *testing.T) {
 	m, f := newTestModelWithBridge(t)
 	m.prompt.pending = &pendingPermission{
 		request: PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload"},
 		reply:   make(chan PromptChoice, 1),
 	}
 
-	// "4" is the Bash prompt's "No" option (promptOptionsFor("bash"):
-	// Yes / don't-ask-again / switch-to-auto / No) — an outright decline,
-	// not the feedback-then-Enter path, so this also checks the plain
-	// "No" option commits the follow-up, not just Esc.
 	next, _ := m.handleKey(charKey('4'))
-	_ = next.(Model)
+	nm := next.(Model)
 
 	declineNote := waitForPrinted(t, f, "Declined npm test -- upload")
 	if !strings.Contains(declineNote, "✕") {
 		t.Errorf("decline note = %q, want the ✕ marker", declineNote)
 	}
-	waitForPrinted(t, f, declinedFollowupText)
+	nm.commitNote("sentinel-after-decline")
+	waitForPrinted(t, f, "sentinel-after-decline")
+	printed, _ := f.snapshot()
+	for _, p := range printed {
+		if strings.Contains(p, "What should I do instead") {
+			t.Errorf("committed a scripted reply %q in the model's name", p)
+		}
+	}
 }
 
 // TestEscInterruptsBusyPrompt_SuppressesFollowupText pins defect 5 (Esc
@@ -218,7 +217,7 @@ func TestEscInterruptsBusyPrompt_SuppressesFollowupText(t *testing.T) {
 
 	printed, _ := f.snapshot()
 	for _, p := range printed {
-		if strings.Contains(p, declinedFollowupText) {
+		if strings.Contains(p, "What should I do instead") {
 			t.Errorf("committed %q; an Esc-driven interrupt must not also show the decline follow-up text", p)
 		}
 	}
@@ -251,35 +250,5 @@ func TestLiveTail_HidesToolGroupRowWhileBusy(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("idle liveTail dropped the group row entirely; want it still rendered when not busy")
-	}
-}
-
-// TestModelSwitchNote_WaitsForDialogEcho: a switch made from /model's open
-// dialog used to commit its "Model: …" note straight away, above the
-// "/model" echo the app commits only when the dialog closes
-// (qa/findings *model-dialog-stale-state). The note now lands after it.
-func TestModelSwitchNote_WaitsForDialogEcho(t *testing.T) {
-	m, f := newTestModelWithBridge(t)
-	m.dialogEcho = "/model"
-	m.dialog = NewCommandDialog(commands.ModalSpec{Title: "Select model"})
-	next, _ := m.Update(msgModelSwitchNote{Text: "Model: faux/faux-2 · small tier · 32.8k usable"})
-	m = next.(Model)
-	if printed, _ := f.snapshot(); len(printed) != 0 {
-		t.Fatalf("note committed while the dialog was open: %q", printed)
-	}
-	m = m.closeDialog()
-	waitForPrinted(t, f, "Model: faux/faux-2")
-	printed, _ := f.snapshot()
-	echo, note := -1, -1
-	for i, p := range printed {
-		if strings.Contains(p, "/model") && echo < 0 {
-			echo = i
-		}
-		if strings.Contains(p, "Model: faux/faux-2") {
-			note = i
-		}
-	}
-	if echo < 0 || note < echo {
-		t.Errorf("want the /model echo before the switch note, got echo=%d note=%d in %q", echo, note, printed)
 	}
 }

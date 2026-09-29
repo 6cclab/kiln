@@ -30,6 +30,20 @@ const (
 	StrategyFullSchemas ToolStrategy = "full-schemas"
 )
 
+// Describe is the strategy in words, for the reports people read (/usage,
+// /doctor, /context); the identifier itself stays in settings and logs.
+func (s ToolStrategy) Describe() string {
+	switch s {
+	case StrategyPostureIndex:
+		return "MCP index of this posture's servers, tools loaded on demand"
+	case StrategyFullIndex:
+		return "MCP index of every server, tools loaded on demand"
+	case StrategyFullSchemas:
+		return "every MCP tool loaded up front"
+	}
+	return string(s)
+}
+
 // CompactionSettings mirrors pi-agent-core's CompactionSettings, the subset
 // the tier computes.
 type CompactionSettings struct {
@@ -64,28 +78,16 @@ var ToolStrategyCost = map[ToolStrategy]int{
 	StrategyFullSchemas:  31_897,
 }
 
-// toolBudgetShare is the share of the window the tool catalog may occupy.
-//
-// The strategy is derived from this rather than hard-coded per tier. Deriving
-// it matters because window size and tier name are not the same question: a
-// 48k local model and a 48k hosted model want the same catalog treatment, and
-// a new strategy added to the table below is picked up automatically at
-// every size.
-const toolBudgetShare = 0.2
-
-// strategyOrder is evaluated most-generous-first, matching the TS
-// ["full-schemas", "full-index", "posture-index"] find().
-var strategyOrder = []ToolStrategy{StrategyFullSchemas, StrategyFullIndex, StrategyPostureIndex}
-
-// StrategyForWindow returns the most generous strategy whose measured cost
-// fits the share. Falls back to the cheapest.
+// StrategyForWindow always returns posture-index, regardless of window
+// size: MCP schemas stay behind tool_search, and the prompt indexes only the
+// active posture's servers. A window having room for resident schemas does
+// not make them worth paying for: on a paid API they are token cost and
+// latency on every turn, while tool_search admits a tool only when the model
+// needs it. On a 165-tool catalog and a 1M-window model, resident schemas
+// made the first request 74k tokens and the session 3x the cost of a
+// tool_search-based agent. full-index and full-schemas stay defined and
+// priced (ToolStrategyCost) for the code that reasons about their cost.
 func StrategyForWindow(contextWindow int) ToolStrategy {
-	ceiling := float64(contextWindow) * toolBudgetShare
-	for _, s := range strategyOrder {
-		if float64(ToolStrategyCost[s]) <= ceiling {
-			return s
-		}
-	}
 	return StrategyPostureIndex
 }
 
@@ -119,9 +121,10 @@ const (
 
 // TierForWindow resolves the operating posture for a context window.
 //
-// The tier NAME is a step function because the thing it selects genuinely is
-// one: the tool catalog has a fixed cost, so "can I afford full schemas"
-// flips at a threshold. The budgets are not -- they scale with the window.
+// The tier NAME is still a step function -- small/medium/large budgets
+// genuinely are different regimes -- but it no longer has anything to do
+// with the tool strategy: ToolStrategy is posture-index at every size (see
+// StrategyForWindow). The budgets scale with the window regardless of name.
 func TierForWindow(contextWindow int) Tier {
 	toolStrategy := StrategyForWindow(contextWindow)
 	var name string

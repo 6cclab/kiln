@@ -19,6 +19,9 @@ type Source string
 const (
 	Personal Source = "personal"
 	Project  Source = "project"
+	// Plugin marks a Definition built from a plugin's agents/*.md by
+	// internal/claude/plugins, rather than loaded here by LoadAgents.
+	Plugin Source = "plugin"
 )
 
 // Definition is one parsed .claude/agents/*.md subagent definition.

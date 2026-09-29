@@ -13,7 +13,7 @@ KEY enter
 WAITFOR /Second turn reply from kiln/ 20
 SHOT turn-two
 KEY esc esc
-WAITFOR /Restore the code and\/or conversation to the point before/ 20
+WAITFOR /Go back in the conversation to before one of your messages/ 20
 SHOT rewind-dialog-open
 KEY up
 SHOT rewind-navigated

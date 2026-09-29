@@ -1,0 +1,29 @@
+# Manual permission mode: decline one prompt with feedback, accept the next
+# with "don't ask again", then check the /permissions dialog.
+@real
+@size 140x45
+@fixture qa/fixtures/real/wf-manual-permissions
+@args --permission-mode manual
+WAITFOR /describe a task/ 30
+SHOT ready
+SEND Extend the doc comment on Count in notes.go to say it returns 0 for a nil slice, then run `go test ./...` to confirm it still passes.
+WAITFOR /Allow kiln to/ 60
+SHOT first-prompt
+KEY tab
+TYPE Don't touch that file yet, just tell me your plan first.
+KEY enter
+WAITFOR /describe a task/ 120
+SHOT after-decline
+EXPECT_NOT /What should I do instead/
+SEND Plan looks good, go ahead.
+WAITFOR /Allow kiln to/ 120
+SHOT second-prompt
+KEY 2
+IDLE 180
+SHOT after-permissions
+SEND /permissions
+WAIT 2
+SHOT permissions-dialog
+EXPECT /mode\s+acceptEdits/
+KEY esc
+IDLE 30

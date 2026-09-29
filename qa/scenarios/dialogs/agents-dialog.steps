@@ -26,10 +26,10 @@ SHOT agents-autocomplete
 # text here is expected to fail against the real binary.
 EXPECT /Manage subagents/
 KEY enter
-WAITFOR /Subagents/ 20
+WAITFOR /agents ─/ 20
 SHOT agents-dialog-open
-EXPECT /Subagents/
-EXPECT /dispatched with the task tool[\s\S]*reader[\s\S]*inherit · 1 tools/
+EXPECT /agents ─/
+EXPECT /dispatched with the task tool[\s\S]*reader[\s\S]*inherit · 1 tool /
 KEY down
 SHOT agents-navigated
 KEY s

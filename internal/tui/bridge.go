@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +18,7 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/claude/permission"
 	"github.com/andrepato/harness/internal/compaction"
+	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
 )
@@ -59,8 +62,11 @@ type Bridge struct {
 	// lastFault is the last EventFault message committed as an error
 	// block; see FaultCommitted.
 	lastFault string
-	mu        sync.Mutex
-	progSink  sink
+	// lastWasNote reports that the most recent commit was a system note,
+	// so the next note joins its block (CommitNote).
+	lastWasNote bool
+	mu          sync.Mutex
+	progSink    sink
 
 	queue chan bridgeItem
 	quit  chan struct{}
@@ -255,6 +261,9 @@ func (b *Bridge) Commit(lines []string) {
 		return
 	}
 	lines = padMargin(lines, ruleMargin())
+	b.mu.Lock()
+	b.lastWasNote = false
+	b.mu.Unlock()
 	select {
 	case b.queue <- bridgeItem{text: strings.Join(lines, "\n")}:
 	case <-b.quit:
@@ -419,7 +428,7 @@ type MsgTranscriptAppend struct{ Text string }
 
 // RenderCommandResult renders a slash command's multi-line result as a
 // labelled block named after the command ("status ───", "cost ───", …),
-// each row indented by the same continuationIndent so the key/value
+// every row starting at the same column so the key/value
 // columns the command itself already aligned (e.g. /status's
 // "model     faux/faux-1", "auth      configured") stay aligned instead of
 // zig-zagging (qa/findings/20260927T000712Z-command-output-elbow-
@@ -435,8 +444,11 @@ func RenderCommandResult(name string, lines []string, width int) []string {
 	}
 	out := make([]string, 0, len(lines)+1)
 	out = append(out, labelRule(label, Muted, "", width))
+	// Rows start at the block's own margin, like a reply's text or
+	// /context's legend under their label rules; the command's own
+	// columns (key/value pairs, nested lists) carry through unchanged.
 	for _, l := range lines {
-		out = append(out, FitStatus(continuationIndent+l, width))
+		out = append(out, FitStatus(l, width))
 	}
 	return out
 }
@@ -586,7 +598,7 @@ func busyLabelForToolStart(ts *turnState, ev harness.Event) string {
 		if cmd == "" {
 			cmd = PrimaryArg(ev.ToolArgs)
 		}
-		return "Running " + truncateBusyArg(cmd, 30)
+		return "Running " + truncateBusyArg(skipLeadingCd(cmd), 30)
 	case "task":
 		if ts != nil {
 			ts.tasksInFlight++
@@ -612,6 +624,22 @@ func busyArgDisplay(arg string) string {
 	return filepath.Base(arg)
 }
 
+// leadingCd matches a "cd <dir> &&" (or ";") prefix of a command line.
+var leadingCd = regexp.MustCompile(`^\s*cd\s+('[^']*'|"[^"]*"|\S+)\s*(&&|;)\s*`)
+
+// skipLeadingCd drops the "cd <dir> &&" prefixes from a command line for
+// the busy line: models lead most commands with an absolute cd, which
+// filled the 30-rune budget with a path and hid the command itself.
+func skipLeadingCd(cmd string) string {
+	for {
+		loc := leadingCd.FindStringIndex(cmd)
+		if loc == nil || loc[1] == len(cmd) {
+			return cmd
+		}
+		cmd = cmd[loc[1]:]
+	}
+}
+
 // truncateBusyArg keeps the busy line to a bounded width for a long bash
 // command (design: "first 30 chars of cmd"), preferring the head — same
 // reasoning as SummarizeArg in permission_render.go: the part of a command
@@ -626,6 +654,9 @@ func busyArgDisplay(arg string) string {
 // trailing ellipsis always drawn by the renderer — leaves exactly one "…"
 // on screen either way.
 func truncateBusyArg(s string, n int) string {
+	// One line: a multi-line command (a variable assignment, then curl)
+	// otherwise broke the busy row and started its second line at column 0.
+	s = strings.Join(strings.Fields(s), " ")
 	r := []rune(s)
 	if len(r) <= n {
 		return s
@@ -668,7 +699,11 @@ type MsgQueue struct{ Len int }
 // counters); the bridge keeps the same state itself since it, not app.go,
 // owns the handler that mutates it.
 type turnState struct {
-	streamed        strings.Builder
+	streamed strings.Builder
+	// lastContext is the context the latest request carried (cached or
+	// not), the base the busy line's token figure grows from while the
+	// next reply streams.
+	lastContext     int
 	toolCallsInTurn int
 	// toolStarts records EventToolStart's wall-clock time and identity per
 	// call id, so EventToolEnd can report the call's elapsed time in the
@@ -823,15 +858,31 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 			return
 		}
 		text := assistantText(ev.Message)
-		if text == "" {
+		if text == "" && ev.Message.StopReason == msg.StopStop && !hasVisibleContent(ev.Message.Content) {
+			// A turn that ended normally with nothing in it left no trace
+			// on screen, which read as a dropped message.
+			b.CommitNote("The model ended its turn without replying.")
 			return
 		}
-		// The final state always sends regardless of streamThrottle — a
-		// throttled-away last delta must not be the one dropped, or the
-		// live caret's last frame would show stale, truncated text for an
-		// instant before the committed block replaces it.
-		b.Send(MsgStreamText{Text: text})
-		b.Send(msgCommitMarkdown{Text: text})
+		if text != "" {
+			// The final state always sends regardless of streamThrottle —
+			// a throttled-away last delta must not be the one dropped, or
+			// the live caret's last frame would show stale, truncated text
+			// for an instant before the committed block replaces it.
+			b.Send(MsgStreamText{Text: text})
+		}
+		if !hasSearchBlocks(ev.Message.Content) {
+			if text != "" {
+				b.Send(msgCommitMarkdown{Text: text})
+			}
+			return
+		}
+		// A message that ran a web search interleaves text and search
+		// blocks in Content order (Anthropic can emit text, a search, then
+		// more text, all within one message since the search resolved
+		// server-side mid-stream): commit each in that order instead of
+		// the single whole-message markdown block above.
+		b.commitMessageInOrder(ev.Message)
 
 	case harness.EventToolStart:
 		ts.toolCallsInTurn++
@@ -858,6 +909,13 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		// see InFlightTools' doc comment). Committing again here would
 		// double the block in the transcript — skip it, but still clean
 		// up toolStarts so a stale entry cannot leak into the next turn.
+		// A call the user declined at the prompt is already reported by
+		// the "✕ Declined …" note (app.go); its result is the
+		// model-facing refusal text, which would say it a second time.
+		if ev.PermissionOutcome == string(permission.OutcomeDeclined) {
+			delete(ts.toolStarts, ev.ToolCallID)
+			return
+		}
 		if ts.abortCommitted != nil && ts.abortCommitted[ev.ToolCallID] {
 			delete(ts.abortCommitted, ev.ToolCallID)
 			delete(ts.toolStarts, ev.ToolCallID)
@@ -865,8 +923,8 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		}
 
 		name := MapToolName(ev.ToolName)
-		primary := PrimaryArg(ev.ToolArgs)
-		summary := summarizeToolResult(ev.ToolResult)
+		primary := DisplayArg(ev.ToolName, PrimaryArg(ev.ToolArgs), b.cwd, b.Verbose())
+		summary := collapsedSummary(ev.ToolName, summarizeToolResult(ev.ToolResult), ev.ToolResult != nil && ev.ToolResult.IsError, b.Verbose())
 		// The committed block shows a short output summary and a
 		// "… +N lines (ctrl+o to expand)" tail (design: "tool" row);
 		// verbose mode gets the tool-output budget instead.
@@ -928,7 +986,7 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		// Rendered on the Update goroutine (like markdown) so result lines
 		// are fitted to the live width, and so tool calls and assistant
 		// text commit in the order they were sent.
-		b.Send(msgCommitToolCall{View: view})
+		b.Send(msgCommitToolCall{View: view, CallID: ev.ToolCallID})
 		if ev.ToolName == "exit_plan_mode" {
 			// Approving a plan moves the gate's mode; the footer re-reads it.
 			b.Send(MsgRefreshMode{})
@@ -959,12 +1017,20 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		var cost *float64
 		var tokens *int
 		if ev.UsageRow != nil {
-			v := ev.UsageRow.Input + ev.UsageRow.Output
+			// Everything the request carried is in context, cached or not.
+			// Counting only uncached input read ~0% once the conversation
+			// is served from the prompt cache.
+			u := ev.UsageRow
+			v := u.Input + u.CacheRead + u.CacheWrite + u.Output
 			contextUsed = &v
+			// The busy line's figure is the same quantity (design: "58k
+			// tokens" beside a 29% meter), so both read one number. It
+			// used to be the session's Input+Output, which collapses to
+			// tens of tokens once the conversation is cached.
+			ts.lastContext = v
+			tokens = &v
 		}
 		if ev.UsageTotals != nil {
-			t := ev.UsageTotals.Input + ev.UsageTotals.Output
-			tokens = &t
 			c := ev.UsageTotals.Cost.Total
 			cost = &c
 		}
@@ -975,8 +1041,12 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		if ev.Err != nil {
 			msg = ev.Err.Error()
 		}
-		b.FreezeBefore()
-		b.Commit(RenderError(msg))
+		// Through the app like msgCommitToolCall, not straight to Commit: a
+		// tool block for a call that ran before the fault is still on its
+		// way through Update, and a direct Commit overtook it, so the error
+		// landed above the call that preceded it. SendAsync because a fault
+		// can be emitted from the Update goroutine (see Send).
+		b.SendAsync(msgCommitFault{Message: msg})
 		b.mu.Lock()
 		b.lastFault = msg
 		b.mu.Unlock()
@@ -1000,7 +1070,40 @@ type msgCommitMarkdown struct{ Text string }
 
 // msgCommitToolCall asks the app to render a finished tool call at the
 // current width and commit it.
-type msgCommitToolCall struct{ View ToolCallView }
+type msgCommitToolCall struct {
+	View ToolCallView
+	// CallID is the tool call's id, so a task call the subagents panel
+	// already reports can be left out.
+	CallID string
+}
+
+// faultStatus reads the HTTP status off a provider error, which
+// provider/api's StatusError writes as "<Status Text> (<code>)…".
+var faultStatus = regexp.MustCompile(`^[A-Z][A-Za-z '-]* \((\d{3})\)`)
+
+// faultHint is the next step for a failed turn, by the provider's HTTP
+// status: the error line says what happened, this says what to do.
+func faultHint(message string) string {
+	m := faultStatus.FindStringSubmatch(message)
+	if m == nil {
+		return ""
+	}
+	switch code := m[1]; {
+	case code == "401" || code == "403":
+		return "Check this provider's credentials: /login shows how to sign in."
+	case code == "404":
+		return "This provider may not offer the model: /model lists the ones it does."
+	case code == "429":
+		return "Still rate limited after retrying. Wait a minute, then send again."
+	case code >= "500":
+		return "The provider kept failing after retries. Send again shortly, or switch with /model."
+	}
+	return ""
+}
+
+// msgCommitFault asks the app to commit a turn's error block, in order with
+// the tool calls committed before it.
+type msgCommitFault struct{ Message string }
 
 // MsgFooterNote sets the footer's transient note ("mcp: connecting 11
 // servers…"); an empty Text clears it. Sent by the CLI for work that
@@ -1101,6 +1204,8 @@ func toolMeta(ts *turnState, ev harness.Event) string {
 		parts = append(parts, "approved")
 	case string(permission.OutcomeAuto):
 		parts = append(parts, "auto-approved")
+	case string(permission.OutcomeHookBlocked):
+		parts = append(parts, "blocked by hook")
 	}
 	if elapsed, ok := toolElapsed(ts, ev.ToolCallID); ok {
 		parts = append(parts, elapsed)
@@ -1124,7 +1229,13 @@ func toolElapsed(ts *turnState, callID string) (string, bool) {
 	if _, testClock := os.LookupEnv("HARNESS_TEST_CLOCK"); testClock {
 		return "1.0s", true
 	}
-	return fmt.Sprintf("%.1fs", time.Since(start.At).Seconds()), true
+	// A call that took under a tenth of a second reads as "0.0s" on every
+	// file read: noise, not information.
+	d := time.Since(start.At)
+	if d < 100*time.Millisecond {
+		return "", false
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds()), true
 }
 
 // toolStart is one call's identity and start time, recorded on
@@ -1218,7 +1329,7 @@ func (b *Bridge) handleStreamEvent(se *msg.StreamEvent, ts *turnState) {
 			return
 		}
 		ts.streamed.WriteString(se.Delta)
-		tokens := compaction.EstimateTokens(msg.AssistantMessage{
+		tokens := ts.lastContext + compaction.EstimateTokens(msg.AssistantMessage{
 			Role:    msg.RoleAssistant,
 			Content: msg.Blocks{msg.Text(ts.streamed.String())},
 		})
@@ -1228,7 +1339,33 @@ func (b *Bridge) handleStreamEvent(se *msg.StreamEvent, ts *turnState) {
 			ts.lastStreamSend = now
 			b.Send(MsgStreamText{Text: ts.streamed.String()})
 		}
+	case msg.EventProviderBlockEnd:
+		// A server-side web search runs inside the stream, with no
+		// EventToolStart of its own: without this the busy line kept the
+		// turn's gerund for the seconds the search took.
+		if label, ok := webSearchBusyLabel(se.Content); ok {
+			b.Send(MsgSpinnerLabel{Text: label})
+		} else if strings.Contains(se.Content, `"web_search_tool_result"`) {
+			b.Send(MsgSpinnerReset{})
+		}
 	}
+}
+
+// webSearchBusyLabel is the busy label for a completed server_tool_use
+// web_search block: "Searching the web for <query>".
+func webSearchBusyLabel(raw string) (string, bool) {
+	var b anthropicServerToolUseBlock
+	if json.Unmarshal([]byte(raw), &b) != nil || b.Type != "server_tool_use" || b.Name != "web_search" {
+		return "", false
+	}
+	var in struct {
+		Query string `json:"query"`
+	}
+	_ = json.Unmarshal(b.Input, &in)
+	if in.Query == "" {
+		return "Searching the web", true
+	}
+	return "Searching the web for " + truncateBusyArg(in.Query, 40), true
 }
 
 // --- gate / plan approver wiring ----------------------------------------
@@ -1332,7 +1469,17 @@ func (b *Bridge) SubagentSink() func(agent.SubagentEvent) {
 
 // HookNotice renders a hook activity line, matching app.ts's onHookNotices
 // (app.ts:634-637): a dim aside the user needs to see; the model does not.
+//
+// A PreToolUse rewrite ("rewrote bash: …") goes to the debug log, not the
+// transcript: a hook that rewrites every command (a token-filtering proxy)
+// otherwise put a system block above nearly every bash call, repeating the
+// command the block below already shows. What a hook says itself, and a
+// block, still reach the transcript.
 func (b *Bridge) HookNotice(message string) {
+	if strings.HasPrefix(message, "rewrote ") {
+		diag.L().Info("hook rewrite", "detail", message)
+		return
+	}
 	b.CommitNote("hook: " + message)
 }
 
@@ -1344,12 +1491,10 @@ func (b *Bridge) HookNotice(message string) {
 // the app commits only once the dialog closes. SendAsync, because a
 // "/model <name>" argument switch runs on the Update goroutine.
 func (b *Bridge) ModelSwitch(label string, tierName string, usable int) {
-	b.SendAsync(msgModelSwitchNote{Text: fmt.Sprintf("Model: %s · %s tier · %s usable", label, tierName, FormatTokens(usable))})
+	// No transcript note of its own: /model, the only thing that switches
+	// models, confirms the switch itself, and a second note repeated it.
 	b.SendAsync(MsgModelInfo{Label: label})
 }
-
-// msgModelSwitchNote carries ModelSwitch's transcript note to the app.
-type msgModelSwitchNote struct{ Text string }
 
 // --- helpers -------------------------------------------------------------
 
@@ -1397,6 +1542,71 @@ func assistantText(m *msg.AssistantMessage) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, ""))
+}
+
+// hasVisibleContent reports whether an assistant message holds anything
+// the transcript shows besides its text: a tool call, thinking, or a
+// provider block such as a web search.
+func hasVisibleContent(content msg.Blocks) bool {
+	for _, c := range content {
+		switch cv := c.(type) {
+		case msg.ToolCall, msg.ProviderBlock:
+			return true
+		case msg.ThinkingContent:
+			if strings.TrimSpace(cv.Thinking) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasSearchBlocks reports whether m's content carries an Anthropic
+// web_search_tool_result ProviderBlock — the signal bridge.go uses to
+// switch EventMessageEnd from "commit the whole message as one markdown
+// block" to "walk Content in order, committing each search where it
+// happened".
+func hasSearchBlocks(content msg.Blocks) bool {
+	for _, c := range content {
+		if pb, ok := c.(msg.ProviderBlock); ok && pb.Provider == "anthropic" {
+			if bytes.Contains(pb.Raw, []byte(`"web_search_tool_result"`)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// commitMessageInOrder renders m's content in order, flushing accumulated
+// text as its own markdown block whenever a web search result block is
+// reached, and committing that search as a tool-call-shaped block (same
+// renderer as a real tool call: label, query, "→ N results · domains").
+// server_tool_use blocks carry no row of their own — their query is read
+// into the paired result's PrimaryArg via searchQueriesByToolUseID.
+func (b *Bridge) commitMessageInOrder(m *msg.AssistantMessage) {
+	queries := searchQueriesByToolUseID(m.Content)
+	var pending strings.Builder
+	flush := func() {
+		text := strings.TrimSpace(pending.String())
+		pending.Reset()
+		if text != "" {
+			b.Send(msgCommitMarkdown{Text: text})
+		}
+	}
+	for _, c := range m.Content {
+		switch cv := c.(type) {
+		case msg.TextContent:
+			pending.WriteString(cv.Text)
+		case msg.ProviderBlock:
+			view, ok := searchResultView(cv, queries)
+			if !ok {
+				continue
+			}
+			flush()
+			b.Send(msgCommitToolCall{View: view})
+		}
+	}
+	flush()
 }
 
 // diffFromToolDetails decodes an edit result's Details payload

@@ -17,13 +17,14 @@ WAITFOR /Second task handled too/ 20
 SHOT turn-two
 TYPE /config
 KEY enter
-WAITFOR /Configuration/ 20
+WAITFOR /read-only; each line says/ 20
 SHOT config-dialog-open
-EXPECT /Configuration/
+EXPECT /config ─/
+EXPECT_NOT /Configuration/
 EXPECT /read-only; each line says where the value came from/
 EXPECT /model\s+faux\/faux-1/
 EXPECT /permission mode\s+manual/
-EXPECT /hooks\s+1 across 1 events/
+EXPECT /hooks\s+1 hook on 1 event/
 # 2, not 1: kiln always injects a built-in "general-purpose" agent
 # (internal/agent/subagent.go) alongside the fixture's reader.md.
 EXPECT /subagents\s+2 available/
@@ -35,7 +36,7 @@ KEY up
 SHOT config-navigated-back
 KEY enter
 SHOT config-enter-noop
-EXPECT /Configuration/
+EXPECT /read-only; each line says/
 KEY esc
 SHOT config-closed
 EXPECT_NOT /panic|goroutine/

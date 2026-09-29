@@ -1,0 +1,18 @@
+# Start a dev server in the background, use it to reproduce a failing
+# integration test, fix the bug, and confirm no server survives past exit.
+@real
+@size 140x45
+@fixture qa/fixtures/real/wf-devserver-debug
+WAITFOR /describe a task/ 30
+SHOT ready
+TURN Start the dev server in the background on port 8089, then use it to figure out why TestHealthContentType in integration_test.go fails, and fix the bug. Run the test against the running server to confirm the fix, then leave the server running.
+SHOT after-fix
+SEND /bashes
+WAIT 2
+SHOT bashes
+RUN cd {PROJ} && PORT=8089 go test ./... -run TestHealthContentType -v -count=1
+RELAUNCH
+WAITFOR /describe a task/ 30
+SHOT relaunched
+RUN ! (lsof -i :8089 -t 2>/dev/null | grep -q .)
+NOTE kiln may or may not kill a background dev server on exit by design; the port-probe RUN above is the real check, not an assumption.

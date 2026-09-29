@@ -3,7 +3,9 @@ package permission
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -53,16 +55,23 @@ type Outcome string
 
 const (
 	// OutcomeNone means no gate decision applies to this call worth
-	// surfacing: a read-only tool, or a call that was blocked/denied.
+	// surfacing: a read-only tool, or a call a rule or mode blocked.
 	OutcomeNone Outcome = ""
 	// OutcomeApproved means the call reached a human prompt and was
 	// answered Yes or Yes-always, this time.
 	OutcomeApproved Outcome = "approved"
 	// OutcomeAuto means the call proceeded without asking: an existing
 	// session "always allow" grant, a permission-rules allow, or a mode
-	// that skips prompting (bypassPermissions, dontAsk, auto, acceptEdits
-	// for edit/write).
+	// that skips prompting (bypassPermissions, auto, acceptEdits for
+	// edit/write).
 	OutcomeAuto Outcome = "auto-approved"
+	// OutcomeDeclined means the call reached a human prompt and was
+	// answered No. The interface has already reported the refusal (with
+	// any feedback), so it need not render the call's result as well.
+	OutcomeDeclined Outcome = "declined"
+	// OutcomeHookBlocked means a PreToolUse hook refused the call before
+	// the gate saw it.
+	OutcomeHookBlocked Outcome = "blocked by hook"
 )
 
 // GateOptions configures a Gate.
@@ -96,6 +105,10 @@ type Gate struct {
 	// in a hurry to unblock one task should not silently become permanent
 	// policy.
 	sessionAllows map[string]bool
+	// sessionRules are bash allow rules granted by "yes, don't ask again"
+	// (settings.BashDontAskRule: the prefix the prompt names), judged per
+	// command segment with the configured allow rules.
+	sessionRules []string
 
 	// blockLog is everything refused this session, for diagnostics.
 	blockLog []string
@@ -264,15 +277,40 @@ func (g *Gate) RemoveRule(list RuleList, rule string) {
 }
 
 // SessionGrants returns grants made by "yes, don't ask again" this
-// session, surfaced because they are invisible otherwise.
+// session, surfaced because they are invisible otherwise. Each is written
+// as a Claude Code permission rule ("Bash(npm test)"), the form a person
+// reads in settings.json and the form /permissions saves when one is
+// promoted to a deny rule. Sorted, so the list does not reshuffle.
 func (g *Gate) SessionGrants() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	out := make([]string, 0, len(g.sessionAllows))
 	for k := range g.sessionAllows {
-		out = append(out, k)
+		out = append(out, grantRule(k))
 	}
+	sort.Strings(out)
 	return out
+}
+
+// grantRule turns a session-grant key ("bash::npm test") into rule syntax
+// ("Bash(npm test)"). Tool names take Claude Code's spelling: snake_case
+// becomes CamelCase ("web_fetch" → "WebFetch"); MCP tool names
+// ("mcp__server__tool") are already in that form and stay as they are.
+func grantRule(k string) string {
+	tool, arg, _ := strings.Cut(k, "::")
+	if !strings.HasPrefix(tool, "mcp__") {
+		var b strings.Builder
+		for _, part := range strings.Split(tool, "_") {
+			if part != "" {
+				b.WriteString(strings.ToUpper(part[:1]) + part[1:])
+			}
+		}
+		tool = b.String()
+	}
+	if arg == "" {
+		return tool
+	}
+	return tool + "(" + arg + ")"
 }
 
 // Blocked returns the refusal log, for /permissions-style reporting.
@@ -339,6 +377,43 @@ func PrimaryArgOf(args map[string]any) (string, bool) {
 	return "", false
 }
 
+// explicitAsk reports whether an ask rule names this bash command, which
+// the read-only allowance must not override.
+func (g *Gate) explicitAsk(permissions settings.Permissions, cmd string) bool {
+	return len(permissions.Ask) > 0 && settings.Decide(settings.Permissions{Ask: permissions.Ask}, "bash", cmd, settings.ModeAuto) == settings.Ask
+}
+
+// commandWithinRoots reports whether every path a command names stays in
+// the workspace: absolute and ~ paths must lie inside a root (/dev/null
+// aside), and a relative one must not climb out with "..". A cd target is
+// a path like any other, so "cd /elsewhere && cat x" is outside.
+func (g *Gate) commandWithinRoots(cmd string) bool {
+	words, ok := settings.CommandWords(cmd)
+	if !ok {
+		return false
+	}
+	home, _ := os.UserHomeDir()
+	for _, w := range words {
+		if _, v, ok := strings.Cut(w, "="); ok && strings.HasPrefix(w, "-") {
+			w = v // --output=/x
+		}
+		switch {
+		case w == "/dev/null":
+		case strings.HasPrefix(w, "~"):
+			if home == "" || !g.WithinRoots(filepath.Join(home, strings.TrimPrefix(w, "~"))) {
+				return false
+			}
+		case filepath.IsAbs(w):
+			if !g.WithinRoots(w) {
+				return false
+			}
+		case w == ".." || strings.HasPrefix(w, "../") || strings.Contains(w, "/../") || strings.HasSuffix(w, "/.."):
+			return false
+		}
+	}
+	return true
+}
+
 // Check decides, prompting if necessary. A nil result means proceed; a
 // non-nil BlockResult carries the reason, written for the model.
 //
@@ -366,15 +441,34 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 
 	g.mu.Lock()
 	permissions, mode := g.permissions, g.mode
+	if len(g.sessionRules) > 0 {
+		permissions.Allow = append(append([]string(nil), permissions.Allow...), g.sessionRules...)
+	}
 	g.mu.Unlock()
 
 	verdict := settings.Decide(permissions, req.ToolName, req.PrimaryArg, mode)
+
+	// A bash command that provably only reads, and only inside the
+	// workspace, runs without asking in the modes that otherwise ask about
+	// bash — the way the read tool never asks. Asking before "cat app.py"
+	// or "git log" was pure friction. Rules still win: Decide has already
+	// returned Deny or an explicit Ask for anything a rule names.
+	if verdict == settings.Ask && strings.EqualFold(req.ToolName, "bash") &&
+		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits || mode == settings.ModeDontAsk) &&
+		settings.IsReadOnlyCommand(req.PrimaryArg) && !g.explicitAsk(permissions, req.PrimaryArg) &&
+		g.commandWithinRoots(req.PrimaryArg) {
+		return nil, OutcomeAuto, nil
+	}
 
 	// A path outside the workspace always warrants a question, even when a
 	// rule would otherwise allow the tool.
 	path, hasPath := PathArgOf(req.Args)
 	escaped := hasPath && !g.WithinRoots(path)
 	if escaped && verdict == settings.Allow && mode != settings.ModeBypassPermissions {
+		if mode == settings.ModeDontAsk {
+			r := g.record(req, fmt.Sprintf("%s is outside the workspace, and don't-ask mode refuses anything that would need approval.", path))
+			return &r, OutcomeNone, nil
+		}
 		if g.prompter == nil {
 			r := g.record(req, fmt.Sprintf("%s is outside the workspace and cannot be confirmed.", path))
 			return &r, OutcomeNone, nil
@@ -392,7 +486,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 		if choice.Kind == PromptDeny {
 			r := g.record(req, "the user declined access to a path outside the workspace.")
-			return &r, OutcomeNone, nil
+			return &r, OutcomeDeclined, nil
 		}
 		if choice.Kind == PromptAllowAlways {
 			g.grantSession(k)
@@ -420,6 +514,10 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 
 	// verdict == ask
+	if mode == settings.ModeDontAsk {
+		r := g.record(req, "don't-ask mode refuses anything that would need approval. Add an allow rule for it, or switch modes.")
+		return &r, OutcomeNone, nil
+	}
 	if g.prompter == nil {
 		// Headless with no way to ask. Refusing beats proceeding: an
 		// unattended run must not silently take an action the policy said
@@ -442,6 +540,11 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	if choice.Kind == PromptAllowAlways {
 		g.grantSession(k)
+		if strings.EqualFold(req.ToolName, "bash") {
+			g.mu.Lock()
+			g.sessionRules = append(g.sessionRules, "Bash("+settings.BashDontAskRule(req.PrimaryArg)+")")
+			g.mu.Unlock()
+		}
 		return nil, OutcomeApproved, nil
 	}
 
@@ -450,5 +553,5 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		reason = fmt.Sprintf("the user declined and said: %s", choice.Feedback)
 	}
 	r := g.record(req, reason)
-	return &r, OutcomeNone, nil
+	return &r, OutcomeDeclined, nil
 }

@@ -23,8 +23,10 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
+	claudecommands "github.com/andrepato/harness/internal/claude/commands"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/permission"
+	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	claudeskills "github.com/andrepato/harness/internal/claude/skills"
 	"github.com/andrepato/harness/internal/claude/writesettings"
 	slashcommands "github.com/andrepato/harness/internal/commands"
@@ -40,15 +42,27 @@ import (
 type registryDeps struct {
 	Cwd     string
 	Started *agent.Started
+	// Interactive enables commands that only make sense in the TUI, such
+	// as /resume switching sessions by relaunching.
+	Interactive bool
 
 	Registry *provider.Registry
 	Gate     *permission.Gate
 	Hooks    claudehooks.Config
 	Agents   []claudeagents.Definition
 	Skills   []claudeskills.Skill
-	MCP      *mcpSession
-	Todos    *agent.TodoStore
-	Shells   *agent.BackgroundShells
+	// Plugins is the active (installed and enabled) plugin set for this
+	// run, for /plugin's report.
+	Plugins []claudeplugins.Plugin
+	// PluginCommands is every active plugin's own commands/**/*.md,
+	// already namespaced "<plugin>:<name>" (internal/claude/plugins.
+	// Commands) — registered as their own Source so a plugin's commands
+	// and its palette entries update independently of Claude's own
+	// .claude/commands (see slashcommands.PluginCommandSource).
+	PluginCommands []claudecommands.CommandFile
+	MCP            *mcpSession
+	Todos          *agent.TodoStore
+	Shells         *agent.BackgroundShells
 
 	SettingsLoadedFrom []string
 	// ModelRoles is settings.json's modelRoles map, threaded through to
@@ -91,7 +105,10 @@ func mcpStatusesOf(hub *mcpgate.Hub) func() []slashcommands.ServerStatus {
 		statuses := hub.Statuses()
 		out := make([]slashcommands.ServerStatus, len(statuses))
 		for i, s := range statuses {
-			out[i] = slashcommands.ServerStatus{Name: s.Name, OK: s.OK, ToolCount: s.ToolCount, Ms: s.Ms, Error: s.Error, Detail: s.Detail}
+			out[i] = slashcommands.ServerStatus{Name: s.Name, Scope: s.Scope, OK: s.OK, ToolCount: s.ToolCount, Ms: s.Ms, Error: s.Error, Detail: s.Detail}
+		}
+		for _, s := range hub.Pending() {
+			out = append(out, slashcommands.ServerStatus{Name: s.Name, Scope: s.Scope, Connecting: true})
 		}
 		return out
 	}
@@ -214,6 +231,8 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		Gate:        gate,
 		Cwd:         deps.Cwd,
 		SessionsDir: deps.SessionsDir,
+		CurrentID:   started.SessionID,
+		Relaunch:    relaunchFor(deps.Interactive),
 	}))
 
 	registry.Add(slashcommands.AccountCommands(slashcommands.AccountDeps{
@@ -279,6 +298,18 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 	for _, s := range slashcommands.ClaudeCommandSources(deps.Cwd) {
 		registry.Add(s)
 	}
+	registry.Add(slashcommands.PluginCommandSource(deps.PluginCommands))
+
+	registry.Add(slashcommands.PluginReportCommand(deps.Cwd, deps.Plugins))
 
 	return registry
+}
+
+// relaunchFor is /resume's Relaunch hook: nil in print mode, which runs one
+// prompt and exits rather than switching sessions.
+func relaunchFor(interactive bool) func(string) {
+	if !interactive {
+		return nil
+	}
+	return func(id string) { pendingRelaunch = id }
 }

@@ -50,7 +50,7 @@ steps:
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "run a slow command with a short timeout",
-		"--output-format", "json", "--permission-mode", "dontAsk")
+		"--output-format", "json", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}
@@ -122,7 +122,7 @@ steps:
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "start a background shell and read its output",
-		"--output-format", "json", "--permission-mode", "dontAsk")
+		"--output-format", "json", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}
@@ -175,7 +175,7 @@ steps:
 	before := sha256File(t, mathPath)
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
-		"-p", "fix the bug", "--output-format", "json", "--permission-mode", "dontAsk")
+		"-p", "fix the bug", "--output-format", "json", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}
@@ -316,7 +316,7 @@ steps:
 	addr, srv := startFaux(t, script)
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
-		"-p", "read the image", "--output-format", "json", "--permission-mode", "dontAsk")
+		"-p", "read the image", "--output-format", "json", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}
@@ -405,7 +405,7 @@ steps:
 	env["HARNESS_POSTURE"] = "all" // see this test's doc comment on the "coding" posture gap
 	res := runHarness(t, proj, env,
 		"-p", "echo something for me", "--output-format", "json",
-		"--mcp-config", cfg, "--strict-mcp-config", "--permission-mode", "dontAsk")
+		"--mcp-config", cfg, "--strict-mcp-config", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}
@@ -461,7 +461,7 @@ steps:
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "track the todo and search past sessions",
-		"--output-format", "json", "--permission-mode", "dontAsk")
+		"--output-format", "json", "--permission-mode", "bypassPermissions")
 	if res.Code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
 	}

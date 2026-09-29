@@ -45,6 +45,7 @@ SHOT arg-add-dir
 EXPECT /\bsrc\b/
 EXPECT /\btest\b/
 EXPECT /\bscripts\b/
+EXPECT /src\/\s+already in the workspace/
 KEY esc
 KEY ctrl+u
 SHOT arg-completion-cleared

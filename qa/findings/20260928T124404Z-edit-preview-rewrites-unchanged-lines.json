@@ -1,0 +1,25 @@
+{
+ "id": "20260928T124404Z-edit-preview-rewrites-unchanged-lines",
+ "found_at": "2026-09-28T12:44:04Z",
+ "scenario": "real/ext-skills",
+ "step": "05-prompt",
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Edit approval preview shows unchanged lines as removed and re-added",
+ "observed": "Appending a /health endpoint showed the existing route's 3 lines as − and + pairs, as if they were rewritten",
+ "expected": "Unchanged lines shown as dim context; only real removals/additions signed",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-ext-skills-140x45/05-prompt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go"
+  ],
+  "regression_test": "TestLineDiffHunks_KeepsUnchangedLinesAsContext",
+  "note": "Awaiting a live re-drive.",
+  "updated_at": "2026-09-28T12:44:04Z"
+ }
+}

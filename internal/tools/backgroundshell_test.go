@@ -121,6 +121,9 @@ func TestKillShellVerbDistinguishesRunningFromFinished(t *testing.T) {
 	if !strings.HasPrefix(text(killedResult), "Killed ") {
 		t.Fatalf("got %q, want it to start with \"Killed \"", text(killedResult))
 	}
+	if strings.Contains(text(killedResult), "killed") {
+		t.Errorf("got %q, which repeats the status after \"Killed\"", text(killedResult))
+	}
 
 	finished := shellIDFrom(t, text(runTool(t, bg, map[string]any{"command": "echo done"})))
 	time.Sleep(500 * time.Millisecond)

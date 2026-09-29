@@ -19,7 +19,7 @@ SHOT after-esc
 EXPECT /✕ Declined curl https:\/\/example\.invalid\/deploy/
 EXPECT_NOT /approval needed/
 EXPECT /■ Interrupted\. Tell kiln what to do instead\./
-# Recorded per the task brief's literal wording — expected to fail given
-# the promptEscInterrupt behaviour traced above.
+# One system block: the interrupt line continues the decline note.
+EXPECT /✕ Declined curl[^\n]*\n\s*■ Interrupted/
 EXPECT_NOT /Okay, I won.t run it/
 EXPECT_NOT /panic|goroutine/

@@ -137,7 +137,7 @@ func TestRun_PrintTools_ListsResident(t *testing.T) {
 		t.Fatalf("exit code %d, stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"bash", "read", "edit", "write", "todo_write", "tool_search"} {
+	for _, want := range []string{"bash", "read", "edit", "write", "todo write", "tool search"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("/tools output missing %q:\n%s", want, out)
 		}
@@ -175,7 +175,7 @@ steps:
 	args.Print = true
 	args.PrintPrompt = "look up echo and use it"
 	args.OutputFormat = "stream-json"
-	args.PermissionMode = "dontAsk"
+	args.PermissionMode = "bypassPermissions"
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), args, &stdout, &stderr, strings.NewReader(""))
@@ -219,9 +219,11 @@ steps:
 	}
 }
 
-// TestRun_PrintHelp_29Builtins checks /help lists all 29 built-in slash
-// commands the registry wiring in commands.go registers.
-func TestRun_PrintHelp_29Builtins(t *testing.T) {
+// TestRun_PrintHelp_30Builtins checks /help lists all 30 built-in slash
+// commands the registry wiring in commands.go registers — 29 plus /plugin
+// (internal/commands/plugin_commands.go), added once kiln started reading
+// Claude Code's installed_plugins.json/enabledPlugins itself.
+func TestRun_PrintHelp_30Builtins(t *testing.T) {
 	startFaux(t, unreadScript)
 	scratchProject(t)
 
@@ -240,8 +242,8 @@ func TestRun_PrintHelp_29Builtins(t *testing.T) {
 			count++
 		}
 	}
-	if count != 29 {
-		t.Errorf("/help listed %d commands, want 29:\n%s", count, stdout.String())
+	if count != 30 {
+		t.Errorf("/help listed %d commands, want 30:\n%s", count, stdout.String())
 	}
 }
 
@@ -260,8 +262,8 @@ func TestRun_PrintModel_SwitchesAndPrints(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code %d, stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "now on faux/faux-1") {
-		t.Errorf("stdout = %q, want it to contain \"now on faux/faux-1\"", stdout.String())
+	if !strings.Contains(stdout.String(), "Now on faux/faux-1") {
+		t.Errorf("stdout = %q, want it to contain \"Now on faux/faux-1\"", stdout.String())
 	}
 }
 
@@ -355,7 +357,7 @@ func TestDoctor_ReportsMCP(t *testing.T) {
 	if strings.Contains(out, "phase 5") {
 		t.Errorf("doctor output still mentions phase 5: %q", out)
 	}
-	if !strings.Contains(out, "resident, strategy") {
+	if !strings.Contains(out, "always available · MCP index") || strings.Contains(out, "resident") {
 		t.Errorf("doctor output missing resident tool/strategy line: %q", out)
 	}
 }

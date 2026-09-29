@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -47,6 +46,31 @@ type ExecResult struct {
 	Text       string
 	Truncation TruncationResult
 	SpillPath  string
+	// JobsLeft reports that the command left background jobs running
+	// ("server &"): its process group outlived the shell. They are
+	// stopped by KillLeftoverJobs when the session ends. JobsGroup is
+	// their process group, so they can be stopped precisely before that.
+	JobsLeft  bool
+	JobsGroup int
+}
+
+// leftoverGroups holds the process groups of commands whose background
+// jobs outlived them, so the session can stop them on exit instead of
+// leaving a server holding a port nobody has a handle on.
+var leftoverGroups = struct {
+	mu    sync.Mutex
+	pgids map[int]struct{}
+}{pgids: map[int]struct{}{}}
+
+// KillLeftoverJobs sends SIGTERM to every process group a command left
+// running (ExecResult.JobsLeft). Called on exit.
+func KillLeftoverJobs() {
+	leftoverGroups.mu.Lock()
+	defer leftoverGroups.mu.Unlock()
+	for pgid := range leftoverGroups.pgids {
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		delete(leftoverGroups.pgids, pgid)
+	}
 }
 
 // resolveShell picks the shell Exec runs commands under, mirroring
@@ -71,6 +95,18 @@ func resolveShell(shellPath string) (string, error) {
 		return path, nil
 	}
 	return "/bin/sh", nil
+}
+
+// pipeDrainDelay is how long Exec keeps reading output after the shell
+// exits, for pipes a background job still holds open.
+const pipeDrainDelay = time.Second
+
+// feedWriter adapts Exec's feed callback to an io.Writer.
+type feedWriter func(string)
+
+func (f feedWriter) Write(p []byte) (int, error) {
+	f(string(p))
+	return len(p), nil
 }
 
 // Exec runs command under a shell (`<shell> -c <command>`), streaming
@@ -139,14 +175,15 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 		}
 	}
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return ExecResult{}, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return ExecResult{}, err
-	}
+	// Output goes through writers, not StdoutPipe, so Wait owns the copy
+	// and WaitDelay can bound it: a job the command backgrounded
+	// ("server &") inherits the pipes and holds them open after the shell
+	// exits, and reading to EOF would then wait for that job forever. Once
+	// the shell has exited, Wait gives the pipes pipeDrainDelay to drain,
+	// then closes them and returns; the job keeps running.
+	cmd.Stdout = feedWriter(feed)
+	cmd.Stderr = feedWriter(feed)
+	cmd.WaitDelay = pipeDrainDelay
 
 	if err := cmd.Start(); err != nil {
 		return ExecResult{}, err
@@ -167,26 +204,19 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 		})
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	pump := func(r io.Reader) {
-		defer wg.Done()
-		buf := make([]byte, 64*1024)
-		for {
-			n, err := r.Read(buf)
-			if n > 0 {
-				feed(string(buf[:n]))
-			}
-			if err != nil {
-				return
-			}
-		}
-	}
-	go pump(stdout)
-	go pump(stderr)
-	wg.Wait()
-
 	waitErr := cmd.Wait()
+	if errors.Is(waitErr, exec.ErrWaitDelay) {
+		waitErr = nil // the shell exited 0; only a background job held the pipes
+	}
+	// The shell ran in its own process group; if anything is still in it,
+	// the command backgrounded a job that is still running.
+	pgid := cmd.Process.Pid
+	jobsLeft := syscall.Kill(-pgid, 0) == nil
+	if jobsLeft {
+		leftoverGroups.mu.Lock()
+		leftoverGroups.pgids[pgid] = struct{}{}
+		leftoverGroups.mu.Unlock()
+	}
 	if timer != nil {
 		timer.Stop()
 	}
@@ -231,6 +261,8 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 		Text:       final.Text,
 		Truncation: final.Truncation,
 		SpillPath:  final.SpillPath,
+		JobsLeft:   jobsLeft,
+		JobsGroup:  pgid,
 	}, nil
 }
 

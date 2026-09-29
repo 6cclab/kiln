@@ -382,6 +382,9 @@ func convertResponsesTools(model provider.Model, tools []provider.ToolDef, compa
 	supportsStrict := boolDefault(compat.SupportsStrictMode, false)
 	out := make([]responsesFunctionTool, 0, len(tools))
 	for _, td := range tools {
+		if len(td.ServerTool) > 0 {
+			continue
+		}
 		schema := td.Parameters
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)

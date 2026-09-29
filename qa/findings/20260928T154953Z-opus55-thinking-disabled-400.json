@@ -1,0 +1,22 @@
+{
+ "id": "20260928T154953Z-opus55-thinking-disabled-400",
+ "found_at": "2026-09-28T15:49:53Z",
+ "scenario": "user-report",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Opus 5.5 requests fail: thinking.type.disabled not supported",
+ "observed": "400 invalid_request_error: \"thinking.type.disabled\" is not supported for this model. Use \"thinking.type.adaptive\" and \"output_config.effort\" (req_011CfW6VDzwAzRAgoSscp8x9). The client only did budget thinking and ignored the catalog's forceAdaptiveThinking and thinkingLevelMap",
+ "expected": "Adaptive-only models get thinking adaptive + output_config.effort; off maps to the lowest supported effort where the model cannot disable thinking",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/provider/api/anthropic_messages.go"
+  ],
+  "regression_test": "TestAdaptiveThinkingModelsGetEffortNotBudgets",
+  "updated_at": "2026-09-28T15:49:53Z"
+ }
+}

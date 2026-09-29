@@ -103,7 +103,9 @@ func selectionGutter(selected bool) string {
 	if !IsColorEnabled() {
 		return "> "
 	}
-	return "  "
+	// The raised background alone is too faint on many terminal themes
+	// to tell which row is selected; the prompt glyph says it plainly.
+	return KilnAmber("›") + " "
 }
 
 // renderTitleAndDescription renders the bold title row followed by the
@@ -226,13 +228,13 @@ func renderOptionRows(options []DialogOption, selected int, width, maxRows int) 
 			row += strings.Repeat(" ", pad) + Muted(descLines[0])
 		}
 		if i == selected {
-			row = OnRaise(padTo(row, width))
+			row = RaiseRow(row, width)
 		}
 		out = append(out, row)
 		for _, cont := range descLines[1:] {
 			contRow := strings.Repeat(" ", descCol) + Muted(cont)
 			if i == selected {
-				contRow = OnRaise(padTo(contRow, width))
+				contRow = RaiseRow(contRow, width)
 			}
 			out = append(out, contRow)
 		}
@@ -380,6 +382,13 @@ func (d *commandDialog) FrameLabel() string {
 	return strings.ToLower(d.spec.Title)
 }
 
+// repeatsLabel reports whether title is one word that the frame label
+// spells or abbreviates.
+func repeatsLabel(title, label string) bool {
+	t := strings.ToLower(title)
+	return label != "" && !strings.Contains(t, " ") && strings.HasPrefix(t, strings.ToLower(label))
+}
+
 func (d *commandDialog) selected() (commands.Item, bool) {
 	if d.cursor < 0 || d.cursor >= len(d.spec.Items) {
 		return commands.Item{}, false
@@ -389,7 +398,12 @@ func (d *commandDialog) selected() (commands.Item, bool) {
 
 func (d *commandDialog) Render(width, height int) []string {
 	var out []string
-	out = append(out, renderTitleAndDescription(d.spec.Title, "", width)...)
+	// The label rule above already names the dialog; a title that only
+	// repeats it ("permissions ───" then "Permissions", "config ───" then
+	// "Configuration") is dropped.
+	if !repeatsLabel(d.spec.Title, d.FrameLabel()) {
+		out = append(out, renderTitleAndDescription(d.spec.Title, "", width)...)
+	}
 	for _, h := range d.spec.Header {
 		out = append(out, dialogIndent+h)
 	}
@@ -410,6 +424,11 @@ func (d *commandDialog) Render(width, height int) []string {
 	if maxRows < 1 {
 		maxRows = len(options)
 	}
+	if len(options) == 0 && d.spec.Empty != "" {
+		for _, line := range wrapMultiline(d.spec.Empty, max(width-len(dialogIndent), 20)) {
+			out = append(out, dialogIndent+Muted(line))
+		}
+	}
 	out = append(out, renderOptionRows(options, d.cursor, width, maxRows)...)
 
 	out = append(out, "")
@@ -426,6 +445,9 @@ func (d *commandDialog) Render(width, height int) []string {
 		keys = append(keys, "Enter to select")
 	}
 	for _, a := range d.spec.Actions {
+		if len(d.spec.Items) == 0 && !a.Global {
+			continue
+		}
 		keys = append(keys, a.Key+" "+a.Label)
 	}
 	keys = append(keys, "Esc to cancel")

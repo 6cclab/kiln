@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
@@ -105,6 +106,10 @@ type Config struct {
 	// use the text tokens fitted to the terminal's reported background
 	// rather than the design defaults Banner was styled with at startup.
 	BannerFunc func() []string
+	// StartupNotes are committed as system notes right after the banner,
+	// once the terminal's width is known (committed any earlier, a note
+	// wrapped at the fallback width).
+	StartupNotes []string
 	// ModelID is the provider/model id the verbose transcript's model row
 	// shows after a turn's last tool call (docs/claude-code-reference.md
 	// §3); empty falls back to ModelLabel.
@@ -221,10 +226,6 @@ type Model struct {
 	// closes (docs/claude-code-reference.md §3: "❯ /model" / "  ⎿  Kept
 	// model as …").
 	dialogEcho string
-	// dialogNotes are notes raised while dialogEcho's dialog was open (a
-	// model switch from /model); closeDialog commits them after the echo
-	// so the transcript reads in the order things happened.
-	dialogNotes []string
 	// group is the in-flight collapsed row for consecutive read-only tool
 	// calls ("  Reading 2 files…", docs/claude-code-reference.md §3). It is
 	// live (redrawn every frame) until a non-grouped commit or the turn's
@@ -289,12 +290,15 @@ type Model struct {
 	// on ClearScreen/toggle/resize-rewrap — see appendTranscript and
 	// replayTranscript.
 	transcript []string
+	// sel is the fullscreen transcript selection being dragged or last
+	// copied (selection.go); nil when there is none.
+	sel *selection
 	// viewport renders transcript, scrolled. Its own KeyMap is emptied in
 	// NewModel (see there) so it never intercepts a keypress on its own;
 	// scrolling is driven explicitly from handleKey/Update instead.
 	viewport viewport.Model
 	// resizeGen guards the debounced re-wrap a width change schedules
-	// (msgFullscreenRewrap): only the most recent WindowSizeMsg's tick may
+	// (msgResizeRewrap): only the most recent WindowSizeMsg's tick may
 	// trigger the clear+replay, so a burst of resizes during a drag
 	// rewraps once, not once per event.
 	resizeGen int
@@ -446,18 +450,28 @@ type toolGroup struct {
 	views []ToolCallView
 }
 
-// msgFullscreenRewrap follows a debounced width change in fullscreen mode:
+// msgResizeRewrap follows a debounced width change in fullscreen mode:
 // once 150ms have passed with no further WindowSizeMsg, the transcript is
 // cleared and replayed at the new width (the same tea.ClearScreen +
 // msgReplayTranscript sequence Ctrl+O uses), so history re-wraps instead of
 // staying wrapped to a stale width. gen must match Model.resizeGen at the
 // time the tick fires, or a later resize already superseded this one.
-type msgFullscreenRewrap struct{ gen int }
+type msgResizeRewrap struct{ gen int }
 
 // msgReplayTranscript follows the tea.ClearScreen a Ctrl+O toggle returns:
 // once the clear has been applied, the transcript so far is re-committed at
 // the new verbosity (see replayTranscript and Bridge.MsgClearAndReplay).
-type msgReplayTranscript struct{}
+type msgReplayTranscript struct {
+	// then runs after the replay has been queued: a note that must land
+	// under the redrawn history. A tea.Sequence step after this message
+	// runs as soon as the message is returned, before Update replays, and
+	// so committed its note above the redrawn transcript.
+	then func()
+}
+
+// msgExecDone reports that a program a command handed the terminal to (the
+// editor /memory opens) has exited, with the note to show for it.
+type msgExecDone struct{ note string }
 
 // bannerBackgroundGrace is how long the first WindowSizeMsg's handler waits
 // for tea.BackgroundColorMsg before committing the banner (and, for a
@@ -525,11 +539,21 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.appendTranscript(strings.Split(msg.Text, "\n"))
 		return m, nil
 
-	case msgFullscreenRewrap:
+	case msgResizeRewrap:
 		if msg.gen != m.resizeGen {
 			return m, nil
 		}
 		return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
+
+	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
+		next, cmd, _ := m.handleMouseSelect(msg)
+		return next, cmd
+
+	case msgCopied:
+		m.modeHintGen++
+		gen := m.modeHintGen
+		m.modeHintText = copiedNote(msg)
+		return m, tea.Tick(copiedNoteDuration, func(time.Time) tea.Msg { return msgClearModeHint{gen: gen} })
 
 	case tea.MouseWheelMsg:
 		if !m.fullscreen {
@@ -585,11 +609,16 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.fullscreen {
 			m = m.layoutViewport()
-			if prevWidth != 0 && prevWidth != m.width {
-				m.resizeGen++
-				gen := m.resizeGen
-				return m, tea.Batch(bannerCmd, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return msgFullscreenRewrap{gen: gen} }))
-			}
+		}
+		// A width change redraws the transcript at the new width once the
+		// resize settles. Inline mode needs it as much as fullscreen: a
+		// frame painted at the old width between the terminal's resize and
+		// this message wraps, the renderer loses count of the rows it owns,
+		// and pieces of the old frame stay on screen.
+		if prevWidth != 0 && prevWidth != m.width && (m.fullscreen || m.bannerDone) {
+			m.resizeGen++
+			gen := m.resizeGen
+			return m, tea.Batch(bannerCmd, tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return msgResizeRewrap{gen: gen} }))
 		}
 		return m, bannerCmd
 
@@ -601,7 +630,25 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyPressMsg:
+		m.sel = nil
 		return m.handleKey(msg)
+
+	case tea.PasteMsg:
+		// Terminals deliver a paste as one bracketed block, not keys; it
+		// goes to whatever text field is active: a permission prompt's
+		// reason, else the input. Dialogs have no text fields.
+		m.shortcuts = false
+		if m.dialog != nil {
+			return m, nil
+		}
+		if m.prompt.Active() {
+			m.prompt.Paste(msg.Content)
+			return m, nil
+		}
+		ed, cmd, _ := m.editor.Update(msg)
+		m.editor = ed
+		m = m.refreshPopup()
+		return m, cmd
 
 	case msgSpinnerTick:
 		if !m.busy {
@@ -628,6 +675,18 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m = m.commitReconnectNote()
+		// Text after a held read group ends the group: commit it now, or
+		// the calls stay off screen while the reply that follows them
+		// streams in.
+		// The reply streaming is also when "Running <tool>" stops being
+		// true (the design's busy label returns to the turn's gerund once
+		// text resumes).
+		if m.streamText == "" {
+			if m.group != nil {
+				m = m.flushGroup()
+			}
+			m.spinner.ResetLabel()
+		}
 		m.streamText = msg.Text
 		return m, nil
 
@@ -665,8 +724,23 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.reconnectedAttempt = msg.Attempt
 		return m, nil
 
+	case msgCommitFault:
+		// A bash/read call that ran before the fault may still sit in the
+		// collapsed group, uncommitted; flush it first, as msgCommitToolCall
+		// does for any non-grouped block.
+		m = m.flushGroup()
+		m.commit(RenderError(msg.Message))
+		return m, nil
+
 	case msgCommitToolCall:
 		if m.cfg.Bridge == nil {
+			return m, nil
+		}
+		// A dispatch the subagents panel shows (its row carries the
+		// outcome, success or failure) gets no task block of its own: the
+		// design's agents block is the one record of a dispatch. A task
+		// call that failed before dispatching has no row and still shows.
+		if strings.EqualFold(msg.View.Name, "task") && m.subagents.Has(msg.CallID) && !m.cfg.Bridge.Verbose() {
 			return m, nil
 		}
 		if kind, grouped := groupKindFor(msg.View.Name); grouped && !m.cfg.Bridge.Verbose() {
@@ -703,6 +777,11 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case msgDialogResult:
 		if applier, ok := m.dialog.(interface{ Apply(msgDialogResult) }); ok {
 			applier.Apply(msg)
+			// A dialog whose choice is final (a model picked) closes once
+			// it has applied, leaving its outcome as the confirmation.
+			if d, ok := m.dialog.(interface{ Done() bool }); ok && d.Done() {
+				m = m.closeDialog()
+			}
 			// A dialog action can move the gate's mode (/permissions' "m");
 			// the footer re-reads it so it agrees once the panel closes.
 			return m.refreshMode(), nil
@@ -722,12 +801,21 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			return nil
 		}
 		if msg.replay {
-			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} }, note)
+			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{then: func() { note() }} })
 		}
 		return m, note
 
 	case msgReplayTranscript:
 		m.replayTranscript()
+		if msg.then != nil {
+			msg.then()
+		}
+		return m, nil
+
+	case msgExecDone:
+		if msg.note != "" {
+			m.commitNote(msg.note)
+		}
 		return m, nil
 
 	case msgCommitBanner:
@@ -758,14 +846,6 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			cost = *msg.Cost
 		}
 		m.footer.Apply(StatusPatch{ContextUsed: msg.ContextUsed, Cost: &cost})
-		return m, nil
-
-	case msgModelSwitchNote:
-		if m.dialog != nil && m.dialogEcho != "" {
-			m.dialogNotes = append(m.dialogNotes, msg.Text)
-			return m, nil
-		}
-		m.commitNote(msg.Text)
 		return m, nil
 
 	case MsgModelInfo:
@@ -945,9 +1025,27 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 	}
 	m.subagents.Reset()
 	if msg.result.Status == harness.StatusAborted && m.cfg.Bridge != nil {
+		// Follow-ups queued during the interrupted turn go back into the
+		// input rather than riding along with whatever the user says
+		// next: the interrupt usually means the plan changed. m.queued is
+		// cleared first, so ClearInbox's MsgQueue{Len:0} commits nothing.
+		note := "■ Interrupted. Tell kiln what to do instead."
+		if len(m.queued) > 0 && m.cfg.Lane != nil {
+			restored := strings.Join(m.queued, "\n")
+			m.queued = nil
+			m.spinner.SetQueueLen(0)
+			if _, err := m.cfg.Lane.ClearInbox(); err != nil {
+				m.commit(RenderError(err.Error()))
+			}
+			if typed := m.editor.Value(); typed != "" {
+				restored += "\n" + typed
+			}
+			m.editor.SetValue(restored)
+			note = "■ Interrupted. Your queued message is back in the input: edit it or press enter to send."
+		}
 		// Last, so it reads as the final word on what happened
 		// (docs/kiln-design-handoff/README.md's "note" row).
-		m.cfg.Bridge.CommitNote("■ Interrupted. Tell kiln what to do instead.")
+		m.cfg.Bridge.CommitNote(note)
 	}
 	m.footer.SetNote("")
 	m.editor.SetPlaceholder(editor.DefaultPlaceholder)
@@ -1011,27 +1109,6 @@ func (m Model) commitNote(text string) {
 	m.cfg.Bridge.CommitNote(text)
 }
 
-// declinedFollowupText is the assistant text block that follows a
-// declined tool call (Terminal.dc.html line 303's pick(2): the note
-// "✕ Declined …" plus this exact sentence, copied literally from the
-// design source — a plain ASCII apostrophe in "won't", not a typographic
-// one).
-const declinedFollowupText = "Okay, I won't run it. What should I do instead?"
-
-// commitAssistantText commits text as an ordinary "kiln" assistant text
-// block (RenderAssistantText), the same rendering msgCommitMarkdown uses
-// for a real streamed reply — used for declinedFollowupText, which is
-// synthesized locally rather than streamed from the model, but must read
-// the same as one that was.
-func (m Model) commitAssistantText(text string) {
-	if m.cfg.Bridge == nil {
-		return
-	}
-	renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
-	lines := append([]string{""}, RenderAssistantText(renderer.Render(text))...)
-	m.commit(lines)
-}
-
 // commitCommandResult is commit's CommitCommandResult counterpart.
 func (m Model) commitCommandResult(name string, lines []string) {
 	if m.cfg.Bridge == nil {
@@ -1055,9 +1132,6 @@ func (m Model) closeDialog() Model {
 	m.dialog = nil
 	if m.dialogEcho != "" && m.cfg.Bridge != nil {
 		m.commit(RenderUserMessage(m.dialogEcho, m.contentWidth()))
-		for _, note := range m.dialogNotes {
-			m.cfg.Bridge.CommitNote(note)
-		}
 		if outcome != "" {
 			// A dialog's outcome is always one line ("Kept model as …",
 			// "Compacted history · context 38% → 8%") — the kiln "note"
@@ -1066,7 +1140,6 @@ func (m Model) closeDialog() Model {
 		}
 	}
 	m.dialogEcho = ""
-	m.dialogNotes = nil
 	return m
 }
 
@@ -1084,9 +1157,13 @@ func (m Model) flushGroup() Model {
 	if m.cfg.Bridge != nil {
 		width := m.contentWidth()
 		m.cfg.Bridge.FreezeBefore()
-		for _, view := range m.group.views {
-			lines := append([]string{""}, FitLines(RenderToolCall(view), width, "     ")...)
-			m.cfg.Bridge.Commit(lines)
+		if CompactReadGroup(m.group.views, m.cfg.Bridge.Verbose()) {
+			m.cfg.Bridge.Commit(append([]string{""}, FitLines(RenderReadGroup(m.group.views), width, "     ")...))
+		} else {
+			for _, view := range m.group.views {
+				lines := append([]string{""}, FitLines(RenderToolCall(view), width, "     ")...)
+				m.cfg.Bridge.Commit(lines)
+			}
 		}
 	}
 	m.group = nil
@@ -1231,6 +1308,14 @@ func (m Model) fullscreenView() tea.View {
 	for len(vpRows) < vp.Height() {
 		vpRows = append(vpRows, "")
 	}
+	if m.sel != nil {
+		top := vp.YOffset()
+		for i := range vpRows {
+			if from, to, ok := m.sel.span(top+i, m.width); ok {
+				vpRows[i] = highlightRow(vpRows[i], from, to)
+			}
+		}
+	}
 
 	content := append(append([]string{}, vpRows...), chrome...)
 	v := tea.NewView(strings.Join(content, "\n"))
@@ -1342,10 +1427,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// one keypress, as Claude Code does — the popup does not eat the
 			// Enter to merely re-insert what is already there. A partial name
 			// (or Tab) still completes first; a second Enter then submits.
+			// The same goes for anything else already typed in full — an
+			// argument ("/posture ops"), a file mention — when accepting
+			// would leave the line as it is: Enter used to be swallowed there,
+			// so the next message was typed onto the end of the command.
 			item, hasItem := m.popup.SelectedItem()
 			line, _ := m.editor.CursorLine()
-			if msg.String() == "enter" && hasItem && m.popup.Kind == KindSlashCommand &&
-				strings.TrimSpace(line) == "/"+item.Value {
+			replacement, _ := m.popup.Accept()
+			accepted := line
+			if m.popup.Start >= 0 && m.popup.Start <= m.popup.End && m.popup.End <= len(line) {
+				accepted = line[:m.popup.Start] + replacement + line[m.popup.End:]
+			}
+			if msg.String() == "enter" && hasItem && (strings.TrimSpace(line) == "/"+item.Value ||
+				strings.TrimRight(accepted, " ") == strings.TrimRight(line, " ")) {
 				m.popup = nil
 				m.editor.PopupActive = false
 				// Fall through to the editor's submit pipeline below.
@@ -1434,19 +1528,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// ending), matching docs/kiln-design-handoff/README.md's "note" row.
 	if denied := m.prompt.lastDenied; denied != nil {
 		m.prompt.lastDenied = nil
-		m.commitNote(declinedNoteText(*denied))
-		// The design's decline-only path (Terminal.dc.html line 303)
-		// also commits an assistant text block asking what to do
-		// instead — but not when this decline is really an Esc-driven
-		// interrupt (promptEscInterrupt, defect 5): the user is
-		// stopping the whole turn, not redirecting the one declined
-		// call, and finishTurn's own "■ Interrupted…" note is about to
-		// answer that same "what now" beat once the abort actually
-		// lands. Showing both would read as two different, competing
-		// answers to the same moment, so the interrupt note wins.
-		if !promptEscInterrupt {
-			m.commitAssistantText(declinedFollowupText)
-		}
+		m.commitNote(declinedNoteText(*denied, m.prompt.lastDeniedFeedback))
+		m.prompt.lastDeniedFeedback = ""
+		// The design prototype follows this note with a scripted "Okay, I
+		// won't run it. What should I do instead?" from kiln. There a
+		// script plays the model; here the model answers the refusal
+		// itself, so a scripted line would put words in its mouth (it
+		// said "run" of an edit, and landed before the real reply).
 	}
 	// "Yes, and switch to auto mode" (Bash) / "Yes, and switch to accept
 	// edits" (Edit/Write) both allow the pending call AND change the
@@ -1527,12 +1615,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // open (MsgPermissionPrompt/MsgPlanPrompt).
 func (m Model) syncPromptPlaceholder() Model {
 	switch {
-	case m.prompt.pending != nil:
-		if m.prompt.feedback == nil {
-			m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request.ToolName))))
+	case m.prompt.feedback != nil:
+		// The prompt's own field is taking the typing; saying "press 1, 2
+		// or 3" here pointed at a choice that is no longer open. Esc means
+		// different things in the two fields (permissionview.go).
+		if m.prompt.plan != nil {
+			m.editor.SetPlaceholder("typing in the prompt above · enter to send · esc to go back")
 		} else {
-			m.editor.SetPlaceholder("press 1, 2 or 3")
+			m.editor.SetPlaceholder("typing in the prompt above · enter to send · esc to decline")
 		}
+	case m.prompt.pending != nil:
+		m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request.ToolName))))
 	case m.prompt.plan != nil:
 		m.editor.SetPlaceholder("press 1, 2 or 3")
 	case m.busy:
@@ -1639,6 +1732,13 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		return m, m.runMode(classified)
 	}
 
+	// A bare /rewind opens the same picker as esc esc; the command's text
+	// listing is for print mode, where there is no picker.
+	if strings.TrimSpace(line) == "/rewind" && m.cfg.Lane != nil {
+		m.editor.SetValue("")
+		return m.openRewind(), nil
+	}
+
 	ctx := context.Background()
 	var handled *commands.Result
 	if m.cfg.Registry != nil {
@@ -1658,11 +1758,12 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			// The conversation was reset: redraw the (now empty)
 			// transcript, then show the command's note under it.
 			note := strings.Join(handled.Output, " ")
-			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} }, func() tea.Msg {
-				if m.cfg.Bridge != nil && note != "" {
-					m.cfg.Bridge.CommitNote(note)
-				}
-				return nil
+			return m, tea.Sequence(tea.ClearScreen, func() tea.Msg {
+				return msgReplayTranscript{then: func() {
+					if m.cfg.Bridge != nil && note != "" {
+						m.cfg.Bridge.CommitNote(note)
+					}
+				}}
 			})
 		}
 		if handled.Modal != nil {
@@ -1672,6 +1773,18 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		echo()
+		if handled.Exec != nil {
+			// Hand the terminal to the program (an editor for /memory):
+			// the TUI suspends, the program runs in the foreground, and
+			// the note lands once it exits.
+			done := handled.ExecDone
+			return m, tea.ExecProcess(handled.Exec, func(err error) tea.Msg {
+				if done == nil {
+					return nil
+				}
+				return msgExecDone{note: done(err)}
+			})
+		}
 		switch {
 		case handled.Context != nil:
 			// /context gets the structured "context" block
@@ -1686,7 +1799,12 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			// "/help" info form — docs/kiln-design-handoff/README.md's
 			// "note" row example copy), not a "⎿ " continuation under
 			// the echo.
-			m.commitNote(handled.Output[0])
+			if handled.Mistake && m.cfg.Bridge != nil {
+				m.cfg.Bridge.FreezeBefore()
+				m.cfg.Bridge.CommitMistakeNote(handled.Output[0])
+			} else {
+				m.commitNote(handled.Output[0])
+			}
 		case len(handled.Output) > 0:
 			m.commitCommandResult(handled.Name, handled.Output)
 		}
@@ -1743,8 +1861,9 @@ func (m Model) runMode(c Classified) tea.Cmd {
 		env := m.cfg.Env
 		cwd := m.cfg.Cwd
 		bridge := m.cfg.Bridge
+		width := m.contentWidth()
 		return func() tea.Msg {
-			lines := RunBang(context.Background(), c.Body, env)
+			lines := RunBang(context.Background(), c.Body, env, width)
 			if bridge != nil {
 				// Runs on its own Cmd goroutine, not Update's — Bridge's
 				// own freeze helper (not the Model one, which needs the
@@ -1756,8 +1875,13 @@ func (m Model) runMode(c Classified) tea.Cmd {
 			return nil
 		}
 	case ModeMemory:
-		lines := AddMemory(c.Body, m.cfg.Cwd)
-		m.commit(lines)
+		// A system note of its own, not rows under the user's "you" block.
+		note, ok := AddMemory(c.Body, m.cfg.Cwd)
+		if !ok {
+			m.commit(RenderError(note))
+			break
+		}
+		m.commitNote(note)
 	}
 	return nil
 }
@@ -2053,6 +2177,16 @@ func (m Model) liveTail(width int) []string {
 		lines = append(lines, "")
 	}
 
+	// The busy line is set off from the transcript by one blank row, as
+	// every block is from the next (the design's 14px block gap: the
+	// transcript's bottom padding plus the busy row's own). Only the
+	// permission prompt used to end with one, so the busy line sat flush
+	// under streamed text and tool blocks everywhere else.
+	if len(m.spinner.Render(width, time.Time{})) > 0 &&
+		(len(lines) == 0 || strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) != "") {
+		lines = append(lines, "")
+	}
+
 	return padMargin(lines, m.margin())
 }
 
@@ -2187,11 +2321,13 @@ func (m Model) liveLines(width int) (lines []string, editorTop int, ruleSuppress
 // left of the terminal below linesAbove.
 func (m Model) dialogRows(width, linesAbove int) []string {
 	height := m.frameHeight()
-	room := height - linesAbove - 1
+	room := height - linesAbove - 2
 	if room < 4 {
 		room = 4
 	}
-	rows := []string{DialogTopRule(m.dialog, width)}
+	// A blank row first, as between any two blocks: the rule otherwise sat
+	// directly under the last line of the reply above it.
+	rows := []string{"", DialogTopRule(m.dialog, width)}
 	for _, r := range m.dialog.Render(width, room) {
 		rows = append(rows, FitStatus(r, width))
 	}
@@ -2249,6 +2385,9 @@ func (m Model) commitBanner() Model {
 		// start (*qa/findings/20260927T022144Z-inline-stacked-rules.json*).
 		m.replayTranscript()
 	}
+	for _, note := range m.cfg.StartupNotes {
+		m.commitNote(note)
+	}
 	m.bannerDone = true
 	return m
 }
@@ -2272,15 +2411,16 @@ func (m Model) transcriptIsEmpty() bool {
 // scrollback and cannot be repainted, so a verbosity change redraws from
 // the session log, the same source Claude Code redraws from.
 //
-// In fullscreen the banner needs the same treatment: it is part of the
-// transcript buffer (not native scrollback), so a clear wipes it along with
-// everything else, and it must be re-committed first — ahead of the
-// entries — or Ctrl+O/toggle/resize-rewrap would each drop it.
+// The banner needs the same treatment: a clear wipes it along with
+// everything else on screen (in fullscreen it is part of the transcript
+// buffer), so it is re-committed first — ahead of the entries — or
+// Ctrl+O, /clear and the resize rewrap would each drop it. commitBanner's
+// own replay runs before bannerDone is set, so it is not committed twice.
 func (m Model) replayTranscript() {
 	if m.cfg.Bridge == nil || m.cfg.Lane == nil {
 		return
 	}
-	if m.fullscreen && m.bannerDone && len(m.cfg.Banner) > 0 {
+	if m.bannerDone && len(m.cfg.Banner) > 0 {
 		m.cfg.Bridge.Commit(m.bannerRows())
 	}
 	entries, err := m.cfg.Lane.FindEntries(context.Background())

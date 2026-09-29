@@ -1,0 +1,24 @@
+{
+ "id": "20260928T193644Z-result-leading-blank",
+ "found_at": "2026-09-28T19:36:44Z",
+ "scenario": "real/mcp-user-servers",
+ "step": "07-investigated",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "Tool result preview starts with a bare arrow",
+ "observed": "grafana list_datasources: '→' alone, the JSON on the next row (the result begins with a newline)",
+ "expected": "The first real line beside the arrow",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T193207/iterm-dark/real-mcp-user-servers-140x45/07-investigated.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go"
+  ],
+  "regression_test": "TestSummarizeLinesDropsLeadingBlankLines",
+  "updated_at": "2026-09-28T19:36:44Z"
+ }
+}

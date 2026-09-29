@@ -1,0 +1,28 @@
+{
+ "id": "20260928T112308Z-bash-row-shows-cd-into-project",
+ "found_at": "2026-09-28T11:23:08Z",
+ "scenario": "crud-trial/t2-kiln-7",
+ "step": "004-progress",
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "Bash rows open with a cd into the project itself",
+ "observed": "'cd /Users/andrepato/projects/crud-trial/t2-kiln-7 && ls -la …' — the cd target is the working directory",
+ "expected": "Collapsed view drops a cd into the working directory and writes one into a subdirectory relatively; verbose shows the command as run",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/t2-kiln-7/004-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/replay.go"
+  ],
+  "regression_test": "TestDisplayCommand,TestTUI_BashRowDropsCdIntoProject",
+  "note": "Verified live in iTerm2 (t2-kiln-8, build 47e0748; 21/21, 5.8 min, $1.67).",
+  "updated_at": "2026-09-28T11:34:11Z",
+  "after_evidence": [
+   "/Users/andrepato/projects/crud-trial/runs/t2-kiln-8/006-progress.png"
+  ]
+ }
+}

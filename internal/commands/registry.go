@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -60,6 +61,9 @@ type Item struct {
 type Action struct {
 	Key   string
 	Label string
+	// Global marks an action that does not act on the selected row, so
+	// the dialog still offers it when the list is empty.
+	Global bool
 }
 
 // ModalSpec is a TUI-neutral description of a panel a command wants to
@@ -67,8 +71,10 @@ type Action struct {
 // business importing the TUI; a command that returns one in print mode
 // simply falls back to its Output.
 type ModalSpec struct {
-	Title   string
-	Header  []string
+	Title  string
+	Header []string
+	// Empty is shown in place of the list when Items is empty.
+	Empty   string
 	Items   []Item
 	Actions []Action
 
@@ -117,6 +123,10 @@ type Result struct {
 	// Output is the text to display in the transcript, as lines. Nil means
 	// nothing to print.
 	Output []string
+	// Mistake marks Output as telling the user they used the command
+	// wrong (an unknown command, a missing argument): shown in red, where
+	// an ordinary result is dim.
+	Mistake bool
 	// Prompt is text to send to the model as a prompt, if the command
 	// expands to one (e.g. /init).
 	Prompt string
@@ -135,6 +145,12 @@ type Result struct {
 	// other command. -p/print mode ignores it and uses Output, same as
 	// every other command's plain-text form.
 	Context *ContextBreakdown
+	// Exec is a program to hand the terminal to (an editor, for /memory).
+	// The interactive shell suspends itself, runs it in the foreground and
+	// shows ExecDone's note after it exits; Output is the fallback for
+	// print mode, which never runs it.
+	Exec     *exec.Cmd
+	ExecDone func(err error) string
 }
 
 // ContextBreakdown is /context's structured result: how many tokens are
@@ -305,7 +321,7 @@ func (r *Registry) Execute(ctx context.Context, line string) (*Result, error) {
 	name, rest := m[1], strings.TrimSpace(m[2])
 	cmd, ok := r.Get(name)
 	if !ok {
-		return &Result{Output: []string{"Unknown command: /" + name + ". Type / to see what is available."}}, nil
+		return &Result{Output: []string{"Unknown command: /" + name + ". Type / to see what is available."}, Mistake: true}, nil
 	}
 	res, err := cmd.Run(ctx, rest)
 	if err != nil {

@@ -1,0 +1,23 @@
+{
+ "id": "20260928T154235Z-paste-dropped",
+ "found_at": "2026-09-28T15:42:35Z",
+ "scenario": "user-report",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Pasting into kiln does nothing",
+ "observed": "A bracketed paste (how iTerm2/Terminal/Warp deliver Cmd+V) never reached the input: app.update had no tea.PasteMsg case, so it was dropped in both modes",
+ "expected": "Pasted text lands in the input (or a permission prompt's reason field)",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go",
+   "internal/tui/permissionview.go"
+  ],
+  "regression_test": "TestTUI_BracketedPasteReachesTheInput",
+  "updated_at": "2026-09-28T15:42:35Z"
+ }
+}

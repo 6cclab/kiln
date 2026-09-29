@@ -1,0 +1,26 @@
+{
+ "id": "20260927T190525Z-full-schemas-ignores-real-catalog-size",
+ "found_at": "2026-09-27T19:05:25Z",
+ "scenario": "CRUD trial (Opus 4.8, plan mode), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Large-window models get every MCP tool's full schema, chosen from a fixed cost constant",
+ "observed": "budget.StrategyForWindow picks full-schemas whenever a fixed 31,897-token estimate fits 20% of the window, never measuring the real catalog. With 165 MCP tools (81 Grafana) the first request cache-wrote 74,395 tokens ($0.46), and the kiln run cost $8.51 vs Claude Code's $2.70 for the same spec and model.",
+ "expected": "The strategy is chosen from the actual catalog size (or defers MCP schemas behind tool_search by default, as Claude Code does).",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/budget/tier.go",
+   "internal/mcp/gating.go"
+  ],
+  "regression_test": "TestStrategyForWindowAlwaysPostureIndex,TestBuildIndex_TruncatesByRunesNotBytes,TestBudget_ToolStrategyPerWindow",
+  "note": "Verified in the kiln-3 CRUD-trial rerun: 7.9 min, 0 prompts, $1.96 (Claude Code $2.70), 34/34 grade.",
+  "updated_at": "2026-09-27T21:24:12Z"
+ }
+}

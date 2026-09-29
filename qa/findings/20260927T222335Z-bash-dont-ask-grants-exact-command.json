@@ -1,0 +1,28 @@
+{
+ "id": "20260927T222335Z-bash-dont-ask-grants-exact-command",
+ "found_at": "2026-09-27T22:23:35Z",
+ "scenario": "real Opus 4.8 sessions (CRUD trial, workload 2), 2026-09-27",
+ "step": null,
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "\"Don't ask again for: <prefix> *\" granted only the exact command",
+ "observed": "The gate stored a session grant keyed on the exact command string, so the next command with the same prefix asked again despite the label.",
+ "expected": "The named prefix rule is granted, judged per segment.",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/kiln/018-prompt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/permission/permission.go",
+   "internal/claude/settings/bash_rules.go"
+  ],
+  "regression_test": "TestGateBashDontAskGrantsThePrefixItNames",
+  "note": "Fixed in 7f8e470; regression test fails without the fix. Awaiting a live re-drive.",
+  "updated_at": "2026-09-27T22:23:35Z"
+ }
+}

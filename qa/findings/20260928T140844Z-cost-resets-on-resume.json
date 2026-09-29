@@ -1,0 +1,25 @@
+{
+ "id": "20260928T140844Z-cost-resets-on-resume",
+ "found_at": "2026-09-28T14:08:44Z",
+ "scenario": "real/wf-sessions",
+ "step": "06-cost",
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "/cost and its context figure start from zero after -c",
+ "observed": "Session: $0.01 beside a status bar showing $0.09 after relaunching with -c",
+ "expected": "/cost covers the whole session, as the status bar does",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-wf-sessions-140x45/06-cost.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/harness.go",
+   "internal/cli/chat.go"
+  ],
+  "regression_test": "TestCost_ResumedSessionCountsEarlierRuns,TestUsageByModelReadsStoredRows",
+  "updated_at": "2026-09-28T14:08:45Z"
+ }
+}

@@ -1,0 +1,24 @@
+# Real-user job: a Claude Code user wires an MCP server the way `claude mcp
+# add <name> -- <command> [args]` does, then lists configured servers with
+# a bare `mcp`. kiln has no `mcp add` subcommand today (`kiln mcp` only
+# prints a read-only report), so the add is expected to fail and the
+# server is expected to stay absent from /mcp and unusable by the model.
+# This is a known gap the lead is closing; NOTE lines mark what should
+# change once a Claude-Code-compatible `kiln mcp add` lands.
+@real
+@home scratch
+@size 140x45
+@setup mkdir -p {PROJ}/../bin && go -C {ROOT} build -o {PROJ}/../bin/incidents ./qa/fixtures/incident-mcp
+@pre mcp add incidents -- {PROJ}/../bin/incidents
+@pre mcp
+WAITFOR /describe a task/ 30
+SHOT ready
+WAIT 4
+TYPE /mcp
+KEY enter
+SHOT mcp-dialog
+EXPECT /incidents/
+KEY esc
+SHOT mcp-dialog-closed
+TURN any open incidents?
+SHOT answered

@@ -2,7 +2,7 @@
 # KilnRed once the call errored) whose exit status stays visible without
 # expanding — the status line is part of what a failed result must show.
 @faux testdata/faux/qa/tools-bash-fail.yaml
-@args --permission-mode dontAsk
+@args --permission-mode bypassPermissions
 
 WAITFOR /describe a task/ 20
 TYPE break something

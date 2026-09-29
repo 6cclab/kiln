@@ -18,11 +18,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/mattn/go-isatty"
 
 	"github.com/andrepato/harness/internal/agent"
@@ -30,11 +32,13 @@ import (
 	"github.com/andrepato/harness/internal/auth/login"
 	"github.com/andrepato/harness/internal/budget"
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
+	claudecommands "github.com/andrepato/harness/internal/claude/commands"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	claudekeybindings "github.com/andrepato/harness/internal/claude/keybindings"
 	claudememory "github.com/andrepato/harness/internal/claude/memory"
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/permission"
+	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/skills"
 	slashcommands "github.com/andrepato/harness/internal/commands"
@@ -278,11 +282,16 @@ func subagentEventSink(stderr io.Writer) func(agent.SubagentEvent) {
 // internal/harness/turn.go), not a single row at all — a figure that
 // only grows and was observed at 959.6k/1000k (96%) in a session whose
 // pinned status meter simultaneously and correctly read 2%.
+//
+// Cached input counts: with prompt caching almost the whole conversation
+// is CacheRead (and the newest turn CacheWrite), so Input alone is a few
+// dozen tokens — /context reported "53 of 1000k" for a session whose meter
+// read 1%. This is the meter's own sum (bridge.go's EventUsage handler).
 func usageRowContextTokens(row *msg.Usage) (int, bool) {
 	if row == nil {
 		return 0, false
 	}
-	return row.Input + row.Output, true
+	return row.Input + row.CacheRead + row.CacheWrite + row.Output, true
 }
 
 // fileReadTokensFromToolEnd reports the tokens attributable to one
@@ -377,7 +386,19 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return 1
 	}
 
-	// modelRoles warnings: printed once, up front, so a broken role is
+	// startupWarn reports a problem found while starting: to stderr in
+	// print mode, and as a note under the banner interactively, where
+	// stderr is hidden behind the fullscreen TUI until exit.
+	var startupNotes []string
+	startupWarn := func(msg string) {
+		if args.Print {
+			fmt.Fprintln(stderr, "kiln: "+msg)
+			return
+		}
+		startupNotes = append(startupNotes, msg)
+	}
+
+	// modelRoles warnings: reported once, up front, so a broken role is
 	// visible before it silently falls back to the parent model mid-run
 	// (agents.ResolveModel never errors, it only falls back - see its doc
 	// comment). Not fatal: a bad role is a misconfiguration to fix, not a
@@ -392,7 +413,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				}
 			}
 			for _, problem := range claudeagents.ValidateRoles(settings.ModelRoles, candidates) {
-				fmt.Fprintf(stderr, "kiln: role %s\n", problem)
+				startupWarn("Model role " + problem + "; subagents asking for it run on the current model.")
 			}
 		}
 	}
@@ -401,8 +422,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// is capped at ~2k tokens, and an unbounded CLAUDE.md would eat the
 	// session.
 	memory := claudememory.LoadMemory(cwd, resolved.Tier.SystemPromptTokens)
-	for _, path := range memory.Dropped {
-		fmt.Fprintf(stderr, "memory over budget, not loaded: %s\n", path)
+	if n := len(memory.Indexed); n > 0 {
+		diag.L().Info("memory: rules indexed, not loaded in full", "count", n, "budget", resolved.Tier.SystemPromptTokens, "paths", memory.Indexed)
+	}
+	if memory.OverBudget {
+		startupWarn(fmt.Sprintf("CLAUDE.md files use ~%dk tokens, over this model's %dk memory budget; loaded anyway.", memory.EstimatedTokens/1000, resolved.Tier.SystemPromptTokens/1000))
 	}
 
 	// --add-dir may be repeated, matching Claude Code's flag.
@@ -411,7 +435,47 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	env := execenv.New(cwd)
 
 	skillList := skills.LoadSkills(cwd)
-	skillsIndex := formatSkillsIndex(skillList)
+
+	// Active plugins (installed and enabled — internal/claude/plugins).
+	// Loaded once here so skills, commands, agents, hooks and MCP servers
+	// all see the same set for this run.
+	activePlugins := claudeplugins.LoadPlugins(cwd)
+	var pluginSkills []skills.Skill
+	var pluginCommands []claudecommands.CommandFile
+	var pluginAgents []claudeagents.Definition
+	pluginHooks := claudehooks.Config{}
+	pluginMCPServers := map[string]mcpgate.ServerConfig{}
+	for _, p := range activePlugins {
+		pluginSkills = append(pluginSkills, claudeplugins.Skills(p)...)
+		pluginCommands = append(pluginCommands, claudeplugins.Commands(p)...)
+		pluginAgents = append(pluginAgents, claudeplugins.Agents(p)...)
+		for event, groups := range claudeplugins.Hooks(p) {
+			pluginHooks[event] = append(pluginHooks[event], groups...)
+		}
+		for name, cfg := range claudeplugins.MCPServers(p) {
+			pluginMCPServers[name] = cfg
+		}
+	}
+	allSkills := append(append([]skills.Skill{}, skillList...), pluginSkills...)
+	skillsIndex := formatSkillsIndex(allSkills)
+
+	// The `skill` tool's catalog: every project/user/plugin skill except
+	// ones marked disable-model-invocation:true (deliverable 3 —
+	// UserInvocable:false skills ARE included here; that flag only hides
+	// a skill from the slash palette, wired separately below).
+	var skillRecords []tools.SkillRecord
+	for _, s := range allSkills {
+		if s.DisableModelInvocation {
+			continue
+		}
+		skillRecords = append(skillRecords, tools.SkillRecord{
+			Name:        s.Name,
+			Description: s.Description,
+			Body:        s.Content,
+			Dir:         tools.SkillDir(s.FilePath),
+		})
+	}
+	skillTool := tools.SkillTool(skillRecords)
 
 	permissionMode := resolvePermissionMode(args, settings)
 	perms := settings.Permissions
@@ -437,7 +501,23 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	todos := agent.NewTodoStore()
 
 	hub := mcpgate.NewHub()
-	mcpConfigs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
+	// Every scope Claude Code reads (user, local, .mcp.json) plus
+	// --mcp-config. A project's .mcp.json runs commands a clone can ship,
+	// so its servers start only in a trusted folder: now, when it already
+	// is, or (interactive) once the trust dialog is accepted.
+	resolvedMCP := mcpgate.Resolve(mcpgate.ResolveOptions{Cwd: cwd, Path: args.MCPConfig, Strict: args.StrictMCPConfig})
+	// Plugin servers belong alongside the ones the user added by hand
+	// (mcpgate.ScopePlugin): the user already opted in by installing and
+	// enabling the plugin, so — unlike .mcp.json — they are not gated on
+	// folder trust.
+	for name, cfg := range pluginMCPServers {
+		resolvedMCP.Servers[name] = cfg
+	}
+	mcpConfigs := resolvedMCP.Servers
+	pendingMCP := resolvedMCP.Project
+	if folderTrusted(cwd) {
+		mcpConfigs, pendingMCP = resolvedMCP.All(), nil
+	}
 	mcpCtx, cancelMCP := context.WithCancel(ctx)
 	connectMCP := func(ctx context.Context) {
 		phase("mcp connect start", "servers", len(mcpConfigs))
@@ -450,6 +530,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		// is up (internal/cli/tui.go) and registers the tools when done.
 		connectMCP(mcpCtx)
 		warnFailedServers(stderr, hub.Statuses())
+		if len(pendingMCP) > 0 {
+			fmt.Fprintf(stderr, "kiln: not starting %s from %s: this folder is not trusted (start kiln here interactively and trust it)\n",
+				plural.Count(len(pendingMCP), "MCP server"), resolvedMCP.ProjectFile)
+		}
 	}
 	defer hub.Close(context.Background())
 	defer cancelMCP()
@@ -465,7 +549,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	} else {
 		fmt.Fprintf(stderr, "kiln: session search unavailable: %v\n", err)
 	}
-	residentNow := residentToolNames(sessionSearch != nil)
+	residentNow := residentToolNames(sessionSearch != nil, webSearchAllowed(perms))
 
 	mcpSess := &mcpSession{
 		tools:    mcpTools,
@@ -482,7 +566,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// list so they can be rebuilt once the background connect finishes.
 	buildMCPExtras := func(mcpTools []mcpgate.McpTool) ([]*tool.Tool, string) {
 		scope := mcpSess.indexScope()
-		extras := []*tool.Tool{tools.ToolSearchTool(mcpTools, scope, gateState, onAdmit)}
+		extras := []*tool.Tool{tools.ToolSearchTool(mcpTools, scope, mcpSess.state, onAdmit)}
 		for _, t := range mcpTools {
 			extras = append(extras, mcpgate.ToHarnessTool(hub, t))
 		}
@@ -496,6 +580,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// tool list so `task`'s catalog and schema enum are correct on the
 	// first turn.
 	agentsList := append([]claudeagents.Definition{agent.GeneralPurpose}, claudeagents.LoadAgents(cwd)...)
+	agentsList = append(agentsList, pluginAgents...)
 
 	// sessionsDirEnv mirrors agent.Options.SessionsRoot's own default
 	// resolution (internal/agent/session.go's unexported
@@ -571,8 +656,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	mcpExtras, mcpIndexText := buildMCPExtras(mcpTools)
 	extraTools := make([]*tool.Tool, 0, len(mcpExtras)+7)
 	extraTools = append(extraTools, mcpExtras...)
-	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool)
+	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool, tools.WebSearchTool())
 	extraTools = append(extraTools, bgShellTools...)
+	extraTools = append(extraTools, tools.WebFetchTool(nil))
 	if sessionSearch != nil {
 		extraTools = append(extraTools, tools.SessionSearchTool(sessionSearch))
 	}
@@ -580,12 +666,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// System prompt assembly order, matching cli.ts exactly: base persona,
 	// --append-system-prompt, the plan-mode prompt (only in plan mode),
 	// memory, the skills index, the MCP tool index.
+	envBlock := environmentPrompt(ctx, cwd, time.Now())
 	buildSystemPrompt := func(mcpIndexText string) string {
 		systemPromptBase := args.SystemPrompt
 		if systemPromptBase == "" {
 			systemPromptBase = defaultSystemPrompt
 		}
-		promptParts := []string{systemPromptBase, args.AppendSystemPrompt}
+		promptParts := []string{systemPromptBase, envBlock, args.AppendSystemPrompt}
 		if permissionMode == claudesettings.ModePlan {
 			promptParts = append(promptParts, agent.PlanModePrompt)
 		}
@@ -609,7 +696,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		SessionID:       args.SessionID,
 		ForkSession:     args.ForkSession,
 		Name:            args.Name,
-		ThinkingLevel:   args.Effort,
+		ThinkingLevel:   effortOrSetting(args.Effort, settings.EffortLevel, resolved.Model.Api == provider.ApiAnthropicMessages),
 		SystemPrompt:    systemPrompt,
 		Env:             env,
 		ExtraTools:      extraTools,
@@ -639,6 +726,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 		phase("mcp applied", "tools", len(mcpTools))
 	}
+	mcpSess.rebuild = applyMCP
 	// dispatcher.Parent is read only once a subagent is actually dispatched
 	// (during a turn, from taskTool's Execute), by which point started is
 	// always set — see the dispatcher construction above.
@@ -667,7 +755,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// fields; this reads the same one the status meter does, so /context
 	// and the pinned meter now always agree.
 	var usageMu sync.Mutex
-	var lastUsageRow *msg.Usage
+	lastUsageRow := started.Harness.LastUsage() // a resumed session's last request
 	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
 		usageMu.Lock()
 		defer usageMu.Unlock()
@@ -720,7 +808,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// print mode's subagentEventSink nor the TUI's bridge.SubagentSink
 	// (internal/tui/bridge.go) ever overwrites.
 	var usageByModelMu sync.Mutex
-	usageByModel := map[string]msg.Usage{}
+	// Seeded from the session's own usage rows: a resumed session's /cost
+	// covers its earlier runs too, as the footer's cost already does.
+	usageByModel := started.Harness.UsageByModel(started.Model.Provider + "/" + started.Model.ID)
 	addUsage := func(providerID, modelID string, u msg.Usage) {
 		if u.TotalTokens == 0 && u.Input == 0 && u.Output == 0 {
 			return
@@ -751,8 +841,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		settingsLoadedFrom = append(settingsLoadedFrom, string(s))
 	}
 
-	// Hooks from .claude/settings.json, accumulated across scopes.
+	// Hooks from .claude/settings.json, accumulated across scopes, plus
+	// every active plugin's own hooks (each already carrying
+	// CLAUDE_PLUGIN_ROOT — see claudeplugins.Hooks).
 	hookConfig := claudehooks.LoadHooks(cwd)
+	for event, groups := range pluginHooks {
+		hookConfig[event] = append(hookConfig[event], groups...)
+	}
 
 	// The four events the TS parsed but never fired. Stop runs when the
 	// parent's run ends; a blocking Stop hook is reported to the user, not
@@ -814,11 +909,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	registry := buildCommandRegistry(registryDeps{
 		Cwd:                cwd,
 		Started:            started,
+		Interactive:        !args.Print,
 		Registry:           reg,
 		Gate:               gate,
 		Hooks:              hookConfig,
 		Agents:             agentsList,
-		Skills:             skillList,
+		Skills:             allSkills,
+		Plugins:            activePlugins,
+		PluginCommands:     pluginCommands,
 		MCP:                mcpSess,
 		Todos:              todos,
 		Shells:             shells,
@@ -891,7 +989,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if guard.Blocked != nil {
 			primary, _ := permission.PrimaryArgOf(call.Arguments)
 			recordBlocked(call.Name, primary, guard.Blocked.Reason)
-			return harness.BeforeToolResult{Block: &harness.ToolBlock{Reason: guard.Blocked.Reason}}, nil
+			if guard.ByHook {
+				outcome = permission.OutcomeHookBlocked
+			}
+			return harness.BeforeToolResult{Block: &harness.ToolBlock{Reason: guard.Blocked.Reason}, PermissionOutcome: string(outcome)}, nil
 		}
 		if guard.Args != nil {
 			raw, err := json.Marshal(guard.Args)
@@ -1012,6 +1113,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 		phase("tui start")
 		exitCode := RunInteractive(ctx, InteractiveDeps{
+			StartupNotes:   startupNotes,
 			Cwd:            cwd,
 			Effort:         args.Effort,
 			AuthKind:       authKindLabel(ctx, reg, providerID),
@@ -1022,6 +1124,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				connectMCP(mcpCtx)
 				applyMCP()
 				return hub.Statuses()
+			},
+			PendingMCPCount: len(pendingMCP),
+			ConnectPendingMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
+				hub.OnServer = progress
+				before := len(hub.Statuses())
+				phase("mcp project connect start", "servers", len(pendingMCP))
+				hub.ConnectAll(mcpCtx, pendingMCP)
+				applyMCP()
+				return hub.Statuses()[before:]
 			},
 			LogPath:         logPath,
 			Debug:           args.Debug,
@@ -1052,6 +1163,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}, stdout, stderr, stdin)
 
 		shells.KillAll()
+		execenv.KillLeftoverJobs()
 		claudehooks.RunHooks(claudehooks.RunOptions{
 			Config: hookConfig,
 			Event:  claudehooks.SessionEnd,
@@ -1073,6 +1185,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// SessionEnd fires, matching cli.ts's own ordering (src/cli.ts:653-659) —
 	// hub.Close is already deferred above, so it runs last of the three.
 	shells.KillAll()
+	execenv.KillLeftoverJobs()
 
 	claudehooks.RunHooks(claudehooks.RunOptions{
 		Config: hookConfig,
@@ -1341,6 +1454,49 @@ func logHarnessEvents(h *harness.Harness) {
 	on(harness.EventCompactionEnd, none)
 	on(harness.EventFault, func(ev harness.Event) []any { return []any{"err", ev.Err} })
 	on(harness.EventHandlerError, func(ev harness.Event) []any { return []any{"hook", ev.HookName, "err", ev.Err} })
+	logRequestTiming(h)
+}
+
+// logRequestTiming logs one "request_timing" line per model response: time
+// to the first streamed event, total time, and how many stream events
+// arrived. A slow turn is otherwise indistinguishable between a slow
+// provider (long ttft) and a slow client (short ttft, long stream).
+func logRequestTiming(h *harness.Harness) {
+	type timing struct {
+		start, first time.Time
+		events       int
+	}
+	var mu sync.Mutex
+	open := map[string]*timing{}
+	h.Events().On(harness.EventMessageStart, func(ev harness.Event) {
+		mu.Lock()
+		open[ev.EntryID] = &timing{start: time.Now()}
+		mu.Unlock()
+	})
+	h.Events().On(harness.EventMessageUpdate, func(ev harness.Event) {
+		mu.Lock()
+		if t := open[ev.EntryID]; t != nil {
+			if t.events == 0 {
+				t.first = time.Now()
+			}
+			t.events++
+		}
+		mu.Unlock()
+	})
+	h.Events().On(harness.EventMessageEnd, func(ev harness.Event) {
+		mu.Lock()
+		t := open[ev.EntryID]
+		delete(open, ev.EntryID)
+		mu.Unlock()
+		if t == nil {
+			return
+		}
+		ttft := int64(-1)
+		if !t.first.IsZero() {
+			ttft = t.first.Sub(t.start).Milliseconds()
+		}
+		diag.L().Info("request_timing", "lane", ev.Lane, "ttft_ms", ttft, "total_ms", time.Since(t.start).Milliseconds(), "events", t.events)
+	})
 }
 
 // authKindLabel is the banner's auth description for the active provider,
@@ -1375,4 +1531,39 @@ func authKindLabel(ctx context.Context, reg *provider.Registry, providerID strin
 		}
 	}
 	return ""
+}
+
+// environmentPrompt tells the model where it is: the working directory, the
+// repository, the platform and the date. Without it the model guesses paths
+// (a live Opus 4.8 session read /Users/<user>/dev/api/handlers.go for a
+// project elsewhere, and hit the outside-workspace prompt). Built once per
+// session, so it never invalidates the prompt cache mid-session.
+func environmentPrompt(ctx context.Context, cwd string, now time.Time) string {
+	repo := "no"
+	if st, ok := readGitStatusAt(ctx, cwd); ok {
+		repo = "yes"
+		if st.Branch != "" {
+			repo += " (branch " + st.Branch + ")"
+		}
+	} else if out, err := runGit(ctx, cwd, "rev-parse", "--is-inside-work-tree"); err == nil && strings.TrimSpace(out) == "true" {
+		repo = "yes (no commits yet)"
+	}
+	return fmt.Sprintf("<env>\nWorking directory: %s\nIs a git repository: %s\nPlatform: %s/%s\nToday's date: %s\n</env>",
+		cwd, repo, runtime.GOOS, runtime.GOARCH, now.Format("2006-01-02"))
+}
+
+// effortOrSetting is the thinking level for a session: --effort, else the
+// effortLevel from Claude Code's settings (as Claude Code itself reads it)
+// for a Claude model, else unset, which leaves the model's own default.
+// The setting is Claude Code's, so it is not applied to other providers:
+// on some local Qwen models any thinking at all makes them loop
+// (provider/reasoning.go).
+func effortOrSetting(flag, setting string, claudeModel bool) string {
+	if flag != "" {
+		return flag
+	}
+	if !claudeModel {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(setting))
 }

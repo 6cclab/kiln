@@ -3,10 +3,13 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/andrepato/harness/internal/msg"
 )
 
 // Transcript rendering — the layout defined in docs/claude-code-reference.md
@@ -124,7 +127,7 @@ const (
 // DiffLine is one numbered row of an Edit's rendered diff.
 type DiffLine struct {
 	Num  int
-	Sign byte // '-', '+', or ' ' for an unchanged context line
+	Sign byte // '-', '+', ' ' for an unchanged context line, or '~' for a gap between hunks
 	Text string
 }
 
@@ -170,13 +173,14 @@ type ToolCallView struct {
 	Meta string
 }
 
-// MapToolName title-cases a tool id for the call header, with the one
-// documented exception: edit renders as "Update"
-// (docs/claude-code-reference.md §3: "Tool names are title-cased from the
-// tool id except edit → Update").
+// MapToolName title-cases a tool id for the call header. Edit is not
+// renamed to Claude Code's "Update": a successful edit renders as the
+// design's "edit" diff block, and a failed or refused one must read as the
+// same tool.
 func MapToolName(id string) string {
-	if strings.EqualFold(id, "edit") {
-		return "Update"
+	if strings.EqualFold(id, "exit_plan_mode") {
+		// The call that presents a plan; its block records the verdict.
+		return "Plan"
 	}
 	return titleCase(id)
 }
@@ -220,6 +224,9 @@ func RenderDiffLines(lines []DiffLine) []string {
 			sign = KilnRed("− ")
 			bg = OnDiffDel
 			row = Faint(numStr) + " " + sign + Ink(l.Text)
+		case '~':
+			out = append(out, padToWidth(Faint("   …"), width))
+			continue
 		default:
 			bg = func(s string) string { return s }
 			row = Faint(numStr) + "   " + Muted(l.Text)
@@ -266,6 +273,34 @@ func diffCountsRow(d *ToolDiff) string {
 	return fmt.Sprintf("%s  %s", KilnGreen("+"+strconv.Itoa(d.Added)), KilnRed("−"+strconv.Itoa(d.Removed)))
 }
 
+// collapsedSummary is the result summary a committed tool block shows
+// outside verbose mode. A loaded skill's text is instructions for the
+// model, not output for the reader: it reads "loaded · N lines" (ctrl+o
+// shows it all). Everything else is unchanged. The live and replay block
+// builders both call this, so a toggle renders the same block.
+func collapsedSummary(toolName string, summary []string, failed, verbose bool) []string {
+	if verbose || failed || len(summary) == 0 {
+		return summary
+	}
+	switch strings.ToLower(toolName) {
+	case "skill":
+		return []string{fmt.Sprintf("loaded · %d lines", len(summary))}
+	case "bash_background":
+		// The result tells the model how to read the output
+		// (bash_output({id: …})); the person gets where to look instead.
+		if id, _, ok := strings.Cut(strings.TrimPrefix(summary[0], "Started "), ":"); ok && strings.HasPrefix(summary[0], "Started ") {
+			return []string{"running in the background as " + id + " · /bashes to check on it"}
+		}
+	case "exit_plan_mode":
+		// The verdict, not the instructions that follow it for the model
+		// ("You may now make changes. Permission mode is …").
+		if first, _, ok := strings.Cut(summary[0], ". "); ok {
+			return []string{first + "."}
+		}
+	}
+	return summary
+}
+
 // clipResultLines clips a tool result's summary lines to max the same way
 // every committed tool block does (kiln's "tool" row: first N lines, then
 // "… +N lines (ctrl+o to expand)") — except for a failed call, where the
@@ -304,15 +339,16 @@ func clipResultLines(lines []string, max int, status CallStatus) []string {
 //	   2 + module.exports = { add }
 //
 //	bash ──────────────────────────────────  approved · 4.1s
-//	bash npm test -- upload
+//	npm test -- upload
 //	→ 12 passed
 //
 // A call with a Diff renders the "edit" label rule (blue, filename meta)
-// and the panel header row instead of the "Name arg" line and result rows.
+// and the panel header row instead of the argument line and result rows.
 // Otherwise the label rule is the tool name lowercased in the status
 // colour (running amber, ok green, err red) with Meta (e.g.
-// "approved · 4.1s") as the rule's own meta, and the body is "Name arg"
-// followed by the result.
+// "approved · 4.1s") as the rule's own meta, and the body is the argument
+// followed by the result. The design repeats the tool name before the
+// argument; Andre dropped it as printing the name twice.
 func RenderToolCall(view ToolCallView) []string {
 	gl := G()
 	statusColor := toolStatusColor(view.Status)
@@ -322,7 +358,11 @@ func RenderToolCall(view ToolCallView) []string {
 		lines = append(lines, labelRule("edit", KilnBlue, path.Base(view.PrimaryArg), width))
 	} else {
 		lines = append(lines, labelRule(strings.ToLower(view.Name), statusColor, view.Meta, width))
-		lines = append(lines, fmt.Sprintf("%s %s", statusColor(view.Name), Muted(view.PrimaryArg)))
+		// The label rule already names the tool; repeating it on the row
+		// below ("read ───" then "Read FEATURE.md") printed it twice.
+		if view.PrimaryArg != "" {
+			lines = append(lines, Ink(view.PrimaryArg))
+		}
 	}
 
 	if view.Diff != nil {
@@ -332,7 +372,9 @@ func RenderToolCall(view ToolCallView) []string {
 	}
 
 	body := view.ResultLines
-	if len(body) == 0 {
+	// Whitespace-only output (a command that printed a bare newline) drew
+	// a "→" with nothing after it.
+	if strings.TrimSpace(strings.Join(body, "")) == "" && (!view.HasTotalLines || view.TotalLines <= len(body)) {
 		return lines
 	}
 
@@ -365,6 +407,84 @@ func RenderToolCall(view ToolCallView) []string {
 		lines = append(lines, hint)
 	}
 	return lines
+}
+
+// CompactReadGroup reports whether a run of consecutive read-only calls
+// commits as one block (RenderReadGroup) rather than one block each: two
+// or more calls, every one a read-kind tool that succeeded. A failed call
+// keeps its full block so its error stays visible; verbose mode (ctrl+o)
+// never compacts, so expanding shows every call's own output.
+func CompactReadGroup(views []ToolCallView, verbose bool) bool {
+	if verbose || len(views) < 2 {
+		return false
+	}
+	for _, v := range views {
+		kind, ok := groupKindFor(v.Name)
+		if !ok || kind != GroupRead || v.Status != CallOK || v.Diff != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// RenderReadGroup renders consecutive read-only calls as one "read" block:
+// the label rule with the call count as meta, then one "arg · size"
+// row per call. Four file reads were four blocks of five rows each, each
+// previewing the first lines of a file nobody asked to see.
+//
+//	read ─────────────────────────────────────────────  4 files
+//	web/src/api.ts · 56 lines
+//	web/src/App.tsx · 293 lines
+func RenderReadGroup(views []ToolCallView) []string {
+	allRead := true
+	for _, v := range views {
+		if !strings.EqualFold(v.Name, "read") {
+			allRead = false
+		}
+	}
+	meta := fmt.Sprintf("%d calls", len(views))
+	if allRead {
+		meta = fmt.Sprintf("%d files", len(views))
+	}
+	lines := []string{labelRule("read", toolStatusColor(CallOK), meta, ruleWidth())}
+	for _, v := range views {
+		// A Read row is just its path under the "read" label; a Grep or
+		// Glob row keeps its name, which the label does not say.
+		row := Ink(v.PrimaryArg)
+		if !strings.EqualFold(v.Name, "read") {
+			row = fmt.Sprintf("%s %s", toolStatusColor(CallOK)(v.Name), Ink(v.PrimaryArg))
+		}
+		if size := readGroupSize(v); size != "" {
+			row += Faint(" · " + size)
+		}
+		lines = append(lines, row)
+	}
+	return lines
+}
+
+// readGroupSize is a grouped call's one-word result: the file's line count
+// for a read, the number of result lines for a search or listing.
+func readGroupSize(v ToolCallView) string {
+	n := len(v.ResultLines)
+	if v.HasTotalLines {
+		n = v.TotalLines
+	}
+	plural := func(n int, one, many string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return fmt.Sprintf("%d %s", n, many)
+	}
+	switch strings.ToLower(v.Name) {
+	case "read":
+		return plural(n, "line", "lines")
+	case "grep", "glob", "ls":
+		if n == 0 {
+			return "no results"
+		}
+		return plural(n, "result", "results")
+	}
+	return ""
 }
 
 // GroupKind is which read-only grouping a collapsed row summarizes.
@@ -459,6 +579,11 @@ func ParseUnifiedDiff(patch string, startLine int) *ToolDiff {
 
 	for _, line := range strings.Split(patch, "\n") {
 		if strings.HasPrefix(line, "@@") {
+			// A second hunk is elsewhere in the file: mark the gap, or the
+			// two hunks read as one change with jumping line numbers.
+			if len(d.Lines) > 0 {
+				d.Lines = append(d.Lines, DiffLine{Sign: '~'})
+			}
 			inHunk = true
 			if m := hunkHeaderRe.FindStringSubmatch(line); m != nil {
 				oldNo, _ = strconv.Atoi(m[1])
@@ -656,6 +781,12 @@ func RenderError(message string) []string {
 	for _, line := range lines {
 		out = append(out, KilnRed(line))
 	}
+	// A provider failure also says what to do about it (faultHint).
+	if hint := faultHint(message); hint != "" {
+		for _, line := range wrapMultiline(hint, ruleWidth()) {
+			out = append(out, Muted(line))
+		}
+	}
 	return out
 }
 
@@ -829,7 +960,7 @@ func PrimaryArg(args any) string {
 	if !ok {
 		return ""
 	}
-	for _, key := range []string{"path", "file_path", "filePath", "command", "pattern", "query", "url"} {
+	for _, key := range []string{"path", "file_path", "filePath", "command", "pattern", "query", "url", "skill", "id"} {
 		if v, ok := obj[key]; ok {
 			if s, ok := v.(string); ok {
 				return s
@@ -892,6 +1023,9 @@ func Summarize(result any) []string {
 // newline produces. Command output almost always ends in a newline;
 // kept, it renders as a blank row under every tool call.
 func summarizeLines(text string) []string {
+	// Leading blank lines too: a result that starts with one otherwise
+	// shows a bare "→" row above its first real line.
+	text = strings.TrimLeft(text, "\r\n")
 	out := strings.Split(text, "\n")
 	if len(out) > 1 && out[len(out)-1] == "" {
 		out = out[:len(out)-1]
@@ -950,3 +1084,117 @@ func RenderAssistantText(lines []string) []string {
 // dropped if the design has no place for it". Its two call sites
 // (app.go's finishTurn, replay.go's RenderTranscriptEntries) are removed
 // along with it.
+
+// --- provider blocks (Anthropic web_search) ------------------------------
+
+// anthropicServerToolUseBlock/anthropicWebSearchResultBlock decode the raw
+// JSON a msg.ProviderBlock carries for Provider=="anthropic", mirroring
+// the wire shapes internal/provider/api/anthropic_messages.go builds.
+type anthropicServerToolUseBlock struct {
+	Type  string          `json:"type"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+type anthropicWebSearchResultBlock struct {
+	Type      string          `json:"type"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+}
+
+type anthropicSearchResultItem struct {
+	Type  string `json:"type"`
+	URL   string `json:"url"`
+	Title string `json:"title"`
+}
+
+type anthropicSearchErrorItem struct {
+	Type      string `json:"type"`
+	ErrorCode string `json:"error_code"`
+}
+
+// searchQueriesByToolUseID scans an assistant message's content for
+// server_tool_use blocks and returns their queries keyed by block id, so
+// the paired web_search_tool_result block (matched on tool_use_id) can
+// show what was searched for.
+func searchQueriesByToolUseID(content msg.Blocks) map[string]string {
+	out := map[string]string{}
+	for _, c := range content {
+		pb, ok := c.(msg.ProviderBlock)
+		if !ok || pb.Provider != "anthropic" {
+			continue
+		}
+		var b anthropicServerToolUseBlock
+		if json.Unmarshal(pb.Raw, &b) != nil || b.Type != "server_tool_use" || b.Name != "web_search" {
+			continue
+		}
+		var input struct {
+			Query string `json:"query"`
+		}
+		if json.Unmarshal(b.Input, &input) == nil {
+			out[b.ID] = input.Query
+		}
+	}
+	return out
+}
+
+// searchResultView builds the committed block for one Anthropic
+// web_search_tool_result ProviderBlock: label "Web Search", the query as
+// the primary arg, and one result row — "→ N results · domain, domain, …"
+// on success, the error code on failure. ok is false when pb is not a
+// web_search_tool_result block at all (a server_tool_use block never gets
+// its own row; its query is folded into the paired result's view instead).
+func searchResultView(pb msg.ProviderBlock, queries map[string]string) (ToolCallView, bool) {
+	if pb.Provider != "anthropic" {
+		return ToolCallView{}, false
+	}
+	var b anthropicWebSearchResultBlock
+	if json.Unmarshal(pb.Raw, &b) != nil || b.Type != "web_search_tool_result" {
+		return ToolCallView{}, false
+	}
+	view := ToolCallView{
+		Name:       MapToolName("web_search"),
+		PrimaryArg: queries[b.ToolUseID],
+		Status:     CallOK,
+	}
+	var errItem anthropicSearchErrorItem
+	if json.Unmarshal(b.Content, &errItem) == nil && errItem.Type == "web_search_tool_result_error" {
+		view.Status = CallError
+		view.ResultLines = []string{"→ " + errItem.ErrorCode}
+		return view, true
+	}
+	var items []anthropicSearchResultItem
+	if err := json.Unmarshal(b.Content, &items); err != nil {
+		// An unrecognized content shape still commits a block rather than
+		// silently dropping the search from the transcript.
+		view.ResultLines = []string{"→ 0 results"}
+		return view, true
+	}
+	const maxDomains = 5
+	domains := make([]string, 0, maxDomains)
+	seen := map[string]bool{}
+	for _, it := range items {
+		if len(domains) >= maxDomains {
+			break
+		}
+		host := it.URL
+		if u, err := url.Parse(it.URL); err == nil && u.Hostname() != "" {
+			host = u.Hostname()
+		}
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		domains = append(domains, host)
+	}
+	line := fmt.Sprintf("→ %d result", len(items))
+	if len(items) != 1 {
+		line += "s"
+	}
+	if len(domains) > 0 {
+		line += " · " + strings.Join(domains, ", ")
+	}
+	view.ResultLines = []string{line}
+	return view, true
+}

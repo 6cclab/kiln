@@ -1,2 +1,2 @@
 system ─────────────────────────────────────────────────────────────────────────
-✕ Declined Update src/math.js
+✕ Declined Edit src/math.js

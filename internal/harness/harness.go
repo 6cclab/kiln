@@ -2,6 +2,7 @@ package harness
 
 import (
 	"fmt"
+	"github.com/andrepato/harness/internal/msg"
 	"sync"
 	"time"
 
@@ -72,9 +73,10 @@ func New(opts Options) (*Harness, error) {
 		opts.Now = time.Now
 	}
 	opts.Retry = opts.Retry.normalized()
-	if opts.ThinkingLevel == "" {
-		opts.ThinkingLevel = "off"
-	}
+	// An unset ThinkingLevel stays unset: the provider applies the model's
+	// own default (adaptive thinking on models that have it). It used to
+	// become "off", pi's default, which ran every session without --effort
+	// with thinking disabled.
 	return &Harness{
 		opts:   opts,
 		events: NewEvents(),
@@ -169,6 +171,45 @@ func (h *Harness) Close() error { return h.opts.Storage.Close() }
 // dispatcher, internal/agent/dispatch.go) can report back what the run
 // actually cost, without reaching into opts.Storage directly.
 func (h *Harness) Stats() session.SessionStats { return h.opts.Storage.GetStats() }
+
+// LastUsage is the usage of the session's most recent request, or nil
+// before its first. A resumed session reports context occupancy from it
+// until its own first request.
+func (h *Harness) LastUsage() *msg.Usage {
+	for _, r := range h.opts.Storage.ScanUsage(session.UsageScan{Order: "desc"}) {
+		if !r.Adjustment {
+			u := r.Usage
+			return &u
+		}
+	}
+	return nil
+}
+
+// UsageByModel sums the session's recorded usage rows per
+// "provider/model", read from the assistant entry each row belongs to.
+// Rows whose entry names no model are keyed by fallback. A resumed session
+// starts from these, so its cost covers every run, not just this one.
+func (h *Harness) UsageByModel(fallback string) map[string]msg.Usage {
+	rows := h.opts.Storage.ScanUsage(session.UsageScan{})
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.EntryID != "" {
+			ids = append(ids, r.EntryID)
+		}
+	}
+	entries := h.opts.Storage.GetEntries(ids)
+	out := map[string]msg.Usage{}
+	for _, r := range rows {
+		key := fallback
+		if e, ok := entries[r.EntryID]; ok {
+			if am, ok := e.Message.(msg.AssistantMessage); ok && am.Provider != "" && am.Model != "" {
+				key = am.Provider + "/" + am.Model
+			}
+		}
+		out[key] = out[key].Add(r.Usage)
+	}
+	return out
+}
 
 // Lane returns the named lane, creating it (and writing its initial
 // pi.branch.tip / pi.lane.config / pi.lane.state values) if this is the

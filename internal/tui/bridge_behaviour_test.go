@@ -278,3 +278,30 @@ func TestBridge_InFlightTools_ReportsStartedNotEnded(t *testing.T) {
 		t.Errorf("PrimaryArg = %q, want %q", views[0].PrimaryArg, "sleep 5")
 	}
 }
+
+func TestWebSearchBusyLabel(t *testing.T) {
+	got, ok := webSearchBusyLabel(`{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"go generics"}}`)
+	if !ok || got != "Searching the web for go generics" {
+		t.Errorf("label = %q, %v", got, ok)
+	}
+	if _, ok := webSearchBusyLabel(`{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[]}`); ok {
+		t.Error("a search result block is not a search start")
+	}
+}
+
+func TestFaultHint(t *testing.T) {
+	cases := map[string]string{
+		"Unauthorized (401): invalid api key":          "/login",
+		"Overloaded (529)":                             "Send again shortly",
+		"Too Many Requests (429): slow down":           "Wait a minute",
+		"Not Found (404): model: claude-x":             "/model lists",
+		"Bad Request (400): prompt is too long":        "",
+		"stream interrupted: connection reset by peer": "",
+	}
+	for msg, want := range cases {
+		got := faultHint(msg)
+		if (want == "") != (got == "") || !strings.Contains(got, want) {
+			t.Errorf("faultHint(%q) = %q, want it to contain %q", msg, got, want)
+		}
+	}
+}

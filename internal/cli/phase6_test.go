@@ -65,9 +65,9 @@ steps:
 	args.PrintPrompt = "look something up for me"
 	args.OutputFormat = "stream-json"
 	// "task" is not in settings.ReadOnly, so the default (manual) mode
-	// would ask — and headless has nobody to ask. dontAsk allows it
+	// would ask — and headless has nobody to ask. bypassPermissions allows it
 	// unconditionally, matching how this scenario would actually be run.
-	args.PermissionMode = "dontAsk"
+	args.PermissionMode = "bypassPermissions"
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), args, &stdout, &stderr, strings.NewReader(""))
@@ -130,7 +130,7 @@ steps:
 	args.Print = true
 	args.PrintPrompt = "start a background job and stop it"
 	args.OutputFormat = "stream-json"
-	args.PermissionMode = "dontAsk"
+	args.PermissionMode = "bypassPermissions"
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), args, &stdout, &stderr, strings.NewReader(""))
@@ -171,7 +171,7 @@ steps:
 	args.Print = true
 	args.PrintPrompt = "start a background job"
 	args.OutputFormat = "stream-json"
-	args.PermissionMode = "dontAsk"
+	args.PermissionMode = "bypassPermissions"
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), args, &stdout, &stderr, strings.NewReader(""))
@@ -301,7 +301,7 @@ steps:
 	args.Print = true
 	args.PrintPrompt = "start a background job"
 	args.OutputFormat = "text"
-	args.PermissionMode = "dontAsk"
+	args.PermissionMode = "bypassPermissions"
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), args, &stdout, &stderr, strings.NewReader(""))

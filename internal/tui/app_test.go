@@ -76,8 +76,9 @@ func TestView_IdleFrame(t *testing.T) {
 	}
 }
 
-// TestView_SpinnerRowWhileBusy checks the spinner contributes exactly one
-// row while busy and zero while idle (SpinnerState.Render's own contract).
+// TestView_SpinnerRowWhileBusy checks the busy line contributes exactly two
+// rows while busy (the spinner and the blank row setting it off from the
+// transcript) and zero while idle.
 func TestView_SpinnerRowWhileBusy(t *testing.T) {
 	m := newTestModel()
 	// No terminal height: bottom anchoring would otherwise absorb the
@@ -90,8 +91,8 @@ func TestView_SpinnerRowWhileBusy(t *testing.T) {
 	m.spinner.Start(0)
 
 	busyRows := len(viewLines(m))
-	if busyRows != idleRows+1 {
-		t.Errorf("busy frame added %d rows, want exactly 1 (the spinner)", busyRows-idleRows)
+	if busyRows != idleRows+2 {
+		t.Errorf("busy frame added %d rows, want exactly 2 (a blank row, then the spinner)", busyRows-idleRows)
 	}
 
 	m.busy = false

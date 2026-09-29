@@ -7,8 +7,8 @@ KEY enter
 WAITFOR /Main session turn/ 20
 TYPE /resume
 KEY enter
-WAITFOR /session\(s\):/ 20
+WAITFOR /past sessions?:/ 20
 SHOT resume
-EXPECT /\d+ session\(s\):/
-EXPECT /Resume: kiln --resume <id>/
+EXPECT /\d+ past sessions?:/
+EXPECT /Switch with \/resume <id>/
 EXPECT_NOT /panic|goroutine/

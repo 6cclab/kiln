@@ -50,11 +50,13 @@ visual (see "Reporting a bug").
   doctor`). Ollama keeps one model resident; two roles on different Ollama
   models can evict each other. Fix: point every Ollama role at the same model.
 
-- **`memory over budget, not loaded: <path>`** (`internal/cli/chat.go`).
-  CLAUDE.md/`@import`/`.claude/rules/*.md` exceeded the tier's system-prompt
-  ceiling; `LoadMemory` drops whole files rather than truncating one
-  (`internal/claude/memory/memory.go`). Fix: trim the file, or use
-  a bigger-window model.
+- **`CLAUDE.md files use ~Nk tokens, over this model's Mk memory budget;
+  loaded anyway`** (`internal/cli/chat.go`). The CLAUDE.md files alone
+  exceed the tier's memory budget (10% of the window). They still load;
+  every rule is then listed by description rather than loaded
+  (`internal/claude/memory/memory.go`). Fix: trim CLAUDE.md, move detail
+  into `.claude/rules/*.md` with a `description`, or use a bigger-window
+  model.
 
 - **`kiln: interactive mode requires a TTY on stdin; use -p`**
   (`internal/cli/chat.go`). stdin isn't a terminal and no `-p` was given.
@@ -209,7 +211,8 @@ kiln --strict-mcp-config --mcp-config ./project-mcp.json
 
 Modes (`internal/claude/settings/settings.go`): `manual` (default,
 read-only free else ask), `acceptEdits` (edit/write + read-only free else
-ask), `auto`/`dontAsk` (blanket allow), `bypassPermissions` (allow
+ask), `auto` (blanket allow), `dontAsk` (read-only free, allow rules
+apply, everything else denied without asking), `bypassPermissions` (allow
 everything else), `plan` (read-only allowed, everything else denied
 outright, no prompt). An explicit `deny` rule wins over every mode,
 `bypassPermissions` included — see Precedence below.
@@ -288,8 +291,8 @@ overridable per-hook via `timeout` in settings.json.
 
 ## Context and compaction
 
-- `memory over budget, not loaded: <path>` — see "Startup and models"; same
-  mechanism (`internal/claude/memory/memory.go`).
+- `CLAUDE.md files use ~Nk tokens, over this model's … memory budget` — see
+  "Startup and models" (`internal/claude/memory/memory.go`).
 
 - **Compaction trigger**: fires when estimated context tokens exceed
   `contextWindow - ReserveTokens` (`internal/compaction/estimate.go`,

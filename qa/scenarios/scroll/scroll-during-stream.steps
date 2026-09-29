@@ -17,7 +17,7 @@
 WAITFOR /describe a task/ 20
 TYPE tell me about the rollout
 KEY enter
-WAITFOR /esc to interrupt/ 10
+WAITFOR /esc to stop/ 10
 SHOT streaming-before-scroll
 
 SCROLL up 3

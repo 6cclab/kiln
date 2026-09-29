@@ -13,6 +13,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/session/jsonl"
 )
@@ -36,6 +37,12 @@ type SessionCommandDeps struct {
 	Cwd  string
 	// SessionsDir is shown in /resume's hint text.
 	SessionsDir string
+	// CurrentID is this session's id, left out of /resume's choices.
+	CurrentID string
+	// Relaunch, when set, makes /resume <id> switch sessions: it records
+	// the id and the command exits, and the process restarts resuming it.
+	// Nil keeps /resume to naming the restart command.
+	Relaunch func(id string)
 }
 
 // ago renders a millisecond timestamp as "<n><unit> ago".
@@ -96,16 +103,16 @@ func truncateRunes(s string, max int) string {
 // SessionCommands returns the source for /resume, /rewind, /export,
 // /memory, /add-dir, /init and /config.
 //
-// /resume deliberately lists rather than swaps: resuming replaces the
-// session, tools, model and gate, effectively rebuilding everything the
-// process holds. Doing that in place would leave half-torn-down state on
-// any failure, so the session id is printed and the restart flag named
-// instead. "kiln --resume <id>" is the supported path.
+// /resume <id> does not swap sessions inside the process: resuming
+// replaces the session, tools, model and gate, and doing that in place
+// would leave half-torn-down state on any failure. It hands the id to
+// deps.Relaunch and exits instead; the process then re-executes itself
+// with --resume <id> after its normal exit path has run (cmd/kiln).
 func SessionCommands(deps SessionCommandDeps) Source {
 	cmds := []Command{
 		{
 			Name:         "resume",
-			Description:  "List past sessions in this directory",
+			Description:  "Switch to a past session in this directory",
 			ArgumentHint: "[session-id]",
 			ArgumentCompletions: func(prefix string) []Completion {
 				if deps.Repo == nil {
@@ -122,24 +129,39 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				wanted := strings.ToLower(strings.TrimSpace(prefix))
 				var out []Completion
 				for _, m := range found {
-					if wanted != "" && !strings.Contains(strings.ToLower(m.ID), wanted) {
+					if m.ID == deps.CurrentID {
+						continue
+					}
+					prompt := jsonl.FirstPrompt(m.Path)
+					if wanted != "" && !strings.Contains(strings.ToLower(m.ID), wanted) && !strings.Contains(strings.ToLower(prompt), wanted) {
 						continue
 					}
 					out = append(out, Completion{
 						Value:       m.ID,
-						Label:       fmt.Sprintf("%s  %s", ago(m.ModifiedAt), m.ID[:min(8, len(m.ID))]),
-						Description: m.ID,
+						Label:       fmt.Sprintf("%s  %s", ago(m.ModifiedAt), shortID(m.ID)),
+						Description: orDefault(prompt, "(no prompt yet)"),
 					})
 				}
 				return out
 			},
 			Run: func(ctx context.Context, args string) (Result, error) {
-				if args != "" {
-					return Result{Output: []string{
-						"Resuming replaces the session, tools and model, so it happens at startup:",
-						"",
-						fmt.Sprintf("  kiln --resume %s", args),
-					}}, nil
+				if args = strings.TrimSpace(args); args != "" {
+					id, problem, err := resolveSessionID(deps, args)
+					if err != nil {
+						return Result{}, err
+					}
+					if problem != "" {
+						return Result{Output: []string{problem}}, nil
+					}
+					if deps.Relaunch == nil {
+						return Result{Output: []string{
+							"Resuming replaces the session, tools and model, so it happens at startup:",
+							"",
+							fmt.Sprintf("  kiln --resume %s", id),
+						}}, nil
+					}
+					deps.Relaunch(id)
+					return Result{Output: []string{"Resuming " + id + "…"}, Exit: true}, nil
 				}
 				if deps.Repo == nil {
 					return Result{Output: []string{"No past sessions in this directory."}}, nil
@@ -148,6 +170,13 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				if err != nil {
 					return Result{}, err
 				}
+				others := found[:0]
+				for _, m := range found {
+					if m.ID != deps.CurrentID {
+						others = append(others, m)
+					}
+				}
+				found = others
 				if len(found) == 0 {
 					return Result{Output: []string{"No past sessions in this directory."}}, nil
 				}
@@ -156,11 +185,11 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				if len(top) > 15 {
 					top = top[:15]
 				}
-				lines := []string{fmt.Sprintf("%d session(s):", len(found)), ""}
+				lines := []string{plural.Count(len(found), "past session") + ":", ""}
 				for _, m := range top {
-					lines = append(lines, fmt.Sprintf("  %s  %8s", m.ID, ago(m.ModifiedAt)))
+					lines = append(lines, fmt.Sprintf("  %s  %8s  %s", shortID(m.ID), ago(m.ModifiedAt), truncate(orDefault(jsonl.FirstPrompt(m.Path), "(no prompt yet)"), 70)))
 				}
-				lines = append(lines, "", "Resume: kiln --resume <id>")
+				lines = append(lines, "", "Switch with /resume <id> (type /resume and a space to pick one)")
 				return Result{Output: lines}, nil
 			},
 		},
@@ -210,33 +239,51 @@ func SessionCommands(deps SessionCommandDeps) Source {
 					return Result{}, err
 				}
 
+				var turns []session.Entry
+				for _, e := range entries {
+					if role, _, ok := entryText(e); ok && role == "user" {
+						turns = append(turns, e)
+					}
+				}
 				trimmed := strings.TrimSpace(args)
 				if trimmed == "" {
-					var turns []session.Entry
-					for _, e := range entries {
-						if role, _, ok := entryText(e); ok && role == "user" {
-							turns = append(turns, e)
-						}
-					}
 					if len(turns) > 10 {
 						turns = turns[len(turns)-10:]
 					}
 					if len(turns) == 0 {
 						return Result{Output: []string{"Nothing to rewind to yet."}}, nil
 					}
-					lines := []string{"Rewind to which turn?", ""}
+					lines := []string{"Rewind to before which message?", ""}
 					for _, e := range turns {
 						_, text, _ := entryText(e)
-						lines = append(lines, fmt.Sprintf("  %s  %s", e.ID, truncateRunes(collapseSpace(text), 60)))
+						lines = append(lines, fmt.Sprintf("  %s  %s", shortID(e.ID), truncateRunes(collapseSpace(text), 60)))
 					}
-					lines = append(lines, "", "Use: /rewind <entry-id>")
+					lines = append(lines, "", "Rewind with /rewind <id>, or press esc twice for a picker.")
 					return Result{Output: lines}, nil
 				}
 
-				if err := deps.Lane.NavigateTree(ctx, &trimmed); err != nil {
+				// An id, or any unique prefix of one (the list shows 8
+				// characters), naming one of your messages. Like the
+				// picker, this goes back to just before that message.
+				var match *session.Entry
+				for i, e := range turns {
+					if strings.HasPrefix(e.ID, trimmed) {
+						if match != nil {
+							return Result{}, fmt.Errorf("%q matches more than one message; use more of the id", trimmed)
+						}
+						match = &turns[i]
+					}
+				}
+				if match == nil {
+					return Result{}, fmt.Errorf("no message of yours has an id starting %q; /rewind lists them", trimmed)
+				}
+				if err := deps.Lane.NavigateTree(ctx, match.ParentID); err != nil {
 					return Result{}, err
 				}
-				return Result{Output: []string{fmt.Sprintf("Rewound to %s.", trimmed)}}, nil
+				_, text, _ := entryText(*match)
+				// Clear redraws the transcript as it now stands, then shows
+				// this note under it.
+				return Result{Output: []string{"Rewound to before: " + truncateRunes(collapseSpace(text), 60)}, Clear: true}, nil
 			},
 		},
 		{
@@ -263,7 +310,7 @@ func SessionCommands(deps SessionCommandDeps) Source {
 
 				target := strings.TrimSpace(args)
 				if target == "" {
-					target = fmt.Sprintf("transcript-%d.md", time.Now().UnixMilli())
+					target = "kiln-transcript-" + time.Now().Format("2006-01-02-150405") + ".md"
 				}
 				if !filepath.IsAbs(target) {
 					target = filepath.Join(deps.Cwd, target)
@@ -313,15 +360,30 @@ func SessionCommands(deps SessionCommandDeps) Source {
 					return Result{Output: []string{"No $EDITOR set. Edit manually:", "  " + path}}, nil
 				}
 
-				cmd := exec.Command(editor, path)
-				cmd.Stdin = os.Stdin
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
-				if err := cmd.Start(); err != nil {
-					return Result{}, err
+				// $EDITOR may carry flags ("code --wait"), so it runs through
+				// the shell with the path as a positional argument.
+				cmd := exec.Command("/bin/sh", "-c", editor+` "$1"`, "sh", path)
+				before := modTime(path)
+				shown := path
+				if rel, err := filepath.Rel(deps.Cwd, path); err == nil && !strings.HasPrefix(rel, "..") {
+					shown = rel
+				} else if home := userHome(); strings.HasPrefix(path, home+string(filepath.Separator)) {
+					shown = "~" + strings.TrimPrefix(path, home)
 				}
-				go func() { _ = cmd.Wait() }() // detached: do not hold the harness hostage
-				return Result{Output: []string{fmt.Sprintf("Opened %s in %s.", path, editor)}}, nil
+				return Result{
+					Output: []string{"Memory file: " + path},
+					Exec:   cmd,
+					ExecDone: func(err error) string {
+						switch {
+						case err != nil:
+							return fmt.Sprintf("%s exited with an error: %s", editor, err)
+						case modTime(path).Equal(before):
+							return "No changes to " + shown + "."
+						default:
+							return "Saved " + shown + "."
+						}
+					},
+				}, nil
 			},
 		},
 		{
@@ -352,7 +414,15 @@ func SessionCommands(deps SessionCommandDeps) Source {
 					if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || !strings.HasPrefix(e.Name(), leaf) {
 						continue
 					}
-					out = append(out, Completion{Value: filepath.Join(root, e.Name()), Label: e.Name(), Description: root})
+					// The per-row fact worth showing: whether the directory is
+					// already inside the workspace (every row repeating the
+					// parent path said nothing).
+					dir := filepath.Join(root, e.Name())
+					desc := ""
+					if deps.Gate != nil && withinAny(dir, deps.Gate.Roots()) {
+						desc = "already in the workspace"
+					}
+					out = append(out, Completion{Value: dir, Label: e.Name() + "/", Description: desc})
 					if len(out) >= 50 {
 						break
 					}
@@ -420,4 +490,60 @@ func userHome() string {
 		return ""
 	}
 	return h
+}
+
+// modTime is path's modification time, zero when it does not exist.
+func modTime(path string) time.Time {
+	if info, err := os.Stat(path); err == nil {
+		return info.ModTime()
+	}
+	return time.Time{}
+}
+
+// resolveSessionID finds the past session in this directory whose id is,
+// or starts with, prefix. problem explains an unknown, ambiguous or current
+// session to the user; err is a failure to list sessions at all.
+func resolveSessionID(deps SessionCommandDeps, prefix string) (id, problem string, err error) {
+	if deps.Repo == nil {
+		return "", "No past sessions in this directory.", nil
+	}
+	found, err := deps.Repo.List(deps.Cwd)
+	if err != nil {
+		return "", "", err
+	}
+	var matches []string
+	for _, m := range found {
+		if m.ID == prefix {
+			matches = []string{m.ID}
+			break
+		}
+		if strings.HasPrefix(m.ID, prefix) {
+			matches = append(matches, m.ID)
+		}
+	}
+	switch {
+	case len(matches) == 1 && matches[0] == deps.CurrentID:
+		return "", matches[0] + " is this session.", nil
+	case len(matches) == 1:
+		return matches[0], "", nil
+	case len(matches) > 1:
+		return "", fmt.Sprintf("%q matches %d sessions; type more of the id.", prefix, len(matches)), nil
+	}
+	return "", fmt.Sprintf("No session %q in this directory. Type /resume and a space to pick one.", prefix), nil
+}
+
+// shortID is the 8-character form of a session or entry id the listings
+// show; commands taking an id accept any unique prefix of it.
+func shortID(id string) string {
+	return id[:min(8, len(id))]
+}
+
+// withinAny reports whether dir is one of roots or below one of them.
+func withinAny(dir string, roots []string) bool {
+	for _, r := range roots {
+		if rel, err := filepath.Rel(r, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+			return true
+		}
+	}
+	return false
 }

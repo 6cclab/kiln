@@ -35,6 +35,9 @@ type PromptState struct {
 	// note the same way RenderToolCall would name the call ("bash npm
 	// test -- upload", "Update src/math.js").
 	lastDenied *PermissionRequest
+	// lastDeniedFeedback is what the user typed with that "no", shown on
+	// the same note.
+	lastDeniedFeedback string
 	// switchMode is set by chooseOption when the option picked is "switch
 	// to <mode> then allow" (Bash's "switch to auto mode", Edit/Write's
 	// "switch to accept edits"). app.go's handleKey reads it right after
@@ -162,6 +165,7 @@ func (p *PromptState) finishTool(choice PromptChoice) {
 		if choice.Kind == ChoiceDeny {
 			req := pending.request
 			p.lastDenied = &req
+			p.lastDeniedFeedback = strings.TrimSpace(choice.Feedback)
 		}
 		pending.reply <- choice
 	}
@@ -213,6 +217,19 @@ func (p *PromptState) finishPlan(reply PlanReply) {
 //     cancels (deny outright for a tool prompt; back to the menu for a
 //     plan).
 //   - Anything else is swallowed while a prompt is up.
+//
+// Paste appends pasted text to the reason being typed after a "no", and
+// reports whether the prompt took it. Outside feedback mode a prompt has no
+// text field, so the paste is not the prompt's to take.
+func (p *PromptState) Paste(text string) bool {
+	if p.feedback == nil {
+		return false
+	}
+	f := *p.feedback + strings.ReplaceAll(text, "\r\n", "\n")
+	p.feedback = &f
+	return true
+}
+
 func (p *PromptState) HandleKey(msg tea.KeyPressMsg) bool {
 	if p.plan != nil {
 		return p.handlePlanKey(msg)
@@ -361,7 +378,9 @@ func (p *PromptState) handlePlanKey(msg tea.KeyPressMsg) bool {
 		}
 		return true
 	case "1", "y":
-		p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "acceptEdits"})
+		// "Yes, and use auto mode": auto, as the option says. acceptEdits
+		// still prompted for every command the plan went on to run.
+		p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "auto"})
 		return true
 	case "2":
 		p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "manual"})
@@ -385,7 +404,7 @@ func (p *PromptState) handlePlanKey(msg tea.KeyPressMsg) bool {
 	case "enter":
 		switch p.plan.selected {
 		case 0:
-			p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "acceptEdits"})
+			p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "auto"})
 		case 1:
 			p.finishPlan(PlanReply{Kind: PlanApprove, Mode: "manual"})
 		case 2:

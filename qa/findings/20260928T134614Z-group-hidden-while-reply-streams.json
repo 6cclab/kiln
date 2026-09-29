@@ -1,0 +1,24 @@
+{
+ "id": "20260928T134614Z-group-hidden-while-reply-streams",
+ "found_at": "2026-09-28T13:46:14Z",
+ "scenario": "real/mcp-project-config",
+ "step": "04-progress",
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Tool call hidden while the next reply streams; busy line stale",
+ "observed": "The go vet/go test bash call was held in the read group, so it was off screen while the following reply streamed (looked like one reply split in two) and the busy line still said 'Running go vet'",
+ "expected": "The held group commits when the reply starts streaming and the label returns to the gerund",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T081041/iterm-dark/real-mcp-project-config-140x45/04-progress.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestTUI_ReadGroupCommitsBeforeStreamedReply",
+  "updated_at": "2026-09-28T13:46:14Z"
+ }
+}

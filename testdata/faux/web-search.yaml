@@ -1,0 +1,12 @@
+model: faux-1
+steps:
+  - text: "Let me search for that."
+  - raw_blocks:
+      - {type: server_tool_use, id: srvtoolu_1, name: web_search, input: {query: "go generics release date"}}
+      - {type: web_search_tool_result, tool_use_id: srvtoolu_1, content: [
+          {type: web_search_result, url: "https://go.dev/blog/generics", title: "Generics in Go"},
+          {type: web_search_result, url: "https://go.dev/doc/go1.18", title: "Go 1.18 Release Notes"},
+        ]}
+  - text: "Go generics shipped in Go 1.18, released March 2022."
+    end_turn: true
+  - text: "Anything else?"

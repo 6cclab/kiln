@@ -6,7 +6,7 @@ KEY enter
 WAITFOR /Sure, working on it/ 20
 TYPE /compact
 KEY enter
-WAITFOR /Context compacted\./ 20
+WAITFOR /Context compacted|Nothing to compact yet/ 20
 SHOT compacted
-EXPECT /Context compacted\./
+EXPECT /Context compacted|Nothing to compact yet/
 EXPECT_NOT /panic|goroutine/

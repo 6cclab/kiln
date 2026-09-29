@@ -24,7 +24,9 @@ import (
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
+	slashcommands "github.com/andrepato/harness/internal/commands"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
+	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/search"
 )
@@ -295,7 +297,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 			lines = append(lines, fmt.Sprintf("tier       unresolvable: %v", err))
 		} else {
 			strategy = resolved.Tier.ToolStrategy
-			lines = append(lines, fmt.Sprintf("tier       %s (%d tokens)", resolved.Tier.Name, resolved.Tier.ContextWindow))
+			lines = append(lines, "tier       "+slashcommands.TierSummary(resolved.Tier))
 		}
 	}
 
@@ -349,7 +351,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	}
 
 	hub := mcpgate.NewHub()
-	mcpConfigs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
+	mcpConfigs := resolveForReport(args)
 	hub.ConnectAll(ctx, mcpConfigs)
 	defer hub.Close(ctx)
 	statuses := hub.Statuses()
@@ -366,8 +368,8 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		hasSessionSearch = true
 		_ = s.Close()
 	}
-	residentNow := residentToolNames(hasSessionSearch)
-	lines = append(lines, fmt.Sprintf(`tools      %d resident, strategy "%s"`, len(residentNow), strategy))
+	residentNow := residentToolNames(hasSessionSearch, webSearchAllowed(settings.Permissions))
+	lines = append(lines, "tools      "+slashcommands.ToolsSummary(len(residentNow), budget.Tier{ToolStrategy: strategy}))
 
 	hookConfig := claudehooks.LoadHooks(cwd)
 	hookCount := 0
@@ -382,7 +384,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		}
 		hookCount += n
 	}
-	lines = append(lines, fmt.Sprintf("hooks      %d across %d events", hookCount, eventsWithHooks))
+	lines = append(lines, "hooks      "+slashcommands.HooksSummary(hookCount, eventsWithHooks))
 
 	agentsList := append([]claudeagents.Definition{agent.GeneralPurpose}, claudeagents.LoadAgents(cwd)...)
 	lines = append(lines, fmt.Sprintf("agents     %d available", len(agentsList)))
@@ -414,7 +416,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	if len(problems) == 0 {
 		lines = append(lines, "No problems found.")
 	} else {
-		lines = append(lines, fmt.Sprintf("%d problem(s):", len(problems)))
+		lines = append(lines, plural.Count(len(problems), "problem")+":")
 		for _, p := range problems {
 			lines = append(lines, "  - "+p)
 		}
@@ -430,7 +432,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 // chat.go's Run does) and renders mcp.RenderMCPReport's connected/failed
 // summary, rather than listing configuration only.
 func MCP(ctx context.Context, args Args, stdout, stderr io.Writer) int {
-	configs := mcpgate.ResolveConfigs(args.MCPConfig, args.StrictMCPConfig)
+	configs := resolveForReport(args)
 	hub := mcpgate.NewHub()
 	hub.ConnectAll(ctx, configs)
 	defer hub.Close(ctx)
@@ -473,4 +475,15 @@ func versionLabel(v string) string {
 		return "v" + strings.TrimPrefix(v, "v")
 	}
 	return v
+}
+
+// resolveForReport is every MCP server a session here would start: all
+// scopes (project ones only in a trusted folder) plus --mcp-config.
+func resolveForReport(args Args) map[string]mcpgate.ServerConfig {
+	cwd, _ := os.Getwd()
+	r := mcpgate.Resolve(mcpgate.ResolveOptions{Cwd: cwd, Path: args.MCPConfig, Strict: args.StrictMCPConfig})
+	if folderTrusted(cwd) {
+		return r.All()
+	}
+	return r.Servers
 }

@@ -107,6 +107,33 @@ func TestRenderGolden_BannerNoSessions(t *testing.T) {
 	assertBannerGolden(t, "banner-no-sessions", bannerRows(deps, 80))
 }
 
+// TestRenderGolden_BannerNarrow: below the art's minimum text column the
+// banner drops the kiln and keeps the compact text-only rows.
+func TestRenderGolden_BannerNarrow(t *testing.T) {
+	tui.SetColorEnabled(true)
+	tui.SetPlainMode(false)
+	t.Cleanup(func() { tui.SetPlainMode(false) })
+
+	chdirNoGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	Version = "0.9.2"
+	deps := InteractiveDeps{Cwd: "/home/dev/relay-api", ModelLabel: "kiln-large", IsResume: false}
+	assertBannerGolden(t, "banner-narrow", bannerRows(deps, 50))
+}
+
+// TestBannerPlainModeHasNoArt: screen-reader mode never draws the kiln.
+func TestBannerPlainModeHasNoArt(t *testing.T) {
+	tui.SetPlainMode(true)
+	t.Cleanup(func() { tui.SetPlainMode(false) })
+	chdirNoGit(t)
+	t.Setenv("HOME", t.TempDir())
+	rows := bannerRows(InteractiveDeps{Cwd: "/home/dev/relay-api", ModelLabel: "kiln-large"}, 120)
+	if joined := strings.Join(rows, "\n"); strings.ContainsAny(joined, "█▀▄░▒▓") {
+		t.Errorf("plain-mode banner draws block art:\n%s", joined)
+	}
+}
+
 func TestRenderGolden_BannerWithSessions(t *testing.T) {
 	tui.SetColorEnabled(true)
 	tui.SetPlainMode(false)
@@ -229,12 +256,17 @@ func TestBannerRow1_LongCwdKeepsBranchAndModelAt120And80(t *testing.T) {
 	const model = "kiln-large"
 	deps := InteractiveDeps{Cwd: longCwd, ModelLabel: model, IsResume: false}
 
-	for _, width := range []int{120, 80} {
+	for _, width := range []int{120, 80, 50} {
 		rows := bannerRows(deps, width)
-		if len(rows) < 2 {
-			t.Fatalf("width %d: expected at least 2 banner rows, got %d", width, len(rows))
+		// The repo line: beside the kiln art when it fits, row 1 of the
+		// text-only banner otherwise.
+		row1 := ""
+		for _, r := range rows {
+			if strings.Contains(ansi.Strip(r), "branch ") {
+				row1 = r
+				break
+			}
 		}
-		row1 := rows[1]
 		plain := ansi.Strip(row1)
 		if tui.VisibleWidth(row1) > width {
 			t.Errorf("width %d: banner row 1 overflowed: %q (%d cols)", width, plain, tui.VisibleWidth(row1))

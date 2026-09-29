@@ -183,10 +183,9 @@ func TestEnsureContrastDarkensForLightBackground(t *testing.T) {
 // TestSetTerminalBackground_LightBackgroundTextTokensMeetContrast is the
 // end-to-end regression: every text token SetTerminalBackground recomputes
 // for the QA light profile's background must clear its threshold —
-// bodyMinContrast (4.5:1, WCAG AA normal text) for Ink, dimMinContrast
-// (3:1, WCAG AA large-text/UI-component floor) for Muted/Faint, and
-// accentMinContrast (3:1) for the named accents, which render as bold
-// labels, single glyphs or decorative marks rather than small body copy.
+// 7:1 for Ink, 4.5:1 (small text) for Muted and the named accents, which
+// colour normal-size words such as the mode label, and 3:1 for Faint. The
+// bars are literals so lowering a floor in theme.go fails here.
 func TestSetTerminalBackground_LightBackgroundTextTokensMeetContrast(t *testing.T) {
 	prevEnabled := enabled
 	t.Cleanup(func() {
@@ -206,14 +205,14 @@ func TestSetTerminalBackground_LightBackgroundTextTokensMeetContrast(t *testing.
 		hex  string
 		min  float64
 	}{
-		{"Ink", tx.Ink, bodyMinContrast},
-		{"Muted/Dim", tx.Dim, dimMinContrast},
-		{"Faint", tx.Faint, dimMinContrast},
-		{"KilnAmber", tx.Amber, accentMinContrast},
-		{"KilnGreen", tx.Green, accentMinContrast},
-		{"KilnRed", tx.Red, accentMinContrast},
-		{"KilnBlue", tx.Blue, accentMinContrast},
-		{"Violet", tx.Violet, accentMinContrast},
+		{"Ink", tx.Ink, 7.0},
+		{"Muted/Dim", tx.Dim, 4.5},
+		{"Faint", tx.Faint, 3.0},
+		{"KilnAmber", tx.Amber, 4.5},
+		{"KilnGreen", tx.Green, 4.5},
+		{"KilnRed", tx.Red, 4.5},
+		{"KilnBlue", tx.Blue, 4.5},
+		{"Violet", tx.Violet, 4.5},
 	}
 	for _, c := range cases {
 		ratio := contrastRatio(bg, parseHex(c.hex))
@@ -302,4 +301,41 @@ func TestSetTerminalBackground_LightBackgroundSurfacesVisible(t *testing.T) {
 
 func designSeparation(hex string) float64 {
 	return contrastRatio(parseHex(hexDesignBg), parseHex(hex))
+}
+
+// TestSetTerminalBackground_LightSurfacesStayVisible: hairlines, raised
+// rows, empty meter cells and diff tints keep the design's perceived step
+// off the background on a light profile (a review measured raised rows at
+// 1.18:1 and diff rows at 1.07:1 when separation matched the design's
+// contrast ratio, or used a fixed blend), and dim text stays a step above
+// faint.
+func TestSetTerminalBackground_LightSurfacesStayVisible(t *testing.T) {
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		resetSurfaceTokensToDesign()
+		resetTextTokensToDesign()
+	})
+	SetColorEnabled(true)
+	bg := parseHex("#f5f3ec")
+	SetTerminalBackground(color.RGBA{R: 0xf5, G: 0xf3, B: 0xec, A: 0xff})
+	design := parseHex(hexDesignBg)
+	sf := CurrentSurfaceHex()
+	for _, c := range []struct{ name, got, designHex string }{
+		{"Rule", sf.Rule, hexRule},
+		{"Raise", sf.Raise, hexRaise},
+		{"BarEmpty", sf.BarEmpty, hexBarEmpty},
+		{"DiffAdd", sf.DiffAdd, hexDiffAddBg},
+		{"DiffDel", sf.DiffDel, hexDiffDelBg},
+	} {
+		want := math.Abs(lightness(parseHex(c.designHex)) - lightness(design))
+		got := math.Abs(lightness(parseHex(c.got)) - lightness(bg))
+		if got+0.5 < want {
+			t.Errorf("%s = %s: lightness step %.1f off the background, want the design's %.1f", c.name, c.got, got, want)
+		}
+	}
+	tx := CurrentTextHex()
+	if contrastRatio(bg, parseHex(tx.Dim)) <= contrastRatio(bg, parseHex(tx.Faint)) {
+		t.Errorf("dim %s does not stand above faint %s", tx.Dim, tx.Faint)
+	}
 }

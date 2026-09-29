@@ -328,6 +328,9 @@ func buildBedrockToolConfig(tools []provider.ToolDef) *bedrockToolConfigWire {
 	}
 	wrapped := make([]bedrockToolWrapper, 0, len(tools))
 	for _, td := range tools {
+		if len(td.ServerTool) > 0 {
+			continue
+		}
 		schema := td.Parameters
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)

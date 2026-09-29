@@ -147,6 +147,7 @@ a multi-line paste never submits early. Source: `internal/tui/editor`.
 | `Esc` | interrupt a running turn; twice within 1s on an idle, empty input opens Rewind |
 | `?` | open the shortcuts panel (idle, empty input only) |
 | `PgUp`/`PgDn`, `Shift+↑`/`↓`, mouse wheel | scroll the transcript (full-screen mode only) |
+| drag with the mouse | select transcript text and copy it to the clipboard on release (full-screen mode; inline mode leaves selection to the terminal) |
 
 While a permission or plan prompt is open, it owns every key until answered
 (§6). Source: `internal/tui/keys.go`, `internal/tui/editor`.
@@ -168,7 +169,7 @@ is won by the later one — see precedence below).
 
 | Command | Args | Effect |
 |---|---|---|
-| `/resume` | `[id]` | list recent sessions here, or print how to resume a given one (`kiln --resume <id>` — it can't swap sessions mid-run) |
+| `/resume` | `[id]` | switch to a past session here: type `/resume ` to pick one by its first prompt, or give an id prefix; with no argument, list recent sessions |
 | `/rewind` | `[entry-id]` | list recent turns, or move the conversation's branch tip back to one |
 | `/export` | `[path]` | write this conversation to a Markdown file |
 | `/memory` | `[user\|project]` | open `CLAUDE.md` in `$EDITOR`/`$VISUAL`, or print its path |
@@ -351,9 +352,11 @@ that role for the rest of the session only (never written to disk); plain
 
 Sessions live at `~/.harness/sessions` (override with `HARNESS_SESSIONS_DIR`),
 one JSONL file per session. `/resume` lists up to 15 recent sessions in the
-current directory; resuming actually happens at startup (`kiln --resume
-<id>`), since swapping mid-process would mean rebuilding the model, tools and
-permission gate live. `/rewind` lists the last 10 user turns and moves the
+current directory with their first prompts; `/resume <id>` ends the current
+session (hooks, shells and MCP servers shut down as on exit) and restarts
+kiln with the same flags plus `--resume <id>`, so the chosen conversation
+continues in the same terminal. `kiln --resume <id>` does the same from the
+shell. `/rewind` lists the last 10 user turns and moves the
 conversation's branch tip back to one you pick (also reachable by pressing
 `Esc` twice on an idle, empty input). `/export [path]` writes a Markdown
 transcript (`# Session transcript`, then `## user`/`## assistant` sections),

@@ -3,6 +3,7 @@ package settings
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -201,10 +202,16 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 		if strings.HasPrefix(bare, "mcp__") {
 			return strings.HasPrefix(tool, bare)
 		}
-		return bare == tool
+		return sameTool(bare, tool)
 	}
-	if strings.ToLower(m[1]) != tool {
+	if !sameTool(strings.ToLower(m[1]), tool) {
 		return false
+	}
+
+	// Claude Code's WebFetch rules name a host: `WebFetch(domain:x.com)`.
+	// kiln's web_fetch argument is the whole URL, so compare its host.
+	if d, ok := strings.CutPrefix(strings.TrimSpace(m[2]), "domain:"); ok && sameTool(tool, "webfetch") {
+		return strings.EqualFold(urlHost(primaryArg), d)
 	}
 
 	// `find:*` means "the find command, any arguments". Normalize the
@@ -235,6 +242,22 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 	return re.MatchString(strings.TrimSpace(primaryArg))
 }
 
+// sameTool compares a rule's tool name with a tool's, both lower-cased,
+// ignoring underscores: Claude Code spells tools WebFetch and TodoWrite
+// where kiln's are web_fetch and todo_write.
+func sameTool(a, b string) bool {
+	return strings.ReplaceAll(a, "_", "") == strings.ReplaceAll(b, "_", "")
+}
+
+// urlHost is the host of a URL argument, or "" when it has none.
+func urlHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
 // ReadOnly is the set of tools that cannot change anything.
 //
 // "bash" is deliberately absent: bash(ls) is read-only and bash(rm -rf) is
@@ -252,6 +275,10 @@ var ReadOnly = map[string]bool{
 	// todo_write only edits the in-memory todo list.
 	"exit_plan_mode": true,
 	"todo_write":     true,
+	// skill only reads a SKILL.md's own content; it changes nothing on
+	// disk, so plan mode (and manual mode) allow it the same way Read
+	// does.
+	"skill": true,
 }
 
 // Decision is the outcome of Decide.
@@ -277,25 +304,40 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 		return false
 	}
 
-	if hits(permissions.Deny) {
+	denyHit, askHit, allowHit := hits(permissions.Deny), hits(permissions.Ask), hits(permissions.Allow)
+	if strings.EqualFold(toolName, "bash") {
+		// A command line is several commands; judge each one
+		// (bashRuleVerdicts).
+		denyHit, askHit, allowHit = bashRuleVerdicts(permissions, toolName, primaryArg)
+	}
+
+	if denyHit {
 		return Deny
 	}
 	if mode == ModeBypassPermissions {
 		return Allow
 	}
-	if hits(permissions.Allow) {
+	if allowHit {
 		return Allow
 	}
-	if hits(permissions.Ask) {
+	if askHit {
 		return Ask
 	}
 
 	switch mode {
 	case ModePlan:
 		// Read-only: anything that could mutate is refused outright rather
-		// than prompted, which is what makes plan mode trustworthy.
-		if ReadOnly[toolName] {
+		// than prompted, which is what makes plan mode trustworthy. A bash
+		// command that provably only reads (IsReadOnlyCommand) is allowed,
+		// so planning can look around the way the read tool does.
+		if ReadOnly[toolName] || (toolName == "bash" && IsReadOnlyCommand(primaryArg)) {
 			return Allow
+		}
+		// Fetching a page changes nothing locally and is how a plan gets
+		// researched, but the URL can carry data out, so it asks rather
+		// than being refused or allowed.
+		if toolName == "web_fetch" {
+			return Ask
 		}
 		return Deny
 	case ModeAcceptEdits:
@@ -309,7 +351,17 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 		}
 		return Ask
 	case ModeDontAsk:
-		return Allow
+		// Claude Code's dontAsk (docs: permission-modes, "Allow only
+		// pre-approved tools with dontAsk mode"): what runs without asking
+		// in manual mode still runs, allow rules still apply (above), and
+		// everything that would prompt is denied instead. Decide reports
+		// that as Ask, as manual does; the gate turns it into a denial,
+		// after its own read-only bash check, so the two modes cannot
+		// drift apart on what "would prompt" means.
+		if ReadOnly[toolName] {
+			return Allow
+		}
+		return Ask
 	case ModeAuto:
 		// Blanket allow, still subject to deny rules above and to the
 		// workspace boundary enforced separately by the gate.

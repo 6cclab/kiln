@@ -1,0 +1,25 @@
+# Real-user job: a Claude Code user drops a project-scoped .mcp.json into a
+# repo (the way `claude mcp add --scope project` or a hand-written
+# .mcp.json would) and expects kiln to pick it up the same way. kiln
+# currently only reads ~/.claude.json (or --mcp-config), not project
+# .mcp.json, so /mcp is expected to show no servers and the on-call
+# investigation has no incidents MCP tools to call. This is a known gap the
+# lead is closing; NOTE lines below mark what should change once project
+# .mcp.json support lands.
+@real
+@size 140x45
+@fixture qa/fixtures/real/mcp-orders-svc
+@setup mkdir -p {PROJ}/../bin && go -C {ROOT} build -o {PROJ}/../bin/incidents ./qa/fixtures/incident-mcp && printf '{"mcpServers":{"incidents":{"command":"%s"}}}' "{PROJ}/../bin/incidents" > {PROJ}/.mcp.json
+WAITFOR /describe a task/ 30
+SHOT ready
+WAIT 4
+TYPE /mcp
+KEY enter
+SHOT mcp-dialog
+EXPECT /incidents/
+KEY esc
+SHOT mcp-dialog-closed
+TURN orders-svc is paging... use the incidents MCP to figure out what's wrong, then fix it in this repo and add a regression test
+SHOT investigated
+RUN go vet ./... && go test ./...
+RUN grep -RIl "page=3\|per_page=10\|page: *3" --include=*_test.go . | grep -v vendor

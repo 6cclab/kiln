@@ -1,0 +1,27 @@
+{
+ "id": "20260928T192147Z-plural-s-wording",
+ "found_at": "2026-09-28T19:21:47Z",
+ "scenario": "real/wf-devserver-debug",
+ "step": null,
+ "terminals": [],
+ "category": "style",
+ "severity": "low",
+ "title": "'(s)' plurals across kiln's output",
+ "observed": "'2 shell(s), 1 running', 'Enabled 4 tool(s)', '2 line(s)', 'N problem(s)'",
+ "expected": "Proper plurals via one helper",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/real-20260928T134637/iterm-dark/real-wf-devserver-debug-140x45/03-bashes.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/plural/plural.go",
+   "internal/tools/toolsearch.go",
+   "internal/agent/shells.go",
+   "internal/tui/changepreview.go"
+  ],
+  "regression_test": "TestCount",
+  "updated_at": "2026-09-28T19:21:47Z"
+ }
+}

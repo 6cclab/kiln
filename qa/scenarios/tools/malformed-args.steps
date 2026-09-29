@@ -7,14 +7,14 @@
 # arguments" message, which only fires for well-formed-JSON-but-wrong-
 # shape input.
 @faux testdata/faux/qa/tools-malformed-args.yaml
-@args --permission-mode dontAsk
+@args --permission-mode bypassPermissions
 
 WAITFOR /describe a task/ 20
 TYPE run a bash command
 KEY enter
 WAITFOR /not valid JSON/ 20
 SHOT malformed-args
-EXPECT /tool call arguments were not valid JSON/
+EXPECT /arguments were not valid JSON, so it did not run/
 EXPECT /command.*echo hi/
 EXPECT /That call's arguments were broken/
 EXPECT_NOT /panic|goroutine/
