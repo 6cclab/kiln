@@ -202,6 +202,7 @@ class Headless:
         self._live_conns = set()
         self._live_lock = threading.Lock()
         self._reader_stop = threading.Event()
+        self._last_output = time.monotonic()
 
         def pump():
             tail = b""
@@ -219,6 +220,7 @@ class Headless:
                     except OSError:
                         pass
                 tail = window[-16:]
+                self._last_output = time.monotonic()
                 with self._backlog_lock:
                     self._backlog += chunk
                 with self._live_lock:
@@ -337,26 +339,38 @@ class Headless:
     def _focus(self):
         self._page.evaluate("() => window.__term.focus()")
 
+    def settle(self, quiet=0.12, limit=1.0):
+        """Waits until kiln has written nothing for `quiet` seconds (at most
+        `limit`), and xterm.js has drawn what it wrote. A real terminal's own
+        input latency gives kiln that time before the next step reads the
+        screen; headless input lands in microseconds, so a check right after
+        TYPE would read the frame before kiln redrew."""
+        deadline = time.monotonic() + limit
+        time.sleep(quiet)
+        while time.monotonic() < deadline and time.monotonic() - self._last_output < quiet:
+            time.sleep(0.02)
+        self._page.evaluate("() => new Promise(r => requestAnimationFrame(() => r()))")
+
     def type_text(self, text):
         self._focus()
         self._page.keyboard.type(text)
+        self.settle()
 
     def press_key(self, name):
         self._focus()
         n = name.lower()
         if n in KEY_MAP:
             self._page.keyboard.press(KEY_MAP[n])
-            return
-        if "+" in n:
+        elif "+" in n:
             *mods, base = n.split("+")
             base_key = KEY_MAP.get(base, base.upper() if len(base) == 1 else base.capitalize())
             combo = "+".join(MOD_MAP[m] for m in mods) + "+" + base_key
             self._page.keyboard.press(combo)
-            return
-        if len(name) == 1:
+        elif len(name) == 1:
             self._page.keyboard.type(name)
-            return
-        raise HeadlessError("unknown key name %r" % name)
+        else:
+            raise HeadlessError("unknown key name %r" % name)
+        self.settle()
 
     def scroll(self, direction, n):
         # xterm.js's mouse-report wheel handler sends one SGR wheel report
@@ -375,11 +389,13 @@ class Headless:
         for _ in range(int(n)):
             self._page.mouse.wheel(0, delta)
             self._page.wait_for_timeout(20)
+        self.settle()
 
     def click(self, x, y):
         self._focus()
         box = self._page.locator("#terminal").bounding_box()
         self._page.mouse.click(box["x"] + int(x), box["y"] + int(y))
+        self.settle()
 
     def screenshot(self, path):
         self._page.locator("#terminal").screenshot(path=path)

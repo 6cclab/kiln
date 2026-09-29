@@ -294,6 +294,11 @@ modes, palette, permissions, queueing, resize, scroll (xterm.js's own mouse
 wheel reporting, matching kiln's SGR mouse mode) and tools — the full
 `.steps`/`EXPECT`/`SHOT` scenario format, unchanged from the macOS driver.
 
+- xterm.js has no kitty keyboard protocol, so shift+enter is plain enter. Mark a scenario that
+  depends on it `@requires kitty-keyboard`; headless runs print `SKIP` for it.
+- Input returns once kiln's output has been quiet for 120ms (at most 1s), standing in for a real
+  terminal's input latency. Still use WAITFOR, not EXPECT, for anything kiln draws after a delay.
+
 **What it cannot cover** (still needs a real terminal — `make qa`): a real
 terminal's own key encoder quirks (Terminal.app's, iTerm2's, Warp's — each
 can differ from xterm.js's for a given key combo; the kitty keyboard

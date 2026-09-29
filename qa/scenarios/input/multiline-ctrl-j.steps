@@ -1,0 +1,14 @@
+# Multi-line entry with ctrl+j (internal/tui/editor/model.go's KeyNewLine).
+# It does not submit; no faux turn is consumed since nothing is ever sent.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE third line
+KEY ctrl+j
+TYPE fourth line via ctrl j
+SHOT multiline-ctrl-j
+EXPECT /third line/
+EXPECT /fourth line via ctrl j/
+EXPECT_NOT /Hello from faux/
+EXPECT_NOT /panic|goroutine/

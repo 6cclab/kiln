@@ -35,6 +35,9 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     @args <kiln args...>         extra kiln arguments
     @env KEY=VAL                 extra environment (repeatable)
     @untrusted                   do not pre-trust the project
+    @requires kitty-keyboard     needs the kitty keyboard protocol (shift+enter
+                                 as its own key); headless terminals, whose
+                                 xterm.js lacks it, report SKIP instead
     @nogit                       do not git-init the project
     @real                        drive the real model instead of faux (no
                                  @faux); HOME is the real one unless
@@ -1015,6 +1018,18 @@ def lint_faux(path):
     return problems
 
 
+# @requires values, and the terminals that cannot meet each.
+REQUIREMENTS = {"kitty-keyboard": ("xterm-dark", "xterm-light")}
+
+
+def unmet_requirement(scenario, terminal):
+    """The reason scenario cannot run on terminal, or None."""
+    req = parse_scenario(scenario)[0].get("requires")
+    if req in REQUIREMENTS and terminal in REQUIREMENTS[req]:
+        return "needs %s, which %s lacks" % (req, terminal)
+    return None
+
+
 def lint_scenario(path):
     problems = []
     try:
@@ -1030,6 +1045,9 @@ def lint_scenario(path):
     fixture = directives.get("fixture")
     if fixture and fixture is not True and not (ROOT / fixture).is_dir():
         problems.append("%s: @fixture %s is not a directory" % (path, fixture))
+    req = directives.get("requires")
+    if req and req not in REQUIREMENTS:
+        problems.append("%s: unknown @requires %r (known: %s)" % (path, req, ", ".join(sorted(REQUIREMENTS))))
     size = directives.get("size")
     if size and not re.match(r"^\d+x\d+$", str(size)):
         problems.append("%s: bad @size %r" % (path, size))
@@ -1116,6 +1134,10 @@ def main():
 
     failed = 0
     for sc in a.scenarios:
+        why = unmet_requirement(sc, a.terminal)
+        if why:
+            print("SKIP %s (%s)" % (sc, why))
+            continue
         r = Run(sc, a.terminal, a.out, a.size, a.keep)
         error = None
         try:
