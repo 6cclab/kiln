@@ -30,7 +30,7 @@ SEND /export
 WAIT 2
 SHOT export
 EXPECT /Wrote .* entries to/
-RUN ls transcript-*.md
+RUN ls kiln-transcript-*.md
 TURN /compact
 SHOT compacted
 EXPECT /[Cc]ompact/

@@ -475,6 +475,24 @@ def parse_regex(arg):
     return re.compile(m.group(1), re.S), float(m.group(3)) if m.group(3) else None
 
 
+def access_only(creds_path, min_minutes=60):
+    """The real credentials with every OAuth refresh token removed, for a
+    scratch HOME. Refresh tokens rotate: a scratch copy that refreshes
+    invalidates the real file's token, which logs the user out once the
+    scratch HOME is deleted. Refuses when an access token expires within
+    min_minutes, since the copy cannot renew it."""
+    data = json.loads(Path(creds_path).read_text())
+    soon = (time.time() + min_minutes * 60) * 1000
+    for provider, entry in data.items():
+        if not isinstance(entry, dict) or "refresh" not in entry:
+            continue
+        del entry["refresh"]
+        if entry.get("expires", 0) < soon:
+            raise DriveError("the %s login expires within %d minutes; run kiln once with the real HOME to "
+                             "renew it (or /login %s), then re-drive" % (provider, min_minutes, provider))
+    return data
+
+
 class Run:
     def __init__(self, scenario, terminal_name, out_root, size_override, keep):
         self.scenario = Path(scenario)
@@ -513,7 +531,7 @@ class Run:
             if self.real:
                 creds = Path(os.environ["HOME"]) / ".harness" / "credentials.json"
                 if creds.exists():
-                    shutil.copy(creds, home / ".harness" / "credentials.json")
+                    (home / ".harness" / "credentials.json").write_text(json.dumps(access_only(creds)))
         self.home = home
         proj = self.work / "proj"
         self.proj = proj

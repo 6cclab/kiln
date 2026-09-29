@@ -62,11 +62,12 @@ e2e-live:
 
 # Real-terminal QA (macOS only): drives bin/kiln through qa/scenarios in a
 # real terminal window via Orca and records screenshots under qa/runs.
-# SCENARIO=<area>/<name> runs one scenario (default: all of them);
+# SCENARIO=<area>/<name> runs one scenario (default: all but qa/scenarios/real,
+# which drive the real model; REAL=1 adds them);
 # TERMINAL is iterm-dark, iterm-light, terminal or warp. See docs/testing.md.
 TERMINAL ?= iterm-dark
 SCENARIO ?=
-QA_STEPS := $(if $(SCENARIO),qa/scenarios/$(SCENARIO).steps,$(wildcard qa/scenarios/*/*.steps))
+QA_STEPS := $(if $(SCENARIO),qa/scenarios/$(SCENARIO).steps,$(if $(REAL),$(wildcard qa/scenarios/*/*.steps),$(filter-out qa/scenarios/real/%,$(wildcard qa/scenarios/*/*.steps))))
 qa: build
 	go build -o $(BIN_DIR)/faux ./cmd/faux
 	python3 scripts/qa/drive.py --terminal $(TERMINAL) --out qa/runs/$(shell date +%Y%m%dT%H%M%S) $(QA_STEPS)
