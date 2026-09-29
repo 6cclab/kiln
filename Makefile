@@ -62,17 +62,34 @@ e2e-live:
 
 # Real-terminal QA (macOS only): drives bin/kiln through qa/scenarios in a
 # real terminal window via Orca and records screenshots under qa/runs.
-# SCENARIO=<area>/<name> runs one scenario (default: all of them);
+# SCENARIO=<area>/<name> runs one scenario (default: all but qa/scenarios/real,
+# which drive the real model; REAL=1 adds them);
 # TERMINAL is iterm-dark, iterm-light, terminal or warp. See docs/testing.md.
 TERMINAL ?= iterm-dark
 SCENARIO ?=
-QA_STEPS := $(if $(SCENARIO),qa/scenarios/$(SCENARIO).steps,$(wildcard qa/scenarios/*/*.steps))
+QA_STEPS := $(if $(SCENARIO),qa/scenarios/$(SCENARIO).steps,$(if $(REAL),$(wildcard qa/scenarios/*/*.steps),$(filter-out qa/scenarios/real/%,$(wildcard qa/scenarios/*/*.steps))))
 qa: build
 	go build -o $(BIN_DIR)/faux ./cmd/faux
 	python3 scripts/qa/drive.py --terminal $(TERMINAL) --out qa/runs/$(shell date +%Y%m%dT%H%M%S) $(QA_STEPS)
 
 qa-lint:
 	python3 scripts/qa/drive.py --lint $(QA_STEPS)
+
+# Headless QA: the same qa/scenarios, driven through xterm.js in headless
+# Chromium instead of a real macOS terminal window, so it runs in CI (see
+# .github/workflows/qa-headless.yml) as well as locally on Linux or macOS.
+# Excludes qa/scenarios/real/, which drives a real model, not the faux
+# server. TERMINAL is xterm-dark or xterm-light; J is the parallel worker
+# count (drive.py spawns one subprocess per scenario, up to J at a time).
+# Needs the venv from docs/testing.md "Headless QA" active, or an
+# equivalent playwright+websockets install, on PATH as `python3`.
+TERMINAL_HEADLESS ?= xterm-dark
+J ?= 4
+QA_HEADLESS_STEPS := $(filter-out qa/scenarios/real/%,$(wildcard qa/scenarios/*/*.steps))
+qa-headless: build
+	go build -o $(BIN_DIR)/faux ./cmd/faux
+	python3 scripts/qa/drive.py --terminal $(TERMINAL_HEADLESS) -j $(J) \
+		--out qa/runs/$(shell date +%Y%m%dT%H%M%S) $(QA_HEADLESS_STEPS)
 
 # kiln eval: runs every eval/scenarios entry against the faux provider
 # only (no network, no credentials), then reports the result against

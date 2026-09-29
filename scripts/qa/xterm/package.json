@@ -1,0 +1,9 @@
+{
+  "name": "kiln-qa-xterm",
+  "private": true,
+  "description": "Static xterm.js page for kiln's headless QA backend (scripts/qa/headless.py). Never built or served through a bundler: index.html references these packages' files under node_modules/ directly, loaded via a file:// URL in headless Chromium.",
+  "dependencies": {
+    "@xterm/xterm": "5.5.0",
+    "@fontsource/jetbrains-mono": "5.1.1"
+  }
+}

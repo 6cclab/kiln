@@ -268,6 +268,12 @@ func (p *catalogProvider) refreshOAuthIfNeeded(ctx context.Context, o *auth.OAut
 		}
 		tok, rerr := refresher(ctx, current.OAuth.Refresh)
 		if rerr != nil {
+			// invalid_grant (RFC 6749 §5.2): the server no longer accepts
+			// this refresh token, so only signing in again helps.
+			if strings.Contains(rerr.Error(), "invalid_grant") {
+				//lint:ignore ST1005 shown to the user as a sentence in the error block
+				return nil, fmt.Errorf("Your %s login has expired or was revoked. Sign in again with /login %s.", p.id, p.id)
+			}
 			return nil, fmt.Errorf("%s OAuth refresh failed: %w", p.id, rerr)
 		}
 		refreshed = &auth.OAuthCredential{Refresh: tok.Refresh, Access: tok.Access, Expires: tok.Expires}

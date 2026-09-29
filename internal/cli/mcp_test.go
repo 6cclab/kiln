@@ -219,11 +219,10 @@ steps:
 	}
 }
 
-// TestRun_PrintHelp_30Builtins checks /help lists all 30 built-in slash
-// commands the registry wiring in commands.go registers — 29 plus /plugin
-// (internal/commands/plugin_commands.go), added once kiln started reading
-// Claude Code's installed_plugins.json/enabledPlugins itself.
-func TestRun_PrintHelp_30Builtins(t *testing.T) {
+// TestRun_PrintHelp_31Builtins checks /help lists all 31 built-in slash
+// commands the registry wiring in commands.go registers — 29, /plugin
+// (internal/commands/plugin_commands.go) and /plan (manage_commands.go).
+func TestRun_PrintHelp_31Builtins(t *testing.T) {
 	startFaux(t, unreadScript)
 	scratchProject(t)
 
@@ -242,8 +241,8 @@ func TestRun_PrintHelp_30Builtins(t *testing.T) {
 			count++
 		}
 	}
-	if count != 30 {
-		t.Errorf("/help listed %d commands, want 30:\n%s", count, stdout.String())
+	if count != 31 {
+		t.Errorf("/help listed %d commands, want 31:\n%s", count, stdout.String())
 	}
 }
 

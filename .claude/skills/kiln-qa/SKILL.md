@@ -20,7 +20,8 @@ Read first: the docstring of `scripts/qa/drive.py` (every directive and step ver
    `python3 scripts/qa/drive.py --terminal iterm-dark --out qa/runs/<label>-<UTC stamp> <steps...>`
    Everything: `make qa` (`TERMINAL=iterm-light|terminal|warp`, `SCENARIO=<area>/<name>`).
    A full run of every faux scenario takes about 25 minutes: run it in the background and
-   do not rebuild until it ends.
+   do not rebuild until it ends. `make qa-headless` (see "Terminals" below) runs the same
+   scenarios headless — faster, and doesn't take over the user's screen.
 4. Results: `grep -E "^(PASS|FAIL)" qa/runs/<run>.log`. Each scenario directory holds
    `run.log`, and a `.png` plus `.txt` per SHOT (and per timeout).
 
@@ -48,6 +49,12 @@ Read first: the docstring of `scripts/qa/drive.py` (every directive and step ver
 - `warp` reads the screen by OCR, so its EXPECT checks are advisory: confirm against the PNG.
 - SCROLL moves the pointer to the window centre and back; wheel direction is compensated for
   macOS natural scrolling inside `wheel.swift`.
+- `xterm-dark`/`xterm-light` run headless (real PTY + xterm.js in headless Chromium via
+  Playwright, `scripts/qa/headless.py`) — no macOS, no window, so they run in CI too
+  (`make qa-headless`, `.github/workflows/qa-headless.yml`). Use them for the bulk of a QA pass;
+  fall back to a real terminal (above) for anything specific to a real key encoder, Terminal.app's
+  256-colour rounding, natural-scroll direction, real window chrome, or exact font rendering —
+  see docs/testing.md "Headless QA" for the full list of what they cannot cover.
 
 ## Debug terminal input
 

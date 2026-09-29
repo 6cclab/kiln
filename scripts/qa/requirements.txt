@@ -1,0 +1,9 @@
+# Headless QA backend (scripts/qa/headless.py). Install into a venv:
+#
+#   python3 -m venv .venv-qa
+#   .venv-qa/bin/pip install -r scripts/qa/requirements.txt
+#   .venv-qa/bin/python -m playwright install --with-deps chromium
+#
+# See docs/testing.md "Headless QA" for the full local recipe.
+playwright==1.48.0
+websockets==13.1

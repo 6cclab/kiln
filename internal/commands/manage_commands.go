@@ -470,5 +470,20 @@ func ManageCommands(deps ManageDeps) Source {
 			},
 		})
 	}
+	cmds = append(cmds, Command{
+		Name:         "plan",
+		Description:  "Enter plan mode",
+		ArgumentHint: "[task]",
+		// Claude Code's /plan: switch modes, then send any text after it
+		// as the prompt, so "/plan add a login page" plans that task.
+		Run: func(ctx context.Context, args string) (Result, error) {
+			note := "Enabled plan mode"
+			if deps.Gate.Mode() == settings.ModePlan {
+				note = "Already in plan mode"
+			}
+			deps.Gate.SetMode(settings.ModePlan)
+			return Result{Output: []string{note}, Prompt: strings.TrimSpace(args)}, nil
+		},
+	})
 	return StaticSource(OriginBuiltin, cmds)
 }
