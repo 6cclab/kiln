@@ -5,6 +5,7 @@
 # from internal/tui/status.go's modeLabel; every ring stop has its own
 # label, so this checks each press shows the next stop's label.
 @faux testdata/faux/hello.yaml
+@smoke
 @size 120x40
 
 WAITFOR /describe a task/ 20

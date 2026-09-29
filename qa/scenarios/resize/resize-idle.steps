@@ -1,6 +1,7 @@
 # Resize while idle, no turn in flight: layout must re-wrap sanely at
 # each size, growing and shrinking, with no crash and no leftover garbage.
 @faux testdata/faux/hello.yaml
+@smoke
 @size 120x40
 
 WAITFOR /describe a task/ 20

@@ -2,6 +2,7 @@
 # internal/tui/keys.go Router's ctrl+c case), then a second Ctrl+C within
 # the DoublePress window exits the program.
 @faux testdata/faux/hello.yaml
+@smoke
 @size 120x40
 
 WAITFOR /describe a task/ 20

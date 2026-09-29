@@ -3,6 +3,7 @@
 # case), so SCROLL up 5 moves ~15 lines, not necessarily all the way to
 # testdata/faux/qa/scroll-long.yaml's top marker.
 @faux testdata/faux/qa/scroll-long.yaml
+@smoke
 @size 120x40
 
 WAITFOR /describe a task/ 20

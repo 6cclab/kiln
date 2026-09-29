@@ -3,6 +3,7 @@
 # (diffCountsRow).
 # design: Terminal.dc.html:362 (diff block header: +N / −N counts)
 @faux testdata/faux/qa/tools-edit-existing.yaml
+@smoke
 @fixture testdata/behaviour/design
 @args --permission-mode acceptEdits
 

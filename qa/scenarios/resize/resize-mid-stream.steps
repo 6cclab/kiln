@@ -6,6 +6,7 @@
 # the current source) when the resize lands. Checks the streamed marker
 # text survives the resize once the turn finishes.
 @faux testdata/faux/qa/resize-mid-stream.yaml
+@smoke
 @size 120x40
 
 WAITFOR /describe a task/ 20

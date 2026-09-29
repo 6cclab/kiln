@@ -1,6 +1,7 @@
 # Untrusted folder: accept the trust dialog (internal/tui/dialog_trust.go).
 # "2" jumps the cursor straight to "Yes, I trust this folder" and answers.
 @faux testdata/faux/hello.yaml
+@smoke
 @size 120x40
 @untrusted
 

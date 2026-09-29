@@ -6,6 +6,7 @@
 # Option keys lose their modifier under kiln's kitty keyboard protocol
 # (qa/findings kitty-mode-drops-arrow-modifiers, wontfix).
 @faux testdata/faux/hello.yaml
+@smoke
 @size 120x40
 
 WAITFOR /describe a task/ 20
