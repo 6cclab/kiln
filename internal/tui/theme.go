@@ -467,22 +467,19 @@ func SetTerminalBackground(c color.Color) {
 // user's own text a mid grey on a light profile, visibly fainter than the
 // reply body in the terminal's own foreground.
 //
-// dimMinContrast and accentMinContrast use the AA threshold for large-scale
-// text and non-text UI components/graphics (SC 1.4.11, 1.4.3's large-text
-// case): dim/muted/faint chrome (labels, meta, statuslines) and every named
-// accent (amber/green/red/blue/violet) are either large/bold-weight text,
-// single-glyph markers, or decorative, so 3:1 — not 4.5:1 — is the
-// applicable bar, and holding accents to 4.5:1 would wash out their hue
-// more than legibility requires.
+// dimMinContrast and accentMinContrast use the AA threshold for normal-size
+// text (SC 1.4.3, 4.5:1): dim text carries descriptions and meta, and the
+// accents colour normal-size words (the mode label, the `you` and `edit`
+// labels, shortcut keys), not only glyphs. The design's accents clear 6:1
+// on its own dark background, so the floor only darkens them on light ones.
 //
-// Dim text carries descriptions and meta at normal size, so it takes the
-// small-text bar (4.5:1); faint stays at 3:1 so it still reads as a step
-// below dim (line numbers, unselected keys).
+// faint stays at the non-text/large-text bar (SC 1.4.11, 3:1) so it still
+// reads as a step below dim (line numbers, unselected keys).
 const (
 	bodyMinContrast   = 7.0
 	dimMinContrast    = 4.5
 	faintMinContrast  = 3.0
-	accentMinContrast = 3.0
+	accentMinContrast = 4.5
 )
 
 // srgbChannel converts one 8-bit sRGB channel to its linear-light value,

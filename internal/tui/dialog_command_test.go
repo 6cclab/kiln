@@ -115,3 +115,26 @@ func TestCommandDialog_ActRefreshesHeader(t *testing.T) {
 		t.Errorf("header not refreshed after the action:\n%s", got)
 	}
 }
+
+// The label rule above a dialog already names it, so a title that only
+// repeats the label ("permissions ───" then "Permissions", "config ───"
+// then "Configuration") is dropped; a title that says more is kept.
+func TestCommandDialog_TitleRepeatingFrameLabelIsDropped(t *testing.T) {
+	cases := []struct {
+		title, kind string
+		shown       bool
+	}{
+		{"Permissions", "permissions", false},
+		{"Agents", "agents", false},
+		{"Configuration", "config", false},
+		{"Recent sessions", "resume", true},
+	}
+	for _, c := range cases {
+		spec := fakeModalSpec()
+		spec.Title, spec.Kind = c.title, c.kind
+		joined := stripANSI(strings.Join(NewCommandDialog(spec).Render(80, 20), "\n"))
+		if got := strings.Contains(joined, c.title); got != c.shown {
+			t.Errorf("%s under %q: title shown = %v, want %v\n%s", c.title, c.kind, got, c.shown, joined)
+		}
+	}
+}

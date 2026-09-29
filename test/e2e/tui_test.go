@@ -1053,7 +1053,7 @@ var panelTitles = map[string]string{
 	"permissions": "permissions ─",
 	"mcp":         "Manage MCP",
 	"agents":      "agents ─",
-	"config":      "Configuration",
+	"config":      "config ─",
 }
 
 func TestTUI_Panels_OpenClose(t *testing.T) {

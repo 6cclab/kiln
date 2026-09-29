@@ -382,6 +382,13 @@ func (d *commandDialog) FrameLabel() string {
 	return strings.ToLower(d.spec.Title)
 }
 
+// repeatsLabel reports whether title is one word that the frame label
+// spells or abbreviates.
+func repeatsLabel(title, label string) bool {
+	t := strings.ToLower(title)
+	return label != "" && !strings.Contains(t, " ") && strings.HasPrefix(t, strings.ToLower(label))
+}
+
 func (d *commandDialog) selected() (commands.Item, bool) {
 	if d.cursor < 0 || d.cursor >= len(d.spec.Items) {
 		return commands.Item{}, false
@@ -392,8 +399,9 @@ func (d *commandDialog) selected() (commands.Item, bool) {
 func (d *commandDialog) Render(width, height int) []string {
 	var out []string
 	// The label rule above already names the dialog; a title that only
-	// repeats it ("permissions ───", then "Permissions") is dropped.
-	if !strings.EqualFold(d.spec.Title, d.FrameLabel()) {
+	// repeats it ("permissions ───" then "Permissions", "config ───" then
+	// "Configuration") is dropped.
+	if !repeatsLabel(d.spec.Title, d.FrameLabel()) {
 		out = append(out, renderTitleAndDescription(d.spec.Title, "", width)...)
 	}
 	for _, h := range d.spec.Header {

@@ -24,6 +24,7 @@ TYPE /permissions
 KEY enter
 WAITFOR /permissions ─/ 20
 SHOT permissions-dialog-open
+EXPECT_NOT /(?m)^\s*Permissions\s*$/
 EXPECT /mode\s+manual/
 EXPECT /Bash\(touch qa-alpha\.txt\)/
 EXPECT /session only/

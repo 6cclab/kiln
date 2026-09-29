@@ -4,9 +4,10 @@
 WAITFOR /describe a task/ 20
 TYPE /config
 KEY enter
-WAITFOR /Configuration/ 20
+WAITFOR /read-only; each line says/ 20
 SHOT config-dialog
-EXPECT /Configuration/
+EXPECT /config ─/
+EXPECT_NOT /Configuration/
 EXPECT /permission mode/
 EXPECT /settings loaded from/
 KEY esc

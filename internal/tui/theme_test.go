@@ -183,10 +183,9 @@ func TestEnsureContrastDarkensForLightBackground(t *testing.T) {
 // TestSetTerminalBackground_LightBackgroundTextTokensMeetContrast is the
 // end-to-end regression: every text token SetTerminalBackground recomputes
 // for the QA light profile's background must clear its threshold —
-// bodyMinContrast for Ink, dimMinContrast (4.5:1, small text) for Muted,
-// faintMinContrast (3:1) for Faint, and
-// accentMinContrast (3:1) for the named accents, which render as bold
-// labels, single glyphs or decorative marks rather than small body copy.
+// 7:1 for Ink, 4.5:1 (small text) for Muted and the named accents, which
+// colour normal-size words such as the mode label, and 3:1 for Faint. The
+// bars are literals so lowering a floor in theme.go fails here.
 func TestSetTerminalBackground_LightBackgroundTextTokensMeetContrast(t *testing.T) {
 	prevEnabled := enabled
 	t.Cleanup(func() {
@@ -206,14 +205,14 @@ func TestSetTerminalBackground_LightBackgroundTextTokensMeetContrast(t *testing.
 		hex  string
 		min  float64
 	}{
-		{"Ink", tx.Ink, bodyMinContrast},
-		{"Muted/Dim", tx.Dim, dimMinContrast},
-		{"Faint", tx.Faint, faintMinContrast},
-		{"KilnAmber", tx.Amber, accentMinContrast},
-		{"KilnGreen", tx.Green, accentMinContrast},
-		{"KilnRed", tx.Red, accentMinContrast},
-		{"KilnBlue", tx.Blue, accentMinContrast},
-		{"Violet", tx.Violet, accentMinContrast},
+		{"Ink", tx.Ink, 7.0},
+		{"Muted/Dim", tx.Dim, 4.5},
+		{"Faint", tx.Faint, 3.0},
+		{"KilnAmber", tx.Amber, 4.5},
+		{"KilnGreen", tx.Green, 4.5},
+		{"KilnRed", tx.Red, 4.5},
+		{"KilnBlue", tx.Blue, 4.5},
+		{"Violet", tx.Violet, 4.5},
 	}
 	for _, c := range cases {
 		ratio := contrastRatio(bg, parseHex(c.hex))
