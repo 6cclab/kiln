@@ -2080,11 +2080,22 @@ func (m Model) renderRetryLive(width int) []string {
 // streamed yet (before the first delta, or after msgCommitMarkdown/turn end
 // cleared it) or in plain (screen-reader) mode, which never shows it (D's
 // spec: a screen reader would re-read the live region every tick).
-func (m Model) renderStreamLive(width int) []string {
+func (m Model) renderStreamLive(width, maxRows int) []string {
 	if m.streamText == "" || IsPlain() {
 		return nil
 	}
-	return append([]string{""}, RenderStreamLive(m.streamText, width, maxStreamRows)...)
+	return append([]string{""}, RenderStreamLive(m.streamText, width, maxRows)...)
+}
+
+// streamRows is how many rows of streaming text fit: the frame, less the
+// pinned chrome, the live blocks below the text (rows), the blank and
+// label rows the stream block opens with, and the blank above the busy
+// line. The whole reply so far shows while it fits (the design grows the
+// block as tokens arrive); past that the newest rows, never fewer than
+// maxStreamRows.
+func (m Model) streamRows(width int, rows int) int {
+	chrome, _, _ := m.chromeLines(width, 0)
+	return max(maxStreamRows, m.frameHeight()-len(chrome)-rows-3)
 }
 
 // renderPlanLive draws the live "plan" checklist (plan.go's RenderPlan)
@@ -2156,21 +2167,19 @@ func (m Model) liveTail(width int) []string {
 	// README.md scene 06) keeps them visible, in the transcript
 	// position, directly above the "approval needed" block and the
 	// busy line.
+	var below []string
 	if !m.prompt.Active() {
-		if rows := m.renderStreamLive(width); len(rows) > 0 {
-			lines = append(lines, rows...)
-		}
-		if rows := m.renderRetryLive(width); len(rows) > 0 {
-			lines = append(lines, rows...)
-		}
+		below = append(below, m.renderRetryLive(width)...)
 	}
-	if rows := m.renderPlanLive(width); len(rows) > 0 {
-		lines = append(lines, rows...)
-	}
+	below = append(below, m.renderPlanLive(width)...)
 	if rows := m.subagents.Render(width); len(rows) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, rows...)
+		below = append(below, "")
+		below = append(below, rows...)
 	}
+	if !m.prompt.Active() {
+		lines = append(lines, m.renderStreamLive(width, m.streamRows(width, len(lines)+len(below)))...)
+	}
+	lines = append(lines, below...)
 
 	if m.prompt.Active() {
 		// Every live block leads with a blank row, like a committed one.

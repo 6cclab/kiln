@@ -1,0 +1,43 @@
+# Streaming, seen as it happens: a real reply with headings, a list and a
+# code block, shot about once a second while it streams. Read the shots for
+# the busy line, the caret, raw markdown settling into the rendered block,
+# and anything that jumps or flickers. No file changes; no tools needed.
+@real
+@home scratch
+@size 120x40
+@setup printf 'package main\n\nfunc main() {}\n' > main.go && git add -A && git -c user.name=qa -c user.email=qa@example.invalid commit -qm main
+WAITFOR /describe a task/ 30
+SEND Without using any tools, explain Go's context package in about 200 words: a short heading, a bulleted list of three uses, and one small code example.
+WAITFOR /esc to stop/ 30
+SHOT stream-01
+WAIT 0.6
+SHOT stream-02
+WAIT 0.6
+SHOT stream-03
+WAIT 0.6
+SHOT stream-04
+WAIT 0.6
+SHOT stream-05
+WAIT 0.6
+SHOT stream-06
+WAIT 0.6
+SHOT stream-07
+WAIT 0.6
+SHOT stream-08
+WAIT 0.6
+SHOT stream-09
+WAIT 0.6
+SHOT stream-10
+WAIT 0.6
+SHOT stream-11
+WAIT 0.6
+SHOT stream-12
+WAIT 0.6
+SHOT stream-13
+WAIT 0.6
+SHOT stream-14
+WAIT 0.6
+IDLE 300
+SHOT done
+EXPECT /context/
+EXPECT_NOT /panic: |goroutine [0-9]+ \[/
