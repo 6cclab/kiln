@@ -62,18 +62,23 @@ e2e-live:
 
 # Real-terminal QA (macOS only): drives bin/kiln through qa/scenarios in a
 # real terminal window via Orca and records screenshots under qa/runs.
-# SCENARIO=<area>/<name> runs one scenario (default: all but qa/scenarios/real,
-# which drive the real model; REAL=1 adds them);
+# By default only the smoke set (scenarios marked @smoke: what headless CI
+# cannot check, such as the terminal's own key encoding, wheel, resize and
+# fonts); ALL=1 runs every scenario but qa/scenarios/real, REAL=1 adds those
+# (they drive the real model); SCENARIO=<area>/<name> runs one.
 # TERMINAL is iterm-dark, iterm-light, terminal or warp. See docs/testing.md.
 TERMINAL ?= iterm-dark
 SCENARIO ?=
-QA_STEPS := $(if $(SCENARIO),qa/scenarios/$(SCENARIO).steps,$(if $(REAL),$(wildcard qa/scenarios/*/*.steps),$(filter-out qa/scenarios/real/%,$(wildcard qa/scenarios/*/*.steps))))
+QA_ALL_STEPS := $(wildcard qa/scenarios/*/*.steps)
+QA_FAUX_STEPS := $(filter-out qa/scenarios/real/%,$(QA_ALL_STEPS))
+QA_SMOKE_STEPS := $(shell grep -l '^@smoke' $(QA_FAUX_STEPS))
+QA_STEPS := $(if $(SCENARIO),qa/scenarios/$(SCENARIO).steps,$(if $(REAL),$(QA_ALL_STEPS),$(if $(ALL),$(QA_FAUX_STEPS),$(QA_SMOKE_STEPS))))
 qa: build
 	go build -o $(BIN_DIR)/faux ./cmd/faux
 	python3 scripts/qa/drive.py --terminal $(TERMINAL) --out qa/runs/$(shell date +%Y%m%dT%H%M%S) $(QA_STEPS)
 
 qa-lint:
-	python3 scripts/qa/drive.py --lint $(QA_STEPS)
+	python3 scripts/qa/drive.py --lint $(QA_ALL_STEPS)
 
 # Headless QA: the same qa/scenarios, driven through xterm.js in headless
 # Chromium instead of a real macOS terminal window, so it runs in CI (see

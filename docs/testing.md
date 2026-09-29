@@ -239,13 +239,18 @@ iTerm2 and Screen Recording permission for the terminal that runs it.
 
 The emulator cannot show fonts, glyph widths, colour on the actual
 background, or how a terminal encodes keys. `make qa` drives the real
-`bin/kiln` through every `qa/scenarios/<area>/<name>.steps` file in a real
+`bin/kiln` through `qa/scenarios/<area>/<name>.steps` files in a real
 terminal window and saves a screenshot and the screen text for every `SHOT`:
 
-    make qa                                   # every scenario, iTerm2 dark
+    make qa                                   # the @smoke set, iTerm2 dark
+    make qa ALL=1                             # every scenario but qa/scenarios/real
+    make qa REAL=1                            # every scenario, real model included
     make qa SCENARIO=permissions/bash-deny-feedback-tab
     make qa TERMINAL=iterm-light              # iterm-dark, iterm-light, terminal, warp
     make qa-lint                              # check steps and faux scripts only
+
+`@smoke` marks the scenarios that depend on the terminal itself (key encoding, wheel,
+resize, background detection, fonts); headless CI covers the rest on every PR.
 
 Requirements: macOS, the terminal under test, Orca (its `orca computer`
 actions deliver every key, click and capture; AppleScript only creates,

@@ -3,6 +3,7 @@
 # enter declines the command with that reason (permissionview.go
 # PromptState.HandleKey "tab").
 @faux testdata/faux/qa/permissions-deny-feedback.yaml
+@smoke
 
 WAITFOR /describe a task/ 20
 TYPE run the probe command

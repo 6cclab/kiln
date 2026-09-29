@@ -18,10 +18,13 @@ Read first: the docstring of `scripts/qa/drive.py` (every directive and step ver
 2. Tell the user a drive is starting and not to type or move the pointer until it ends.
 3. One or a few scenarios:
    `python3 scripts/qa/drive.py --terminal iterm-dark --out qa/runs/<label>-<UTC stamp> <steps...>`
-   Everything: `make qa` (`TERMINAL=iterm-light|terminal|warp`, `SCENARIO=<area>/<name>`).
-   A full run of every faux scenario takes about 25 minutes: run it in the background and
-   do not rebuild until it ends. `make qa-headless` (see "Terminals" below) runs the same
-   scenarios headless — faster, and doesn't take over the user's screen.
+   The smoke set: `make qa` (`TERMINAL=iterm-light|terminal|warp`, `SCENARIO=<area>/<name>`)
+   runs the scenarios marked `@smoke`, the ones headless CI cannot check. `ALL=1` runs every
+   faux scenario (about 25 minutes: run it in the background and do not rebuild until it
+   ends); `REAL=1` adds qa/scenarios/real. Prefer `make qa-headless` (see "Terminals" below)
+   for everything else: it doesn't take over the user's screen.
+   Mark a new scenario `@smoke` only if it depends on the terminal itself: key encoding,
+   wheel, resize, background detection, fonts.
 4. Results: `grep -E "^(PASS|FAIL)" qa/runs/<run>.log`. Each scenario directory holds
    `run.log`, and a `.png` plus `.txt` per SHOT (and per timeout).
 

@@ -1,4 +1,5 @@
 @faux testdata/faux/qa/commands-baseline.yaml
+@smoke
 
 WAITFOR /describe a task/ 20
 TYPE turn one

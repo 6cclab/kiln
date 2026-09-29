@@ -14,6 +14,7 @@
 # whatever order the scheduler picks), so the checks below only assert
 # that all three distinct indices show up, not which task owns which.
 @faux testdata/faux/qa/tools-task-concurrent.yaml
+@smoke
 @fixture testdata/behaviour/qa/model-roles-fast-heavy
 @args --permission-mode acceptEdits
 @env HARNESS_FAUX_EXTRA_MODELS=faux-3

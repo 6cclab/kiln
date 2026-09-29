@@ -12,6 +12,7 @@
 # already there) — which reads as "stays wherever the user left it," but
 # that has not been confirmed against the running program here.
 @faux testdata/faux/qa/scroll-stream.yaml
+@smoke
 @size 120x40
 
 WAITFOR /describe a task/ 20

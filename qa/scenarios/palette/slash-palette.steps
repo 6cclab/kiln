@@ -5,6 +5,7 @@
 # command runs it directly, and esc closes the popup without touching the
 # line.
 @faux testdata/faux/hello.yaml
+@smoke
 @size 120x40
 
 WAITFOR /describe a task/ 20

@@ -5,6 +5,7 @@
 # than one viewport height but less than two, so one pgup should clamp
 # all the way to the top marker and one pgdown back to the bottom one.
 @faux testdata/faux/qa/scroll-long.yaml
+@smoke
 @size 120x40
 
 WAITFOR /describe a task/ 20

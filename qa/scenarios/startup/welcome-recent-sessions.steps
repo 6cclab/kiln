@@ -4,6 +4,7 @@
 # block), then check the banner lists all three (internal/cli/tui.go
 # recentSessionRows, capped at recentSessionRowLimit == 3).
 @faux testdata/faux/qa/startup-recent.yaml
+@smoke
 @size 120x40
 @pre -p "fix the upload timeout"
 @pre -p "add the retry loop"

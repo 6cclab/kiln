@@ -35,6 +35,8 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     @args <kiln args...>         extra kiln arguments
     @env KEY=VAL                 extra environment (repeatable)
     @untrusted                   do not pre-trust the project
+    @smoke                       part of the real-terminal smoke set (`make qa`
+                                 runs only these by default)
     @requires kitty-keyboard     needs the kitty keyboard protocol (shift+enter
                                  as its own key); headless terminals, whose
                                  xterm.js lacks it, report SKIP instead

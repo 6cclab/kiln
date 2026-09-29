@@ -4,6 +4,7 @@
 # its own key under the kitty keyboard protocol; ctrl+j is covered by
 # multiline-ctrl-j.steps, which every terminal can run.
 @faux testdata/faux/hello.yaml
+@smoke
 @size 120x40
 @requires kitty-keyboard
 
