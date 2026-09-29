@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
@@ -748,5 +749,27 @@ func TestSlashCommandModeChangeUpdatesStatusRow(t *testing.T) {
 	next, _ := m.handleSubmit("/plan")
 	if got := ansiStrip(next.(Model).renderStatusRow(200)); !strings.Contains(got, "plan only") {
 		t.Errorf("status row after /plan = %q, want plan only", got)
+	}
+}
+
+// Bubbletea reports a 256-colour terminal with ColorProfileMsg; the app
+// passes it to the theme, so diff rows get palette tints that survive the
+// renderer's rounding instead of the background's own grey.
+func TestColorProfileMsgSelectsPaletteSurfaces(t *testing.T) {
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		SetColorProfile256(false)
+		resetSurfaceTokensToDesign()
+	})
+	SetColorEnabled(true)
+	m := newTestModel()
+	m.Update(tea.ColorProfileMsg{Profile: colorprofile.ANSI256})
+	if got := CurrentSurfaceHex().DiffAdd; got != "#005f00" {
+		t.Errorf("DiffAdd under a 256-colour profile = %s, want palette 22 #005f00", got)
+	}
+	m.Update(tea.ColorProfileMsg{Profile: colorprofile.TrueColor})
+	if got := CurrentSurfaceHex().DiffAdd; got != hexDiffAddBg {
+		t.Errorf("DiffAdd under truecolor = %s, want the design's %s", got, hexDiffAddBg)
 	}
 }
