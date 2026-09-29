@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestPlainModeSwapsGlyphsAndColour(t *testing.T) {
@@ -337,5 +338,92 @@ func TestSetTerminalBackground_LightSurfacesStayVisible(t *testing.T) {
 	tx := CurrentTextHex()
 	if contrastRatio(bg, parseHex(tx.Dim)) <= contrastRatio(bg, parseHex(tx.Faint)) {
 		t.Errorf("dim %s does not stand above faint %s", tx.Dim, tx.Faint)
+	}
+}
+
+// TestColorProfile256_SurfacesSurviveThePalette: a 256-colour terminal
+// (Terminal.app) gets every colour through ansi.Convert256, which picks the
+// nearest palette entry; for surfaces meant to sit just off the background
+// that was often the background's own grey, and diff tints and the empty
+// context bar vanished. With the 256 profile set, each surface as rendered
+// (after Convert256) keeps most of the design's lightness step.
+func TestColorProfile256_SurfacesSurviveThePalette(t *testing.T) {
+	// Added and removed rows must also look different from each other, not
+	// only from the background.
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		SetColorProfile256(false)
+		resetSurfaceTokensToDesign()
+		resetTextTokensToDesign()
+	})
+	SetColorEnabled(true)
+	design := parseHex(hexDesignBg)
+	for _, bgHex := range []string{hexDesignBg, "#1e1e1e", "#f5f3ec"} {
+		bg := parseHex(bgHex)
+		SetColorProfile256(true)
+		SetTerminalBackground(color.RGBA{R: bg.r, G: bg.g, B: bg.b, A: 0xff})
+		sf := CurrentSurfaceHex()
+		if ansi.Convert256(lipgloss.Color(sf.DiffAdd)) == ansi.Convert256(lipgloss.Color(sf.DiffDel)) {
+			t.Errorf("bg %s: added and removed rows render alike (%s, %s)", bgHex, sf.DiffAdd, sf.DiffDel)
+		}
+		for _, c := range []struct{ name, got, designHex string }{
+			{"Rule", sf.Rule, hexRule},
+			{"Raise", sf.Raise, hexRaise},
+			{"BarEmpty", sf.BarEmpty, hexBarEmpty},
+			{"DiffAdd", sf.DiffAdd, hexDiffAddBg},
+			{"DiffDel", sf.DiffDel, hexDiffDelBg},
+		} {
+			rendered := xterm256RGB(int(ansi.Convert256(lipgloss.Color(c.got))))
+			want := math.Abs(lightness(parseHex(c.designHex)) - lightness(design))
+			got := math.Abs(lightness(rendered) - lightness(bg))
+			floor := 0.9
+			if c.name == "DiffAdd" || c.name == "DiffDel" {
+				floor = 0.8 // tints also separate by hue
+			}
+			if got < floor*want {
+				t.Errorf("bg %s: %s = %s renders as %s, lightness step %.1f, want at least %.0f%%%% of the design's %.1f",
+					bgHex, c.name, c.got, rendered.hex(), got, floor*100, want)
+			}
+		}
+	}
+}
+
+// TestSetTerminalBackground_NearDesignDarkKeepsSteps: Terminal.app's and
+// iTerm2's default dark backgrounds (#1c1c1c, #1e1e1e) are close to the
+// design's #14110d but a few lightness units lighter; the design's own
+// hexes then sit too near them (diff tints drew at under half the
+// design's step). Only a background that is essentially the design's
+// keeps the design's hexes.
+func TestSetTerminalBackground_NearDesignDarkKeepsSteps(t *testing.T) {
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		resetSurfaceTokensToDesign()
+		resetTextTokensToDesign()
+	})
+	SetColorEnabled(true)
+	design := parseHex(hexDesignBg)
+	for _, bgHex := range []string{"#1c1c1c", "#1e1e1e"} {
+		bg := parseHex(bgHex)
+		SetTerminalBackground(color.RGBA{R: bg.r, G: bg.g, B: bg.b, A: 0xff})
+		sf := CurrentSurfaceHex()
+		for _, c := range []struct{ name, got, designHex string }{
+			{"Rule", sf.Rule, hexRule},
+			{"Raise", sf.Raise, hexRaise},
+			{"BarEmpty", sf.BarEmpty, hexBarEmpty},
+			{"DiffAdd", sf.DiffAdd, hexDiffAddBg},
+			{"DiffDel", sf.DiffDel, hexDiffDelBg},
+		} {
+			want := math.Abs(lightness(parseHex(c.designHex)) - lightness(design))
+			got := math.Abs(lightness(parseHex(c.got)) - lightness(bg))
+			if got+0.5 < want {
+				t.Errorf("bg %s: %s = %s, lightness step %.1f, want the design's %.1f", bgHex, c.name, c.got, got, want)
+			}
+		}
+	}
+	SetTerminalBackground(color.RGBA{R: design.r, G: design.g, B: design.b, A: 0xff})
+	if got := CurrentSurfaceHex().DiffAdd; got != hexDiffAddBg {
+		t.Errorf("on the design's own background DiffAdd = %s, want the design's %s", got, hexDiffAddBg)
 	}
 }

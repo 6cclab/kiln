@@ -175,12 +175,12 @@ var (
 const hexDesignBg = "#14110d"
 
 // designBgNearThreshold bounds how far a detected terminal background may
-// be (per RGB channel's simple Euclidean distance, 0-441.7 range) from
-// hexDesignBg and still count as "the design background" — small enough to
-// absorb a terminal's own gamma/rounding on that exact colour, far enough
-// that an actually different (if also dark) background still gets
-// recomputed tokens. 24 is roughly a 10% per-channel tolerance.
-const designBgNearThreshold = 24.0
+// be (Euclidean RGB distance, 0-441.7) from hexDesignBg and still keep the
+// design's own hexes: enough to absorb a terminal's rounding of that exact
+// colour, no more. Terminal.app's and iTerm2's default dark backgrounds
+// (#1c1c1c, #1e1e1e) are about 20 away and a few lightness units lighter;
+// the design's hexes drew diff tints at under half their step there.
+const designBgNearThreshold = 4.0
 
 func init() {
 	resetSurfaceTokensToDesign()
@@ -193,7 +193,8 @@ func init() {
 // and the state SetTerminalBackground restores when the reported background
 // is within designBgNearThreshold of hexDesignBg.
 func resetSurfaceTokensToDesign() {
-	setSurfaceTokens(hexRule, hexRuleStrong, hexBarEmpty, hexRaise, hexPanel, hexDiffAddBg, hexDiffDelBg)
+	terminalBgKnown = false
+	applySurfaces()
 }
 
 // surfaceHex holds the hexes the surface tokens were last built from, so
@@ -425,29 +426,18 @@ func SetTerminalBackground(c color.Color) {
 		return
 	}
 	bg := toRGB8(c)
+	terminalBg, terminalBgKnown = bg, true
 	design := parseHex(hexDesignBg)
 	if bg.distance(design) <= designBgNearThreshold {
-		resetSurfaceTokensToDesign()
+		applySurfaces()
 		resetTextTokensToDesign()
 		themeGenerationBump()
 		return
 	}
 	green := parseHex(hexGreen)
 	red := parseHex(hexRed)
-	// Surfaces blend the background toward the legible foreground, not the
-	// design's light ink: on a light background the design ink is itself
-	// near the background, and blends toward it vanish (hairlines and the
-	// raised you-block surface disappeared on a light profile).
 	ink := ensureContrast(bg, parseHex(hexInk), bodyMinContrast)
-	setSurfaceTokens(
-		matchDesignSeparation(bg, ink, hexRule).hex(),
-		matchDesignSeparation(bg, ink, hexRuleStrong).hex(),
-		matchDesignSeparation(bg, ink, hexBarEmpty).hex(),
-		matchDesignSeparation(bg, ink, hexRaise).hex(),
-		matchDesignSeparation(bg, ink, hexPanel).hex(),
-		matchDesignSeparation(bg, green, hexDiffAddBg).hex(),
-		matchDesignSeparation(bg, red, hexDiffDelBg).hex(),
-	)
+	applySurfaces()
 	setTextTokens(
 		ink.hex(),
 		ensureContrast(bg, parseHex(hexDim), dimMinContrast).hex(),
@@ -813,4 +803,158 @@ func RaiseRow(row string, width int) string {
 		row = strings.ReplaceAll(row, reset, reset+on)
 	}
 	return on + row + off
+}
+
+// xterm256RGB is the colour of palette entry idx (16-255: the 6x6x6 cube
+// and the grey ramp, which every 256-colour terminal draws the same;
+// 0-15 are the user's own theme and are never chosen here).
+func xterm256RGB(idx int) rgb8 {
+	if idx >= 232 {
+		v := uint8(8 + 10*(idx-232))
+		return rgb8{v, v, v}
+	}
+	levels := [6]uint8{0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff}
+	i := idx - 16
+	return rgb8{levels[i/36], levels[(i/6)%6], levels[i%6]}
+}
+
+// palette256 is set when the terminal draws 256 colours (Terminal.app):
+// the renderer rounds every colour to the nearest palette entry.
+var palette256 bool
+
+// SetColorProfile256 tells the theme whether the terminal is limited to
+// the 256-colour palette, and rebuilds the surface tokens for it.
+func SetColorProfile256(on bool) {
+	if palette256 == on {
+		return
+	}
+	palette256 = on
+	if enabled {
+		applySurfaces()
+		themeGenerationBump()
+	}
+}
+
+// terminalBg is the background SetTerminalBackground last reported;
+// until it does, surfaces are built for the design's own background.
+var (
+	terminalBg      rgb8
+	terminalBgKnown bool
+)
+
+// applySurfaces rebuilds the surface tokens for the terminal's background
+// and colour profile. Surfaces blend the background toward the legible
+// foreground, not the design's light ink: on a light background the design
+// ink is itself near the background, and blends toward it vanish (hairlines
+// and the raised you-block surface disappeared on a light profile). On a
+// background close to the design's, the design's own hexes are used. On a
+// 256-colour terminal each surface is then snapped to a palette entry that
+// keeps its step off the background (snap256).
+func applySurfaces() {
+	bg := parseHex(hexDesignBg)
+	if terminalBgKnown {
+		bg = terminalBg
+	}
+	hexes := hexes0
+	if bg.distance(parseHex(hexDesignBg)) > designBgNearThreshold {
+		ink := ensureContrast(bg, parseHex(hexInk), bodyMinContrast)
+		green, red := parseHex(hexGreen), parseHex(hexRed)
+		towards := [7]rgb8{ink, ink, ink, ink, ink, green, red}
+		for i, h := range hexes {
+			hexes[i] = matchDesignSeparation(bg, towards[i], h).hex()
+		}
+	}
+	if palette256 {
+		for i, h := range hexes {
+			hexes[i] = snap256(bg, parseHex(h), designStep(hexes0[i])).hex()
+		}
+		hexes[5] = snapTint(bg, designStep(hexDiffAddBg), diffAdd256).hex()
+		hexes[6] = snapTint(bg, designStep(hexDiffDelBg), diffDel256).hex()
+	}
+	setSurfaceTokens(hexes[0], hexes[1], hexes[2], hexes[3], hexes[4], hexes[5], hexes[6])
+}
+
+// hexes0 are the design hexes in applySurfaces' order, for their steps.
+var hexes0 = [7]string{hexRule, hexRuleStrong, hexBarEmpty, hexRaise, hexPanel, hexDiffAddBg, hexDiffDelBg}
+
+// designStep is how far designHex sits off the design background, in
+// CIELAB lightness.
+func designStep(designHex string) float64 {
+	return math.Abs(lightness(parseHex(designHex)) - lightness(parseHex(hexDesignBg)))
+}
+
+// snap256 picks the palette entry (16-255) nearest want in CIELAB that
+// sits at least 90% of step off bg, on want's side. The renderer's own
+// rounding (ansi.Convert256) takes the nearest entry by colour alone,
+// which for a surface one step off the background is often the
+// background's own grey. Falls back to want when no entry qualifies.
+func snap256(bg, want rgb8, step float64) rgb8 {
+	lb := lightness(bg)
+	side := 1.0
+	if lightness(want) < lb {
+		side = -1
+	}
+	wl, wa, wb := lab(want)
+	best, bestD := want, math.Inf(1)
+	for idx := 16; idx < 256; idx++ {
+		c := xterm256RGB(idx)
+		if (lightness(c)-lb)*side < 0.9*step {
+			continue
+		}
+		l, a, b := lab(c)
+		if d := math.Sqrt((l-wl)*(l-wl) + (a-wa)*(a-wa) + (b-wb)*(b-wb)); d < bestD {
+			best, bestD = c, d
+		}
+	}
+	return best
+}
+
+// The palette's greens and reds, darkest first, for diff tints on a
+// 256-colour terminal. The design's tints are so muted that the nearest
+// entry by colour is a grey, which draws added and removed rows alike;
+// 22/52 on dark and 151/224 on light are what 256-colour diff tools
+// (delta) use.
+var (
+	diffAdd256 = []int{22, 28, 65, 108, 151, 194}
+	diffDel256 = []int{52, 88, 95, 131, 181, 224}
+)
+
+// snapTint picks, from candidates, the entry on the text side of bg whose
+// lightness step off bg is at least 80% of step (hue carries part of a
+// tint's separation) and overshoots it least.
+// Falls back to the design's own tint.
+func snapTint(bg rgb8, step float64, candidates []int) rgb8 {
+	lb := lightness(bg)
+	side := 1.0
+	if lb > 50 {
+		side = -1 // light background: tints are darker than it
+	}
+	best, bestOver := rgb8{}, math.Inf(1)
+	for _, idx := range candidates {
+		c := xterm256RGB(idx)
+		d := (lightness(c) - lb) * side
+		if d >= 0.8*step && d-step < bestOver {
+			best, bestOver = c, d-step
+		}
+	}
+	if math.IsInf(bestOver, 1) {
+		return snap256(bg, parseHex(hexDiffAddBg), step)
+	}
+	return best
+}
+
+// lab is c in CIELAB (D65).
+func lab(c rgb8) (l, a, b float64) {
+	r, g, bl := srgbChannel(c.r), srgbChannel(c.g), srgbChannel(c.b)
+	x := (0.4124*r + 0.3576*g + 0.1805*bl) / 0.95047
+	y := 0.2126*r + 0.7152*g + 0.0722*bl
+	z := (0.0193*r + 0.1192*g + 0.9505*bl) / 1.08883
+	f := func(t float64) float64 {
+		if t > 216.0/24389 {
+			return math.Cbrt(t)
+		}
+		return (24389.0/27*t + 16) / 116
+	}
+	fx, fy, fz := f(x), f(y), f(z)
+	return 116*fy - 16, 500 * (fx - fy), 200 * (fy - fz)
 }

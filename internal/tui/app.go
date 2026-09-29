@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrepato/harness/internal/agent"
@@ -861,6 +862,12 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.footer.Apply(StatusPatch{Git: &g})
 		return m, nil
 
+	case tea.ColorProfileMsg:
+		// A 256-colour terminal (Terminal.app) rounds every colour to the
+		// palette; surfaces are chosen so the rounding keeps them visible.
+		SetColorProfile256(msg.Profile == colorprofile.ANSI256)
+		m.editor.SetStyles(editorStyles(G().UserMark))
+		return m, nil
 	case tea.BackgroundColorMsg:
 		SetTerminalBackground(msg.Color)
 		// The banner divider and every other Rule/RuleStrong/Muted/...
