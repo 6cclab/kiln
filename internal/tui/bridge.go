@@ -67,6 +67,8 @@ type Bridge struct {
 	lastWasNote bool
 	mu          sync.Mutex
 	progSink    sink
+	// covered holds the task calls the subagents panel showed (MarkCoveredCall); guarded by mu.
+	covered map[string]bool
 
 	queue chan bridgeItem
 	quit  chan struct{}
@@ -280,6 +282,28 @@ func (b *Bridge) Commit(lines []string) {
 type SyntheticCommit struct {
 	AfterEntryID string
 	Lines        []string
+}
+
+// MarkCoveredCall records a task call whose outcome the subagents panel
+// shows instead of a task block, so a replay leaves it out too.
+func (b *Bridge) MarkCoveredCall(id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.covered == nil {
+		b.covered = map[string]bool{}
+	}
+	b.covered[id] = true
+}
+
+// CoveredCalls is a copy of the calls MarkCoveredCall recorded.
+func (b *Bridge) CoveredCalls() map[string]bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[string]bool, len(b.covered))
+	for id := range b.covered {
+		out[id] = true
+	}
+	return out
 }
 
 // CommitSynthetic commits lines exactly like Commit, and additionally

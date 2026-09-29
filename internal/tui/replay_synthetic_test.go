@@ -44,7 +44,7 @@ func TestRenderTranscriptEntries_SplicesSynthetics(t *testing.T) {
 		{AfterEntryID: entryA.ID, Lines: noteLines},
 	}
 
-	out := RenderTranscriptEntries([]session.Entry{entryA, entryB}, 80, false, "/tmp", synthetics)
+	out := RenderTranscriptEntries([]session.Entry{entryA, entryB}, 80, false, "/tmp", synthetics, nil)
 	joined := strings.Join(out, "\n")
 
 	idxA := strings.Index(joined, "first message")
@@ -75,7 +75,7 @@ func TestRenderTranscriptEntries_SyntheticBeforeFirstEntry(t *testing.T) {
 		{AfterEntryID: "", Lines: RenderNote("before anything", 80)},
 	}
 
-	out := RenderTranscriptEntries([]session.Entry{entryA}, 80, false, "/tmp", synthetics)
+	out := RenderTranscriptEntries([]session.Entry{entryA}, 80, false, "/tmp", synthetics, nil)
 	joined := strings.Join(out, "\n")
 
 	idxNote := strings.Index(joined, "before anything")
@@ -97,12 +97,40 @@ func TestRenderTranscriptEntries_OneBlankRowBetweenBlocks(t *testing.T) {
 		{ID: "4", Type: session.EntryMessage, Message: msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.Text("Done.")}}},
 	}
 	for _, verbose := range []bool{false, true} {
-		out := RenderTranscriptEntries(entries, 80, verbose, "/tmp/p", nil)
+		out := RenderTranscriptEntries(entries, 80, verbose, "/tmp/p", nil, nil)
 		for i := 1; i < len(out); i++ {
 			if strings.TrimSpace(stripANSI(out[i])) == "" && strings.TrimSpace(stripANSI(out[i-1])) == "" {
 				t.Errorf("verbose=%v: two blank rows at %d:\n%s", verbose, i, strings.Join(out, "\n"))
 				break
 			}
 		}
+	}
+}
+
+// TestRenderTranscriptEntries_SkipsTaskCallsThePanelCovers: a task
+// dispatch the subagents panel showed gets no task block of its own live,
+// and a replay (Ctrl+F, Ctrl+O) must not bring one back beside the
+// replayed panel; verbose still shows it, as live.
+func TestRenderTranscriptEntries_SkipsTaskCallsThePanelCovers(t *testing.T) {
+	call := msg.ToolCall{ID: "t1", Name: "task", Arguments: map[string]any{"description": "check the auth middleware"}}
+	entries := []session.Entry{
+		{ID: "1", Type: session.EntryMessage, Message: msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("scout")}}},
+		{ID: "2", Type: session.EntryMessage, Message: msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{call}}},
+		{ID: "3", Type: session.EntryMessage, Message: msg.ToolResultMessage{Role: msg.RoleToolResult, ToolCallID: "t1", ToolName: "task", Content: msg.Blocks{msg.Text("auth checks for an Authorization header")}}},
+	}
+	covered := map[string]bool{"t1": true}
+	panel := []SyntheticCommit{{AfterEntryID: "3", Lines: []string{"", "PANEL ROW"}}}
+	out := stripANSI(strings.Join(RenderTranscriptEntries(entries, 80, false, "/tmp/p", panel, covered), "\n"))
+	if strings.Contains(out, "Authorization header") {
+		t.Errorf("a covered task call replayed as its own block:\n%s", out)
+	}
+	if !strings.Contains(out, "PANEL ROW") {
+		t.Errorf("the panel anchored to the skipped entry was dropped too:\n%s", out)
+	}
+	if out := stripANSI(strings.Join(RenderTranscriptEntries(entries, 80, true, "/tmp/p", nil, covered), "\n")); !strings.Contains(out, "Authorization header") {
+		t.Errorf("verbose replay dropped the task block:\n%s", out)
+	}
+	if out := stripANSI(strings.Join(RenderTranscriptEntries(entries, 80, false, "/tmp/p", nil, nil), "\n")); !strings.Contains(out, "Authorization header") {
+		t.Errorf("an uncovered task call (a resumed session, no panel) was dropped:\n%s", out)
 	}
 }

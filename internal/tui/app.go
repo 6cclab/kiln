@@ -286,6 +286,9 @@ type Model struct {
 	// and flipped at runtime by toggleFullscreen (ctrl+f). Plain mode never
 	// enters fullscreen: it has no alt-screen rendering to fall back from.
 	fullscreen bool
+	// repaintOnly marks the next ClearScreen as msgFullRepaint's: repaint
+	// the screen without discarding the fullscreen transcript.
+	repaintOnly bool
 	// transcript holds every committed row while fullscreen (already
 	// rendered, one string per terminal row), rebuilt from the session log
 	// on ClearScreen/toggle/resize-rewrap — see appendTranscript and
@@ -527,6 +530,12 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if tea.IsClearScreen(tm) {
+		if m.repaintOnly {
+			// msgFullRepaint's clear: the renderer repaints everything,
+			// the transcript stays.
+			m.repaintOnly = false
+			return m, nil
+		}
 		m.committedRows = 0
 		if m.fullscreen {
 			m.transcript = nil
@@ -742,6 +751,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		// design's agents block is the one record of a dispatch. A task
 		// call that failed before dispatching has no row and still shows.
 		if strings.EqualFold(msg.View.Name, "task") && m.subagents.Has(msg.CallID) && !m.cfg.Bridge.Verbose() {
+			m.cfg.Bridge.MarkCoveredCall(msg.CallID)
 			return m, nil
 		}
 		if kind, grouped := groupKindFor(msg.View.Name); grouped && !m.cfg.Bridge.Verbose() {
@@ -812,6 +822,10 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			msg.then()
 		}
 		return m, nil
+
+	case msgFullRepaint:
+		m.repaintOnly = true
+		return m, tea.ClearScreen
 
 	case msgExecDone:
 		if msg.note != "" {
@@ -1250,8 +1264,27 @@ func (m Model) toggleFullscreen() (tea.Model, tea.Cmd) {
 		m.cfg.Bridge.SetFullscreen(m.fullscreen)
 	}
 	m.transcript = nil
-	return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return msgReplayTranscript{} })
+	replay := msgReplayTranscript{}
+	if m.fullscreen && m.cfg.Bridge != nil {
+		// Workaround: entering fullscreen mid-turn (a live subagents
+		// panel redrawing) can leave the renderer's model of the alt
+		// screen out of step with the glass, so a row the replayed
+		// transcript pushed down stays drawn at its old position (the
+		// renderer believes it blank and never repaints it; seen as a
+		// stray panel row under the prompt, ~1 in 15 runs of
+		// TestTUI_FullscreenWithSubagentsPanel under load). Where the
+		// renderer loses step is not yet known. One full repaint once the
+		// replayed lines have landed resyncs it: queued behind them on
+		// the bridge, so it arrives after the last MsgTranscriptAppend.
+		bridge := m.cfg.Bridge
+		replay.then = func() { bridge.SendAsync(msgFullRepaint{}) }
+	}
+	return m, tea.Sequence(tea.ClearScreen, func() tea.Msg { return replay })
 }
+
+// msgFullRepaint asks for one clear-and-repaint of the whole screen; see
+// toggleFullscreen.
+type msgFullRepaint struct{}
 
 // fullscreenView composes the alt-screen frame: the transcript viewport —
 // committed transcript followed by the live tail (tool-group/stream/retry/
@@ -2450,7 +2483,7 @@ func (m Model) replayTranscript() {
 	// commits nothing here, leaving committedRows at bannerRowCount —
 	// transcriptIsEmpty then reports true, exactly as for a fresh start
 	// (*qa/findings/20260927T022144Z-inline-stacked-rules.json*).
-	m.cfg.Bridge.Commit(RenderTranscriptEntries(oldestFirst(entries), m.contentWidth(), m.cfg.Bridge.Verbose(), m.cfg.Cwd, m.cfg.Bridge.Synthetics()))
+	m.cfg.Bridge.Commit(RenderTranscriptEntries(oldestFirst(entries), m.contentWidth(), m.cfg.Bridge.Verbose(), m.cfg.Cwd, m.cfg.Bridge.Synthetics(), m.cfg.Bridge.CoveredCalls()))
 }
 
 // openRewind opens the Rewind dialog over the lane's user messages

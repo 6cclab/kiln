@@ -1,0 +1,30 @@
+# Starting inline, Ctrl+F into fullscreen while subagents are running,
+# then back. The
+# replayed transcript pushes the live panel down; no row of the panel may be
+# left behind at its old position (a stray "gen-N ... ━━━" row under the
+# prompt; toggleFullscreen's repaint), and the prompt and panel each appear
+# once.
+@faux testdata/faux/qa/tools-task-concurrent.yaml
+@fixture testdata/behaviour/qa/model-roles-fast-heavy
+@args --inline --permission-mode acceptEdits
+@env HARNESS_FAUX_EXTRA_MODELS=faux-3
+
+WAITFOR /describe a task/ 20
+TYPE scout the upload path with three subagents
+KEY enter
+WAITFOR /subagents? running/ 20
+KEY ctrl+f
+WAITFOR /3 subagents? finished/ 20
+SHOT fullscreen-done
+EXPECT /scout the upload path with three subagents/
+EXPECT_NOT /scout the upload path with three subagents[\s\S]*scout the upload path with three subagents/
+EXPECT_NOT /(3 subagents? (running|finished))[\s\S]*3 subagents? (running|finished)/
+KEY ctrl+f
+WAIT 1
+SHOT inline-again
+EXPECT /All three scouted/
+EXPECT /3 subagents? finished/
+# The panel is the one record of each dispatch; the replay adds no task
+# block beside it.
+EXPECT_NOT /(?m)^\s*task ─/
+EXPECT_NOT /panic|goroutine/

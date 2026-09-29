@@ -1,0 +1,18 @@
+{
+ "id": "20260929T170529Z-renderer-altscreen-desync-after-fullscreen-toggle",
+ "found_at": "2026-09-29T17:05:29Z",
+ "scenario": "modes/fullscreen-toggle-mid-dispatch",
+ "step": null,
+ "terminals": [
+  "e2e-emulator"
+ ],
+ "category": "bug",
+ "severity": "low",
+ "title": "Renderer's model of the alt screen falls out of step after Ctrl+F mid-dispatch",
+ "observed": "Entering fullscreen while the subagents panel redraws: the next frame skips a row the renderer believes blank but still shows a panel row (raw PTY recording: frame 2 emits a bare newline over row 17 where frame 1 drew gen-1; no scroll-region or insert/delete-line ops in between; persists with scroll optimisation disabled). ~1 in 12 runs of TestTUI_FullscreenWithSubagentsPanel under CPU load. Worked around by one full repaint after the replay (toggleFullscreen, msgFullRepaint): 0/90 under the same load.",
+ "expected": "The renderer's cell model matches the screen after the alt-screen switch without a forced repaint; find where it loses step (cursed_renderer.go flushLocked / ultraviolet Render) and remove the workaround.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "open",
+ "fix": null
+}
