@@ -5,7 +5,7 @@
 
 WAITFOR /describe a task/ 20
 SHOT welcome-no-recent
-EXPECT /K I L N/
+EXPECT /█▄▀  ▀█▀  █    █▄ █/
 EXPECT /coding agent/
 EXPECT /model faux\/faux-1/
 EXPECT_NOT /Recent sessions/

@@ -592,9 +592,20 @@ var kilnArt = [][]artSegment{
 	{{artBase, "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"}},
 }
 
-// kilnArtTextRow is the art row the text column starts on: the three text
-// rows sit centred against the nine art rows, as in the design.
+// kilnArtTextRow is the art row the text column starts on: the wordmark's
+// two rows, the version and the repo line sit against the kiln's body, as
+// in the design.
 const kilnArtTextRow = 3
+
+// kilnWordmark is the banner's "KILN" beside the art. The design sets it
+// at 26px against 14px body text (Terminal.dc.html, the banner block); a
+// terminal has one font size, so the letters are drawn two rows tall in
+// half blocks, like the art. Narrow terminals and screen-reader mode, which
+// drop the art, keep the letter-spaced text.
+var kilnWordmark = [2]string{
+	"█▄▀  ▀█▀  █    █▄ █",
+	"█▀▄  ▄█▄  █▄▄  █ ▀█",
+}
 
 // styleBanner renders the banner rows from newBanner's data with the
 // current theme tokens.
@@ -614,6 +625,7 @@ func styleBanner(verLabel, loc string, recent []recentSession, art bool) []strin
 
 	var rows []string
 	if art {
+		text = append([]string{tui.KilnAmber(kilnWordmark[0]), tui.KilnAmber(kilnWordmark[1])}, text[1:]...)
 		for i, segs := range kilnArt {
 			row := ""
 			for _, seg := range segs {

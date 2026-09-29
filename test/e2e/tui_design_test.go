@@ -790,7 +790,7 @@ func TestTUI_Design_Fullscreen_Welcome(t *testing.T) {
 			}
 			// The banner opens the screen: the kiln art's smoke on row 0
 			// (the wordmark sits beside the art, a few rows down).
-			if !strings.Contains(rows[0], "░▒░") || !strings.Contains(strings.Join(rows[:9], "\n"), "K I L N") {
+			if !strings.Contains(rows[0], "░▒░") || !strings.Contains(strings.Join(rows[:9], "\n"), "coding agent") {
 				t.Errorf("rows 0-8 = %q, want the banner (art and wordmark) at the very top", rows[:9])
 			}
 			last := rows[len(rows)-1]

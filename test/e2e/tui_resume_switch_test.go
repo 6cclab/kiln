@@ -40,7 +40,7 @@ steps:
 		t.Fatalf("the resumed session's transcript never appeared: %v\n%s", err, strings.Join(s.Rows(), "\n"))
 	}
 	waitReady(t, s)
-	if rows := strings.Join(s.Rows(), "\n"); strings.Count(rows, "K I L N") != 1 || strings.Contains(rows, "/resume") {
+	if rows := strings.Join(s.Rows(), "\n"); strings.Count(rows, "coding agent") != 1 || strings.Contains(rows, "/resume") {
 		t.Errorf("the old session's screen is still showing after the switch:\n%s", rows)
 	}
 
