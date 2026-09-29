@@ -4,13 +4,24 @@
     scripts/qa/drive.py --terminal iterm-dark qa/scenarios/startup/welcome.steps
     scripts/qa/drive.py --terminal terminal --out qa/runs/manual qa/scenarios/.../x.steps
 
-Input goes through Orca (`orca computer press-key|hotkey|type-text|scroll|
-click`): real macOS key events, so the terminal's own key encoder runs
-before kiln sees anything. AppleScript is used only for what Orca cannot do
-(its capability report says windows.focus and windows.moveResize are
-unsupported): creating, sizing, activating and closing windows, and reading
-the terminal's own screen text. Nothing is ever written into a running
-kiln's input except through Orca.
+On the macOS terminals (iterm-dark, iterm-light, terminal, warp), input goes
+through Orca (`orca computer press-key|hotkey|type-text|scroll|click`): real
+macOS key events, so the terminal's own key encoder runs before kiln sees
+anything. AppleScript is used only for what Orca cannot do (its capability
+report says windows.focus and windows.moveResize are unsupported): creating,
+sizing, activating and closing windows, and reading the terminal's own
+screen text. Nothing is ever written into a running kiln's input except
+through Orca.
+
+`--terminal xterm-dark`/`xterm-light` drive a headless backend instead
+(scripts/qa/headless.py): a real PTY running kiln, rendered by xterm.js in
+headless Chromium via Playwright, input going through xterm.js's own key
+encoder the same way Orca's real key events do on macOS. No window manager,
+so it runs in CI (see .github/workflows/qa-headless.yml, `make qa-headless`)
+as well as locally; see docs/testing.md "Headless QA" for setup. `-j N` runs
+scenarios in parallel across separate drive.py subprocesses (headless
+terminals only — Playwright's sync API is not thread-safe); `--shard i/n`
+runs only the i-th of n deterministic shards of the given scenario list.
 
 Safety: kiln runs with a scratch HOME (no real ~/.claude or ~/.harness),
 HARNESS_OFFLINE=1 (faux and ollama only) and --model faux/faux-1 against a
@@ -438,6 +449,13 @@ def make_terminal(name, work):
         if not (ROOT / "bin/qa-ocr").exists():
             raise DriveError("warp needs bin/qa-ocr: swiftc -O -o bin/qa-ocr scripts/qa/ocr.swift")
         return Warp(work)
+    if name in ("xterm-dark", "xterm-light"):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from headless import Headless, HeadlessError
+        try:
+            return Headless(name, work)
+        except HeadlessError as e:
+            raise DriveError(str(e))
     raise DriveError("unknown terminal %r" % name)
 
 
@@ -740,11 +758,18 @@ class Run:
                 self.log(f"cleanup: could not remove {self.work}: {e}")
 
     def kiln_running(self):
+        if hasattr(self.term, "alive"):
+            return self.term.alive()
         return bool(self._kiln_pids())
 
     def _kiln_pids(self):
-        """kiln processes launched by this run: run.sh exports HOME=<work>/home,
-        so the scratch path appears in the process environment (`ps eww`)."""
+        """kiln processes launched by this run. The headless adapter tracks
+        its own PTY child pid directly (Linux has no `ps eww`-style env
+        trick guarantee); the macOS adapters go through run.sh's exported
+        HOME=<work>/home, which appears in the process environment."""
+        if hasattr(self.term, "child_pid"):
+            pid = self.term.child_pid()
+            return [str(pid)] if pid else []
         if self.work is None:
             return []
         p = run(["pgrep", "-f", "bin/kiln"])
@@ -758,9 +783,18 @@ class Run:
     # ---- actions
 
     def key(self, name):
+        if hasattr(self.term, "press_key"):
+            self.term.press_key(name)
+            return
         action, arg = key_action(name)
         flag = "--text" if action == "type-text" else "--key"
         self._orca_input(action, flag, arg)
+
+    def type_text(self, text):
+        if hasattr(self.term, "type_text"):
+            self.term.type_text(text)
+        else:
+            self._orca_input("type-text", "--text", text)
 
     def _orca_input(self, action, flag, arg):
         for attempt in (1, 2):
@@ -795,13 +829,16 @@ class Run:
     def shot(self, name):
         self.shot_n += 1
         stem = "%02d-%s" % (self.shot_n, name)
-        d = orca("get-app-state", "--app", self.term.bundle, "--window-id", str(self.term.wid))
-        if not d.get("ok"):
-            raise DriveError("capture failed: %s" % json.dumps(d.get("error"))[:300])
-        src = d["result"].get("screenshot", {}).get("path")
-        if not src:
-            raise DriveError("capture returned no screenshot")
-        shutil.copy(src, self.out / (stem + ".png"))
+        if hasattr(self.term, "screenshot"):
+            self.term.screenshot(str(self.out / (stem + ".png")))
+        else:
+            d = orca("get-app-state", "--app", self.term.bundle, "--window-id", str(self.term.wid))
+            if not d.get("ok"):
+                raise DriveError("capture failed: %s" % json.dumps(d.get("error"))[:300])
+            src = d["result"].get("screenshot", {}).get("path")
+            if not src:
+                raise DriveError("capture returned no screenshot")
+            shutil.copy(src, self.out / (stem + ".png"))
         buf = self.buffer()
         visible = "\n".join(buf.split("\n")[-self.rows:])
         (self.out / (stem + ".txt")).write_text(visible)
@@ -817,29 +854,36 @@ class Run:
         for lineno, verb, arg in self.steps:
             self.log("%s %s" % (verb, arg))
             if verb == "TYPE":
-                self._orca_input("type-text", "--text", arg)
+                self.type_text(arg)
             elif verb == "KEY":
                 for name in arg.split():
                     self.key(name)
                     time.sleep(0.12)
             elif verb == "SCROLL":
-                # Orca's scroll reports ok but delivers no wheel event to the
-                # terminal, so SCROLL posts real wheel events itself
-                # (scripts/qa/wheel.swift) over the window's centre.
                 direction, n = arg.split()[:2]
-                self.term.activate()
-                time.sleep(0.2)
-                x, y = self.term.centre()
-                p = run([wheel_binary(), str(x), str(y), direction, n])
-                if p.returncode != 0:
-                    raise DriveError("SCROLL failed: " + (p.stderr or p.stdout).strip())
-                time.sleep(0.3)
+                if hasattr(self.term, "scroll"):
+                    self.term.scroll(direction, int(n))
+                    time.sleep(0.3)
+                else:
+                    # Orca's scroll reports ok but delivers no wheel event to
+                    # the terminal, so SCROLL posts real wheel events itself
+                    # (scripts/qa/wheel.swift) over the window's centre.
+                    self.term.activate()
+                    time.sleep(0.2)
+                    x, y = self.term.centre()
+                    p = run([wheel_binary(), str(x), str(y), direction, n])
+                    if p.returncode != 0:
+                        raise DriveError("SCROLL failed: " + (p.stderr or p.stdout).strip())
+                    time.sleep(0.3)
             elif verb == "CLICK":
                 x, y = arg.split()[:2]
-                self.term.activate()
-                d = orca("click", "--app", self.term.bundle, "--window-id", str(self.term.wid), "--x", x, "--y", y)
-                if not d.get("ok"):
-                    raise DriveError("click failed: %s" % json.dumps(d.get("error"))[:200])
+                if hasattr(self.term, "click"):
+                    self.term.click(int(x), int(y))
+                else:
+                    self.term.activate()
+                    d = orca("click", "--app", self.term.bundle, "--window-id", str(self.term.wid), "--x", x, "--y", y)
+                    if not d.get("ok"):
+                        raise DriveError("click failed: %s" % json.dumps(d.get("error"))[:200])
             elif verb == "RESIZE":
                 c, r = (int(v) for v in arg.split()[:2])
                 self.term.resize(c, r)
@@ -870,7 +914,7 @@ class Run:
             elif verb == "NOTE":
                 pass
             elif verb in ("SEND", "TURN"):
-                self._orca_input("type-text", "--text", arg)
+                self.type_text(arg)
                 time.sleep(0.3)
                 self.key("enter")
                 if verb == "TURN":
@@ -888,7 +932,7 @@ class Run:
                     raise DriveError("RELAUNCH needs @real")
                 # /exit, like a user; Orca's key round trip (~0.6s each) is
                 # too slow to land two ctrl+c presses inside kiln's 1s window.
-                self._orca_input("type-text", "--text", "/exit")
+                self.type_text("/exit")
                 time.sleep(0.3)
                 self.key("enter")
                 deadline = time.time() + 15
@@ -1026,12 +1070,17 @@ def lint_scenario(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scenarios", nargs="*")
-    ap.add_argument("--terminal", default="iterm-dark", choices=["iterm-dark", "iterm-light", "terminal", "warp"])
+    ap.add_argument("--terminal", default="iterm-dark",
+                     choices=["iterm-dark", "iterm-light", "terminal", "warp", "xterm-dark", "xterm-light"])
     ap.add_argument("--out", default=str(ROOT / "qa/runs" / time.strftime("%Y%m%d-%H%M%S")))
     ap.add_argument("--size", help="override the scenario's @size, e.g. 80x24")
     ap.add_argument("--keep", action="store_true", help="keep the scratch project and home")
     ap.add_argument("--cleanup-profile", action="store_true", help="remove the kiln-qa-light iTerm2 profile and exit")
     ap.add_argument("--lint", action="store_true", help="check scenarios and their faux scripts; drive nothing")
+    ap.add_argument("-j", type=int, default=1,
+                     help="parallel scenario workers, headless terminals only (spawns drive.py subprocesses; "
+                          "Playwright's sync API is not thread-safe)")
+    ap.add_argument("--shard", help="i/n: run only the i-th of n shards of a deterministic sort of the given scenarios")
     a = ap.parse_args()
 
     if a.lint:
@@ -1053,6 +1102,18 @@ def main():
             print("missing %s: run `make build && go build -o bin/faux ./cmd/faux`" % binary, file=sys.stderr)
             return 2
 
+    if a.shard:
+        i, n = (int(x) for x in a.shard.split("/"))
+        scenarios = sorted(a.scenarios)
+        chunk = -(-len(scenarios) // n)  # ceil
+        start = (i - 1) * chunk
+        a.scenarios = scenarios[start:start + chunk]
+
+    if a.j > 1:
+        if not a.terminal.startswith("xterm-"):
+            ap.error("-j > 1 is only supported for headless terminals (xterm-dark/xterm-light)")
+        return run_parallel(a)
+
     failed = 0
     for sc in a.scenarios:
         r = Run(sc, a.terminal, a.out, a.size, a.keep)
@@ -1071,6 +1132,32 @@ def main():
         res = r.write_result(error)
         failed += 0 if res["passed"] else 1
         print("%s %s -> %s" % ("PASS" if res["passed"] else "FAIL", sc, r.out))
+    return 1 if failed else 0
+
+
+def run_parallel(a):
+    """Runs each scenario in its own drive.py subprocess (headless terminals
+    only): Playwright's sync API is not thread-safe, so this is real process
+    parallelism, not threads sharing one Chromium/Playwright instance. Each
+    child prints its own PASS/FAIL line and writes into the same --out tree
+    (safe: every scenario gets its own subdirectory)."""
+    import concurrent.futures
+
+    def one(sc):
+        cmd = [sys.executable, os.path.abspath(__file__), "--terminal", a.terminal, "--out", a.out, sc]
+        if a.size:
+            cmd += ["--size", a.size]
+        if a.keep:
+            cmd.append("--keep")
+        p = run(cmd, timeout=1800)
+        sys.stdout.write(p.stdout)
+        sys.stderr.write(p.stderr)
+        return p.returncode
+
+    failed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=a.j) as ex:
+        for rc in ex.map(one, a.scenarios):
+            failed += 0 if rc == 0 else 1
     return 1 if failed else 0
 
 
