@@ -421,14 +421,14 @@ func TestTUI_FullscreenWithSubagentsPanel(t *testing.T) {
 	// Toggle back to inline. Going fullscreen -> inline rebuilds the
 	// transcript from the session log (replayTranscript/
 	// RenderTranscriptEntries, replay.go), which reconstructs blocks
-	// backed by a session.Entry (user/assistant/tool messages — the
-	// individual "task" tool call blocks below are entries) directly, and
+	// backed by a session.Entry (user/assistant/tool messages) directly —
+	// except the task calls the panel covered (Bridge.CoveredCalls) — and
 	// every other committed block via Bridge.CommitSynthetic's recorded
 	// splice list (bridge.go's SyntheticCommit) — including the
 	// subagents PANEL itself (the aggregate name/task/tokens table,
 	// finishTurn's commit in app.go, now routed through CommitSynthetic
-	// precisely so this survives). Both must still be on screen after the
-	// round trip.
+	// precisely so this survives). The panel must be on screen once after
+	// the round trip, with no task block beside it.
 	s.SendKey("ctrl+f")
 	if err := s.WaitFor(tuiUserMark, 3*time.Second); err != nil {
 		t.Fatal(err)
@@ -437,11 +437,13 @@ func TestTUI_FullscreenWithSubagentsPanel(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(s.Rows(), "\n")
-	if !strings.Contains(joined, "task ") {
-		t.Error("task blocks gone after toggling back to inline")
+	// The panel is the one record of each dispatch, live and replayed: no
+	// separate "task ──" block per subagent beside it.
+	if regexp.MustCompile(`(?m)^\s*task ─`).MatchString(joined) {
+		t.Errorf("task blocks replayed beside the subagents panel after toggling back to inline:\n%s", joined)
 	}
-	if !strings.Contains(joined, "2 subagents finished") {
-		t.Errorf("subagents panel text gone after toggling back to inline:\n%s", joined)
+	if n := strings.Count(joined, "2 subagents finished"); n != 1 {
+		t.Errorf("subagents panel shown %d times after toggling back to inline, want 1:\n%s", n, joined)
 	}
 }
 

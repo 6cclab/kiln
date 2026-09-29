@@ -38,7 +38,7 @@ const replayResultLines = 50
 // the entry it was tagged with (empty AfterEntryID means "before the
 // first entry") — see SyntheticCommit's doc comment. It is what Ctrl+O,
 // Ctrl+F and Rewind redraw the screen from.
-func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, cwd string, synthetics []SyntheticCommit) []string {
+func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, cwd string, synthetics []SyntheticCommit, covered map[string]bool) []string {
 	// Each block opens with one blank row and none after it, as the live
 	// commit path does; a blank on both sides doubled every gap in the
 	// ctrl+o view.
@@ -137,6 +137,13 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 			name := m.ToolName
 			if name == "" {
 				name = call.Name
+			}
+			// A dispatch the subagents panel showed has no task block of
+			// its own (app.go's msgCommitToolCall); covered holds those
+			// call IDs, and the panel itself replays as a synthetic.
+			if !verbose && covered[m.ToolCallID] && strings.EqualFold(name, "task") {
+				emitSynthetics(e.ID) // the panel may be anchored to this entry
+				continue
 			}
 			// One renderer for a committed tool block, live or replayed: no
 			// grouping here (the live commit path — app.go's flushGroup —

@@ -23,4 +23,8 @@ KEY ctrl+f
 WAIT 1
 SHOT inline-again
 EXPECT /All three scouted/
+EXPECT /3 subagents? finished/
+# The panel is the one record of each dispatch; the replay adds no task
+# block beside it.
+EXPECT_NOT /(?m)^\s*task ─/
 EXPECT_NOT /panic|goroutine/

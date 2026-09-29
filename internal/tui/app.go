@@ -751,6 +751,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		// design's agents block is the one record of a dispatch. A task
 		// call that failed before dispatching has no row and still shows.
 		if strings.EqualFold(msg.View.Name, "task") && m.subagents.Has(msg.CallID) && !m.cfg.Bridge.Verbose() {
+			m.cfg.Bridge.MarkCoveredCall(msg.CallID)
 			return m, nil
 		}
 		if kind, grouped := groupKindFor(msg.View.Name); grouped && !m.cfg.Bridge.Verbose() {
@@ -2473,7 +2474,7 @@ func (m Model) replayTranscript() {
 	// commits nothing here, leaving committedRows at bannerRowCount —
 	// transcriptIsEmpty then reports true, exactly as for a fresh start
 	// (*qa/findings/20260927T022144Z-inline-stacked-rules.json*).
-	m.cfg.Bridge.Commit(RenderTranscriptEntries(oldestFirst(entries), m.contentWidth(), m.cfg.Bridge.Verbose(), m.cfg.Cwd, m.cfg.Bridge.Synthetics()))
+	m.cfg.Bridge.Commit(RenderTranscriptEntries(oldestFirst(entries), m.contentWidth(), m.cfg.Bridge.Verbose(), m.cfg.Cwd, m.cfg.Bridge.Synthetics(), m.cfg.Bridge.CoveredCalls()))
 }
 
 // openRewind opens the Rewind dialog over the lane's user messages
