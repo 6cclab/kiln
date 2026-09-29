@@ -1,0 +1,63 @@
+name: QA headless
+
+on:
+  pull_request:
+    branches: [main, go-port]
+  push:
+    branches: [main, go-port]
+  workflow_dispatch:
+
+jobs:
+  qa-headless:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        terminal: [xterm-dark, xterm-light]
+        shard: ["1/3", "2/3", "3/3"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: build bin/kiln and bin/faux
+        run: |
+          mkdir -p bin
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+          go build -ldflags "-X github.com/andrepato/harness/internal/cli.Version=$VERSION" -o bin/kiln ./cmd/kiln
+          go build -o bin/faux ./cmd/faux
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: npm ci (xterm.js page)
+        working-directory: scripts/qa/xterm
+        run: npm ci
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install python deps
+        run: |
+          pip install -r scripts/qa/requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: run headless QA (excludes qa/scenarios/real, which drives a real model)
+        run: |
+          STEPS=$(find qa/scenarios -mindepth 2 -maxdepth 2 -name '*.steps' -not -path 'qa/scenarios/real/*' | sort)
+          python3 scripts/qa/drive.py --terminal ${{ matrix.terminal }} \
+            --shard ${{ matrix.shard }} \
+            --out qa/runs/ci \
+            $STEPS
+
+      - name: upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-headless-${{ matrix.terminal }}-${{ strategy.job-index }}
+          path: qa/runs/ci
+          if-no-files-found: ignore
