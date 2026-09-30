@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/andrepato/harness/internal/plural"
@@ -486,11 +487,20 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	perms.Allow = append(append([]string{}, perms.Allow...), args.AllowedTools...)
 	perms.Deny = append(append([]string{}, perms.Deny...), args.DisallowedTools...)
 
+	// HARNESS_EXP_LEDGER (switch 1, experiments.go): the one path plan
+	// mode's read-only enforcement exempts, resolved once here so the gate
+	// and the plan-mode prompt (buildSystemPrompt, below) agree on it.
+	var experimentLedgerPath string
+	if ledgerEnabled() {
+		experimentLedgerPath = ledgerPath()
+	}
+
 	roots := append([]string{cwd}, addDirs...)
 	gate := permission.NewGate(permission.GateOptions{
-		Permissions: perms,
-		Roots:       roots,
-		Mode:        permissionMode,
+		Permissions:    perms,
+		Roots:          roots,
+		Mode:           permissionMode,
+		PlanLedgerPath: experimentLedgerPath,
 	})
 
 	// --- MCP ---------------------------------------------------------
@@ -627,12 +637,38 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// resolvePermissionMode already folded in above).
 	planController := agent.NewPlanController()
 	planController.SetActive(permissionMode == claudesettings.ModePlan)
+
+	// baseEffort is what --effort/the settings file asked for; startEffort
+	// is what the session actually starts at, which HARNESS_EXP_PLAN_EFFORT
+	// (switch 4, internal/cli/experiments.go) can raise for the plan-mode
+	// portion of the run only. laneRef is filled in once agent.Start returns
+	// (below), so planController.OnApprove — built here, before the lane
+	// exists — can revert the effort level when the plan it approves leaves
+	// plan mode.
+	baseEffort := effortOrSetting(args.Effort, settings.EffortLevel, resolved.Model.Api == provider.ApiAnthropicMessages)
+	startEffort := baseEffort
+	planEffort := planEffortOverride()
+	if planEffort != "" && permissionMode == claudesettings.ModePlan {
+		startEffort = planEffort
+	}
+	var laneRef *harness.Lane
+	// HARNESS_EXP_AUDIT (switch 2, experiments.go): armed by an approval,
+	// consumed by the OnAfterResponse hook below (registered once
+	// started.Lane exists) the first time the model's turn ends with no
+	// tool calls afterward.
+	var auditArmed atomic.Bool
 	// Approving a plan leaves plan mode into the chosen mode, on the gate
 	// itself (src/cli.ts:215-217: onApprove -> permissionGate.setMode).
 	// Without this the gate stayed read-only after approval while the tool
 	// result claimed otherwise.
 	planController.OnApprove = func(mode string) {
 		gate.SetMode(claudesettings.PermissionMode(mode))
+		if planEffort != "" && laneRef != nil {
+			_ = laneRef.SetThinkingLevel(baseEffort)
+		}
+		if auditEnabled() {
+			auditArmed.Store(true)
+		}
 	}
 	// Bound to the TUI once it starts, exactly as cli.ts reassigns
 	// approvePlan from runApp's onPlanApprover callback (src/cli.ts:675-677).
@@ -681,6 +717,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		promptParts := []string{systemPromptBase, envBlock, args.AppendSystemPrompt}
 		if permissionMode == claudesettings.ModePlan {
 			promptParts = append(promptParts, agent.PlanModePrompt)
+			// HARNESS_EXP_LEDGER (switch 1, experiments.go): tell the model
+			// about the one path plan mode now lets it write.
+			if path := experimentLedgerPath; path != "" {
+				promptParts = append(promptParts, ledgerPrompt(path))
+			}
+		}
+		// HARNESS_EXP_REVIEW (switch 3, experiments.go): a reviewer subagent
+		// before finishing, regardless of plan mode.
+		if reviewEnabled() {
+			promptParts = append(promptParts, reviewPrompt)
 		}
 		promptParts = append(promptParts, memory.Text, skillsIndex, mcpIndexText)
 		return strings.Join(nonEmpty(promptParts), "\n\n")
@@ -702,7 +748,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		SessionID:       args.SessionID,
 		ForkSession:     args.ForkSession,
 		Name:            args.Name,
-		ThinkingLevel:   effortOrSetting(args.Effort, settings.EffortLevel, resolved.Model.Api == provider.ApiAnthropicMessages),
+		ThinkingLevel:   startEffort,
 		SystemPrompt:    systemPrompt,
 		Env:             env,
 		ExtraTools:      extraTools,
@@ -713,6 +759,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return 1
 	}
 	mcpSess.lane = started.Lane
+	laneRef = started.Lane
 	phase("session started", "session", started.SessionID, "transcript", started.TranscriptPath)
 	diag.L().Info("run log", "session", started.SessionID, "path", logPath)
 	logHarnessEvents(started.Harness)
@@ -1026,6 +1073,24 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// operation, before the model's next turn — so the context still
 	// reaches the very next request, just as a synthetic context message
 	// rather than as part of the tool_result content block.
+	// HARNESS_EXP_AUDIT (switch 2, experiments.go): auditArmed is set once,
+	// by planController.OnApprove above, on the plan's approval. The first
+	// response afterward that ends the turn with no tool calls (not a
+	// pause_turn) gets Steer'd one follow-up instead of finishing; Steer
+	// queues onto the existing inbox-drain path (turn.go's drainInbox),
+	// which already keeps a turn open when something was queued, so no
+	// turn-loop change is needed here.
+	started.Harness.Hooks().OnAfterResponse(func(ctx context.Context, m *msg.AssistantMessage) error {
+		if !auditArmed.Load() {
+			return nil
+		}
+		if len(msg.ToolCallsOf(m.Content)) > 0 || m.StopReason == msg.StopPause {
+			return nil
+		}
+		auditArmed.Store(false)
+		return started.Lane.Steer(auditFollowUp)
+	})
+
 	var postToolCtxMu sync.Mutex
 	var postToolCtxQueue []string
 	started.Harness.Hooks().OnTransformContext(func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error) {
