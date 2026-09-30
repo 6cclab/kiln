@@ -231,7 +231,7 @@ func Skills(p Plugin) []skills.Skill {
 	}
 	var out []skills.Skill
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !skills.IsDirEntry(dir, entry) {
 			continue
 		}
 		skillPath := filepath.Join(dir, entry.Name(), "SKILL.md")
@@ -256,23 +256,7 @@ func Skills(p Plugin) []skills.Skill {
 // commands/git/changelog.md becomes "<plugin>:git:changelog".
 func Commands(p Plugin) []claudecommands.CommandFile {
 	dir := filepath.Join(p.Root, "commands")
-	var files []string
-	var walk func(string)
-	walk = func(d string) {
-		entries, err := os.ReadDir(d)
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			full := filepath.Join(d, e.Name())
-			if e.IsDir() {
-				walk(full)
-			} else if strings.HasSuffix(e.Name(), ".md") {
-				files = append(files, full)
-			}
-		}
-	}
-	walk(dir)
+	files := claudecommands.WalkMarkdown(dir)
 
 	var out []claudecommands.CommandFile
 	for _, file := range files {

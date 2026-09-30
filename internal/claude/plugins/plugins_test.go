@@ -237,6 +237,53 @@ func TestSkills_NamespacedAndDisableModelInvocationHonored(t *testing.T) {
 	}
 }
 
+// A plugin skill directory that is a symlink is loaded like a real one.
+func TestSkills_FollowsSymlinkedSkillDir(t *testing.T) {
+	_, cwd, root := setupPluginTree(t)
+	writeManifest(t, root, "demo", "1.0.0", nil)
+	target := filepath.Join(t.TempDir(), "greet")
+	writeFile(t, filepath.Join(target, "SKILL.md"), "---\nname: greet\ndescription: says hi\n---\nHello.")
+	if err := os.MkdirAll(filepath.Join(root, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "skills", "greet")); err != nil {
+		t.Fatal(err)
+	}
+
+	plugins := LoadPlugins(cwd)
+	if len(plugins) != 1 {
+		t.Fatalf("LoadPlugins = %+v", plugins)
+	}
+	got := Skills(plugins[0])
+	if len(got) != 1 || got[0].Name != "demo:greet" {
+		t.Fatalf("Skills = %+v, want the symlinked demo:greet", got)
+	}
+}
+
+// A plugin commands subfolder that is a symlink is followed, keeping the
+// folder in the command's name.
+func TestCommands_FollowsSymlinkedFolder(t *testing.T) {
+	_, cwd, root := setupPluginTree(t)
+	writeManifest(t, root, "demo", "1.0.0", nil)
+	target := filepath.Join(t.TempDir(), "git")
+	writeFile(t, filepath.Join(target, "changelog.md"), "---\ndescription: Changelog\n---\nWrite one.")
+	if err := os.MkdirAll(filepath.Join(root, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "commands", "git")); err != nil {
+		t.Fatal(err)
+	}
+
+	plugins := LoadPlugins(cwd)
+	if len(plugins) != 1 {
+		t.Fatalf("LoadPlugins = %+v", plugins)
+	}
+	cmds := Commands(plugins[0])
+	if len(cmds) != 1 {
+		t.Fatalf("Commands = %+v, want the symlinked git/changelog", cmds)
+	}
+}
+
 func TestCommands_Namespaced(t *testing.T) {
 	_, cwd, root := setupPluginTree(t)
 	writeManifest(t, root, "demo", "1.0.0", nil)

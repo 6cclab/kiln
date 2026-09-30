@@ -1,0 +1,23 @@
+{
+ "id": "20260929T220359Z-commands-symlinks-skipped",
+ "found_at": "2026-09-29T22:03:59Z",
+ "scenario": "real/commands-discovery",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "low",
+ "title": "Symlinked command folders are not followed",
+ "observed": "walkMarkdown in internal/claude/commands and the plugin commands walk skipped symlinked folders (DirEntry.IsDir is false for a link), so commands inside a linked folder never loaded.",
+ "expected": "Claude Code 2.1.283 lists commands inside a symlinked commands folder as <folder>:<name> (checked by capturing its first request with linked/zqlinked.md).",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/commands/commands.go",
+   "internal/claude/plugins/plugins.go"
+  ],
+  "regression_test": "TestLoadCommandsFollowsSymlinks,TestCommands_FollowsSymlinkedFolder",
+  "updated_at": "2026-09-29T22:04:04Z"
+ }
+}
