@@ -1,6 +1,6 @@
 # Headless QA backend (scripts/qa/headless.py). Install into a venv:
 #
-#   python3 -m venv .venv-qa
+#   python3.12 -m venv .venv-qa   # as CI; greenlet has no 3.14 wheel
 #   .venv-qa/bin/pip install -r scripts/qa/requirements.txt
 #   .venv-qa/bin/python -m playwright install --with-deps chromium
 #
