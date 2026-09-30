@@ -70,7 +70,9 @@ func ExitPlanModeTool(state PlanModeState, approve PlanApprover) *tool.Tool {
 		Label: "Present plan",
 		Description: "Call this when you have finished researching and have a plan ready for the user to approve. " +
 			"Only for tasks that will change things - if the user asked a question or wants research, " +
-			"just answer. Pass the plan as concise markdown.",
+			"just answer. Pass the plan as markdown with three parts: the context (what is wrong or " +
+			"needed, and why), the changes (each with its file paths), and how you will verify them " +
+			"(the tests to add or run, and for a fix, a test that fails without it). Keep it easy to scan.",
 		Parameters: exitPlanModeParameters,
 		Execute: func(ctx context.Context, raw json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
 			var a exitPlanModeArgs

@@ -25,10 +25,9 @@ import (
 // would take their own, matching session.ts's MAIN_LANE.
 const MainLane = "main"
 
-// defaultSystemPrompt mirrors session.ts's DEFAULT_SYSTEM_PROMPT.
-const defaultSystemPrompt = "You are a coding assistant operating in a terminal. " +
-	"Use the provided tools to inspect and modify the user's code. " +
-	"Prefer reading a file before editing it. Keep responses short."
+// defaultSystemPrompt is the prompt a session gets when Options leaves
+// SystemPrompt empty: the same base prompt the CLI uses.
+var defaultSystemPrompt = BasePrompt
 
 // defaultSessionsDirEnv is the environment variable that overrides the
 // session store root when Options.SessionsRoot is left empty, matching

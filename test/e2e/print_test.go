@@ -133,7 +133,7 @@ func TestPrint_StreamJSON_FixBug(t *testing.T) {
 		t.Fatal("faux recorded no requests")
 	}
 	last := reqs[len(reqs)-1]
-	if !strings.Contains(last.System, "You are a coding assistant") {
+	if !strings.HasPrefix(last.System, "You are kiln, a coding agent") {
 		t.Errorf("recorded system prompt missing base persona: %q", last.System)
 	}
 	var sawEdit, sawRead bool

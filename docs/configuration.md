@@ -62,7 +62,7 @@ Both tool-list flags accept `Read,Write,Edit` (commas) and `Bash(git *) Edit` (w
 | `--setting-sources <list>` | `user,project,local`; restricts which settings-file scopes are read |
 | `--mcp-config <file>` | MCP servers from this file instead of `~/.claude.json` |
 | `--strict-mcp-config` | use only `--mcp-config`; with no `--mcp-config` given, connects to nothing (see §8) |
-| `--system-prompt <text>` | replaces the base persona (default: `"You are a coding assistant operating in a terminal."`, `internal/cli/chat.go`) |
+| `--system-prompt <text>` | replaces the base prompt (default: `agent.BasePrompt`, `internal/agent/prompt.go`) |
 | `--append-system-prompt <text>` | appended after the base/replaced persona |
 
 ### Output flags

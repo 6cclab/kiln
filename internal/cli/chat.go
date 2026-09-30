@@ -62,8 +62,8 @@ import (
 // on this machine, so it needs no load wait.
 const defaultModel = "ollama/qwen3.8:latest"
 
-// defaultSystemPrompt is cli.ts's fallback when --system-prompt is absent.
-const defaultSystemPrompt = "You are a coding assistant operating in a terminal."
+// defaultSystemPrompt is the base prompt when --system-prompt is absent.
+var defaultSystemPrompt = agent.BasePrompt
 
 // buildRegistry constructs the provider registry chat.go and subcommands.go
 // both need: every provider in the vendored pi-ai catalog, Ollama

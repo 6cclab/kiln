@@ -5,19 +5,49 @@ import (
 	"testing"
 )
 
-func TestPlanModePromptMatchesTS(t *testing.T) {
-	want := strings.Join([]string{
-		"You are in PLAN MODE. You may read files, search, and run read-only commands,",
-		"but you must not edit, write, or run anything that changes state.",
-		"",
-		"Research the task thoroughly first. When you have a concrete plan, call",
-		"exit_plan_mode with it and wait for approval. Do not attempt changes before",
-		"the plan is approved - they will be refused.",
-		"",
+// The plan-mode prompt keeps the read-only rule and the question escape,
+// and gives planning its steps: check against the spec, sort findings, ask,
+// present. It deliberately diverges from plan-mode.ts (see PlanModePrompt).
+func TestPlanModePromptStructuresPlanning(t *testing.T) {
+	for _, want := range []string{
+		"You are in PLAN MODE.",
+		"must not edit, write, or run anything that changes state",
 		"If the user only asked a question, answer it; do not present a plan.",
-	}, "\n")
-	if PlanModePrompt != want {
-		t.Fatalf("PlanModePrompt diverged from the plan-mode.ts source:\n%s", PlanModePrompt)
+		"rule by rule",
+		"ask_user_question",
+		"Call exit_plan_mode with the plan and wait for approval.",
+	} {
+		if !strings.Contains(PlanModePrompt, want) {
+			t.Errorf("PlanModePrompt is missing %q", want)
+		}
+	}
+}
+
+// BasePrompt carries the working habits every task needs; each phrase
+// guards one habit the one-line persona left to chance.
+func TestBasePromptCarriesWorkingHabits(t *testing.T) {
+	for _, want := range []string{
+		"You are kiln",
+		"check the code\nagainst each rule",
+		"match its naming",
+		"well-established library",
+		"check that before designing around it",
+		"ask_user_question",
+		"fails without the fix",
+		"Report what actually happened",
+		"review `git status` and the diff",
+		"read what you are about to\ndelete or overwrite",
+	} {
+		if !strings.Contains(BasePrompt, want) {
+			t.Errorf("BasePrompt is missing %q", want)
+		}
+	}
+}
+
+// A session started without a system prompt gets BasePrompt.
+func TestDefaultSystemPromptIsBasePrompt(t *testing.T) {
+	if defaultSystemPrompt != BasePrompt {
+		t.Fatalf("defaultSystemPrompt = %q, want BasePrompt", defaultSystemPrompt)
 	}
 }
 
