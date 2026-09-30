@@ -201,6 +201,31 @@ func budgetForThinkingLevel(level provider.ThinkingLevel) int {
 	}
 }
 
+// cacheRetention is the main conversation's prompt-cache TTL bucket:
+// "short" (5m, the default) or "long" (1h, billed at a higher cache-write
+// rate in exchange for surviving longer gaps between requests).
+//
+// This is a kiln experiment switch (HARNESS_CACHE_RETENTION=long; see
+// internal/cli/experiments.go), OFF (short) unless set. Claude Code has its
+// own equivalent, CLAUDE_CODE_PROMPT_CACHE_TTL ("5m" or "1h"; any other
+// value ignored) — docs/en/prompt-caching#choose-the-ttl-yourself,
+// https://code.claude.com/docs/en/prompt-caching, fetched 2026-09-30 — so
+// that is checked first to keep kiln behaving like Claude Code wherever it
+// reads Claude Code's own config, with HARNESS_CACHE_RETENTION as a
+// fallback for the benchmark rig.
+func cacheRetention() string {
+	switch os.Getenv("CLAUDE_CODE_PROMPT_CACHE_TTL") {
+	case "1h":
+		return "long"
+	case "5m":
+		return "short"
+	}
+	if os.Getenv("HARNESS_CACHE_RETENTION") == "long" {
+		return "long"
+	}
+	return "short"
+}
+
 func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts provider.StreamOptions, auth Auth) anthropicRequest {
 	req := anthropicRequest{
 		Model:     model.ID,
@@ -212,7 +237,7 @@ func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts 
 	}
 
 	compat := model.AnthropicMessagesCompat()
-	retention := "short"
+	retention := cacheRetention()
 	var ttl string
 	if retention == "long" && boolDefault(compat.SupportsLongCacheRetention, true) {
 		ttl = "1h"
