@@ -1,0 +1,10 @@
+question ──────────────────────────────────────────────────────────────────  1/1
+────────────────────────────────────────────────────────────────────────────────
+ Which approach should I use?
+
+ 1  Fast path — Ship quickly, fewer tests                                       
+ 2  Careful path — Slower, more coverage
+ 3  Other — type your own answer
+
+ ↑↓ select · enter confirm · esc cancel
+────────────────────────────────────────────────────────────────────────────────

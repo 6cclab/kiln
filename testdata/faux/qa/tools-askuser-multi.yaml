@@ -1,0 +1,6 @@
+model: faux-1
+steps:
+  - tool_call: {name: ask_user_question, args: {questions: [{question: "Which scope should I take?", header: "Scope", options: [{label: "Core fixes", description: "Only the required fixes"}, {label: "Everything", description: "Required plus optional fixes"}]}, {question: "Which checks should block the merge?", header: "Checks", multiSelect: true, options: [{label: "Lint", description: "gofmt, vet, staticcheck"}, {label: "Unit tests", description: "go test ./..."}, {label: "E2E", description: "PTY behaviour suite"}]}]}, id: q1}
+  - on_tool_result: q1
+    then:
+      - text: "Answers received, starting now."

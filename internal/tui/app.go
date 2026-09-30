@@ -927,6 +927,15 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.SetLabel("Waiting for approval")
 		return m.syncPromptPlaceholder(), nil
 
+	case MsgAskUserPrompt:
+		p := m.prompt
+		p.question = &pendingQuestion{questions: msg.Questions, checked: map[int]bool{}, reply: msg.Reply}
+		p.feedback = nil
+		p.pending = nil
+		p.plan = nil
+		m.spinner.SetLabel("Waiting for an answer")
+		return m.syncPromptPlaceholder(), nil
+
 	case MsgSpinnerLabel:
 		m.spinner.SetLabel(msg.Text)
 		return m, nil
@@ -1664,6 +1673,13 @@ func (m Model) syncPromptPlaceholder() Model {
 		} else {
 			m.editor.SetPlaceholder("typing in the prompt above · enter to send · esc to decline")
 		}
+	case m.prompt.question != nil && m.prompt.question.otherText != nil:
+		m.editor.SetPlaceholder("typing in the prompt above · enter to send · esc to cancel")
+	case m.prompt.question != nil && m.prompt.question.reviewing:
+		m.editor.SetPlaceholder("press 1 or 2")
+	case m.prompt.question != nil:
+		total := len(m.prompt.question.questions[m.prompt.question.index].Options) + 1
+		m.editor.SetPlaceholder(placeholderForOptionCount(total))
 	case m.prompt.pending != nil:
 		m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request.ToolName))))
 	case m.prompt.plan != nil:

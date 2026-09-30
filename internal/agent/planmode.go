@@ -26,15 +26,31 @@ import (
 // and is intentionally left untouched; see the phase report for the
 // follow-up (chat.go should import agent.PlanModePrompt and delete its own
 // copy).
+//
+// It no longer matches plan-mode.ts: the four-line original told the model
+// only to research "thoroughly", and in the head-to-head against Claude Code
+// (see BasePrompt) kiln's plans were faster but missed findings Claude Code's
+// structured plan phase caught. The steps below give planning a shape:
+// understand, check against the spec, sort findings, ask, then present a plan
+// that says how it will be verified.
 var PlanModePrompt = strings.Join([]string{
 	"You are in PLAN MODE. You may read files, search, and run read-only commands,",
-	"but you must not edit, write, or run anything that changes state.",
-	"",
-	"Research the task thoroughly first. When you have a concrete plan, call",
-	"exit_plan_mode with it and wait for approval. Do not attempt changes before",
-	"the plan is approved - they will be refused.",
+	"but you must not edit, write, or run anything that changes state. Changes",
+	"attempted before the plan is approved will be refused.",
 	"",
 	"If the user only asked a question, answer it; do not present a plan.",
+	"",
+	"Otherwise, plan in this order:",
+	"1. Understand. Read the request, the code it touches and any spec, README or",
+	"   issue it refers to, in full. For a large or unfamiliar codebase, use task",
+	"   subagents to explore areas in parallel.",
+	"2. Check. Go through the spec or requirements rule by rule and compare each with",
+	"   what the code does, edge cases and error paths included. Look for existing",
+	"   code to reuse before proposing new code.",
+	"3. Sort. Split what you found into changes the task requires and optional ones.",
+	"   If the scope is unclear or a choice belongs to the user, ask with",
+	"   ask_user_question before you finish the plan.",
+	"4. Present. Call exit_plan_mode with the plan and wait for approval.",
 }, "\n")
 
 // PlanDecisionKind discriminates PlanDecision.

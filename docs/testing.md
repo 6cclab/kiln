@@ -336,10 +336,12 @@ byte stream, before Chromium has even launched — answering from the page
 would add a WebSocket + browser round trip that risks missing the 30ms
 window entirely.
 
-**Local setup** (gitignored, run once per checkout):
+**Local setup** (gitignored, run once per checkout). Use Python 3.12, the
+version CI uses: the pinned Playwright 1.48 depends on greenlet, which has no
+Python 3.14 wheel and fails to build from source there.
 
 ```bash
-python3 -m venv .venv-qa
+python3.12 -m venv .venv-qa
 .venv-qa/bin/pip install -r scripts/qa/requirements.txt
 .venv-qa/bin/python -m playwright install chromium   # add --with-deps on a fresh Linux box
 cd scripts/qa/xterm && npm ci && cd -

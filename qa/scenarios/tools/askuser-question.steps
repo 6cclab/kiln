@@ -1,0 +1,23 @@
+# ask_user_question: the model asks a single multiple-choice question,
+# kiln shows the inline question prompt (permission_render.go's visual
+# language reused for it - askuser_render.go), the first option is picked
+# with a digit key, and the model's reply after the answer lands. A single
+# question ends the exchange directly (no review screen - that only shows
+# up with more than one question, exercised separately below).
+@faux testdata/faux/qa/tools-askuser-question.yaml
+
+WAITFOR /describe a task/ 20
+TYPE decide how to fix the bug
+KEY enter
+WAITFOR /Which approach should I use\?/ 20
+SHOT question-first-option-selected
+EXPECT /Fast path/
+EXPECT /Careful path/
+EXPECT /Other/
+EXPECT_NOT /panic|goroutine/
+KEY down
+SHOT question-second-option-selected
+KEY 1
+WAITFOR /Got it, going with the fast path\./ 20
+SHOT after-answer
+EXPECT_NOT /panic|goroutine/

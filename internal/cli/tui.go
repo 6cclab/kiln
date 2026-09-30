@@ -163,6 +163,17 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	if deps.SetHookNotice != nil {
 		deps.SetHookNotice(bridge.HookNotice)
 	}
+	// ask_user_question has no chat.go wiring analogous to SetPlanApprover
+	// (see internal/tools/askuser.go's doc comment: chat.go is being
+	// edited concurrently by another session this phase, so the
+	// interactive approver is a package-level rebind instead of a
+	// rebindable variable + InteractiveDeps field). Bound here, the same
+	// moment SetPlanApprover's callback is bound above; cleared on the way
+	// out so a later print-mode/eval run in the same process (tests) falls
+	// back to the headless message rather than reusing a dead TUI's
+	// channel.
+	tools.SetAskUserApprover(bridge.AskUserApprover())
+	defer tools.SetAskUserApprover(nil)
 	if deps.Dispatcher != nil {
 		// Fan out every dispatch event to both the transcript (a one-line
 		// note per start/done/error) and the live subagents panel (which

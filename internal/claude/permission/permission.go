@@ -83,6 +83,14 @@ type GateOptions struct {
 	Roots  []string
 	Mode   settings.PermissionMode
 	Prompt Prompter
+	// PlanLedgerPath, when non-empty, is the one path plan mode's
+	// read-only enforcement exempts: an edit/write call naming exactly
+	// this path is allowed even in ModePlan. Empty leaves plan mode fully
+	// read-only, as before. This is kiln's HARNESS_EXP_LEDGER experiment
+	// switch (internal/cli/experiments.go) — small and easy to delete: it
+	// touches only this field, its one check in CheckWithOutcome below,
+	// and the call site that sets it.
+	PlanLedgerPath string
 }
 
 // Gate is the permission gate for tool calls: pi's before_tool hook.
@@ -128,6 +136,10 @@ type Gate struct {
 	// acquiring promptMu, so a grant the first waiter just made is honored
 	// without asking again.
 	promptMu sync.Mutex
+
+	// planLedgerPath mirrors GateOptions.PlanLedgerPath; see its doc
+	// comment.
+	planLedgerPath string
 }
 
 // NewGate builds a Gate. Roots are resolved to absolute paths and
@@ -138,6 +150,13 @@ func NewGate(opts GateOptions) *Gate {
 		mode:          opts.Mode,
 		prompter:      opts.Prompt,
 		sessionAllows: map[string]bool{},
+	}
+	if opts.PlanLedgerPath != "" {
+		if full, err := filepath.Abs(opts.PlanLedgerPath); err == nil {
+			g.planLedgerPath = filepath.Clean(full)
+		} else {
+			g.planLedgerPath = filepath.Clean(opts.PlanLedgerPath)
+		}
 	}
 	if g.mode == "" {
 		if opts.Permissions.DefaultMode != "" {
@@ -197,6 +216,24 @@ func (g *Gate) WithinRoots(path string) bool {
 		}
 	}
 	return false
+}
+
+// resolvePlanPath makes path absolute and clean, relative to the first
+// root when it is not already absolute, matching how WithinRoots resolves
+// a relative path. Used only by the planLedgerPath exception, which needs
+// to compare a tool call's path argument against g.planLedgerPath (always
+// absolute) regardless of whether the model passed it relative or
+// absolute.
+func (g *Gate) resolvePlanPath(path string) string {
+	full := path
+	if !filepath.IsAbs(full) {
+		base := "."
+		if len(g.roots) > 0 {
+			base = g.roots[0]
+		}
+		full = filepath.Join(base, full)
+	}
+	return filepath.Clean(full)
 }
 
 // SetMode sets the active permission mode.
@@ -445,6 +482,18 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		permissions.Allow = append(append([]string(nil), permissions.Allow...), g.sessionRules...)
 	}
 	g.mu.Unlock()
+
+	// HARNESS_EXP_LEDGER (internal/cli/experiments.go): the one narrow
+	// exception to plan mode's read-only enforcement, checked before
+	// Decide so it never has to know about it. Only edit/write, and only
+	// for the exact ledger path — every other tool and every other path
+	// still hits Decide's ModePlan case below and is refused as usual.
+	if mode == settings.ModePlan && g.planLedgerPath != "" &&
+		(strings.EqualFold(req.ToolName, "edit") || strings.EqualFold(req.ToolName, "write")) {
+		if path, ok := PathArgOf(req.Args); ok && g.resolvePlanPath(path) == g.planLedgerPath {
+			return nil, OutcomeAuto, nil
+		}
+	}
 
 	verdict := settings.Decide(permissions, req.ToolName, req.PrimaryArg, mode)
 

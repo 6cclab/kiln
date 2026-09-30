@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,6 +81,17 @@ func parseSkill(source, filePath string, scope paths.Scope) (Skill, bool) {
 	}, true
 }
 
+// IsDirEntry reports whether entry, read from parent, is a directory,
+// following a symlink to its target the way Claude Code does (skills are
+// often linked in from a shared folder). A dangling link is not a directory.
+func IsDirEntry(parent string, entry fs.DirEntry) bool {
+	if entry.Type()&fs.ModeSymlink == 0 {
+		return entry.IsDir()
+	}
+	info, err := os.Stat(filepath.Join(parent, entry.Name()))
+	return err == nil && info.IsDir()
+}
+
 func loadFrom(dir string, scope paths.Scope) []Skill {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -88,7 +100,7 @@ func loadFrom(dir string, scope paths.Scope) []Skill {
 	}
 	var out []Skill
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !IsDirEntry(dir, entry) {
 			continue
 		}
 		skillPath := filepath.Join(dir, entry.Name(), "SKILL.md")

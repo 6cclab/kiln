@@ -1,0 +1,25 @@
+{
+ "id": "20260929T212836Z-skills-symlinks-skipped",
+ "found_at": "2026-09-29T21:28:36Z",
+ "scenario": "real/skills-discovery",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Skills that are symlinks in ~/.claude/skills are not listed",
+ "observed": "~/.claude/skills has 5 symlinked skill dirs (computer-use, find-skills, golang-security, orca-cli, orchestration -> ../../.agents/skills/*). kiln's skill tool lists only the 2 real dirs (documentation, react-router-v7-expert); the 5 symlinks are missing from the first request.",
+ "expected": "Claude Code follows the symlinks and lists all 7 user skills in its first request; kiln should list the same set.",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/capture-evidence/kiln-first-request.json"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/skills/skills.go",
+   "internal/claude/plugins/plugins.go"
+  ],
+  "regression_test": "TestLoadFromFollowsSymlinkedSkillDirs,TestSkills_FollowsSymlinkedSkillDir",
+  "updated_at": "2026-09-29T21:38:48Z"
+ }
+}

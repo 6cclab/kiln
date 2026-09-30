@@ -152,6 +152,51 @@ func TestLoadCommands(t *testing.T) {
 	}
 }
 
+// Claude Code follows symlinked command folders and files, naming a
+// command inside a linked folder "<folder>:<name>"; a link back up the tree
+// must not loop.
+func TestLoadCommandsFollowsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	cmdDir := filepath.Join(dir, ".claude", "commands")
+	shared := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(shared, "linked"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "linked", "deploy.md"), []byte("---\ndescription: Deploy\n---\nShip it."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "notes.md"), []byte("---\ndescription: Notes\n---\nWrite notes."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for link, target := range map[string]string{
+		"linked":   filepath.Join(shared, "linked"),
+		"notes.md": filepath.Join(shared, "notes.md"),
+		"loop":     cmdDir,
+	} {
+		if err := os.Symlink(target, filepath.Join(cmdDir, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := map[string]bool{}
+	for _, f := range LoadCommands(dir) {
+		if f.Origin == Project {
+			got[f.Namespace+":"+f.Name] = true
+		}
+	}
+	for _, want := range []string{"linked:deploy", ":notes"} {
+		if !got[want] {
+			t.Errorf("missing command %q; loaded %v", want, got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("loaded %v, want exactly linked:deploy and notes (the loop link adds nothing)", got)
+	}
+}
+
 // ParseCommandFile is how plugins build their commands; it keeps the
 // frontmatter out of the body and carries name, namespace and origin.
 func TestParseCommandFile(t *testing.T) {

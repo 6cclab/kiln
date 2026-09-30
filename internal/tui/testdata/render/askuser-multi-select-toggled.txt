@@ -1,0 +1,11 @@
+question ──────────────────────────────────────────────────────────────────  1/1
+────────────────────────────────────────────────────────────────────────────────
+ Which checks should block the merge?
+
+ 1  ✓ Lint — gofmt, vet, staticcheck
+ 2  ○ Unit tests — go test ./...                                                
+ 3  ✓ E2E — PTY behaviour suite
+ 4  Other — type your own answer
+
+ ↑↓ select · space toggle · enter confirm · esc cancel
+────────────────────────────────────────────────────────────────────────────────

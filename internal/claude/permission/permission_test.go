@@ -402,3 +402,51 @@ func TestDontAskDeniesWhatWouldPrompt(t *testing.T) {
 		t.Error("dontAsk mode prompted")
 	}
 }
+
+// TestPlanLedgerPathIsTheOneExceptionToPlanModeReadOnly: kiln's
+// HARNESS_EXP_LEDGER experiment switch (internal/cli/experiments.go) sets
+// GateOptions.PlanLedgerPath so exactly one file stays writable in plan
+// mode. A relative path given to Check is resolved against the workspace
+// root the same as the ledger path itself, so a relative and an absolute
+// spelling of the same file agree; everything else, including a path one
+// directory over, still hits Decide's ModePlan case and is refused.
+// Without PlanLedgerPath set at all, plan mode is unchanged: fully
+// read-only.
+func TestPlanLedgerPathIsTheOneExceptionToPlanModeReadOnly(t *testing.T) {
+	ctx := context.Background()
+	root := work(t)
+	ledger := filepath.Join(root, ".harness", "plans", "ledger.md")
+	g := NewGate(GateOptions{
+		Mode:           settings.ModePlan,
+		Roots:          []string{root},
+		PlanLedgerPath: ledger,
+	})
+	cases := []struct {
+		name    string
+		req     Request
+		allowed bool
+	}{
+		{"write to the ledger, absolute path", Request{ToolName: "write", PrimaryArg: ledger, Args: map[string]any{"path": ledger}}, true},
+		{"edit the ledger, absolute path", Request{ToolName: "edit", PrimaryArg: ledger, Args: map[string]any{"path": ledger}}, true},
+		{"write to the ledger, relative path", Request{ToolName: "write", PrimaryArg: filepath.Join(".harness", "plans", "ledger.md"), Args: map[string]any{"path": filepath.Join(".harness", "plans", "ledger.md")}}, true},
+		{"write elsewhere is still refused", Request{ToolName: "write", PrimaryArg: filepath.Join(root, "other.txt"), Args: map[string]any{"path": filepath.Join(root, "other.txt")}}, false},
+		{"a near-miss path is still refused", Request{ToolName: "write", PrimaryArg: filepath.Join(root, ".harness", "plans", "ledger2.md"), Args: map[string]any{"path": filepath.Join(root, ".harness", "plans", "ledger2.md")}}, false},
+		{"bash is unaffected by the exception", Request{ToolName: "bash", PrimaryArg: "rm " + ledger, Args: map[string]any{"command": "rm " + ledger}}, false},
+	}
+	for _, c := range cases {
+		blocked, err := g.Check(ctx, c.req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (blocked == nil) != c.allowed {
+			t.Errorf("%s: blocked=%v, want allowed=%v", c.name, blocked, c.allowed)
+		}
+	}
+
+	// With PlanLedgerPath unset, plan mode is exactly as read-only as
+	// before this switch existed.
+	plain := NewGate(GateOptions{Mode: settings.ModePlan, Roots: []string{root}})
+	if blocked, err := plain.Check(ctx, Request{ToolName: "write", PrimaryArg: ledger, Args: map[string]any{"path": ledger}}); err != nil || blocked == nil {
+		t.Errorf("no PlanLedgerPath: write to %s allowed=%v, want refused", ledger, blocked == nil)
+	}
+}

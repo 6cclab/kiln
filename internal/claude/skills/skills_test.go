@@ -109,6 +109,34 @@ func TestLoadFromSkipsNonSkillEntries(t *testing.T) {
 	}
 }
 
+// A skill directory that is a symlink (e.g. ~/.claude/skills/x ->
+// ~/.agents/skills/x) is loaded, as Claude Code does; a dangling link is
+// skipped.
+func TestLoadFromFollowsSymlinkedSkillDirs(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "shared", "greet")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("---\nname: greet\ndescription: says hi\n---\nHello."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(dir, "greet")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "missing"), filepath.Join(dir, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+
+	got := loadFrom(dir, paths.ScopeUser)
+	if len(got) != 1 || got[0].Name != "greet" {
+		t.Fatalf("loadFrom = %+v, want the symlinked greet skill", got)
+	}
+	if want := filepath.Join(dir, "greet", "SKILL.md"); got[0].FilePath != want {
+		t.Errorf("FilePath = %q, want %q (the path under the skills dir)", got[0].FilePath, want)
+	}
+}
+
 // ParseSkill is the entry point plugins use; it applies the same
 // frontmatter rules as the loader, including rejecting a skill with no
 // description and honouring disable-model-invocation.

@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/andrepato/harness/internal/tools"
 )
 
 // PromptState is the stateful half of the inline permission/plan prompt:
@@ -20,6 +22,9 @@ type PromptState struct {
 	// plan is set while a plan is awaiting approval. Only one of pending
 	// and plan is ever set.
 	plan *pendingPlan
+	// question is set while an ask_user_question exchange is up. Only one
+	// of pending, plan and question is ever set.
+	question *pendingQuestion
 	// feedback is non-nil while the user is typing a reason after
 	// choosing "no" (permission) or "3" (plan). "" is a valid, empty
 	// in-progress feedback string; nil means not in feedback mode.
@@ -95,6 +100,40 @@ type pendingPlan struct {
 	selected int // 0..2, the highlighted option row
 }
 
+// pendingQuestion is one ask_user_question exchange in progress: one or
+// more questions, answered one at a time (askuser_render.go's tab strip),
+// ending either directly (a single question) or via a review screen (more
+// than one) before the reply is sent.
+type pendingQuestion struct {
+	questions []tools.AskUserQuestion
+	// index is the question currently on screen; answers[i] is filled in
+	// once question i is answered, nil until then.
+	index   int
+	answers [][]string
+	// selected is the highlighted option row (0..len(Options), the last
+	// being the automatic "Other" choice) for the current question.
+	selected int
+	// checked holds which of the current question's options are toggled,
+	// multi-select only; reset to {} on every question change.
+	checked map[int]bool
+	// otherText is non-nil while typing a free-text "Other" answer for the
+	// current question.
+	otherText *string
+	// reviewing is true once every question has an answer and there was
+	// more than one: the review screen lists them all before submitting.
+	reviewing      bool
+	reviewSelected int // 0 = submit, 1 = cancel
+	reply          chan AskUserReply
+}
+
+// AskUserReply is the answer to an ask_user_question exchange: either
+// every question's answers, in order, or Cancelled if the user declined
+// (Esc from a question, or "Cancel" from the review screen).
+type AskUserReply struct {
+	Cancelled bool
+	Answers   []tools.AskUserAnswer
+}
+
 // PromptChoice is the tool-permission answer, mirroring
 // claude/permission.PromptChoice's shape (kept separate here so this
 // package does not need to import claude/permission just for the type;
@@ -131,9 +170,9 @@ func NewPromptState(cwd string) *PromptState {
 	return &PromptState{cwd: cwd}
 }
 
-// Active reports whether a prompt (tool permission or plan) is up.
+// Active reports whether a prompt (tool permission, plan or question) is up.
 func (p *PromptState) Active() bool {
-	return p.pending != nil || p.plan != nil
+	return p.pending != nil || p.plan != nil || p.question != nil
 }
 
 // AskTool arms a tool-permission prompt. reply is buffered by 1 so the
@@ -153,6 +192,15 @@ func (p *PromptState) AskTool(req PermissionRequest) chan PromptChoice {
 func (p *PromptState) AskPlan(plan, path string) chan PlanReply {
 	reply := make(chan PlanReply, 1)
 	p.plan = &pendingPlan{plan: plan, path: path, reply: reply}
+	p.feedback = nil
+	return reply
+}
+
+// AskAskUser arms an ask_user_question prompt, the same blocking-reply
+// contract as AskTool/AskPlan.
+func (p *PromptState) AskAskUser(questions []tools.AskUserQuestion) chan AskUserReply {
+	reply := make(chan AskUserReply, 1)
+	p.question = &pendingQuestion{questions: questions, checked: map[int]bool{}, reply: reply}
 	p.feedback = nil
 	return reply
 }
@@ -177,6 +225,218 @@ func (p *PromptState) finishPlan(reply PlanReply) {
 	p.feedback = nil
 	if pending != nil {
 		pending.reply <- reply
+	}
+}
+
+// cancelQuestion ends the whole ask_user_question exchange as declined —
+// Esc from any question, or "Cancel" on the review screen.
+func (p *PromptState) cancelQuestion() {
+	pending := p.question
+	p.question = nil
+	p.feedback = nil
+	if pending != nil {
+		pending.reply <- AskUserReply{Cancelled: true}
+	}
+}
+
+// submitQuestion ends the exchange successfully, converting each
+// question's recorded answer into the tools.AskUserAnswer shape the
+// approver returns.
+func (p *PromptState) submitQuestion() {
+	pending := p.question
+	p.question = nil
+	p.feedback = nil
+	if pending == nil {
+		return
+	}
+	answers := make([]tools.AskUserAnswer, len(pending.questions))
+	for i, q := range pending.questions {
+		answers[i] = tools.AskUserAnswer{Question: q.Question, Answers: pending.answers[i]}
+	}
+	pending.reply <- AskUserReply{Answers: answers}
+}
+
+// recordAnswer stores the current question's answer and either advances
+// to the next question, opens the review screen (more than one question,
+// all now answered), or submits directly (a single question needs no
+// review — answering it IS finishing the exchange).
+func (p *PromptState) recordAnswer(answer []string) {
+	q := p.question
+	if q.answers == nil {
+		q.answers = make([][]string, len(q.questions))
+	}
+	q.answers[q.index] = answer
+	if q.index == len(q.questions)-1 {
+		if len(q.questions) == 1 {
+			p.submitQuestion()
+			return
+		}
+		q.reviewing = true
+		q.reviewSelected = 0
+		return
+	}
+	q.index++
+	q.selected = 0
+	q.checked = map[int]bool{}
+	q.otherText = nil
+}
+
+// chooseQuestionOption applies picking option i (0..len(Options)-1) or the
+// automatic "Other" row (i == len(Options)) on a single-select question:
+// Other opens free-text entry, anything else answers and advances
+// immediately, matching a single-select permission option's own
+// pick-and-commit behaviour. Multi-select questions never call this for a
+// plain pick — see handleQuestionKey's "space"/digit toggling and its
+// "enter" case's own confirm-the-checked-set logic.
+func (p *PromptState) chooseQuestionOption(i int) {
+	q := p.question
+	current := q.questions[q.index]
+	if i == len(current.Options) {
+		t := ""
+		q.otherText = &t
+		return
+	}
+	p.recordAnswer([]string{current.Options[i].Label})
+}
+
+func (p *PromptState) handleQuestionKey(msg tea.KeyPressMsg) bool {
+	q := p.question
+	if q.reviewing {
+		return p.handleReviewKey(msg)
+	}
+	if q.otherText != nil {
+		return p.handleOtherKey(msg)
+	}
+
+	current := q.questions[q.index]
+	total := len(current.Options) + 1 // + the automatic "Other" row
+
+	switch strings.ToLower(msg.String()) {
+	case "up", "k":
+		if q.selected > 0 {
+			q.selected--
+		}
+		return true
+	case "down", "j":
+		if q.selected < total-1 {
+			q.selected++
+		}
+		return true
+	case "esc":
+		p.cancelQuestion()
+		return true
+	case " ", "space":
+		if current.MultiSelect && q.selected < len(current.Options) {
+			q.checked[q.selected] = !q.checked[q.selected]
+		}
+		return true
+	case "enter":
+		if current.MultiSelect {
+			if q.selected == len(current.Options) {
+				t := ""
+				q.otherText = &t
+				return true
+			}
+			var chosen []string
+			for i, opt := range current.Options {
+				if q.checked[i] {
+					chosen = append(chosen, opt.Label)
+				}
+			}
+			if len(chosen) == 0 {
+				// Nothing picked yet; Enter with no selection is a no-op
+				// rather than sending an empty answer.
+				return true
+			}
+			p.recordAnswer(chosen)
+			return true
+		}
+		p.chooseQuestionOption(q.selected)
+		return true
+	default:
+		if idx := digitIndex(msg.String()); idx >= 1 && idx <= total {
+			q.selected = idx - 1
+			if current.MultiSelect {
+				if q.selected < len(current.Options) {
+					q.checked[q.selected] = !q.checked[q.selected]
+				}
+			} else {
+				p.chooseQuestionOption(q.selected)
+			}
+		}
+		return true
+	}
+}
+
+func (p *PromptState) handleOtherKey(msg tea.KeyPressMsg) bool {
+	q := p.question
+	switch msg.String() {
+	case "enter":
+		text := strings.TrimSpace(*q.otherText)
+		if text == "" {
+			// Empty free text is not an answer; back to the option list.
+			q.otherText = nil
+			return true
+		}
+		q.otherText = nil
+		current := q.questions[q.index]
+		if current.MultiSelect {
+			var chosen []string
+			for i, opt := range current.Options {
+				if q.checked[i] {
+					chosen = append(chosen, opt.Label)
+				}
+			}
+			chosen = append(chosen, text)
+			p.recordAnswer(chosen)
+		} else {
+			p.recordAnswer([]string{text})
+		}
+		return true
+	case "backspace":
+		f := *q.otherText
+		if len(f) > 0 {
+			runes := []rune(f)
+			f = string(runes[:len(runes)-1])
+		}
+		q.otherText = &f
+		return true
+	case "esc":
+		p.cancelQuestion()
+		return true
+	default:
+		if text := msg.Text; text != "" {
+			f := *q.otherText + text
+			q.otherText = &f
+		}
+		return true
+	}
+}
+
+func (p *PromptState) handleReviewKey(msg tea.KeyPressMsg) bool {
+	q := p.question
+	switch strings.ToLower(msg.String()) {
+	case "up", "down", "k", "j":
+		q.reviewSelected = 1 - q.reviewSelected
+		return true
+	case "enter":
+		if q.reviewSelected == 0 {
+			p.submitQuestion()
+		} else {
+			p.cancelQuestion()
+		}
+		return true
+	case "esc":
+		p.cancelQuestion()
+		return true
+	case "1":
+		p.submitQuestion()
+		return true
+	case "2":
+		p.cancelQuestion()
+		return true
+	default:
+		return true
 	}
 }
 
@@ -222,6 +482,11 @@ func (p *PromptState) finishPlan(reply PlanReply) {
 // reports whether the prompt took it. Outside feedback mode a prompt has no
 // text field, so the paste is not the prompt's to take.
 func (p *PromptState) Paste(text string) bool {
+	if p.question != nil && p.question.otherText != nil {
+		f := *p.question.otherText + strings.ReplaceAll(text, "\r\n", "\n")
+		p.question.otherText = &f
+		return true
+	}
 	if p.feedback == nil {
 		return false
 	}
@@ -231,6 +496,9 @@ func (p *PromptState) Paste(text string) bool {
 }
 
 func (p *PromptState) HandleKey(msg tea.KeyPressMsg) bool {
+	if p.question != nil {
+		return p.handleQuestionKey(msg)
+	}
 	if p.plan != nil {
 		return p.handlePlanKey(msg)
 	}
@@ -462,6 +730,9 @@ func (p *PromptState) handlePlanFeedbackKey(msg tea.KeyPressMsg) bool {
 // grow a second (width, height int) form once app.go's call site can pass
 // one — flagged in the handback report rather than done silently.
 func (p *PromptState) Render(width int) []string {
+	if p.question != nil {
+		return p.renderQuestion(width)
+	}
 	if p.plan != nil {
 		feedback := ""
 		if p.feedback != nil {
@@ -508,4 +779,34 @@ func (p *PromptState) Render(width int) []string {
 	default:
 		return RenderPermissionPrompt(req, p.cwd, width, p.pending.selected, p.feedback != nil, feedback)
 	}
+}
+
+// renderQuestion renders whichever screen the current ask_user_question
+// exchange is on: the review screen once every question is answered (only
+// shown for more than one question), otherwise the question currently on
+// screen.
+func (p *PromptState) renderQuestion(width int) []string {
+	q := p.question
+	headers := make([]string, len(q.questions))
+	views := make([]AskUserQuestionView, len(q.questions))
+	for i, qq := range q.questions {
+		headers[i] = qq.Header
+		views[i] = toAskUserQuestionView(qq)
+	}
+	if q.reviewing {
+		return RenderAskUserReview(views, q.answers, width, q.reviewSelected)
+	}
+	otherText := ""
+	if q.otherText != nil {
+		otherText = *q.otherText
+	}
+	return RenderAskUserQuestion(headers, q.index, views[q.index], width, q.selected, q.checked, q.otherText != nil, otherText)
+}
+
+func toAskUserQuestionView(q tools.AskUserQuestion) AskUserQuestionView {
+	opts := make([]AskUserOptionView, len(q.Options))
+	for i, o := range q.Options {
+		opts[i] = AskUserOptionView{Label: o.Label, Description: o.Description}
+	}
+	return AskUserQuestionView{Header: q.Header, Question: q.Question, Options: opts, MultiSelect: q.MultiSelect}
 }

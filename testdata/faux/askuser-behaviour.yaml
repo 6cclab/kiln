@@ -1,0 +1,6 @@
+model: faux-1
+steps:
+  - tool_call: {name: ask_user_question, args: {questions: [{question: "Which approach should I use?", header: "Approach", options: [{label: "Fast path", description: "Ship quickly, fewer tests"}, {label: "Careful path", description: "Slower, more coverage"}]}]}, id: q1}
+  - on_tool_result: q1
+    then:
+      - text: "Got it, going with the fast path."

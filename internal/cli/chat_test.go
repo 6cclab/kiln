@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/claude/skills"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
@@ -224,8 +225,8 @@ func TestRun_PrintStreamJSON_FixBug(t *testing.T) {
 		t.Fatal("faux recorded no requests")
 	}
 	last := reqs[len(reqs)-1]
-	if !strings.Contains(last.System, "You are a coding assistant") {
-		t.Errorf("recorded system prompt missing base persona: %q", last.System)
+	if !strings.HasPrefix(last.System, agent.BasePrompt) {
+		t.Errorf("recorded system prompt does not start with agent.BasePrompt: %q", last.System)
 	}
 	var sawEditSchema bool
 	for _, tl := range last.Tools {

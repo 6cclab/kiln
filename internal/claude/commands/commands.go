@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -155,10 +156,19 @@ func ParseCommandFile(source, name, namespace string, origin Origin, path string
 	}
 }
 
-func walkMarkdown(dir string) []string {
+// WalkMarkdown lists the .md files under dir. It follows symlinked folders
+// and files as Claude Code does, visiting each real folder once so a link
+// back up the tree cannot loop.
+func WalkMarkdown(dir string) []string {
 	var found []string
+	visited := map[string]bool{}
 	var walk func(string)
 	walk = func(d string) {
+		real, err := filepath.EvalSymlinks(d)
+		if err != nil || visited[real] {
+			return
+		}
+		visited[real] = true
 		entries, err := os.ReadDir(d)
 		if err != nil {
 			// A missing commands directory is the normal case, not an
@@ -167,7 +177,15 @@ func walkMarkdown(dir string) []string {
 		}
 		for _, entry := range entries {
 			full := filepath.Join(d, entry.Name())
-			if entry.IsDir() {
+			isDir := entry.IsDir()
+			if entry.Type()&fs.ModeSymlink != 0 {
+				info, err := os.Stat(full)
+				if err != nil {
+					continue // dangling link
+				}
+				isDir = info.IsDir()
+			}
+			if isDir {
 				walk(full)
 			} else if strings.HasSuffix(entry.Name(), ".md") {
 				found = append(found, full)
@@ -180,7 +198,7 @@ func walkMarkdown(dir string) []string {
 
 func loadFrom(dir string, origin Origin) []CommandFile {
 	var out []CommandFile
-	for _, file := range walkMarkdown(dir) {
+	for _, file := range WalkMarkdown(dir) {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			continue
