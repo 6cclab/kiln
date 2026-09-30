@@ -645,6 +645,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			Feedback: "No interactive approval available. Describe the plan in your reply instead.",
 		}, nil
 	}}
+	if fn := headlessPlanApprover(); fn != nil {
+		planApprover.set(fn)
+	}
+	if fn := headlessAskApprover(); fn != nil {
+		tools.SetAskUserApprover(fn)
+	}
 	approvePlan := func(ctx context.Context, plan string) (tools.PlanDecision, error) {
 		return planApprover.get()(ctx, plan)
 	}
