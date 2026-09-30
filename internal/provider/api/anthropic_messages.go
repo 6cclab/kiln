@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/andrepato/harness/internal/msg"
@@ -593,7 +594,7 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 		return errorOut(partial, events, false, err)
 	}
 
-	url := strings.TrimRight(model.BaseURL, "/") + "/v1/messages"
+	url := strings.TrimRight(anthropicBaseURL(model), "/") + "/v1/messages"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return errorOut(partial, events, false, err)
@@ -866,6 +867,17 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 
 	events <- msg.StreamEvent{Type: msg.EventDone, Reason: partial.StopReason, Message: partial}
 	return partial, nil
+}
+
+// anthropicBaseURL is the endpoint for model: ANTHROPIC_BASE_URL when it is
+// set and the model is Anthropic's own (as Claude Code honours it, for
+// gateways and proxies), else the catalog's base URL. Other providers that
+// speak the Messages API (MiniMax, Kimi, ...) keep their own endpoints.
+func anthropicBaseURL(model provider.Model) string {
+	if v := os.Getenv("ANTHROPIC_BASE_URL"); v != "" && model.Provider == "anthropic" {
+		return v
+	}
+	return model.BaseURL
 }
 
 func errorOut(partial *msg.AssistantMessage, events chan<- msg.StreamEvent, aborted bool, err error) (*msg.AssistantMessage, error) {

@@ -1,0 +1,22 @@
+{
+ "id": "20260929T212836Z-anthropic-base-url-ignored",
+ "found_at": "2026-09-29T21:28:36Z",
+ "scenario": "real/env-config",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "low",
+ "title": "ANTHROPIC_BASE_URL is ignored",
+ "observed": "kiln reads no ANTHROPIC_BASE_URL (grep of internal/ and cmd/ finds none); the Anthropic base URL is fixed in the embedded catalog, so requests cannot be routed through a gateway or proxy.",
+ "expected": "Claude Code honours ANTHROPIC_BASE_URL; kiln should too, for the anthropic provider.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/provider/api/anthropic_messages.go"
+  ],
+  "regression_test": "TestAnthropicBaseURL_EnvOverridesAnthropicOnly,TestAnthropicStream_SendsToEnvBaseURL",
+  "updated_at": "2026-09-29T22:03:59Z"
+ }
+}
