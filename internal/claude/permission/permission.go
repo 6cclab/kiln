@@ -93,9 +93,18 @@ type GateOptions struct {
 	// Roots are directories tools may touch without asking. Defaults to
 	// []string{cwd} — callers should pass the current directory explicitly
 	// since Go has no implicit process.cwd() equivalent here.
-	Roots  []string
-	Mode   settings.PermissionMode
-	Prompt Prompter
+	Roots []string
+	// ReadOnlyRoots are directories a read-only tool (settings.ReadOnly)
+	// may read from without the extra "outside workspace" prompt, but
+	// that a mutating tool (edit, write, bash, ...) still treats as
+	// outside the workspace exactly as before: escaped-path handling for
+	// those is unchanged. This is narrower than Roots on purpose — it
+	// exists for Claude Code's auto-memory directory
+	// (internal/claude/memory's LoadAutoMemory), which kiln reads but
+	// must never write to.
+	ReadOnlyRoots []string
+	Mode          settings.PermissionMode
+	Prompt        Prompter
 	// PlanLedgerPath, when non-empty, is the one path plan mode's
 	// read-only enforcement exempts: an edit/write call naming exactly
 	// this path is allowed even in ModePlan. Empty leaves plan mode fully
@@ -144,6 +153,12 @@ type Gate struct {
 	// to their project.
 	roots []string
 
+	// readOnlyRoots mirrors GateOptions.ReadOnlyRoots; see its doc
+	// comment. Checked only for tools in settings.ReadOnly, never for a
+	// mutating one, so adding a directory here can only ever relax a
+	// read, never a write.
+	readOnlyRoots []string
+
 	// promptMu is held across an entire prompter round trip (both prompt
 	// branches of Check), so two concurrent Check calls asking about the
 	// same or different requests never show the user two dialogs at once.
@@ -185,6 +200,9 @@ func NewGate(opts GateOptions) *Gate {
 	}
 	for _, r := range opts.Roots {
 		g.AddRoot(r)
+	}
+	for _, r := range opts.ReadOnlyRoots {
+		g.AddReadOnlyRoot(r)
 	}
 	return g
 }
@@ -233,21 +251,64 @@ func (g *Gate) cwd() string {
 // however it is spelt. A path that cannot be resolved (a symlink loop) is
 // outside.
 func (g *Gate) WithinRoots(path string) bool {
+	return g.within(path, g.roots)
+}
+
+// AddReadOnlyRoot widens what a read-only tool may reach without asking,
+// without widening what a mutating tool may reach. Returns the absolute
+// path actually added. See GateOptions.ReadOnlyRoots.
+func (g *Gate) AddReadOnlyRoot(dir string) string {
+	full, err := filepath.Abs(dir)
+	if err != nil {
+		full = dir
+	}
+	for _, r := range g.readOnlyRoots {
+		if r == full {
+			return full
+		}
+	}
+	g.readOnlyRoots = append(g.readOnlyRoots, full)
+	return full
+}
+
+// ReadOnlyRoots returns the current read-only-only roots (not including
+// the regular workspace roots, which are already read-write).
+func (g *Gate) ReadOnlyRoots() []string {
+	out := make([]string, len(g.readOnlyRoots))
+	copy(out, g.readOnlyRoots)
+	return out
+}
+
+// WithinReadOnlyRoots reports whether path lies inside a root added by
+// AddReadOnlyRoot, resolved exactly as WithinRoots resolves a path. It does
+// not consider the regular workspace roots: callers that want either kind
+// check WithinRoots first, as Check does.
+func (g *Gate) WithinReadOnlyRoots(path string) bool {
+	return g.within(path, g.readOnlyRoots)
+}
+
+// within reports whether path, resolved against the first workspace root,
+// lies inside one of roots both as written and through symlinks and the
+// OS's own name for it (see WithinRoots).
+func (g *Gate) within(path string, roots []string) bool {
+	if len(roots) == 0 {
+		return false
+	}
 	base := "."
 	if len(g.roots) > 0 {
 		base = g.roots[0]
 	}
 	full := execenv.ResolveToolPath(base, path)
-	if !under(full, g.roots) {
+	if !under(full, roots) {
 		return false
 	}
 	real, ok := execenv.RealPath(full)
 	if !ok {
 		return false
 	}
-	realRoots := make([]string, 0, len(g.roots))
-	canonRoots := make([]string, 0, len(g.roots))
-	for _, r := range g.roots {
+	realRoots := make([]string, 0, len(roots))
+	canonRoots := make([]string, 0, len(roots))
+	for _, r := range roots {
 		rr, _ := execenv.RealPath(r)
 		realRoots = append(realRoots, rr)
 		canonRoots = append(canonRoots, execenv.CanonicalPath(r))
@@ -666,9 +727,17 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 
 	// A path outside the workspace always warrants a question, even when a
-	// rule would otherwise allow the tool.
+	// rule would otherwise allow the tool. The one exception: a read-only
+	// tool (settings.ReadOnly) whose path lies in a read-only root
+	// (GateOptions.ReadOnlyRoots, e.g. Claude Code's auto-memory
+	// directory) is not treated as escaped. A mutating tool's path is
+	// never checked against readOnlyRoots, only against roots, so this
+	// can only ever relax a read.
 	path, hasPath := PathArgOf(req.Args)
 	escaped := hasPath && !g.WithinRoots(path)
+	if escaped && settings.ReadOnly[strings.ToLower(req.ToolName)] && g.WithinReadOnlyRoots(path) {
+		escaped = false
+	}
 	if escaped && verdict == settings.Allow && mode != settings.ModeBypassPermissions {
 		if mode == settings.ModeDontAsk {
 			r := g.record(req, fmt.Sprintf("%s is outside the workspace, and don't-ask mode refuses anything that would need approval.", path))

@@ -96,6 +96,10 @@ type registryDeps struct {
 	SessionStartedAt time.Time
 	// MCPConfigPath is the mcpServers file /mcp names in its section header.
 	MCPConfigPath string
+	// AutoMemoryStatus is /context's one-line report of Claude Code's
+	// auto-memory index: whether it loaded, was trimmed, or was skipped,
+	// and why (internal/claude/memory.AutoMemory.StatusLine).
+	AutoMemoryStatus string
 }
 
 // mcpStatusesOf adapts mcp.ServerStatus onto slashcommands.ServerStatus, the
@@ -202,9 +206,10 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		SwitchModel: func(ctx context.Context, providerID, modelID string) (budget.Tier, error) {
 			return switchModel(ctx, reg, started, mcpSess, providerID, modelID)
 		},
-		Agents:       deps.Agents,
-		SessionsDir:  deps.SessionsDir,
-		UsageByModel: deps.UsageByModel,
+		Agents:           deps.Agents,
+		SessionsDir:      deps.SessionsDir,
+		UsageByModel:     deps.UsageByModel,
+		AutoMemoryStatus: func() string { return deps.AutoMemoryStatus },
 		SessionElapsed: func() time.Duration {
 			if deps.SessionStartedAt.IsZero() {
 				return 0

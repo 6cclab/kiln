@@ -432,6 +432,19 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		startupWarn(fmt.Sprintf("CLAUDE.md files use ~%dk tokens, over this model's %dk memory budget; loaded anyway.", memory.EstimatedTokens/1000, resolved.Tier.SystemPromptTokens/1000))
 	}
 
+	// Claude Code's auto-memory index (MEMORY.md), read-only: whatever
+	// budget CLAUDE.md/rules left of the tier's system-prompt ceiling.
+	// kiln never writes here — see internal/claude/memory/automemory.go.
+	autoMemoryBudget := resolved.Tier.SystemPromptTokens - memory.EstimatedTokens
+	autoMemory := claudememory.LoadAutoMemory(cwd, claudememory.AutoMemoryOptions{
+		Directory:    settings.AutoMemoryDirectory,
+		Enabled:      settings.AutoMemoryEnabled,
+		EnvDisabled:  os.Getenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY") == "1",
+		SmallTier:    resolved.Tier.Name == "small",
+		BudgetTokens: autoMemoryBudget,
+	})
+	diag.L().Info("auto-memory", "status", autoMemory.Status, "dir", autoMemory.Dir, "reason", autoMemory.Reason)
+
 	// --add-dir may be repeated, matching Claude Code's flag.
 	addDirs := args.AddDir
 
@@ -510,9 +523,18 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 
 	roots := append([]string{cwd}, addDirs...)
+	var readOnlyRoots []string
+	if !autoMemory.Disabled {
+		// Reads of Claude Code's auto-memory topic files (the read tool,
+		// on demand) should not prompt, but a write/edit there is still
+		// gated exactly as any other outside-workspace path: kiln never
+		// writes auto memory.
+		readOnlyRoots = append(readOnlyRoots, autoMemory.Dir)
+	}
 	gate := permission.NewGate(permission.GateOptions{
 		Permissions:    perms,
 		Roots:          roots,
+		ReadOnlyRoots:  readOnlyRoots,
 		Mode:           permissionMode,
 		PlanLedgerPath: experimentLedgerPath,
 	})
@@ -742,7 +764,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if reviewEnabled() {
 			promptParts = append(promptParts, reviewPrompt)
 		}
-		promptParts = append(promptParts, memory.Text, skillsIndex, mcpIndexText)
+		promptParts = append(promptParts, memory.Text, autoMemory.Text, skillsIndex, mcpIndexText)
 		return strings.Join(nonEmpty(promptParts), "\n\n")
 	}
 	systemPrompt := buildSystemPrompt(mcpIndexText)
@@ -1005,6 +1027,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		UsageByModel:       getUsageByModel,
 		SessionStartedAt:   sessionStartedAt,
 		MCPConfigPath:      mcpgate.ConfigPath(args.MCPConfig),
+		AutoMemoryStatus:   autoMemory.StatusLine(),
 	}, hub)
 
 	// blockedLog accumulates every before_tool refusal this run, whether it

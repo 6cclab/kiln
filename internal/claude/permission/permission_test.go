@@ -87,6 +87,44 @@ func TestGateWorkspaceBoundary(t *testing.T) {
 		}
 	})
 
+	t.Run("read-only root: a read does not prompt, but a write is still blocked exactly as before", func(t *testing.T) {
+		// Regression for the auto-memory read-only root
+		// (internal/claude/memory.LoadAutoMemory): adding a directory via
+		// AddReadOnlyRoot must relax reads there without opening it up to
+		// writes, which stay gated the same way any other
+		// outside-workspace path is.
+		memDir := filepath.Join(os.TempDir(), "harness-test-automemory")
+		g := newGate(t)
+
+		readPath := filepath.Join(memDir, "MEMORY.md")
+		blocked, err := g.Check(ctx, Request{ToolName: "read", PrimaryArg: readPath, Args: map[string]any{"path": readPath}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked == nil {
+			t.Fatal("expected a read outside the workspace to be blocked before adding the read-only root")
+		}
+
+		g.AddReadOnlyRoot(memDir)
+
+		blocked, err = g.Check(ctx, Request{ToolName: "read", PrimaryArg: readPath, Args: map[string]any{"path": readPath}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked != nil {
+			t.Errorf("expected the read to pass once the directory is a read-only root, got %+v", blocked)
+		}
+
+		writePath := filepath.Join(memDir, "notes.md")
+		blocked, err = g.Check(ctx, Request{ToolName: "write", PrimaryArg: writePath, Args: map[string]any{"path": writePath}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked == nil {
+			t.Error("a write into a read-only root must still be blocked exactly as any other outside-workspace write")
+		}
+	})
+
 	t.Run("refuses rather than proceeds when there is no way to ask", func(t *testing.T) {
 		g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{work(t)}})
 		p := filepath.Join(work(t), "a.ts")
