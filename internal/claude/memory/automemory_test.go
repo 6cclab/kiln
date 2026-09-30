@@ -99,6 +99,20 @@ func TestProjectDirName_MatchesRealConvention(t *testing.T) {
 	}
 }
 
+// TestProjectDirName_UnderscoreAlsoEscaped fails without the character-
+// class fix (replacing only "/" left "_" untouched): this machine's own
+// $TMPDIR, /var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T (symlink-
+// resolved to /private/var/...), has two real entries under
+// ~/.claude/projects/ whose names replace both underscores with "-", not
+// leave them as "_" — confirmed by a read-only `ls` of that directory.
+func TestProjectDirName_UnderscoreAlsoEscaped(t *testing.T) {
+	got := projectDirName("/private/var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T/claude-cli-transport-dUDLvV")
+	want := "-private-var-folders-93-248j-5ds3ls8k4ggh-fxndjh0000gn-T-claude-cli-transport-dUDLvV"
+	if got != want {
+		t.Errorf("projectDirName = %q, want %q", got, want)
+	}
+}
+
 func TestResolveAutoMemoryDir_Default(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -296,6 +310,87 @@ func TestAutoMemory_StatusLine(t *testing.T) {
 	}
 }
 
+// TestResolveAutoMemoryDir_RejectsRootOverride fails without
+// unsafeAutoMemoryDirectory's "/" check: an autoMemoryDirectory of "/"
+// would otherwise be honoured and, once added as a read-only permission
+// root, would let the read tool open anything on disk without asking.
+func TestResolveAutoMemoryDir_RejectsRootOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+
+	dir, rejected := resolveAutoMemoryDir(cwd, "/")
+	if !rejected {
+		t.Fatal("expected \"/\" to be rejected as an auto-memory directory override")
+	}
+	if dir == "/" {
+		t.Errorf("dir = %q, want the default directory, not the root override", dir)
+	}
+}
+
+// TestResolveAutoMemoryDir_RejectsHomeOverride fails without
+// unsafeAutoMemoryDirectory's home-or-ancestor check: an
+// autoMemoryDirectory of "~/" (or "~/.ssh", an ancestor-of-home example is
+// covered by the home check itself since .ssh is a *descendant*, not an
+// ancestor — home itself and any of ITS ancestors are what must be
+// rejected) would, once added as a read-only permission root, let the read
+// tool open the user's entire home directory without asking.
+func TestResolveAutoMemoryDir_RejectsHomeOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+
+	dir, rejected := resolveAutoMemoryDir(cwd, "~/")
+	if !rejected {
+		t.Fatal("expected the home directory itself to be rejected as an override")
+	}
+	if dir == filepath.Clean(home) {
+		t.Errorf("dir = %q, want the default directory, not home itself", dir)
+	}
+}
+
+// TestResolveAutoMemoryDir_RejectsAncestorOfHomeOverride fails the same
+// way: an override that is an ancestor of home (e.g. home's parent
+// directory) is just as dangerous as home itself, since every read under
+// it - including all of home - would be exempted from the workspace
+// prompt.
+func TestResolveAutoMemoryDir_RejectsAncestorOfHomeOverride(t *testing.T) {
+	parent := t.TempDir()
+	home := filepath.Join(parent, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+
+	dir, rejected := resolveAutoMemoryDir(cwd, parent)
+	if !rejected {
+		t.Fatal("expected an ancestor of home to be rejected as an override")
+	}
+	if dir == filepath.Clean(parent) {
+		t.Errorf("dir = %q, want the default directory, not the ancestor override", dir)
+	}
+}
+
+// TestResolveAutoMemoryDir_SafeOverrideStillHonoured is the control: a
+// perfectly ordinary override (some unrelated temp directory) must still
+// be honoured and not flagged, so the safety check above isn't just
+// rejecting everything.
+func TestResolveAutoMemoryDir_SafeOverrideStillHonoured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	override := filepath.Join(t.TempDir(), "my-memory")
+
+	dir, rejected := resolveAutoMemoryDir(cwd, override)
+	if rejected {
+		t.Fatalf("an ordinary override should not be rejected, got dir=%q", dir)
+	}
+	if dir != filepath.Clean(override) {
+		t.Errorf("dir = %q, want %q", dir, override)
+	}
+}
+
 func TestLoadAutoMemory_NoBudgetLeftSkips(t *testing.T) {
 	cwd := t.TempDir()
 	dir := filepath.Join(cwd, "mem")
@@ -307,5 +402,24 @@ func TestLoadAutoMemory_NoBudgetLeftSkips(t *testing.T) {
 	got := LoadAutoMemory(cwd, AutoMemoryOptions{Directory: dir, BudgetTokens: 0})
 	if got.Status != AutoMemorySkipped || got.Disabled {
 		t.Errorf("got %+v, want skipped (not disabled) when no budget remains", got)
+	}
+}
+
+// TestLoadAutoMemory_UnsafeOverrideRejectedAndReported fails without
+// LoadAutoMemory routing through resolveAutoMemoryDir (versus calling
+// ResolveAutoMemoryDir, which discards the rejected flag): callers like
+// chat.go need to know the override was rejected so they can warn, not
+// just silently fall back.
+func TestLoadAutoMemory_UnsafeOverrideRejectedAndReported(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+
+	got := LoadAutoMemory(cwd, AutoMemoryOptions{Directory: "/", BudgetTokens: 1000})
+	if !got.DirectoryOverrideRejected {
+		t.Fatal("expected DirectoryOverrideRejected to be true for a \"/\" override")
+	}
+	if got.Dir == "/" {
+		t.Errorf("Dir = %q, should be the default, not the rejected override", got.Dir)
 	}
 }

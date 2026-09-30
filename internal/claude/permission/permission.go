@@ -256,7 +256,8 @@ func (g *Gate) WithinRoots(path string) bool {
 
 // AddReadOnlyRoot widens what a read-only tool may reach without asking,
 // without widening what a mutating tool may reach. Returns the absolute
-// path actually added. See GateOptions.ReadOnlyRoots.
+// path actually added. Like the workspace roots it is stored as given;
+// WithinReadOnlyRoots resolves both sides. See GateOptions.ReadOnlyRoots.
 func (g *Gate) AddReadOnlyRoot(dir string) string {
 	full, err := filepath.Abs(dir)
 	if err != nil {
@@ -283,6 +284,12 @@ func (g *Gate) ReadOnlyRoots() []string {
 // AddReadOnlyRoot, resolved exactly as WithinRoots resolves a path. It does
 // not consider the regular workspace roots: callers that want either kind
 // check WithinRoots first, as Check does.
+//
+// Both the path as written and its real target must be inside the root, so
+// a symlink planted in a read-only root (say `evil -> /etc/passwd` in Claude
+// Code's auto-memory directory) does not lend its target the root's
+// no-prompt treatment. Roots are resolved the same way, so /var vs
+// /private/var spellings still match.
 func (g *Gate) WithinReadOnlyRoots(path string) bool {
 	return g.within(path, g.readOnlyRoots)
 }

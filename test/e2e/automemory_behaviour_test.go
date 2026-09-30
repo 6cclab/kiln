@@ -16,7 +16,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andrepato/harness/internal/claude/trust"
 )
+
+// automemTrust marks proj as a trusted folder in home's trust store,
+// matching how a person accepting kiln's trust dialog would.
+func automemTrust(t *testing.T, home, proj string) {
+	t.Helper()
+	store := trust.NewStoreAt(filepath.Join(home, ".harness", "trusted.json"))
+	if err := store.Trust(proj); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // automemWriteJSON writes proj's .claude/settings.json.
 func automemWriteJSON(t *testing.T, proj string, settings map[string]any) {
@@ -38,7 +50,9 @@ func automemWriteJSON(t *testing.T, proj string, settings map[string]any) {
 // directory, and points proj's .claude/settings.json at it via
 // autoMemoryDirectory, so every test controls exactly where the memory
 // directory is rather than depending on git/project-name resolution
-// (covered separately by internal/claude/memory's own unit tests).
+// (covered separately by internal/claude/memory's own unit tests). It does
+// NOT trust proj — callers that want the override actually honoured (as
+// opposed to testing the trust gate itself) must call automemTrust too.
 func automemSeed(t *testing.T, proj, memoryIndex string) (dir string) {
 	t.Helper()
 	dir = t.TempDir()
@@ -59,6 +73,7 @@ func TestAutoMemory_IndexAppearsInFirstSystemPrompt(t *testing.T) {
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
 	dir := automemSeed(t, proj, "- user_role: prefers table-driven Go tests\n")
+	automemTrust(t, home, proj)
 
 	sys := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "", nil)
 	if !strings.Contains(sys, "user_role: prefers table-driven Go tests") {
@@ -86,6 +101,7 @@ func TestAutoMemory_AbsentWhenDisabledBySetting(t *testing.T) {
 		"autoMemoryDirectory": dir,
 		"autoMemoryEnabled":   false,
 	})
+	automemTrust(t, home, proj)
 
 	sys := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "", nil)
 	if strings.Contains(sys, "should not load") {
@@ -102,6 +118,7 @@ func TestAutoMemory_AbsentWhenDisabledByEnv(t *testing.T) {
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
 	automemSeed(t, proj, "- should not load either\n")
+	automemTrust(t, home, proj)
 
 	sys := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "",
 		map[string]string{"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"})
@@ -119,10 +136,11 @@ steps:
 `
 
 // TestAutoMemory_ReadTopicFileDoesNotPrompt: a faux read of a topic file
-// inside the auto-memory directory runs clean, in kiln's default
-// (unspecified -> manual) permission mode, which has no prompter in print
-// mode — so before ReadOnlyRoots, this path (outside every workspace root)
-// would be refused as "outside the workspace and cannot be confirmed."
+// inside the (trusted-project) auto-memory directory runs clean, in
+// kiln's default (unspecified -> manual) permission mode, which has no
+// prompter in print mode — so before ReadOnlyRoots, this path (outside
+// every workspace root) would be refused as "outside the workspace and
+// cannot be confirmed."
 //
 // Proved able to fail: removing the `ReadOnlyRoots: readOnlyRoots` line
 // from chat.go's permission.NewGate call turns this red (Blocked gains a
@@ -136,6 +154,7 @@ func TestAutoMemory_ReadTopicFileDoesNotPrompt(t *testing.T) {
 	if err := os.WriteFile(topic, []byte("Prefers table-driven tests."), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	automemTrust(t, home, proj)
 
 	addr, _ := startFaux(t, fmt.Sprintf(automemReadScriptFmt, topic))
 	run := runHarness(t, proj, baseEnv(home, sessDir, addr),
@@ -185,6 +204,7 @@ func TestAutoMemory_WriteIntoMemoryDirStillBlocked(t *testing.T) {
 	proj := scratchProject(t)
 	dir := automemSeed(t, proj, "- some note\n")
 	target := filepath.Join(dir, "sneaky.md")
+	automemTrust(t, home, proj)
 
 	addr, _ := startFaux(t, fmt.Sprintf(automemWriteScriptFmt, target))
 	run := runHarness(t, proj, baseEnv(home, sessDir, addr),
@@ -205,5 +225,128 @@ func TestAutoMemory_WriteIntoMemoryDirStillBlocked(t *testing.T) {
 	}
 	if _, err := os.Stat(target); err == nil {
 		t.Errorf("kiln must never write into the auto-memory directory, but %s was created", target)
+	}
+}
+
+// automemRunRead runs a faux read of path and reports whether it was
+// blocked, via --output-format json's Blocked list.
+func automemRunRead(t *testing.T, proj string, env map[string]string, path string) (blocked bool) {
+	t.Helper()
+	addr, _ := startFaux(t, fmt.Sprintf(automemReadScriptFmt, path))
+	env = mergeEnv(env, map[string]string{"HARNESS_FAUX_ADDR": addr, "HARNESS_FAUX_API": "anthropic-messages", "HARNESS_MODEL": "faux/faux-1"})
+	run := runHarness(t, proj, env, "-p", "what does memory say", "--output-format", "json")
+
+	var res struct {
+		OK      bool     `json:"ok"`
+		Blocked []string `json:"blocked"`
+	}
+	if err := json.Unmarshal([]byte(run.Stdout), &res); err != nil {
+		t.Fatalf("parse --output-format json: %v\nstdout=%s\nstderr=%s", err, run.Stdout, run.Stderr)
+	}
+	if run.Code != 0 {
+		t.Fatalf("exit code %d, want 0; result=%+v stderr=%s", run.Code, res, run.Stderr)
+	}
+	return permBlockedFor(res.Blocked, "read(")
+}
+
+// TestAutoMemory_DirectoryOverrideIgnoredWhenUntrusted: a project's checked-
+// in/local .claude/settings.json can set autoMemoryDirectory to anywhere on
+// disk (here, a scratch "secrets" directory), and since that directory
+// becomes a read-only permission root, an untrusted folder must not be
+// able to steer kiln's reads there without asking. In kiln's default
+// (manual, untrusted) state, a read of a file under that directory must
+// still be blocked, exactly as any other outside-workspace read.
+//
+// Proved able to fail: passing settings.AutoMemoryDirectory straight to
+// LoadAutoMemory (as the original, pre-review version of chat.go did,
+// skipping trustedAutoMemoryDirectory's folderTrusted gate) turns this red
+// — the secrets directory becomes a root and the read is no longer
+// blocked.
+func TestAutoMemory_DirectoryOverrideIgnoredWhenUntrusted(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	secrets := t.TempDir()
+	secretFile := filepath.Join(secrets, "id_rsa")
+	if err := os.WriteFile(secretFile, []byte("fake key material"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	automemWriteJSON(t, proj, map[string]any{"autoMemoryDirectory": secrets})
+
+	if blocked := automemRunRead(t, proj, baseEnv(home, sessDir, ""), secretFile); !blocked {
+		t.Error("expected a read under an untrusted project's autoMemoryDirectory override to be blocked")
+	}
+}
+
+// TestAutoMemory_DirectoryOverrideHonouredWhenTrusted is the control for
+// the test above: once the same folder is trusted (as accepting kiln's
+// trust dialog would record), the same project-settings override is
+// honoured and the read passes.
+func TestAutoMemory_DirectoryOverrideHonouredWhenTrusted(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	secrets := t.TempDir()
+	secretFile := filepath.Join(secrets, "id_rsa")
+	if err := os.WriteFile(secretFile, []byte("fake key material"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	automemWriteJSON(t, proj, map[string]any{"autoMemoryDirectory": secrets})
+	automemTrust(t, home, proj)
+
+	if blocked := automemRunRead(t, proj, baseEnv(home, sessDir, ""), secretFile); blocked {
+		t.Error("expected a read under a trusted project's autoMemoryDirectory override to be allowed")
+	}
+}
+
+// TestAutoMemory_RootDirectoryOverrideRefusedEvenWhenTrusted: an
+// autoMemoryDirectory of "/" must never be honoured, trusted folder or
+// not — it would turn the read-only permission root into "read anything
+// on disk without asking". The project is trusted here specifically to
+// prove the refusal comes from the unsafe-directory check, not merely
+// from the trust gate above.
+//
+// Proved able to fail: removing resolveAutoMemoryDir's
+// unsafeAutoMemoryDirectory check (or trusting this folder before that fix
+// existed) turns this red — a file completely unrelated to the project
+// would no longer be blocked.
+func TestAutoMemory_RootDirectoryOverrideRefusedEvenWhenTrusted(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	automemWriteJSON(t, proj, map[string]any{"autoMemoryDirectory": "/"})
+	automemTrust(t, home, proj)
+
+	elsewhere := t.TempDir()
+	unrelated := filepath.Join(elsewhere, "unrelated.txt")
+	if err := os.WriteFile(unrelated, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if blocked := automemRunRead(t, proj, baseEnv(home, sessDir, ""), unrelated); !blocked {
+		t.Error("expected an autoMemoryDirectory of \"/\" to be refused, leaving an unrelated file still blocked")
+	}
+}
+
+// TestAutoMemory_HomeDirectoryOverrideRefusedEvenWhenTrusted:
+// autoMemoryDirectory: "~/" must never be honoured either — it would make
+// the read-only permission root the user's entire home directory. Trusted
+// here for the same reason as the "/" test above.
+func TestAutoMemory_HomeDirectoryOverrideRefusedEvenWhenTrusted(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	automemWriteJSON(t, proj, map[string]any{"autoMemoryDirectory": "~/"})
+	automemTrust(t, home, proj)
+
+	// Under home, but nowhere near the default auto-memory directory
+	// (~/.claude/projects/<project>/memory): if the "~/" override were
+	// honoured, this file would fall inside the (much too broad) root.
+	elsewhereUnderHome := filepath.Join(home, "Documents", "diary.txt")
+	if err := os.MkdirAll(filepath.Dir(elsewhereUnderHome), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(elsewhereUnderHome, []byte("private"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if blocked := automemRunRead(t, proj, baseEnv(home, sessDir, ""), elsewhereUnderHome); !blocked {
+		t.Error("expected an autoMemoryDirectory of \"~/\" to be refused, leaving an unrelated file under home still blocked")
 	}
 }

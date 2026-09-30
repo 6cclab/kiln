@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -51,6 +52,13 @@ type AutoMemory struct {
 	Lines    int
 	Bytes    int
 	Disabled bool
+	// DirectoryOverrideRejected is set when opts.Directory was non-empty
+	// but resolved to an unsafe location (the filesystem root, the user's
+	// home directory, or an ancestor of it) and was ignored in favour of
+	// the default directory. Adding an unsafe override as a read-only
+	// permission root would let it stand in for "read anything under
+	// home without asking" — see resolveAutoMemoryDir's doc comment.
+	DirectoryOverrideRejected bool
 }
 
 // AutoMemoryOptions configures LoadAutoMemory.
@@ -91,24 +99,75 @@ func autoMemoryDisabled(opts AutoMemoryOptions) (bool, string) {
 
 // ResolveAutoMemoryDir returns the directory Claude Code stores this
 // project's auto memory in: directoryOverride (the autoMemoryDirectory
-// setting), if set, else
+// setting), if set and safe, else
 // ~/.claude/projects/<project>/memory, where <project> is derived from the
 // git repository root (shared by every worktree and subdirectory of that
 // repository — see projectRoot), or cwd itself outside a git repository.
+// An unsafe override (see unsafeAutoMemoryDirectory) is silently ignored;
+// callers that need to know whether that happened use resolveAutoMemoryDir
+// directly (LoadAutoMemory does, reporting it as
+// AutoMemory.DirectoryOverrideRejected).
 func ResolveAutoMemoryDir(cwd, directoryOverride string) string {
-	if directoryOverride != "" {
-		dir := expandHome(directoryOverride)
-		if !filepath.IsAbs(dir) {
-			// Claude Code documents the value as "an absolute path or
-			// start with ~/"; treating a relative value as relative to
-			// cwd, rather than rejecting it, matches how the rest of
-			// this package resolves paths it is handed.
-			dir = filepath.Join(cwd, dir)
-		}
-		return filepath.Clean(dir)
-	}
+	dir, _ := resolveAutoMemoryDir(cwd, directoryOverride)
+	return dir
+}
+
+// defaultAutoMemoryDir is ResolveAutoMemoryDir's fallback, with no override
+// at all.
+func defaultAutoMemoryDir(cwd string) string {
 	root := projectRoot(cwd)
 	return filepath.Join(homeDir(), ".claude", "projects", projectDirName(root), "memory")
+}
+
+// resolveAutoMemoryDir is ResolveAutoMemoryDir, plus whether
+// directoryOverride was rejected as unsafe and the default was used
+// instead (rejected is always false when directoryOverride is "").
+func resolveAutoMemoryDir(cwd, directoryOverride string) (dir string, rejected bool) {
+	if directoryOverride == "" {
+		return defaultAutoMemoryDir(cwd), false
+	}
+	candidate := expandHome(directoryOverride)
+	if !filepath.IsAbs(candidate) {
+		// Claude Code documents the value as "an absolute path or start
+		// with ~/"; treating a relative value as relative to cwd, rather
+		// than rejecting it, matches how the rest of this package
+		// resolves paths it is handed.
+		candidate = filepath.Join(cwd, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	if unsafeAutoMemoryDirectory(candidate) {
+		return defaultAutoMemoryDir(cwd), true
+	}
+	return candidate, false
+}
+
+// unsafeAutoMemoryDirectory reports whether dir (already absolute and
+// cleaned) is too dangerous to use as an auto-memory directory: the
+// filesystem root, the user's home directory itself, or any ancestor of
+// it. Loading auto memory adds this directory as a read-only permission
+// root (internal/claude/permission's ReadOnlyRoots), so honouring any of
+// these would turn a single settings.json value into "read anything under
+// my home directory without asking".
+func unsafeAutoMemoryDirectory(dir string) bool {
+	if dir == string(filepath.Separator) {
+		return true
+	}
+	home := homeDir()
+	if home == "" {
+		return false
+	}
+	home = filepath.Clean(home)
+	if dir == home {
+		return true
+	}
+	rel, err := filepath.Rel(dir, home)
+	if err != nil {
+		return false
+	}
+	// No leading ".." (and not absolute, which filepath.Rel never returns
+	// here since both inputs are already absolute) means home is dir
+	// itself or somewhere under it: dir is home or an ancestor of it.
+	return rel == "." || (!strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel))
 }
 
 // projectRoot is the git repository's root, or cwd itself when cwd is not
@@ -154,21 +213,36 @@ func resolveSymlinks(path string) string {
 	return filepath.Clean(path)
 }
 
+// projectDirNameUnsafeChar matches every character projectDirName escapes:
+// anything that isn't a plain ASCII letter or digit.
+var projectDirNameUnsafeChar = regexp.MustCompile(`[^A-Za-z0-9]`)
+
 // projectDirName is Claude Code's escaping of a project root path into a
-// ~/.claude/projects/ directory name.
+// ~/.claude/projects/ directory name: every character that is not an ASCII
+// letter or digit becomes "-", one-for-one (no collapsing of runs), case
+// preserved.
 //
-// Verified against real directory names under this machine's
-// ~/.claude/projects/ (read-only `ls`, never file contents): every "/" in
-// the absolute path becomes "-", with no other change — e.g.
-// /Users/andrepato/projects/harness -> -Users-andrepato-projects-harness,
-// confirmed both for that path and for a worktree of it (git-common-dir
-// resolves both to the same root, so both map to the same directory name,
-// matching the docs). No real project path on this machine contains a
-// literal ".", so whether "." is also escaped is NOT verified; this
-// assumes it is not, since Claude Code's docs describe only the "/"
-// replacement and no real counterexample was found.
+// Verified against real directory names on this machine (read-only `ls`,
+// never file contents):
+//   - "/" -> "-": /Users/andrepato/projects/harness ->
+//     -Users-andrepato-projects-harness (confirmed both for that path and
+//     for a worktree of it — git-common-dir resolves both to the same
+//     root, so both map to the same directory name, matching the docs).
+//   - "_" -> "-": this machine's own $TMPDIR,
+//     /var/folders/93/248j_5ds3ls8k4ggh_fxndjh0000gn/T/ (symlink-resolved
+//     to /private/var/...), appears under ~/.claude/projects/ as
+//     -private-var-folders-93-248j-5ds3ls8k4ggh-fxndjh0000gn-T-... — both
+//     underscores became "-", not left as "_" (an earlier version of this
+//     function only replaced "/", which got this wrong).
+//
+// No real project path on this machine contains a literal ".", so whether
+// "." is also escaped is not directly confirmed by a real example; this
+// follows the same "-" rule for every other punctuation character on the
+// theory that Claude Code applies one uniform escape rather than special-
+// casing "/" and "_" but not ".", which the "_" evidence already rules
+// out as the simpler hypothesis.
 func projectDirName(root string) string {
-	return strings.ReplaceAll(filepath.Clean(root), string(filepath.Separator), "-")
+	return projectDirNameUnsafeChar.ReplaceAllString(filepath.Clean(root), "-")
 }
 
 // LoadAutoMemory loads Claude Code's auto-memory index (MEMORY.md) for
@@ -178,8 +252,8 @@ func projectDirName(root string) string {
 // the model reads them on demand with the normal read tool once it is
 // told, in Text, where the directory is.
 func LoadAutoMemory(cwd string, opts AutoMemoryOptions) AutoMemory {
-	dir := ResolveAutoMemoryDir(cwd, opts.Directory)
-	result := AutoMemory{Dir: dir}
+	dir, rejected := resolveAutoMemoryDir(cwd, opts.Directory)
+	result := AutoMemory{Dir: dir, DirectoryOverrideRejected: rejected}
 
 	if disabled, reason := autoMemoryDisabled(opts); disabled {
 		result.Disabled = true

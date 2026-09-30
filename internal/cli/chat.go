@@ -151,6 +151,45 @@ func settingsSources(raw []string) []paths.Scope {
 	return out
 }
 
+// userOnlySources narrows sources (as settingsSources returns it: nil
+// means "every scope") to just the user scope, respecting a caller's own
+// --setting-sources restriction: if the caller already excluded "user",
+// the narrowed result excludes it too (an empty, non-nil slice, which
+// settings.LoadSettings's `wants` reads as "nothing").
+func userOnlySources(sources []paths.Scope) []paths.Scope {
+	if sources == nil {
+		return []paths.Scope{paths.ScopeUser}
+	}
+	for _, s := range sources {
+		if s == paths.ScopeUser {
+			return []paths.Scope{paths.ScopeUser}
+		}
+	}
+	return []paths.Scope{}
+}
+
+// trustedAutoMemoryDirectory resolves the autoMemoryDirectory setting
+// kiln is allowed to honour: merged (every scope) when cwd is a trusted
+// folder, but only the user's own settings (plus an explicit --settings
+// file, which the person typed on the command line themselves) when it
+// isn't — a repository's own, possibly untrusted, checked-in or local
+// settings.json must not be able to point kiln's auto-memory read-only
+// permission root at an arbitrary directory (e.g. ~/.ssh) before the
+// person has trusted the folder. Matches Claude Code's own rule for this
+// setting (docs: code.claude.com/docs/en/memory, "Storage location" —
+// honoured from project/local settings only under the same workspace-
+// trust rule as hooks).
+func trustedAutoMemoryDirectory(cwd string, args Args, merged claudesettings.Settings) (dir string, ignoredUntrusted bool) {
+	if folderTrusted(cwd) {
+		return merged.AutoMemoryDirectory, false
+	}
+	userOnly := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{
+		Sources: userOnlySources(settingsSources(args.SettingSources)),
+		Extra:   args.Settings,
+	})
+	return userOnly.AutoMemoryDirectory, userOnly.AutoMemoryDirectory != merged.AutoMemoryDirectory
+}
+
 // resolvePermissionMode applies cli.ts's precedence: --permission-mode >
 // HARNESS_PERMISSION_MODE > settings.permissions.defaultMode > "manual".
 func resolvePermissionMode(args Args, settings claudesettings.Settings) claudesettings.PermissionMode {
@@ -435,14 +474,21 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Claude Code's auto-memory index (MEMORY.md), read-only: whatever
 	// budget CLAUDE.md/rules left of the tier's system-prompt ceiling.
 	// kiln never writes here — see internal/claude/memory/automemory.go.
+	autoMemoryDirectorySetting, autoMemoryDirIgnoredUntrusted := trustedAutoMemoryDirectory(cwd, args, settings)
+	if autoMemoryDirIgnoredUntrusted {
+		startupWarn("this project's autoMemoryDirectory setting is ignored until the folder is trusted; using the default auto-memory location.")
+	}
 	autoMemoryBudget := resolved.Tier.SystemPromptTokens - memory.EstimatedTokens
 	autoMemory := claudememory.LoadAutoMemory(cwd, claudememory.AutoMemoryOptions{
-		Directory:    settings.AutoMemoryDirectory,
+		Directory:    autoMemoryDirectorySetting,
 		Enabled:      settings.AutoMemoryEnabled,
 		EnvDisabled:  os.Getenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY") == "1",
 		SmallTier:    resolved.Tier.Name == "small",
 		BudgetTokens: autoMemoryBudget,
 	})
+	if autoMemory.DirectoryOverrideRejected {
+		startupWarn("autoMemoryDirectory points at an unsafe location (the filesystem root, the home directory, or an ancestor of it); using the default auto-memory location instead.")
+	}
 	diag.L().Info("auto-memory", "status", autoMemory.Status, "dir", autoMemory.Dir, "reason", autoMemory.Reason)
 
 	// --add-dir may be repeated, matching Claude Code's flag.
