@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +19,7 @@ import (
 // one call site named in its paragraph below, not spread through the
 // package.
 //
-//	HARNESS_EXP_LEDGER=1              During plan mode, keep a findings
+//	HARNESS_EXP_LEDGER=1|<path>       During plan mode, keep a findings
 //	                                  ledger (ledgerPath, below) that the
 //	                                  model appends a line to for every
 //	                                  defect the moment it finds one, and
@@ -65,7 +67,7 @@ const (
 	envExpPlanEffort = "HARNESS_EXP_PLAN_EFFORT"
 )
 
-func ledgerEnabled() bool { return os.Getenv(envExpLedger) == "1" }
+func ledgerEnabled() bool { return os.Getenv(envExpLedger) != "" }
 func auditEnabled() bool  { return os.Getenv(envExpAudit) == "1" }
 func reviewEnabled() bool { return os.Getenv(envExpReview) == "1" }
 
@@ -75,18 +77,21 @@ func planEffortOverride() string {
 	return strings.TrimSpace(os.Getenv(envExpPlanEffort))
 }
 
-// ledgerPath is HARNESS_EXP_LEDGER's findings ledger: one fixed file
-// outside the project tree, mirroring Claude Code's own ~/.claude/plans/
-// (docs/en/permission-modes's plan-mode write log lives outside the repo
-// too, so a plan survives even though nothing in plan mode may touch the
-// project). Returns "" if $HOME cannot be resolved, in which case the
-// ledger experiment is silently unavailable rather than crashing the run.
-func ledgerPath() string {
+// ledgerPath is HARNESS_EXP_LEDGER's findings ledger, outside the project
+// tree like Claude Code's ~/.claude/plans/. HARNESS_EXP_LEDGER=1 picks a
+// file per working directory, so parallel runs in different projects never
+// share one; any other value is taken as the ledger path itself. Returns ""
+// if $HOME cannot be resolved, which leaves the experiment off.
+func ledgerPath(cwd string) string {
+	if v := os.Getenv(envExpLedger); v != "1" {
+		return v
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".harness", "plans", "ledger.md")
+	sum := sha256.Sum256([]byte(cwd))
+	return filepath.Join(home, ".harness", "plans", "ledger-"+hex.EncodeToString(sum[:6])+".md")
 }
 
 // ledgerPrompt is the paragraph buildSystemPrompt appends to the plan-mode

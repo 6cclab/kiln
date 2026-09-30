@@ -40,7 +40,7 @@ func TestExpLedger_PromptNamesThePathOnlyWhenSet(t *testing.T) {
 			if gotLedger != tc.wantIn {
 				t.Errorf("system prompt contains ledger paragraph = %v, want %v:\n%s", gotLedger, tc.wantIn, sys)
 			}
-			wantPath := filepath.Join(home, ".harness", "plans", "ledger.md")
+			wantPath := filepath.Join(home, ".harness", "plans", "ledger-")
 			gotPath := strings.Contains(sys, wantPath)
 			if gotPath != tc.wantIn {
 				t.Errorf("system prompt contains ledger path = %v, want %v", gotPath, tc.wantIn)
@@ -77,7 +77,7 @@ func TestExpLedger_WriteAllowedOnlyForLedgerPath(t *testing.T) {
 		wantLedger    bool
 		wantElsewhere bool
 	}{
-		{"set", map[string]string{"HARNESS_EXP_LEDGER": "1"}, true, false},
+		{"set", map[string]string{"HARNESS_EXP_LEDGER": "LEDGER"}, true, false},
 		{"unset", nil, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -89,6 +89,9 @@ func TestExpLedger_WriteAllowedOnlyForLedgerPath(t *testing.T) {
 			env := baseEnv(home, sessDir, addr)
 			env["HARNESS_MODEL"] = "faux/faux-1"
 			for k, v := range tc.env {
+				if v == "LEDGER" {
+					v = ledger
+				}
 				env[k] = v
 			}
 			res := runHarness(t, proj, env, "-p", "audit math.js", "--permission-mode", "plan")

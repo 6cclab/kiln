@@ -492,7 +492,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// and the plan-mode prompt (buildSystemPrompt, below) agree on it.
 	var experimentLedgerPath string
 	if ledgerEnabled() {
-		experimentLedgerPath = ledgerPath()
+		experimentLedgerPath = ledgerPath(cwd)
 	}
 
 	roots := append([]string{cwd}, addDirs...)
