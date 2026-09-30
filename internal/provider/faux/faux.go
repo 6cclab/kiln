@@ -60,6 +60,15 @@ func New() (*Provider, bool) {
 		ContextWindow: 128000,
 		MaxTokens:     16384,
 		Cost:          provider.ModelCost{},
+		// Reasoning: true so a script/test that sets --effort or
+		// HARNESS_EXP_PLAN_EFFORT can see the resulting thinking/effort
+		// field on the wire (internal/provider/api/anthropic_messages.go's
+		// buildAnthropicRequest is a no-op for either when
+		// !model.Reasoning). With no effort asked for, this is still a
+		// no-op (buildAnthropicRequest's opts.ThinkingLevel == "" case),
+		// so existing faux-driven tests that never set an effort are
+		// unaffected.
+		Reasoning: true,
 	}
 
 	model2 := provider.Model{
