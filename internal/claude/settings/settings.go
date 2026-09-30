@@ -279,6 +279,11 @@ var ReadOnly = map[string]bool{
 	// disk, so plan mode (and manual mode) allow it the same way Read
 	// does.
 	"skill": true,
+	// ask_user_question only asks the user a multiple-choice question; it
+	// changes nothing on disk and, like exit_plan_mode, must stay
+	// available from inside plan mode or the model has no way to resolve
+	// an ambiguity without leaving it.
+	"ask_user_question": true,
 }
 
 // Decision is the outcome of Decide.

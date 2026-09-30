@@ -1,0 +1,15 @@
+review answers ─────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────
+ Review your answers
+
+ Which approach should I use?
+   Fast path
+
+ Which checks should block the merge?
+   Lint, E2E
+
+ 1  Submit answers                                                              
+ 2  Cancel
+
+ ↑↓ select · enter confirm · esc cancel
+────────────────────────────────────────────────────────────────────────────────

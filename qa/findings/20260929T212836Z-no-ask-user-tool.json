@@ -1,0 +1,29 @@
+{
+ "id": "20260929T212836Z-no-ask-user-tool",
+ "found_at": "2026-09-29T21:28:36Z",
+ "scenario": "real/w4-audit",
+ "step": null,
+ "terminals": [],
+ "category": "usability",
+ "severity": "medium",
+ "title": "No equivalent of Claude Code's AskUserQuestion tool",
+ "observed": "kiln's tool list has no question tool. In 3/3 W4 audit runs Claude Code asked scope questions (test tooling, fix scope) via AskUserQuestion; kiln never asked and decided scope alone.",
+ "expected": "A tool the model can use to ask the user multiple-choice questions, matching Claude Code's AskUserQuestion.",
+ "design_ref": null,
+ "evidence": [
+  "/Users/andrepato/projects/crud-trial/runs/capture-evidence/claude-code-first-request.json"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tools/askuser.go",
+   "internal/tui/permissionview.go",
+   "internal/tui/askuser_render.go"
+  ],
+  "regression_test": "TestAskUserQuestion_AnswerReachesModel,TestAskUserQuestion_EscCancelsAndModelIsToldSoItCanProceed",
+  "after_evidence": [
+   "qa/runs/askuser-iterm-20260929T222238Z/iterm-dark/tools-askuser-multi-question-120x40/04-review.png"
+  ],
+  "updated_at": "2026-09-30T01:31:55Z"
+ }
+}

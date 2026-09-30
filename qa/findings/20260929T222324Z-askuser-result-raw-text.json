@@ -1,0 +1,20 @@
+{
+ "id": "20260929T222324Z-askuser-result-raw-text",
+ "found_at": "2026-09-29T22:23:24Z",
+ "scenario": "tools/askuser-multi-question",
+ "step": "after-submit",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "Answered question block shows the model-facing result string",
+ "observed": "After submitting, the tool block is labelled 'ask user question' and shows the raw result sent to the model: User has answered your questions: \"Which scope should I take?\"=\"Everything\", ...",
+ "expected": "A readable summary, one line per question with its answer (Claude Code renders 'User answered Claude's questions' then '· question -> answer' lines), under a proper tool label.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/askuser-iterm-20260929T222238Z/iterm-dark/tools-askuser-multi-question-120x40/05-after-submit.png"
+ ],
+ "status": "open",
+ "fix": null
+}

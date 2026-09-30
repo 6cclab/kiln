@@ -21,6 +21,7 @@ import (
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/tools"
 )
 
 // Bridge is the agent side of the TUI: it turns harness.Events, and every
@@ -578,6 +579,14 @@ type MsgPermissionPrompt struct {
 type MsgPlanPrompt struct {
 	Plan  string
 	Reply chan PlanReply
+}
+
+// MsgAskUserPrompt asks the app to show an ask_user_question prompt.
+// Reply is answered by the app once the exchange finishes (submitted or
+// cancelled), releasing the approver goroutine blocked on it.
+type MsgAskUserPrompt struct {
+	Questions []tools.AskUserQuestion
+	Reply     chan AskUserReply
 }
 
 // MsgSpinnerLabel sets a temporary busy-line label — a verb per tool
@@ -1444,6 +1453,26 @@ func (b *Bridge) PlanApprover() agent.PlanApprover {
 			return agent.PlanDecision{}, ctx.Err()
 		case <-b.quit:
 			return agent.PlanDecision{Kind: agent.PlanDecisionRevise, Feedback: "cancelled"}, nil
+		}
+	}
+}
+
+// AskUserApprover returns a tools.AskUserApprover with the same blocking
+// contract as Prompter/PlanApprover.
+func (b *Bridge) AskUserApprover() tools.AskUserApprover {
+	return func(ctx context.Context, questions []tools.AskUserQuestion) ([]tools.AskUserAnswer, error) {
+		reply := make(chan AskUserReply, 1)
+		b.Send(MsgAskUserPrompt{Questions: questions, Reply: reply})
+		select {
+		case r := <-reply:
+			if r.Cancelled {
+				return nil, tools.ErrAskUserCancelled
+			}
+			return r.Answers, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-b.quit:
+			return nil, tools.ErrAskUserCancelled
 		}
 	}
 }

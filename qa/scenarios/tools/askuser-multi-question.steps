@@ -1,0 +1,32 @@
+# ask_user_question with two questions, the second multi-select: the tab
+# strip shows progress, space toggles options, and after the last question
+# the review screen lists every answer before Submit. Claude Code shows the
+# same review step ("Ready to submit your answers?") for more than one
+# question.
+@faux testdata/faux/qa/tools-askuser-multi.yaml
+
+WAITFOR /describe a task/ 20
+TYPE plan the release
+KEY enter
+WAITFOR /Which scope should I take\?/ 20
+SHOT q1-scope
+EXPECT /Scope/
+EXPECT /Checks/
+KEY 2
+WAITFOR /Which checks should block the merge\?/ 10
+SHOT q2-checks-untoggled
+KEY space
+KEY down
+KEY down
+KEY space
+SHOT q2-lint-and-e2e-toggled
+KEY enter
+WAITFOR /Review your answers/ 10
+SHOT review
+EXPECT /Everything/
+EXPECT /Lint, E2E/
+EXPECT /Submit answers/
+KEY enter
+WAITFOR /Answers received, starting now\./ 20
+SHOT after-submit
+EXPECT_NOT /panic|goroutine/

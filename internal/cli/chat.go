@@ -656,7 +656,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	mcpExtras, mcpIndexText := buildMCPExtras(mcpTools)
 	extraTools := make([]*tool.Tool, 0, len(mcpExtras)+7)
 	extraTools = append(extraTools, mcpExtras...)
-	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool, tools.WebSearchTool())
+	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool, tools.WebSearchTool(), tools.AskUserQuestionTool())
 	extraTools = append(extraTools, bgShellTools...)
 	extraTools = append(extraTools, tools.WebFetchTool(nil))
 	if sessionSearch != nil {

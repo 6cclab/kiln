@@ -39,6 +39,7 @@ var residentAll = []string{
 	"kill_shell",
 	"skill",
 	"web_search",
+	"ask_user_question",
 }
 
 // residentToolNames filters residentAll down to what this run actually
