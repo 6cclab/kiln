@@ -228,3 +228,50 @@ func TestAskUserQuestionTool_PlumbingErrorPropagates(t *testing.T) {
 		t.Fatalf("expected the plumbing error to propagate, got %v", err)
 	}
 }
+
+// ParseAskUserAnswers inverts FormatAskUserAnswers exactly, quotes and
+// commas inside answers included, so the TUI can show the answers without
+// the model-facing wrapper.
+func TestParseAskUserAnswersRoundTrip(t *testing.T) {
+	in := []AskUserAnswer{
+		{Question: `Which "scope" should I take?`, Answers: []string{"Everything"}},
+		{Question: "Which checks should block the merge?", Answers: []string{"Lint", "E2E, but only on main"}},
+	}
+	got, ok := ParseAskUserAnswers(FormatAskUserAnswers(in))
+	if !ok || len(got) != 2 {
+		t.Fatalf("ParseAskUserAnswers = %+v, %v", got, ok)
+	}
+	if got[0].Question != in[0].Question || got[0].Answer != "Everything" {
+		t.Errorf("first = %+v", got[0])
+	}
+	if got[1].Answer != "Lint, E2E, but only on main" {
+		t.Errorf("second answer = %q", got[1].Answer)
+	}
+	if _, ok := ParseAskUserAnswers("The user declined to answer."); ok {
+		t.Error("a non-answer text parsed as answers")
+	}
+}
+
+// The header limit is in the schema itself, not only in prose: both
+// header rejections seen in real runs were 13-14 characters.
+func TestAskUserQuestionSchemaCapsHeaderLength(t *testing.T) {
+	var schema struct {
+		Properties struct {
+			Questions struct {
+				Items struct {
+					Properties struct {
+						Header struct {
+							MaxLength int `json:"maxLength"`
+						} `json:"header"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"questions"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(AskUserQuestionTool().Parameters, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if got := schema.Properties.Questions.Items.Properties.Header.MaxLength; got != 12 {
+		t.Fatalf("header maxLength = %d, want 12", got)
+	}
+}

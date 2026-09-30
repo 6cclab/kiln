@@ -15,6 +15,16 @@
  "evidence": [
   "qa/runs/askuser-iterm-20260929T222238Z/iterm-dark/tools-askuser-multi-question-120x40/05-after-submit.png"
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/transcript.go",
+   "internal/tools/askuser.go"
+  ],
+  "regression_test": "TestCollapsedSummaryShowsAnsweredQuestions,TestParseAskUserAnswersRoundTrip",
+  "after_evidence": [
+   "qa/runs/askuser-fix-20260930T110817Z/iterm-dark/tools-askuser-multi-question-120x40/05-after-submit.png"
+  ],
+  "updated_at": "2026-09-30T11:08:57Z"
+ }
 }

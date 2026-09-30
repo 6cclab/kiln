@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/tools"
 )
 
 // Transcript rendering — the layout defined in docs/claude-code-reference.md
@@ -182,6 +183,9 @@ func MapToolName(id string) string {
 		// The call that presents a plan; its block records the verdict.
 		return "Plan"
 	}
+	if strings.EqualFold(id, "ask_user_question") {
+		return "Question"
+	}
 	return titleCase(id)
 }
 
@@ -290,6 +294,15 @@ func collapsedSummary(toolName string, summary []string, failed, verbose bool) [
 		// (bash_output({id: …})); the person gets where to look instead.
 		if id, _, ok := strings.Cut(strings.TrimPrefix(summary[0], "Started "), ":"); ok && strings.HasPrefix(summary[0], "Started ") {
 			return []string{"running in the background as " + id + " · /bashes to check on it"}
+		}
+	case "ask_user_question":
+		// Each question with its answer, not the model-facing wrapper.
+		if pairs, ok := tools.ParseAskUserAnswers(strings.Join(summary, "\n")); ok {
+			lines := make([]string, 0, len(pairs))
+			for _, p := range pairs {
+				lines = append(lines, p.Question+" → "+p.Answer)
+			}
+			return lines
 		}
 	case "exit_plan_mode":
 		// The verdict, not the instructions that follow it for the model

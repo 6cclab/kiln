@@ -400,3 +400,22 @@ func TestCollapsedSummaryHidesModelInstructions(t *testing.T) {
 		t.Errorf("verbose keeps the whole result, got %q", v)
 	}
 }
+
+// An answered ask_user_question block reads as the questions and answers,
+// not the model-facing "User has answered your questions: ..." string.
+func TestCollapsedSummaryShowsAnsweredQuestions(t *testing.T) {
+	result := `User has answered your questions: "Which scope should I take?"="Everything", "Which checks should block the merge?"="Lint, E2E"`
+	got := collapsedSummary("ask_user_question", []string{result}, false, false)
+	want := []string{"Which scope should I take? → Everything", "Which checks should block the merge? → Lint, E2E"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("collapsedSummary = %q, want %q", got, want)
+	}
+	if got := MapToolName("ask_user_question"); got != "Question" {
+		t.Errorf("MapToolName = %q, want Question", got)
+	}
+	// A decline or error passes through unchanged.
+	decline := []string{"The user declined to answer."}
+	if got := collapsedSummary("ask_user_question", decline, false, false); got[0] != decline[0] {
+		t.Errorf("decline = %q", got)
+	}
+}

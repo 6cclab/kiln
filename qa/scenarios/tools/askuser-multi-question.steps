@@ -29,4 +29,7 @@ EXPECT /Submit answers/
 KEY enter
 WAITFOR /Answers received, starting now\./ 20
 SHOT after-submit
+EXPECT /Which scope should I take\? → Everything/
+EXPECT /Lint, E2E/
+EXPECT_NOT /User has answered your questions/
 EXPECT_NOT /panic|goroutine/

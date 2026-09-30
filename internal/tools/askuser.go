@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -95,7 +96,7 @@ var askUserQuestionParameters = json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"question": {"type": "string", "description": "The full question text, ending with \"?\"."},
-					"header": {"type": "string", "description": "Short label for this question's tab, at most 12 characters."},
+					"header": {"type": "string", "maxLength": 12, "description": "Tab label of at most 12 characters, one or two words: \"Scope\", \"Tests\", \"PUT rule\"."},
 					"multiSelect": {"type": "boolean", "description": "Allow choosing more than one option. Default false."},
 					"options": {
 						"type": "array",
@@ -155,7 +156,7 @@ func validateAskUserQuestions(qs []AskUserQuestion) error {
 			return fmt.Errorf("question %d: header must not be empty", i+1)
 		}
 		if len(header) > 12 {
-			return fmt.Errorf("question %d: header %q is %d characters, want at most 12", i+1, header, len(header))
+			return fmt.Errorf("question %d: header %q is %d characters, want at most 12; use one or two words", i+1, header, len(header))
 		}
 
 		if len(q.Options) < 2 {
@@ -197,6 +198,41 @@ func FormatAskUserAnswers(answers []AskUserAnswer) string {
 		parts = append(parts, fmt.Sprintf("%q=%q", a.Question, strings.Join(a.Answers, ", ")))
 	}
 	return "User has answered your questions: " + strings.Join(parts, ", ")
+}
+
+// AskUserAnswerPair is one question and its answer as shown to the user.
+type AskUserAnswerPair struct {
+	Question string
+	Answer   string
+}
+
+// ParseAskUserAnswers inverts FormatAskUserAnswers, so the TUI can show the
+// answers without the model-facing wrapper. ok is false for any other text
+// (a decline, an error).
+func ParseAskUserAnswers(s string) (pairs []AskUserAnswerPair, ok bool) {
+	rest, found := strings.CutPrefix(s, "User has answered your questions: ")
+	if !found {
+		return nil, false
+	}
+	for rest != "" {
+		q, err := strconv.QuotedPrefix(rest)
+		if err != nil {
+			return nil, false
+		}
+		rest = rest[len(q):]
+		if rest, found = strings.CutPrefix(rest, "="); !found {
+			return nil, false
+		}
+		a, err := strconv.QuotedPrefix(rest)
+		if err != nil {
+			return nil, false
+		}
+		rest = strings.TrimPrefix(rest[len(a):], ", ")
+		uq, _ := strconv.Unquote(q)
+		ua, _ := strconv.Unquote(a)
+		pairs = append(pairs, AskUserAnswerPair{Question: uq, Answer: ua})
+	}
+	return pairs, len(pairs) > 0
 }
 
 // AskUserQuestionTool builds `ask_user_question`.
