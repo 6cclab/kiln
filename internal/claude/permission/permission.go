@@ -492,12 +492,6 @@ func PrimaryArgOf(args map[string]any) (string, bool) {
 	return "", false
 }
 
-// explicitAsk reports whether an ask rule names this bash command, which
-// the read-only allowance must not override.
-func (g *Gate) explicitAsk(permissions settings.Permissions, cmd string) bool {
-	return len(permissions.Ask) > 0 && settings.DecideIn(settings.Permissions{Ask: permissions.Ask, AskFrom: permissions.AskFrom}, g.cwd(), "bash", cmd, settings.ModeAuto) == settings.Ask
-}
-
 // commandWithinRoots reports whether every path a command names stays in
 // the workspace: absolute and ~ paths must lie inside a root (/dev/null
 // aside), and a relative one must not climb out with "..". A cd target is
@@ -567,12 +561,14 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 			decideArg = p
 		}
 	}
-	denyHit, askHit, allowHit := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg)
+	hits := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg)
 
 	// A session "don't ask again" grant stands in for an allow rule, so
 	// like one it never beats a deny or ask rule — including one added
-	// after the grant (Claude Code: deny, then ask, then allow).
-	grantable := !denyHit && !askHit
+	// after the grant (Claude Code: deny, then ask, then allow). Nor does
+	// it cover a command naming a file kiln cannot resolve: the same text
+	// ("cat $F") can name a different file next time.
+	grantable := !hits.Deny && !hits.Ask && !hits.Unsure
 	if grantable && g.sessionAllowed(k) {
 		return nil, OutcomeAuto, nil
 	}
@@ -583,23 +579,24 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// for the exact ledger path — every other tool and every other path
 	// still hits Decide's ModePlan case below and is refused as usual. A
 	// deny rule still wins.
-	if mode == settings.ModePlan && g.planLedgerPath != "" && !denyHit &&
+	if mode == settings.ModePlan && g.planLedgerPath != "" && !hits.Deny &&
 		(strings.EqualFold(req.ToolName, "edit") || strings.EqualFold(req.ToolName, "write")) {
 		if path, ok := PathArgOf(req.Args); ok && g.resolvePlanPath(path) == g.planLedgerPath {
 			return nil, OutcomeAuto, nil
 		}
 	}
 
-	verdict := settings.DecideFromHits(denyHit, askHit, allowHit, req.ToolName, decideArg, mode)
+	verdict := settings.DecideFromHits(hits, req.ToolName, decideArg, mode)
 
 	// A bash command that provably only reads, and only inside the
 	// workspace, runs without asking in the modes that otherwise ask about
 	// bash — the way the read tool never asks. Asking before "cat app.py"
-	// or "git log" was pure friction. Rules still win: Decide has already
-	// returned Deny or an explicit Ask for anything a rule names.
+	// or "git log" was pure friction. Rules still win: not when an ask rule
+	// (a Bash rule, or a Read/Edit rule on a file it names) matched, or it
+	// names a file kiln cannot resolve while path rules exist.
 	if verdict == settings.Ask && strings.EqualFold(req.ToolName, "bash") &&
 		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits || mode == settings.ModeDontAsk) &&
-		settings.IsReadOnlyCommand(req.PrimaryArg) && !g.explicitAsk(permissions, req.PrimaryArg) &&
+		!hits.Ask && !hits.Unsure && settings.IsReadOnlyCommand(req.PrimaryArg) &&
 		g.commandWithinRoots(req.PrimaryArg) {
 		return nil, OutcomeAuto, nil
 	}

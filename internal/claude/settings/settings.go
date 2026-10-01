@@ -378,16 +378,24 @@ var ReadOnly = map[string]bool{
 	"ask_user_question": true,
 }
 
-// RuleHits reports which rule lists match a call, before any mode or
-// precedence is applied (DecideIn orders them). The permission gate uses
+// Hits is which rule lists match a call, before any mode or precedence is
+// applied (DecideFromHits orders them).
+type Hits struct {
+	Deny, Ask, Allow bool
+	// Unsure is set for a bash command naming a file kiln cannot resolve
+	// (a variable, a glob it could not expand, a substitution as an
+	// operand) while some Read/Edit path rule is in deny or ask
+	// (bash_paths.go). It is not a rule match: DecideFromHits only lets it
+	// turn an Allow into an Ask, never weaken a Deny.
+	Unsure bool
+}
+
+// RuleHits reports which rule lists match a call. The permission gate uses
 // it to let deny and ask rules win over a session "don't ask again" grant.
 //
 // For bash, a file the command names that a Read/Edit deny rule covers is
-// a deny hit; a file operand kiln cannot resolve (a variable, a glob in an
-// unknown directory, a command substitution it cannot parse) is an ask hit
-// whenever any Read/Edit path rule sits in deny or ask, so an unknowable
-// path is asked about instead of slipping past a deny (bash_paths.go).
-func RuleHits(permissions Permissions, cwd, toolName, primaryArg string) (deny, ask, allow bool) {
+// a deny hit and one an ask rule covers an ask hit.
+func RuleHits(permissions Permissions, cwd, toolName, primaryArg string) Hits {
 	hits := func(rules []string) bool {
 		for _, r := range rules {
 			if _, isPath := splitFileRule(r); isPath {
@@ -401,22 +409,23 @@ func RuleHits(permissions Permissions, cwd, toolName, primaryArg string) (deny, 
 	}
 
 	c := newMatchCtx(cwd)
-	deny, ask, allow = hits(permissions.Deny), hits(permissions.Ask), hits(permissions.Allow)
+	h := Hits{Deny: hits(permissions.Deny), Ask: hits(permissions.Ask), Allow: hits(permissions.Allow)}
 	switch {
 	case strings.EqualFold(toolName, "bash"), strings.EqualFold(toolName, "bash_background"):
 		if strings.EqualFold(toolName, "bash") {
 			// A command line is several commands; judge each one
 			// (bashRuleVerdicts).
-			deny, ask, allow = bashRuleVerdicts(permissions, toolName, primaryArg)
+			h.Deny, h.Ask, h.Allow = bashRuleVerdicts(permissions, toolName, primaryArg)
 		}
-		fileDeny, unsure := bashFileVerdict(permissions, c, primaryArg)
-		deny = deny || fileDeny
-		ask = ask || unsure
+		fileDeny, fileAsk, unsure := bashFileVerdict(permissions, c, primaryArg)
+		h.Deny = h.Deny || fileDeny
+		h.Ask = h.Ask || fileAsk
+		h.Unsure = unsure
 	case IsFileTool(toolName):
 		d, a, al := filePathVerdicts(permissions, c, toolName, primaryArg)
-		deny, ask, allow = deny || d, ask || a, allow || al
+		h.Deny, h.Ask, h.Allow = h.Deny || d, h.Ask || a, h.Allow || al
 	}
-	return deny, ask, allow
+	return h
 }
 
 // Decision is the outcome of Decide.
@@ -434,9 +443,12 @@ const (
 // allow, the first match deciding, whatever the rules' specificity. deny
 // is absolute: an explicit denial must not be overridable by a broader
 // allow rule elsewhere in the hierarchy; and a matching ask rule prompts
-// even when an allow rule also matches. bypassPermissions skips prompts,
-// so in that mode an ask rule does not stop a call (a deny rule still
-// does).
+// even when an allow rule also matches. bypassPermissions comes after both
+// (Claude Code's permission-modes docs: deny rules block in every mode,
+// and no mode auto-approves a call an explicit ask rule matches), so in
+// bypassPermissions a deny rule still blocks and an ask rule still asks; a
+// print run, having nobody to ask, refuses it (the gate). Allow rules
+// change nothing in bypassPermissions, which allows everything else.
 //
 // Relative paths, and Read/Edit rules anchored at the current directory,
 // resolve against the process's working directory; DecideIn names it.
@@ -450,23 +462,33 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 // "" means the process's working directory. For a file tool (read, edit,
 // write, ...) primaryArg is its path argument.
 func DecideIn(permissions Permissions, cwd, toolName, primaryArg string, mode PermissionMode) Decision {
-	denyHit, askHit, allowHit := RuleHits(permissions, cwd, toolName, primaryArg)
-	return DecideFromHits(denyHit, askHit, allowHit, toolName, primaryArg, mode)
+	return DecideFromHits(RuleHits(permissions, cwd, toolName, primaryArg), toolName, primaryArg, mode)
 }
 
 // DecideFromHits is DecideIn for a caller that already has RuleHits'
 // result (the permission gate, which also needs the hits themselves).
-func DecideFromHits(denyHit, askHit, allowHit bool, toolName, primaryArg string, mode PermissionMode) Decision {
-	if denyHit {
-		return Deny
-	}
-	if mode == ModeBypassPermissions {
-		return Allow
-	}
-	if askHit {
+//
+// Hits.Unsure is applied last, to the verdict rules and mode reached: it
+// lifts an Allow to an Ask (an unknowable file operand while path rules
+// exist, in every mode, bypassPermissions included, since a deny rule is
+// meant to hold in every mode) and leaves Deny and Ask as they are, so it
+// can never turn plan mode's refusal into a prompt.
+func DecideFromHits(h Hits, toolName, primaryArg string, mode PermissionMode) Decision {
+	d := decideRules(h, toolName, primaryArg, mode)
+	if d == Allow && h.Unsure {
 		return Ask
 	}
-	if allowHit {
+	return d
+}
+
+func decideRules(h Hits, toolName, primaryArg string, mode PermissionMode) Decision {
+	if h.Deny {
+		return Deny
+	}
+	if h.Ask {
+		return Ask
+	}
+	if mode == ModeBypassPermissions || h.Allow {
 		return Allow
 	}
 

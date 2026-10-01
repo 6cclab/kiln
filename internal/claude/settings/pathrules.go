@@ -171,14 +171,47 @@ type pathRule struct {
 	// rel marks a "p" or "./p" rule: only those take part in "!" carve-outs.
 	rel bool
 	src RuleSource
-	// bases are the directories segs is matched under: the anchor joined
-	// with the pattern's leading literal segments, then the same directory
-	// with symlinks resolved when that differs.
-	bases []string
-	segs  []string
-	// loose compares in NFC and, where foldCase, without case (bases and
+	// base is the directory segs is matched under: the anchor joined with
+	// the pattern's leading literal segments, clean and as written. The
+	// rule also matches under base's real location, which is resolved on
+	// each decision (anchors), never cached across them: a directory can
+	// become a link between two calls.
+	base string
+	// cmpBase is base in the form the rule compares in.
+	cmpBase string
+	segs    []string
+	// loose compares in NFC and, where foldCase, without case (cmpBase and
 	// segs are already in that form).
 	loose bool
+}
+
+// anchors resolves rule bases to their real locations for one decision,
+// each distinct base once.
+type anchors struct {
+	resolve func(string) string
+	real    map[string][2]string // base -> {real, loosened real}
+}
+
+func newAnchors() *anchors {
+	return &anchors{resolve: newRealPathMemo(), real: map[string][2]string{}}
+}
+
+// realBase is base's real location in the rule's comparison form, and
+// whether it differs from base.
+func (a *anchors) realBase(r pathRule) (string, bool) {
+	v, ok := a.real[r.base]
+	if !ok {
+		real := a.resolve(r.base)
+		v = [2]string{real, loosen(real)}
+		a.real[r.base] = v
+	}
+	if v[0] == r.base {
+		return "", false
+	}
+	if r.loose {
+		return v[1], true
+	}
+	return v[0], true
 }
 
 // foldCase is set where the default filesystem ignores case (macOS,
@@ -288,7 +321,7 @@ func (c matchCtx) compilePathRule(kind fileKind, pattern string, src RuleSource,
 		}
 		// Still guards the exact path it names (and, being a path, what
 		// is under it).
-		r.bases = withReal(filepath.Join(anchor, p))
+		r.base = filepath.Join(anchor, p)
 		r.segs = nil
 		return r.loosened(list), true
 	}
@@ -314,39 +347,29 @@ func (c matchCtx) compilePathRule(kind fileKind, pattern string, src RuleSource,
 		base = filepath.Join(base, segs[0])
 		segs = segs[1:]
 	}
-	r.bases = withReal(base)
+	r.base = filepath.Clean(base)
 	r.segs = segs
 	return r.loosened(list), true
 }
 
 // loosened puts a deny or ask rule in the form it compares in.
 func (r pathRule) loosened(list ruleList) pathRule {
+	r.base = filepath.Clean(r.base)
+	r.cmpBase = r.base
 	if list == listAllow {
 		return r
 	}
 	r.loose = true
-	bases := make([]string, len(r.bases))
-	for i, b := range r.bases {
-		bases[i] = loosen(b)
-	}
+	r.cmpBase = loosen(r.base)
 	segs := make([]string, len(r.segs))
 	for i, s := range r.segs {
 		segs[i] = loosen(s)
 	}
-	r.bases, r.segs = bases, segs
+	r.segs = segs
 	return r
 }
 
 func hasGlobMeta(s string) bool { return strings.ContainsAny(s, `*?[\`) }
-
-// withReal is dir, plus dir with symlinks resolved when that differs.
-func withReal(dir string) []string {
-	dir = filepath.Clean(dir)
-	if real := realPath(dir); real != dir {
-		return []string{dir, real}
-	}
-	return []string{dir}
-}
 
 // realPath is execenv.RealPath without the ok flag: an unresolvable path
 // (a symlink loop) is judged as written, and the tool's own open then
@@ -374,31 +397,37 @@ func candPrefixes(abs string) []pathCand {
 // matchesExactly reports whether the rule's pattern matches the path
 // itself. Paths and bases are clean and absolute, so "under a base" is a
 // string prefix ending at a separator.
-func (r pathRule) matchesExactly(c pathCand) bool {
+func (r pathRule) matchesExactly(c pathCand, a *anchors) bool {
 	abs := c.raw
 	if r.loose {
 		abs = c.loose
 	}
-	for _, b := range r.bases {
-		var rest string
-		switch {
-		case abs == b:
-		case b == "/":
-			rest = abs[1:]
-		case len(abs) > len(b) && abs[len(b)] == '/' && strings.HasPrefix(abs, b):
-			rest = abs[len(b)+1:]
-		default:
-			continue
-		}
-		var name []string
-		if rest != "" {
-			name = strings.Split(rest, "/")
-		}
-		if matchSegs(r.segs, name) {
-			return true
-		}
+	if r.underBase(abs, r.cmpBase) {
+		return true
+	}
+	if real, differs := a.realBase(r); differs {
+		return r.underBase(abs, real)
 	}
 	return false
+}
+
+// underBase matches the rule's segments against abs relative to base b.
+func (r pathRule) underBase(abs, b string) bool {
+	var rest string
+	switch {
+	case abs == b:
+	case b == "/":
+		rest = abs[1:]
+	case len(abs) > len(b) && abs[len(b)] == '/' && strings.HasPrefix(abs, b):
+		rest = abs[len(b)+1:]
+	default:
+		return false
+	}
+	var name []string
+	if rest != "" {
+		name = strings.Split(rest, "/")
+	}
+	return matchSegs(r.segs, name)
 }
 
 // matchSegs matches gitignore pattern segments against path segments.
@@ -481,14 +510,14 @@ func (s ruleSet) empty() bool { return len(s.single) == 0 && len(s.groups) == 0 
 // blocks applies deny/ask rules to abs with gitignore semantics: a path is
 // blocked when it, or a directory above it, ends up matched (a carve-out
 // cannot reopen a file inside a blocked directory).
-func (s ruleSet) blocks(abs string) bool {
+func (s ruleSet) blocks(abs string, a *anchors) bool {
 	if s.empty() {
 		return false
 	}
 	ps := candPrefixes(abs)
 	for _, r := range s.single {
 		for _, p := range ps {
-			if r.matchesExactly(p) {
+			if r.matchesExactly(p, a) {
 				return true
 			}
 		}
@@ -497,7 +526,7 @@ func (s ruleSet) blocks(abs string) bool {
 		for _, g := range s.groups {
 			state := false
 			for _, r := range g {
-				if r.matchesExactly(p) {
+				if r.matchesExactly(p, a) {
 					state = !r.neg
 				}
 			}
@@ -510,7 +539,9 @@ func (s ruleSet) blocks(abs string) bool {
 }
 
 // listBlocks is ruleSet.blocks for an ad hoc rule list.
-func listBlocks(rules []pathRule, abs string) bool { return newRuleSet(rules).blocks(abs) }
+func listBlocks(rules []pathRule, abs string) bool {
+	return newRuleSet(rules).blocks(abs, newAnchors())
+}
 
 // callClass is the class of file tool a rule set is prepared for.
 type callClass int
@@ -617,10 +648,11 @@ func (c matchCtx) compile(p Permissions) *compiledRules {
 }
 
 // ruleCache holds compiled rules per (cwd, home, case mode, rules,
-// sources). Compiling resolves each rule's anchor through symlinks, which
-// is most of the cost of a decision; the key is cheap to build. The cache
-// is small and simply cleared when full: a session has one rule set at a
-// time, changing only when /permissions edits it.
+// sources): parsed patterns and their grouping, nothing read from the
+// filesystem (each decision resolves anchors afresh, see anchors). The
+// key is cheap to build. The cache is small and simply cleared when full:
+// a session has one rule set at a time, changing only when /permissions
+// edits it.
 var ruleCache = struct {
 	sync.Mutex
 	m map[string]*compiledRules
@@ -689,9 +721,10 @@ func filePathVerdicts(p Permissions, c matchCtx, tool, arg string) (deny, ask, a
 	}
 
 	class, _ := classOf(tool)
+	a := newAnchors()
 	blocks := func(s ruleSet) bool {
 		for _, cand := range candidates {
-			if s.blocks(cand) {
+			if s.blocks(cand, a) {
 				return true
 			}
 		}
@@ -704,7 +737,7 @@ func filePathVerdicts(p Permissions, c matchCtx, tool, arg string) (deny, ask, a
 	allowSet := cr.allow[class]
 	allow = !allowSet.empty()
 	for _, cand := range candidates {
-		allow = allow && allowSet.blocks(cand)
+		allow = allow && allowSet.blocks(cand, a)
 	}
 	return deny, ask, allow
 }

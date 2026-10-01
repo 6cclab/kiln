@@ -239,6 +239,42 @@ func TestGate_SymlinkEscapesWorkspace(t *testing.T) {
 	}
 }
 
+// TestGate_DotDotLinkLeavesWorkspace (verification HIGH 1): with
+// sshl -> ~/.ssh and evil -> "sshl/..", evil/.ssh/authorized_keys is
+// ~/.ssh/authorized_keys to the kernel; it is outside the workspace with
+// no rules at all, and an Edit(~/.ssh/**) deny blocks it.
+func TestGate_DotDotLinkLeavesWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	proj := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, ".ssh"), filepath.Join(proj, "sshl")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("sshl/..", filepath.Join(proj, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	p := "evil/.ssh/authorized_keys"
+	open := NewGate(GateOptions{Mode: settings.ModeAcceptEdits, Roots: []string{proj}})
+	if open.WithinRoots(p) {
+		t.Errorf("WithinRoots(%q) = true; it is ~/.ssh/authorized_keys", p)
+	}
+	denied := NewGate(GateOptions{
+		Mode:        settings.ModeAcceptEdits,
+		Roots:       []string{proj, home},
+		Permissions: settings.Permissions{Deny: []string{"Edit(~/.ssh/**)"}},
+	})
+	b, err := denied.Check(context.Background(), Request{ToolName: "write", PrimaryArg: p, Args: map[string]any{"path": p, "content": "k"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b == nil || !strings.Contains(b.Reason, "permission rules") {
+		t.Errorf("write %s: %+v, want blocked by permission rules", p, b)
+	}
+}
+
 // TestGate_DenyBeatsSessionGrant: an "always allow" answer does not
 // outlive a deny or ask rule added afterwards.
 func TestGate_DenyBeatsSessionGrant(t *testing.T) {

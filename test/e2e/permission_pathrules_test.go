@@ -175,6 +175,74 @@ steps:
 	}
 }
 
+// TestPermission_DotDotLinkWriteBlocked (verification HIGH 1): with
+// sshl -> ~/.ssh and evil -> "sshl/..", the model's write to
+// evil/.ssh/authorized_keys (which the kernel opens as
+// ~/.ssh/authorized_keys) is blocked by a user Edit(~/.ssh/**) deny in
+// acceptEdits, and the key file is not written.
+func TestPermission_DotDotLinkWriteBlocked(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	target := filepath.Join(home, ".ssh", "authorized_keys")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, ".ssh"), filepath.Join(proj, "sshl")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("sshl/..", filepath.Join(proj, "evil")); err != nil {
+		t.Fatal(err)
+	}
+	pathRulesWriteFile(t, filepath.Join(home, ".claude", "settings.json"), `{"permissions":{"deny":["Edit(~/.ssh/**)"]}}`)
+	addr, _ := startFaux(t, `model: faux-1
+steps:
+  - tool_call: {name: write, args: {path: evil/.ssh/authorized_keys, content: "ssh-ed25519 AAAA attacker"}, id: w1}
+  - on_tool_result: w1
+    then:
+      - tool_call: {name: bash, args: {command: "echo k >> evil/.ssh/authorized_keys"}, id: b1}
+  - on_tool_result: b1
+    then:
+      - text: "done"
+`)
+	res, _ := pathRulesRun(t, proj, home, sessDir, addr, "--permission-mode", "acceptEdits", "--add-dir", home)
+	if !pathRulesBlocked(res, "write(evil/.ssh/authorized_keys)") {
+		t.Errorf("write not blocked by Edit(~/.ssh/**); blocked=%v", res.Blocked)
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Errorf("%s was written through evil -> sshl/..", target)
+	}
+}
+
+// TestPermission_BypassAskRefusedInPrint (verification LOW 10): an ask rule
+// still applies in bypassPermissions (deny, then ask, then bypass); in a
+// print run there is nobody to ask, so the call is refused, and nothing
+// else is.
+func TestPermission_BypassAskRefusedInPrint(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	pathRulesWriteFile(t, filepath.Join(proj, ".claude", "settings.json"), `{"permissions":{"ask":["Edit(src/**)"]}}`)
+	addr, _ := startFaux(t, `model: faux-1
+steps:
+  - tool_call: {name: write, args: {path: src/new.js, content: "x"}, id: w1}
+  - on_tool_result: w1
+    then:
+      - tool_call: {name: write, args: {path: notes.md, content: "x"}, id: w2}
+  - on_tool_result: w2
+    then:
+      - text: "done"
+`)
+	res, _ := pathRulesRun(t, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
+	if !permBlockedFor(res.Blocked, "write(src/new.js)") {
+		t.Errorf("write src/new.js was not refused under an ask rule; blocked=%v", res.Blocked)
+	}
+	if _, err := os.Stat(filepath.Join(proj, "src", "new.js")); err == nil {
+		t.Error("src/new.js was written")
+	}
+	if _, err := os.Stat(filepath.Join(proj, "notes.md")); err != nil {
+		t.Errorf("notes.md (no rule) was not written in bypassPermissions: %v", err)
+	}
+}
+
 // pathRulesWarning is a substring of the startup warning for a
 // Write(docs/**) rule.
 const pathRulesWarning = "not matched by file permission checks"
