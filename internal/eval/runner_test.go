@@ -15,14 +15,15 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("eval test: mkdtemp: " + err.Error())
 	}
-	defer os.RemoveAll(tmp)
 
 	kilnBin = filepath.Join(tmp, "kiln")
 	if out, err := exec.Command("go", "build", "-o", kilnBin, "github.com/andrepato/harness/cmd/kiln").CombinedOutput(); err != nil {
 		panic("eval test: build cmd/kiln: " + err.Error() + "\n" + string(out))
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+	os.RemoveAll(tmp) // not deferred: os.Exit skips deferred calls
+	os.Exit(code)
 }
 
 func writeFile(t *testing.T, path, content string) {
