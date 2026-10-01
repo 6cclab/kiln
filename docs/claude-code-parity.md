@@ -314,7 +314,7 @@ call, but API keys are.
 
 ## Deliberate divergences
 
-Six, all additive:
+Seven; the first six are additive:
 
 1. **Budget footer** (§7) — required by the 32k local case.
 2. **Model picker spans providers** — `/model` must offer local Ollama models
@@ -333,6 +333,22 @@ Six, all additive:
    subagents of its own, up to two levels deep from the root session before
    the tool stops being offered at all. Claude Code's subagents cannot
    dispatch subagents of their own `[chk]`.
+7. **kiln reads `.claude`, writes `.kiln`** — kiln reads Claude Code's settings,
+   memory and rules exactly as Claude Code does, but never writes them. What
+   kiln saves goes to `<repo>/.kiln/settings.local.json` (approved rules,
+   `/permissions` edits), `~/.kiln/settings.json` (`/model` default) and
+   `~/.kiln/CLAUDE.md` (`#` notes when the project has no `CLAUDE.md`). Each
+   kiln file joins its Claude Code scope and wins for single values; deny rules
+   win everywhere. A git-tracked or symlinked `.kiln/settings.local.json` is
+   held until the folder is trusted.
+
+   Open, not yet moved:
+   - `kiln mcp add/remove` still writes Claude Code's `~/.claude.json` (local
+     and user scope) and `.mcp.json` (project scope). Moving it needs a kiln
+     MCP config file and a reader that merges it with Claude Code's.
+   - `/memory user` opens `~/.claude/CLAUDE.md` in `$EDITOR`. kiln writes
+     nothing itself; decide whether it should open `~/.kiln/CLAUDE.md`
+     instead.
 
 ## Explicit non-goals
 
