@@ -264,8 +264,24 @@ Per-window budgets (all proportional, with floors/ceilings): system prompt 10% o
 - Bare tool name (no parens): case-insensitive exact match, e.g. `Read` matches any `Read` call regardless of argument.
 - Bare `mcp__` prefix: matches every tool whose name starts with it, e.g. `mcp__homelab-kb` matches every tool from that server.
 - Paren form `Tool(pattern)`: tool name must match exactly (case-insensitive); `pattern` is glob-compiled (`*` → `.*`, everything else escaped) and anchored against the tool's primary argument. A `Tool(cmd:*)` colon suffix is rewritten to `Tool(cmd *)` first. A pattern ending in a wildcard also matches the bare command with no arguments (e.g. `Bash(git *)` matches both `git status` and bare `git`).
-- Examples: `Bash(git *)` matches `git status`, `git commit -m x`, and bare `git`. `Read(/path/**)` matches any `Read` whose path starts with `/path/`. `mcp__homelab-kb` matches `mcp__homelab-kb__hk_search` and every other tool from that server.
+- Examples: `Bash(git *)` matches `git status`, `git commit -m x`, and bare `git`. `mcp__homelab-kb` matches `mcp__homelab-kb__hk_search` and every other tool from that server.
 - A malformed pattern fails closed (never matches) rather than erroring.
+- A bare `Edit` rule covers every edit tool (`edit`, `write`, …) and a bare `Read` every read tool; any other bare rule (`Write`) matches its own tool only.
+
+### Read and Edit path rules (`pathrules.go`, `settings.go`)
+
+`Read(path)` and `Edit(path)` follow Claude Code's "Read and Edit" and "Symlinks" rules ([permissions docs](https://code.claude.com/docs/en/permissions)). They are never compared with the raw argument text.
+
+- **The path argument** is resolved the way the tool resolves it (`execenv.ResolveToolPath`: `@` prefix, `~`, `file://`, relative to the primary working directory, cleaned).
+- **Anchors**: `//p` absolute; `~/p` under `$HOME`; `/p` under the rule's settings source (project and local settings, `--allowed-tools`/`--disallowed-tools` and session rules: the primary working directory; user settings: `~/.claude`; `--settings <file>`: that file's directory); `p` or `./p` under the current directory. kiln does not read `CLAUDE_CONFIG_DIR`, so user settings are always `~/.claude/settings.json`. Each rule keeps its source through the merge (`Permissions.AllowFrom`/`DenyFrom`/`AskFrom`, parallel to the lists; a missing entry means a CLI or session rule).
+- **gitignore patterns**: `*` within a segment, `**` across. A relative pattern with no slash (`.env`, `*.key`) matches at any depth under the current directory. A relative single-directory pattern (`secrets/**`) matches at any depth in a deny or ask rule, but only at `<cwd>/secrets` in an allow rule. Every other shape is anchored. A pattern matching a directory covers what is under it. `./name` in an allow rule stays at `<cwd>/name` (Claude Code's docs give `./` no separate depth rule; kiln takes the narrower reading for allow and the wider for deny/ask).
+- **`!` carve-outs** (deny and ask lists): carve out of the relative rules listed before them from the same settings file only, read relative to the current directory, and cannot reopen a file inside a blocked directory.
+- **Symlinks**: a deny or ask rule applies if the requested path or its resolved target matches; an allow rule needs both. A rule is also tried at its anchor's real location, so `Read(//etc/**)` covers `/private/etc` on macOS. A file that does not exist yet resolves through its deepest existing ancestor.
+- **Case**: on macOS and Windows, whose default filesystems ignore case, deny and ask rules match case-insensitively (`.ENV` opens `.env`); allow rules always match exact case.
+- **Invalid patterns**: a deny or ask pattern that is not a valid glob (or contains `..`) still guards the exact path it names; an invalid allow pattern approves nothing.
+- **Tools**: Edit rules apply to `edit`, `write`, `multi_edit`, `notebook_edit`; Read rules to `read`, `grep`, `glob`, `ls`. A Read deny also blocks `edit`/`write`/`multi_edit` (not `notebook_edit`).
+- **`Write(...)`, `MultiEdit(...)`, `NotebookEdit(...)`, `Glob(...)`**: Claude Code accepts these path rules but never consults them, and warns at startup. kiln honours the deny and ask ones as `Edit(...)`/`Read(...)` (never weaker than the rule's evident intent), ignores the allow ones (never broader than Claude Code), and prints a startup warning for each naming the replacement.
+- **Bash**: Read and Edit *deny* rules also apply to the files a `bash` or `bash_background` command names: operands of recognised file commands (`cat`, `head`, `tail`, `sed`, `tee`, `cp`, `grep`, …, following a `cd` earlier in the line) and redirection targets (`> f`, `>> f`, `< f`, `&> f`). Read deny rules check files read and written; Edit deny rules files written. A file named only through a variable other than `$HOME`, a command substitution, or opened by a script itself is not seen.
 
 ### `Decide` (`settings.go`)
 
@@ -284,7 +300,7 @@ Read-only set: `read`, `glob`, `grep`, `session_search`, `tool_search`, `bash_ou
 
 ### Outside-workspace rule
 
-`internal/claude/permission/permission.go`. After `Decide` returns a verdict, if the call carries a path argument (`path`/`file_path`/`filePath`) that resolves outside the gate's registered roots, an otherwise-allowed call is forced to prompt (or denied, headless with no prompter) — unless the mode is `bypassPermissions`, which skips this check too. `WithinRoots` (`permission.go`) resolves relative paths against the first root and rejects any `..`-escape.
+`internal/claude/permission/permission.go`. After `Decide` returns a verdict, if the call carries a path argument (`path`/`file_path`/`filePath`) that resolves outside the gate's registered roots, an otherwise-allowed call is forced to prompt (or denied, headless with no prompter) — unless the mode is `bypassPermissions`, which skips this check too. `WithinRoots` (`permission.go`) resolves the path as the tools do (`execenv.ResolveToolPath`: `@`, `~`, `file://`, relative to the first root) and rejects any `..`-escape.
 
 ### `task` role-crossing gate
 

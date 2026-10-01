@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/execenv"
 )
 
 // PromptChoice is the user's answer to a permission prompt.
@@ -194,17 +195,26 @@ func (g *Gate) Roots() []string {
 	return out
 }
 
-// WithinRoots reports whether path lies inside any allowed root.
-func (g *Gate) WithinRoots(path string) bool {
-	full := path
-	if !filepath.IsAbs(full) {
-		base := "."
-		if len(g.roots) > 0 {
-			base = g.roots[0]
-		}
-		full = filepath.Join(base, full)
+// cwd is the primary working directory: the first root, where relative
+// paths and cwd-anchored permission rules resolve. "" (no roots) lets
+// settings fall back to the process's working directory.
+func (g *Gate) cwd() string {
+	if len(g.roots) > 0 {
+		return g.roots[0]
 	}
-	full = filepath.Clean(full)
+	return ""
+}
+
+// WithinRoots reports whether path lies inside any allowed root. path is
+// resolved the way the file tools resolve it (execenv.ResolveToolPath), so
+// "~/x", "@/x" and file:///x name the file the tool will open, not a
+// directory called "~" or "@" under the workspace.
+func (g *Gate) WithinRoots(path string) bool {
+	base := "."
+	if len(g.roots) > 0 {
+		base = g.roots[0]
+	}
+	full := execenv.ResolveToolPath(base, path)
 	for _, root := range g.roots {
 		rel, err := filepath.Rel(root, full)
 		if err != nil {
@@ -271,16 +281,16 @@ const (
 	RuleAsk   RuleList = "ask"
 )
 
-func (g *Gate) list(list RuleList) *[]string {
+// list returns a rule list and its parallel source list
+// (settings.Permissions.AllowFrom etc.).
+func (g *Gate) list(list RuleList) (*[]string, *[]settings.RuleSource) {
 	switch list {
-	case RuleAllow:
-		return &g.permissions.Allow
 	case RuleDeny:
-		return &g.permissions.Deny
+		return &g.permissions.Deny, &g.permissions.DenyFrom
 	case RuleAsk:
-		return &g.permissions.Ask
+		return &g.permissions.Ask, &g.permissions.AskFrom
 	default:
-		return &g.permissions.Allow
+		return &g.permissions.Allow, &g.permissions.AllowFrom
 	}
 }
 
@@ -290,12 +300,14 @@ func (g *Gate) list(list RuleList) *[]string {
 func (g *Gate) AddRule(list RuleList, rule string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	l := g.list(list)
+	l, _ := g.list(list)
 	for _, r := range *l {
 		if r == rule {
 			return
 		}
 	}
+	// No source entry: a session rule, anchored like a CLI rule at the
+	// primary working directory (settings.Permissions' doc comment).
 	*l = append(*l, rule)
 }
 
@@ -303,14 +315,20 @@ func (g *Gate) AddRule(list RuleList, rule string) {
 func (g *Gate) RemoveRule(list RuleList, rule string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	l := g.list(list)
+	l, from := g.list(list)
 	out := make([]string, 0, len(*l))
-	for _, r := range *l {
-		if r != rule {
-			out = append(out, r)
+	var outFrom []settings.RuleSource
+	for i, r := range *l {
+		if r == rule {
+			continue
+		}
+		out = append(out, r)
+		// Keep each remaining rule's source aligned with it.
+		if i < len(*from) {
+			outFrom = append(outFrom, (*from)[i])
 		}
 	}
-	*l = out
+	*l, *from = out, outFrom
 }
 
 // SessionGrants returns grants made by "yes, don't ask again" this
@@ -417,7 +435,7 @@ func PrimaryArgOf(args map[string]any) (string, bool) {
 // explicitAsk reports whether an ask rule names this bash command, which
 // the read-only allowance must not override.
 func (g *Gate) explicitAsk(permissions settings.Permissions, cmd string) bool {
-	return len(permissions.Ask) > 0 && settings.Decide(settings.Permissions{Ask: permissions.Ask}, "bash", cmd, settings.ModeAuto) == settings.Ask
+	return len(permissions.Ask) > 0 && settings.DecideIn(settings.Permissions{Ask: permissions.Ask, AskFrom: permissions.AskFrom}, g.cwd(), "bash", cmd, settings.ModeAuto) == settings.Ask
 }
 
 // commandWithinRoots reports whether every path a command names stays in
@@ -495,7 +513,16 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 	}
 
-	verdict := settings.Decide(permissions, req.ToolName, req.PrimaryArg, mode)
+	// A file tool is judged on its path argument, resolved the way the
+	// tool resolves it (settings/pathrules.go), whatever PrimaryArgOf
+	// picked.
+	decideArg := req.PrimaryArg
+	if settings.IsFileTool(req.ToolName) {
+		if p, ok := PathArgOf(req.Args); ok {
+			decideArg = p
+		}
+	}
+	verdict := settings.DecideIn(permissions, g.cwd(), req.ToolName, decideArg, mode)
 
 	// A bash command that provably only reads, and only inside the
 	// workspace, runs without asking in the modes that otherwise ask about

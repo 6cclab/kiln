@@ -7,18 +7,12 @@ import (
 	"github.com/andrepato/harness/internal/execenv"
 )
 
-// unicodeSpaces matches the special Unicode space characters pi normalizes
-// out of tool-supplied paths, mirroring path-utils.js's UNICODE_SPACES.
-var unicodeSpaces = regexp.MustCompile("[  -   　]")
-
 const narrowNoBreakSpace = " "
 
-// normalizeToolPath mirrors path-utils.js's normalizeToolPath: collapse
-// Unicode space variants to plain spaces, and strip a leading "@" (some
-// clients quote paths with an @-mention prefix).
+// normalizeToolPath is execenv.NormalizeToolPath. It lives there so the
+// permission gate resolves a path argument exactly as the tools do.
 func normalizeToolPath(path string) string {
-	normalized := unicodeSpaces.ReplaceAllString(path, " ")
-	return strings.TrimPrefix(normalized, "@")
+	return execenv.NormalizeToolPath(path)
 }
 
 // resolveToolPath mirrors path-utils.js's resolveToolPath.

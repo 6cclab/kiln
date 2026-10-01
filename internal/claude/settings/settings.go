@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/andrepato/harness/internal/claude/paths"
+	"github.com/andrepato/harness/internal/execenv"
 )
 
 // PermissionMode is one of the six modes Claude Code's permission system
@@ -25,11 +27,37 @@ const (
 )
 
 // Permissions is the allow/deny/ask rule lists plus a default mode.
+//
+// AllowFrom, DenyFrom and AskFrom run parallel to Allow, Deny and Ask:
+// entry i is where rule i came from, which decides where a Read/Edit "/path"
+// rule is anchored (pathrules.go). A From slice shorter than its list (or
+// nil) means the remaining rules came from CLI flags or this session, which
+// Claude Code anchors at the primary working directory; so code that only
+// appends rule strings keeps working, and code that removes one must remove
+// the matching From entry (permission.Gate.RemoveRule does).
 type Permissions struct {
 	Allow       []string
 	Deny        []string
 	Ask         []string
+	AllowFrom   []RuleSource
+	DenyFrom    []RuleSource
+	AskFrom     []RuleSource
 	DefaultMode PermissionMode // "" means unset
+}
+
+// RuleSource is the settings file a permission rule was read from.
+type RuleSource struct {
+	// Scope is the settings scope; "" for CLI flags and session rules.
+	Scope paths.Scope
+	// File is the settings file's path; "" for CLI flags and session rules.
+	// Two files are two sources, even in the same scope ("!" carve-outs
+	// reach only rules from their own source).
+	File string
+	// Root is the directory a "/path" Read/Edit rule is anchored at: the
+	// user's ~/.claude for user settings, the file's own directory for
+	// --settings, and "" (the primary working directory) for project and
+	// local settings, CLI flags and session rules.
+	Root string
 }
 
 // Settings is the merged result of loading settings.json across scopes.
@@ -109,16 +137,31 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		Permissions: Permissions{Allow: []string{}, Deny: []string{}, Ask: []string{}},
 	}
 
-	files := []paths.SettingsFile{}
+	type source struct {
+		paths.SettingsFile
+		root string // RuleSource.Root for this file's rules
+	}
+	files := []source{}
 	for _, f := range paths.SettingsFiles(cwd) {
 		if wants(opts.Sources, f.Scope) {
-			files = append(files, f)
+			root := ""
+			if f.Scope == paths.ScopeUser {
+				// "/path" in user settings is under ~/.claude, the
+				// directory that holds the file (Claude Code's table).
+				root = filepath.Dir(f.Path)
+			}
+			files = append(files, source{f, root})
 		}
 	}
 	if opts.Extra != "" {
 		// Applied last so it overrides the hierarchy, mirroring the TS
-		// behaviour of pushing it onto the "local" scope.
-		files = append(files, paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra})
+		// behaviour of pushing it onto the "local" scope. Its "/path"
+		// rules anchor at the file's own directory.
+		root := filepath.Dir(opts.Extra)
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+		files = append(files, source{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root})
 	}
 
 	for _, f := range files {
@@ -136,9 +179,16 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 
 		merged.LoadedFrom = append(merged.LoadedFrom, f.Scope)
 		if raw.Permissions != nil {
-			merged.Permissions.Allow = append(merged.Permissions.Allow, raw.Permissions.Allow...)
-			merged.Permissions.Deny = append(merged.Permissions.Deny, raw.Permissions.Deny...)
-			merged.Permissions.Ask = append(merged.Permissions.Ask, raw.Permissions.Ask...)
+			src := RuleSource{Scope: f.Scope, File: f.Path, Root: f.root}
+			add := func(list *[]string, from *[]RuleSource, rules []string) {
+				*list = append(*list, rules...)
+				for range rules {
+					*from = append(*from, src)
+				}
+			}
+			add(&merged.Permissions.Allow, &merged.Permissions.AllowFrom, raw.Permissions.Allow)
+			add(&merged.Permissions.Deny, &merged.Permissions.DenyFrom, raw.Permissions.Deny)
+			add(&merged.Permissions.Ask, &merged.Permissions.AskFrom, raw.Permissions.Ask)
 			if raw.Permissions.DefaultMode != "" {
 				merged.Permissions.DefaultMode = raw.Permissions.DefaultMode
 			}
@@ -189,8 +239,11 @@ var regexMeta = regexp.MustCompile(`[.*+?^${}()|[\]\\]`)
 //	mcp__homelab     PREFIX - every tool from that MCP server
 //	Bash(find:*)     colon form: commands beginning with `find`
 //	Bash(git *)      glob form, as documented by `claude --help`
+//	Read(src/**)     a Read/Edit path rule, gitignore-style (pathrules.go)
 //
-// Only `*` is a wildcard; every other regex metacharacter is escaped.
+// A bare Edit rule covers every edit tool (edit, write, ...) and a bare Read
+// rule every read tool, as in Claude Code. For the non-path shapes only `*`
+// is a wildcard; every other regex metacharacter is escaped.
 // Matching is case-insensitive because Claude Code writes Read/Bash/Edit
 // while pi's tools are read/bash/edit.
 func MatchesRule(rule, toolName, primaryArg string) bool {
@@ -202,7 +255,23 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 		if strings.HasPrefix(bare, "mcp__") {
 			return strings.HasPrefix(tool, bare)
 		}
-		return sameTool(bare, tool)
+		return sameTool(bare, tool) || bareFamilyMatches(bare, tool)
+	}
+	if kind, _, pattern, ok := splitFileRule(rule); ok {
+		// A Read/Edit path rule (pathrules.go), judged here as a deny
+		// rule from the command line: anchored at the current directory,
+		// matching the requested path or its symlink target. Decide does
+		// not come through here; it knows each rule's list and source.
+		if toolFileKind(toolName) != kind {
+			return false
+		}
+		c := newMatchCtx("")
+		r, ok := c.compilePathRule(kind, pattern, RuleSource{}, listDeny)
+		if !ok {
+			return false
+		}
+		requested := execenv.ResolveToolPath(c.cwd, primaryArg)
+		return listBlocks([]pathRule{r}, requested) || listBlocks([]pathRule{r}, realPath(requested))
 	}
 	if !sameTool(strings.ToLower(m[1]), tool) {
 		return false
@@ -299,9 +368,24 @@ const (
 //
 // deny is checked first and is absolute: an explicit denial must not be
 // overridable by a broader allow rule elsewhere in the hierarchy.
+//
+// Relative paths, and Read/Edit rules anchored at the current directory,
+// resolve against the process's working directory; DecideIn names it.
 func Decide(permissions Permissions, toolName, primaryArg string, mode PermissionMode) Decision {
+	return DecideIn(permissions, "", toolName, primaryArg, mode)
+}
+
+// DecideIn is Decide with the primary working directory given: cwd is where
+// a relative path argument, a "path" or "./path" Read/Edit rule, and a
+// "/path" rule from project/local settings or the command line resolve.
+// "" means the process's working directory. For a file tool (read, edit,
+// write, ...) primaryArg is its path argument.
+func DecideIn(permissions Permissions, cwd, toolName, primaryArg string, mode PermissionMode) Decision {
 	hits := func(rules []string) bool {
 		for _, r := range rules {
+			if _, _, _, isPath := splitFileRule(r); isPath {
+				continue // judged with its source by filePathVerdicts
+			}
 			if MatchesRule(r, toolName, primaryArg) {
 				return true
 			}
@@ -309,11 +393,19 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 		return false
 	}
 
+	c := newMatchCtx(cwd)
 	denyHit, askHit, allowHit := hits(permissions.Deny), hits(permissions.Ask), hits(permissions.Allow)
-	if strings.EqualFold(toolName, "bash") {
+	switch {
+	case strings.EqualFold(toolName, "bash"):
 		// A command line is several commands; judge each one
 		// (bashRuleVerdicts).
 		denyHit, askHit, allowHit = bashRuleVerdicts(permissions, toolName, primaryArg)
+		denyHit = denyHit || bashFileDenied(permissions, c, primaryArg)
+	case strings.EqualFold(toolName, "bash_background"):
+		denyHit = denyHit || bashFileDenied(permissions, c, primaryArg)
+	case IsFileTool(toolName):
+		d, a, al := filePathVerdicts(permissions, c, toolName, primaryArg)
+		denyHit, askHit, allowHit = denyHit || d, askHit || a, allowHit || al
 	}
 
 	if denyHit {

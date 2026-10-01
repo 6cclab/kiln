@@ -372,7 +372,16 @@ workspace boundary.
 **Rule syntax** (`MatchesRule`): a bare rule is an exact tool-name match
 (`mcp__`-prefixed rules match by prefix); a parenthesized rule
 `Tool(pattern)` matches the tool's primary argument against a glob (`*`),
-with a `cmd:*` colon suffix normalized to `cmd *`.
+with a `cmd:*` colon suffix normalized to `cmd *`. `Read(path)` and
+`Edit(path)` are path rules (`internal/claude/settings/pathrules.go`), matched
+as Claude Code matches them: the tool's path argument is resolved to an
+absolute path the way the tool resolves it (`execenv.ResolveToolPath`), and the
+rule is a gitignore pattern under its anchor (`//` root, `~/` home, `/` the
+settings source's directory, otherwise the current directory). Each rule
+carries its source (`settings.RuleSource`, in `Permissions.AllowFrom`/
+`DenyFrom`/`AskFrom`) through the merge, so a user-settings `/path` anchors at
+`~/.claude` and a project one at the project. Deny rules also reach the files a
+bash command names (`bash_paths.go`).
 
 **Outside-workspace rule**: a path argument outside `Gate.Roots` always
 warrants a question — even when a rule would otherwise `Allow` — unless
