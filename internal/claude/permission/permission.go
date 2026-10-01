@@ -259,22 +259,17 @@ func under(full string, roots []string) bool {
 	return false
 }
 
-// resolvePlanPath makes path absolute and clean, relative to the first
-// root when it is not already absolute, matching how WithinRoots resolves
-// a relative path. Used only by the planLedgerPath exception, which needs
-// to compare a tool call's path argument against g.planLedgerPath (always
-// absolute) regardless of whether the model passed it relative or
-// absolute.
+// resolvePlanPath resolves a tool call's path argument the way the tools
+// do (execenv.ResolveToolPath: "@", "~", "file://", relative to the first
+// root), clean. Used only by the planLedgerPath exception, which needs to
+// compare it against g.planLedgerPath (always absolute) whatever spelling
+// the model used.
 func (g *Gate) resolvePlanPath(path string) string {
-	full := path
-	if !filepath.IsAbs(full) {
-		base := "."
-		if len(g.roots) > 0 {
-			base = g.roots[0]
-		}
-		full = filepath.Join(base, full)
+	base := "."
+	if len(g.roots) > 0 {
+		base = g.roots[0]
 	}
-	return filepath.Clean(full)
+	return filepath.Clean(execenv.ResolveToolPath(base, path))
 }
 
 // SetMode sets the active permission mode.
@@ -584,20 +579,24 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		return nil, OutcomeAuto, nil
 	}
 
+	verdict := settings.DecideFromHits(hits, req.ToolName, decideArg, mode)
+
 	// HARNESS_EXP_LEDGER (internal/cli/experiments.go): the one narrow
-	// exception to plan mode's read-only enforcement, checked before
-	// Decide so it never has to know about it. Only edit/write, and only
-	// for the exact ledger path — every other tool and every other path
-	// still hits Decide's ModePlan case below and is refused as usual. A
-	// deny rule still wins.
+	// exception to plan mode's read-only enforcement — edit/write on
+	// exactly the ledger path, nothing else, however the call spells it.
+	// It is taken only after the rules have been evaluated, and only when
+	// neither a deny nor an ask rule matched: a deny rule on the ledger
+	// still refuses, and an ask rule still asks (rather than meeting plan
+	// mode's refusal of edits). Every other tool and path keeps verdict.
 	if mode == settings.ModePlan && g.planLedgerPath != "" && !hits.Deny &&
 		(strings.EqualFold(req.ToolName, "edit") || strings.EqualFold(req.ToolName, "write")) {
 		if path, ok := PathArgOf(req.Args); ok && g.resolvePlanPath(path) == g.planLedgerPath {
-			return nil, OutcomeAuto, nil
+			if !hits.Ask {
+				return nil, OutcomeAuto, nil
+			}
+			verdict = settings.Ask
 		}
 	}
-
-	verdict := settings.DecideFromHits(hits, req.ToolName, decideArg, mode)
 
 	// A bash command that provably only reads, and only inside the
 	// workspace, runs without asking in the modes that otherwise ask about
