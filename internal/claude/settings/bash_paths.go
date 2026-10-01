@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/andrepato/harness/internal/execenv"
 )
 
 // Read and Edit rules also apply to the files a bash command names, as in
@@ -41,23 +43,40 @@ func bashFileVerdict(p Permissions, c matchCtx, cmd string) (deny, ask, unsure b
 	reads, writes, unsure := bashFileOperands(cmd, c.cwd, c.home)
 	a := newAnchors()
 	resolve := newRealPathMemo()
+	// Every spelling of a file: as written (cleaned), as open(2) resolves
+	// it, and the OS's own name for it (execenv.CanonicalPath).
+	spellings := map[string][]string{}
+	spell := func(f string) []string {
+		if s, ok := spellings[f]; ok {
+			return s
+		}
+		lexical := filepath.Clean(f)
+		var real string
+		if hasDotSegment(f) {
+			real = realPath(f) // physical: a ".." after a link
+		} else {
+			real = resolve(lexical)
+		}
+		s := appendNew(nil, lexical, real, execenv.CanonicalPath(f))
+		spellings[f] = s
+		return s
+	}
+	for _, f := range append(append([]string(nil), reads...), writes...) {
+		for _, s := range spell(f) {
+			if isVolPath(s) {
+				unsure = true // /.vol/<dev>/<inode>: no rule can name it
+			}
+		}
+	}
 	covered := func(rules ruleSet, files []string) bool {
 		if rules.empty() {
 			return false
 		}
 		for _, f := range files {
-			lexical := filepath.Clean(f)
-			if rules.blocks(lexical, a) {
-				return true
-			}
-			var real string
-			if hasDotSegment(f) {
-				real = realPath(f) // physical: a ".." after a link
-			} else {
-				real = resolve(lexical)
-			}
-			if real != lexical && rules.blocks(real, a) {
-				return true
+			for _, s := range spell(f) {
+				if rules.blocks(s, a) {
+					return true
+				}
 			}
 		}
 		return false
@@ -68,6 +87,10 @@ func bashFileVerdict(p Permissions, c matchCtx, cmd string) (deny, ask, unsure b
 	ask = covered(cr.ask[classRead], reads) || covered(cr.ask[classEdit], writes)
 	return false, ask, unsure
 }
+
+// isVolPath reports a path under macOS's /.vol, which opens files by
+// device and inode number (any case: the root volume ignores it).
+func isVolPath(p string) bool { return execenv.IsVolPath(p) }
 
 // hasDotSegment reports a "." or ".." component in p.
 func hasDotSegment(p string) bool {
@@ -135,6 +158,21 @@ type bashScan struct {
 	unsure        bool
 	depth         int
 	budget        *globBudget
+	// docs are the current line's heredoc bodies (stripHeredocs).
+	docs []heredoc
+	// stdin is what the command being scanned reads as standard input,
+	// for a shell that runs it as a script.
+	stdin stdinSource
+}
+
+// stdinSource is a command's standard input as far as a redirection
+// says: a heredoc or herestring (script holds its text), a file, or
+// nothing known (a pipe, or the terminal).
+type stdinSource struct {
+	script   string
+	scripted bool // a heredoc or herestring: script is the text
+	file     bool // "< file"
+	unknown  bool // a herestring kiln cannot expand
 }
 
 // nested scans a command line that runs inside this one (a substitution,
@@ -153,14 +191,25 @@ func (s *bashScan) line(cmd string) {
 		return
 	}
 	// Heredoc bodies are input, not commands; only the substitutions in
-	// an unquoted-delimiter body run.
+	// an unquoted-delimiter body run (and a shell fed one runs all of
+	// it: segment). Backslash-newline goes before words are split, as in
+	// bash (in an unquoted body too, not a quoted one).
 	cmd, docs := stripHeredocs(cmd)
-	outer, bodies, ok := extractSubstitutions(cmd, false)
+	for i := range docs {
+		if !docs[i].quoted {
+			docs[i].body = joinContinuations(docs[i].body)
+		}
+	}
+	s.docs = docs
+	outer, bodies, ok := extractSubstitutions(joinContinuations(cmd), false)
 	if !ok {
 		s.unsure = true
 	}
 	for _, d := range docs {
-		_, more, ok := extractSubstitutions(d, true)
+		if d.quoted {
+			continue
+		}
+		_, more, ok := extractSubstitutions(d.body, true)
 		if !ok {
 			s.unsure = true
 		}
@@ -182,8 +231,25 @@ func (s *bashScan) line(cmd string) {
 // it, and the command itself.
 func (s *bashScan) segment(seg string) {
 	words, redirs := shellWords(seg)
+	s.stdin = stdinSource{}
 	for _, r := range redirs {
-		s.operand(r.target, r.read, r.write)
+		switch {
+		case r.doc:
+			if n, ok := heredocIndex(r.target.lit()); ok && n < len(s.docs) {
+				s.stdin = stdinSource{script: s.docs[n].body, scripted: true}
+			}
+		case r.here:
+			if w, ok := expandHome(r.target, s.home); ok {
+				s.stdin = stdinSource{script: w.lit(), scripted: true}
+			} else {
+				s.stdin = stdinSource{unknown: true}
+			}
+		default:
+			s.operand(r.target, r.read, r.write)
+			if r.read && !r.write {
+				s.stdin = stdinSource{file: true}
+			}
+		}
 	}
 	words, chdir := s.unwrap(words)
 	if len(words) == 0 {
@@ -489,23 +555,31 @@ func (s *bashScan) command(words []word) {
 	}
 }
 
-// shell scans "bash -c 'cmd'" (any option cluster holding c: -c, -lc, -ec)
-// as the command line it runs, and "bash script" as reading the script.
+// shell scans what a shell runs: "bash -c 'cmd'" (any option cluster
+// holding c: -c, -lc, -ec) as that command line; "bash script" as reading
+// the script file; and a shell reading its script from standard input
+// ("bash -s", or no script argument) as the heredoc or herestring fed to
+// it. With stdin from a pipe or the terminal, what it runs is unknowable.
 func (s *bashScan) shell(args []word) {
+	fromStdin := false
 	for i := 0; i < len(args); i++ {
 		a := args[i].lit()
 		if a == "--" || !strings.HasPrefix(a, "-") || a == "-" {
 			if a == "--" {
 				i++
 			}
-			if i < len(args) {
+			if i < len(args) && !fromStdin {
 				s.operand(args[i], true, false) // the script file
+				return
 			}
-			return
+			break // -s: the rest are the script's arguments
 		}
 		if strings.HasPrefix(a, "--") || !strings.Contains(a, "c") {
 			if a == "-o" || a == "+o" {
 				i++ // -o option-name
+			}
+			if !strings.HasPrefix(a, "--") && strings.Contains(a, "s") {
+				fromStdin = true
 			}
 			continue
 		}
@@ -520,6 +594,15 @@ func (s *bashScan) shell(args []word) {
 		}
 		s.nested(script.lit())
 		return
+	}
+	switch in := s.stdin; {
+	case in.scripted:
+		s.nested(in.script)
+	case in.file:
+		// "bash < script": the file was recorded as read; like
+		// "bash script", its contents are not seen.
+	default:
+		s.unsure = true // a pipe ("echo 'cat .env' | sh") or the terminal
 	}
 }
 

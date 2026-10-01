@@ -56,6 +56,9 @@ func WriteTool(env *execenv.Env) *tool.Tool {
 				if ctx.Err() != nil {
 					return tool.Errorf("Operation aborted"), nil
 				}
+				if refusal, refused := refuseVolPath(absolutePath, in.Path); refused {
+					return refusal, nil
+				}
 				if refusal, refused := refuseSymlink(env, absolutePath, in.Path); refused {
 					return refusal, nil
 				}

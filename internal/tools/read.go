@@ -59,6 +59,9 @@ func ReadTool(env *execenv.Env) *tool.Tool {
 				return tool.Errorf("invalid arguments: %s", err), nil
 			}
 			absolutePath := resolveReadToolPath(env, in.Path)
+			if refusal, refused := refuseVolPath(absolutePath, in.Path); refused {
+				return refusal, nil
+			}
 			bytes, err := env.ReadFile(absolutePath)
 			if err != nil {
 				return tool.Errorf("%s", err), nil

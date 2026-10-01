@@ -99,17 +99,38 @@ func decodeANSI(s string, start int) (out []byte, end int, ok bool) {
 	return out, len(s), false
 }
 
+// heredoc is one heredoc body. quoted is set when its delimiter was quoted
+// ('EOF', "EOF", \EOF): then bash expands nothing in it.
+type heredoc struct {
+	body   string
+	quoted bool
+}
+
+// heredocWord is the placeholder stripHeredocs leaves for heredoc n's
+// delimiter, so the command it feeds can be matched to its body.
+func heredocWord(n int) string { return "KILNHEREDOC" + strconv.Itoa(n) }
+
+// heredocIndex reverses heredocWord.
+func heredocIndex(w string) (int, bool) {
+	s, ok := strings.CutPrefix(w, "KILNHEREDOC")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil
+}
+
 // stripHeredocs removes heredoc bodies from cmd (they are input, not
-// commands), keeping the "<<WORD" operators. expanding are the bodies whose
-// delimiter was unquoted: bash expands $(…) and backticks in those, so
-// their substitutions still run and must be scanned.
-func stripHeredocs(cmd string) (out string, expanding []string) {
+// commands), keeping each "<<" operator with heredocWord(n) in place of
+// its delimiter, and returns the bodies. bash expands $(…) and backticks
+// in a body whose delimiter is unquoted, and a shell fed one runs it.
+func stripHeredocs(cmd string) (out string, docs []heredoc) {
 	type pending struct {
 		delim        string
 		tabs, quoted bool
 	}
 	var b strings.Builder
-	var docs []pending
+	var waiting []pending
 	i := 0
 	for i < len(cmd) {
 		c := cmd[i]
@@ -121,7 +142,7 @@ func stripHeredocs(cmd string) (out string, expanding []string) {
 			end := strings.IndexByte(cmd[i+1:], '\'')
 			if end < 0 {
 				b.WriteString(cmd[i:])
-				return b.String(), expanding
+				return b.String(), docs
 			}
 			b.WriteString(cmd[i : i+end+2])
 			i += end + 2
@@ -140,7 +161,10 @@ func stripHeredocs(cmd string) (out string, expanding []string) {
 			end := min(j+1, len(cmd))
 			b.WriteString(cmd[i:end])
 			i = end
-		case strings.HasPrefix(cmd[i:], "<<") && !strings.HasPrefix(cmd[i:], "<<<"):
+		case strings.HasPrefix(cmd[i:], "<<<"):
+			b.WriteString("<<<") // a herestring, not a heredoc
+			i += 3
+		case strings.HasPrefix(cmd[i:], "<<"):
 			j := i + 2
 			p := pending{}
 			if j < len(cmd) && cmd[j] == '-' {
@@ -176,15 +200,18 @@ func stripHeredocs(cmd string) (out string, expanding []string) {
 				}
 			}
 			p.delim = delim.String()
-			b.WriteString(cmd[i:min(j, len(cmd))])
-			i = j
-			if p.delim != "" {
-				docs = append(docs, p)
+			if p.delim == "" {
+				b.WriteString(cmd[i:min(j, len(cmd))])
+				i = j
+				continue
 			}
-		case c == '\n' && len(docs) > 0:
+			b.WriteString("<< " + heredocWord(len(docs)+len(waiting)))
+			i = j
+			waiting = append(waiting, p)
+		case c == '\n' && len(waiting) > 0:
 			b.WriteByte('\n')
 			i++
-			for _, d := range docs {
+			for _, d := range waiting {
 				var body strings.Builder
 				for i < len(cmd) {
 					nl := strings.IndexByte(cmd[i:], '\n')
@@ -205,17 +232,54 @@ func stripHeredocs(cmd string) (out string, expanding []string) {
 					body.WriteString(line)
 					body.WriteByte('\n')
 				}
-				if !d.quoted {
-					expanding = append(expanding, body.String())
-				}
+				docs = append(docs, heredoc{body: body.String(), quoted: d.quoted})
 			}
-			docs = nil
+			waiting = nil
 		default:
 			b.WriteByte(c)
 			i++
 		}
 	}
-	return b.String(), expanding
+	// A heredoc never terminated by a newline has an empty body.
+	for _, d := range waiting {
+		docs = append(docs, heredoc{quoted: d.quoted})
+	}
+	return b.String(), docs
+}
+
+// joinContinuations removes backslash-newline pairs, which bash deletes
+// before it splits a line into words ("c\<NL>at .env" is "cat .env"),
+// except inside single quotes and $'…', where they are text.
+func joinContinuations(cmd string) string {
+	if !strings.Contains(cmd, "\\\n") {
+		return cmd
+	}
+	var b strings.Builder
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case c == '\\' && i+1 < len(cmd) && cmd[i+1] == '\n':
+			i++
+		case c == '\\' && i+1 < len(cmd):
+			b.WriteString(cmd[i : i+2])
+			i++
+		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '\'':
+			end, _ := ansiEnd(cmd, i+2)
+			b.WriteString(cmd[i:end])
+			i = end - 1
+		case c == '\'':
+			end := strings.IndexByte(cmd[i+1:], '\'')
+			if end < 0 {
+				b.WriteString(cmd[i:])
+				return b.String()
+			}
+			b.WriteString(cmd[i : i+end+2])
+			i += end + 1
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // extractSubstitutions pulls the bodies of $(...), `...`, <(...) and >(...)
@@ -355,10 +419,12 @@ func literalWord(s string) word {
 	return word{b: []byte(s), q: q}
 }
 
-// redirect is one redirection in a command.
+// redirect is one redirection in a command. doc marks "<<" (target is
+// heredocWord(n)), here marks "<<<" (target is the string fed to stdin).
 type redirect struct {
 	target      word
 	read, write bool
+	doc, here   bool
 }
 
 // shellWords splits one command (a BashSegments segment) into its words,
@@ -464,9 +530,10 @@ func shellWords(seg string) (words []word, redirs []redirect) {
 				}
 				r.write = op == ">&"
 				r.read = op == "<&"
-			default: // "<<", "<<-", "<<<": a heredoc delimiter or a string
-				skipNext = true
-				continue
+			case "<<", "<<-":
+				r.doc = true
+			case "<<<":
+				r.here = true
 			}
 			pending = len(redirs)
 			redirs = append(redirs, r)
@@ -477,7 +544,7 @@ func shellWords(seg string) (words []word, redirs []redirect) {
 	flush()
 	var out []redirect
 	for _, r := range redirs {
-		if (r.read || r.write) && (len(r.target.b) > 0 || r.target.bad) {
+		if (r.read || r.write || r.doc || r.here) && (len(r.target.b) > 0 || r.target.bad) {
 			out = append(out, r)
 		}
 	}

@@ -116,6 +116,9 @@ func BashDontAskRule(command string) string {
 //     allow rule and nothing is opaque, so Bash(git *) no longer approves
 //     "git status && rm -rf ~".
 func bashRuleVerdicts(permissions Permissions, toolName, cmd string) (deny, ask, allow bool) {
+	// bash deletes backslash-newline before splitting words: "rm \<NL>-rf
+	// x" is "rm -rf x", and Bash(rm *) must see it so.
+	cmd = joinContinuations(cmd)
 	segments, opaque := BashSegments(cmd)
 	anyMatch := func(rules []string) bool {
 		for _, r := range rules {

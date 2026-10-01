@@ -8,6 +8,17 @@ import (
 	"github.com/andrepato/harness/internal/tool"
 )
 
+// refuseVolPath refuses a path under macOS's /.vol (as written, or after
+// resolving symlinks), which opens a file by device and inode number: a
+// spelling no permission rule can name, so the file tools do not open it.
+func refuseVolPath(absolutePath, shown string) (tool.Result, bool) {
+	real, _ := execenv.RealPath(absolutePath)
+	if execenv.IsVolPath(absolutePath) || execenv.IsVolPath(real) {
+		return tool.Errorf("Refusing %s: /.vol paths open files by inode number. Use the file's ordinary path.", shown), true
+	}
+	return tool.Result{}, false
+}
+
 // refuseSymlink is Claude Code's rule for the Edit and Write tools: when
 // the path asked for is itself a symlink, refuse and name the link's
 // target, so the model edits the file it actually means and the permission

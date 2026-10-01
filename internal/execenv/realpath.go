@@ -39,6 +39,15 @@ func ReadPathVariants(abs string) []string {
 	return out
 }
 
+// IsVolPath reports whether p is under macOS's /.vol, which opens a file
+// by device and inode number ("/.vol/16777220/1234"), a spelling no path
+// rule can name. The first component is compared without case, as the
+// root volume compares it.
+func IsVolPath(p string) bool {
+	parts := splitPath(filepath.Clean(p))
+	return filepath.IsAbs(p) && len(parts) > 0 && strings.EqualFold(parts[0], ".vol")
+}
+
 // maxLinkHops bounds symlink resolution, as the kernel's ELOOP does.
 const maxLinkHops = 40
 
@@ -76,7 +85,9 @@ func RealPath(p string) (string, bool) {
 			if len(cur) > 0 {
 				cur = cur[:len(cur)-1]
 			}
-			if missingAt >= 0 && len(cur) < missingAt {
+			// Popping the missing component itself puts the walk back
+			// on paths that exist (len(cur) == missingAt).
+			if missingAt >= 0 && len(cur) <= missingAt {
 				missingAt = -1 // back on paths that exist
 			}
 			continue

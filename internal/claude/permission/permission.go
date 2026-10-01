@@ -230,11 +230,15 @@ func (g *Gate) WithinRoots(path string) bool {
 		return false
 	}
 	realRoots := make([]string, 0, len(g.roots))
+	canonRoots := make([]string, 0, len(g.roots))
 	for _, r := range g.roots {
 		rr, _ := execenv.RealPath(r)
 		realRoots = append(realRoots, rr)
+		canonRoots = append(canonRoots, execenv.CanonicalPath(r))
 	}
-	return under(real, realRoots)
+	// And the OS's own name for it (macOS firmlinks, APFS case folding,
+	// /.vol inode paths), against the roots' own.
+	return under(real, realRoots) && under(execenv.CanonicalPath(full), canonRoots)
 }
 
 // under reports whether full is one of roots or inside one.
