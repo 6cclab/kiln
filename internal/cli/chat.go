@@ -486,6 +486,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// deny first).
 	perms.Allow = append(append([]string{}, perms.Allow...), args.AllowedTools...)
 	perms.Deny = append(append([]string{}, perms.Deny...), args.DisallowedTools...)
+	// Write(...)/MultiEdit(...)/NotebookEdit(...)/Glob(...) path rules:
+	// Claude Code never consults them and warns at startup; kiln honours
+	// the deny/ask ones as Edit/Read rules and ignores the allow ones
+	// (settings/pathrules.go), and says so here. Like Claude Code, a
+	// Glob(...) rule passed in --allowed-tools is not warned about. The
+	// warnings go to stderr or the TUI's startup notes, never the model.
+	for _, w := range claudesettings.FileRuleWarnings(perms, args.AllowedTools...) {
+		startupWarn(w)
+	}
 
 	// HARNESS_EXP_LEDGER (switch 1, experiments.go): the one path plan
 	// mode's read-only enforcement exempts, resolved once here so the gate

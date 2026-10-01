@@ -9,7 +9,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/execenv"
 )
 
 // PromptChoice is the user's answer to a permission prompt.
@@ -194,24 +196,56 @@ func (g *Gate) Roots() []string {
 	return out
 }
 
-// WithinRoots reports whether path lies inside any allowed root.
-func (g *Gate) WithinRoots(path string) bool {
-	full := path
-	if !filepath.IsAbs(full) {
-		base := "."
-		if len(g.roots) > 0 {
-			base = g.roots[0]
-		}
-		full = filepath.Join(base, full)
+// cwd is the primary working directory: the first root, where relative
+// paths and cwd-anchored permission rules resolve. "" (no roots) lets
+// settings fall back to the process's working directory.
+func (g *Gate) cwd() string {
+	if len(g.roots) > 0 {
+		return g.roots[0]
 	}
-	full = filepath.Clean(full)
-	for _, root := range g.roots {
+	return ""
+}
+
+// WithinRoots reports whether path lies inside any allowed root. path is
+// resolved the way the file tools resolve it (execenv.ResolveToolPath), so
+// "~/x", "@/x" and file:///x name the file the tool will open, not a
+// directory called "~" or "@" under the workspace.
+//
+// Both the path as written and the path it resolves to through symlinks
+// (execenv.RealPath, which follows a dangling final link too) must be
+// inside: "proj/sshdir/authorized_keys" with sshdir -> ~/.ssh is outside,
+// however it is spelt. A path that cannot be resolved (a symlink loop) is
+// outside.
+func (g *Gate) WithinRoots(path string) bool {
+	base := "."
+	if len(g.roots) > 0 {
+		base = g.roots[0]
+	}
+	full := execenv.ResolveToolPath(base, path)
+	if !under(full, g.roots) {
+		return false
+	}
+	real, ok := execenv.RealPath(full)
+	if !ok {
+		return false
+	}
+	realRoots := make([]string, 0, len(g.roots))
+	for _, r := range g.roots {
+		rr, _ := execenv.RealPath(r)
+		realRoots = append(realRoots, rr)
+	}
+	return under(real, realRoots)
+}
+
+// under reports whether full is one of roots or inside one.
+func under(full string, roots []string) bool {
+	for _, root := range roots {
 		rel, err := filepath.Rel(root, full)
 		if err != nil {
 			continue
 		}
-		// Empty means the path IS the root; a leading ".." means it escapes.
-		if rel == "." || (!strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)) {
+		// "." means the path IS the root; a leading ".." means it escapes.
+		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, "../") && !filepath.IsAbs(rel)) {
 			return true
 		}
 	}
@@ -271,46 +305,90 @@ const (
 	RuleAsk   RuleList = "ask"
 )
 
-func (g *Gate) list(list RuleList) *[]string {
+// list returns a rule list and its parallel source list
+// (settings.Permissions.AllowFrom etc.).
+func (g *Gate) list(list RuleList) (*[]string, *[]settings.RuleSource) {
 	switch list {
-	case RuleAllow:
-		return &g.permissions.Allow
 	case RuleDeny:
-		return &g.permissions.Deny
+		return &g.permissions.Deny, &g.permissions.DenyFrom
 	case RuleAsk:
-		return &g.permissions.Ask
+		return &g.permissions.Ask, &g.permissions.AskFrom
 	default:
-		return &g.permissions.Allow
+		return &g.permissions.Allow, &g.permissions.AllowFrom
 	}
 }
 
-// AddRule adds a rule for the rest of this session. Separate from
+// localSource is the source of a rule /permissions saves: the project's
+// settings.local.json (internal/cli/commands.go writes it there), which
+// anchors "/path" rules at the primary working directory.
+func (g *Gate) localSource() settings.RuleSource {
+	for _, f := range paths.SettingsFiles(g.cwd()) {
+		if f.Scope == paths.ScopeLocal {
+			return settings.RuleSource{Scope: paths.ScopeLocal, File: f.Path}
+		}
+	}
+	return settings.RuleSource{}
+}
+
+// removable reports whether a rule from src is one RemoveRule may drop:
+// one /permissions saved (the local settings file) or a CLI/session rule.
+// A rule from user or project settings stays, as it does in its file.
+func (g *Gate) removable(src settings.RuleSource) bool {
+	return src == settings.RuleSource{} || src == g.localSource()
+}
+
+// AddRule adds a rule for the rest of this session, as the local settings
+// file's rule (which is where /permissions also saves it). Separate from
 // persisting it: the in-memory set is what the next tool call is judged
-// against.
+// against. It is deduplicated on the rule and its source together: the
+// same text from user settings is a different rule ("/secrets/**" there
+// is under ~/.claude, here under the project).
 func (g *Gate) AddRule(list RuleList, rule string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	l := g.list(list)
-	for _, r := range *l {
-		if r == rule {
+	l, from := g.list(list)
+	src := g.localSource()
+	for i, r := range *l {
+		if r == rule && sourceAt(*from, i) == src {
 			return
 		}
 	}
+	// Give every earlier rule an explicit source entry first, so the new
+	// rule's lands at its own index.
+	for len(*from) < len(*l) {
+		*from = append(*from, settings.RuleSource{})
+	}
 	*l = append(*l, rule)
+	*from = append(*from, src)
 }
 
-// RemoveRule removes a rule from the in-memory set.
+func sourceAt(from []settings.RuleSource, i int) settings.RuleSource {
+	if i < len(from) {
+		return from[i]
+	}
+	return settings.RuleSource{}
+}
+
+// RemoveRule removes a rule from the in-memory set: the copies /permissions
+// saved or this session added, not the same text from user or project
+// settings (writesettings.RemoveRule leaves those files alone too).
 func (g *Gate) RemoveRule(list RuleList, rule string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	l := g.list(list)
+	l, from := g.list(list)
 	out := make([]string, 0, len(*l))
-	for _, r := range *l {
-		if r != rule {
-			out = append(out, r)
+	var outFrom []settings.RuleSource
+	for i, r := range *l {
+		if r == rule && g.removable(sourceAt(*from, i)) {
+			continue
+		}
+		out = append(out, r)
+		// Keep each remaining rule's source aligned with it.
+		if i < len(*from) {
+			outFrom = append(outFrom, (*from)[i])
 		}
 	}
-	*l = out
+	*l, *from = out, outFrom
 }
 
 // SessionGrants returns grants made by "yes, don't ask again" this
@@ -414,12 +492,6 @@ func PrimaryArgOf(args map[string]any) (string, bool) {
 	return "", false
 }
 
-// explicitAsk reports whether an ask rule names this bash command, which
-// the read-only allowance must not override.
-func (g *Gate) explicitAsk(permissions settings.Permissions, cmd string) bool {
-	return len(permissions.Ask) > 0 && settings.Decide(settings.Permissions{Ask: permissions.Ask}, "bash", cmd, settings.ModeAuto) == settings.Ask
-}
-
 // commandWithinRoots reports whether every path a command names stays in
 // the workspace: absolute and ~ paths must lie inside a root (/dev/null
 // aside), and a relative one must not climb out with "..". A cd target is
@@ -472,9 +544,6 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 // the tool block that follows.
 func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult, Outcome, error) {
 	k := key(req.ToolName, req.PrimaryArg)
-	if g.sessionAllowed(k) {
-		return nil, OutcomeAuto, nil
-	}
 
 	g.mu.Lock()
 	permissions, mode := g.permissions, g.mode
@@ -483,28 +552,51 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	g.mu.Unlock()
 
+	// A file tool is judged on its path argument, resolved the way the
+	// tool resolves it (settings/pathrules.go), whatever PrimaryArgOf
+	// picked.
+	decideArg := req.PrimaryArg
+	if settings.IsFileTool(req.ToolName) {
+		if p, ok := PathArgOf(req.Args); ok {
+			decideArg = p
+		}
+	}
+	hits := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg)
+
+	// A session "don't ask again" grant stands in for an allow rule, so
+	// like one it never beats a deny or ask rule — including one added
+	// after the grant (Claude Code: deny, then ask, then allow). Nor does
+	// it cover a command naming a file kiln cannot resolve: the same text
+	// ("cat $F") can name a different file next time.
+	grantable := !hits.Deny && !hits.Ask && !hits.Unsure
+	if grantable && g.sessionAllowed(k) {
+		return nil, OutcomeAuto, nil
+	}
+
 	// HARNESS_EXP_LEDGER (internal/cli/experiments.go): the one narrow
 	// exception to plan mode's read-only enforcement, checked before
 	// Decide so it never has to know about it. Only edit/write, and only
 	// for the exact ledger path — every other tool and every other path
-	// still hits Decide's ModePlan case below and is refused as usual.
-	if mode == settings.ModePlan && g.planLedgerPath != "" &&
+	// still hits Decide's ModePlan case below and is refused as usual. A
+	// deny rule still wins.
+	if mode == settings.ModePlan && g.planLedgerPath != "" && !hits.Deny &&
 		(strings.EqualFold(req.ToolName, "edit") || strings.EqualFold(req.ToolName, "write")) {
 		if path, ok := PathArgOf(req.Args); ok && g.resolvePlanPath(path) == g.planLedgerPath {
 			return nil, OutcomeAuto, nil
 		}
 	}
 
-	verdict := settings.Decide(permissions, req.ToolName, req.PrimaryArg, mode)
+	verdict := settings.DecideFromHits(hits, req.ToolName, decideArg, mode)
 
 	// A bash command that provably only reads, and only inside the
 	// workspace, runs without asking in the modes that otherwise ask about
 	// bash — the way the read tool never asks. Asking before "cat app.py"
-	// or "git log" was pure friction. Rules still win: Decide has already
-	// returned Deny or an explicit Ask for anything a rule names.
+	// or "git log" was pure friction. Rules still win: not when an ask rule
+	// (a Bash rule, or a Read/Edit rule on a file it names) matched, or it
+	// names a file kiln cannot resolve while path rules exist.
 	if verdict == settings.Ask && strings.EqualFold(req.ToolName, "bash") &&
 		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits || mode == settings.ModeDontAsk) &&
-		settings.IsReadOnlyCommand(req.PrimaryArg) && !g.explicitAsk(permissions, req.PrimaryArg) &&
+		!hits.Ask && !hits.Unsure && settings.IsReadOnlyCommand(req.PrimaryArg) &&
 		g.commandWithinRoots(req.PrimaryArg) {
 		return nil, OutcomeAuto, nil
 	}
@@ -524,7 +616,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 		g.promptMu.Lock()
 		defer g.promptMu.Unlock()
-		if g.sessionAllowed(k) {
+		if grantable && g.sessionAllowed(k) {
 			return nil, OutcomeAuto, nil
 		}
 		promptReq := req
@@ -577,7 +669,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 
 	g.promptMu.Lock()
 	defer g.promptMu.Unlock()
-	if g.sessionAllowed(k) {
+	if grantable && g.sessionAllowed(k) {
 		return nil, OutcomeAuto, nil
 	}
 	choice, err := g.prompter(ctx, req)

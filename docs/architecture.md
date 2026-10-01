@@ -360,9 +360,10 @@ the session.
 
 **The six modes** (`internal/claude/settings/settings.go`): `manual`,
 `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`. `Decide`
-checks deny rules first (absolute, never overridable), then
-`bypassPermissions` (allow everything), then allow rules, then ask rules,
-then falls through to mode defaults: `plan` allows only `settings.ReadOnly`
+checks deny rules first (absolute, never overridable), then ask rules
+(they ask even in `bypassPermissions`, and even when an allow rule matches
+too), then `bypassPermissions` (allow everything else), then allow rules —
+Claude Code's deny, ask, allow — then falls through to mode defaults: `plan` allows only `settings.ReadOnly`
 tools and denies everything else outright, never asking; `acceptEdits`
 allows `edit`/`write`/read-only tools and asks for the rest; `dontAsk`
 answers like `manual`, and the gate then denies whatever `manual` would have
@@ -372,7 +373,16 @@ workspace boundary.
 **Rule syntax** (`MatchesRule`): a bare rule is an exact tool-name match
 (`mcp__`-prefixed rules match by prefix); a parenthesized rule
 `Tool(pattern)` matches the tool's primary argument against a glob (`*`),
-with a `cmd:*` colon suffix normalized to `cmd *`.
+with a `cmd:*` colon suffix normalized to `cmd *`. `Read(path)` and
+`Edit(path)` are path rules (`internal/claude/settings/pathrules.go`), matched
+as Claude Code matches them: the tool's path argument is resolved to an
+absolute path the way the tool resolves it (`execenv.ResolveToolPath`), and the
+rule is a gitignore pattern under its anchor (`//` root, `~/` home, `/` the
+settings source's directory, otherwise the current directory). Each rule
+carries its source (`settings.RuleSource`, in `Permissions.AllowFrom`/
+`DenyFrom`/`AskFrom`) through the merge, so a user-settings `/path` anchors at
+`~/.claude` and a project one at the project. Deny rules also reach the files a
+bash command names (`bash_paths.go`).
 
 **Outside-workspace rule**: a path argument outside `Gate.Roots` always
 warrants a question — even when a rule would otherwise `Allow` — unless

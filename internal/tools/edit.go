@@ -79,11 +79,14 @@ func EditTool(env *execenv.Env) *tool.Tool {
 				if ctx.Err() != nil {
 					return tool.Errorf("Operation aborted"), nil
 				}
+				if refusal, refused := refuseSymlink(env, absolutePath, in.Path); refused {
+					return refusal, nil
+				}
 				info, err := env.Stat(absolutePath)
 				if err != nil {
 					return tool.Errorf("Could not edit file: %s. Error code: %s.", in.Path, errCode(err)), nil
 				}
-				if info.Kind != execenv.KindFile && info.Kind != execenv.KindSymlink {
+				if info.Kind != execenv.KindFile {
 					return tool.Errorf("Could not edit file: %s. Path is not a file.", in.Path), nil
 				}
 				raw, err := env.ReadFile(absolutePath)

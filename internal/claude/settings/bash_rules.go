@@ -21,6 +21,12 @@ func BashSegments(cmd string) (segments []string, opaque bool) {
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
 		switch {
+		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '\'':
+			// $'…': a backslash escapes the next byte, so \' does not
+			// end it (and a ";" inside is text, not a separator).
+			end, _ := ansiEnd(cmd, i+2)
+			cur.WriteString(cmd[i:end])
+			i = end - 1
 		case c == '\'':
 			end := strings.IndexByte(cmd[i+1:], '\'')
 			if end < 0 {
@@ -62,6 +68,10 @@ func BashSegments(cmd string) (segments []string, opaque bool) {
 				continue
 			}
 			flush()
+		case c == '|' && i > 0 && cmd[i-1] == '>':
+			// ">|" (and "2>|") is a clobbering output redirection, not a
+			// pipe: it stays part of its command.
+			cur.WriteByte(c)
 		case c == ';', c == '|', c == '\n':
 			flush()
 		default:

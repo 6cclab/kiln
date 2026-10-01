@@ -56,6 +56,9 @@ func WriteTool(env *execenv.Env) *tool.Tool {
 				if ctx.Err() != nil {
 					return tool.Errorf("Operation aborted"), nil
 				}
+				if refusal, refused := refuseSymlink(env, absolutePath, in.Path); refused {
+					return refusal, nil
+				}
 				// Read whatever is there before overwriting it, so the
 				// result can report "new file" versus a real diff against
 				// the previous content (kiln's diff block, transcript.go

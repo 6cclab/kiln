@@ -1,24 +1,39 @@
 package tools
 
 import (
-	"regexp"
-	"strings"
+	"os"
+	"path/filepath"
 
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/tool"
 )
 
-// unicodeSpaces matches the special Unicode space characters pi normalizes
-// out of tool-supplied paths, mirroring path-utils.js's UNICODE_SPACES.
-var unicodeSpaces = regexp.MustCompile("[  -   　]")
+// refuseSymlink is Claude Code's rule for the Edit and Write tools: when
+// the path asked for is itself a symlink, refuse and name the link's
+// target, so the model edits the file it actually means and the permission
+// check sees that path ("Writes through a symlink",
+// https://code.claude.com/docs/en/permissions). A symlinked directory
+// further up the path is not refused; the gate judges the resolved path.
+func refuseSymlink(env *execenv.Env, absolutePath, shown string) (tool.Result, bool) {
+	info, err := env.Stat(absolutePath)
+	if err != nil || info.Kind != execenv.KindSymlink {
+		return tool.Result{}, false
+	}
+	target, err := os.Readlink(absolutePath)
+	if err != nil {
+		return tool.Errorf("Refusing to write %s: it is a symlink, and its target could not be read.", shown), true
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(absolutePath), target)
+	}
+	target = filepath.Clean(target)
+	return tool.Errorf("Refusing to write %s: it is a symlink to %s. Use %s as the path if that is the file you mean.", shown, target, target), true
+}
 
-const narrowNoBreakSpace = " "
-
-// normalizeToolPath mirrors path-utils.js's normalizeToolPath: collapse
-// Unicode space variants to plain spaces, and strip a leading "@" (some
-// clients quote paths with an @-mention prefix).
+// normalizeToolPath is execenv.NormalizeToolPath. It lives there so the
+// permission gate resolves a path argument exactly as the tools do.
 func normalizeToolPath(path string) string {
-	normalized := unicodeSpaces.ReplaceAllString(path, " ")
-	return strings.TrimPrefix(normalized, "@")
+	return execenv.NormalizeToolPath(path)
 }
 
 // resolveToolPath mirrors path-utils.js's resolveToolPath.
@@ -26,47 +41,19 @@ func resolveToolPath(env *execenv.Env, path string) string {
 	return env.AbsolutePath(normalizeToolPath(path))
 }
 
-// amPmSpace matches " AM." / " PM." so resolveReadToolPath can retry with
-// macOS Photos-style narrow-no-break-space timestamps.
-var amPmSpace = regexp.MustCompile(`(?i) (AM|PM)\.`)
-
-// resolveReadToolPath mirrors path-utils.js's resolveReadToolPath: some
-// filenames arrive with characters the model normalized away (a narrow
-// no-break space before AM/PM, precomposed vs. decomposed Unicode, a
-// curly apostrophe standing in for a straight one). Try the literal path
-// first, then each of those variants, falling back to the literal
-// resolved path if none exist so callers get pi's ordinary "not found"
-// error instead of a silent substitution.
+// resolveReadToolPath mirrors path-utils.js's resolveReadToolPath: try the
+// literal path first, then each of execenv.ReadPathVariants (filenames the
+// model normalized away: a narrow no-break space before AM/PM, a curly
+// apostrophe), falling back to the literal resolved path if none exist so
+// callers get pi's ordinary "not found" error instead of a silent
+// substitution. The permission gate judges the same variant list, so a
+// deny rule covers whichever one this opens.
 func resolveReadToolPath(env *execenv.Env, path string) string {
 	resolved := resolveToolPath(env, path)
-	seen := map[string]bool{}
-	variants := []string{
-		resolved,
-		amPmSpace.ReplaceAllString(resolved, " "+narrowNoBreakSpace+"$1."),
-		normalizeNFD(resolved),
-		strings.ReplaceAll(resolved, "'", "’"),
-		strings.ReplaceAll(normalizeNFD(resolved), "'", "’"),
-	}
-	for _, variant := range variants {
-		if seen[variant] {
-			continue
-		}
-		seen[variant] = true
+	for _, variant := range execenv.ReadPathVariants(resolved) {
 		if ok, err := env.Exists(variant); err == nil && ok {
 			return variant
 		}
 	}
 	return resolved
-}
-
-// normalizeNFD is a deviation from pi's resolveReadToolPath, which retries
-// with path.normalize("NFD") (Unicode canonical decomposition — e.g. an
-// "é" precomposed as U+00E9 becomes "e" + a combining acute accent). Go's
-// standard library has no Unicode normalization package, and adding
-// golang.org/x/text for this one macOS-filename edge case was judged not
-// worth a new dependency, so this is the identity function: the
-// NFD-decomposed retry variant is skipped, and the other retries (curly
-// apostrophe, narrow-no-break-space before AM/PM) still apply.
-func normalizeNFD(path string) string {
-	return path
 }
