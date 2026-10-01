@@ -481,13 +481,21 @@ func DecideFromHits(h Hits, toolName, primaryArg string, mode PermissionMode) De
 	return d
 }
 
+// Plan mode, as Claude Code's permission-modes doc describes it for a
+// session without its auto-mode classifier (kiln has none): "edits stay
+// blocked until you approve the plan", and "commands outside the built-in
+// read-only set prompt for approval". Both hold whatever allow rules say.
+
 // planRefuses reports a call plan mode refuses whatever the rules: one
-// that edits files (the edit tools) or runs a shell command that is not
-// provably read-only.
-func planRefuses(toolName, primaryArg string) bool {
+// that edits files (the edit tools).
+func planRefuses(toolName string) bool {
+	return toolFileKind(toolName) == kindEdit
+}
+
+// planAsks reports a call plan mode asks about whatever allow rules say: a
+// shell command that is not provably read-only (a background one always).
+func planAsks(toolName, primaryArg string) bool {
 	switch {
-	case toolFileKind(toolName) == kindEdit:
-		return true
 	case strings.EqualFold(toolName, "bash"):
 		return !IsReadOnlyCommand(primaryArg)
 	case strings.EqualFold(toolName, "bash_background"):
@@ -496,17 +504,21 @@ func planRefuses(toolName, primaryArg string) bool {
 	return false
 }
 
+// PlanOverridesAllow reports a call that no allow rule, mode or session
+// "don't ask again" grant approves while planning: plan mode refuses it
+// (an edit) or asks about it (a shell command that is not read-only).
+func PlanOverridesAllow(toolName, primaryArg string) bool {
+	return planRefuses(toolName) || planAsks(toolName, primaryArg)
+}
+
 func decideRules(h Hits, toolName, primaryArg string, mode PermissionMode) Decision {
 	if h.Deny {
 		return Deny
 	}
-	if mode == ModePlan && planRefuses(toolName, primaryArg) {
-		// Claude Code's plan mode: "edits stay blocked until you approve
-		// the plan", whatever allow or ask rules say, so neither an
-		// allow rule nor an approved ask prompt edits during planning.
+	if mode == ModePlan && planRefuses(toolName) {
 		return Deny
 	}
-	if h.Ask {
+	if h.Ask || (mode == ModePlan && planAsks(toolName, primaryArg)) {
 		return Ask
 	}
 	if mode == ModeBypassPermissions || h.Allow {
@@ -515,10 +527,10 @@ func decideRules(h Hits, toolName, primaryArg string, mode PermissionMode) Decis
 
 	switch mode {
 	case ModePlan:
-		// Read-only: anything that could mutate is refused outright rather
-		// than prompted, which is what makes plan mode trustworthy. A bash
-		// command that provably only reads (IsReadOnlyCommand) is allowed,
-		// so planning can look around the way the read tool does.
+		// Edits were refused and other shell commands asked about above.
+		// A bash command that provably only reads (IsReadOnlyCommand) is
+		// allowed, so planning can look around the way the read tool does;
+		// any other tool no rule allowed is refused outright.
 		if ReadOnly[toolName] || (toolName == "bash" && IsReadOnlyCommand(primaryArg)) {
 			return Allow
 		}

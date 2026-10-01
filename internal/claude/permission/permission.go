@@ -575,7 +575,11 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// after the grant (Claude Code: deny, then ask, then allow). Nor does
 	// it cover a command naming a file kiln cannot resolve: the same text
 	// ("cat $F") can name a different file next time.
-	grantable := !hits.Deny && !hits.Ask && !hits.Unsure
+	// Nor, while planning, does it cover an edit or a shell command that is
+	// not read-only: plan mode refuses or asks about those whatever any
+	// allow says (settings.PlanOverridesAllow).
+	grantable := !hits.Deny && !hits.Ask && !hits.Unsure &&
+		!(mode == settings.ModePlan && settings.PlanOverridesAllow(req.ToolName, decideArg))
 	if grantable && g.sessionAllowed(k) {
 		return nil, OutcomeAuto, nil
 	}

@@ -80,7 +80,7 @@ func TestRound3_UnsureNeverWeakensDeny(t *testing.T) {
 	p := Permissions{Deny: []string{"Read(.env)"}}
 	cmd := "rm -rf $TMPDIR/foo"
 	want := map[PermissionMode]Decision{
-		ModePlan:              Deny,
+		ModePlan:              Ask, // a command that is not read-only asks in plan
 		ModeManual:            Ask,
 		ModeAcceptEdits:       Ask,
 		ModeAuto:              Ask,

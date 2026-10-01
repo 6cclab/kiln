@@ -86,13 +86,13 @@ func TestIsReadOnlyCommand(t *testing.T) {
 }
 
 // TestDecidePlanModeBash: plan mode allows a read-only bash command and
-// still refuses anything else.
+// asks about anything else (Claude Code without its plan classifier).
 func TestDecidePlanModeBash(t *testing.T) {
 	if got := Decide(Permissions{}, "bash", "cat SPEC.md && ls -la", ModePlan); got != Allow {
 		t.Errorf("read-only bash in plan mode = %v, want Allow", got)
 	}
-	if got := Decide(Permissions{}, "bash", "mkdir api", ModePlan); got != Deny {
-		t.Errorf("mutating bash in plan mode = %v, want Deny", got)
+	if got := Decide(Permissions{}, "bash", "mkdir api", ModePlan); got != Ask {
+		t.Errorf("mutating bash in plan mode = %v, want Ask", got)
 	}
 	if got := Decide(Permissions{Deny: []string{"Bash(cat *)"}}, "bash", "cat SPEC.md", ModePlan); got != Deny {
 		t.Errorf("deny rule must still win in plan mode, got %v", got)
