@@ -38,7 +38,7 @@ func TestSummarizeArgTruncatesLongArgs(t *testing.T) {
 }
 
 func TestRenderPermissionPromptMenuText(t *testing.T) {
-	req := PermissionRequest{ToolName: "Bash", PrimaryArg: "rm -rf /tmp/x"}
+	req := PermissionRequest{ToolName: "web_fetch", PrimaryArg: "https://example.com", Grantable: true}
 	out := RenderPermissionPrompt(req, "/", 80, 0, false, "")
 	full := strings.Join(out, "\n")
 	for _, want := range []string{"Yes", "Yes, and don't ask again for this", "No, and tell kiln what to do instead", "↑↓ select · enter confirm · esc decline"} {
@@ -80,8 +80,10 @@ func TestRenderBashPermissionPrompt_MatchesReference(t *testing.T) {
 	defer SetColorEnabled(true)
 
 	req := BashPermissionRequest{
-		Command:     "openssl rand -hex 4",
-		Description: "Generate 4 random hex bytes",
+		Command:      "openssl rand -hex 4",
+		Description:  "Generate 4 random hex bytes",
+		Grantable:    true,
+		DontAskRules: []string{"openssl rand *"},
 	}
 	got := RenderBashPermissionPrompt(req, 100, 0)
 
@@ -127,7 +129,7 @@ func TestRenderBashPermissionPrompt_NoDescription(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
 
-	req := BashPermissionRequest{Command: "ls -la"}
+	req := BashPermissionRequest{Command: "ls -la", Grantable: true, DontAskRules: []string{"ls -la *"}}
 	got := RenderBashPermissionPrompt(req, 100, 0)
 	for _, l := range got {
 		if strings.TrimRight(l, " ") == "  " {
@@ -142,26 +144,11 @@ func TestRenderBashPermissionPrompt_NoDescription(t *testing.T) {
 	}
 }
 
-// TestBashDontAskRule checks the "first two words + *" gate expression.
-func TestBashDontAskRule(t *testing.T) {
-	cases := map[string]string{
-		"openssl rand -hex 4": "openssl rand *",
-		"ls":                  "ls *",
-		"":                    "*",
-		"git commit -m x":     "git commit *",
-	}
-	for cmd, want := range cases {
-		if got := bashDontAskRule(cmd); got != want {
-			t.Errorf("bashDontAskRule(%q) = %q, want %q", cmd, got, want)
-		}
-	}
-}
-
 func TestRenderBashPermissionPrompt_Widths(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
 	for _, width := range []int{100, 60} {
-		req := BashPermissionRequest{Command: "echo hi", Description: "say hi"}
+		req := BashPermissionRequest{Command: "echo hi", Description: "say hi", Grantable: true, DontAskRules: []string{"echo hi *"}}
 		rows := RenderBashPermissionPrompt(req, width, 2)
 		if len(rows[0]) != 0 && VisibleWidth(rows[0]) != width {
 			t.Errorf("width %d: rule row width = %d", width, VisibleWidth(rows[0]))
@@ -489,7 +476,7 @@ func TestRenderPlanApproval_ScrollIndicatorWhenClipped(t *testing.T) {
 func TestBashPromptFeedbackKeepsFrame(t *testing.T) {
 	SetColorEnabled(false)
 	defer SetColorEnabled(true)
-	req := BashPermissionRequest{Command: "echo tab-amend-probe"}
+	req := BashPermissionRequest{Command: "echo tab-amend-probe", Grantable: true, DontAskRules: []string{"echo tab-amend-probe *"}}
 	options := RenderBashPermissionPrompt(req, 80, 0)
 	typed := "use printf"
 	req.Feedback = &typed
@@ -592,7 +579,7 @@ func TestLineDiffHunks_KeepsUnchangedLinesAsContext(t *testing.T) {
 // TestRenderPermissionPromptNamesMCPToolAndServer: an MCP tool's qualified
 // id reads as the tool and its server in the approval question.
 func TestRenderPermissionPromptNamesMCPToolAndServer(t *testing.T) {
-	req := PermissionRequest{ToolName: "mcp__incidents__list_incidents"}
+	req := PermissionRequest{ToolName: "mcp__incidents__list_incidents", Grantable: true}
 	full := stripANSI(strings.Join(RenderPermissionPrompt(req, "/", 100, 0, false, ""), "\n"))
 	if !strings.Contains(full, "Allow kiln to use list_incidents from the incidents MCP server?") {
 		t.Errorf("prompt does not name the tool and server:\n%s", full)

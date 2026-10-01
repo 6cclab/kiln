@@ -1681,7 +1681,7 @@ func (m Model) syncPromptPlaceholder() Model {
 		total := len(m.prompt.question.questions[m.prompt.question.index].Options) + 1
 		m.editor.SetPlaceholder(placeholderForOptionCount(total))
 	case m.prompt.pending != nil:
-		m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request.ToolName))))
+		m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request))))
 	case m.prompt.plan != nil:
 		m.editor.SetPlaceholder("press 1, 2 or 3")
 	case m.busy:

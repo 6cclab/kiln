@@ -70,14 +70,14 @@ func TestRenderGolden_PaletteSlashRow0(t *testing.T) {
 // prompt with row 1 selected (raised background + amber key move).
 func TestRenderGolden_PermGeneric3Opt(t *testing.T) {
 	withRenderEnv(t, 80)
-	req := PermissionRequest{ToolName: "grep", PrimaryArg: "TODO"}
+	req := PermissionRequest{ToolName: "grep", PrimaryArg: "TODO", Grantable: true}
 	assertRenderGolden(t, "perm-generic-3opt", RenderPermissionPrompt(req, "/", 80, 0, false, ""))
 	assertRenderGolden(t, "perm-generic-3opt-sel1", RenderPermissionPrompt(req, "/", 80, 1, false, ""))
 }
 
 func TestRenderGolden_PermBash4Opt(t *testing.T) {
 	withRenderEnv(t, 80)
-	req := BashPermissionRequest{Command: "npm test -- upload", Cwd: "/home/dev/relay-api"}
+	req := BashPermissionRequest{Command: "npm test -- upload", Cwd: "/home/dev/relay-api", Grantable: true, DontAskRules: []string{"npm test *"}}
 	assertRenderGolden(t, "perm-bash-4opt", RenderBashPermissionPrompt(req, 80, 0))
 }
 

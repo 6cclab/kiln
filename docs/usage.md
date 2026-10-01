@@ -266,16 +266,30 @@ given mode with `--permission-mode`. Source: `internal/claude/settings/settings.
 - A generic tool: **1 Yes** · **2 Yes, and don't ask again for this** · **3
   No, and tell kiln what to do instead** (opens a feedback line) — `Esc`
   declines outright.
-- A shell command: **1 Yes** · **2 Yes, and don't ask again for: `<prefix>
-  *`** · **3 Yes, and switch to auto mode** · **4 No** (`↑`/`↓` to move,
-  `Tab` to amend).
+- A shell command: **1 Yes** · **2 Yes, and don't ask again for: `<rules>`**
+  · **3 Yes, and switch to auto mode** · **4 No** (`↑`/`↓` to move, `Tab` to
+  amend).
 - An edit or write: **1 Yes** · **2 Yes, and switch to accept edits for this
   session** · **3 No**.
 
-"Don't ask again" from these prompts is a **session-only** grant — it is
-never written to disk, so it doesn't survive a restart. To persist a rule,
-use `/permissions`, which writes to `.claude/settings.local.json` in the
-project. Source: `internal/tui/permission_render.go`, `internal/claude/permission/permission.go`, `internal/claude/writesettings`.
+On a shell command, "don't ask again" saves one allow rule per command in
+the line that still needs approval, as Claude Code does: approving `git
+status && npm test && make build` saves `Bash(npm test *)` and `Bash(make
+build *)` (git status is read-only), so a later `npm test` runs unasked. A
+command whose second word names a subcommand gets a `<command> <subcommand>
+*` rule; anything else, and a shell or wrapper (`sh`, `env`, `sudo`, `xargs`,
+`timeout`, …), gets an exact rule. The option names every rule it saves
+(those that do not fit the row are counted, "+2 more"). The rules go to the
+project's `.claude/settings.local.json`, the file `/permissions` writes, so
+they last across sessions. On any other tool, "don't ask again" is a
+session-only grant for that exact call.
+
+The option is left out (and the options below it move up a number) when the
+grant would not be honoured: a deny or ask rule matched, the command names a
+file kiln cannot resolve while Read/Edit path rules exist, the line cannot
+be parsed or runs something kiln cannot name, a command in it has a
+non-literal word, or it would need more than 5 rules. Source:
+`internal/claude/settings/bash_suggest.go`, `internal/tui/permission_render.go`, `internal/claude/permission/permission.go`, `internal/claude/writesettings`.
 
 **Outside the workspace.** A tool call targeting a path outside the current
 workspace roots always asks, even in a mode that would otherwise allow it

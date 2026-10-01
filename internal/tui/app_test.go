@@ -684,7 +684,7 @@ func TestApp_PromptLayout_BusyLineInputStatusBelowPrompt(t *testing.T) {
 	m.spinner.Start(0)
 	m.spinner.SetLabel("Waiting for approval")
 	m.prompt.pending = &pendingPermission{
-		request: PermissionRequest{ToolName: "grep", PrimaryArg: "TODO"},
+		request: PermissionRequest{ToolName: "grep", PrimaryArg: "TODO", Grantable: true},
 	}
 	m = m.syncPromptPlaceholder()
 

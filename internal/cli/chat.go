@@ -42,6 +42,7 @@ import (
 	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/skills"
+	"github.com/andrepato/harness/internal/claude/writesettings"
 	slashcommands "github.com/andrepato/harness/internal/commands"
 	"github.com/andrepato/harness/internal/compaction"
 	"github.com/andrepato/harness/internal/diag"
@@ -800,6 +801,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// onHookNotices callback, src/cli.ts:681-683); stderr until then.
 	hookNotice := &rebindable[func(string)]{fn: hookNoticeSink(stderr)}
 	notice := func(message string) { hookNotice.get()(message) }
+	// "Yes, and don't ask again" on a bash prompt saves its rules where
+	// Claude Code saves them: the project's .claude/settings.local.json
+	// (the same file /permissions writes).
+	gate.SetRuleSaver(func(rule string) {
+		if err := writesettings.AddRule(cwd, writesettings.Allow, rule); err != nil {
+			notice(fmt.Sprintf("could not save %s to %s: %v (it applies to this session only)", rule, writesettings.LocalSettingsPath(cwd), err))
+		}
+	})
 
 	// ContextUsed (for /usage and /context) tracks the LAST request's
 	// input+output tokens — never UsageTotals, which is the session's

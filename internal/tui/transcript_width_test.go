@@ -93,7 +93,7 @@ func TestFitStatusLineFits(t *testing.T) {
 }
 
 func TestPermissionPromptWrapsLongCommand(t *testing.T) {
-	req := PermissionRequest{ToolName: "bash", PrimaryArg: "echo " + longURL, Args: map[string]any{"command": "echo " + longURL}}
+	req := PermissionRequest{ToolName: "bash", PrimaryArg: "echo " + longURL, Args: map[string]any{"command": "echo " + longURL}, Grantable: true}
 	out := RenderPermissionPrompt(req, "/", width40, 0, false, "")
 	assertFits(t, out, width40)
 }

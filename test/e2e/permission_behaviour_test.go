@@ -295,18 +295,18 @@ steps:
       - text: "second done"
 `
 
-// TestPermission_AllowAlwaysWithinSessionNotAcross drives the TUI in
-// manual mode: the first "echo hi" bash call prompts, answering "2"
-// ("Yes, and don't ask again for: ...") grants it for the rest of the
-// session; a second, identical bash call in the same run does not prompt
-// again; a fresh process (a brand-new Gate, since sessionAllows is
-// in-memory only per permission.go's own doc comment) prompts again for
-// the identical command.
+// TestPermission_AllowAlwaysSavesTheRule drives the TUI in manual mode:
+// the first "echo hi | tee hi.txt" call prompts, and answering "2" ("Yes,
+// and don't ask again for: tee hi.txt") saves Bash(tee hi.txt) to the
+// project's .claude/settings.local.json, as Claude Code does ("Permanently
+// per repository and command"). A second, identical call in the same run
+// does not prompt, and neither does one in a fresh process, which reads
+// the rule back from that file.
 //
 // Proved able to fail: asserting the second call *does* show the prompt
 // (inverting the no-second-prompt check) turned this red because the
 // prompt text never reappeared within the wait window; reverted.
-func TestPermission_AllowAlwaysWithinSessionNotAcross(t *testing.T) {
+func TestPermission_AllowAlwaysSavesTheRule(t *testing.T) {
 	proj, home, sessDir, addr, _ := tuiFixture(t, permBashPromptScript)
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "manual")
@@ -317,7 +317,10 @@ func TestPermission_AllowAlwaysWithinSessionNotAcross(t *testing.T) {
 	if err := s.WaitFor("Allow kiln to run this command", 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	s.SendKey("2") // "Yes, and don't ask again for: ..."
+	if err := s.WaitFor("don’t ask again for: tee hi.txt", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	s.SendKey("2") // "Yes, and don't ask again for: tee hi.txt"
 	// Wait for the first turn's own distinctive reply text, not the
 	// generic turn-summary pattern: that pattern is already satisfied by
 	// this same turn's own summary line and would still be sitting in
@@ -337,21 +340,81 @@ func TestPermission_AllowAlwaysWithinSessionNotAcross(t *testing.T) {
 	if err := s.WaitFor("second done", 5*time.Second); err != nil {
 		t.Fatalf("second identical bash call did not complete without a fresh prompt: %v", err)
 	}
+	assertLocalAllow(t, proj, []string{"Bash(tee hi.txt)"})
 
-	// A fresh process (new Gate) must prompt again for the same command.
-	// It needs its own faux server too: the first process's script cursor
-	// is already exhausted (both steps consumed), so a fresh cursor is
-	// wired up rather than trying to Reset the first server mid-test.
+	// A fresh process reads the saved rule: no prompt. It needs its own
+	// faux server: the first one's script cursor is exhausted.
 	addr2, _ := startFaux(t, permBashPromptScript)
 	s2 := startTUI(t, 100, 30, proj, home, sessDir, addr2, "--permission-mode", "manual")
 	waitReady(t, s2)
 	s2.Send("run a command")
 	s2.SendKey("enter")
-	if err := s2.WaitFor("Allow kiln to run this command", 5*time.Second); err != nil {
-		t.Fatalf("fresh process never prompted for the same command: %v", err)
+	if err := s2.WaitFor("first done", 5*time.Second); err != nil {
+		t.Fatalf("fresh process did not run the saved command unasked: %v", err)
 	}
-	s2.SendKey("2")
-	waitTurnSettled(t, s2)
+}
+
+// assertLocalAllow checks the allow list in proj's settings.local.json.
+func assertLocalAllow(t *testing.T, proj string, want []string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(proj, ".claude", "settings.local.json"))
+	if err != nil {
+		t.Fatalf("settings.local.json: %v", err)
+	}
+	var local struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(data, &local); err != nil {
+		t.Fatalf("settings.local.json: %v\n%s", err, data)
+	}
+	if fmt.Sprint(local.Permissions.Allow) != fmt.Sprint(want) {
+		t.Errorf("settings.local.json allow = %q, want %q", local.Permissions.Allow, want)
+	}
+}
+
+// permCompoundScript runs a compound line, then one of its commands on its
+// own. The commands do not exist (they fail harmlessly): the test is about
+// the prompt, not what runs.
+const permCompoundScript = `model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "git status && kilnfakea test && kilnfakeb build"}, id: c1}
+  - on_tool_result: c1
+    then:
+      - text: "compound done"
+  - tool_call: {name: bash, args: {command: "kilnfakea test -- upload"}, id: c2}
+  - on_tool_result: c2
+    then:
+      - text: "follow-up done"
+`
+
+// TestPermission_DontAskSavesARulePerSubcommand: "don't ask again" on
+// "git status && kilnfakea test && kilnfakeb build" names and saves one
+// rule per command that needed approval (Claude Code's "Compound
+// commands"), not git status (read-only) and not the whole line; a later
+// "kilnfakea test -- upload" then runs without a prompt.
+func TestPermission_DontAskSavesARulePerSubcommand(t *testing.T) {
+	proj, home, sessDir, addr, _ := tuiFixture(t, permCompoundScript)
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "manual")
+	waitReady(t, s)
+
+	s.Send("run the compound line")
+	s.SendKey("enter")
+	if err := s.WaitFor("don’t ask again for: kilnfakea test *, kilnfakeb build *", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	s.SendKey("2")
+	if err := s.WaitFor("compound done", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	assertLocalAllow(t, proj, []string{"Bash(kilnfakea test *)", "Bash(kilnfakeb build *)"})
+
+	s.Send("now just the tests")
+	s.SendKey("enter")
+	if err := s.WaitFor("follow-up done", 5*time.Second); err != nil {
+		t.Fatalf("the follow-up command was not approved by the saved rule: %v", err)
+	}
 }
 
 // TestPermission_RulePrecedence checks settings.Decide's precedence order

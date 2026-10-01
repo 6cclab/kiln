@@ -250,7 +250,8 @@ match wins, checked first → `bypassPermissions` allows the rest → `allow` ma
   separately, guarded by `mode != bypassPermissions`, file:305).
 
 - `/permissions` shows merged deny/allow/ask, active mode, workspace roots, and
-  this session's ungranted-to-settings "don't ask again" grants
+  this session's "don't ask again" grants for tools other than bash (a bash
+  "don't ask again" saves allow rules to `.claude/settings.local.json`)
   (`internal/commands/inspect_commands.go`).
 
 ## Hooks
