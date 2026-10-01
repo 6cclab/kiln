@@ -1,11 +1,11 @@
 # /permissions dialog (internal/tui's generic commandDialog over
 # internal/commands/manage_commands.go's permissionsModal): navigate, then
 # its three action keys — "m" cycles permission mode, "p" promotes the
-# selected rule to deny, "d" deletes it. One real session grant (from
-# approving a bash call with "always allow this session", key "a" on the
-# inline permission prompt — internal/tui/permissionview.go) gives the
-# list a real row to act on, since a fresh project starts with no
-# persisted allow/deny/ask rules.
+# selected rule to deny, "d" deletes it. One real allow rule (saved by
+# approving a bash call with "don't ask again", key "a" on the inline
+# permission prompt — internal/tui/permissionview.go — which writes
+# Bash(touch qa-alpha.txt) to .claude/settings.local.json) gives the list a
+# real row to act on, since a fresh project starts with no rules.
 @faux testdata/faux/qa/dialogs-permissions-dialog.yaml
 
 WAITFOR /describe a task/ 20
@@ -27,7 +27,7 @@ SHOT permissions-dialog-open
 EXPECT_NOT /(?m)^\s*Permissions\s*$/
 EXPECT /mode\s+manual/
 EXPECT /Bash\(touch qa-alpha\.txt\)/
-EXPECT /session only/
+EXPECT /Bash\(touch qa-alpha\.txt\)\s+allow/
 KEY down
 SHOT permissions-navigated
 KEY m
@@ -39,9 +39,9 @@ WAITFOR /is now denied/ 20
 SHOT permissions-promoted
 EXPECT /Bash\(touch qa-alpha\.txt\) is now denied/
 KEY d
-WAITFOR /nothing to delete/ 20
-SHOT permissions-delete-session
-EXPECT /session grants clear when the session ends; nothing to delete/
+WAITFOR /removed Bash/ 20
+SHOT permissions-delete-rule
+EXPECT /removed Bash\(touch qa-alpha\.txt\) from allow/
 KEY esc
 SHOT permissions-closed
 EXPECT_NOT /panic|goroutine/

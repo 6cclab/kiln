@@ -1,0 +1,9 @@
+# A command an ask rule names (the scenario's @setup writes it): the
+# prompt must not offer "don't ask again", since the rule would ask again.
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "npm test -- upload"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Ran it once under the ask rule."
+        usage: {input: 150, output: 15}

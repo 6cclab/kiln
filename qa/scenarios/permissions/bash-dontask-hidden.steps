@@ -1,0 +1,26 @@
+# Bash prompt for a command an ask rule matches: "don't ask again" would
+# not be honoured (the ask rule still asks), so the option is left out,
+# the rest move up a number (Yes / switch to auto mode / No) and its "a"
+# shortcut does nothing (permission.Request.Grantable).
+@faux testdata/faux/qa/permissions-bash-dontask-hidden.yaml
+@setup mkdir -p .claude && printf '{"permissions":{"ask":["Bash(npm test *)"]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+TYPE run the upload tests
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT hidden-prompt
+EXPECT /npm test -- upload/
+EXPECT_NOT /ask again/
+EXPECT /2  Yes, and switch to auto mode/
+EXPECT /3  No/
+EXPECT /press 1, 2 or 3/
+KEY a
+SHOT after-a
+EXPECT /approval needed/
+KEY 1
+WAITFOR /Ran it once under the ask rule/ 20
+SHOT approved-once
+EXPECT_NOT /approval needed/
+RUN test ! -e .claude/settings.local.json
+EXPECT_NOT /panic|goroutine/
