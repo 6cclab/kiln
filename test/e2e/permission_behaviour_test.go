@@ -133,8 +133,8 @@ func TestPermission_ModesAgainstEditAndBash(t *testing.T) {
 		// bypassPermissions: allow (only an explicit deny rule would stop it).
 		{mode: "bypassPermissions", wantEditBlocked: false, wantBashBlocked: false},
 		// plan: edits refused outright with a plan-specific reason; a bash
-		// command that is not read-only asks (Claude Code without its plan
-		// classifier), which print mode refuses for want of a prompter.
+		// command that is not read-only takes the regular flow, so with no
+		// rule it asks, which print mode refuses for want of a prompter.
 		{mode: "plan", wantEditBlocked: true, wantBashBlocked: true, blockReasonHas: "plan mode is read-only"},
 	}
 
@@ -433,8 +433,9 @@ steps:
 // that only reads and asks about one that writes
 // (qa/findings *plan-mode-denies-read-only-bash). It used to refuse both,
 // so a model planning a change could not even cat the spec. Print mode has
-// nobody to ask, so the mutating one is refused as any ask is — also when
-// an allow rule covers it, since plan mode asks whatever allow rules say.
+// nobody to ask, so the mutating one is refused as any ask is. An allow
+// rule for it lets it run: shell commands take the regular permission flow
+// while planning (Claude Code's permissions doc).
 func TestPermission_PlanModeAllowsReadOnlyBash(t *testing.T) {
 	for _, allow := range [][]string{nil, {"Bash(mkdir *)"}} {
 		t.Run(fmt.Sprintf("allow=%v", allow), func(t *testing.T) {
@@ -455,10 +456,17 @@ func TestPermission_PlanModeAllowsReadOnlyBash(t *testing.T) {
 			if strings.Contains(joined, "cat src/math.js") {
 				t.Errorf("read-only bash was blocked in plan mode: %v", res.Blocked)
 			}
+			_, statErr := os.Stat(filepath.Join(proj, "build"))
+			if allow != nil {
+				if strings.Contains(joined, "mkdir build") || statErr != nil {
+					t.Errorf("mkdir under Bash(mkdir *) did not run in plan mode: blocked=%v stat=%v", res.Blocked, statErr)
+				}
+				return
+			}
 			if !strings.Contains(joined, "mkdir build") || !strings.Contains(joined, "requires confirmation") {
 				t.Errorf("mutating bash was not put to the user (refused for want of a prompter) in plan mode: %v", res.Blocked)
 			}
-			if _, err := os.Stat(filepath.Join(proj, "build")); err == nil {
+			if statErr == nil {
 				t.Errorf("plan mode let mkdir run")
 			}
 		})

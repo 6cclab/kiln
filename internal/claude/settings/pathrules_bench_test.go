@@ -66,6 +66,24 @@ func BenchmarkDecide80DenyBash(b *testing.B) {
 	}
 }
 
+// BenchmarkDecideBashRules is Bash rules alone (no path rules) on a
+// compound line with a substitution.
+func BenchmarkDecideBashRules(b *testing.B) {
+	b.Setenv("HOME", b.TempDir())
+	cwd := b.TempDir()
+	var p Permissions
+	for i := 0; i < 20; i++ {
+		p.Allow = append(p.Allow, fmt.Sprintf("Bash(tool%d *)", i))
+		p.Deny = append(p.Deny, fmt.Sprintf("Bash(bad%d *)", i))
+	}
+	p.Allow = append(p.Allow, "Bash(git *)", "Bash(npm test *)")
+	cmd := `cd src && git status && npm test -- -t "x y" | tee out.log; echo "$(git rev-parse HEAD)"`
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		DecideIn(p, cwd, "bash", cmd, ModeManual)
+	}
+}
+
 // catOperands is "cat f0.txt … f199.txt" over files that exist in dir.
 func catOperands(tb testing.TB, dir string) string {
 	tb.Helper()

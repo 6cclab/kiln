@@ -388,6 +388,10 @@ type Hits struct {
 	// (bash_paths.go). It is not a rule match: DecideFromHits only lets it
 	// turn an Allow into an Ask, never weaken a Deny.
 	Unsure bool
+	// ReadOnly is set for a bash command that only reads (IsReadOnlyCommand,
+	// with the working directory known, so "cd <cwd> && git log" is a no-op
+	// cd and still read-only).
+	ReadOnly bool
 }
 
 // RuleHits reports which rule lists match a call. The permission gate uses
@@ -411,16 +415,38 @@ func RuleHits(permissions Permissions, cwd, toolName, primaryArg string) Hits {
 	c := newMatchCtx(cwd)
 	h := Hits{Deny: hits(permissions.Deny), Ask: hits(permissions.Ask), Allow: hits(permissions.Allow)}
 	switch {
-	case strings.EqualFold(toolName, "bash"), strings.EqualFold(toolName, "bash_background"):
-		if strings.EqualFold(toolName, "bash") {
-			// A command line is several commands; judge each one
-			// (bashRuleVerdicts).
-			h.Deny, h.Ask, h.Allow = bashRuleVerdicts(permissions, toolName, primaryArg)
-		}
-		fileDeny, fileAsk, unsure := bashFileVerdict(permissions, c, primaryArg)
+	case isBashTool(toolName):
+		// A command line is several commands; judge each one, nested ones
+		// included (bash_parse.go, bashRuleVerdicts), and the files they
+		// name when a Read/Edit rule could cover one (bashFileVerdict).
+		guarded := compiledFor(permissions, c).guarded
+		a := analyzeBash(primaryArg, c.cwd, c.home, guarded)
+		h.Deny, h.Ask, h.Allow = bashRuleVerdicts(permissions, a, toolName, primaryArg)
+		fileDeny, fileAsk, unsure := bashFileVerdict(permissions, c, a)
 		h.Deny = h.Deny || fileDeny
 		h.Ask = h.Ask || fileAsk
 		h.Unsure = unsure
+		// A line kiln cannot parse, or one running something it cannot
+		// name, is asked about rather than allowed past a deny or ask rule
+		// that might have covered it.
+		if (!a.parsed || a.unknown) && (guarded || bashGuarded(permissions, toolName)) {
+			h.Unsure = true
+		}
+		if !a.parsed {
+			// Deny and ask rules still see what can be made out: each piece
+			// between separators that parses on its own.
+			for _, seg := range roughSegments(primaryArg) {
+				s := analyzeBash(seg, c.cwd, c.home, guarded)
+				if !s.parsed {
+					continue
+				}
+				d, k, _ := bashRuleVerdicts(permissions, s, toolName, seg)
+				fd, fk, _ := bashFileVerdict(permissions, c, s)
+				h.Deny = h.Deny || d || fd
+				h.Ask = h.Ask || k || fk
+			}
+		}
+		h.ReadOnly = a.readOnly()
 	case IsFileTool(toolName):
 		d, a, al := filePathVerdicts(permissions, c, toolName, primaryArg)
 		h.Deny, h.Ask, h.Allow = h.Deny || d, h.Ask || a, h.Allow || al
@@ -481,44 +507,27 @@ func DecideFromHits(h Hits, toolName, primaryArg string, mode PermissionMode) De
 	return d
 }
 
-// Plan mode, as Claude Code's permission-modes doc describes it for a
-// session without its auto-mode classifier (kiln has none): "edits stay
-// blocked until you approve the plan", and "commands outside the built-in
-// read-only set prompt for approval". Both hold whatever allow rules say.
-
-// planRefuses reports a call plan mode refuses whatever the rules: one
-// that edits files (the edit tools).
-func planRefuses(toolName string) bool {
-	return toolFileKind(toolName) == kindEdit
-}
-
-// planAsks reports a call plan mode asks about whatever allow rules say: a
-// shell command that is not provably read-only (a background one always).
-func planAsks(toolName, primaryArg string) bool {
-	switch {
-	case strings.EqualFold(toolName, "bash"):
-		return !IsReadOnlyCommand(primaryArg)
-	case strings.EqualFold(toolName, "bash_background"):
-		return true
-	}
-	return false
-}
+// Plan mode, as Claude Code's docs describe it: "edits stay blocked until
+// you approve the plan", whatever allow or ask rules say; read-only shell
+// commands run without prompting, and "any other shell command goes
+// through the regular permission flow while you are still planning"
+// (permissions, "Sandboxing" section): deny, ask, allow, and with no rule
+// a prompt, never a refusal.
 
 // PlanOverridesAllow reports a call that no allow rule, mode or session
-// "don't ask again" grant approves while planning: plan mode refuses it
-// (an edit) or asks about it (a shell command that is not read-only).
-func PlanOverridesAllow(toolName, primaryArg string) bool {
-	return planRefuses(toolName) || planAsks(toolName, primaryArg)
+// "don't ask again" grant approves while planning: an edit.
+func PlanOverridesAllow(toolName, _ string) bool {
+	return toolFileKind(toolName) == kindEdit
 }
 
 func decideRules(h Hits, toolName, primaryArg string, mode PermissionMode) Decision {
 	if h.Deny {
 		return Deny
 	}
-	if mode == ModePlan && planRefuses(toolName) {
+	if mode == ModePlan && PlanOverridesAllow(toolName, primaryArg) {
 		return Deny
 	}
-	if h.Ask || (mode == ModePlan && planAsks(toolName, primaryArg)) {
+	if h.Ask {
 		return Ask
 	}
 	if mode == ModeBypassPermissions || h.Allow {
@@ -527,12 +536,18 @@ func decideRules(h Hits, toolName, primaryArg string, mode PermissionMode) Decis
 
 	switch mode {
 	case ModePlan:
-		// Edits were refused and other shell commands asked about above.
-		// A bash command that provably only reads (IsReadOnlyCommand) is
-		// allowed, so planning can look around the way the read tool does;
-		// any other tool no rule allowed is refused outright.
-		if ReadOnly[toolName] || (toolName == "bash" && IsReadOnlyCommand(primaryArg)) {
+		// Edits were refused above. A bash command that provably only
+		// reads (IsReadOnlyCommand) is allowed, so planning can look around
+		// the way the read tool does; any other one asks, as in manual
+		// mode. Any other tool no rule allowed is refused outright.
+		if ReadOnly[toolName] {
 			return Allow
+		}
+		if isBashTool(toolName) {
+			if h.ReadOnly {
+				return Allow
+			}
+			return Ask
 		}
 		// Fetching a page changes nothing locally and is how a plan gets
 		// researched, but the URL can carry data out, so it asks rather

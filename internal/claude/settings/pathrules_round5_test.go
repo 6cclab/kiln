@@ -171,9 +171,9 @@ func TestRound5_APFSFoldTableMatchesDisk(t *testing.T) {
 }
 
 // TestRound5_PlanModeBlocksEdits (LOW 5): in plan mode edits are refused
-// whatever allow or ask rules say, and a command that is not read-only
-// asks whatever allow rules say; deny still wins and read-only commands
-// still honour ask rules.
+// whatever allow or ask rules say; a shell command takes the regular flow
+// (an allow rule allows it); deny still wins and read-only commands still
+// honour ask rules.
 func TestRound5_PlanModeBlocksEdits(t *testing.T) {
 	f := newPathFixture(t)
 	src := f.p("src/a.go")
@@ -185,7 +185,7 @@ func TestRound5_PlanModeBlocksEdits(t *testing.T) {
 		{"allow Edit path", "edit", src, Permissions{Allow: []string{"Edit(src/**)"}}, Deny},
 		{"allow bare Write", "write", src, Permissions{Allow: []string{"Write"}}, Deny},
 		{"ask Edit path", "edit", src, Permissions{Ask: []string{"Edit(src/**)"}}, Deny},
-		{"allow Bash rule", "bash", "npm test", Permissions{Allow: []string{"Bash(npm test)"}}, Ask},
+		{"allow Bash rule", "bash", "npm test", Permissions{Allow: []string{"Bash(npm test)"}}, Allow},
 		{"ask on a read-only command", "bash", "git log", Permissions{Ask: []string{"Bash(git log*)"}}, Ask},
 		{"read-only command", "bash", "git log", Permissions{}, Allow},
 		{"allowed MCP tool", "mcp__x__y", "", Permissions{Allow: []string{"mcp__x"}}, Allow},

@@ -9,10 +9,10 @@ import (
 	"github.com/andrepato/harness/internal/claude/settings"
 )
 
-// Plan mode as Claude Code runs it without its auto-mode classifier
-// (permission-modes, "Analyze before you edit with plan mode"): edits stay
-// blocked until the plan is approved, and a shell command outside the
-// read-only set prompts — whatever allow rules or session grants say.
+// Plan mode as Claude Code's docs describe it: edits stay blocked until
+// the plan is approved, whatever the rules say; a read-only shell command
+// runs; any other shell command goes through the regular permission flow
+// (deny, ask, allow, and with no rule a prompt).
 
 func planBash(cmd string) Request {
 	return Request{ToolName: "bash", PrimaryArg: cmd, Args: map[string]any{"command": cmd}}
@@ -22,10 +22,10 @@ func planEdit(path string) Request {
 	return Request{ToolName: "edit", PrimaryArg: path, Args: map[string]any{"path": path}}
 }
 
-// TestPlan_ShellCommandAsksWhateverAllowRulesSay: a mutating command that
-// an allow rule covers is put to the user in plan mode, not run and not
-// refused; a read-only one still runs without asking.
-func TestPlan_ShellCommandAsksWhateverAllowRulesSay(t *testing.T) {
+// TestPlan_ShellCommandTakesTheRegularFlow: an allowed command runs, an
+// unruled one is put to the user, a read-only one in the workspace runs
+// unasked and one reading outside the workspace asks, as in manual mode.
+func TestPlan_ShellCommandTakesTheRegularFlow(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	proj := t.TempDir()
 	allow := settings.Permissions{Allow: []string{"Bash(npm test)", "Bash(mkdir *)"}}
@@ -35,52 +35,62 @@ func TestPlan_ShellCommandAsksWhateverAllowRulesSay(t *testing.T) {
 		asked = append(asked, req.PrimaryArg)
 		return PromptChoice{Kind: PromptDeny}, nil
 	})
-	for _, cmd := range []string{"npm test", "mkdir build", "touch x"} {
-		blocked, err := g.Check(context.Background(), planBash(cmd))
+	for _, c := range []struct {
+		cmd  string
+		asks bool
+	}{
+		{"npm test", false},
+		{"mkdir build", false},
+		{"git log", false},
+		{"touch x", true},
+		{"cat /etc/passwd", true},
+	} {
+		asked = nil
+		blocked, err := g.Check(context.Background(), planBash(c.cmd))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if blocked == nil {
-			t.Errorf("%q ran in plan mode without asking", cmd)
+		if got := len(asked) > 0; got != c.asks {
+			t.Errorf("%q: asked=%v, want %v", c.cmd, got, c.asks)
+		}
+		if !c.asks && blocked != nil {
+			t.Errorf("%q was blocked: %s", c.cmd, blocked.Reason)
 		}
 	}
-	if strings.Join(asked, "|") != "npm test|mkdir build|touch x" {
-		t.Errorf("prompted for %q, want every command asked about", asked)
-	}
-	asked = nil
-	if blocked, _ := g.Check(context.Background(), planBash("git log")); blocked != nil || len(asked) != 0 {
-		t.Errorf("read-only git log: blocked=%v asked=%v, want it to run unasked", blocked, asked)
-	}
 }
 
-// TestPlan_HeadlessRefusesTheAsk: with nobody to ask, the prompt is
-// refused as any ask is, and an edit keeps plan mode's own refusal text.
-func TestPlan_HeadlessRefusesTheAsk(t *testing.T) {
+// TestPlan_HeadlessRefusals: with nobody to ask, an unruled command is
+// refused as any ask is; an edit keeps plan mode's own refusal text; a
+// deny rule's refusal names the rules, not plan mode.
+func TestPlan_HeadlessRefusals(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	proj := t.TempDir()
-	allow := settings.Permissions{Allow: []string{"Bash(npm test)", "Edit"}}
-	g := NewGate(GateOptions{Permissions: allow, Mode: settings.ModePlan, Roots: []string{proj}})
-	blocked, err := g.Check(context.Background(), planBash("npm test"))
-	if err != nil {
-		t.Fatal(err)
+	p := settings.Permissions{Allow: []string{"Edit"}, Deny: []string{"Bash(rm *)"}}
+	g := NewGate(GateOptions{Permissions: p, Mode: settings.ModePlan, Roots: []string{proj}})
+	check := func(req Request) *BlockResult {
+		t.Helper()
+		blocked, err := g.Check(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return blocked
 	}
-	if blocked == nil || !strings.Contains(blocked.Reason, "requires confirmation") {
-		t.Errorf("headless plan-mode npm test: %+v, want refused as needing confirmation", blocked)
-	}
-	blocked, err = g.Check(context.Background(), planEdit(filepath.Join(proj, "a.go")))
-	if err != nil {
-		t.Fatal(err)
+	if b := check(planBash("touch x")); b == nil || !strings.Contains(b.Reason, "requires confirmation") {
+		t.Errorf("headless plan-mode touch: %+v, want refused as needing confirmation", b)
 	}
 	const want = "plan mode is read-only, so edit is not available. Describe the change instead of making it."
-	if blocked == nil || blocked.Reason != want {
-		t.Errorf("plan-mode edit: %+v, want reason %q", blocked, want)
+	if b := check(planEdit(filepath.Join(proj, "a.go"))); b == nil || b.Reason != want {
+		t.Errorf("plan-mode edit: %+v, want reason %q", b, want)
+	}
+	if b := check(planBash("rm -rf build")); b == nil || b.Reason != "blocked by permission rules." {
+		t.Errorf("deny rule in plan mode: %+v, want the rules' refusal", b)
 	}
 }
 
-// TestPlan_SessionGrantDoesNotApply: a "don't ask again" grant from
-// before planning counts as an allow, so it neither runs a mutating
-// command unasked nor lets an edit through in plan mode.
-func TestPlan_SessionGrantDoesNotApply(t *testing.T) {
+// TestPlan_SessionGrants: a "don't ask again" grant from before planning
+// still runs its command (the regular flow), but never lets an edit
+// through.
+func TestPlan_SessionGrants(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	proj := t.TempDir()
 	g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{proj}})
@@ -101,14 +111,14 @@ func TestPlan_SessionGrantDoesNotApply(t *testing.T) {
 
 	g.SetMode(settings.ModePlan)
 	prompts = 0
-	if blocked, _ := g.Check(context.Background(), planBash("npm test")); blocked != nil || prompts != 1 {
-		t.Errorf("granted npm test in plan: blocked=%v prompts=%d, want asked again", blocked, prompts)
+	if blocked, _ := g.Check(context.Background(), planBash("npm test")); blocked != nil || prompts != 0 {
+		t.Errorf("granted npm test in plan: blocked=%v prompts=%d, want it to run unasked", blocked, prompts)
 	}
 	blocked, _ := g.Check(context.Background(), planEdit(file))
 	if blocked == nil || !strings.Contains(blocked.Reason, "plan mode is read-only") {
 		t.Errorf("granted edit in plan: %+v, want plan mode's refusal", blocked)
 	}
-	if prompts != 1 {
+	if prompts != 0 {
 		t.Errorf("the edit prompted (%d prompts); plan mode refuses edits outright", prompts)
 	}
 }

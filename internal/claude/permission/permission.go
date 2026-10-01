@@ -575,9 +575,9 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// after the grant (Claude Code: deny, then ask, then allow). Nor does
 	// it cover a command naming a file kiln cannot resolve: the same text
 	// ("cat $F") can name a different file next time.
-	// Nor, while planning, does it cover an edit or a shell command that is
-	// not read-only: plan mode refuses or asks about those whatever any
-	// allow says (settings.PlanOverridesAllow).
+	// Nor, while planning, does it cover an edit: plan mode refuses edits
+	// whatever any allow says (settings.PlanOverridesAllow). A shell
+	// command goes through the regular flow there, grants included.
 	grantable := !hits.Deny && !hits.Ask && !hits.Unsure &&
 		!(mode == settings.ModePlan && settings.PlanOverridesAllow(req.ToolName, decideArg))
 	if grantable && g.sessionAllowed(k) {
@@ -607,9 +607,15 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// names a file kiln cannot resolve while path rules exist.
 	if verdict == settings.Ask && strings.EqualFold(req.ToolName, "bash") &&
 		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits || mode == settings.ModeDontAsk) &&
-		!hits.Ask && !hits.Unsure && settings.IsReadOnlyCommand(req.PrimaryArg) &&
+		!hits.Ask && !hits.Unsure && hits.ReadOnly &&
 		g.commandWithinRoots(req.PrimaryArg) {
 		return nil, OutcomeAuto, nil
+	}
+	// Plan mode runs read-only commands without asking (Decide), but, as in
+	// manual mode, only inside the workspace: one reading elsewhere asks.
+	if verdict == settings.Allow && mode == settings.ModePlan && settings.IsBashTool(req.ToolName) &&
+		!hits.Allow && hits.ReadOnly && !g.commandWithinRoots(req.PrimaryArg) {
+		verdict = settings.Ask
 	}
 
 	// A path outside the workspace always warrants a question, even when a
@@ -658,7 +664,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	if verdict == settings.Deny {
 		reason := "blocked by permission rules."
-		if mode == settings.ModePlan {
+		if mode == settings.ModePlan && !hits.Deny {
 			reason = fmt.Sprintf("plan mode is read-only, so %s is not available. Describe the change instead of making it.", req.ToolName)
 		}
 		r := g.record(req, reason)

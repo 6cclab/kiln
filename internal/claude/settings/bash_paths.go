@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/execenv"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Read and Edit rules also apply to the files a bash command names, as in
@@ -16,9 +17,11 @@ import (
 // without naming it ("grep -r x .") or one a script opens itself. The
 // sandbox, not this, is the boundary for those.
 //
-// Paths are resolved the way the shell's open(2) resolves them: physically,
-// so "sshl/../x" with sshl a link is the x beside sshl's target, not the x
-// beside sshl. Both that and the lexical reading are checked.
+// The commands and their words come from the parsed command line
+// (bash_parse.go). Paths are resolved the way the shell's open(2) resolves
+// them: physically, so "sshl/../x" with sshl a link is the x beside sshl's
+// target, not the x beside sshl. Both that and the lexical reading are
+// checked.
 //
 // Where a named file cannot be known statically (a variable, a glob in a
 // directory kiln lost track of or too large to expand, a command
@@ -29,18 +32,18 @@ import (
 // unknowable path is asked about rather than allowed past a rule. It never
 // weakens a Deny.
 
-// bashFileVerdict judges the files the command line reads or writes:
-// deny when a Read or Edit deny rule covers one, ask when an ask rule
-// does, unsure when the command names a file kiln cannot resolve. All
+// bashFileVerdict judges the files the analysed command line reads or
+// writes: deny when a Read or Edit deny rule covers one, ask when an ask
+// rule does, unsure when the command names a file kiln cannot resolve. All
 // three are false unless some Read/Edit path rule is in deny or ask. A file
 // the command reads is checked as a read call would be; one it writes as a
 // write call (Edit rules, and Read deny rules, which also block writes).
-func bashFileVerdict(p Permissions, c matchCtx, cmd string) (deny, ask, unsure bool) {
+func bashFileVerdict(p Permissions, c matchCtx, an *bashAnalysis) (deny, ask, unsure bool) {
 	cr := compiledFor(p, c)
 	if !cr.guarded {
 		return false, false, false
 	}
-	reads, writes, unsure := bashFileOperands(cmd, c.cwd, c.home)
+	reads, writes, unsure := an.reads, an.writes, an.unsure
 	a := newAnchors()
 	// Every spelling of a file: as written (cleaned), as open(2) resolves
 	// it, and the OS's own name for it (execenv.CanonicalPath, memoised per
@@ -127,47 +130,6 @@ func newRealPathMemo() func(string) string {
 	}
 }
 
-// bashFileOperands returns the absolute paths a command line reads and
-// writes (unclean: a ".." in them is for physical resolution), resolved
-// against cwd and following any cd/pushd earlier in the line, and whether
-// some file operand could not be resolved.
-func bashFileOperands(cmd, cwd, home string) (reads, writes []string, unsure bool) {
-	s := &bashScan{home: home, dirs: []string{cwd}, known: true, budget: &globBudget{}}
-	s.line(cmd)
-	return s.reads, s.writes, s.unsure
-}
-
-// maxScanDepth bounds nested command lines (substitutions, bash -c, eval).
-const maxScanDepth = 8
-
-// maxExpansions bounds brace expansion; past it the word is unsure.
-const maxExpansions = 256
-
-// bashScan collects file operands across one command line.
-type bashScan struct {
-	home string
-	// dirs are the directories a relative path may be relative to: the
-	// start directory plus every cd target seen so far. A cd in "a | cd x"
-	// or "(cd x)" does not change the next command's directory, so dirs
-	// only grow, and a path is checked against all of them.
-	dirs []string
-	// known is false once a cd went somewhere kiln cannot tell (cd -,
-	// popd, cd $X): a relative path after that is unsure.
-	known         bool
-	reads, writes []string
-	unsure        bool
-	depth         int
-	budget        *globBudget
-	// docs are the current line's heredoc bodies (stripHeredocs).
-	docs []heredoc
-	// stdin is what the command being scanned reads as standard input,
-	// for a shell that runs it as a script.
-	stdin stdinSource
-	// argsFromStdin is set when xargs runs the command: its arguments
-	// (for "xargs sh -c", the command line itself) come from stdin.
-	argsFromStdin bool
-}
-
 // stdinSource is a command's standard input as far as a redirection
 // says: a heredoc or herestring (script holds its text), a file, or
 // nothing known (a pipe, or the terminal).
@@ -176,109 +138,6 @@ type stdinSource struct {
 	scripted bool // a heredoc or herestring: script is the text
 	file     bool // "< file"
 	unknown  bool // a herestring kiln cannot expand
-}
-
-// nested scans a command line that runs inside this one (a substitution,
-// bash -c, eval) and merges what it finds.
-func (s *bashScan) nested(cmd string) {
-	sub := &bashScan{home: s.home, dirs: append([]string(nil), s.dirs...), known: s.known, depth: s.depth + 1, budget: s.budget}
-	sub.line(cmd)
-	s.reads = append(s.reads, sub.reads...)
-	s.writes = append(s.writes, sub.writes...)
-	s.unsure = s.unsure || sub.unsure
-}
-
-func (s *bashScan) line(cmd string) {
-	if s.depth > maxScanDepth {
-		s.unsure = true
-		return
-	}
-	// Heredoc bodies are input, not commands; only the substitutions in
-	// an unquoted-delimiter body run (and a shell fed one runs all of
-	// it: segment). Backslash-newline goes before words are split, as in
-	// bash (in an unquoted body too, not a quoted one).
-	cmd, docs := stripHeredocs(cmd)
-	for i := range docs {
-		if !docs[i].quoted {
-			docs[i].body = joinBodyContinuations(docs[i].body)
-		}
-	}
-	s.docs = docs
-	outer, bodies, ok := extractSubstitutions(joinContinuations(cmd), false)
-	if !ok {
-		s.unsure = true
-	}
-	for _, d := range docs {
-		if d.quoted {
-			continue
-		}
-		_, more, ok := extractSubstitutions(d.body, true)
-		if !ok {
-			s.unsure = true
-		}
-		bodies = append(bodies, more...)
-	}
-	segments, _ := BashSegments(outer)
-	for _, seg := range segments {
-		s.segment(seg)
-	}
-	// A substitution runs where it appears; dirs by now holds every
-	// directory the line could have been in, so check the bodies against
-	// all of them.
-	for _, b := range bodies {
-		s.nested(b)
-	}
-}
-
-// segment scans one command: its redirections, the wrappers in front of
-// it, and the command itself.
-func (s *bashScan) segment(seg string) {
-	words, redirs := shellWords(seg)
-	s.stdin = stdinSource{}
-	s.argsFromStdin = false
-	for _, r := range redirs {
-		switch {
-		case r.doc:
-			if n, ok := heredocIndex(r.target.lit()); ok && n < len(s.docs) {
-				s.stdin = stdinSource{script: s.docs[n].body, scripted: true}
-			}
-		case r.here:
-			if w, ok := expandHome(r.target, s.home); ok {
-				s.stdin = stdinSource{script: w.lit(), scripted: true}
-			} else {
-				s.stdin = stdinSource{unknown: true}
-			}
-		default:
-			s.operand(r.target, r.read, r.write)
-			if r.read && !r.write {
-				switch t := r.target.lit(); {
-				case isStdinPath(t):
-					// "< /dev/stdin": still whatever stdin already was.
-				case isFdPath(t):
-					s.stdin = stdinSource{unknown: true} // "< <(cmd)": cmd's output
-				default:
-					s.stdin = stdinSource{file: true}
-				}
-			}
-		}
-	}
-	words, chdir := s.unwrap(words)
-	if len(words) == 0 {
-		return
-	}
-	if chdir != nil {
-		// env -C dir / sudo -D dir: this command only runs there.
-		saved, savedKnown := s.dirs, s.known
-		s.cd(*chdir)
-		defer func() { s.dirs, s.known = saved, savedKnown }()
-	}
-	s.command(words)
-}
-
-// shellKeywords start a compound command; the command follows them.
-var shellKeywords = map[string]bool{
-	"if": true, "then": true, "else": true, "elif": true, "do": true,
-	"while": true, "until": true, "!": true,
 }
 
 // wrapperSpec describes a command that runs the rest of its words as a
@@ -307,6 +166,7 @@ var wrappers = map[string]wrapperSpec{
 		chdir: set("-D", "--chdir"),
 	},
 	"doas":    {value: set("-u", "-C")},
+	"pkexec":  {value: set("--user")},
 	"env":     {value: set("-u", "--unset", "-C", "--chdir", "-S", "--split-string"), chdir: set("-C", "--chdir")},
 	"timeout": {value: set("-s", "--signal", "-k", "--kill-after"), positional: 1},
 	"nice":    {value: set("-n", "--adjustment")},
@@ -315,6 +175,10 @@ var wrappers = map[string]wrapperSpec{
 	"nohup":   {},
 	"builtin": {},
 	"command": {},
+	"noglob":  {},
+	"setsid":  {},
+	"watch":   {value: set("-n", "--interval", "-q", "--equexit")},
+	"flock":   {value: set("-w", "--timeout", "-E", "--conflict-exit-code"), positional: 1},
 	"exec":    {value: set("-a")},
 	"time":    {value: set("-f", "--format", "-o", "--output"), writes: set("-o", "--output")},
 	"xargs": {
@@ -324,85 +188,94 @@ var wrappers = map[string]wrapperSpec{
 	},
 }
 
-// unwrap drops shell keywords, leading NAME=value assignments and wrapper
-// commands (sudo, env, timeout, xargs, ...), consuming their options and
-// option values, and unwraps rtk, leaving the command that runs. Files a
-// wrapper option names (time -o, xargs -a) are recorded. chdir is set when
-// a wrapper runs the command in another directory.
-func (s *bashScan) unwrap(words []word) (rest []word, chdir *word) {
+// unwrapped is the command a simple command runs once every wrapper in
+// front of it is gone.
+type unwrapped struct {
+	words []evalWord
+	chdir *evalWord // the directory a wrapper runs it in (env -C, sudo -D)
+	// optReads and optWrites are files wrapper options name (xargs -a,
+	// time -o).
+	optReads, optWrites []evalWord
+	argsFromStdin       bool // under xargs: arguments come from stdin
+	dark                bool // a wrapper hides what runs
+}
+
+// unwrap drops leading NAME=value words, wrapper commands (sudo, env,
+// timeout, xargs, watch, …) with their options and option values, and rtk,
+// leaving the command that runs.
+func (a *bashAnalysis) unwrap(words []evalWord) (u unwrapped) {
 	for len(words) > 0 {
-		w := words[0].lit()
-		if t := strings.TrimLeft(w, "({"); t != w {
-			// "(cat f)" / "{ cat f; }": a subshell or group around a command.
-			if t == "" {
-				words = words[1:]
-			} else {
-				words = append([]word{words[0].slice(len(w) - len(t))}, words[1:]...)
-			}
-			continue
+		if !words[0].literal {
+			break
 		}
-		if shellKeywords[w] {
-			words = words[1:]
-			continue
-		}
-		if isAssignment(words[0]) {
+		w := words[0].lit
+		if isAssignment(words[0].w) {
 			words = words[1:]
 			continue
 		}
 		if w == "rtk" {
 			if len(words) < 2 {
-				return nil, chdir
+				words = nil
+				break
 			}
-			switch words[1].lit() {
+			switch words[1].text() {
 			case "read":
-				words = append([]word{literalWord("cat")}, words[2:]...)
+				words = append([]evalWord{litWord("cat")}, words[2:]...)
 			case "proxy":
 				words = words[2:]
 			case "ls", "grep", "find", "tree", "git", "wc", "diff", "cat", "head", "tail", "rg":
 				words = words[1:]
 			default:
-				return nil, chdir
+				u.words = words
+				return u
 			}
 			continue
 		}
 		name := filepath.Base(w)
 		spec, ok := wrappers[name]
 		if !ok {
-			return words, chdir
+			break
 		}
 		if name == "xargs" {
-			s.argsFromStdin = true
+			u.argsFromStdin = true
 		}
 		i := 1
 		for i < len(words) {
-			a := words[i].lit()
-			if a == "--" {
+			opt := words[i].text()
+			if opt == "--" {
 				i++
 				break
 			}
-			if !strings.HasPrefix(a, "-") || a == "-" {
+			if !strings.HasPrefix(opt, "-") || opt == "-" {
 				break
 			}
-			if name == "command" && (a == "-v" || a == "-V") {
-				return nil, chdir // only looks the command up
+			if name == "command" && (opt == "-v" || opt == "-V") {
+				return u // only looks the command up
 			}
-			if name == "sudo" && (a == "-e" || a == "--edit") {
+			if name == "sudo" && (opt == "-e" || opt == "--edit") {
 				// sudoedit: the operands are files it edits.
-				return append([]word{literalWord("sudoedit")}, words[i+1:]...), chdir
+				u.words = append([]evalWord{litWord("sudoedit")}, words[i+1:]...)
+				return u
 			}
-			opt, val, hasVal := a, word{}, false
+			if name == "flock" && (opt == "-c" || opt == "--command") {
+				break
+			}
+			var val evalWord
+			hasVal := false
 			switch {
-			case strings.HasPrefix(a, "--") && strings.Contains(a, "="):
-				eq := strings.IndexByte(a, '=')
-				opt, val, hasVal = a[:eq], words[i].slice(eq+1), true
+			case strings.HasPrefix(opt, "--") && strings.Contains(opt, "="):
+				eq := strings.IndexByte(opt, '=')
+				val, hasVal = sliceWord(words[i], eq+1), true
+				opt = opt[:eq]
 				i++
-			case spec.value[a]:
+			case spec.value[opt]:
 				if i+1 < len(words) {
 					val, hasVal = words[i+1], true
 				}
 				i += 2
-			case len(a) > 2 && a[1] != '-' && spec.value[a[:2]]:
-				opt, val, hasVal = a[:2], words[i].slice(2), true
+			case len(opt) > 2 && opt[1] != '-' && spec.value[opt[:2]]:
+				val, hasVal = sliceWord(words[i], 2), true
+				opt = opt[:2]
 				i++
 			default:
 				i++
@@ -413,32 +286,62 @@ func (s *bashScan) unwrap(words []word) (rest []word, chdir *word) {
 			switch {
 			case spec.chdir[opt]:
 				v := val
-				chdir = &v
+				u.chdir = &v
 			case spec.reads[opt]:
-				s.operand(val, true, false)
+				u.optReads = append(u.optReads, val)
 			case spec.writes[opt]:
-				s.operand(val, false, true)
+				u.optWrites = append(u.optWrites, val)
 			case name == "env" && (opt == "-S" || opt == "--split-string"):
-				split, redirs := shellWords(val.lit())
-				for _, r := range redirs {
-					s.operand(r.target, r.read, r.write)
+				// The split string is the command line, followed by any
+				// remaining words; env's own options end there.
+				split, ok := splitWords(val)
+				if !ok {
+					u.dark = true
+					return u
 				}
-				// The split string is the command line (followed by any
-				// remaining words); env's own options end here.
-				rest, inner := s.unwrap(append(split, words[min(i, len(words)):]...))
-				if inner != nil {
-					chdir = inner
-				}
-				return rest, chdir
+				words = append(split, words[min(i, len(words)):]...)
+				i = 0
 			}
+			if i == 0 {
+				break
+			}
+		}
+		if i == 0 {
+			continue // env -S: unwrap the split string
 		}
 		i += spec.positional
 		if i > len(words) {
 			i = len(words)
 		}
 		words = words[i:]
+		if name == "flock" && len(words) >= 2 && (words[0].text() == "-c" || words[0].text() == "--command") {
+			// "flock file -c cmd": cmd is a shell command line.
+			words = append([]evalWord{litWord("sh"), litWord("-c")}, words[1:]...)
+		}
 	}
-	return words, chdir
+	u.words = words
+	return u
+}
+
+// splitWords splits env -S's string into words the way a simple command
+// is split, or fails.
+func splitWords(val evalWord) ([]evalWord, bool) {
+	if !val.literal {
+		return nil, false
+	}
+	f, src, ok := parseBash(val.lit)
+	if !ok || len(f.Stmts) != 1 {
+		return nil, false
+	}
+	c, isCall := f.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !isCall || len(c.Assigns) > 0 || len(f.Stmts[0].Redirs) > 0 {
+		return nil, false
+	}
+	var out []evalWord
+	for _, w := range c.Args {
+		out = append(out, evalShellWord(w, src))
+	}
+	return out, true
 }
 
 // isAssignment reports whether w is NAME=value with an unquoted "=".
@@ -480,7 +383,7 @@ var fileCommands = map[string]operandRole{
 	"xxd": roleRead, "hexdump": roleRead, "base64": roleRead, "md5": roleRead,
 	"md5sum": roleRead, "shasum": roleRead, "sha1sum": roleRead,
 	"sha256sum": roleRead, "tac": roleRead, "rev": roleRead, "column": roleRead,
-	"source": roleRead, ".": roleRead, "ls": roleRead, "cut": roleRead,
+	"ls": roleRead, "cut": roleRead,
 	"paste": roleRead, "fold": roleRead, "fmt": roleRead, "expand": roleRead,
 	"readlink": roleRead, "realpath": roleRead, "bat": roleRead, "view": roleRead,
 	"vi": roleWrite, "vim": roleWrite, "nano": roleWrite, "sudoedit": roleWrite,
@@ -495,65 +398,82 @@ var fileCommands = map[string]operandRole{
 // shells run a command string given with -c, or a script file.
 var shells = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true}
 
-// command scans the command that runs: cd/pushd/popd move the directory,
-// dd names its files in if=/of=, bash -c and eval run a command line, and a
-// known file command's operands are files. A command word that is itself
-// an expansion ($CMD, ${IFS} tricks) is unsure: kiln cannot tell what runs.
-func (s *bashScan) command(words []word) {
-	cw, ok := expandHome(words[0], s.home)
-	if !ok {
-		s.unsure = true
+// runs follows what an unwrapped command does: the files wrapper options
+// name, then the command itself (in the wrapper's directory, if it set
+// one).
+func (a *bashAnalysis) runs(u unwrapped, in stdinSource) {
+	for _, w := range u.optReads {
+		a.operand(w, true, false)
+	}
+	for _, w := range u.optWrites {
+		a.operand(w, false, true)
+	}
+	if len(u.words) == 0 {
 		return
 	}
-	// "(bash) <<EOF" / "( bash )": the group's closing ")" or "}" is not
-	// part of the command word or an argument.
-	name := filepath.Base(strings.TrimRight(cw.lit(), ")}"))
-	var args []word
-	for _, a := range words[1:] {
-		if strings.Trim(a.lit(), ")}") != "" || a.lit() == "" {
-			args = append(args, a)
-		}
+	if u.chdir != nil {
+		// env -C dir / sudo -D dir: this command only runs there.
+		saved, savedKnown := append([]string(nil), a.dirs...), a.known
+		a.cd(*u.chdir)
+		defer func() { a.dirs, a.known = saved, savedKnown }()
 	}
+	a.command1(u.words, in, u.argsFromStdin)
+}
+
+// command1 follows the command that runs: cd/pushd/popd move the
+// directory, dd names its files in if=/of=, bash -c and eval run a command
+// line, source and a shell run a script, and a known file command's
+// operands are files. A command word that is itself an expansion ($CMD,
+// ${IFS} tricks) is unknown: kiln cannot tell what runs.
+func (a *bashAnalysis) command1(words []evalWord, in stdinSource, argsFromStdin bool) {
+	cw, ok := expandHome(words[0].w, a.home)
+	if !ok {
+		a.dark()
+		return
+	}
+	name := filepath.Base(cw.lit())
+	args := words[1:]
 	switch {
 	case name == "cd" || name == "pushd":
-		s.changeDir(name, args)
+		a.changeDir(name, args)
 		return
 	case name == "popd":
-		s.known = false
+		a.known = false
 		return
 	case name == "dd":
-		for _, a := range args {
-			lit := a.lit()
+		for _, w := range args {
+			lit := w.w.lit()
 			switch {
 			case strings.HasPrefix(lit, "if="):
-				s.operand(a.slice(3), true, false)
+				a.operand(sliceWord(w, 3), true, false)
 			case strings.HasPrefix(lit, "of="):
-				s.operand(a.slice(3), false, true)
+				a.operand(sliceWord(w, 3), false, true)
 			}
 		}
 		return
 	case name == "eval":
 		var parts []string
-		for _, a := range args {
-			if _, ok := expandHome(a, s.home); !ok {
-				s.unsure = true
+		for _, w := range args {
+			ew, ok := expandHome(w.w, a.home)
+			if !ok {
+				a.dark()
 				return
 			}
-			parts = append(parts, a.lit())
+			parts = append(parts, ew.lit())
 		}
-		s.nested(strings.Join(parts, " "))
+		a.nested(strings.Join(parts, " "))
 		return
 	case shells[name]:
-		s.shell(args)
+		a.shell(args, in, argsFromStdin)
 		return
 	case name == "source" || name == ".":
 		// The file is read, and run as commands; from stdin or a process
 		// substitution that is the stdin script or unknowable.
-		for _, a := range args {
-			if lit := a.lit(); strings.HasPrefix(lit, "-") && lit != "-" {
+		for _, w := range args {
+			if lit := w.text(); strings.HasPrefix(lit, "-") && lit != "-" {
 				continue
 			}
-			s.script(a)
+			a.script(w, in)
 			return
 		}
 		return
@@ -562,11 +482,11 @@ func (s *bashScan) command(words []word) {
 	if !known {
 		return
 	}
-	ops, inPlace, scriptGiven := s.operands(name, args)
+	ops, inPlace, scriptGiven := a.operands(name, args)
 	switch role {
 	case roleRead:
 		if name == "uniq" && len(ops) >= 2 {
-			s.operand(ops[1], false, true)
+			a.operand(ops[1], false, true)
 			ops = ops[:1]
 		}
 	case roleFirstExpr:
@@ -579,11 +499,7 @@ func (s *bashScan) command(words []word) {
 	}
 	for i, o := range ops {
 		write := role == roleWrite || (role == roleLastWrite && i == len(ops)-1)
-		s.operand(o, !write, write)
-		if t := strings.TrimRight(o.lit(), ")"); t != o.lit() && t != "" {
-			// "(cat f)": the ")" closes a subshell.
-			s.operand(word{b: o.b[:len(t)], q: o.q[:len(t)]}, !write, write)
-		}
+		a.operand(o, !write, write)
 	}
 }
 
@@ -605,7 +521,7 @@ func isFdPath(p string) bool {
 	return strings.HasPrefix(p, "/dev/fd/") || strings.HasPrefix(p, "/proc/self/fd/")
 }
 
-// shell scans what a shell runs: "bash -c 'cmd'" (any option cluster
+// shell follows what a shell runs: "bash -c 'cmd'" (any option cluster
 // holding c: -c, -lc, -ec) as that command line; "bash script" as reading
 // the script file; and a shell reading its script from standard input
 // ("bash -s", "bash -", "bash /dev/stdin", or no script argument) as the
@@ -613,103 +529,103 @@ func isFdPath(p string) bool {
 // --rcfile f) are skipped with it. Under xargs the command line or its
 // arguments come from stdin, and with stdin from a pipe or the terminal
 // what runs is unknowable.
-func (s *bashScan) shell(args []word) {
-	if s.argsFromStdin {
-		s.unsure = true
+func (a *bashAnalysis) shell(args []evalWord, in stdinSource, argsFromStdin bool) {
+	if argsFromStdin {
+		a.dark()
 		return
 	}
 	fromStdin := false
 	for i := 0; i < len(args); i++ {
-		a := args[i].lit()
-		if shellValueOpts[a] {
+		w := args[i].text()
+		if shellValueOpts[w] {
 			i++
 			continue
 		}
-		operand := a == "--" || a == "-" || !(strings.HasPrefix(a, "-") || strings.HasPrefix(a, "+"))
+		operand := w == "--" || w == "-" || !(strings.HasPrefix(w, "-") || strings.HasPrefix(w, "+"))
 		if operand {
-			if a == "--" {
+			if w == "--" {
 				i++
 			}
 			if i < len(args) && !fromStdin {
-				s.script(args[i])
+				a.script(args[i], in)
 				return
 			}
 			break // -s: the rest are the script's arguments
 		}
-		if strings.HasPrefix(a, "--") {
+		if strings.HasPrefix(w, "--") {
 			continue
 		}
-		if strings.HasPrefix(a, "-") && strings.Contains(a, "c") {
+		if strings.HasPrefix(w, "-") && strings.Contains(w, "c") {
 			// -c: the next word is the command line.
 			if i+1 >= len(args) {
-				s.unsure = true // "sh -c" with the command from elsewhere
+				a.dark() // "sh -c" with the command from elsewhere
 				return
 			}
-			script, ok := expandHome(args[i+1], s.home)
+			script, ok := expandHome(args[i+1].w, a.home)
 			if !ok {
-				s.unsure = true
+				a.dark()
 				return
 			}
-			s.nested(script.lit())
+			a.nested(script.lit())
 			return
 		}
-		if strings.Contains(a, "s") {
+		if strings.Contains(w, "s") {
 			fromStdin = true
 		}
-		if strings.HasSuffix(a, "o") || strings.HasSuffix(a, "O") {
+		if strings.HasSuffix(w, "o") || strings.HasSuffix(w, "O") {
 			i++ // "-eo pipefail": the cluster's last option takes the next word
 		}
 	}
-	s.stdinScript()
+	a.stdinScript(in)
 }
 
 // script handles a script operand (of a shell, source or "."): stdin is
 // the stdin script; a process substitution's pipe is unknowable (its
 // output is the script); anything else is a file read.
-func (s *bashScan) script(w word) {
-	ew, ok := expandHome(w, s.home)
+func (a *bashAnalysis) script(w evalWord, in stdinSource) {
+	ew, ok := expandHome(w.w, a.home)
 	switch {
 	case !ok:
-		s.unsure = true
+		a.dark()
 	case isStdinPath(ew.lit()):
-		s.stdinScript()
+		a.stdinScript(in)
 	case isFdPath(ew.lit()):
-		s.unsure = true
+		a.dark()
 	default:
-		s.operand(w, true, false)
+		a.operand(w, true, false)
 	}
 }
 
-// stdinScript scans the script a command reads from standard input.
-func (s *bashScan) stdinScript() {
-	switch in := s.stdin; {
+// stdinScript follows the script a command reads from standard input.
+func (a *bashAnalysis) stdinScript(in stdinSource) {
+	switch {
 	case in.scripted:
-		s.nested(in.script)
+		a.nested(in.script)
 	case in.file:
 		// "bash < script": the file was recorded as read; like
 		// "bash script", its contents are not seen.
 	default:
-		s.unsure = true // a pipe ("echo 'cat .env' | sh"), the terminal, <(…)
+		a.dark() // a pipe ("echo 'cat .env' | sh"), the terminal, <(…)
 	}
 }
 
 // changeDir follows cd/pushd: options are skipped; "-", "+N"/"-N", a bare
 // pushd, or a target kiln cannot resolve lose track of the directory.
-func (s *bashScan) changeDir(name string, args []word) {
-	var target *word
+func (a *bashAnalysis) changeDir(name string, args []evalWord) {
+	var target *evalWord
 	for i := 0; i < len(args); i++ {
-		a := args[i].lit()
-		if a == "--" {
+		w := args[i].text()
+		if w == "--" {
 			if i+1 < len(args) {
 				target = &args[i+1]
 			}
 			break
 		}
-		if a == "-" || ((strings.HasPrefix(a, "+") || strings.HasPrefix(a, "-")) && isDigits(a[1:])) {
-			s.known = false
+		if w == "-" || ((strings.HasPrefix(w, "+") || strings.HasPrefix(w, "-")) && isDigits(w[1:])) {
+			a.known = false
 			return
 		}
-		if strings.HasPrefix(a, "-") {
+		if strings.HasPrefix(w, "-") {
 			continue // -P, -L, -e, -@, pushd -n
 		}
 		target = &args[i]
@@ -717,25 +633,31 @@ func (s *bashScan) changeDir(name string, args []word) {
 	}
 	if target == nil {
 		if name == "pushd" {
-			s.known = false // swaps the top two stack entries
+			a.known = false // swaps the top two stack entries
 			return
 		}
-		home := literalWord(s.home)
+		home := litWord(a.home)
 		target = &home
 	}
-	s.cd(*target)
+	a.cd(*target)
 }
 
-// cd adds the directories target may resolve to.
-func (s *bashScan) cd(target word) {
-	dirs, ok := s.expand(target)
+// cd adds the directories target may resolve to. A cd in "a | cd x" or
+// "(cd x)" does not change the next command's directory, so the
+// directories only grow, and a relative path is checked against all of
+// them.
+func (a *bashAnalysis) cd(target evalWord) {
+	if !a.paths {
+		return
+	}
+	dirs, ok := a.expand(target.w)
 	if !ok || len(dirs) == 0 {
-		s.known = false
+		a.known = false
 		return
 	}
 	for _, d := range dirs {
-		if !contains(s.dirs, d) {
-			s.dirs = append(s.dirs, d)
+		if !contains(a.dirs, d) {
+			a.dirs = append(a.dirs, d)
 		}
 	}
 }
@@ -755,27 +677,27 @@ func contains(xs []string, x string) bool {
 // with "-". Flag values ("head -n 5") come through as operands; a stray
 // "5" only costs a rule lookup that will not match. "--file=x" values are
 // operands, and sort's -o target is written.
-func (s *bashScan) operands(name string, args []word) (ops []word, inPlace, scriptGiven bool) {
+func (a *bashAnalysis) operands(name string, args []evalWord) (ops []evalWord, inPlace, scriptGiven bool) {
 	dashdash := false
 	for i, w := range args {
-		a := w.lit()
+		lit := w.text()
 		switch {
 		case dashdash:
 			ops = append(ops, w)
-		case a == "--":
+		case lit == "--":
 			dashdash = true
-		case strings.HasPrefix(a, "-") && a != "-":
-			if name == "sed" && (strings.HasPrefix(a, "-i") || strings.HasPrefix(a, "-I") || strings.HasPrefix(a, "--in-place")) {
+		case strings.HasPrefix(lit, "-") && lit != "-":
+			if name == "sed" && (strings.HasPrefix(lit, "-i") || strings.HasPrefix(lit, "-I") || strings.HasPrefix(lit, "--in-place")) {
 				inPlace = true
 			}
-			if a == "-e" || a == "-f" || strings.HasPrefix(a, "--regexp") || strings.HasPrefix(a, "--file") || strings.HasPrefix(a, "--expression") {
+			if lit == "-e" || lit == "-f" || strings.HasPrefix(lit, "--regexp") || strings.HasPrefix(lit, "--file") || strings.HasPrefix(lit, "--expression") {
 				scriptGiven = true
 			}
-			if name == "sort" && a == "-o" && i+1 < len(args) {
-				s.operand(args[i+1], false, true)
+			if name == "sort" && lit == "-o" && i+1 < len(args) {
+				a.operand(args[i+1], false, true)
 			}
-			if eq := strings.IndexByte(a, '='); eq > 0 && strings.HasPrefix(a, "--") {
-				ops = append(ops, w.slice(eq+1))
+			if eq := strings.IndexByte(lit, '='); eq > 0 && strings.HasPrefix(lit, "--") {
+				ops = append(ops, sliceWord(w, eq+1))
 			}
 		default:
 			ops = append(ops, w)
@@ -784,18 +706,21 @@ func (s *bashScan) operands(name string, args []word) (ops []word, inPlace, scri
 	return ops, inPlace, scriptGiven
 }
 
-// operand records the files w may name, or marks the scan unsure.
-func (s *bashScan) operand(w word, read, write bool) {
-	paths, ok := s.expand(w)
+// operand records the files w may name, or marks the command unsure.
+func (a *bashAnalysis) operand(w evalWord, read, write bool) {
+	if !a.paths {
+		return
+	}
+	paths, ok := a.expand(w.w)
 	if !ok {
-		s.unsure = true
+		a.unsure = true
 		return
 	}
 	if read {
-		s.reads = append(s.reads, paths...)
+		a.reads = append(a.reads, paths...)
 	}
 	if write {
-		s.writes = append(s.writes, paths...)
+		a.writes = append(a.writes, paths...)
 	}
 }
 
@@ -807,13 +732,13 @@ func (s *bashScan) operand(w word, read, write bool) {
 // cannot be known: another variable, a command substitution, ~user, a
 // relative path after the directory was lost, too many expansions or glob
 // matches.
-func (s *bashScan) expand(w word) (paths []string, ok bool) {
+func (a *bashAnalysis) expand(w word) (paths []string, ok bool) {
 	alts, ok := braceExpand(w, maxExpansions)
 	if !ok {
 		return nil, false
 	}
 	for _, alt := range alts {
-		ew, ok := expandHome(alt, s.home)
+		ew, ok := expandHome(alt, a.home)
 		if !ok {
 			return nil, false
 		}
@@ -823,10 +748,10 @@ func (s *bashScan) expand(w word) (paths []string, ok bool) {
 		}
 		bases := []string{"/"}
 		if !strings.HasPrefix(text, "/") {
-			if !s.known {
+			if !a.known {
 				return nil, false
 			}
-			bases = s.dirs
+			bases = a.dirs
 		}
 		for _, b := range bases {
 			lit := text
@@ -835,7 +760,7 @@ func (s *bashScan) expand(w word) (paths []string, ok bool) {
 			}
 			paths = append(paths, lit)
 			if hasLiveGlob(ew) {
-				matches, ok := glob(ew, b, s.budget)
+				matches, ok := glob(ew, b, a.budget)
 				if !ok {
 					return nil, false
 				}

@@ -363,12 +363,11 @@ the session.
 checks deny rules first (absolute, never overridable), then, in `plan`,
 refuses edit tools whatever allow or ask rules say (Claude Code keeps edits
 blocked until the plan is approved), then ask rules (they ask even in
-`bypassPermissions`, and even when an allow rule matches too) — and in
-`plan` a bash command that is not read-only asks whatever allow rules say,
-as Claude Code's does without its plan classifier — then
+`bypassPermissions`, and even when an allow rule matches too), then
 `bypassPermissions` (allow everything else), then allow rules — Claude
 Code's deny, ask, allow — then falls through to mode defaults: `plan`
-allows `settings.ReadOnly` tools and read-only bash and denies everything
+allows `settings.ReadOnly` tools and read-only bash, asks about any other
+shell command (the regular flow, as in Claude Code) and denies everything
 else outright; `acceptEdits`
 allows `edit`/`write`/read-only tools and asks for the rest; `dontAsk`
 answers like `manual`, and the gate then denies whatever `manual` would have
@@ -388,6 +387,18 @@ carries its source (`settings.RuleSource`, in `Permissions.AllowFrom`/
 `DenyFrom`/`AskFrom`) through the merge, so a user-settings `/path` anchors at
 `~/.claude` and a project one at the project. Deny rules also reach the files a
 bash command names (`bash_paths.go`).
+
+**Bash analysis** (`bash_parse.go`): a command line is parsed with
+`mvdan.cc/sh/v3/syntax` (bash dialect) into one `bashAnalysis`: every simple
+command anywhere in it (lists, pipelines, subshells, control-flow and function
+bodies, substitutions, heredocs fed to a shell, `sh -c` and `eval` strings,
+parsed recursively), its words evaluated statically (`evalWord`: quote removal,
+`$'…'`, brace expansion; an expansion makes a word non-literal), what runs once
+wrappers are stripped, and whether anything runs that kiln cannot name. Bash
+rules (`bash_rules.go`), the read-only classification (`readonly_bash.go`) and
+the file-operand checks (`bash_paths.go`) all read it. `TestBashDifferential`
+runs generated command lines in real bash with logging stub commands and fails
+when bash runs a command the analysis did not collect.
 
 **Outside-workspace rule**: a path argument outside `Gate.Roots` always
 warrants a question — even when a rule would otherwise `Allow` — unless

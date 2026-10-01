@@ -23,6 +23,7 @@ require (
 	golang.org/x/text v0.40.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.59.0
+	mvdan.cc/sh/v3 v3.14.1
 )
 
 require (
