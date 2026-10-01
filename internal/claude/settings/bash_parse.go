@@ -38,8 +38,12 @@ const maxBashLen = 10000
 // bash ends a comment at the newline whatever precedes it. Inside a
 // comment such a backslash is text, so each one is replaced with a space
 // (offsets do not move) and the line is parsed again.
+//
+// A carriage return makes the line unparseable: the parser takes it for
+// blank space (and "\" CR LF for a continuation), while bash takes it for
+// a word byte, so the two would split the line differently.
 func parseBash(src string) (*syntax.File, string, bool) {
-	if len(src) > maxBashLen {
+	if len(src) > maxBashLen || strings.ContainsRune(src, '\r') {
 		return nil, src, false
 	}
 	for range 16 {
@@ -206,6 +210,9 @@ type bashCmd struct {
 	// with quotes removed; allowRaw is the same words as written, quotes
 	// kept, for a rule that spells the command exactly.
 	allow, allowRaw string
+	// allowFull and allowFullRaw are the command as written, nothing
+	// stripped, quotes removed and kept.
+	allowFull, allowFullRaw string
 	// exactOnly is set when only an exact rule (no "*") may approve it:
 	// an exec wrapper (sudo, env, watch, …) or find running or deleting.
 	exactOnly bool
@@ -239,6 +246,9 @@ type bashAnalysis struct {
 	sawCd, cdAway, git bool
 	relRedirect        bool
 	nonLocalRedirect   bool
+	// outsideWrite is set by an output redirect to a path outside the
+	// working directory or one that expands (no allow rule covers it).
+	outsideWrite bool
 	// words is every word and redirect target, for the workspace check
 	// (CommandWords); literalWords is false once one is not literal.
 	words        []string
@@ -331,19 +341,54 @@ func (a *bashAnalysis) nested(text string) {
 
 // subs queues the command and process substitutions in n, which run
 // wherever they appear.
+//
+// Two constructs bash 3.2 (the /bin/bash kiln runs) reads differently from
+// the parser are unknown: a case clause inside a substitution (bash 3.2
+// ends "$(" at the first ")" of a case pattern), and anything bash
+// evaluates as arithmetic — $((…)), $[…], an array subscript in an
+// expansion or assignment — since a quoted string there is evaluated as
+// code ("$(( 'a[$(cmd)]' ))" runs cmd).
 func (a *bashAnalysis) subs(n syntax.Node) {
 	syntax.Walk(n, func(n syntax.Node) bool {
 		switch n := n.(type) {
 		case *syntax.CmdSubst:
 			a.roOK = false
+			a.caseInside(n)
 			a.pending = append(a.pending, n.Stmts)
 			return false
 		case *syntax.ProcSubst:
 			a.roOK = false
+			a.caseInside(n)
 			a.pending = append(a.pending, n.Stmts)
 			return false
-		case *syntax.ParamExp, *syntax.ArithmExp, *syntax.ExtGlob:
+		case *syntax.ArithmExp:
+			a.dark()
+		case *syntax.ParamExp:
 			a.roOK = false
+			if n.Index != nil {
+				a.dark()
+			}
+		case *syntax.Assign:
+			if n.Index != nil {
+				a.dark()
+			}
+		case *syntax.ArrayElem:
+			if n.Index != nil {
+				a.dark()
+			}
+		case *syntax.ExtGlob:
+			a.roOK = false
+		}
+		return true
+	})
+}
+
+// caseInside marks a substitution holding a case clause unknown.
+func (a *bashAnalysis) caseInside(n syntax.Node) {
+	syntax.Walk(n, func(n syntax.Node) bool {
+		if _, ok := n.(*syntax.CaseClause); ok {
+			a.dark()
+			return false
 		}
 		return true
 	})
@@ -412,6 +457,9 @@ func (a *bashAnalysis) command(c syntax.Command, in stdinSource) {
 		a.stmts(c.Do, in)
 	case *syntax.ForClause:
 		a.roOK = false
+		if _, arith := c.Loop.(*syntax.CStyleLoop); arith {
+			a.dark() // for ((…)): arithmetic, see subs
+		}
 		a.subs(c.Loop)
 		a.stmts(c.Do, in)
 	case *syntax.CaseClause:
@@ -445,7 +493,22 @@ func (a *bashAnalysis) command(c syntax.Command, in stdinSource) {
 	case *syntax.CoprocClause:
 		a.roOK = false
 		a.stmt(c.Stmt, stdinSource{})
-	case *syntax.ArithmCmd, *syntax.TestClause, *syntax.LetClause, *syntax.DeclClause:
+	case *syntax.ArithmCmd, *syntax.LetClause:
+		a.leaf(c)
+		a.dark() // arithmetic, see subs
+	case *syntax.TestClause:
+		a.leaf(c)
+		// [[ a -eq b ]] evaluates its operands as arithmetic.
+		syntax.Walk(c, func(n syntax.Node) bool {
+			if b, ok := n.(*syntax.BinaryTest); ok {
+				switch b.Op {
+				case syntax.TsEql, syntax.TsNeq, syntax.TsLeq, syntax.TsGeq, syntax.TsLss, syntax.TsGtr:
+					a.dark()
+				}
+			}
+			return true
+		})
+	case *syntax.DeclClause:
 		a.leaf(c)
 	default:
 		a.dark()
@@ -461,6 +524,14 @@ func (a *bashAnalysis) redirects(rs []*syntax.Redirect, in stdinSource) stdinSou
 		}
 		if r.Hdoc != nil {
 			a.subs(r.Hdoc)
+			// An expansion in an unquoted heredoc body that spans lines may
+			// span the delimiter line, where bash 3.2 ends the heredoc and
+			// the parser does not.
+			for _, p := range r.Hdoc.Parts {
+				if _, lit := p.(*syntax.Lit); !lit && strings.Contains(a.slice(p), "\n") {
+					a.dark()
+				}
+			}
 		}
 		switch r.Op {
 		case syntax.Hdoc, syntax.DashHdoc:
@@ -512,19 +583,45 @@ func (a *bashAnalysis) redirects(rs []*syntax.Redirect, in stdinSource) stdinSou
 			if !(e.literal && e.lit == "/dev/null") {
 				a.roOK = false
 			}
+			a.writeTarget(e)
 			a.operand(e, false, true)
 		case syntax.DplIn:
 			a.roOK = false
 			a.operand(e, true, false)
 		case syntax.DplOut:
 			a.roOK = false // ">&file" writes file
+			a.writeTarget(e)
 			a.operand(e, false, true)
 		default: // <>, and anything newer
 			a.roOK = false
+			a.writeTarget(e)
 			a.operand(e, true, true)
 		}
 	}
 	return in
+}
+
+// writeTarget notes an output redirect target outside the working
+// directory, or one kiln cannot spell out: Claude Code asks for those
+// whatever allow rule matches the command ("A rule such as Bash(git
+// commit *) allows the command, not the target").
+func (a *bashAnalysis) writeTarget(e evalWord) {
+	if !e.literal {
+		a.outsideWrite = true
+		return
+	}
+	switch t := e.lit; {
+	case t == "/dev/null" || t == "/dev/stdout" || t == "/dev/stderr":
+	case strings.HasPrefix(t, "~"):
+		a.outsideWrite = true
+	case filepath.IsAbs(t):
+		rel, err := filepath.Rel(a.cwd, t)
+		if a.cwd == "" || err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+			a.outsideWrite = true
+		}
+	case !localPath(t):
+		a.outsideWrite = true
+	}
 }
 
 // target notes a redirect target for the read-only checks.
@@ -643,6 +740,12 @@ func (a *bashAnalysis) call(c *syntax.CallExpr, in stdinSource, prefix ...evalWo
 		e := a.eval(w)
 		if e.literal {
 			a.words = append(a.words, e.lit)
+			// A variable name with a subscript ("a[$(cmd)]") given to
+			// unset, read, printf -v, declare and the like is evaluated as
+			// arithmetic: the substitution in it runs.
+			if strings.Contains(e.lit, "[") && strings.ContainsAny(e.lit, "$`") {
+				a.dark()
+			}
 		} else {
 			a.literalWords = false
 			a.roOK = false
@@ -714,9 +817,29 @@ func (a *bashAnalysis) simple(assigns []assignment, words []evalWord, in stdinSo
 		raw = append(raw, w.src)
 	}
 	cmd.allowRaw = strings.Join(raw, " ")
+	// The command as written, wrappers and assignments kept, too: an exact
+	// rule such as Bash(timeout 3 pnpm start:*) names it that way.
+	cmd.allowFull = joinWords(assignTexts, words)
+	full := append([]string(nil), assignTexts...)
+	for _, w := range words {
+		full = append(full, w.src)
+	}
+	cmd.allowFullRaw = strings.Join(full, " ")
+	for _, w := range words {
+		if w.literal && filepath.Base(w.lit) == "xargs" {
+			// What xargs runs is matched as itself, never as "xargs …".
+			cmd.allowFull, cmd.allowFullRaw = "", ""
+		}
+		if !w.literal || !ccWrappers[filepath.Base(w.lit)] {
+			break
+		}
+	}
 	if len(kept) == 0 && len(cc) > 0 && cc[0].literal {
 		name := filepath.Base(cc[0].lit)
 		cmd.exactOnly = execWrappers[name] || (name == "find" && findRuns(cc[1:]))
+	}
+	if u.execWrapped || (len(u.words) > 0 && filepath.Base(u.words[0].text()) == "find" && findRuns(u.words[1:])) {
+		cmd.exactOnly = true
 	}
 
 	// Read-only: kiln's set, on the command as written.

@@ -58,17 +58,25 @@ func CommandWords(cmd string) (words []string, ok bool) {
 // A nil check means every argument is fine.
 var readOnlyPrograms = map[string]func(args []string) bool{
 	"cat": nil, "head": nil, "tail": nil, "ls": nil, "pwd": nil, "echo": nil,
-	"printf": nil, "wc": nil, "cut": nil, "tr": nil, "grep": nil, "egrep": nil,
-	"fgrep": nil, "file": nil, "stat": nil, "du": nil, "df": nil, "which": nil,
+	"wc": nil, "cut": nil, "tr": nil, "grep": nil, "egrep": nil,
+	"fgrep": nil, "stat": nil, "du": nil, "df": nil, "which": nil,
 	"whoami": nil, "uname": nil, "basename": nil, "dirname": nil,
 	"realpath": nil, "readlink": nil, "diff": nil, "cmp": nil, "comm": nil,
 	"jq": nil, "true": nil, "false": nil, "test": nil, "[": nil, "cd": nil,
 	"printenv": nil, "nl": nil, "column": nil,
-	"sort": func(a []string) bool { return !hasArg(a, "-o", "--output") },
+	// Each check below refuses the options that write a file or run a
+	// program, in every spelling getopt accepts (optionSet).
+	"printf": func(a []string) bool { return !optionSet(a, "v") }, // -v assigns a variable (and its subscript runs)
+	"file": func(a []string) bool {
+		return !optionSet(a, "Cmf", "compile", "magic-file", "files-from") // -C writes; -m, -f open the paths they name
+	},
+	"sort": func(a []string) bool { return !optionSet(a, "o", "output", "compress-program") },
 	"uniq": func(a []string) bool { return len(positional(a)) <= 1 }, // a 2nd operand is an output file
-	"tree": func(a []string) bool { return !hasArg(a, "-o") },
-	"rg":   func(a []string) bool { return !hasArg(a, "--pre") },
-	"date": func(a []string) bool { return !hasArg(a, "-s", "--set") },
+	"tree": func(a []string) bool {
+		return !optionSet(a, "o") && !(optionSet(a, "R") && optionSet(a, "H")) // -o writes; -R with -H writes an index per directory
+	},
+	"rg":   func(a []string) bool { return !optionSet(a, "", "pre", "hostname-bin") },
+	"date": func(a []string) bool { return !optionSet(a, "s", "set") },
 	"find": func(a []string) bool {
 		return !hasArg(a, "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls")
 	},
@@ -171,17 +179,51 @@ func readOnlyGit(a []string) bool {
 		return false
 	}
 	rest := a[1:]
-	for _, w := range rest {
-		if strings.HasPrefix(w, "--output") || w == "--ext-diff" || w == "--textconv" || strings.HasPrefix(w, "--exec") {
-			return false // writes a file, or runs a configured program
-		}
+	// Writes a file, or runs a configured or given program.
+	if optionSet(rest, "", "output", "ext-diff", "textconv", "exec", "filters", "open-files-in-pager") {
+		return false
+	}
+	if sub == "grep" && optionSet(rest, "O") {
+		return false // -O opens the matching files in a pager
 	}
 	return check == nil || check(rest)
+}
+
+// optionSet reports an argument that sets one of the short options in
+// short — alone ("-o"), in a cluster ("-mo") or with its value attached
+// ("-oFILE") — or one of the long options, spelt out or abbreviated as
+// GNU getopt accepts ("--outp=x" for --output). Arguments after "--" are
+// operands. It errs towards a match: a cluster's later letters may be an
+// earlier option's value.
+func optionSet(args []string, short string, long ...string) bool {
+	for _, w := range args {
+		switch {
+		case w == "--":
+			return false
+		case strings.HasPrefix(w, "--"):
+			name, _, _ := strings.Cut(w[2:], "=")
+			for _, l := range long {
+				if name != "" && strings.HasPrefix(l, name) {
+					return true
+				}
+			}
+		case len(w) > 1 && w[0] == '-' && short != "" && strings.ContainsAny(w[1:], short):
+			return true
+		}
+	}
+	return false
 }
 
 func readOnlyGo(a []string) bool {
 	if len(a) == 0 {
 		return false
+	}
+	for _, w := range a[1:] {
+		// -toolexec and -exec run a program for each build step or binary.
+		name, _, _ := strings.Cut(strings.TrimLeft(w, "-"), "=")
+		if strings.HasPrefix(w, "-") && (name == "toolexec" || name == "exec") {
+			return false
+		}
 	}
 	switch a[0] {
 	case "version", "list", "doc":

@@ -136,7 +136,7 @@ func bashGuarded(p Permissions, toolName string) bool {
 func roughSegments(cmd string) []string {
 	var out []string
 	for _, s := range strings.FieldsFunc(cmd, func(r rune) bool {
-		return strings.ContainsRune("\n;&|()`{}", r)
+		return strings.ContainsRune("\n\r;&|()`{}", r)
 	}) {
 		s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "$"))
 		if s != "" {
@@ -191,7 +191,9 @@ func bashRuleVerdicts(permissions Permissions, a *bashAnalysis, toolName, cmd st
 	}
 	deny = anyMatch(permissions.Deny)
 	ask = anyMatch(permissions.Ask)
-	if !a.parsed || len(a.cmds) == 0 {
+	if !a.parsed || len(a.cmds) == 0 || a.outsideWrite {
+		// An output redirect outside the working directory (or one that
+		// expands) needs approval whatever rule allows the command.
 		return deny, ask, false
 	}
 	for _, r := range permissions.Allow {
@@ -213,8 +215,13 @@ func bashRuleVerdicts(permissions Permissions, a *bashAnalysis, toolName, cmd st
 			if c.exactOnly && !isExactBashRule(r) {
 				continue
 			}
-			if matchesBashRule(r, toolName, c.allow) || (c.allowRaw != "" && matchesBashRule(r, toolName, c.allowRaw)) {
-				ok = true
+			for _, text := range []string{c.allow, c.allowRaw, c.allowFull, c.allowFullRaw} {
+				if text != "" && matchesBashRule(r, toolName, text) {
+					ok = true
+					break
+				}
+			}
+			if ok {
 				break
 			}
 		}

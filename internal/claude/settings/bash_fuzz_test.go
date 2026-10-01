@@ -23,9 +23,13 @@ import (
 // A few hundred seeded cases run by default; KILN_BASH_FUZZ=<n> runs n,
 // and KILN_BASH_FUZZ_SEED=<s> picks the seed.
 func TestBashDifferential(t *testing.T) {
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("bash not found")
+	// The bash kiln runs commands with (execenv's resolveShell): /bin/bash
+	// when present, which on macOS is bash 3.2.
+	bash := "/bin/bash"
+	if _, err := os.Stat(bash); err != nil {
+		if bash, err = exec.LookPath("bash"); err != nil {
+			t.Skip("bash not found")
+		}
 	}
 	n, seed := 300, uint64(1)
 	if v, err := strconv.Atoi(os.Getenv("KILN_BASH_FUZZ")); err == nil && v > 0 {
@@ -233,7 +237,7 @@ func (g *fuzzGen) list(d int) string {
 	if d <= 0 {
 		return g.simple()
 	}
-	switch g.r.IntN(24) {
+	switch g.r.IntN(26) {
 	case 0, 1, 2:
 		return g.simple()
 	case 3, 4:
@@ -275,6 +279,26 @@ func (g *fuzzGen) list(d int) string {
 		return g.simple() + " #" + g.pick("", " c", " don't", ` "`, " $(x") + g.pick("", " \\", "\\") + "\n" + g.simple()
 	case 21:
 		return g.name() + " a\\" + g.pick(" ", "\t", ";", "|", "&", "(", ")", "<", ">") + "#'\n" + g.name() + " '; " + g.simple() + "; " + g.name() + " ' #'"
+	case 23, 24:
+		// Where bash 3.2 and the parser part ways: CR bytes, arithmetic
+		// and subscripts, case inside a substitution, an expansion
+		// spanning a heredoc's delimiter line.
+		switch g.r.IntN(7) {
+		case 0:
+			return g.simple() + " \\\r\n" + g.simple()
+		case 1:
+			return g.name() + " a\r# ; " + g.simple()
+		case 2:
+			return g.name() + " $(( 'a[$(" + g.simple() + ")]' ))"
+		case 3:
+			return g.name() + " ${x['a[$(" + g.simple() + ")]']}"
+		case 4:
+			return g.name() + " $(case x in y) " + g.simple() + ";; esac)"
+		case 5:
+			return g.name() + " <<E\n" + g.pick("${x:-", "$(", "$((") + "\nE\n" + g.simple() + "\n" + g.pick("}", ")", "))") + "\nE"
+		default:
+			return "unset 'a[$(" + g.simple() + ")]'; " + g.simple()
+		}
 	case 22:
 		switch g.r.IntN(5) {
 		case 0:

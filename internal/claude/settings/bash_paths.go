@@ -198,6 +198,7 @@ type unwrapped struct {
 	optReads, optWrites []evalWord
 	argsFromStdin       bool // under xargs: arguments come from stdin
 	dark                bool // a wrapper hides what runs
+	execWrapped         bool // an exec wrapper (sudo, env, watch, …) was stripped
 }
 
 // unwrap drops leading NAME=value words, wrapper commands (sudo, env,
@@ -238,6 +239,9 @@ func (a *bashAnalysis) unwrap(words []evalWord) (u unwrapped) {
 		}
 		if name == "xargs" {
 			u.argsFromStdin = true
+		}
+		if execWrappers[name] {
+			u.execWrapped = true
 		}
 		i := 1
 		for i < len(words) {
