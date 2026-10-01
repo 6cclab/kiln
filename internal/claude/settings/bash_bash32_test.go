@@ -157,3 +157,19 @@ func TestBash32_ExactRuleWithWrapper(t *testing.T) {
 	notApproved(t, []string{"Bash(timeout 3 sudo:*)"}, "timeout 3 sudo rm -rf /")
 	notApproved(t, []string{"Bash(xargs:*)"}, "xargs rm < list")
 }
+
+// A nested shell may be dash (/bin/sh on Debian/Ubuntu), which reads $'…'
+// literally, so kiln can't know the words: the line is unknown, and an
+// allow rule must not approve it. Found by TestBashDifferential on Linux CI.
+func TestBash32_NestedShellAnsiQuoting(t *testing.T) {
+	p := Permissions{Allow: []string{"Bash(sh -c:*)", "Bash(cmdc:*)"}}
+	for _, line := range []string{
+		`sh -c 'cmdc $'"'"'t\x41'"'"''`,
+		`sh -c "cmdc \$\"x\""`,
+		`eval "cmdc \$'x'"`,
+	} {
+		if got := Decide(p, "bash", line, ModeManual); got == Allow {
+			t.Errorf("%q: got Allow, want not Allow", line)
+		}
+	}
+}

@@ -329,6 +329,13 @@ func (a *bashAnalysis) nested(text string) {
 		a.dark()
 		return
 	}
+	// The nested interpreter may not be bash: /bin/sh is dash on many
+	// Linux systems, and dash reads $'…' and $"…" as a "$" followed by an
+	// ordinary quoted string. Words using them can't be evaluated safely.
+	if strings.Contains(text, "$'") || strings.Contains(text, "$\"") {
+		a.dark()
+		return
+	}
 	f, src, ok := parseBash(text)
 	if !ok {
 		a.dark()
