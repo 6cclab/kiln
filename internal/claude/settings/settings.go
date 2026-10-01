@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/execenv"
@@ -257,16 +258,19 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 		}
 		return sameTool(bare, tool) || bareFamilyMatches(bare, tool)
 	}
-	if kind, _, pattern, ok := splitFileRule(rule); ok {
+	if f, ok := splitFileRule(rule); ok {
 		// A Read/Edit path rule (pathrules.go), judged here as a deny
 		// rule from the command line: anchored at the current directory,
 		// matching the requested path or its symlink target. Decide does
 		// not come through here; it knows each rule's list and source.
-		if toolFileKind(toolName) != kind {
+		if f.empty() {
+			return MatchesRule(f.tool, toolName, "")
+		}
+		if toolFileKind(toolName) != f.kind {
 			return false
 		}
 		c := newMatchCtx("")
-		r, ok := c.compilePathRule(kind, pattern, RuleSource{}, listDeny)
+		r, ok := c.compilePathRule(f.kind, f.pattern, RuleSource{}, listDeny)
 		if !ok {
 			return false
 		}
@@ -304,11 +308,30 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 		pattern = pattern[:len(pattern)-len(" .*")] + "(\\s.*)?"
 	}
 
-	re, err := regexp.Compile("^" + pattern + "$")
-	if err != nil {
+	re := compiledPattern("^" + pattern + "$")
+	if re == nil {
 		return false
 	}
 	return re.MatchString(strings.TrimSpace(primaryArg))
+}
+
+// patternCache holds MatchesRule's compiled patterns, keyed by the pattern
+// (so bounded by the rules there are, not the calls made); nil records
+// one that does not compile. A bash call is judged against every rule for
+// every segment, and compiling each time cost more than the rest of the
+// decision.
+var patternCache sync.Map // string -> *regexp.Regexp
+
+func compiledPattern(p string) *regexp.Regexp {
+	if v, ok := patternCache.Load(p); ok {
+		return v.(*regexp.Regexp)
+	}
+	re, err := regexp.Compile(p)
+	if err != nil {
+		re = nil
+	}
+	patternCache.Store(p, re)
+	return re
 }
 
 // sameTool compares a rule's tool name with a tool's, both lower-cased,
@@ -355,6 +378,47 @@ var ReadOnly = map[string]bool{
 	"ask_user_question": true,
 }
 
+// RuleHits reports which rule lists match a call, before any mode or
+// precedence is applied (DecideIn orders them). The permission gate uses
+// it to let deny and ask rules win over a session "don't ask again" grant.
+//
+// For bash, a file the command names that a Read/Edit deny rule covers is
+// a deny hit; a file operand kiln cannot resolve (a variable, a glob in an
+// unknown directory, a command substitution it cannot parse) is an ask hit
+// whenever any Read/Edit path rule sits in deny or ask, so an unknowable
+// path is asked about instead of slipping past a deny (bash_paths.go).
+func RuleHits(permissions Permissions, cwd, toolName, primaryArg string) (deny, ask, allow bool) {
+	hits := func(rules []string) bool {
+		for _, r := range rules {
+			if _, isPath := splitFileRule(r); isPath {
+				continue // judged with its source by filePathVerdicts
+			}
+			if MatchesRule(r, toolName, primaryArg) {
+				return true
+			}
+		}
+		return false
+	}
+
+	c := newMatchCtx(cwd)
+	deny, ask, allow = hits(permissions.Deny), hits(permissions.Ask), hits(permissions.Allow)
+	switch {
+	case strings.EqualFold(toolName, "bash"), strings.EqualFold(toolName, "bash_background"):
+		if strings.EqualFold(toolName, "bash") {
+			// A command line is several commands; judge each one
+			// (bashRuleVerdicts).
+			deny, ask, allow = bashRuleVerdicts(permissions, toolName, primaryArg)
+		}
+		fileDeny, unsure := bashFileVerdict(permissions, c, primaryArg)
+		deny = deny || fileDeny
+		ask = ask || unsure
+	case IsFileTool(toolName):
+		d, a, al := filePathVerdicts(permissions, c, toolName, primaryArg)
+		deny, ask, allow = deny || d, ask || a, allow || al
+	}
+	return deny, ask, allow
+}
+
 // Decision is the outcome of Decide.
 type Decision string
 
@@ -366,8 +430,13 @@ const (
 
 // Decide whether a call may proceed.
 //
-// deny is checked first and is absolute: an explicit denial must not be
-// overridable by a broader allow rule elsewhere in the hierarchy.
+// Rules are evaluated as Claude Code evaluates them: deny, then ask, then
+// allow, the first match deciding, whatever the rules' specificity. deny
+// is absolute: an explicit denial must not be overridable by a broader
+// allow rule elsewhere in the hierarchy; and a matching ask rule prompts
+// even when an allow rule also matches. bypassPermissions skips prompts,
+// so in that mode an ask rule does not stop a call (a deny rule still
+// does).
 //
 // Relative paths, and Read/Edit rules anchored at the current directory,
 // resolve against the process's working directory; DecideIn names it.
@@ -381,44 +450,24 @@ func Decide(permissions Permissions, toolName, primaryArg string, mode Permissio
 // "" means the process's working directory. For a file tool (read, edit,
 // write, ...) primaryArg is its path argument.
 func DecideIn(permissions Permissions, cwd, toolName, primaryArg string, mode PermissionMode) Decision {
-	hits := func(rules []string) bool {
-		for _, r := range rules {
-			if _, _, _, isPath := splitFileRule(r); isPath {
-				continue // judged with its source by filePathVerdicts
-			}
-			if MatchesRule(r, toolName, primaryArg) {
-				return true
-			}
-		}
-		return false
-	}
+	denyHit, askHit, allowHit := RuleHits(permissions, cwd, toolName, primaryArg)
+	return DecideFromHits(denyHit, askHit, allowHit, toolName, primaryArg, mode)
+}
 
-	c := newMatchCtx(cwd)
-	denyHit, askHit, allowHit := hits(permissions.Deny), hits(permissions.Ask), hits(permissions.Allow)
-	switch {
-	case strings.EqualFold(toolName, "bash"):
-		// A command line is several commands; judge each one
-		// (bashRuleVerdicts).
-		denyHit, askHit, allowHit = bashRuleVerdicts(permissions, toolName, primaryArg)
-		denyHit = denyHit || bashFileDenied(permissions, c, primaryArg)
-	case strings.EqualFold(toolName, "bash_background"):
-		denyHit = denyHit || bashFileDenied(permissions, c, primaryArg)
-	case IsFileTool(toolName):
-		d, a, al := filePathVerdicts(permissions, c, toolName, primaryArg)
-		denyHit, askHit, allowHit = denyHit || d, askHit || a, allowHit || al
-	}
-
+// DecideFromHits is DecideIn for a caller that already has RuleHits'
+// result (the permission gate, which also needs the hits themselves).
+func DecideFromHits(denyHit, askHit, allowHit bool, toolName, primaryArg string, mode PermissionMode) Decision {
 	if denyHit {
 		return Deny
 	}
 	if mode == ModeBypassPermissions {
 		return Allow
 	}
-	if allowHit {
-		return Allow
-	}
 	if askHit {
 		return Ask
+	}
+	if allowHit {
+		return Allow
 	}
 
 	switch mode {

@@ -14,8 +14,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
 )
 
 type pathRulesResult struct {
@@ -130,6 +134,97 @@ steps:
 	}
 	if _, err := os.Stat(filepath.Join(proj, "docs", "a.md")); err == nil {
 		t.Error("docs/a.md was written despite the deny rule")
+	}
+}
+
+// TestPermission_DanglingLinkWriteBlocked (review HIGH 1): a project file
+// that is a dangling link into ~/.ssh is not a way to write there. With a
+// user Edit(~/.ssh/**) deny the gate blocks it; without one, acceptEdits
+// still does not write it (outside the workspace, and the write tool
+// refuses a symlink path).
+func TestPermission_DanglingLinkWriteBlocked(t *testing.T) {
+	for _, withDeny := range []bool{true, false} {
+		t.Run(fmt.Sprintf("deny=%v", withDeny), func(t *testing.T) {
+			home, sessDir := scratchHome(t)
+			proj := scratchProject(t)
+			target := filepath.Join(home, ".ssh", "authorized_keys")
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(proj, "keys")); err != nil {
+				t.Fatal(err)
+			}
+			if withDeny {
+				pathRulesWriteFile(t, filepath.Join(home, ".claude", "settings.json"), `{"permissions":{"deny":["Edit(~/.ssh/**)"]}}`)
+			}
+			addr, _ := startFaux(t, `model: faux-1
+steps:
+  - tool_call: {name: write, args: {path: keys, content: "ssh-ed25519 AAAA attacker"}, id: w1}
+  - on_tool_result: w1
+    then:
+      - text: "done"
+`)
+			res, _ := pathRulesRun(t, proj, home, sessDir, addr, "--permission-mode", "acceptEdits")
+			if withDeny && !pathRulesBlocked(res, "write(keys)") {
+				t.Errorf("write keys not blocked by Edit(~/.ssh/**); blocked=%v", res.Blocked)
+			}
+			if _, err := os.Stat(target); err == nil {
+				t.Errorf("%s was created through the dangling link", target)
+			}
+		})
+	}
+}
+
+// pathRulesWarning is a substring of the startup warning for a
+// Write(docs/**) rule.
+const pathRulesWarning = "not matched by file permission checks"
+
+// TestPermission_RuleWarningNeverReachesModel: the startup warning goes to
+// stderr (print) or the TUI's notes, never into what the model is sent.
+func TestPermission_RuleWarningNeverReachesModel(t *testing.T) {
+	const script = `model: faux-1
+steps:
+  - text: "done"
+`
+	t.Run("print", func(t *testing.T) {
+		home, sessDir := scratchHome(t)
+		proj := scratchProject(t)
+		pathRulesWriteFile(t, filepath.Join(proj, ".claude", "settings.json"), `{"permissions":{"deny":["Write(docs/**)"]}}`)
+		addr, srv := startFaux(t, script)
+		_, run := pathRulesRun(t, proj, home, sessDir, addr)
+		if !strings.Contains(run.Stderr, pathRulesWarning) {
+			t.Fatalf("no warning on stderr: %s", run.Stderr)
+		}
+		pathRulesNotInRequests(t, srv.Requests())
+	})
+	t.Run("tui", func(t *testing.T) {
+		home, sessDir := scratchHome(t)
+		proj := scratchProject(t)
+		pathRulesWriteFile(t, filepath.Join(proj, ".claude", "settings.json"), `{"permissions":{"deny":["Write(docs/**)"]}}`)
+		addr, srv := startFaux(t, script)
+		s := startTUI(t, 220, 40, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
+		defer s.Close()
+		if err := s.WaitFor(pathRulesWarning, 10*time.Second); err != nil {
+			t.Fatalf("warning not shown in the TUI: %v", err)
+		}
+		s.Send("hello\r")
+		if err := s.WaitFor(regexp.MustCompile(`(?m)^\s*done\s*$`), 15*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		reqs := srv.Requests()
+		if len(reqs) == 0 {
+			t.Fatal("the model was never called")
+		}
+		pathRulesNotInRequests(t, reqs)
+	})
+}
+
+func pathRulesNotInRequests(t *testing.T, reqs []tkfaux.Request) {
+	t.Helper()
+	for _, r := range reqs {
+		if strings.Contains(string(r.Body), pathRulesWarning) || strings.Contains(string(r.Body), "use Edit(docs/**) instead") {
+			t.Fatal("the permission-rule warning reached the model")
+		}
 	}
 }
 

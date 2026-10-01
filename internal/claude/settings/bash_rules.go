@@ -62,6 +62,10 @@ func BashSegments(cmd string) (segments []string, opaque bool) {
 				continue
 			}
 			flush()
+		case c == '|' && i > 0 && cmd[i-1] == '>':
+			// ">|" (and "2>|") is a clobbering output redirection, not a
+			// pipe: it stays part of its command.
+			cur.WriteByte(c)
 		case c == ';', c == '|', c == '\n':
 			flush()
 		default:

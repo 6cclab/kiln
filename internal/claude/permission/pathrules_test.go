@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/andrepato/harness/internal/claude/settings"
@@ -106,11 +107,11 @@ func TestGate_RemoveRuleKeepsSourcesAligned(t *testing.T) {
 	t.Setenv("HOME", home)
 	proj := t.TempDir()
 	user := settings.RuleSource{Scope: "user", File: filepath.Join(home, ".claude", "settings.json"), Root: filepath.Join(home, ".claude")}
-	project := settings.RuleSource{Scope: "project", File: filepath.Join(proj, ".claude", "settings.json")}
+	local := settings.RuleSource{Scope: "local", File: filepath.Join(proj, ".claude", "settings.local.json")}
 	g := NewGate(GateOptions{
 		Permissions: settings.Permissions{
 			Deny:     []string{"Read(/a/**)", "Read(/secrets/**)"},
-			DenyFrom: []settings.RuleSource{project, user},
+			DenyFrom: []settings.RuleSource{local, user},
 		},
 		Mode:  settings.ModeAuto,
 		Roots: []string{proj},
@@ -125,9 +126,145 @@ func TestGate_RemoveRuleKeepsSourcesAligned(t *testing.T) {
 		t.Error("the user rule lost its ~/.claude anchor after an earlier rule was removed")
 	}
 
-	g.AddRule(RuleDeny, "Read(/b/**)") // a session rule: anchored at the primary root
+	g.AddRule(RuleDeny, "Read(/b/**)") // saved to settings.local.json: anchored at the primary root
 	session := filepath.Join(proj, "b", "k")
 	if blocked, _ := g.Check(context.Background(), Request{ToolName: "read", PrimaryArg: session, Args: map[string]any{"path": session}}); blocked == nil {
-		t.Error("a session /path rule did not anchor at the primary root")
+		t.Error("an added /path rule did not anchor at the primary root")
+	}
+}
+
+// TestGate_AddRemoveRuleBySource: AddRule and RemoveRule work on the rule
+// and its source together. /permissions saving "Read(/secrets/**)" when user
+// settings already has that text adds the project-anchored copy (the user
+// one is under ~/.claude); removing it removes only that copy, as
+// writesettings.RemoveRule only edits settings.local.json.
+func TestGate_AddRemoveRuleBySource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	proj := t.TempDir()
+	user := settings.RuleSource{Scope: "user", File: filepath.Join(home, ".claude", "settings.json"), Root: filepath.Join(home, ".claude")}
+	project := settings.RuleSource{Scope: "project", File: filepath.Join(proj, ".claude", "settings.json")}
+	g := NewGate(GateOptions{
+		Permissions: settings.Permissions{
+			Deny:     []string{"Read(/secrets/**)", "Read(/p/**)"},
+			DenyFrom: []settings.RuleSource{user, project},
+		},
+		Mode:  settings.ModeAuto,
+		Roots: []string{proj},
+	})
+	check := func(path string) bool {
+		blocked, err := g.Check(context.Background(), Request{ToolName: "read", PrimaryArg: path, Args: map[string]any{"path": path}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return blocked != nil
+	}
+	inProject := filepath.Join(proj, "secrets", "k")
+	inClaude := filepath.Join(home, ".claude", "secrets", "k")
+	if check(inProject) {
+		t.Fatal("the user rule matched in the project before anything was added")
+	}
+
+	g.AddRule(RuleDeny, "Read(/secrets/**)")
+	if !check(inProject) {
+		t.Error("AddRule dropped the project-anchored copy because user settings had the same text")
+	}
+	if !check(inClaude) {
+		t.Error("the user copy stopped applying")
+	}
+
+	g.RemoveRule(RuleDeny, "Read(/secrets/**)")
+	if check(inProject) {
+		t.Error("RemoveRule left the added copy in place")
+	}
+	if !check(inClaude) {
+		t.Error("RemoveRule removed the user settings copy too")
+	}
+	g.RemoveRule(RuleDeny, "Read(/p/**)")
+	if !check(filepath.Join(proj, "p", "x")) {
+		t.Error("RemoveRule removed a project settings rule, which stays in its file")
+	}
+}
+
+// TestGate_SymlinkEscapesWorkspace (review HIGH 1, 2): in acceptEdits, a
+// write through a link or a linked directory that resolves outside the
+// workspace is outside the workspace: it asks (refused headless), and a
+// deny rule on the target blocks it outright.
+func TestGate_SymlinkEscapesWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	proj := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, ".ssh", "authorized_keys"), filepath.Join(proj, "dangle")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, ".ssh"), filepath.Join(proj, "sshdir")); err != nil {
+		t.Fatal(err)
+	}
+	write := func(g *Gate, path string) *BlockResult {
+		blocked, err := g.Check(context.Background(), Request{ToolName: "write", PrimaryArg: path, Args: map[string]any{"path": path, "content": "k"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return blocked
+	}
+
+	open := NewGate(GateOptions{Mode: settings.ModeAcceptEdits, Roots: []string{proj}})
+	for _, p := range []string{"dangle", "sshdir/authorized_keys"} {
+		if open.WithinRoots(p) {
+			t.Errorf("WithinRoots(%q) = true; it resolves into ~/.ssh", p)
+		}
+		if write(open, p) == nil {
+			t.Errorf("acceptEdits wrote %s, which resolves outside the workspace, without asking", p)
+		}
+	}
+	if !open.WithinRoots("notes/new.md") {
+		t.Error("a new file inside the workspace is not within it")
+	}
+
+	denied := NewGate(GateOptions{
+		Mode:        settings.ModeAcceptEdits,
+		Roots:       []string{proj},
+		Permissions: settings.Permissions{Deny: []string{"Edit(~/.ssh/**)"}},
+		Prompt: func(context.Context, Request) (PromptChoice, error) {
+			return PromptChoice{Kind: PromptAllow}, nil
+		},
+	})
+	for _, p := range []string{"dangle", "sshdir/authorized_keys"} {
+		if b := write(denied, p); b == nil || !strings.Contains(b.Reason, "permission rules") {
+			t.Errorf("write %s: %+v, want blocked by permission rules", p, b)
+		}
+	}
+}
+
+// TestGate_DenyBeatsSessionGrant: an "always allow" answer does not
+// outlive a deny or ask rule added afterwards.
+func TestGate_DenyBeatsSessionGrant(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	proj := t.TempDir()
+	prompts := 0
+	g := NewGate(GateOptions{
+		Mode:  settings.ModeManual,
+		Roots: []string{proj},
+		Prompt: func(context.Context, Request) (PromptChoice, error) {
+			prompts++
+			return PromptChoice{Kind: PromptAllowAlways}, nil
+		},
+	})
+	p := filepath.Join(proj, "notes.md")
+	req := Request{ToolName: "write", PrimaryArg: p, Args: map[string]any{"path": p}}
+	if blocked, _ := g.Check(context.Background(), req); blocked != nil || prompts != 1 {
+		t.Fatalf("first write: blocked=%v prompts=%d", blocked, prompts)
+	}
+
+	g.AddRule(RuleAsk, "Edit(notes.md)")
+	if _, _ = g.Check(context.Background(), req); prompts != 2 {
+		t.Errorf("an ask rule added after the grant did not prompt (prompts=%d)", prompts)
+	}
+	g.AddRule(RuleDeny, "Edit(notes.md)")
+	if blocked, _ := g.Check(context.Background(), req); blocked == nil {
+		t.Error("a deny rule added after the grant did not block")
 	}
 }

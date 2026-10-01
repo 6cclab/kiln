@@ -31,6 +31,29 @@ func TestFileRuleWarnings(t *testing.T) {
 	}
 }
 
+// TestFileRuleWarnings_EmptyAndCLIGlob: an empty path is warned about; a
+// Glob(...) allow passed in --allowed-tools is not, as in Claude Code, but
+// the same rule from a settings file still is.
+func TestFileRuleWarnings_EmptyAndCLIGlob(t *testing.T) {
+	p := Permissions{
+		Allow: []string{"Glob(src/**)", "Glob(docs/**)", "Edit()"},
+		Deny:  []string{"Read()"},
+	}
+	got := strings.Join(FileRuleWarnings(p, "Glob(docs/**)"), "\n")
+	for _, want := range []string{
+		"Permission rule Read() in deny has an empty path (kiln applies it as Read, the whole tool); write Read for the whole tool, or give it a path.",
+		"Permission rule Edit() in allow has an empty path (kiln ignores it)",
+		"Permission rule Glob(src/**) in allow",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Glob(docs/**)") {
+		t.Errorf("warned about a Glob rule passed in --allowed-tools:\n%s", got)
+	}
+}
+
 // TestLoadSettings_RuleSources: each rule carries its file's scope and
 // anchor, aligned with the merged lists.
 func TestLoadSettings_RuleSources(t *testing.T) {

@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/andrepato/harness/internal/execenv"
 )
@@ -25,16 +28,22 @@ import (
 //     at any depth. A relative single-directory pattern ("secrets/**")
 //     matches at any depth in a deny or ask rule, but only at <cwd>/secrets
 //     in an allow rule. Every other shape is anchored. A pattern that
-//     matches a directory also covers everything under it.
+//     matches a directory also covers everything under it (gitignore: so an
+//     allow "Edit(src/)" covers a src directory at any depth, as gitignore
+//     reads a pattern with only a trailing slash).
 //   - "!p" in a deny or ask list carves p out of the relative rules listed
 //     before it from the same source; it cannot reopen a file inside a
 //     directory those rules block as a whole.
 //   - Symlinks: a deny or ask rule applies when the requested path OR the
-//     path it resolves to matches; an allow rule needs BOTH. Each rule is
-//     also tried at its anchor's real location, so "//tmp/**" covers
-//     /private/tmp on macOS.
+//     path it resolves to matches; an allow rule needs BOTH. A dangling
+//     final link resolves to its (missing) target. Each rule is also tried
+//     at its anchor's real location, so "//tmp/**" covers /private/tmp on
+//     macOS.
 //   - A deny or ask pattern that is not a valid glob still guards that
 //     exact path; an invalid allow pattern approves nothing.
+//   - Deny and ask rules compare paths in Unicode NFC, and ignore case where
+//     the filesystem does (foldCase): ".ENV" and a decomposed "café" open
+//     the same file there. Allow rules compare exactly.
 //
 // Rule tool names: Read and Edit are path rules. Claude Code accepts
 // Write(...), MultiEdit(...), NotebookEdit(...) and Glob(...) path rules
@@ -42,8 +51,10 @@ import (
 // in one direction only: a DENY or ASK rule written that way is honoured as
 // the Edit (resp. Read) rule it was meant to be, so a misspelt deny never
 // leaves a file unguarded; an ALLOW rule written that way is ignored, as
-// in Claude Code, so it never approves more than Claude Code would.
-// FileRuleWarnings reports every such rule at startup.
+// in Claude Code, so it never approves more than Claude Code would. An
+// empty path ("Read()") in a deny or ask rule is taken as the bare tool
+// rule; in an allow rule it approves nothing. FileRuleWarnings reports
+// every such rule at startup.
 
 // ruleList says which list a rule came from; matching depth and symlink
 // handling differ between allow and deny/ask.
@@ -66,7 +77,7 @@ const (
 
 // norm lower-cases a tool name and drops underscores, so Claude Code's
 // MultiEdit and kiln's multi_edit compare equal.
-func norm(name string) string {
+func normTool(name string) string {
 	return strings.ReplaceAll(strings.ToLower(name), "_", "")
 }
 
@@ -85,7 +96,7 @@ var readDenyCoversEdit = map[string]bool{"edit": true, "write": true, "multiedit
 
 // toolFileKind is the family a tool call belongs to.
 func toolFileKind(tool string) fileKind {
-	switch t := norm(tool); {
+	switch t := normTool(tool); {
 	case readTools[t]:
 		return kindRead
 	case editTools[t]:
@@ -102,7 +113,7 @@ func IsFileTool(tool string) bool { return toolFileKind(tool) != kindNone }
 // checked as. alias is true for Write/MultiEdit/NotebookEdit/Glob, the
 // names Claude Code accepts but never consults for path rules.
 func ruleFileKind(ruleTool string) (kind fileKind, alias bool) {
-	switch norm(ruleTool) {
+	switch normTool(ruleTool) {
 	case "read":
 		return kindRead, false
 	case "edit":
@@ -115,30 +126,40 @@ func ruleFileKind(ruleTool string) (kind fileKind, alias bool) {
 	return kindNone, false
 }
 
-// splitFileRule reports whether rule is a parenthesized path rule, and
-// returns its family, alias flag and pattern.
-func splitFileRule(rule string) (kind fileKind, alias bool, pattern string, ok bool) {
+// fileRule is a parenthesized rule naming a file tool.
+type fileRule struct {
+	tool    string // as written: "Read", "Write", ...
+	kind    fileKind
+	alias   bool
+	pattern string
+}
+
+// splitFileRule reports whether rule is a parenthesized path rule.
+func splitFileRule(rule string) (fileRule, bool) {
 	m := parenRule.FindStringSubmatch(strings.TrimSpace(rule))
 	if m == nil {
-		return kindNone, false, "", false
+		return fileRule{}, false
 	}
-	kind, alias = ruleFileKind(strings.TrimSpace(m[1]))
+	tool := strings.TrimSpace(m[1])
+	kind, alias := ruleFileKind(tool)
 	if kind == kindNone {
-		return kindNone, false, "", false
+		return fileRule{}, false
 	}
-	return kind, alias, m[2], true
+	return fileRule{tool: tool, kind: kind, alias: alias, pattern: m[2]}, true
 }
+
+func (f fileRule) empty() bool { return strings.TrimSpace(f.pattern) == "" }
 
 // bareFamilyMatches reports whether a bare (no-argument) rule names this
 // tool's family: Edit covers every edit tool and Read every read tool, as
 // Claude Code's "Edit rules apply to all built-in tools that edit files".
 // Any other bare rule (Write, Bash, ...) matches its own tool only.
 func bareFamilyMatches(bare, tool string) bool {
-	switch norm(bare) {
+	switch normTool(bare) {
 	case "edit":
-		return editTools[norm(tool)]
+		return editTools[normTool(tool)]
 	case "read":
-		return readTools[norm(tool)]
+		return readTools[normTool(tool)]
 	}
 	return false
 }
@@ -155,16 +176,26 @@ type pathRule struct {
 	// with symlinks resolved when that differs.
 	bases []string
 	segs  []string
-	// fold compares case-insensitively (bases and segs already lowered).
-	fold bool
+	// loose compares in NFC and, where foldCase, without case (bases and
+	// segs are already in that form).
+	loose bool
 }
 
 // foldCase is set where the default filesystem ignores case (macOS,
-// Windows): there ".ENV" opens .env, and filepath.EvalSymlinks does not
+// Windows): there ".ENV" opens .env, and symlink resolution does not
 // canonicalize case, so a deny or ask rule must compare without it or it
 // silently misses. Allow rules keep exact case, the narrower reading. A
 // variable so a test can exercise both.
 var foldCase = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+
+// loosen is the form a deny/ask rule compares in.
+func loosen(s string) string {
+	s = norm.NFC.String(s)
+	if foldCase {
+		s = strings.ToLower(s)
+	}
+	return s
+}
 
 // matchCtx is what a rule is anchored against for one decision.
 type matchCtx struct {
@@ -259,15 +290,16 @@ func (c matchCtx) compilePathRule(kind fileKind, pattern string, src RuleSource,
 		// is under it).
 		r.bases = withReal(filepath.Join(anchor, p))
 		r.segs = nil
-		return r.folded(list), true
+		return r.loosened(list), true
 	}
 
 	if r.rel && !anchored {
 		switch {
 		case len(segs) == 1 && !(explicitDot && list == listAllow):
 			// A bare name matches at any depth. "./name" in an allow
-			// rule stays at <cwd>/name: the narrower reading, since
-			// Claude Code's docs give "./" no separate depth rule.
+			// rule stays at <cwd>/name: the narrower reading, and Claude
+			// Code's own example ("Read(./.env)": the .env file in the
+			// current directory).
 			segs = append([]string{"**"}, segs...)
 		case len(segs) == 2 && segs[1] == "**" && segs[0] != "**" && list != listAllow:
 			// "dir/**" in a deny or ask rule: that directory at any depth.
@@ -284,22 +316,22 @@ func (c matchCtx) compilePathRule(kind fileKind, pattern string, src RuleSource,
 	}
 	r.bases = withReal(base)
 	r.segs = segs
-	return r.folded(list), true
+	return r.loosened(list), true
 }
 
-// folded lower-cases a deny or ask rule where foldCase is set.
-func (r pathRule) folded(list ruleList) pathRule {
-	if !foldCase || list == listAllow {
+// loosened puts a deny or ask rule in the form it compares in.
+func (r pathRule) loosened(list ruleList) pathRule {
+	if list == listAllow {
 		return r
 	}
-	r.fold = true
+	r.loose = true
 	bases := make([]string, len(r.bases))
 	for i, b := range r.bases {
-		bases[i] = strings.ToLower(b)
+		bases[i] = loosen(b)
 	}
 	segs := make([]string, len(r.segs))
 	for i, s := range r.segs {
-		segs[i] = strings.ToLower(s)
+		segs[i] = loosen(s)
 	}
 	r.bases, r.segs = bases, segs
 	return r
@@ -316,39 +348,51 @@ func withReal(dir string) []string {
 	return []string{dir}
 }
 
-// realPath resolves every symlink in p. A path that does not exist yet (a
-// file about to be written) resolves through its deepest existing
-// ancestor. A path that cannot be resolved at all is returned as is.
+// realPath is execenv.RealPath without the ok flag: an unresolvable path
+// (a symlink loop) is judged as written, and the tool's own open then
+// fails on it.
 func realPath(p string) string {
-	p = filepath.Clean(p)
-	var rest []string
-	cur := p
-	for {
-		if r, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(append([]string{r}, rest...)...)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return p
-		}
-		rest = append([]string{filepath.Base(cur)}, rest...)
-		cur = parent
-	}
+	r, _ := execenv.RealPath(p)
+	return r
 }
 
-// matchesExactly reports whether the rule's pattern matches abs itself.
-func (r pathRule) matchesExactly(abs string) bool {
-	if r.fold {
-		abs = strings.ToLower(abs)
+// pathCand is one clean absolute path in both comparison forms: as is
+// (allow rules) and loosened (deny and ask rules).
+type pathCand struct{ raw, loose string }
+
+// candPrefixes is prefixes(abs), each in both forms, loosened once here
+// rather than once per rule.
+func candPrefixes(abs string) []pathCand {
+	ps := prefixes(abs)
+	out := make([]pathCand, len(ps))
+	for i, p := range ps {
+		out[i] = pathCand{raw: p, loose: loosen(p)}
+	}
+	return out
+}
+
+// matchesExactly reports whether the rule's pattern matches the path
+// itself. Paths and bases are clean and absolute, so "under a base" is a
+// string prefix ending at a separator.
+func (r pathRule) matchesExactly(c pathCand) bool {
+	abs := c.raw
+	if r.loose {
+		abs = c.loose
 	}
 	for _, b := range r.bases {
-		rel, err := filepath.Rel(b, abs)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+		var rest string
+		switch {
+		case abs == b:
+		case b == "/":
+			rest = abs[1:]
+		case len(abs) > len(b) && abs[len(b)] == '/' && strings.HasPrefix(abs, b):
+			rest = abs[len(b)+1:]
+		default:
 			continue
 		}
 		var name []string
-		if rel != "." {
-			name = strings.Split(filepath.ToSlash(rel), "/")
+		if rest != "" {
+			name = strings.Split(rest, "/")
 		}
 		if matchSegs(r.segs, name) {
 			return true
@@ -396,17 +440,6 @@ func prefixes(abs string) []string {
 	return out
 }
 
-// covers reports whether one rule (no carve-outs) matches abs or a
-// directory above it.
-func (r pathRule) covers(abs string) bool {
-	for _, p := range prefixes(abs) {
-		if r.matchesExactly(p) {
-			return true
-		}
-	}
-	return false
-}
-
 // groupKey groups the relative rules a "!" can carve out of: same source,
 // same family.
 type groupKey struct {
@@ -414,35 +447,56 @@ type groupKey struct {
 	kind fileKind
 }
 
-// listBlocks applies deny/ask rules to abs with gitignore semantics:
-// relative rules from one source are evaluated in order, so a later "!"
-// rule carves out of earlier ones, and a directory that ends up blocked
-// blocks everything under it (a carve-out cannot reopen it). Every other
-// rule stands alone.
-func listBlocks(rules []pathRule, abs string) bool {
-	var order []groupKey
-	groups := map[groupKey][]pathRule{}
-	var single []pathRule
+// ruleSet is the rules of one list that judge one class of call, grouped
+// for gitignore evaluation: relative rules from one source (and family) in
+// order, so a later "!" rule carves out of earlier ones; every other rule
+// on its own.
+type ruleSet struct {
+	single []pathRule
+	groups [][]pathRule
+}
+
+func newRuleSet(rules []pathRule) ruleSet {
+	var s ruleSet
+	index := map[groupKey]int{}
 	for _, r := range rules {
 		if !r.rel {
-			single = append(single, r)
+			s.single = append(s.single, r)
 			continue
 		}
 		k := groupKey{r.src, r.kind}
-		if _, seen := groups[k]; !seen {
-			order = append(order, k)
+		i, seen := index[k]
+		if !seen {
+			i = len(s.groups)
+			index[k] = i
+			s.groups = append(s.groups, nil)
 		}
-		groups[k] = append(groups[k], r)
+		s.groups[i] = append(s.groups[i], r)
 	}
-	for _, r := range single {
-		if r.covers(abs) {
-			return true
+	return s
+}
+
+func (s ruleSet) empty() bool { return len(s.single) == 0 && len(s.groups) == 0 }
+
+// blocks applies deny/ask rules to abs with gitignore semantics: a path is
+// blocked when it, or a directory above it, ends up matched (a carve-out
+// cannot reopen a file inside a blocked directory).
+func (s ruleSet) blocks(abs string) bool {
+	if s.empty() {
+		return false
+	}
+	ps := candPrefixes(abs)
+	for _, r := range s.single {
+		for _, p := range ps {
+			if r.matchesExactly(p) {
+				return true
+			}
 		}
 	}
-	for _, p := range prefixes(abs) {
-		for _, k := range order {
+	for _, p := range ps {
+		for _, g := range s.groups {
 			state := false
-			for _, r := range groups[k] {
+			for _, r := range g {
 				if r.matchesExactly(p) {
 					state = !r.neg
 				}
@@ -455,36 +509,59 @@ func listBlocks(rules []pathRule, abs string) bool {
 	return false
 }
 
-// compileList compiles the path rules in one list that apply to a call of
-// the given family. For a deny list and an edit-family call, Read rules
-// apply too (Claude Code: a Read deny also blocks Edit and Write, but not
-// NotebookEdit). Alias rules (Write(...), Glob(...)) in an allow list are
-// ignored.
-func (c matchCtx) compileList(rules []string, from []RuleSource, list ruleList, tool string) []pathRule {
-	callKind := toolFileKind(tool)
-	var out []pathRule
-	for i, rule := range rules {
-		kind, alias, pattern, ok := splitFileRule(rule)
-		if !ok {
-			continue
-		}
-		if alias && list == listAllow {
-			continue
-		}
-		applies := kind == callKind ||
-			(list == listDeny && kind == kindRead && readDenyCoversEdit[norm(tool)])
-		if !applies {
-			continue
-		}
-		if r, ok := c.compilePathRule(kind, pattern, sourceAt(from, i), list); ok {
-			out = append(out, r)
-		}
+// listBlocks is ruleSet.blocks for an ad hoc rule list.
+func listBlocks(rules []pathRule, abs string) bool { return newRuleSet(rules).blocks(abs) }
+
+// callClass is the class of file tool a rule set is prepared for.
+type callClass int
+
+const (
+	classRead     callClass = iota // read, grep, glob, ls
+	classEdit                      // edit, write, multi_edit: Read denies apply too
+	classNotebook                  // notebook_edit: Edit rules only
+	numClasses
+)
+
+func classOf(tool string) (callClass, bool) {
+	t := normTool(tool)
+	switch {
+	case readTools[t]:
+		return classRead, true
+	case readDenyCoversEdit[t]:
+		return classEdit, true
+	case editTools[t]:
+		return classNotebook, true
 	}
-	return out
+	return 0, false
 }
 
-// sourceAt is the source of rule i, defaulting to a CLI/session rule (anchored
-// at the primary working directory) when from does not cover it.
+// appliesTo reports whether a rule from list judges calls of class c. A
+// Read deny also blocks edit and write, not notebook edit (Claude Code).
+func (r pathRule) appliesTo(list ruleList, c callClass) bool {
+	switch c {
+	case classRead:
+		return r.kind == kindRead
+	case classEdit:
+		return r.kind == kindEdit || (list == listDeny && r.kind == kindRead)
+	default:
+		return r.kind == kindEdit
+	}
+}
+
+// compiledRules is a Permissions' path rules, compiled once for a working
+// directory and home (compiledFor caches them), ready per call class.
+type compiledRules struct {
+	allow, deny, ask [numClasses]ruleSet
+	// emptyDeny/emptyAsk are "Read()"-style rules with an empty path,
+	// taken as the bare tool rule (by the tool name written).
+	emptyDeny, emptyAsk []string
+	// guarded is set when any Read/Edit path rule sits in deny or ask:
+	// then a bash file operand kiln cannot resolve asks rather than runs.
+	guarded bool
+}
+
+// sourceAt is the source of rule i, defaulting to a CLI/session rule
+// (anchored at the primary working directory) when from does not cover it.
 func sourceAt(from []RuleSource, i int) RuleSource {
 	if i < len(from) {
 		return from[i]
@@ -492,66 +569,196 @@ func sourceAt(from []RuleSource, i int) RuleSource {
 	return RuleSource{}
 }
 
+func (c matchCtx) compile(p Permissions) *compiledRules {
+	out := &compiledRules{}
+	one := func(rules []string, from []RuleSource, list ruleList) (compiled []pathRule, empty []string) {
+		for i, rule := range rules {
+			f, ok := splitFileRule(rule)
+			if !ok {
+				continue
+			}
+			if list != listAllow {
+				out.guarded = true
+			}
+			if f.alias && list == listAllow {
+				continue
+			}
+			if f.empty() {
+				if list != listAllow {
+					empty = append(empty, f.tool)
+				}
+				continue
+			}
+			if r, ok := c.compilePathRule(f.kind, f.pattern, sourceAt(from, i), list); ok {
+				compiled = append(compiled, r)
+			}
+		}
+		return compiled, empty
+	}
+	allow, _ := one(p.Allow, p.AllowFrom, listAllow)
+	deny, emptyDeny := one(p.Deny, p.DenyFrom, listDeny)
+	ask, emptyAsk := one(p.Ask, p.AskFrom, listAsk)
+	out.emptyDeny, out.emptyAsk = emptyDeny, emptyAsk
+	for c := callClass(0); c < numClasses; c++ {
+		pick := func(rules []pathRule, list ruleList) ruleSet {
+			var picked []pathRule
+			for _, r := range rules {
+				if r.appliesTo(list, c) {
+					picked = append(picked, r)
+				}
+			}
+			return newRuleSet(picked)
+		}
+		out.allow[c] = pick(allow, listAllow)
+		out.deny[c] = pick(deny, listDeny)
+		out.ask[c] = pick(ask, listAsk)
+	}
+	return out
+}
+
+// ruleCache holds compiled rules per (cwd, home, case mode, rules,
+// sources). Compiling resolves each rule's anchor through symlinks, which
+// is most of the cost of a decision; the key is cheap to build. The cache
+// is small and simply cleared when full: a session has one rule set at a
+// time, changing only when /permissions edits it.
+var ruleCache = struct {
+	sync.Mutex
+	m map[string]*compiledRules
+}{m: map[string]*compiledRules{}}
+
+const ruleCacheMax = 32
+
+func compiledFor(p Permissions, c matchCtx) *compiledRules {
+	var b strings.Builder
+	b.WriteString(c.cwd)
+	b.WriteByte(0)
+	b.WriteString(c.home)
+	if foldCase {
+		b.WriteString("\x00fold")
+	}
+	for _, l := range []struct {
+		rules []string
+		from  []RuleSource
+	}{{p.Allow, p.AllowFrom}, {p.Deny, p.DenyFrom}, {p.Ask, p.AskFrom}} {
+		b.WriteByte(1)
+		for i, r := range l.rules {
+			s := sourceAt(l.from, i)
+			b.WriteString(r)
+			b.WriteByte(2)
+			b.WriteString(string(s.Scope))
+			b.WriteByte(2)
+			b.WriteString(s.File)
+			b.WriteByte(2)
+			b.WriteString(s.Root)
+			b.WriteByte(3)
+		}
+	}
+	key := b.String()
+
+	ruleCache.Lock()
+	defer ruleCache.Unlock()
+	if cr, ok := ruleCache.m[key]; ok {
+		return cr
+	}
+	cr := c.compile(p)
+	if len(ruleCache.m) >= ruleCacheMax {
+		ruleCache.m = map[string]*compiledRules{}
+	}
+	ruleCache.m[key] = cr
+	return cr
+}
+
 // filePathVerdicts judges a file tool's path against the Read/Edit path
 // rules. arg is the tool's path argument as sent; it is resolved the way
 // the tools resolve it (execenv.ResolveToolPath) and then through
-// symlinks.
+// symlinks. For the read tool every filename variant it may fall back to
+// (execenv.ReadPathVariants) is judged too.
 func filePathVerdicts(p Permissions, c matchCtx, tool, arg string) (deny, ask, allow bool) {
+	cr := compiledFor(p, c)
 	requested := execenv.ResolveToolPath(c.cwd, arg)
-	resolved := realPath(requested)
-	candidates := []string{requested}
-	if resolved != requested {
-		candidates = append(candidates, resolved)
+	opened := []string{requested}
+	if normTool(tool) == "read" {
+		opened = execenv.ReadPathVariants(requested)
+	}
+	var candidates []string
+	for _, o := range opened {
+		candidates = append(candidates, o)
+		if r := realPath(o); r != o {
+			candidates = append(candidates, r)
+		}
 	}
 
-	blocks := func(rules []pathRule) bool {
+	class, _ := classOf(tool)
+	blocks := func(s ruleSet) bool {
 		for _, cand := range candidates {
-			if listBlocks(rules, cand) {
+			if s.blocks(cand) {
 				return true
 			}
 		}
 		return false
 	}
-	deny = blocks(c.compileList(p.Deny, p.DenyFrom, listDeny, tool))
-	ask = blocks(c.compileList(p.Ask, p.AskFrom, listAsk, tool))
+	deny = blocks(cr.deny[class]) || emptyRuleHits(cr.emptyDeny, tool)
+	ask = blocks(cr.ask[class]) || emptyRuleHits(cr.emptyAsk, tool)
 
-	allowRules := c.compileList(p.Allow, p.AllowFrom, listAllow, tool)
-	allowed := func(cand string) bool {
-		for _, r := range allowRules {
-			if r.covers(cand) {
-				return true
-			}
-		}
-		return false
-	}
-	allow = len(allowRules) > 0
+	// Allow rules have no carve-outs, so "blocks" is "some rule covers".
+	allowSet := cr.allow[class]
+	allow = !allowSet.empty()
 	for _, cand := range candidates {
-		allow = allow && allowed(cand)
+		allow = allow && allowSet.blocks(cand)
 	}
 	return deny, ask, allow
 }
 
-// FileRuleWarnings lists, for a startup warning, every path rule written
-// for Write, MultiEdit, NotebookEdit or Glob, which Claude Code accepts but
-// never consults. kiln honours the deny and ask ones as Edit/Read rules
-// and ignores the allow ones; each message says which, and names the rule
-// to write instead.
-func FileRuleWarnings(p Permissions) []string {
+// emptyRuleHits judges "Read()"-style deny/ask rules as the bare rule.
+func emptyRuleHits(tools []string, tool string) bool {
+	for _, t := range tools {
+		if MatchesRule(t, tool, "") {
+			return true
+		}
+	}
+	return false
+}
+
+// FileRuleWarnings lists, for a startup warning, every path rule Claude
+// Code accepts but never consults: one written for Write, MultiEdit,
+// NotebookEdit or Glob (kiln honours the deny and ask ones as Edit/Read
+// rules and ignores the allow ones), and one with an empty path. Each
+// message says what kiln does and names the rule to write instead.
+// cliAllow are the --allowed-tools rules: like Claude Code, a Glob rule
+// passed there is not warned about.
+func FileRuleWarnings(p Permissions, cliAllow ...string) []string {
+	exempt := map[string]bool{}
+	for _, r := range cliAllow {
+		if f, ok := splitFileRule(r); ok && normTool(f.tool) == "glob" {
+			exempt[r] = true
+		}
+	}
 	var out []string
 	for _, l := range []struct {
 		name  string
 		rules []string
 	}{{"allow", p.Allow}, {"deny", p.Deny}, {"ask", p.Ask}} {
 		for _, rule := range l.rules {
-			kind, alias, pattern, ok := splitFileRule(rule)
-			if !ok || !alias {
+			f, ok := splitFileRule(rule)
+			if !ok {
+				continue
+			}
+			if f.empty() {
+				effect := "kiln applies it as " + f.tool + ", the whole tool"
+				if l.name == "allow" {
+					effect = "kiln ignores it"
+				}
+				out = append(out, "Permission rule "+rule+" in "+l.name+" has an empty path ("+effect+"); write "+f.tool+" for the whole tool, or give it a path.")
+				continue
+			}
+			if !f.alias || (l.name == "allow" && exempt[rule]) {
 				continue
 			}
 			want := "Edit"
-			if kind == kindRead {
+			if f.kind == kindRead {
 				want = "Read"
 			}
-			replacement := want + "(" + pattern + ")"
+			replacement := want + "(" + f.pattern + ")"
 			effect := "kiln ignores it"
 			if l.name != "allow" {
 				effect = "kiln applies it as " + replacement

@@ -361,8 +361,9 @@ the session.
 **The six modes** (`internal/claude/settings/settings.go`): `manual`,
 `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`. `Decide`
 checks deny rules first (absolute, never overridable), then
-`bypassPermissions` (allow everything), then allow rules, then ask rules,
-then falls through to mode defaults: `plan` allows only `settings.ReadOnly`
+`bypassPermissions` (allow everything), then ask rules, then allow rules
+(Claude Code's deny, ask, allow: a matching ask rule prompts even when an
+allow rule matches too), then falls through to mode defaults: `plan` allows only `settings.ReadOnly`
 tools and denies everything else outright, never asking; `acceptEdits`
 allows `edit`/`write`/read-only tools and asks for the rest; `dontAsk`
 answers like `manual`, and the gate then denies whatever `manual` would have
