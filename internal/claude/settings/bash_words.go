@@ -8,24 +8,11 @@ import (
 	"unicode/utf8"
 )
 
-// The shell-lexing half of bash_paths.go: heredocs, substitutions, quoting
-// (including $'…' and $"…"), words, brace expansion and globbing, each the
-// way bash itself does them, to the extent a deny rule needs.
-
-// ansiEnd returns the index just past the "'" closing an ANSI-C string
-// whose body starts at start ($'…': a backslash escapes the next byte,
-// so \' does not close it). closed is false when there is none.
-func ansiEnd(s string, start int) (end int, closed bool) {
-	for i := start; i < len(s); i++ {
-		switch s[i] {
-		case '\\':
-			i++
-		case '\'':
-			return i + 1, true
-		}
-	}
-	return len(s), false
-}
+// Word expansion for bash_paths.go: a parsed word (bash_parse.go) as bytes
+// with their quoting, then $'…' decoding, brace expansion, ~ and $HOME,
+// and globbing, each the way bash itself does them, to the extent a deny
+// rule needs. Splitting a command line into commands and words is the
+// parser's job (mvdan.cc/sh), not this file's.
 
 // decodeANSI decodes the body of $'…' starting at start, as bash does.
 // end is the index just past the closing "'"; ok is false when the string
@@ -99,236 +86,6 @@ func decodeANSI(s string, start int) (out []byte, end int, ok bool) {
 	return out, len(s), false
 }
 
-// stripHeredocs removes heredoc bodies from cmd (they are input, not
-// commands), keeping the "<<WORD" operators. expanding are the bodies whose
-// delimiter was unquoted: bash expands $(…) and backticks in those, so
-// their substitutions still run and must be scanned.
-func stripHeredocs(cmd string) (out string, expanding []string) {
-	type pending struct {
-		delim        string
-		tabs, quoted bool
-	}
-	var b strings.Builder
-	var docs []pending
-	i := 0
-	for i < len(cmd) {
-		c := cmd[i]
-		switch {
-		case c == '\\' && i+1 < len(cmd):
-			b.WriteString(cmd[i : i+2])
-			i += 2
-		case c == '\'':
-			end := strings.IndexByte(cmd[i+1:], '\'')
-			if end < 0 {
-				b.WriteString(cmd[i:])
-				return b.String(), expanding
-			}
-			b.WriteString(cmd[i : i+end+2])
-			i += end + 2
-		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '\'':
-			end, _ := ansiEnd(cmd, i+2)
-			b.WriteString(cmd[i:end])
-			i = end
-		case c == '"':
-			j := i + 1
-			for j < len(cmd) && cmd[j] != '"' {
-				if cmd[j] == '\\' {
-					j++
-				}
-				j++
-			}
-			end := min(j+1, len(cmd))
-			b.WriteString(cmd[i:end])
-			i = end
-		case strings.HasPrefix(cmd[i:], "<<") && !strings.HasPrefix(cmd[i:], "<<<"):
-			j := i + 2
-			p := pending{}
-			if j < len(cmd) && cmd[j] == '-' {
-				p.tabs = true
-				j++
-			}
-			for j < len(cmd) && (cmd[j] == ' ' || cmd[j] == '\t') {
-				j++
-			}
-			var delim strings.Builder
-			for j < len(cmd) && strings.IndexByte(" \t\n;|&<>()", cmd[j]) < 0 {
-				switch cmd[j] {
-				case '\'', '"':
-					p.quoted = true
-					q := cmd[j]
-					k := strings.IndexByte(cmd[j+1:], q)
-					if k < 0 {
-						delim.WriteString(cmd[j+1:])
-						j = len(cmd)
-						continue
-					}
-					delim.WriteString(cmd[j+1 : j+1+k])
-					j += k + 2
-				case '\\':
-					p.quoted = true
-					if j+1 < len(cmd) {
-						delim.WriteByte(cmd[j+1])
-					}
-					j += 2
-				default:
-					delim.WriteByte(cmd[j])
-					j++
-				}
-			}
-			p.delim = delim.String()
-			b.WriteString(cmd[i:min(j, len(cmd))])
-			i = j
-			if p.delim != "" {
-				docs = append(docs, p)
-			}
-		case c == '\n' && len(docs) > 0:
-			b.WriteByte('\n')
-			i++
-			for _, d := range docs {
-				var body strings.Builder
-				for i < len(cmd) {
-					nl := strings.IndexByte(cmd[i:], '\n')
-					line := cmd[i:]
-					if nl >= 0 {
-						line = cmd[i : i+nl]
-						i += nl + 1
-					} else {
-						i = len(cmd)
-					}
-					check := line
-					if d.tabs {
-						check = strings.TrimLeft(check, "\t")
-					}
-					if check == d.delim {
-						break
-					}
-					body.WriteString(line)
-					body.WriteByte('\n')
-				}
-				if !d.quoted {
-					expanding = append(expanding, body.String())
-				}
-			}
-			docs = nil
-		default:
-			b.WriteByte(c)
-			i++
-		}
-	}
-	return b.String(), expanding
-}
-
-// extractSubstitutions pulls the bodies of $(...), `...`, <(...) and >(...)
-// out of cmd, replacing each with a placeholder: "$KILN_SUBST" for a command
-// substitution (its output is unknowable, so as an operand it is unsure)
-// and "/dev/fd/63" for a process substitution (a pipe, not a file). ok is
-// false when a substitution is not closed. literalQuotes is for a heredoc
-// body, where quotes are text and only $(…) and backticks are live.
-func extractSubstitutions(cmd string, literalQuotes bool) (outer string, bodies []string, ok bool) {
-	var out strings.Builder
-	ok = true
-	inDouble := false
-	for i := 0; i < len(cmd); i++ {
-		c := cmd[i]
-		switch {
-		case c == '\\' && i+1 < len(cmd):
-			out.WriteString(cmd[i : i+2])
-			i++
-		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '\'' && !inDouble && !literalQuotes:
-			end, closed := ansiEnd(cmd, i+2)
-			if !closed {
-				ok = false
-			}
-			out.WriteString(cmd[i:end])
-			i = end - 1
-		case c == '\'' && !inDouble && !literalQuotes:
-			end := strings.IndexByte(cmd[i+1:], '\'')
-			if end < 0 {
-				out.WriteString(cmd[i:])
-				return out.String(), bodies, ok
-			}
-			out.WriteString(cmd[i : i+end+2])
-			i += end + 1
-		case c == '"' && !literalQuotes:
-			inDouble = !inDouble
-			out.WriteByte(c)
-		case c == '`':
-			j := i + 1
-			var body strings.Builder
-			for ; j < len(cmd) && cmd[j] != '`'; j++ {
-				if cmd[j] == '\\' && j+1 < len(cmd) && (cmd[j+1] == '`' || cmd[j+1] == '\\' || cmd[j+1] == '$') {
-					j++
-				}
-				body.WriteByte(cmd[j])
-			}
-			if j >= len(cmd) {
-				ok = false
-			}
-			bodies = append(bodies, body.String())
-			out.WriteString("$KILN_SUBST")
-			i = j
-		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '(':
-			body, end, closed := parenBody(cmd, i+2)
-			if !closed {
-				ok = false
-			}
-			bodies = append(bodies, body)
-			out.WriteString("$KILN_SUBST")
-			i = end
-		case (c == '<' || c == '>') && !inDouble && !literalQuotes && i+1 < len(cmd) && cmd[i+1] == '(':
-			body, end, closed := parenBody(cmd, i+2)
-			if !closed {
-				ok = false
-			}
-			bodies = append(bodies, body)
-			out.WriteString("/dev/fd/63")
-			i = end
-		default:
-			out.WriteByte(c)
-		}
-	}
-	return out.String(), bodies, ok
-}
-
-// parenBody returns the text from start up to the ")" that closes an
-// already-open "(", skipping quoted text and nested parentheses, and the
-// index of that ")". closed is false when there is none (end is then the
-// last index).
-func parenBody(cmd string, start int) (body string, end int, closed bool) {
-	depth := 1
-	for i := start; i < len(cmd); i++ {
-		switch cmd[i] {
-		case '\\':
-			i++
-		case '$':
-			if i+1 < len(cmd) && cmd[i+1] == '\'' {
-				e, _ := ansiEnd(cmd, i+2)
-				i = e - 1
-			}
-		case '\'':
-			j := strings.IndexByte(cmd[i+1:], '\'')
-			if j < 0 {
-				return cmd[start:], len(cmd) - 1, false
-			}
-			i += j + 1
-		case '"':
-			for i++; i < len(cmd) && cmd[i] != '"'; i++ {
-				if cmd[i] == '\\' {
-					i++
-				}
-			}
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return cmd[start:i], i, true
-			}
-		}
-	}
-	return cmd[start:], len(cmd) - 1, false
-}
-
 // Quoting states of a word's bytes.
 const (
 	qNone   byte = iota // unquoted: globs, braces, ~ and $ are live
@@ -353,146 +110,6 @@ func literalWord(s string) word {
 		q[i] = qLit
 	}
 	return word{b: []byte(s), q: q}
-}
-
-// redirect is one redirection in a command.
-type redirect struct {
-	target      word
-	read, write bool
-}
-
-// shellWords splits one command (a BashSegments segment) into its words,
-// quotes removed and each byte's quoting state kept, and its redirections.
-func shellWords(seg string) (words []word, redirs []redirect) {
-	var cur word
-	inWord := false
-	pending := -1 // index into redirs awaiting its target word
-	skipNext := false
-	add := func(c, q byte) {
-		cur.b = append(cur.b, c)
-		cur.q = append(cur.q, q)
-		inWord = true
-	}
-	flush := func() {
-		if !inWord {
-			return
-		}
-		w := cur
-		cur = word{}
-		inWord = false
-		switch {
-		case skipNext:
-			skipNext = false
-		case pending >= 0:
-			redirs[pending].target = w
-			pending = -1
-		default:
-			words = append(words, w)
-		}
-	}
-	for i := 0; i < len(seg); i++ {
-		c := seg[i]
-		switch {
-		case c == '$' && i+1 < len(seg) && seg[i+1] == '\'':
-			decoded, end, ok := decodeANSI(seg, i+2)
-			for _, d := range decoded {
-				add(d, qLit)
-			}
-			inWord = true
-			if !ok {
-				cur.bad = true
-			}
-			i = end - 1
-		case c == '$' && i+1 < len(seg) && seg[i+1] == '"':
-			// $"…" is a translatable string: a double-quoted one.
-			inWord = true
-		case c == '\'':
-			end := strings.IndexByte(seg[i+1:], '\'')
-			body := seg[i+1:]
-			if end >= 0 {
-				body = seg[i+1 : i+1+end]
-			}
-			for j := 0; j < len(body); j++ {
-				add(body[j], qLit)
-			}
-			inWord = true
-			if end < 0 {
-				i = len(seg)
-			} else {
-				i += end + 1
-			}
-		case c == '"':
-			inWord = true
-			j := i + 1
-			for ; j < len(seg) && seg[j] != '"'; j++ {
-				if seg[j] == '\\' && j+1 < len(seg) && strings.IndexByte("\"\\$`", seg[j+1]) >= 0 {
-					j++
-					add(seg[j], qLit)
-					continue
-				}
-				add(seg[j], qDouble)
-			}
-			i = j
-		case c == '\\' && i+1 < len(seg):
-			add(seg[i+1], qLit)
-			i++
-		case c == ' ' || c == '\t' || c == '\n':
-			flush()
-		case c == '<' || c == '>' || (c == '&' && i+1 < len(seg) && seg[i+1] == '>'):
-			// A word of digits right before the operator is its fd.
-			if inWord && isDigits(string(cur.b)) {
-				cur = word{}
-				inWord = false
-			}
-			flush()
-			op, n := redirOperator(seg[i:])
-			i += n - 1
-			r := redirect{}
-			switch op {
-			case "<":
-				r.read = true
-			case "<>":
-				r.read, r.write = true, true
-			case ">", ">>", ">|", "&>", "&>>":
-				r.write = true
-			case ">&", "<&":
-				// ">&file" writes file; ">&2" and ">&-" duplicate an fd.
-				rest := strings.TrimLeft(seg[i+1:], " \t")
-				if rest == "" || rest[0] == '-' || (rest[0] >= '0' && rest[0] <= '9') {
-					skipNext = true
-					continue
-				}
-				r.write = op == ">&"
-				r.read = op == "<&"
-			default: // "<<", "<<-", "<<<": a heredoc delimiter or a string
-				skipNext = true
-				continue
-			}
-			pending = len(redirs)
-			redirs = append(redirs, r)
-		default:
-			add(c, qNone)
-		}
-	}
-	flush()
-	var out []redirect
-	for _, r := range redirs {
-		if (r.read || r.write) && (len(r.target.b) > 0 || r.target.bad) {
-			out = append(out, r)
-		}
-	}
-	return words, out
-}
-
-// redirOperator returns the redirection operator at the start of s and its
-// length.
-func redirOperator(s string) (string, int) {
-	for _, op := range []string{"&>>", "<<<", "<<-", "&>", ">>", ">|", ">&", "<&", "<>", "<<", "<", ">"} {
-		if strings.HasPrefix(s, op) {
-			return op, len(op)
-		}
-	}
-	return s[:1], 1
 }
 
 func isDigits(s string) bool {
@@ -533,8 +150,33 @@ func braceExpand(w word, limit int) ([]word, bool) {
 				}
 			}
 		}
-		if end < 0 || len(commas) == 0 {
+		if end < 0 {
 			continue
+		}
+		if len(commas) == 0 {
+			// A sequence, "{a..e}" or "{1..10..2}".
+			items, ok := braceSequence(w.b[i+1:end], w.q[i+1:end], limit)
+			if !ok {
+				continue
+			}
+			if items == nil {
+				return nil, false // too many
+			}
+			var out []word
+			for _, it := range items {
+				nw := word{bad: w.bad}
+				nw.b = append(append(append([]byte{}, w.b[:i]...), it...), w.b[end+1:]...)
+				nw.q = append(append(append([]byte{}, w.q[:i]...), make([]byte, len(it))...), w.q[end+1:]...)
+				more, ok := braceExpand(nw, limit-len(out))
+				if !ok {
+					return nil, false
+				}
+				out = append(out, more...)
+				if len(out) > limit {
+					return nil, false
+				}
+			}
+			return out, true
 		}
 		bounds := append(append([]int{i}, commas...), end)
 		var out []word
@@ -555,6 +197,87 @@ func braceExpand(w word, limit int) ([]word, bool) {
 	}
 	return []word{w}, true
 }
+
+// braceSequence expands the inside of a sequence brace, "a..e",
+// "1..10", "10..1..3", "01..10" (zero-padded), as bash does. ok is false
+// when it is not a sequence (bash leaves the braces as they are); items
+// is nil when it would yield more than limit items.
+func braceSequence(b, q []byte, limit int) (items [][]byte, ok bool) {
+	for _, c := range q {
+		if c != qNone {
+			return nil, false
+		}
+	}
+	parts := strings.Split(string(b), "..")
+	if len(parts) != 2 && len(parts) != 3 {
+		return nil, false
+	}
+	step := 1
+	if len(parts) == 3 {
+		s, err := strconv.Atoi(parts[2])
+		if err != nil {
+			return nil, false
+		}
+		if s < 0 {
+			s = -s
+		}
+		if s != 0 {
+			step = s
+		}
+	}
+	emit := func(from, to int, format func(int) string) ([][]byte, bool) {
+		n := (max(from, to)-min(from, to))/step + 1
+		if n > limit {
+			return nil, true
+		}
+		var out [][]byte
+		for k := 0; k < n; k++ {
+			v := from + k*step
+			if from > to {
+				v = from - k*step
+			}
+			out = append(out, []byte(format(v)))
+		}
+		return out, true
+	}
+	if a, errA := strconv.Atoi(parts[0]); errA == nil {
+		z, errZ := strconv.Atoi(parts[1])
+		if errZ != nil {
+			return nil, false
+		}
+		width := 0
+		for _, p := range parts[:2] {
+			d := strings.TrimPrefix(p, "-")
+			if len(d) > 1 && d[0] == '0' {
+				width = max(width, len(p))
+			}
+		}
+		return emit(a, z, func(v int) string {
+			s := strconv.Itoa(v)
+			if width > 0 {
+				neg := v < 0
+				s = strings.TrimPrefix(s, "-")
+				pad := width
+				if neg {
+					pad--
+				}
+				for len(s) < pad {
+					s = "0" + s
+				}
+				if neg {
+					s = "-" + s
+				}
+			}
+			return s
+		})
+	}
+	if len(parts[0]) == 1 && len(parts[1]) == 1 && isLetter(parts[0][0]) && isLetter(parts[1][0]) {
+		return emit(int(parts[0][0]), int(parts[1][0]), func(v int) string { return string(rune(v)) })
+	}
+	return nil, false
+}
+
+func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 
 // expandHome applies ~ and $HOME expansion to w. ok is false for a word
 // with any other live expansion ($VAR, ${…}, $KILN_SUBST, ~user) or one

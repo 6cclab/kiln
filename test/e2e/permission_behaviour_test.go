@@ -11,7 +11,8 @@ package e2e
 //
 // Ground truth read for this file: internal/claude/settings/settings.go's
 // Decide (deny -> bypassPermissions -> allow -> ask -> mode fallback;
-// ModePlan denies anything not in settings.ReadOnly; ModeManual asks for
+// ModePlan refuses edits, asks about bash that is not read-only and denies
+// any other tool not in settings.ReadOnly; ModeManual asks for
 // anything not in settings.ReadOnly) and internal/claude/permission/
 // permission.go's Gate.Check (an outside-workspace path always asks,
 // even when the rule verdict is Allow, unless mode is bypassPermissions;
@@ -20,6 +21,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,8 +132,9 @@ func TestPermission_ModesAgainstEditAndBash(t *testing.T) {
 		{mode: "dontAsk", wantEditBlocked: true, wantBashBlocked: true, blockReasonHas: "don't-ask mode refuses"},
 		// bypassPermissions: allow (only an explicit deny rule would stop it).
 		{mode: "bypassPermissions", wantEditBlocked: false, wantBashBlocked: false},
-		// plan: read-only tools allowed, everything else refused outright
-		// (not asked) with a plan-specific reason.
+		// plan: edits refused outright with a plan-specific reason; a bash
+		// command that is not read-only takes the regular flow, so with no
+		// rule it asks, which print mode refuses for want of a prompter.
 		{mode: "plan", wantEditBlocked: true, wantBashBlocked: true, blockReasonHas: "plan mode is read-only"},
 	}
 
@@ -427,29 +430,46 @@ steps:
 `
 
 // TestPermission_PlanModeAllowsReadOnlyBash: plan mode runs a bash command
-// that only reads and still refuses one that writes
+// that only reads and asks about one that writes
 // (qa/findings *plan-mode-denies-read-only-bash). It used to refuse both,
-// so a model planning a change could not even cat the spec.
+// so a model planning a change could not even cat the spec. Print mode has
+// nobody to ask, so the mutating one is refused as any ask is. An allow
+// rule for it lets it run: shell commands take the regular permission flow
+// while planning (Claude Code's permissions doc).
 func TestPermission_PlanModeAllowsReadOnlyBash(t *testing.T) {
-	addr, _ := startFaux(t, permPlanReadThenWriteScript)
-	home, sessDir := scratchHome(t)
-	proj := scratchProject(t)
-	run := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "plan it", "--output-format", "json", "--permission-mode", "plan")
-	var res struct {
-		Blocked []string `json:"blocked"`
-	}
-	if err := json.Unmarshal([]byte(run.Stdout), &res); err != nil {
-		t.Fatalf("parse --output-format json: %v\nstdout=%s\nstderr=%s", err, run.Stdout, run.Stderr)
-	}
-	joined := strings.Join(res.Blocked, "\n")
-	if strings.Contains(joined, "cat src/math.js") {
-		t.Errorf("read-only bash was blocked in plan mode: %v", res.Blocked)
-	}
-	if !strings.Contains(joined, "mkdir build") || !strings.Contains(joined, "plan mode is read-only") {
-		t.Errorf("mutating bash was not refused in plan mode: %v", res.Blocked)
-	}
-	if _, err := os.Stat(filepath.Join(proj, "build")); err == nil {
-		t.Errorf("plan mode let mkdir run")
+	for _, allow := range [][]string{nil, {"Bash(mkdir *)"}} {
+		t.Run(fmt.Sprintf("allow=%v", allow), func(t *testing.T) {
+			addr, _ := startFaux(t, permPlanReadThenWriteScript)
+			home, sessDir := scratchHome(t)
+			proj := scratchProject(t)
+			if allow != nil {
+				permWriteRules(t, proj, allow, nil, nil)
+			}
+			run := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "plan it", "--output-format", "json", "--permission-mode", "plan")
+			var res struct {
+				Blocked []string `json:"blocked"`
+			}
+			if err := json.Unmarshal([]byte(run.Stdout), &res); err != nil {
+				t.Fatalf("parse --output-format json: %v\nstdout=%s\nstderr=%s", err, run.Stdout, run.Stderr)
+			}
+			joined := strings.Join(res.Blocked, "\n")
+			if strings.Contains(joined, "cat src/math.js") {
+				t.Errorf("read-only bash was blocked in plan mode: %v", res.Blocked)
+			}
+			_, statErr := os.Stat(filepath.Join(proj, "build"))
+			if allow != nil {
+				if strings.Contains(joined, "mkdir build") || statErr != nil {
+					t.Errorf("mkdir under Bash(mkdir *) did not run in plan mode: blocked=%v stat=%v", res.Blocked, statErr)
+				}
+				return
+			}
+			if !strings.Contains(joined, "mkdir build") || !strings.Contains(joined, "requires confirmation") {
+				t.Errorf("mutating bash was not put to the user (refused for want of a prompter) in plan mode: %v", res.Blocked)
+			}
+			if statErr == nil {
+				t.Errorf("plan mode let mkdir run")
+			}
+		})
 	}
 }
 

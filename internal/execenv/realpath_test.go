@@ -90,6 +90,9 @@ func TestRealPath_DotDotInLinkTargets(t *testing.T) {
 		{proj + "/sshl/../.ssh/authorized_keys", keys},
 		// ".." above the root stays at the root.
 		{filepath.Join(proj, "top", "etc"), etc},
+		// ".." out of a missing component is back on real paths: the
+		// link after it is followed.
+		{proj + "/nope/../sshl/authorized_keys", keys},
 	}
 	for _, c := range cases {
 		got, ok := RealPath(c.in)

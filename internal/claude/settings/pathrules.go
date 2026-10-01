@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/andrepato/harness/internal/execenv"
@@ -185,33 +186,69 @@ type pathRule struct {
 	loose bool
 }
 
-// anchors resolves rule bases to their real locations for one decision,
-// each distinct base once.
+// anchors resolves rule bases to their other spellings for one decision,
+// each distinct base once: its real location (symlinks resolved) and the
+// path the OS reports for it (execenv.CanonicalPath: on macOS, firmlinks,
+// APFS case folding and /.vol all map there).
 type anchors struct {
-	resolve func(string) string
-	real    map[string][2]string // base -> {real, loosened real}
+	resolve   func(string) string
+	canonical func(string) string
+	alts      map[string]baseAlts
 }
+
+// baseAlts are a base's other spellings, as is and loosened.
+type baseAlts struct{ raw, loose []string }
 
 func newAnchors() *anchors {
-	return &anchors{resolve: newRealPathMemo(), real: map[string][2]string{}}
+	resolve := newRealPathMemo()
+	return &anchors{resolve: resolve, canonical: newCanonicalMemo(resolve), alts: map[string]baseAlts{}}
 }
 
-// realBase is base's real location in the rule's comparison form, and
-// whether it differs from base.
-func (a *anchors) realBase(r pathRule) (string, bool) {
-	v, ok := a.real[r.base]
-	if !ok {
-		real := a.resolve(r.base)
-		v = [2]string{real, loosen(real)}
-		a.real[r.base] = v
+// kernelPath is execenv.KernelPath; a variable so a test can count calls.
+var kernelPath = execenv.KernelPath
+
+// newCanonicalMemo is execenv.CanonicalPath for clean paths, memoised for
+// one decision: the real path, then the kernel's name for it if it exists
+// (one F_GETPATH), else its parent's canonical path (memoised) plus the
+// leaf. Off macOS it is the real path.
+func newCanonicalMemo(resolve func(string) string) func(string) string {
+	memo := map[string]string{}
+	var canon func(string) string
+	canon = func(p string) string {
+		if c, ok := memo[p]; ok {
+			return c
+		}
+		real := resolve(p)
+		c := real
+		if k, ok := kernelPath(real); ok {
+			c = k
+		} else if parent := filepath.Dir(real); parent != real && runtime.GOOS == "darwin" {
+			c = filepath.Join(canon(parent), filepath.Base(real))
+		}
+		memo[p] = c
+		return c
 	}
-	if v[0] == r.base {
-		return "", false
+	return canon
+}
+
+// otherBases are base's other spellings in the rule's comparison form.
+func (a *anchors) otherBases(r pathRule) []string {
+	v, ok := a.alts[r.base]
+	if !ok {
+		seen := map[string]bool{r.base: true}
+		for _, p := range []string{a.resolve(r.base), a.canonical(r.base)} {
+			if !seen[p] {
+				seen[p] = true
+				v.raw = append(v.raw, p)
+				v.loose = append(v.loose, loosen(p))
+			}
+		}
+		a.alts[r.base] = v
 	}
 	if r.loose {
-		return v[1], true
+		return v.loose
 	}
-	return v[0], true
+	return v.raw
 }
 
 // foldCase is set where the default filesystem ignores case (macOS,
@@ -221,13 +258,62 @@ func (a *anchors) realBase(r pathRule) (string, bool) {
 // variable so a test can exercise both.
 var foldCase = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 
-// loosen is the form a deny/ask rule compares in.
+// loosen is the form a deny/ask rule compares in: NFC, and where foldCase,
+// Unicode case folding (cases.Fold, not strings.ToLower: APFS equates
+// "ſ" with "s", "µ" with "μ", "ς" with "σ", which ToLower does not). The
+// kernel's own spelling (execenv.CanonicalPath) is compared too, for
+// whatever folding this does not cover.
 func loosen(s string) string {
 	s = norm.NFC.String(s)
 	if foldCase {
-		s = strings.ToLower(s)
+		// A Caser holds state; one per call keeps loosen safe for
+		// concurrent decisions.
+		s = norm.NFC.String(cases.Fold().String(s))
+		s = strings.Map(apfsFold, s)
 	}
 	return s
+}
+
+// CaseFoldPath is p as a case- and normalization-insensitive filesystem
+// (foldCase: macOS, Windows) compares it, for a boundary check such as
+// the gate's workspace roots. Elsewhere it is p unchanged: there "café"
+// in NFC and in NFD, or "a" and "A", are different directories.
+func CaseFoldPath(p string) string {
+	if !foldCase {
+		return p
+	}
+	return loosen(p)
+}
+
+// apfsFold maps the letters APFS treats as one but cases.Fold (Unicode
+// 15 case folding in x/text) leaves apart, each pair to one of its two.
+// Measured on an APFS case-insensitive volume by creating a file under
+// one spelling and opening it under the other: Cherokee small letters
+// (AB70–ABBF, 13F8–13FD) with their capitals, Garay (10D70–10D85 with
+// 10D50–10D65), Cyrillic TJE (1C89/1C8A) and the Latin Extended-D letters
+// added in Unicode 16 (A7CB/0264, A7CC/A7CD, A7CE/A7CF, A7D2/A7D3,
+// A7D4/A7D5, A7DA/A7DB, A7DC/019B). A file whose name uses them opens
+// under either spelling, so a deny rule must compare them as one.
+func apfsFold(r rune) rune {
+	switch {
+	case r >= 0xAB70 && r <= 0xABBF:
+		return r - 0xAB70 + 0x13A0
+	case r >= 0x13F8 && r <= 0x13FD:
+		return r - 0x13F8 + 0x13F0
+	case r >= 0x10D70 && r <= 0x10D85:
+		return r - 0x10D70 + 0x10D50
+	}
+	switch r {
+	case 0x1C8A:
+		return 0x1C89
+	case 0xA7CB:
+		return 0x0264
+	case 0xA7CD, 0xA7CF, 0xA7D3, 0xA7D5, 0xA7DB:
+		return r - 1
+	case 0xA7DC:
+		return 0x019B
+	}
+	return r
 }
 
 // matchCtx is what a rule is anchored against for one decision.
@@ -405,8 +491,10 @@ func (r pathRule) matchesExactly(c pathCand, a *anchors) bool {
 	if r.underBase(abs, r.cmpBase) {
 		return true
 	}
-	if real, differs := a.realBase(r); differs {
-		return r.underBase(abs, real)
+	for _, b := range a.otherBases(r) {
+		if r.underBase(abs, b) {
+			return true
+		}
 	}
 	return false
 }
@@ -712,16 +800,17 @@ func filePathVerdicts(p Permissions, c matchCtx, tool, arg string) (deny, ask, a
 	if normTool(tool) == "read" {
 		opened = execenv.ReadPathVariants(requested)
 	}
+	// Every spelling of each path: as asked, symlinks resolved, and the
+	// OS's own name for it (firmlinks, APFS case folding, /.vol). Deny and
+	// ask apply when any matches; allow needs them all.
+	a := newAnchors()
 	var candidates []string
 	for _, o := range opened {
-		candidates = append(candidates, o)
-		if r := realPath(o); r != o {
-			candidates = append(candidates, r)
-		}
+		real := realPath(o)
+		candidates = appendNew(candidates, o, real, a.canonical(real))
 	}
 
 	class, _ := classOf(tool)
-	a := newAnchors()
 	blocks := func(s ruleSet) bool {
 		for _, cand := range candidates {
 			if s.blocks(cand, a) {
@@ -740,6 +829,16 @@ func filePathVerdicts(p Permissions, c matchCtx, tool, arg string) (deny, ask, a
 		allow = allow && allowSet.blocks(cand, a)
 	}
 	return deny, ask, allow
+}
+
+// appendNew appends each of xs not already in list.
+func appendNew(list []string, xs ...string) []string {
+	for _, x := range xs {
+		if !contains(list, x) {
+			list = append(list, x)
+		}
+	}
+	return list
 }
 
 // emptyRuleHits judges "Read()"-style deny/ask rules as the bare rule.

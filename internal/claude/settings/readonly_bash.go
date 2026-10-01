@@ -11,178 +11,72 @@ import (
 // anything.
 //
 // It is an allowlist, and conservative by construction: anything it does
-// not fully understand is not read-only. A command line is read-only when
-// it is a chain (&&, ||, ;) of pipelines (|) whose every command is a
-// known read-only program used in a read-only way, with no output
-// redirection except to /dev/null, and no command or process
-// substitution, variable expansion, backgrounding or escapes that could
-// hide what actually runs.
+// not fully understand is not read-only. The line is parsed (bash_parse.go)
+// and is read-only when it is a list (&&, ||, ;, newlines) of pipelines (|)
+// whose every command is a known read-only program used in a read-only way
+// (readOnlyInvocation), every word literal, with no output redirection
+// except to /dev/null and no substitution, assignment, subshell, group,
+// background job or heredoc. As in Claude Code ("Read-only commands"), an
+// unquoted glob given to a command with write- or exec-capable flags
+// (find, sort, sed, git) is not, nor is git after a cd to another
+// directory, nor a relative redirect target after a cd.
 func IsReadOnlyCommand(cmd string) bool {
-	segments, ok := splitCommandLine(cmd)
-	if !ok || len(segments) == 0 {
+	return analyzeBash(cmd, "", "", false).readOnly()
+}
+
+// readOnly is IsReadOnlyCommand on an analysis.
+func (a *bashAnalysis) readOnly() bool {
+	if !a.parsed || a.unknown || len(a.cmds) == 0 || !a.roShape() {
 		return false
 	}
-	for _, words := range segments {
-		if !readOnlyInvocation(words) {
+	for _, c := range a.cmds {
+		if !c.readOnly {
 			return false
 		}
 	}
 	return true
 }
 
-// CommandWords is every word of a command line IsReadOnlyCommand can parse
-// (quotes removed, operators dropped), for a caller that must check the
-// paths a read-only command touches; ok is false when it cannot be parsed.
+// roShape reports a line whose structure a read-only line may have.
+func (a *bashAnalysis) roShape() bool {
+	return a.roOK && !(a.git && a.cdAway) && !(a.sawCd && a.relRedirect)
+}
+
+// CommandWords is every word of a command line (quotes removed, operators
+// dropped, redirect targets included), for a caller that must check the
+// paths a read-only command touches; ok is false when it cannot be parsed
+// or a word is not literal.
 func CommandWords(cmd string) (words []string, ok bool) {
-	segments, ok := splitCommandLine(cmd)
-	if !ok {
+	a := analyzeBash(cmd, "", "", false)
+	if !a.parsed || !a.literalWords {
 		return nil, false
 	}
-	for _, seg := range segments {
-		words = append(words, seg...)
-	}
-	return words, true
-}
-
-// splitCommandLine tokenizes cmd into the word lists of its individual
-// commands, splitting on &&, ||, ; and |. Quotes group words; the quotes
-// themselves are dropped. It fails (ok=false) on every construct the
-// classifier refuses to reason about.
-func splitCommandLine(cmd string) (segments [][]string, ok bool) {
-	var words []string
-	var cur strings.Builder
-	inWord := false
-	flushWord := func() {
-		if inWord {
-			words = append(words, cur.String())
-			cur.Reset()
-			inWord = false
-		}
-	}
-	flushSegment := func() bool {
-		flushWord()
-		if len(words) == 0 {
-			return false // "a && && b", a leading "|", and the like
-		}
-		segments = append(segments, words)
-		words = nil
-		return true
-	}
-
-	for i := 0; i < len(cmd); i++ {
-		c := cmd[i]
-		switch c {
-		case '\'':
-			end := strings.IndexByte(cmd[i+1:], '\'')
-			if end < 0 {
-				return nil, false
-			}
-			cur.WriteString(cmd[i+1 : i+1+end])
-			inWord = true
-			i += end + 1
-		case '"':
-			end := strings.IndexByte(cmd[i+1:], '"')
-			if end < 0 {
-				return nil, false
-			}
-			body := cmd[i+1 : i+1+end]
-			// Double quotes still expand $ and backticks.
-			if strings.ContainsAny(body, "$`\\") {
-				return nil, false
-			}
-			cur.WriteString(body)
-			inWord = true
-			i += end + 1
-		case ' ', '\t':
-			flushWord()
-		case '&':
-			if strings.HasPrefix(cmd[i:], "&&") {
-				if !flushSegment() {
-					return nil, false
-				}
-				i++
-				continue
-			}
-			if strings.HasPrefix(cmd[i:], "&>/dev/null") {
-				flushWord()
-				i += len("&>/dev/null") - 1
-				continue
-			}
-			return nil, false // backgrounding
-		case '|':
-			if strings.HasPrefix(cmd[i:], "||") {
-				i++
-			}
-			if !flushSegment() {
-				return nil, false
-			}
-		case ';':
-			if !flushSegment() {
-				return nil, false
-			}
-		case '>', '<':
-			n, redirectOK := devNullRedirect(cmd, i, inWord, cur.String())
-			if !redirectOK {
-				return nil, false
-			}
-			// A leading fd digit ("2" of "2>") was taken as a word
-			// character; drop it.
-			if inWord && (cur.String() == "1" || cur.String() == "2") {
-				cur.Reset()
-				inWord = false
-			}
-			flushWord()
-			i += n - 1
-		case '`', '$', '\\', '(', ')', '{', '}', '\n', '\r':
-			return nil, false
-		default:
-			cur.WriteByte(c)
-			inWord = true
-		}
-	}
-	if !flushSegment() {
-		return nil, false
-	}
-	return segments, true
-}
-
-// devNullRedirect accepts only redirections that cannot write anywhere
-// real: ">/dev/null", "2>/dev/null", "2>&1", "1>&2" and an input redirect
-// "< file" (reading). It returns how many bytes of cmd, starting at i,
-// the operator spans (the target file of "<" is left as the next word).
-func devNullRedirect(cmd string, i int, inWord bool, word string) (int, bool) {
-	if inWord && word != "1" && word != "2" {
-		return 0, false // "file>out": a redirect glued to a word
-	}
-	rest := cmd[i:]
-	switch {
-	case strings.HasPrefix(rest, ">/dev/null"):
-		return len(">/dev/null"), true
-	case strings.HasPrefix(rest, "> /dev/null"):
-		return len("> /dev/null"), true
-	case strings.HasPrefix(rest, ">&1"), strings.HasPrefix(rest, ">&2"):
-		return len(">&1"), true
-	case strings.HasPrefix(rest, "<") && !strings.HasPrefix(rest, "<<") && !strings.HasPrefix(rest, "<("):
-		return 1, !inWord
-	}
-	return 0, false
+	return a.words, true
 }
 
 // readOnlyPrograms maps each allowed program to a check of its arguments.
 // A nil check means every argument is fine.
 var readOnlyPrograms = map[string]func(args []string) bool{
 	"cat": nil, "head": nil, "tail": nil, "ls": nil, "pwd": nil, "echo": nil,
-	"printf": nil, "wc": nil, "cut": nil, "tr": nil, "grep": nil, "egrep": nil,
-	"fgrep": nil, "file": nil, "stat": nil, "du": nil, "df": nil, "which": nil,
+	"wc": nil, "cut": nil, "tr": nil, "grep": nil, "egrep": nil,
+	"fgrep": nil, "stat": nil, "du": nil, "df": nil, "which": nil,
 	"whoami": nil, "uname": nil, "basename": nil, "dirname": nil,
 	"realpath": nil, "readlink": nil, "diff": nil, "cmp": nil, "comm": nil,
 	"jq": nil, "true": nil, "false": nil, "test": nil, "[": nil, "cd": nil,
 	"printenv": nil, "nl": nil, "column": nil,
-	"sort": func(a []string) bool { return !hasArg(a, "-o", "--output") },
+	// Each check below refuses the options that write a file or run a
+	// program, in every spelling getopt accepts (optionSet).
+	"printf": func(a []string) bool { return !optionSet(a, "v") }, // -v assigns a variable (and its subscript runs)
+	"file": func(a []string) bool {
+		return !optionSet(a, "Cmf", "compile", "magic-file", "files-from") // -C writes; -m, -f open the paths they name
+	},
+	"sort": func(a []string) bool { return !optionSet(a, "o", "output", "compress-program") },
 	"uniq": func(a []string) bool { return len(positional(a)) <= 1 }, // a 2nd operand is an output file
-	"tree": func(a []string) bool { return !hasArg(a, "-o") },
-	"rg":   func(a []string) bool { return !hasArg(a, "--pre") },
-	"date": func(a []string) bool { return !hasArg(a, "-s", "--set") },
+	"tree": func(a []string) bool {
+		return !optionSet(a, "o") && !(optionSet(a, "R") && optionSet(a, "H")) // -o writes; -R with -H writes an index per directory
+	},
+	"rg":   func(a []string) bool { return !optionSet(a, "", "pre", "hostname-bin") },
+	"date": func(a []string) bool { return !optionSet(a, "s", "set") },
 	"find": func(a []string) bool {
 		return !hasArg(a, "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls")
 	},
@@ -198,12 +92,12 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	},
 }
 
-// wrappers run their argument list as a command; the command is judged,
-// not the wrapper. "rtk" is the token-filtering proxy some setups rewrite
-// every bash call through (via a PreToolUse hook, so the gate sees the
-// rewritten line); its "read" is cat, "proxy" runs the rest verbatim, and
-// its other read-side subcommands share their underlying tool's name.
-func unwrap(words []string) ([]string, bool) {
+// rtkUnwrap judges the command rtk runs, not rtk. rtk is the
+// token-filtering proxy some setups rewrite every bash call through (via a
+// PreToolUse hook, so the gate sees the rewritten line); its "read" is cat,
+// "proxy" runs the rest verbatim, and its other read-side subcommands
+// share their underlying tool's name.
+func rtkUnwrap(words []string) ([]string, bool) {
 	if len(words) >= 2 && words[0] == "rtk" {
 		switch words[1] {
 		case "read":
@@ -219,7 +113,7 @@ func unwrap(words []string) ([]string, bool) {
 }
 
 func readOnlyInvocation(words []string) bool {
-	words, ok := unwrap(words)
+	words, ok := rtkUnwrap(words)
 	if !ok || len(words) == 0 {
 		return false
 	}
@@ -285,17 +179,51 @@ func readOnlyGit(a []string) bool {
 		return false
 	}
 	rest := a[1:]
-	for _, w := range rest {
-		if strings.HasPrefix(w, "--output") || w == "--ext-diff" || w == "--textconv" || strings.HasPrefix(w, "--exec") {
-			return false // writes a file, or runs a configured program
-		}
+	// Writes a file, or runs a configured or given program.
+	if optionSet(rest, "", "output", "ext-diff", "textconv", "exec", "filters", "open-files-in-pager") {
+		return false
+	}
+	if sub == "grep" && optionSet(rest, "O") {
+		return false // -O opens the matching files in a pager
 	}
 	return check == nil || check(rest)
+}
+
+// optionSet reports an argument that sets one of the short options in
+// short — alone ("-o"), in a cluster ("-mo") or with its value attached
+// ("-oFILE") — or one of the long options, spelt out or abbreviated as
+// GNU getopt accepts ("--outp=x" for --output). Arguments after "--" are
+// operands. It errs towards a match: a cluster's later letters may be an
+// earlier option's value.
+func optionSet(args []string, short string, long ...string) bool {
+	for _, w := range args {
+		switch {
+		case w == "--":
+			return false
+		case strings.HasPrefix(w, "--"):
+			name, _, _ := strings.Cut(w[2:], "=")
+			for _, l := range long {
+				if name != "" && strings.HasPrefix(l, name) {
+					return true
+				}
+			}
+		case len(w) > 1 && w[0] == '-' && short != "" && strings.ContainsAny(w[1:], short):
+			return true
+		}
+	}
+	return false
 }
 
 func readOnlyGo(a []string) bool {
 	if len(a) == 0 {
 		return false
+	}
+	for _, w := range a[1:] {
+		// -toolexec and -exec run a program for each build step or binary.
+		name, _, _ := strings.Cut(strings.TrimLeft(w, "-"), "=")
+		if strings.HasPrefix(w, "-") && (name == "toolexec" || name == "exec") {
+			return false
+		}
 	}
 	switch a[0] {
 	case "version", "list", "doc":

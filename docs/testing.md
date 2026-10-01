@@ -578,6 +578,13 @@ This list is a snapshot — check `grep -rl 'func Fuzz' --include=*_test.go .`
 for the current set before relying on it, since fuzz targets are added
 over time.
 
+`TestBashDifferential` (`internal/claude/settings`) is a seeded differential
+test, not a `Fuzz` target: it generates bash command lines, runs each in real
+bash with logging stub commands on `PATH`, and fails when bash runs a command
+kiln's bash analysis did not collect. 300 cases run in `make check`; run more
+with `KILN_BASH_FUZZ=<n>` and another seed with `KILN_BASH_FUZZ_SEED=<s>`. It
+skips when `bash` is missing.
+
 ## 11. Benchmarks
 
 Recorded results and methodology live in `docs/benchmarks.md`. Run any

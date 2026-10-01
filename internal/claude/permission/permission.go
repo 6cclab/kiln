@@ -230,17 +230,24 @@ func (g *Gate) WithinRoots(path string) bool {
 		return false
 	}
 	realRoots := make([]string, 0, len(g.roots))
+	canonRoots := make([]string, 0, len(g.roots))
 	for _, r := range g.roots {
 		rr, _ := execenv.RealPath(r)
 		realRoots = append(realRoots, rr)
+		canonRoots = append(canonRoots, execenv.CanonicalPath(r))
 	}
-	return under(real, realRoots)
+	// And the OS's own name for it (macOS firmlinks, APFS case folding,
+	// /.vol inode paths), against the roots' own.
+	return under(real, realRoots) && under(execenv.CanonicalPath(full), canonRoots)
 }
 
-// under reports whether full is one of roots or inside one.
+// under reports whether full is one of roots or inside one. Paths compare
+// as the filesystem compares them (settings.CaseFoldPath: without case on
+// macOS and Windows), so "/Users/x/Proj/a" is inside a root "/Users/x/proj".
 func under(full string, roots []string) bool {
+	full = settings.CaseFoldPath(full)
 	for _, root := range roots {
-		rel, err := filepath.Rel(root, full)
+		rel, err := filepath.Rel(settings.CaseFoldPath(root), full)
 		if err != nil {
 			continue
 		}
@@ -252,22 +259,17 @@ func under(full string, roots []string) bool {
 	return false
 }
 
-// resolvePlanPath makes path absolute and clean, relative to the first
-// root when it is not already absolute, matching how WithinRoots resolves
-// a relative path. Used only by the planLedgerPath exception, which needs
-// to compare a tool call's path argument against g.planLedgerPath (always
-// absolute) regardless of whether the model passed it relative or
-// absolute.
+// resolvePlanPath resolves a tool call's path argument the way the tools
+// do (execenv.ResolveToolPath: "@", "~", "file://", relative to the first
+// root), clean. Used only by the planLedgerPath exception, which needs to
+// compare it against g.planLedgerPath (always absolute) whatever spelling
+// the model used.
 func (g *Gate) resolvePlanPath(path string) string {
-	full := path
-	if !filepath.IsAbs(full) {
-		base := "."
-		if len(g.roots) > 0 {
-			base = g.roots[0]
-		}
-		full = filepath.Join(base, full)
+	base := "."
+	if len(g.roots) > 0 {
+		base = g.roots[0]
 	}
-	return filepath.Clean(full)
+	return filepath.Clean(execenv.ResolveToolPath(base, path))
 }
 
 // SetMode sets the active permission mode.
@@ -568,25 +570,33 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// after the grant (Claude Code: deny, then ask, then allow). Nor does
 	// it cover a command naming a file kiln cannot resolve: the same text
 	// ("cat $F") can name a different file next time.
-	grantable := !hits.Deny && !hits.Ask && !hits.Unsure
+	// Nor, while planning, does it cover an edit: plan mode refuses edits
+	// whatever any allow says (settings.PlanOverridesAllow). A shell
+	// command goes through the regular flow there, grants included.
+	grantable := !hits.Deny && !hits.Ask && !hits.Unsure &&
+		!(mode == settings.ModePlan && settings.PlanOverridesAllow(req.ToolName, decideArg))
 	if grantable && g.sessionAllowed(k) {
 		return nil, OutcomeAuto, nil
 	}
 
+	verdict := settings.DecideFromHits(hits, req.ToolName, decideArg, mode)
+
 	// HARNESS_EXP_LEDGER (internal/cli/experiments.go): the one narrow
-	// exception to plan mode's read-only enforcement, checked before
-	// Decide so it never has to know about it. Only edit/write, and only
-	// for the exact ledger path — every other tool and every other path
-	// still hits Decide's ModePlan case below and is refused as usual. A
-	// deny rule still wins.
+	// exception to plan mode's read-only enforcement — edit/write on
+	// exactly the ledger path, nothing else, however the call spells it.
+	// It is taken only after the rules have been evaluated, and only when
+	// neither a deny nor an ask rule matched: a deny rule on the ledger
+	// still refuses, and an ask rule still asks (rather than meeting plan
+	// mode's refusal of edits). Every other tool and path keeps verdict.
 	if mode == settings.ModePlan && g.planLedgerPath != "" && !hits.Deny &&
 		(strings.EqualFold(req.ToolName, "edit") || strings.EqualFold(req.ToolName, "write")) {
 		if path, ok := PathArgOf(req.Args); ok && g.resolvePlanPath(path) == g.planLedgerPath {
-			return nil, OutcomeAuto, nil
+			if !hits.Ask {
+				return nil, OutcomeAuto, nil
+			}
+			verdict = settings.Ask
 		}
 	}
-
-	verdict := settings.DecideFromHits(hits, req.ToolName, decideArg, mode)
 
 	// A bash command that provably only reads, and only inside the
 	// workspace, runs without asking in the modes that otherwise ask about
@@ -596,9 +606,15 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// names a file kiln cannot resolve while path rules exist.
 	if verdict == settings.Ask && strings.EqualFold(req.ToolName, "bash") &&
 		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits || mode == settings.ModeDontAsk) &&
-		!hits.Ask && !hits.Unsure && settings.IsReadOnlyCommand(req.PrimaryArg) &&
+		!hits.Ask && !hits.Unsure && hits.ReadOnly &&
 		g.commandWithinRoots(req.PrimaryArg) {
 		return nil, OutcomeAuto, nil
+	}
+	// Plan mode runs read-only commands without asking (Decide), but, as in
+	// manual mode, only inside the workspace: one reading elsewhere asks.
+	if verdict == settings.Allow && mode == settings.ModePlan && settings.IsBashTool(req.ToolName) &&
+		!hits.Allow && hits.ReadOnly && !g.commandWithinRoots(req.PrimaryArg) {
+		verdict = settings.Ask
 	}
 
 	// A path outside the workspace always warrants a question, even when a
@@ -647,7 +663,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	if verdict == settings.Deny {
 		reason := "blocked by permission rules."
-		if mode == settings.ModePlan {
+		if mode == settings.ModePlan && !hits.Deny {
 			reason = fmt.Sprintf("plan mode is read-only, so %s is not available. Describe the change instead of making it.", req.ToolName)
 		}
 		r := g.record(req, reason)
