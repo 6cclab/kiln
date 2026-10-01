@@ -35,7 +35,6 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("harness e2e: mkdtemp: " + err.Error())
 	}
-	defer os.RemoveAll(tmp)
 
 	harnessBin = filepath.Join(tmp, "kiln")
 	if out, err := exec.Command("go", "build", "-o", harnessBin, "github.com/andrepato/harness/cmd/kiln").CombinedOutput(); err != nil {
@@ -47,7 +46,9 @@ func TestMain(m *testing.M) {
 		panic("harness e2e: build cmd/faux: " + err.Error() + "\n" + string(out))
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+	os.RemoveAll(tmp) // not deferred: os.Exit skips deferred calls
+	os.Exit(code)
 }
 
 // startFaux starts a scripted faux server in-process (so its recorded

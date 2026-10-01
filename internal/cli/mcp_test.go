@@ -23,6 +23,14 @@ import (
 // it, which is both slow and (since t.TempDir() cleans up mid-run) racy.
 var realEnviron = os.Environ()
 
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if fixtureBinPath != "" {
+		os.RemoveAll(filepath.Dir(fixtureBinPath))
+	}
+	os.Exit(code)
+}
+
 // repoRoot is this file's directory's grandparent (internal/cli -> repo
 // root), resolved via runtime.Caller so it does not depend on the test's
 // current working directory (scratchProject chdirs into a scratch project

@@ -18,7 +18,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "screen_test: mkdtemp:", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(dir)
 
 	stubBinary = filepath.Join(dir, "stubtui")
 	cmd := exec.Command("go", "build", "-o", stubBinary, "github.com/andrepato/harness/internal/testkit/stubtui/cmd/stubtui")
@@ -29,5 +28,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+	os.RemoveAll(dir) // not deferred: os.Exit skips deferred calls
+	os.Exit(code)
 }
