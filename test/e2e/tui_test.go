@@ -1394,12 +1394,8 @@ func TestTUI_BangCommand(t *testing.T) {
 func TestTUI_MemoryNote(t *testing.T) {
 	proj, home, sessDir, addr, _ := tuiFixture(t, fixBugScript)
 
-	// memory.AddMemory (internal/claude/memory/memory.go) opens
-	// $HOME/.claude/CLAUDE.md with O_CREATE but never MkdirAll's the
-	// .claude directory itself; on a real machine that directory already
-	// exists (settings, credentials, ...), but scratchHome's $HOME is
-	// empty, so this is scratch-fixture setup, not a workaround for an
-	// app bug.
+	// A ~/.claude directory, as on a real machine: kiln reads it but must
+	// not write the note there.
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1409,7 +1405,7 @@ func TestTUI_MemoryNote(t *testing.T) {
 
 	s.Send("#remember to use tabs")
 	s.SendKey("enter")
-	if err := s.WaitFor("Saved to ~/.claude/CLAUDE.md · applies from the next session", 3*time.Second); err != nil {
+	if err := s.WaitFor("Saved to ~/.kiln/CLAUDE.md · applies from the next session", 3*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	// The note is a system note of its own, not rows under "you".
@@ -1419,9 +1415,12 @@ func TestTUI_MemoryNote(t *testing.T) {
 	}
 
 	// scratchProject's dir has no CLAUDE.md yet, so AddMemory (see
-	// internal/claude/memory/memory.go's AddMemory) falls back to the
-	// user-level file under $HOME/.claude/CLAUDE.md.
-	path := filepath.Join(home, ".claude", "CLAUDE.md")
+	// internal/claude/memory/memory.go's AddMemory) falls back to kiln's
+	// user-level file, $HOME/.kiln/CLAUDE.md; ~/.claude stays empty.
+	if entries, _ := os.ReadDir(filepath.Join(home, ".claude")); len(entries) != 0 {
+		t.Errorf("kiln wrote into ~/.claude: %d entries", len(entries))
+	}
+	path := filepath.Join(home, ".kiln", "CLAUDE.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)

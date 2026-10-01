@@ -152,14 +152,25 @@ func TestAddMemoryFallsBackToUserFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".claude", "CLAUDE.md")
+	want := filepath.Join(home, ".kiln", "CLAUDE.md")
 	if path != want {
 		t.Errorf("path = %q, want %q", path, want)
+	}
+	// kiln reads ~/.claude but never writes it; the note is loaded back.
+	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Errorf("~/.claude/CLAUDE.md was written (stat err = %v)", err)
+	}
+	found := false
+	for _, f := range LoadMemory(cwd, 100000).Files {
+		found = found || (f.Path == want && strings.Contains(f.Content, "remember this"))
+	}
+	if !found {
+		t.Error("the saved note is not loaded back from ~/.kiln/CLAUDE.md")
 	}
 }
 
 func TestAddMemoryCreatesMissingClaudeDir(t *testing.T) {
-	// A fresh HOME (or a HOME whose ~/.claude was never created) must not
+	// A fresh HOME (or a HOME whose ~/.kiln was never created) must not
 	// crash AddMemory with a raw ENOENT — the parent directory needs to be
 	// created before the file is opened.
 	home := t.TempDir()
@@ -174,7 +185,7 @@ func TestAddMemoryCreatesMissingClaudeDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddMemory returned error on missing ~/.claude dir: %v", err)
 	}
-	want := filepath.Join(home, ".claude", "CLAUDE.md")
+	want := filepath.Join(home, ".kiln", "CLAUDE.md")
 	if path != want {
 		t.Errorf("path = %q, want %q", path, want)
 	}

@@ -17,9 +17,17 @@ const (
 	Ask   RuleList = "ask"
 )
 
-// LocalSettingsPath returns <cwd>/.claude/settings.local.json.
+// LocalSettingsPath returns <cwd>/.kiln/settings.local.json, the only
+// project file kiln writes. Claude Code's .claude files are read, never
+// written.
 func LocalSettingsPath(cwd string) string {
-	return filepath.Join(cwd, ".claude", "settings.local.json")
+	return paths.KilnLocalSettingsPath(cwd)
+}
+
+// UserSettingsPath is ~/.kiln/settings.json, the only user file kiln
+// writes (the /model default).
+func UserSettingsPath() string {
+	return paths.KilnUserSettingsPath()
 }
 
 type localSettings map[string]any
@@ -44,15 +52,42 @@ func read(path string) localSettings {
 	return parsed
 }
 
+// write replaces path with settings atomically (a temp file in the same
+// directory, renamed over it). A .kiln directory it creates gets a
+// .gitignore of "*", so kiln's files never show up in git status.
 func write(path string, settings localSettings) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	dir := filepath.Dir(path)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		if filepath.Base(dir) == paths.KilnDir {
+			if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*\n"), 0o644); err != nil {
+				return err
+			}
+		}
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op once renamed
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func permissionsOf(settings localSettings) map[string]any {
@@ -76,7 +111,7 @@ func stringList(v any) []string {
 	return out
 }
 
-// AddRule adds rule to the given list in <cwd>/.claude/settings.local.json,
+// AddRule adds rule to the given list in <cwd>/.kiln/settings.local.json,
 // reading, modifying and rewriting the file so anything else in it
 // survives. Deduplicates on add.
 func AddRule(cwd string, list RuleList, rule string) error {
@@ -100,9 +135,20 @@ func AddRule(cwd string, list RuleList, rule string) error {
 	return write(path, settings)
 }
 
-// RemoveRule removes rule from the given list. A rule that lives in
-// settings.json or the user scope is not in this file, so there is
-// nothing to remove; that is reported by the caller, not here.
+// HasRule reports whether rule is in the given list of kiln's local file,
+// the only file RemoveRule can take it out of.
+func HasRule(cwd string, list RuleList, rule string) bool {
+	for _, r := range stringList(permissionsOf(read(LocalSettingsPath(cwd)))[string(list)]) {
+		if r == rule {
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveRule removes rule from the given list of kiln's local file. A rule
+// that lives in a Claude Code settings file is not in this file, so there
+// is nothing to remove; that is reported by the caller (HasRule), not here.
 func RemoveRule(cwd string, list RuleList, rule string) error {
 	path := LocalSettingsPath(cwd)
 	settings := read(path)
@@ -123,24 +169,10 @@ func RemoveRule(cwd string, list RuleList, rule string) error {
 	return write(path, settings)
 }
 
-// UserSettingsPath is ~/.claude/settings.json — paths.SettingsFiles' user
-// scope entry, re-exported here so callers that only need to write the
-// model default don't need to import paths for one constant.
-func UserSettingsPath() string {
-	for _, f := range paths.SettingsFiles("") {
-		if f.Scope == paths.ScopeUser {
-			return f.Path
-		}
-	}
-	return filepath.Join(".", ".claude", "settings.json")
-}
-
-// SetUserModel writes "model": "<provider/model>" into
-// ~/.claude/settings.json, the default for new sessions (/model's Enter
-// path), preserving every other key via the same read-modify-write
-// approach as AddRule. Unlike AddRule/RemoveRule, this touches the USER
-// settings.json, not a project's settings.local.json — /model's default
-// is a per-user preference, not a per-project permission rule.
+// SetUserModel writes "model": "<provider/model>" into ~/.kiln/settings.json,
+// the default for new sessions (/model's Enter path), preserving every other
+// key. kiln reads that file after ~/.claude/settings.json, so its model wins
+// there; Claude Code's own file is left as it is.
 func SetUserModel(model string) error {
 	path := UserSettingsPath()
 	settings := read(path)

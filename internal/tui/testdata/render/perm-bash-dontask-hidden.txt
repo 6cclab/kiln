@@ -1,0 +1,12 @@
+approval needed ────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────
+ Allow kiln to run this command?
+
+ $ npm test -- upload                                                          
+
+ 1  Yes                                                                         
+ 2  Yes, and switch to auto mode · auto mode handles these prompts for you
+ 3  No
+
+ ↑↓ select · enter confirm · esc decline · tab to amend
+────────────────────────────────────────────────────────────────────────────────

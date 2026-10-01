@@ -237,13 +237,15 @@ Per-window budgets (all proportional, with floors/ceilings): system prompt 10% o
 
 ### Locations and merge order
 
-`paths.SettingsFiles(cwd)` (`paths.go`), read least- to most-specific, later wins for scalars:
+`paths.AllSettingsFiles(cwd)` (`paths.go`), read least- to most-specific, later wins for scalars:
 
 1. `~/.claude/settings.json` (user)
-2. `<cwd>/.claude/settings.json` (project)
-3. `<cwd>/.claude/settings.local.json` (local — gitignored machine overrides, highest precedence)
+2. `~/.kiln/settings.json` (user, kiln's own: the `/model` default)
+3. `<cwd>/.claude/settings.json` (project)
+4. `<cwd>/.claude/settings.local.json` (local — gitignored machine overrides)
+5. `<cwd>/.kiln/settings.local.json` (local, kiln's own: rules from "don't ask again" and `/permissions`; highest precedence)
 
-`--settings <file>` adds a fourth file, read last, tagged as local scope — so it wins over all three for scalars and is unioned in for list fields. `--setting-sources user,project,local` restricts which of the three built-in scopes are read at all. Malformed JSON at a scope: warning to stderr, that scope skipped, load continues; a missing file is silently skipped.
+kiln reads Claude Code's `.claude` files exactly as Claude Code does and never writes them; everything it saves goes to the two `.kiln` files, which have the same JSON shape. Each kiln file sits right after Claude Code's file of the same scope: its rules are that scope's (a `/path` rule in `~/.kiln/settings.json` is anchored at `~/.kiln`, one in `.kiln/settings.local.json` at the primary working directory) and its scalars win over that file's. Deny still beats allow across every file. A `<cwd>/.kiln/settings.local.json` that came with the repository (tracked in git, or reached through a symlinked `.kiln`) is held until the folder is trusted: only its deny and ask rules apply, and its allow rules are added once the trust dialog is accepted (`Settings.HeldAllow`). `--settings <file>` adds a further file, read last, tagged as local scope — so it wins over all of them for scalars and is unioned in for list fields. `--setting-sources user,project,local` restricts which scopes are read at all (kiln's files included). Malformed JSON at a scope: warning to stderr, that scope skipped, load continues; a missing file is silently skipped.
 
 ### Keys
 
@@ -299,7 +301,7 @@ A `bash` or `bash_background` command line is parsed with a real bash parser (`m
 
 ### `Decide` (`settings.go`)
 
-Order: deny rules first (absolute — deny wins even under `bypassPermissions`) → in `plan` mode, edit-family tools (`edit`, `write`, and the MultiEdit/NotebookEdit names) are denied whatever allow or ask rules say (Claude Code: "edits stay blocked until you approve the plan"; a deny rule's refusal still names the rules, not plan mode) → ask rules → `bypassPermissions` mode allows everything else → allow rules → mode default. This is Claude Code's order (permissions and permission-modes docs): a matching ask rule prompts even when a more specific allow rule also matches, and no mode auto-approves a call an explicit ask rule matches, `bypassPermissions` included; a print run has nobody to ask and refuses it. Last, a bash command that names a file kiln cannot resolve while Read/Edit path rules exist (`Hits.Unsure`) turns an Allow into an Ask; it never turns a Deny, plan mode's included, into a prompt. A session "don't ask again" grant counts as an allow: the gate (`permission.Gate.CheckWithOutcome`) honours it only when no deny or ask rule matches the call, so a deny or ask rule added after the grant still applies; nor in `plan` mode for an edit (`settings.PlanOverridesAllow`).
+Order: deny rules first (absolute — deny wins even under `bypassPermissions`) → in `plan` mode, edit-family tools (`edit`, `write`, and the MultiEdit/NotebookEdit names) are denied whatever allow or ask rules say (Claude Code: "edits stay blocked until you approve the plan"; a deny rule's refusal still names the rules, not plan mode) → ask rules → `bypassPermissions` mode allows everything else → allow rules → mode default. This is Claude Code's order (permissions and permission-modes docs): a matching ask rule prompts even when a more specific allow rule also matches, and no mode auto-approves a call an explicit ask rule matches, `bypassPermissions` included; a print run has nobody to ask and refuses it. Last, a bash command that names a file kiln cannot resolve while Read/Edit path rules exist (`Hits.Unsure`) turns an Allow into an Ask; it never turns a Deny, plan mode's included, into a prompt. A "don't ask again" grant counts as an allow: the gate (`permission.Gate.CheckWithOutcome`) honours it only when no deny or ask rule matches the call, so a deny or ask rule added after the grant still applies; nor in `plan` mode for an edit (`settings.PlanOverridesAllow`). The prompt offers it only when it would be honoured (`permission.Request.Grantable`). For bash it saves allow rules, one per command still needing approval (`settings.BashDontAskRules`), to `.kiln/settings.local.json`.
 
 | Mode | No explicit rule match |
 |---|---|
@@ -356,7 +358,7 @@ Exit-code / stdout contract, checked in this order:
 
 ### `internal/claude/writesettings`
 
-Contrary to the README's "writes nothing into it": this package does write, narrowly. `AddRule`/`RemoveRule` read-modify-write **`.claude/settings.local.json`** only (permission-rule grants, e.g. "always allow" from a prompt), preserving unrelated keys. `SetUserModel` writes `"model"` into **`~/.claude/settings.json`** (the true user scope) — the `/model` command's "set default" path. Neither ever writes to a project's committed `.claude/settings.json`.
+kiln's only settings writer, and it never writes a `.claude` file. `AddRule`/`RemoveRule` read-modify-write **`<cwd>/.kiln/settings.local.json`** (rules from "don't ask again" and `/permissions`), preserving unrelated keys; `/permissions` refuses to delete a rule that lives in a Claude Code file and names that file. `SetUserModel` writes `"model"` into **`~/.kiln/settings.json`** — the `/model` command's "set default" path; a model already in `~/.claude/settings.json` is still read, and kiln's wins over it. Writes are atomic (temp file + rename); creating `<cwd>/.kiln` also creates `.kiln/.gitignore` holding `*`, so kiln's files never show in `git status`.
 
 ## 6. `modelRoles`
 
@@ -399,7 +401,7 @@ Namespace: the relative path under `commands/` with `.md` stripped; every direct
 
 ### Memory (`CLAUDE.md`)
 
-Discovery: `~/.claude/CLAUDE.md` (user), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
+Discovery: `~/.claude/CLAUDE.md` and `~/.kiln/CLAUDE.md` (user; the second holds `#` notes kiln saves when the project has no `CLAUDE.md`), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
 
 `@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently.
 

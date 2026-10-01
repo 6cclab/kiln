@@ -17,6 +17,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -270,8 +271,7 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 			return writesettings.AddRule(deps.Cwd, list, rule)
 		},
 		RemoveRule: func(list writesettings.RuleList, rule string) error {
-			gate.RemoveRule(permission.RuleList(list), rule)
-			return writesettings.RemoveRule(deps.Cwd, list, rule)
+			return removeKilnRule(gate, deps.Cwd, list, rule)
 		},
 	}))
 
@@ -312,4 +312,15 @@ func relaunchFor(interactive bool) func(string) {
 		return nil
 	}
 	return func(id string) { pendingRelaunch = id }
+}
+
+// removeKilnRule is /permissions' delete: kiln edits only its own
+// .kiln/settings.local.json, so a rule that comes from Claude Code's
+// settings (or the command line) is refused, with where it lives.
+func removeKilnRule(gate *permission.Gate, cwd string, list writesettings.RuleList, rule string) error {
+	if !writesettings.HasRule(cwd, list, rule) {
+		return fmt.Errorf("%s is not kiln's to delete: it comes from %s, which kiln reads but never edits", rule, gate.RuleOrigin(permission.RuleList(list), rule))
+	}
+	gate.RemoveRule(permission.RuleList(list), rule)
+	return writesettings.RemoveRule(cwd, list, rule)
 }

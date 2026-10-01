@@ -54,32 +54,6 @@ func BashSegments(cmd string) (segments []string, opaque bool) {
 	return segments, opaque
 }
 
-// BashDontAskRule is the rule a bash "don't ask again" grants, and the text
-// the prompt shows for it: the first two words of the command plus " *"
-// (Bash(<prefix> *) semantics, e.g. "openssl rand -hex 4" -> "openssl rand
-// *"). For a command line it is taken from the first segment that is not a
-// cd, so "cd api && npm test" grants "npm test *", not a rule tied to one
-// directory. The rule is matched per command (see Decide), so it never
-// covers the other commands of a line it did not name.
-func BashDontAskRule(command string) string {
-	segments, _ := BashSegments(command)
-	first := command
-	for _, s := range segments {
-		if f := strings.Fields(s); len(f) > 0 && f[0] != "cd" {
-			first = s
-			break
-		}
-	}
-	fields := strings.Fields(first)
-	switch len(fields) {
-	case 0:
-		return "*"
-	case 1:
-		return fields[0] + " *"
-	}
-	return fields[0] + " " + fields[1] + " *"
-}
-
 // IsBashTool reports the tools Bash rules govern: bash, and bash_background
 // (kiln's background form of the same tool).
 func IsBashTool(toolName string) bool { return isBashTool(toolName) }
@@ -207,25 +181,7 @@ func bashRuleVerdicts(permissions Permissions, a *bashAnalysis, toolName, cmd st
 	byRule := false
 	roShape := a.roShape() && !a.nonLocalRedirect
 	for _, c := range a.cmds {
-		ok := false
-		for _, r := range permissions.Allow {
-			if _, isPath := splitFileRule(r); isPath {
-				continue
-			}
-			if c.exactOnly && !isExactBashRule(r) {
-				continue
-			}
-			for _, text := range []string{c.allow, c.allowRaw, c.allowFull, c.allowFullRaw} {
-				if text != "" && matchesBashRule(r, toolName, text) {
-					ok = true
-					break
-				}
-			}
-			if ok {
-				break
-			}
-		}
-		if ok {
+		if allowedByRule(permissions.Allow, c, toolName) {
 			byRule = true
 			continue
 		}
@@ -234,4 +190,23 @@ func bashRuleVerdicts(permissions Permissions, a *bashAnalysis, toolName, cmd st
 		}
 	}
 	return deny, ask, byRule
+}
+
+// allowedByRule reports one command an allow rule approves: an exec
+// wrapper (exactOnly) only by an exact rule.
+func allowedByRule(allow []string, c bashCmd, toolName string) bool {
+	for _, r := range allow {
+		if _, isPath := splitFileRule(r); isPath {
+			continue
+		}
+		if c.exactOnly && !isExactBashRule(r) {
+			continue
+		}
+		for _, text := range []string{c.allow, c.allowRaw, c.allowFull, c.allowFullRaw} {
+			if text != "" && matchesBashRule(r, toolName, text) {
+				return true
+			}
+		}
+	}
+	return false
 }

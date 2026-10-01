@@ -20,7 +20,7 @@ const genericToolName = "grep"
 func TestPromptState_ToolAllow(t *testing.T) {
 	for _, k := range []string{"1", "y", "enter"} {
 		p := NewPromptState("/tmp")
-		reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
+		reply := p.AskTool(PermissionRequest{Grantable: true, ToolName: genericToolName})
 		if !p.HandleKey(key(k)) {
 			t.Fatalf("key %q not consumed", k)
 		}
@@ -34,7 +34,7 @@ func TestPromptState_ToolAllow(t *testing.T) {
 func TestPromptState_ToolAllowAlways(t *testing.T) {
 	for _, k := range []string{"2", "a"} {
 		p := NewPromptState("/tmp")
-		reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
+		reply := p.AskTool(PermissionRequest{Grantable: true, ToolName: genericToolName})
 		p.HandleKey(key(k))
 		if choice := <-reply; choice.Kind != ChoiceAllowAlways {
 			t.Errorf("key %q: kind = %q, want allow-always", k, choice.Kind)
@@ -44,7 +44,7 @@ func TestPromptState_ToolAllowAlways(t *testing.T) {
 
 func TestPromptState_ToolDenyWithFeedback(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
+	reply := p.AskTool(PermissionRequest{Grantable: true, ToolName: genericToolName})
 
 	p.HandleKey(key("3")) // enters feedback mode
 	if !p.Active() {
@@ -63,7 +63,7 @@ func TestPromptState_ToolDenyWithFeedback(t *testing.T) {
 
 func TestPromptState_ToolEscDeniesOutright(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
+	reply := p.AskTool(PermissionRequest{Grantable: true, ToolName: genericToolName})
 	p.HandleKey(key("esc"))
 	choice := <-reply
 	if choice.Kind != ChoiceDeny || choice.Feedback != "" {
@@ -73,7 +73,7 @@ func TestPromptState_ToolEscDeniesOutright(t *testing.T) {
 
 func TestPromptState_FeedbackBackspace(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: genericToolName})
+	reply := p.AskTool(PermissionRequest{Grantable: true, ToolName: genericToolName})
 	p.HandleKey(key("3"))
 	p.HandleKey(key("x"))
 	p.HandleKey(backspaceKey())
@@ -86,7 +86,7 @@ func TestPromptState_FeedbackBackspace(t *testing.T) {
 
 func TestPromptState_UnknownKeySwallowedWhileActive(t *testing.T) {
 	p := NewPromptState("/tmp")
-	p.AskTool(PermissionRequest{ToolName: genericToolName})
+	p.AskTool(PermissionRequest{Grantable: true, ToolName: genericToolName})
 	if !p.HandleKey(key("z")) {
 		t.Error("unknown key not swallowed while a prompt is active")
 	}
@@ -99,7 +99,7 @@ func TestPromptState_UnknownKeySwallowedWhileActive(t *testing.T) {
 
 func TestPromptState_BashAllow(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	reply := p.AskTool(PermissionRequest{Grantable: true, DontAskRules: []string{"npm test *"}, ToolName: "bash"})
 	p.HandleKey(key("1"))
 	if choice := <-reply; choice.Kind != ChoiceAllow {
 		t.Errorf("choice = %+v, want allow", choice)
@@ -108,7 +108,7 @@ func TestPromptState_BashAllow(t *testing.T) {
 
 func TestPromptState_BashAllowAlways(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	reply := p.AskTool(PermissionRequest{Grantable: true, DontAskRules: []string{"npm test *"}, ToolName: "bash"})
 	p.HandleKey(key("2"))
 	if choice := <-reply; choice.Kind != ChoiceAllowAlways {
 		t.Errorf("choice = %+v, want allow-always", choice)
@@ -122,7 +122,7 @@ func TestPromptState_BashAllowAlways(t *testing.T) {
 // not have a gate reference itself).
 func TestPromptState_BashSwitchToAutoThenAllow(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	reply := p.AskTool(PermissionRequest{Grantable: true, DontAskRules: []string{"npm test *"}, ToolName: "bash"})
 	p.HandleKey(key("3"))
 	if choice := <-reply; choice.Kind != ChoiceAllow {
 		t.Errorf("choice = %+v, want allow", choice)
@@ -134,7 +134,7 @@ func TestPromptState_BashSwitchToAutoThenAllow(t *testing.T) {
 
 func TestPromptState_BashNoDeniesOutright(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	reply := p.AskTool(PermissionRequest{Grantable: true, DontAskRules: []string{"npm test *"}, ToolName: "bash"})
 	p.HandleKey(key("4"))
 	choice := <-reply
 	if choice.Kind != ChoiceDeny || choice.Feedback != "" {
@@ -158,7 +158,7 @@ func TestPromptState_BashNoDeniesOutright(t *testing.T) {
 // there must send a decline carrying the typed reason.
 func TestPromptState_BashTabOpensFeedback(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash", PrimaryArg: "echo tab-amend-probe"})
+	reply := p.AskTool(PermissionRequest{Grantable: true, DontAskRules: []string{"npm test *"}, ToolName: "bash", PrimaryArg: "echo tab-amend-probe"})
 
 	if !p.HandleKey(key("tab")) {
 		t.Fatal("tab not consumed by the bash prompt")
@@ -193,7 +193,7 @@ func TestPromptState_BashTabOpensFeedback(t *testing.T) {
 // tab-to-amend (any option, not just the last one).
 func TestPromptState_BashTabFromAnyOptionOpensFeedback(t *testing.T) {
 	p := NewPromptState("/tmp")
-	p.AskTool(PermissionRequest{ToolName: "bash"})
+	p.AskTool(PermissionRequest{Grantable: true, DontAskRules: []string{"npm test *"}, ToolName: "bash"})
 	p.HandleKey(key("down")) // selected=1 ("don't ask again")
 	p.HandleKey(key("tab"))
 	if p.feedback == nil {
@@ -227,7 +227,7 @@ func TestPromptState_EditTabOpensFeedback(t *testing.T) {
 // from a bare Esc.
 func TestPromptState_TabEscCancelsBackToOptions(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	reply := p.AskTool(PermissionRequest{Grantable: true, DontAskRules: []string{"npm test *"}, ToolName: "bash"})
 	p.HandleKey(key("tab"))
 	p.HandleKey(key("x"))
 	p.HandleKey(key("esc"))
@@ -239,7 +239,7 @@ func TestPromptState_TabEscCancelsBackToOptions(t *testing.T) {
 
 func TestPromptState_BashArrowNavigation(t *testing.T) {
 	p := NewPromptState("/tmp")
-	reply := p.AskTool(PermissionRequest{ToolName: "bash"})
+	reply := p.AskTool(PermissionRequest{Grantable: true, DontAskRules: []string{"npm test *"}, ToolName: "bash"})
 	p.HandleKey(key("down"))
 	p.HandleKey(key("down"))
 	if p.pending.selected != 2 {

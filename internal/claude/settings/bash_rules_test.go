@@ -55,18 +55,3 @@ func TestDecideBashRulesPerSegment(t *testing.T) {
 		}
 	}
 }
-
-func TestBashDontAskRule(t *testing.T) {
-	cases := map[string]string{
-		"openssl rand -hex 4":                   "openssl rand *",
-		"ls":                                    "ls *",
-		"cd api && npm test -- upload":          "npm test *",
-		"cd /x && cd y && go test ./...":        "go test *",
-		`echo "=== a"; curl -s http://x | head`: `echo "=== *`,
-	}
-	for in, want := range cases {
-		if got := BashDontAskRule(in); got != want {
-			t.Errorf("BashDontAskRule(%q) = %q, want %q", in, got, want)
-		}
-	}
-}

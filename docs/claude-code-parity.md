@@ -45,7 +45,7 @@ see `kiln-design.md`'s "Input" section, not the notes column below.
 | `/` | slash command; opens the command palette | `[obs]` |
 | `@` | file mention; fuzzy path completion inline, contents inlined into the prompt on submit | `[obs]` |
 | `!` | run a bash command directly, output into transcript | `[obs]` |
-| `#` | write to memory / CLAUDE.md | `[obs]` project `CLAUDE.md` preferred, falls back to `~/.claude/CLAUDE.md` — `TestAddMemoryPrefersProjectFile`, `TestAddMemoryFallsBackToUserFile` (`internal/claude/memory/memory_test.go`) |
+| `#` | write to memory / CLAUDE.md | `[obs]` project `CLAUDE.md` preferred, falls back to `~/.kiln/CLAUDE.md` (kiln never writes `~/.claude`; the file is read with `~/.claude/CLAUDE.md`) — `TestAddMemoryPrefersProjectFile`, `TestAddMemoryFallsBackToUserFile` (`internal/claude/memory/memory_test.go`) |
 
 All four are token-boundary triggers, matching `AutocompleteProvider.triggerCharacters`.
 

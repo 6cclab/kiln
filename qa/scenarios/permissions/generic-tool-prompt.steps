@@ -1,7 +1,8 @@
 # A tool other than bash/edit/write that still asks in manual mode
 # (settings.go's Decide: bash_background is not ReadOnly and not one of
 # edit/write/task, so ModeManual -> Ask): renders via the generic
-# RenderPermissionPrompt, 3 options (Yes / don't-ask-again / tell-kiln),
+# RenderPermissionPrompt, 3 options (Yes / don't-ask-again naming the rule
+# it saves, npm run * / tell-kiln),
 # not the bash-specific 4-option layout.
 # design: Terminal.dc.html:367 ("approval needed" label/glyph)
 @faux testdata/faux/qa/permissions-generic-tool.yaml
@@ -14,7 +15,7 @@ SHOT generic-prompt
 EXPECT /Allow kiln to use bash background\?/
 EXPECT /npm run dev/
 EXPECT /Yes/
-EXPECT /Yes, and don.t ask again for this/
+EXPECT /Yes, and don.t ask again for: npm run \*/
 EXPECT /No, and tell kiln what to do instead/
 EXPECT_NOT /Yes, and switch to auto mode/
 EXPECT_NOT /Yes, and switch to accept edits/

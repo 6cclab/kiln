@@ -138,7 +138,9 @@ func LoadMemory(cwd string, budgetTokens int) Assembled {
 	for _, root := range paths.ClaudeRoots(cwd) {
 		var candidates []string
 		if root.Scope == paths.ScopeUser {
-			candidates = []string{filepath.Join(root.Dir, paths.CLAUDEMD)}
+			// ~/.kiln/CLAUDE.md holds the "#" notes kiln saves (AddMemory):
+			// kiln never writes ~/.claude.
+			candidates = []string{filepath.Join(root.Dir, paths.CLAUDEMD), paths.KilnUserMemoryPath()}
 		} else {
 			// The project file sits beside .claude or inside it; Claude
 			// Code reads both.
@@ -231,7 +233,9 @@ func ruleSummary(content string) string {
 }
 
 // AddMemory appends a note to <cwd>/CLAUDE.md if it exists, else
-// ~/.claude/CLAUDE.md, returning the path it wrote to.
+// ~/.kiln/CLAUDE.md (kiln reads ~/.claude but never writes it; LoadMemory
+// reads this file after ~/.claude/CLAUDE.md), returning the path it wrote
+// to.
 //
 // Ported from harness/src/tui/input-modes.ts's addMemory (the "#note"
 // input mode), not from memory.ts, which has no such function. Writing to
@@ -239,7 +243,7 @@ func ruleSummary(content string) string {
 // code in front of you, not about you.
 func AddMemory(note, cwd string) (string, error) {
 	projectPath := filepath.Join(cwd, paths.CLAUDEMD)
-	path := filepath.Join(homeDir(), ".claude", paths.CLAUDEMD)
+	path := paths.KilnUserMemoryPath()
 	if _, err := os.Stat(projectPath); err == nil {
 		path = projectPath
 	}

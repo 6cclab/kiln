@@ -224,6 +224,14 @@ type bashCmd struct {
 	// those words literal.
 	name, line string
 	literal    bool
+	// ruleWords are the words allow rules see (allow's words, wrappers and
+	// safe assignments stripped), for building a "don't ask again" rule
+	// (bash_suggest.go); nil for a construct that is not a simple command.
+	// keptAssigns reports leading assignments allow rules do not strip,
+	// and ruleLiteral that every word and assignment value is literal.
+	ruleWords   []evalWord
+	keptAssigns bool
+	ruleLiteral bool
 }
 
 // bashAnalysis is everything kiln knows about one command line.
@@ -711,6 +719,7 @@ var specialVars = set("PATH", "IFS", "BASH_ENV", "ENV", "PROMPT_COMMAND", "CDPAT
 type assignment struct {
 	name, text string
 	plain      bool // the value is literal and harmless (safeEnvValue)
+	literal    bool // the value (if any) is literal
 }
 
 func (a *bashAnalysis) call(c *syntax.CallExpr, in stdinSource, prefix ...evalWord) {
@@ -722,12 +731,13 @@ func (a *bashAnalysis) call(c *syntax.CallExpr, in stdinSource, prefix ...evalWo
 		if as.Name != nil {
 			name = as.Name.Value
 		}
-		plain := false
-		if as.Value != nil && !as.Append && as.Index == nil && as.Array == nil {
+		plain, literal := false, as.Index == nil && as.Array == nil
+		if as.Value != nil {
 			v := a.eval(as.Value)
-			plain = v.literal && safeEnvValue(v.lit)
+			literal = literal && v.literal && !v.w.bad
+			plain = literal && !as.Append && safeEnvValue(v.lit)
 		}
-		assigns = append(assigns, assignment{name: name, text: a.slice(as), plain: plain})
+		assigns = append(assigns, assignment{name: name, text: a.slice(as), plain: plain, literal: literal})
 	}
 	for _, w := range c.Args {
 		a.subs(w)
@@ -819,6 +829,14 @@ func (a *bashAnalysis) simple(assigns []assignment, words []evalWord, in stdinSo
 	// safe-variable assignments stripped, and nothing else.
 	cc, kept := ccStrip(assigns, words)
 	cmd.allow = joinWords(kept, cc)
+	cmd.ruleWords, cmd.keptAssigns = cc, len(kept) > 0
+	cmd.ruleLiteral = true
+	for _, w := range words {
+		cmd.ruleLiteral = cmd.ruleLiteral && w.literal && !w.w.bad
+	}
+	for _, as := range assigns {
+		cmd.ruleLiteral = cmd.ruleLiteral && as.literal
+	}
 	raw := append([]string(nil), kept...)
 	for _, w := range cc {
 		raw = append(raw, w.src)

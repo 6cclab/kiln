@@ -1,17 +1,12 @@
-# Option 2 ("don't ask again for: <prefix> *"), then a second, EXACTLY
-# identical command, which should run without a prompt. The rendered
-# label promises a prefix rule, but the actual session grant
-# (internal/claude/permission/permission.go's grantSession/key) is keyed
-# on the tool plus the *exact* primaryArg string, not a glob — so this
-# scenario deliberately repeats the identical command rather than a
-# same-prefix one; see permissions-bash-option2-dont-ask.steps for the
-# note recording that gap between the label and the mechanism.
+# Option 2 ("don't ask again for: npm test *") on a compound line: it saves
+# one rule per command needing approval (the read-only git log needs
+# none), so a later npm test with other arguments runs without a prompt.
 model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "npm test -- upload"}, id: tc1}
+  - tool_call: {name: bash, args: {command: "git log -1 && npm test -- upload"}, id: tc1}
   - on_tool_result: tc1
     then:
-      - tool_call: {name: bash, args: {command: "npm test -- upload"}, id: tc2}
+      - tool_call: {name: bash, args: {command: "npm test -- download"}, id: tc2}
   - on_tool_result: tc2
     then:
       - text: "Both test runs done, second one didn't need approval."

@@ -79,6 +79,10 @@ type InteractiveDeps struct {
 	// only once the trust dialog is accepted.
 	PendingMCPCount   int
 	ConnectPendingMCP func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus
+	// ApplyHeldRules adds the allow rules settings held back while the
+	// folder was untrusted (claudesettings.Settings.HeldAllow); run once
+	// the trust dialog is accepted.
+	ApplyHeldRules func()
 	// Effort is the reasoning effort label shown in the banner ("medium");
 	// AuthKind is how the model's provider is authenticated ("Claude
 	// subscription", "API key", "Ollama").
@@ -273,6 +277,9 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			}
 			if err := store.Trust(deps.Cwd); err != nil {
 				diag.L().Warn("trust store", "err", err)
+			}
+			if deps.ApplyHeldRules != nil {
+				deps.ApplyHeldRules()
 			}
 			if deps.ConnectPendingMCP != nil && deps.PendingMCPCount > 0 {
 				go connectInBackground(bridge, deps.PendingMCPCount, deps.ConnectPendingMCP)

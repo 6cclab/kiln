@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 )
 
 // Inline permission prompt rendering, ported from the render half of
@@ -25,6 +23,11 @@ type PermissionRequest struct {
 	PrimaryArg       string
 	OutsideWorkspace bool
 	Args             map[string]any
+	// Grantable and DontAskRules are permission.Request's: whether the
+	// prompt offers "don't ask again" (offersDontAsk), and the bash rules
+	// that answer saves.
+	Grantable    bool
+	DontAskRules []string
 }
 
 // declinedNoteText builds the "✕ Declined …" note's text for a denied
@@ -115,10 +118,19 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 		return FitLines(lines, width, "   ")
 	}
 
+	options := []string{"Yes"}
+	if offersDontAsk(req) {
+		label := "Yes, and don't ask again for this"
+		if len(req.DontAskRules) > 0 {
+			label = dontAskLabel(req.DontAskRules, width-4)
+		}
+		options = append(options, label)
+	}
+	options = append(options, "No, and tell kiln what to do instead")
+	for i, opt := range options {
+		lines = append(lines, " "+permissionOptionRow(fmt.Sprintf("%d", i+1), opt, i == selected, maxInt(width-1, 1)))
+	}
 	lines = append(lines,
-		" "+permissionOptionRow("1", "Yes", selected == 0, maxInt(width-1, 1)),
-		" "+permissionOptionRow("2", "Yes, and don't ask again for this", selected == 1, maxInt(width-1, 1)),
-		" "+permissionOptionRow("3", "No, and tell kiln what to do instead", selected == 2, maxInt(width-1, 1)),
 		"",
 		" "+Muted("↑↓ select · enter confirm · esc decline"),
 		amberRule,
@@ -182,12 +194,39 @@ type BashPermissionRequest struct {
 	// Feedback, when non-nil, is the reason typed after tab: the options
 	// give way to the feedback field, everything above them unchanged.
 	Feedback *string
+	// Grantable shows option 2, "don't ask again", naming DontAskRules:
+	// exactly the rules the gate saves (settings.BashDontAskRules). Without
+	// it (or without rules) the option is left out and the rest move up.
+	Grantable    bool
+	DontAskRules []string
 }
 
-// bashDontAskRule is the rule option 2 grants and names; the gate grants
-// exactly this (claudesettings.BashDontAskRule).
-func bashDontAskRule(command string) string {
-	return claudesettings.BashDontAskRule(command)
+// dontAskLabel is option 2's label: every rule the answer saves, in
+// order. When they do not all fit avail columns, it names as many as fit
+// and counts the rest ("+2 more"), so the row never claims less than is
+// saved; a single rule too long for the row is cut with "…".
+func dontAskLabel(rules []string, avail int) string {
+	const head = "Yes, and don’t ask again for: "
+	full := head + strings.Join(rules, ", ")
+	if VisibleWidth(full) <= avail {
+		return full
+	}
+	for n := len(rules) - 1; n >= 1; n-- {
+		s := head + strings.Join(rules[:n], ", ") + fmt.Sprintf(", +%d more", len(rules)-n)
+		if VisibleWidth(s) <= avail {
+			return s
+		}
+	}
+	more := ""
+	if len(rules) > 1 {
+		more = fmt.Sprintf(", +%d more", len(rules)-1)
+	}
+	room := avail - VisibleWidth(head) - VisibleWidth(more) - 1
+	if room < 8 {
+		// Too narrow to cut sensibly: show it whole and let the row wrap.
+		return head + rules[0] + more
+	}
+	return head + truncateToWidth(rules[0], room) + "…" + more
 }
 
 // RenderBashPermissionPrompt renders the Bash command permission prompt
@@ -230,12 +269,14 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 		return FitLines(lines, width, "    ")
 	}
 
-	options := []string{
-		"Yes",
-		"Yes, and don’t ask again for: " + bashDontAskRule(req.Command),
+	options := []string{"Yes"}
+	if req.Grantable && len(req.DontAskRules) > 0 {
+		options = append(options, dontAskLabel(req.DontAskRules, width-4))
+	}
+	options = append(options,
 		"Yes, and switch to auto mode · auto mode handles these prompts for you",
 		"No",
-	}
+	)
 	for i, opt := range options {
 		key := fmt.Sprintf("%d", i+1)
 		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected, maxInt(width-1, 1)))

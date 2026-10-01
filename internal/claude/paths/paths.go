@@ -82,3 +82,46 @@ func KeybindingsPath() string {
 func ClaudeJSONPath() string {
 	return filepath.Join(homeDir(), ".claude.json")
 }
+
+// KilnDir is kiln's own directory beside a .claude one: kiln reads Claude
+// Code's .claude files but never writes them, so everything it saves goes
+// under .kiln instead (~/.kiln for the user, <cwd>/.kiln for a project).
+const KilnDir = ".kiln"
+
+// KilnUserSettingsPath is ~/.kiln/settings.json, where kiln saves a user
+// setting (the /model default). Same shape as Claude Code's settings.json.
+func KilnUserSettingsPath() string {
+	return filepath.Join(homeDir(), KilnDir, "settings.json")
+}
+
+// KilnLocalSettingsPath is <cwd>/.kiln/settings.local.json, where kiln saves
+// project rules ("don't ask again", /permissions).
+func KilnLocalSettingsPath(cwd string) string {
+	return filepath.Join(cwd, KilnDir, "settings.local.json")
+}
+
+// KilnUserMemoryPath is ~/.kiln/CLAUDE.md, where a "#" note goes when the
+// project has no CLAUDE.md; read after ~/.claude/CLAUDE.md.
+func KilnUserMemoryPath() string {
+	return filepath.Join(homeDir(), KilnDir, CLAUDEMD)
+}
+
+// SettingsSource is one settings file kiln reads; Kiln marks kiln's own.
+type SettingsSource struct {
+	SettingsFile
+	Kiln bool
+}
+
+// AllSettingsFiles is every settings file kiln reads, in merge order: each
+// of kiln's files right after Claude Code's file of the same scope, so it
+// adds to that scope and wins over it for a single value (model).
+func AllSettingsFiles(cwd string) []SettingsSource {
+	cc := SettingsFiles(cwd)
+	return []SettingsSource{
+		{SettingsFile: cc[0]},
+		{SettingsFile: SettingsFile{Scope: ScopeUser, Path: KilnUserSettingsPath()}, Kiln: true},
+		{SettingsFile: cc[1]},
+		{SettingsFile: cc[2]},
+		{SettingsFile: SettingsFile{Scope: ScopeLocal, Path: KilnLocalSettingsPath(cwd)}, Kiln: true},
+	}
+}

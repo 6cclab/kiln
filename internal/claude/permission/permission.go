@@ -39,6 +39,17 @@ type Request struct {
 	PrimaryArg string
 	// Args carries the full arguments, for rendering a diff or command.
 	Args map[string]any
+	// Grantable is set by the gate on a request it prompts for when a
+	// "Yes, and don't ask again" answer would be honoured: no deny or ask
+	// rule matched, nothing kiln cannot see while path rules exist, not a
+	// plan-mode edit, and for bash a set of rules exists that allows the
+	// line (DontAskRules). A prompt offers that option only when it is set;
+	// the gate treats a PromptAllowAlways answer without it as PromptAllow.
+	Grantable bool
+	// DontAskRules are the bash rules (the text inside "Bash(…)") that
+	// answer saves, one per command still needing approval
+	// (settings.BashDontAskRules). Set only on a grantable bash request.
+	DontAskRules []string
 }
 
 // Prompter asks the user. Implemented by the TUI; absent in headless runs.
@@ -93,6 +104,12 @@ type GateOptions struct {
 	// touches only this field, its one check in CheckWithOutcome below,
 	// and the call site that sets it.
 	PlanLedgerPath string
+	// SaveRule, when set, persists each bash allow rule a "Yes, and don't
+	// ask again" answer grants (as Claude Code persists them; kiln writes
+	// its own <cwd>/.kiln/settings.local.json, never .claude). The gate
+	// adds the rule to its own set either way. Errors are the caller's to
+	// report.
+	SaveRule func(rule string)
 }
 
 // Gate is the permission gate for tool calls: pi's before_tool hook.
@@ -110,15 +127,13 @@ type Gate struct {
 	// from more than one goroutine at once.
 	mu sync.Mutex
 
-	// sessionAllows are grants added by "yes, don't ask again", scoped to
-	// this session only. Deliberately not persisted: a permission granted
-	// in a hurry to unblock one task should not silently become permanent
-	// policy.
+	// sessionAllows are grants added by "yes, don't ask again" for a tool
+	// other than bash, scoped to this session only, as Claude Code keeps
+	// them. A bash grant is saved as rules instead (grant, saveRule).
 	sessionAllows map[string]bool
-	// sessionRules are bash allow rules granted by "yes, don't ask again"
-	// (settings.BashDontAskRule: the prefix the prompt names), judged per
-	// command segment with the configured allow rules.
-	sessionRules []string
+	// saveRule persists a bash rule a "don't ask again" answer granted
+	// (GateOptions.SaveRule); nil keeps it in this session only.
+	saveRule func(rule string)
 
 	// blockLog is everything refused this session, for diagnostics.
 	blockLog []string
@@ -152,6 +167,7 @@ func NewGate(opts GateOptions) *Gate {
 		mode:          opts.Mode,
 		prompter:      opts.Prompt,
 		sessionAllows: map[string]bool{},
+		saveRule:      opts.SaveRule,
 	}
 	if opts.PlanLedgerPath != "" {
 		if full, err := filepath.Abs(opts.PlanLedgerPath); err == nil {
@@ -291,6 +307,14 @@ func (g *Gate) Mode() settings.PermissionMode {
 // construction.
 func (g *Gate) SetPrompter(p Prompter) { g.prompter = p }
 
+// SetRuleSaver binds GateOptions.SaveRule after construction, for a caller
+// whose way of reporting a failed save exists only later.
+func (g *Gate) SetRuleSaver(save func(rule string)) {
+	g.mu.Lock()
+	g.saveRule = save
+	g.mu.Unlock()
+}
+
 // Permissions returns the merged rules, for /permissions.
 func (g *Gate) Permissions() settings.Permissions {
 	g.mu.Lock()
@@ -320,16 +344,43 @@ func (g *Gate) list(list RuleList) (*[]string, *[]settings.RuleSource) {
 	}
 }
 
-// localSource is the source of a rule /permissions saves: the project's
-// settings.local.json (internal/cli/commands.go writes it there), which
-// anchors "/path" rules at the primary working directory.
+// localSource is the source of a rule kiln saves ("don't ask again",
+// /permissions): kiln's own <cwd>/.kiln/settings.local.json (kiln never
+// writes Claude Code's .claude files), which anchors "/path" rules at the
+// primary working directory.
 func (g *Gate) localSource() settings.RuleSource {
-	for _, f := range paths.SettingsFiles(g.cwd()) {
-		if f.Scope == paths.ScopeLocal {
-			return settings.RuleSource{Scope: paths.ScopeLocal, File: f.Path}
+	return settings.RuleSource{Scope: paths.ScopeLocal, File: paths.KilnLocalSettingsPath(g.cwd())}
+}
+
+// RuleOrigin names the settings file a rule in list came from, for a
+// message about a rule kiln cannot delete; "the command line" for a flag
+// or session rule.
+func (g *Gate) RuleOrigin(list RuleList, rule string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	l, from := g.list(list)
+	for i, r := range *l {
+		if src := sourceAt(*from, i); r == rule && src.File != "" {
+			return src.File
 		}
 	}
-	return settings.RuleSource{}
+	return "the command line"
+}
+
+// AddSourcedRules adds rules read from a settings file after the gate was
+// built (a .kiln file's allow rules held until the folder was trusted),
+// each with its own source.
+func (g *Gate) AddSourcedRules(list RuleList, rules []string, from []settings.RuleSource) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	l, src := g.list(list)
+	for len(*src) < len(*l) {
+		*src = append(*src, settings.RuleSource{})
+	}
+	for i, r := range rules {
+		*l = append(*l, r)
+		*src = append(*src, sourceAt(from, i))
+	}
 }
 
 // removable reports whether a rule from src is one RemoveRule may drop:
@@ -549,9 +600,6 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 
 	g.mu.Lock()
 	permissions, mode := g.permissions, g.mode
-	if len(g.sessionRules) > 0 {
-		permissions.Allow = append(append([]string(nil), permissions.Allow...), g.sessionRules...)
-	}
 	g.mu.Unlock()
 
 	// A file tool is judged on its path argument, resolved the way the
@@ -635,7 +683,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		if grantable && g.sessionAllowed(k) {
 			return nil, OutcomeAuto, nil
 		}
-		promptReq := req
+		promptReq := g.promptRequest(req, permissions, mode, grantable)
 		promptReq.OutsideWorkspace = true
 		choice, err := g.prompter(ctx, promptReq)
 		if err != nil {
@@ -645,8 +693,8 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 			r := g.record(req, "the user declined access to a path outside the workspace.")
 			return &r, OutcomeDeclined, nil
 		}
-		if choice.Kind == PromptAllowAlways {
-			g.grantSession(k)
+		if choice.Kind == PromptAllowAlways && promptReq.Grantable {
+			g.grant(k, promptReq)
 		}
 		return nil, OutcomeApproved, nil
 	}
@@ -688,20 +736,27 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	if grantable && g.sessionAllowed(k) {
 		return nil, OutcomeAuto, nil
 	}
-	choice, err := g.prompter(ctx, req)
+	// The rules may have changed while this call waited for another
+	// prompt: a "don't ask again" there can have saved a rule covering
+	// this command.
+	g.mu.Lock()
+	permissions, mode = g.permissions, g.mode
+	g.mu.Unlock()
+	if settings.IsBashTool(req.ToolName) {
+		if h := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg); h.Allow && !h.Deny && !h.Ask && !h.Unsure {
+			return nil, OutcomeAuto, nil
+		}
+	}
+	promptReq := g.promptRequest(req, permissions, mode, grantable)
+	choice, err := g.prompter(ctx, promptReq)
 	if err != nil {
 		return nil, OutcomeNone, err
 	}
-	if choice.Kind == PromptAllow {
+	if choice.Kind == PromptAllow || (choice.Kind == PromptAllowAlways && !promptReq.Grantable) {
 		return nil, OutcomeApproved, nil
 	}
 	if choice.Kind == PromptAllowAlways {
-		g.grantSession(k)
-		if strings.EqualFold(req.ToolName, "bash") {
-			g.mu.Lock()
-			g.sessionRules = append(g.sessionRules, "Bash("+settings.BashDontAskRule(req.PrimaryArg)+")")
-			g.mu.Unlock()
-		}
+		g.grant(k, promptReq)
 		return nil, OutcomeApproved, nil
 	}
 
@@ -711,4 +766,51 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	r := g.record(req, reason)
 	return &r, OutcomeDeclined, nil
+}
+
+// promptRequest is req as the prompt sees it: whether "don't ask again"
+// would be honoured (grantable: no deny, ask or unsure hit, not a
+// plan-mode edit), and for bash the rules it saves. A bash line is
+// grantable only when settings.BashDontAskRules finds rules that, saved,
+// let this exact call through in the current mode; otherwise the prompt
+// would promise a grant the next identical call does not get.
+func (g *Gate) promptRequest(req Request, permissions settings.Permissions, mode settings.PermissionMode, grantable bool) Request {
+	req.Grantable, req.DontAskRules = grantable, nil
+	if !grantable || !settings.IsBashTool(req.ToolName) {
+		return req
+	}
+	rules := settings.BashDontAskRules(permissions, g.cwd(), req.ToolName, req.PrimaryArg)
+	if rules == nil {
+		req.Grantable = false
+		return req
+	}
+	with := permissions
+	with.Allow = append(append([]string(nil), permissions.Allow...), settings.BashRules(rules)...)
+	if settings.DecideFromHits(settings.RuleHits(with, g.cwd(), req.ToolName, req.PrimaryArg), req.ToolName, req.PrimaryArg, mode) != settings.Allow {
+		req.Grantable = false
+		return req
+	}
+	req.DontAskRules = rules
+	return req
+}
+
+// grant applies a "don't ask again" answer to a grantable request. A bash
+// line saves its rules (Claude Code: one per command still needing
+// approval), as local-settings rules of this session and through
+// saveRule; any other call is granted for this session, by tool and
+// argument.
+func (g *Gate) grant(k string, req Request) {
+	if len(req.DontAskRules) == 0 {
+		g.grantSession(k)
+		return
+	}
+	g.mu.Lock()
+	save := g.saveRule
+	g.mu.Unlock()
+	for _, r := range settings.BashRules(req.DontAskRules) {
+		g.AddRule(RuleAllow, r)
+		if save != nil {
+			save(r)
+		}
+	}
 }

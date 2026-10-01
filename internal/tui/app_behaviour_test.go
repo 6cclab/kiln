@@ -164,7 +164,7 @@ func TestRetryKey_ConsumedOnlyWithPendingRetryAndEmptyInput(t *testing.T) {
 func TestDeclinedPrompt_CommitsNoteButNoScriptedReply(t *testing.T) {
 	m, f := newTestModelWithBridge(t)
 	m.prompt.pending = &pendingPermission{
-		request: PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload"},
+		request: PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload", Grantable: true, DontAskRules: []string{"npm test *"}},
 		reply:   make(chan PromptChoice, 1),
 	}
 
@@ -202,7 +202,7 @@ func TestEscInterruptsBusyPrompt_SuppressesFollowupText(t *testing.T) {
 	m.busy = true
 	m.cfg.Lane = &harness.Lane{}
 	m.prompt.pending = &pendingPermission{
-		request: PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload"},
+		request: PermissionRequest{ToolName: "bash", PrimaryArg: "npm test -- upload", Grantable: true, DontAskRules: []string{"npm test *"}},
 		reply:   make(chan PromptChoice, 1),
 	}
 

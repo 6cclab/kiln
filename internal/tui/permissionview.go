@@ -72,25 +72,44 @@ const (
 // in the exact order RenderBashPermissionPrompt/RenderEditPermissionPrompt/
 // RenderPermissionPrompt render them, so a key index (1..N), ↑/↓, and Esc
 // all resolve to the same action the rendered row promises.
-func promptOptionsFor(toolName string) []promptOptionKind {
-	switch strings.ToLower(toolName) {
+//
+// "Don't ask again" is listed only when offersDontAsk: without it the rows
+// below move up a number, as in Claude Code, and its "a" shortcut does
+// nothing.
+func promptOptionsFor(req PermissionRequest) []promptOptionKind {
+	var opts []promptOptionKind
+	switch strings.ToLower(req.ToolName) {
 	case "bash":
 		// RenderBashPermissionPrompt: Yes / don't-ask-again / switch to
 		// auto mode / No.
-		return []promptOptionKind{optAllow, optAllowAlways, optSwitchAutoAllow, optDenyOutright}
+		opts = []promptOptionKind{optAllow, optAllowAlways, optSwitchAutoAllow, optDenyOutright}
 	case "edit", "write":
 		// RenderEditPermissionPrompt: Yes / switch to accept edits / No.
 		return []promptOptionKind{optAllow, optSwitchAcceptEditsAllow, optDenyOutright}
 	default:
 		// RenderPermissionPrompt: Yes / don't-ask-again / No-and-tell-kiln.
-		return []promptOptionKind{optAllow, optAllowAlways, optDenyFeedback}
+		opts = []promptOptionKind{optAllow, optAllowAlways, optDenyFeedback}
 	}
+	if !offersDontAsk(req) {
+		opts = append(opts[:1:1], opts[2:]...)
+	}
+	return opts
+}
+
+// offersDontAsk reports a request whose prompt lists "don't ask again":
+// one the gate marked Grantable (it would honour the grant) and, for
+// bash, with the rules that answer saves, since the row names them.
+func offersDontAsk(req PermissionRequest) bool {
+	if strings.EqualFold(req.ToolName, "bash") {
+		return req.Grantable && len(req.DontAskRules) > 0
+	}
+	return req.Grantable
 }
 
 type pendingPermission struct {
 	request  PermissionRequest
 	reply    chan PromptChoice
-	selected int // 0..len(promptOptionsFor(request.ToolName))-1
+	selected int // 0..len(promptOptionsFor(request))-1
 }
 
 type pendingPlan struct {
@@ -510,7 +529,7 @@ func (p *PromptState) HandleKey(msg tea.KeyPressMsg) bool {
 		return p.handleToolFeedbackKey(msg)
 	}
 
-	opts := promptOptionsFor(p.pending.request.ToolName)
+	opts := promptOptionsFor(p.pending.request)
 
 	switch strings.ToLower(msg.String()) {
 	case "up", "k":
@@ -763,7 +782,8 @@ func (p *PromptState) Render(width int) []string {
 		if p.feedback != nil {
 			fb = &feedback
 		}
-		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc, Feedback: fb}, width, p.pending.selected)
+		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc, Feedback: fb,
+			Grantable: req.Grantable, DontAskRules: req.DontAskRules}, width, p.pending.selected)
 	case "edit":
 		return RenderEditPermissionPrompt(EditPermissionRequest{
 			Kind:  EditKindEdit,
