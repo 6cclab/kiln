@@ -4,7 +4,7 @@
 # selected rule to deny, "d" deletes it. One real allow rule (saved by
 # approving a bash call with "don't ask again", key "a" on the inline
 # permission prompt — internal/tui/permissionview.go — which writes
-# Bash(touch qa-alpha.txt) to .claude/settings.local.json) gives the list a
+# Bash(touch qa-alpha.txt) to .kiln/settings.local.json) gives the list a
 # real row to act on, since a fresh project starts with no rules.
 @faux testdata/faux/qa/dialogs-permissions-dialog.yaml
 

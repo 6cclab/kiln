@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -78,6 +79,15 @@ type Settings struct {
 	StatusLine *StatusLineConfig
 	// LoadedFrom records which scopes actually contributed, for diagnostics.
 	LoadedFrom []paths.Scope
+	// HeldAllow are the allow rules of a <cwd>/.kiln/settings.local.json
+	// held back because the folder is not trusted and the file came with
+	// the repository (tracked in git, or reached through a symlink):
+	// HeldFrom is each one's source. A caller adds them once the folder is
+	// trusted. Only that file's deny and ask rules apply until then.
+	HeldAllow []string
+	HeldFrom  []RuleSource
+	// HeldFile is that file, "" when nothing was held.
+	HeldFile string
 }
 
 // StatusLineConfig is Claude Code's settings.json "statusLine" object: a
@@ -112,6 +122,26 @@ type LoadOptions struct {
 	// Extra is an additional file read last, from --settings. Highest
 	// precedence: it is treated as an extra "local" scope entry.
 	Extra string
+	// KilnLocalTrusted is set when the folder is trusted: then a
+	// <cwd>/.kiln/settings.local.json that came with the repository
+	// applies in full (see Settings.HeldAllow).
+	KilnLocalTrusted bool
+}
+
+// repoSupplied reports a kiln settings file that may have come with the
+// repository rather than from kiln on this machine: tracked in git, or
+// itself or its .kiln directory a symlink.
+func repoSupplied(cwd, path string) bool {
+	for _, p := range []string{path, filepath.Dir(path)} {
+		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return true
+		}
+	}
+	rel, err := filepath.Rel(cwd, path)
+	if err != nil {
+		return true
+	}
+	return exec.Command("git", "-C", cwd, "ls-files", "--error-unmatch", "--", rel).Run() == nil
 }
 
 func wants(sources []paths.Scope, scope paths.Scope) bool {
@@ -126,7 +156,10 @@ func wants(sources []paths.Scope, scope paths.Scope) bool {
 	return false
 }
 
-// LoadSettings reads and merges .claude/settings.json across scopes.
+// LoadSettings reads and merges .claude/settings.json across scopes, and
+// kiln's own files (paths.AllSettingsFiles): ~/.kiln/settings.json right
+// after the user's ~/.claude/settings.json, and <cwd>/.kiln/settings.local.json
+// right after .claude/settings.local.json, each in its scope.
 //
 // Permission lists concatenate across scopes; defaultMode/model/effortLevel
 // use last-non-empty-wins; env and modelRoles are shallow-merged with later
@@ -141,17 +174,25 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 	type source struct {
 		paths.SettingsFile
 		root string // RuleSource.Root for this file's rules
+		held bool   // only deny and ask rules apply; allow is held
 	}
 	files := []source{}
-	for _, f := range paths.SettingsFiles(cwd) {
+	for _, f := range paths.AllSettingsFiles(cwd) {
 		if wants(opts.Sources, f.Scope) {
 			root := ""
 			if f.Scope == paths.ScopeUser {
-				// "/path" in user settings is under ~/.claude, the
-				// directory that holds the file (Claude Code's table).
+				// "/path" in user settings is under ~/.claude (~/.kiln for
+				// kiln's), the directory that holds the file (Claude Code's
+				// table).
 				root = filepath.Dir(f.Path)
 			}
-			files = append(files, source{f, root})
+			held := false
+			if f.Kiln && f.Scope == paths.ScopeLocal && !opts.KilnLocalTrusted {
+				if _, err := os.Stat(f.Path); err == nil {
+					held = repoSupplied(cwd, f.Path)
+				}
+			}
+			files = append(files, source{f.SettingsFile, root, held})
 		}
 	}
 	if opts.Extra != "" {
@@ -162,7 +203,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		if abs, err := filepath.Abs(root); err == nil {
 			root = abs
 		}
-		files = append(files, source{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root})
+		files = append(files, source{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false})
 	}
 
 	for _, f := range files {
@@ -179,6 +220,25 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		}
 
 		merged.LoadedFrom = append(merged.LoadedFrom, f.Scope)
+		if f.held {
+			merged.HeldFile = f.Path
+			if raw.Permissions != nil {
+				src := RuleSource{Scope: f.Scope, File: f.Path, Root: f.root}
+				merged.Permissions.Deny = append(merged.Permissions.Deny, raw.Permissions.Deny...)
+				merged.Permissions.Ask = append(merged.Permissions.Ask, raw.Permissions.Ask...)
+				for range raw.Permissions.Deny {
+					merged.Permissions.DenyFrom = append(merged.Permissions.DenyFrom, src)
+				}
+				for range raw.Permissions.Ask {
+					merged.Permissions.AskFrom = append(merged.Permissions.AskFrom, src)
+				}
+				merged.HeldAllow = append(merged.HeldAllow, raw.Permissions.Allow...)
+				for range raw.Permissions.Allow {
+					merged.HeldFrom = append(merged.HeldFrom, src)
+				}
+			}
+			continue
+		}
 		if raw.Permissions != nil {
 			src := RuleSource{Scope: f.Scope, File: f.Path, Root: f.root}
 			add := func(list *[]string, from *[]RuleSource, rules []string) {

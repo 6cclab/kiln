@@ -105,9 +105,10 @@ type GateOptions struct {
 	// and the call site that sets it.
 	PlanLedgerPath string
 	// SaveRule, when set, persists each bash allow rule a "Yes, and don't
-	// ask again" answer grants (Claude Code saves them to the project's
-	// .claude/settings.local.json). The gate adds the rule to its own set
-	// either way. Errors are the caller's to report.
+	// ask again" answer grants (as Claude Code persists them; kiln writes
+	// its own <cwd>/.kiln/settings.local.json, never .claude). The gate
+	// adds the rule to its own set either way. Errors are the caller's to
+	// report.
 	SaveRule func(rule string)
 }
 
@@ -343,16 +344,43 @@ func (g *Gate) list(list RuleList) (*[]string, *[]settings.RuleSource) {
 	}
 }
 
-// localSource is the source of a rule /permissions saves: the project's
-// settings.local.json (internal/cli/commands.go writes it there), which
-// anchors "/path" rules at the primary working directory.
+// localSource is the source of a rule kiln saves ("don't ask again",
+// /permissions): kiln's own <cwd>/.kiln/settings.local.json (kiln never
+// writes Claude Code's .claude files), which anchors "/path" rules at the
+// primary working directory.
 func (g *Gate) localSource() settings.RuleSource {
-	for _, f := range paths.SettingsFiles(g.cwd()) {
-		if f.Scope == paths.ScopeLocal {
-			return settings.RuleSource{Scope: paths.ScopeLocal, File: f.Path}
+	return settings.RuleSource{Scope: paths.ScopeLocal, File: paths.KilnLocalSettingsPath(g.cwd())}
+}
+
+// RuleOrigin names the settings file a rule in list came from, for a
+// message about a rule kiln cannot delete; "the command line" for a flag
+// or session rule.
+func (g *Gate) RuleOrigin(list RuleList, rule string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	l, from := g.list(list)
+	for i, r := range *l {
+		if src := sourceAt(*from, i); r == rule && src.File != "" {
+			return src.File
 		}
 	}
-	return settings.RuleSource{}
+	return "the command line"
+}
+
+// AddSourcedRules adds rules read from a settings file after the gate was
+// built (a .kiln file's allow rules held until the folder was trusted),
+// each with its own source.
+func (g *Gate) AddSourcedRules(list RuleList, rules []string, from []settings.RuleSource) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	l, src := g.list(list)
+	for len(*src) < len(*l) {
+		*src = append(*src, settings.RuleSource{})
+	}
+	for i, r := range rules {
+		*l = append(*l, r)
+		*src = append(*src, sourceAt(from, i))
+	}
 }
 
 // removable reports whether a rule from src is one RemoveRule may drop:

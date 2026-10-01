@@ -107,7 +107,7 @@ func TestGate_RemoveRuleKeepsSourcesAligned(t *testing.T) {
 	t.Setenv("HOME", home)
 	proj := t.TempDir()
 	user := settings.RuleSource{Scope: "user", File: filepath.Join(home, ".claude", "settings.json"), Root: filepath.Join(home, ".claude")}
-	local := settings.RuleSource{Scope: "local", File: filepath.Join(proj, ".claude", "settings.local.json")}
+	local := settings.RuleSource{Scope: "local", File: filepath.Join(proj, ".kiln", "settings.local.json")}
 	g := NewGate(GateOptions{
 		Permissions: settings.Permissions{
 			Deny:     []string{"Read(/a/**)", "Read(/secrets/**)"},
@@ -126,7 +126,7 @@ func TestGate_RemoveRuleKeepsSourcesAligned(t *testing.T) {
 		t.Error("the user rule lost its ~/.claude anchor after an earlier rule was removed")
 	}
 
-	g.AddRule(RuleDeny, "Read(/b/**)") // saved to settings.local.json: anchored at the primary root
+	g.AddRule(RuleDeny, "Read(/b/**)") // saved to .kiln/settings.local.json: anchored at the primary root
 	session := filepath.Join(proj, "b", "k")
 	if blocked, _ := g.Check(context.Background(), Request{ToolName: "read", PrimaryArg: session, Args: map[string]any{"path": session}}); blocked == nil {
 		t.Error("an added /path rule did not anchor at the primary root")
@@ -137,7 +137,7 @@ func TestGate_RemoveRuleKeepsSourcesAligned(t *testing.T) {
 // and its source together. /permissions saving "Read(/secrets/**)" when user
 // settings already has that text adds the project-anchored copy (the user
 // one is under ~/.claude); removing it removes only that copy, as
-// writesettings.RemoveRule only edits settings.local.json.
+// writesettings.RemoveRule only edits .kiln/settings.local.json.
 func TestGate_AddRemoveRuleBySource(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

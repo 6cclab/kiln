@@ -58,7 +58,7 @@ func TestGateDontAskSavesARulePerSubcommand(t *testing.T) {
 		t.Errorf("saved %q, want %q", saved, wantSaved)
 	}
 	p := g.Permissions()
-	local := settings.RuleSource{Scope: paths.ScopeLocal, File: filepath.Join(root, ".claude", "settings.local.json")}
+	local := settings.RuleSource{Scope: paths.ScopeLocal, File: filepath.Join(root, ".kiln", "settings.local.json")}
 	for _, r := range []string{"Bash(npm test *)", "Bash(make build *)"} {
 		found := false
 		for i, a := range p.Allow {
@@ -163,5 +163,31 @@ func TestGateGrantable(t *testing.T) {
 				t.Errorf("not grantable, yet saved %q and granted %q", saved, g.SessionGrants())
 			}
 		})
+	}
+}
+
+// TestGateAddSourcedRules: held allow rules added once the folder is
+// trusted take effect, each with its own source, aligned with the rules
+// already there.
+func TestGateAddSourcedRules(t *testing.T) {
+	root := work(t)
+	cc := settings.RuleSource{Scope: paths.ScopeUser, File: "/h/.claude/settings.json"}
+	g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{root},
+		Permissions: settings.Permissions{Allow: []string{"Bash(ls *)"}, AllowFrom: []settings.RuleSource{cc}}})
+	g.SetPrompter((&recorder{kind: PromptDeny}).prompt)
+	if checkOK(t, g, Request{ToolName: "bash", PrimaryArg: "make build"}) {
+		t.Fatal("make build allowed before the held rule was added")
+	}
+	kiln := settings.RuleSource{Scope: paths.ScopeLocal, File: filepath.Join(root, ".kiln", "settings.local.json")}
+	g.AddSourcedRules(RuleAllow, []string{"Bash(make build *)"}, []settings.RuleSource{kiln})
+	if !checkOK(t, g, Request{ToolName: "bash", PrimaryArg: "make build"}) {
+		t.Error("make build still asks after the held rule was added")
+	}
+	p := g.Permissions()
+	if !reflect.DeepEqual(p.AllowFrom, []settings.RuleSource{cc, kiln}) {
+		t.Errorf("AllowFrom = %+v", p.AllowFrom)
+	}
+	if got := g.RuleOrigin(RuleAllow, "Bash(ls *)"); got != cc.File {
+		t.Errorf("RuleOrigin = %q, want %q", got, cc.File)
 	}
 }

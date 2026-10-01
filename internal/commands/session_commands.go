@@ -470,12 +470,16 @@ func SessionCommands(deps SessionCommandDeps) Source {
 			Name:        "config",
 			Description: "Show settings and where they came from",
 			Run: func(ctx context.Context, args string) (Result, error) {
-				files := paths.SettingsFiles(deps.Cwd)
+				files := paths.AllSettingsFiles(deps.Cwd)
 				lines := []string{"Settings are read in this order, later overriding earlier:", ""}
 				for _, f := range files {
-					lines = append(lines, fmt.Sprintf("  %-8s %s", f.Scope, f.Path))
+					owner := "Claude Code"
+					if f.Kiln {
+						owner = "kiln"
+					}
+					lines = append(lines, fmt.Sprintf("  %-8s %-12s %s", f.Scope, owner, f.Path))
 				}
-				lines = append(lines, "", "Edit a file directly, then restart. Permission lists concatenate", "across scopes rather than replacing.")
+				lines = append(lines, "", "Edit a file directly, then restart. Permission lists concatenate", "across scopes rather than replacing. kiln saves only to its own", ".kiln files; it never writes Claude Code's.")
 				return Result{Output: lines}, nil
 			},
 		},

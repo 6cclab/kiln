@@ -298,7 +298,7 @@ steps:
 // TestPermission_AllowAlwaysSavesTheRule drives the TUI in manual mode:
 // the first "echo hi | tee hi.txt" call prompts, and answering "2" ("Yes,
 // and don't ask again for: tee hi.txt") saves Bash(tee hi.txt) to the
-// project's .claude/settings.local.json, as Claude Code does ("Permanently
+// project's .kiln/settings.local.json (as Claude Code persists it, "Permanently
 // per repository and command"). A second, identical call in the same run
 // does not prompt, and neither does one in a fresh process, which reads
 // the rule back from that file.
@@ -354,10 +354,10 @@ func TestPermission_AllowAlwaysSavesTheRule(t *testing.T) {
 	}
 }
 
-// assertLocalAllow checks the allow list in proj's settings.local.json.
+// assertLocalAllow checks the allow list in proj's .kiln/settings.local.json.
 func assertLocalAllow(t *testing.T, proj string, want []string) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(proj, ".claude", "settings.local.json"))
+	data, err := os.ReadFile(filepath.Join(proj, ".kiln", "settings.local.json"))
 	if err != nil {
 		t.Fatalf("settings.local.json: %v", err)
 	}
@@ -393,9 +393,25 @@ steps:
 // "git status && kilnfakea test && kilnfakeb build" names and saves one
 // rule per command that needed approval (Claude Code's "Compound
 // commands"), not git status (read-only) and not the whole line; a later
-// "kilnfakea test -- upload" then runs without a prompt.
+// "kilnfakea test -- upload" then runs without a prompt, in the same
+// process and in a fresh one. The rules go to .kiln/settings.local.json
+// (with a .kiln/.gitignore); Claude Code's ~/.claude and <proj>/.claude,
+// which kiln reads, are left byte-identical with no file added.
 func TestPermission_DontAskSavesARulePerSubcommand(t *testing.T) {
 	proj, home, sessDir, addr, _ := tuiFixture(t, permCompoundScript)
+	ccFiles := map[string]string{
+		filepath.Join(home, ".claude", "settings.json"):       `{"permissions":{"allow":["Bash(echo *)"]}}`,
+		filepath.Join(proj, ".claude", "settings.json"):       `{"permissions":{"deny":["Bash(rm -rf *)"]}}`,
+		filepath.Join(proj, ".claude", "settings.local.json"): `{"permissions":{"allow":["Bash(true)"]}}`,
+	}
+	for path, body := range ccFiles {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "manual")
 	waitReady(t, s)
 
@@ -414,6 +430,36 @@ func TestPermission_DontAskSavesARulePerSubcommand(t *testing.T) {
 	s.SendKey("enter")
 	if err := s.WaitFor("follow-up done", 5*time.Second); err != nil {
 		t.Fatalf("the follow-up command was not approved by the saved rule: %v", err)
+	}
+
+	// A fresh process reads the rules back from .kiln: no prompt.
+	addr2, _ := startFaux(t, `model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "kilnfakeb build"}, id: f1}
+  - on_tool_result: f1
+    then:
+      - text: "fresh done"
+`)
+	s2 := startTUI(t, 100, 30, proj, home, sessDir, addr2, "--permission-mode", "manual")
+	waitReady(t, s2)
+	s2.Send("build it")
+	s2.SendKey("enter")
+	if err := s2.WaitFor("fresh done", 5*time.Second); err != nil {
+		t.Fatalf("a fresh process did not run the saved command unasked: %v", err)
+	}
+
+	for path, body := range ccFiles {
+		if data, err := os.ReadFile(path); err != nil || string(data) != body {
+			t.Errorf("%s changed: %q (%v)", path, data, err)
+		}
+	}
+	for dir, want := range map[string]int{filepath.Join(home, ".claude"): 1, filepath.Join(proj, ".claude"): 2} {
+		if entries, _ := os.ReadDir(dir); len(entries) != want {
+			t.Errorf("%s holds %d entries, want %d: kiln wrote into it", dir, len(entries), want)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(proj, ".kiln", ".gitignore")); err != nil || string(data) != "*\n" {
+		t.Errorf(".kiln/.gitignore = %q (%v)", data, err)
 	}
 }
 

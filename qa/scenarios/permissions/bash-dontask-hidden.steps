@@ -22,5 +22,5 @@ KEY 1
 WAITFOR /Ran it once under the ask rule/ 20
 SHOT approved-once
 EXPECT_NOT /approval needed/
-RUN test ! -e .claude/settings.local.json
+RUN test ! -e .kiln/settings.local.json && test ! -e .claude/settings.local.json
 EXPECT_NOT /panic|goroutine/

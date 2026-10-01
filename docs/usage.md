@@ -280,8 +280,10 @@ command whose second word names a subcommand gets a `<command> <subcommand>
 *` rule; anything else, and a shell or wrapper (`sh`, `env`, `sudo`, `xargs`,
 `timeout`, …), gets an exact rule. The option names every rule it saves
 (those that do not fit the row are counted, "+2 more"). The rules go to the
-project's `.claude/settings.local.json`, the file `/permissions` writes, so
-they last across sessions. On any other tool, "don't ask again" is a
+project's `.kiln/settings.local.json`, the file `/permissions` writes, so
+they last across sessions. kiln reads Claude Code's `.claude` settings but
+never writes them: everything it saves goes under `.kiln` (a `.kiln/.gitignore`
+keeps it out of git). On any other tool, "don't ask again" is a
 session-only grant for that exact call.
 
 The option is left out (and the options below it move up a number) when the

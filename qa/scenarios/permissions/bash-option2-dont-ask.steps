@@ -17,6 +17,7 @@ WAITFOR /Both test runs done/ 20
 SHOT second-command-no-prompt
 EXPECT_NOT /approval needed/
 EXPECT /second one didn.t need approval/
-RUN grep -qF '"Bash(npm test *)"' .claude/settings.local.json
-RUN ! grep -q 'git' .claude/settings.local.json
+RUN grep -qF '"Bash(npm test *)"' .kiln/settings.local.json
+RUN ! grep -q 'git' .kiln/settings.local.json
+RUN test -f .kiln/.gitignore && test ! -e .claude/settings.local.json
 EXPECT_NOT /panic|goroutine/

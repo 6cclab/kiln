@@ -339,8 +339,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Settings are read before the model is chosen, because `model` may
 	// come from them.
 	settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{
-		Sources: settingsSources(args.SettingSources),
-		Extra:   args.Settings,
+		Sources:          settingsSources(args.SettingSources),
+		Extra:            args.Settings,
+		KilnLocalTrusted: folderTrusted(cwd),
 	})
 
 	// Precedence: --model > settings.json (only in "provider/model" form —
@@ -495,6 +496,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// warnings go to stderr or the TUI's startup notes, never the model.
 	for _, w := range claudesettings.FileRuleWarnings(perms, args.AllowedTools...) {
 		startupWarn(w)
+	}
+	if settings.HeldFile != "" {
+		startupWarn(fmt.Sprintf("%s came with the repository: until this folder is trusted, only its deny and ask rules apply.", settings.HeldFile))
 	}
 
 	// HARNESS_EXP_LEDGER (switch 1, experiments.go): the one path plan
@@ -801,9 +805,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// onHookNotices callback, src/cli.ts:681-683); stderr until then.
 	hookNotice := &rebindable[func(string)]{fn: hookNoticeSink(stderr)}
 	notice := func(message string) { hookNotice.get()(message) }
-	// "Yes, and don't ask again" on a bash prompt saves its rules where
-	// Claude Code saves them: the project's .claude/settings.local.json
-	// (the same file /permissions writes).
+	// "Yes, and don't ask again" on a bash prompt saves its rules, as
+	// Claude Code does, but to kiln's own .kiln/settings.local.json (the
+	// file /permissions writes): kiln reads .claude, never writes it.
 	gate.SetRuleSaver(func(rule string) {
 		if err := writesettings.AddRule(cwd, writesettings.Allow, rule); err != nil {
 			notice(fmt.Sprintf("could not save %s to %s: %v (it applies to this session only)", rule, writesettings.LocalSettingsPath(cwd), err))
@@ -1215,6 +1219,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				return hub.Statuses()
 			},
 			PendingMCPCount: len(pendingMCP),
+			// A repository-supplied .kiln/settings.local.json's allow rules,
+			// held until the folder is trusted.
+			ApplyHeldRules: func() {
+				gate.AddSourcedRules(permission.RuleAllow, settings.HeldAllow, settings.HeldFrom)
+			},
 			ConnectPendingMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
 				hub.OnServer = progress
 				before := len(hub.Statuses())

@@ -251,7 +251,9 @@ match wins, checked first → `bypassPermissions` allows the rest → `allow` ma
 
 - `/permissions` shows merged deny/allow/ask, active mode, workspace roots, and
   this session's "don't ask again" grants for tools other than bash (a bash
-  "don't ask again" saves allow rules to `.claude/settings.local.json`)
+  "don't ask again" saves allow rules to `.kiln/settings.local.json`). Its
+  delete key removes only rules kiln saved; a rule from a Claude Code
+  `.claude` file is refused with that file's name: edit the file yourself.
   (`internal/commands/inspect_commands.go`).
 
 ## Hooks
