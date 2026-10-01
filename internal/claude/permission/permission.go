@@ -241,10 +241,13 @@ func (g *Gate) WithinRoots(path string) bool {
 	return under(real, realRoots) && under(execenv.CanonicalPath(full), canonRoots)
 }
 
-// under reports whether full is one of roots or inside one.
+// under reports whether full is one of roots or inside one. Paths compare
+// as the filesystem compares them (settings.CaseFoldPath: without case on
+// macOS and Windows), so "/Users/x/Proj/a" is inside a root "/Users/x/proj".
 func under(full string, roots []string) bool {
+	full = settings.CaseFoldPath(full)
 	for _, root := range roots {
-		rel, err := filepath.Rel(root, full)
+		rel, err := filepath.Rel(settings.CaseFoldPath(root), full)
 		if err != nil {
 			continue
 		}

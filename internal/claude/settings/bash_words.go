@@ -132,9 +132,21 @@ func stripHeredocs(cmd string) (out string, docs []heredoc) {
 	var b strings.Builder
 	var waiting []pending
 	i := 0
+	wordStart := true
 	for i < len(cmd) {
 		c := cmd[i]
+		prevStart := wordStart
+		wordStart = false
 		switch {
+		case c == '#' && prevStart:
+			// A comment: a "<<" in it is no heredoc. It ends at the
+			// newline, which is left for the case below.
+			end := strings.IndexByte(cmd[i:], '\n')
+			if end < 0 {
+				end = len(cmd) - i
+			}
+			b.WriteString(cmd[i : i+end])
+			i += end
 		case c == '\\' && i+1 < len(cmd):
 			b.WriteString(cmd[i : i+2])
 			i += 2
@@ -235,9 +247,11 @@ func stripHeredocs(cmd string) (out string, docs []heredoc) {
 				docs = append(docs, heredoc{body: body.String(), quoted: d.quoted})
 			}
 			waiting = nil
+			wordStart = true
 		default:
 			b.WriteByte(c)
 			i++
+			wordStart = strings.IndexByte(shellMeta, c) >= 0
 		}
 	}
 	// A heredoc never terminated by a newline has an empty body.
@@ -247,26 +261,45 @@ func stripHeredocs(cmd string) (out string, docs []heredoc) {
 	return b.String(), docs
 }
 
+// shellMeta are the bytes after which a "#" starts a comment (a "#" must
+// begin a word: "a#b" is one word, "a #b" a word and a comment).
+const shellMeta = " \t\n;&|()<>"
+
 // joinContinuations removes backslash-newline pairs, which bash deletes
 // before it splits a line into words ("c\<NL>at .env" is "cat .env"),
-// except inside single quotes and $'…', where they are text.
+// except where they are text: inside single quotes and $'…', and in a
+// comment. A comment ("#" at the start of a word, unquoted) runs to the
+// newline, and that newline always ends it: a backslash at the end of a
+// comment continues nothing, so "echo hi # \<NL>rm -rf x" is two commands.
 func joinContinuations(cmd string) string {
 	if !strings.Contains(cmd, "\\\n") {
 		return cmd
 	}
 	var b strings.Builder
+	wordStart := true
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
 		switch {
+		case c == '#' && wordStart:
+			end := strings.IndexByte(cmd[i:], '\n')
+			if end < 0 {
+				b.WriteString(cmd[i:])
+				return b.String()
+			}
+			b.WriteString(cmd[i : i+end]) // the newline is written next
+			i += end - 1
+			wordStart = false
 		case c == '\\' && i+1 < len(cmd) && cmd[i+1] == '\n':
-			i++
+			i++ // removed entirely; whether a word starts is unchanged
 		case c == '\\' && i+1 < len(cmd):
 			b.WriteString(cmd[i : i+2])
 			i++
+			wordStart = false
 		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '\'':
 			end, _ := ansiEnd(cmd, i+2)
 			b.WriteString(cmd[i:end])
 			i = end - 1
+			wordStart = false
 		case c == '\'':
 			end := strings.IndexByte(cmd[i+1:], '\'')
 			if end < 0 {
@@ -275,11 +308,40 @@ func joinContinuations(cmd string) string {
 			}
 			b.WriteString(cmd[i : i+end+2])
 			i += end + 1
+			wordStart = false
+		case c == '"':
+			// Inside double quotes a backslash-newline is removed too,
+			// and "#" is text.
+			b.WriteByte(c)
+			j := i + 1
+			for ; j < len(cmd) && cmd[j] != '"'; j++ {
+				if cmd[j] == '\\' && j+1 < len(cmd) {
+					if cmd[j+1] != '\n' {
+						b.WriteString(cmd[j : j+2])
+					}
+					j++
+					continue
+				}
+				b.WriteByte(cmd[j])
+			}
+			if j < len(cmd) {
+				b.WriteByte('"')
+			}
+			i = j
+			wordStart = false
 		default:
 			b.WriteByte(c)
+			wordStart = strings.IndexByte(shellMeta, c) >= 0
 		}
 	}
 	return b.String()
+}
+
+// joinBodyContinuations is joinContinuations for an unquoted-delimiter
+// heredoc body: text, not shell code, so quotes and "#" mean nothing and
+// every backslash-newline goes.
+func joinBodyContinuations(body string) string {
+	return strings.ReplaceAll(body, "\\\n", "")
 }
 
 // extractSubstitutions pulls the bodies of $(...), `...`, <(...) and >(...)
@@ -295,6 +357,15 @@ func extractSubstitutions(cmd string, literalQuotes bool) (outer string, bodies 
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
 		switch {
+		case c == '#' && !inDouble && !literalQuotes && (i == 0 || strings.IndexByte(shellMeta, cmd[i-1]) >= 0):
+			// A comment, to the newline: nothing in it runs, and a quote
+			// in it ("# don't") opens nothing.
+			end := strings.IndexByte(cmd[i:], '\n')
+			if end < 0 {
+				end = len(cmd) - i
+			}
+			out.WriteString(cmd[i : i+end])
+			i += end - 1
 		case c == '\\' && i+1 < len(cmd):
 			out.WriteString(cmd[i : i+2])
 			i++
@@ -459,6 +530,9 @@ func shellWords(seg string) (words []word, redirs []redirect) {
 	for i := 0; i < len(seg); i++ {
 		c := seg[i]
 		switch {
+		case c == '#' && !inWord:
+			// A comment: the rest of the segment is not words.
+			i = len(seg)
 		case c == '$' && i+1 < len(seg) && seg[i+1] == '\'':
 			decoded, end, ok := decodeANSI(seg, i+2)
 			for _, d := range decoded {

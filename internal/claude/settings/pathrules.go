@@ -204,6 +204,9 @@ func newAnchors() *anchors {
 	return &anchors{resolve: resolve, canonical: newCanonicalMemo(resolve), alts: map[string]baseAlts{}}
 }
 
+// kernelPath is execenv.KernelPath; a variable so a test can count calls.
+var kernelPath = execenv.KernelPath
+
 // newCanonicalMemo is execenv.CanonicalPath for clean paths, memoised for
 // one decision: the real path, then the kernel's name for it if it exists
 // (one F_GETPATH), else its parent's canonical path (memoised) plus the
@@ -217,7 +220,7 @@ func newCanonicalMemo(resolve func(string) string) func(string) string {
 		}
 		real := resolve(p)
 		c := real
-		if k, ok := execenv.KernelPath(real); ok {
+		if k, ok := kernelPath(real); ok {
 			c = k
 		} else if parent := filepath.Dir(real); parent != real && runtime.GOOS == "darwin" {
 			c = filepath.Join(canon(parent), filepath.Base(real))
@@ -266,8 +269,51 @@ func loosen(s string) string {
 		// A Caser holds state; one per call keeps loosen safe for
 		// concurrent decisions.
 		s = norm.NFC.String(cases.Fold().String(s))
+		s = strings.Map(apfsFold, s)
 	}
 	return s
+}
+
+// CaseFoldPath is p as a case- and normalization-insensitive filesystem
+// (foldCase: macOS, Windows) compares it, for a boundary check such as
+// the gate's workspace roots. Elsewhere it is p unchanged: there "café"
+// in NFC and in NFD, or "a" and "A", are different directories.
+func CaseFoldPath(p string) string {
+	if !foldCase {
+		return p
+	}
+	return loosen(p)
+}
+
+// apfsFold maps the letters APFS treats as one but cases.Fold (Unicode
+// 15 case folding in x/text) leaves apart, each pair to one of its two.
+// Measured on an APFS case-insensitive volume by creating a file under
+// one spelling and opening it under the other: Cherokee small letters
+// (AB70–ABBF, 13F8–13FD) with their capitals, Garay (10D70–10D85 with
+// 10D50–10D65), Cyrillic TJE (1C89/1C8A) and the Latin Extended-D letters
+// added in Unicode 16 (A7CB/0264, A7CC/A7CD, A7CE/A7CF, A7D2/A7D3,
+// A7D4/A7D5, A7DA/A7DB, A7DC/019B). A file whose name uses them opens
+// under either spelling, so a deny rule must compare them as one.
+func apfsFold(r rune) rune {
+	switch {
+	case r >= 0xAB70 && r <= 0xABBF:
+		return r - 0xAB70 + 0x13A0
+	case r >= 0x13F8 && r <= 0x13FD:
+		return r - 0x13F8 + 0x13F0
+	case r >= 0x10D70 && r <= 0x10D85:
+		return r - 0x10D70 + 0x10D50
+	}
+	switch r {
+	case 0x1C8A:
+		return 0x1C89
+	case 0xA7CB:
+		return 0x0264
+	case 0xA7CD, 0xA7CF, 0xA7D3, 0xA7D5, 0xA7DB:
+		return r - 1
+	case 0xA7DC:
+		return 0x019B
+	}
+	return r
 }
 
 // matchCtx is what a rule is anchored against for one decision.
@@ -757,13 +803,14 @@ func filePathVerdicts(p Permissions, c matchCtx, tool, arg string) (deny, ask, a
 	// Every spelling of each path: as asked, symlinks resolved, and the
 	// OS's own name for it (firmlinks, APFS case folding, /.vol). Deny and
 	// ask apply when any matches; allow needs them all.
+	a := newAnchors()
 	var candidates []string
 	for _, o := range opened {
-		candidates = appendNew(candidates, o, realPath(o), execenv.CanonicalPath(o))
+		real := realPath(o)
+		candidates = appendNew(candidates, o, real, a.canonical(real))
 	}
 
 	class, _ := classOf(tool)
-	a := newAnchors()
 	blocks := func(s ruleSet) bool {
 		for _, cand := range candidates {
 			if s.blocks(cand, a) {

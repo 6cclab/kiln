@@ -42,9 +42,9 @@ func bashFileVerdict(p Permissions, c matchCtx, cmd string) (deny, ask, unsure b
 	}
 	reads, writes, unsure := bashFileOperands(cmd, c.cwd, c.home)
 	a := newAnchors()
-	resolve := newRealPathMemo()
 	// Every spelling of a file: as written (cleaned), as open(2) resolves
-	// it, and the OS's own name for it (execenv.CanonicalPath).
+	// it, and the OS's own name for it (execenv.CanonicalPath, memoised per
+	// directory for this decision: a command can name hundreds of files).
 	spellings := map[string][]string{}
 	spell := func(f string) []string {
 		if s, ok := spellings[f]; ok {
@@ -55,9 +55,9 @@ func bashFileVerdict(p Permissions, c matchCtx, cmd string) (deny, ask, unsure b
 		if hasDotSegment(f) {
 			real = realPath(f) // physical: a ".." after a link
 		} else {
-			real = resolve(lexical)
+			real = a.resolve(lexical)
 		}
-		s := appendNew(nil, lexical, real, execenv.CanonicalPath(f))
+		s := appendNew(nil, lexical, real, a.canonical(real))
 		spellings[f] = s
 		return s
 	}
@@ -163,6 +163,9 @@ type bashScan struct {
 	// stdin is what the command being scanned reads as standard input,
 	// for a shell that runs it as a script.
 	stdin stdinSource
+	// argsFromStdin is set when xargs runs the command: its arguments
+	// (for "xargs sh -c", the command line itself) come from stdin.
+	argsFromStdin bool
 }
 
 // stdinSource is a command's standard input as far as a redirection
@@ -197,7 +200,7 @@ func (s *bashScan) line(cmd string) {
 	cmd, docs := stripHeredocs(cmd)
 	for i := range docs {
 		if !docs[i].quoted {
-			docs[i].body = joinContinuations(docs[i].body)
+			docs[i].body = joinBodyContinuations(docs[i].body)
 		}
 	}
 	s.docs = docs
@@ -232,6 +235,7 @@ func (s *bashScan) line(cmd string) {
 func (s *bashScan) segment(seg string) {
 	words, redirs := shellWords(seg)
 	s.stdin = stdinSource{}
+	s.argsFromStdin = false
 	for _, r := range redirs {
 		switch {
 		case r.doc:
@@ -247,7 +251,14 @@ func (s *bashScan) segment(seg string) {
 		default:
 			s.operand(r.target, r.read, r.write)
 			if r.read && !r.write {
-				s.stdin = stdinSource{file: true}
+				switch t := r.target.lit(); {
+				case isStdinPath(t):
+					// "< /dev/stdin": still whatever stdin already was.
+				case isFdPath(t):
+					s.stdin = stdinSource{unknown: true} // "< <(cmd)": cmd's output
+				default:
+					s.stdin = stdinSource{file: true}
+				}
 			}
 		}
 	}
@@ -358,6 +369,9 @@ func (s *bashScan) unwrap(words []word) (rest []word, chdir *word) {
 		spec, ok := wrappers[name]
 		if !ok {
 			return words, chdir
+		}
+		if name == "xargs" {
+			s.argsFromStdin = true
 		}
 		i := 1
 		for i < len(words) {
@@ -491,8 +505,15 @@ func (s *bashScan) command(words []word) {
 		s.unsure = true
 		return
 	}
-	name := filepath.Base(cw.lit())
-	args := words[1:]
+	// "(bash) <<EOF" / "( bash )": the group's closing ")" or "}" is not
+	// part of the command word or an argument.
+	name := filepath.Base(strings.TrimRight(cw.lit(), ")}"))
+	var args []word
+	for _, a := range words[1:] {
+		if strings.Trim(a.lit(), ")}") != "" || a.lit() == "" {
+			args = append(args, a)
+		}
+	}
 	switch {
 	case name == "cd" || name == "pushd":
 		s.changeDir(name, args)
@@ -525,6 +546,17 @@ func (s *bashScan) command(words []word) {
 	case shells[name]:
 		s.shell(args)
 		return
+	case name == "source" || name == ".":
+		// The file is read, and run as commands; from stdin or a process
+		// substitution that is the stdin script or unknowable.
+		for _, a := range args {
+			if lit := a.lit(); strings.HasPrefix(lit, "-") && lit != "-" {
+				continue
+			}
+			s.script(a)
+			return
+		}
+		return
 	}
 	role, known := fileCommands[name]
 	if !known {
@@ -555,46 +587,101 @@ func (s *bashScan) command(words []word) {
 	}
 }
 
+// shellValueOpts are bash/sh/zsh/dash/ksh options whose value is the next
+// word (so it is not the script operand).
+var shellValueOpts = set("-O", "+O", "-o", "+o", "--rcfile", "--init-file")
+
+// isStdinPath reports a script operand that is standard input.
+func isStdinPath(p string) bool {
+	switch p {
+	case "-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0":
+		return true
+	}
+	return false
+}
+
+// isFdPath reports another /dev/fd/N (a process substitution's pipe).
+func isFdPath(p string) bool {
+	return strings.HasPrefix(p, "/dev/fd/") || strings.HasPrefix(p, "/proc/self/fd/")
+}
+
 // shell scans what a shell runs: "bash -c 'cmd'" (any option cluster
 // holding c: -c, -lc, -ec) as that command line; "bash script" as reading
 // the script file; and a shell reading its script from standard input
-// ("bash -s", or no script argument) as the heredoc or herestring fed to
-// it. With stdin from a pipe or the terminal, what it runs is unknowable.
+// ("bash -s", "bash -", "bash /dev/stdin", or no script argument) as the
+// heredoc or herestring fed to it. Options that take a value (-O extglob,
+// --rcfile f) are skipped with it. Under xargs the command line or its
+// arguments come from stdin, and with stdin from a pipe or the terminal
+// what runs is unknowable.
 func (s *bashScan) shell(args []word) {
+	if s.argsFromStdin {
+		s.unsure = true
+		return
+	}
 	fromStdin := false
 	for i := 0; i < len(args); i++ {
 		a := args[i].lit()
-		if a == "--" || !strings.HasPrefix(a, "-") || a == "-" {
+		if shellValueOpts[a] {
+			i++
+			continue
+		}
+		operand := a == "--" || a == "-" || !(strings.HasPrefix(a, "-") || strings.HasPrefix(a, "+"))
+		if operand {
 			if a == "--" {
 				i++
 			}
 			if i < len(args) && !fromStdin {
-				s.operand(args[i], true, false) // the script file
+				s.script(args[i])
 				return
 			}
 			break // -s: the rest are the script's arguments
 		}
-		if strings.HasPrefix(a, "--") || !strings.Contains(a, "c") {
-			if a == "-o" || a == "+o" {
-				i++ // -o option-name
-			}
-			if !strings.HasPrefix(a, "--") && strings.Contains(a, "s") {
-				fromStdin = true
-			}
+		if strings.HasPrefix(a, "--") {
 			continue
 		}
-		// -c: the next word is the command line.
-		if i+1 >= len(args) {
+		if strings.HasPrefix(a, "-") && strings.Contains(a, "c") {
+			// -c: the next word is the command line.
+			if i+1 >= len(args) {
+				s.unsure = true // "sh -c" with the command from elsewhere
+				return
+			}
+			script, ok := expandHome(args[i+1], s.home)
+			if !ok {
+				s.unsure = true
+				return
+			}
+			s.nested(script.lit())
 			return
 		}
-		script, ok := expandHome(args[i+1], s.home)
-		if !ok {
-			s.unsure = true
-			return
+		if strings.Contains(a, "s") {
+			fromStdin = true
 		}
-		s.nested(script.lit())
-		return
+		if strings.HasSuffix(a, "o") || strings.HasSuffix(a, "O") {
+			i++ // "-eo pipefail": the cluster's last option takes the next word
+		}
 	}
+	s.stdinScript()
+}
+
+// script handles a script operand (of a shell, source or "."): stdin is
+// the stdin script; a process substitution's pipe is unknowable (its
+// output is the script); anything else is a file read.
+func (s *bashScan) script(w word) {
+	ew, ok := expandHome(w, s.home)
+	switch {
+	case !ok:
+		s.unsure = true
+	case isStdinPath(ew.lit()):
+		s.stdinScript()
+	case isFdPath(ew.lit()):
+		s.unsure = true
+	default:
+		s.operand(w, true, false)
+	}
+}
+
+// stdinScript scans the script a command reads from standard input.
+func (s *bashScan) stdinScript() {
 	switch in := s.stdin; {
 	case in.scripted:
 		s.nested(in.script)
@@ -602,7 +689,7 @@ func (s *bashScan) shell(args []word) {
 		// "bash < script": the file was recorded as read; like
 		// "bash script", its contents are not seen.
 	default:
-		s.unsure = true // a pipe ("echo 'cat .env' | sh") or the terminal
+		s.unsure = true // a pipe ("echo 'cat .env' | sh"), the terminal, <(…)
 	}
 }
 

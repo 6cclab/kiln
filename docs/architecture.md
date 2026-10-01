@@ -360,7 +360,9 @@ the session.
 
 **The six modes** (`internal/claude/settings/settings.go`): `manual`,
 `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`. `Decide`
-checks deny rules first (absolute, never overridable), then ask rules
+checks deny rules first (absolute, never overridable), then, in `plan`,
+refuses edit tools and non-read-only bash whatever allow or ask rules say
+(Claude Code keeps edits blocked until the plan is approved), then ask rules
 (they ask even in `bypassPermissions`, and even when an allow rule matches
 too), then `bypassPermissions` (allow everything else), then allow rules —
 Claude Code's deny, ask, allow — then falls through to mode defaults: `plan` allows only `settings.ReadOnly`

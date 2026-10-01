@@ -45,11 +45,22 @@ func CanonicalPath(p string) string {
 // memoises parents itself.
 func KernelPath(p string) (string, bool) { return fGetPath(p) }
 
-// fGetPath opens p for event notification only (O_EVTONLY needs no read
-// permission; O_NONBLOCK keeps a FIFO from blocking) and asks the kernel
-// for the path of what it opened.
+// fGetPath asks the kernel for its path of the regular file or directory
+// p. Anything else (a device, FIFO, socket or link) is never opened: ok is
+// false and the caller falls back to the parent directory. The open is for
+// event notification only; O_EVTONLY still needs read permission, so a
+// file the process cannot read falls back to its parent too. O_NOCTTY and
+// O_NONBLOCK keep the open from taking a terminal or blocking, and
+// O_NOFOLLOW from following a link swapped in after the lstat.
 func fGetPath(p string) (string, bool) {
-	fd, err := unix.Open(p, unix.O_EVTONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	var st unix.Stat_t
+	if err := unix.Lstat(p, &st); err != nil {
+		return "", false
+	}
+	if t := st.Mode & unix.S_IFMT; t != unix.S_IFREG && t != unix.S_IFDIR {
+		return "", false
+	}
+	fd, err := unix.Open(p, unix.O_EVTONLY|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return "", false
 	}

@@ -481,8 +481,29 @@ func DecideFromHits(h Hits, toolName, primaryArg string, mode PermissionMode) De
 	return d
 }
 
+// planRefuses reports a call plan mode refuses whatever the rules: one
+// that edits files (the edit tools) or runs a shell command that is not
+// provably read-only.
+func planRefuses(toolName, primaryArg string) bool {
+	switch {
+	case toolFileKind(toolName) == kindEdit:
+		return true
+	case strings.EqualFold(toolName, "bash"):
+		return !IsReadOnlyCommand(primaryArg)
+	case strings.EqualFold(toolName, "bash_background"):
+		return true
+	}
+	return false
+}
+
 func decideRules(h Hits, toolName, primaryArg string, mode PermissionMode) Decision {
 	if h.Deny {
+		return Deny
+	}
+	if mode == ModePlan && planRefuses(toolName, primaryArg) {
+		// Claude Code's plan mode: "edits stay blocked until you approve
+		// the plan", whatever allow or ask rules say, so neither an
+		// allow rule nor an approved ask prompt edits during planning.
 		return Deny
 	}
 	if h.Ask {

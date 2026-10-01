@@ -18,9 +18,29 @@ func BashSegments(cmd string) (segments []string, opaque bool) {
 		}
 		cur.Reset()
 	}
+	inComment := false
 	for i := 0; i < len(cmd); i++ {
 		c := cmd[i]
+		if inComment {
+			// A comment runs to the newline: quotes and backslashes in it
+			// are text (so "# don't" opens no quote and "# \" continues
+			// no line). Separators still split, which only ever makes a
+			// line need more allow rules, never fewer.
+			switch c {
+			case '\n':
+				inComment = false
+				flush()
+			case ';', '|', '&':
+				flush()
+			default:
+				cur.WriteByte(c)
+			}
+			continue
+		}
 		switch {
+		case c == '#' && (i == 0 || strings.IndexByte(shellMeta, cmd[i-1]) >= 0):
+			inComment = true
+			cur.WriteByte(c)
 		case c == '$' && i+1 < len(cmd) && cmd[i+1] == '\'':
 			// $'…': a backslash escapes the next byte, so \' does not
 			// end it (and a ";" inside is text, not a separator).

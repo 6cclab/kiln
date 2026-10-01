@@ -14,8 +14,10 @@ import (
 )
 
 // TestFileToolsRefuseVolPaths: /.vol/<dev>/<inode> opens a file by inode
-// number, a spelling no permission rule names; read, write and edit refuse
-// it, directly or through a link.
+// number, a spelling no permission rule names; read, edit and write refuse
+// it, saying why, and the file is neither returned nor changed. (On this
+// macOS neither "/.VOL/…" nor a symlink to a /.vol path opens at all, so
+// those spellings are not tested: any error would pass.)
 func TestFileToolsRefuseVolPaths(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "secret.txt")
@@ -27,28 +29,20 @@ func TestFileToolsRefuseVolPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	vol := fmt.Sprintf("/.vol/%d/%d", st.Dev, st.Ino)
-	if _, err := os.Stat(vol); err != nil {
-		t.Skip("no /.vol here")
-	}
-	if err := os.Symlink(vol, filepath.Join(dir, "vlink")); err != nil {
-		t.Fatal(err)
+	if data, err := os.ReadFile(vol); err != nil || string(data) != "TOPSECRET" {
+		t.Skip("/.vol does not open the file here")
 	}
 	env := execenv.New(dir)
-	for _, p := range []string{vol, "/.VOL" + vol[len("/.vol"):], "vlink"} {
-		r := execTool(t, ReadTool(env), map[string]any{"path": p})
-		if !r.IsError || strings.Contains(resultText(r), "TOPSECRET") || !strings.Contains(resultText(r), "/.vol") {
-			t.Errorf("read %s: %q", p, resultText(r))
+	refused := func(op string, text string) {
+		t.Helper()
+		if !strings.Contains(text, "/.vol") || strings.Contains(text, "TOPSECRET") {
+			t.Errorf("%s %s: %q, want a /.vol refusal", op, vol, text)
 		}
-		w := execTool(t, WriteTool(env), map[string]any{"path": p, "content": "x"})
-		if !w.IsError {
-			t.Errorf("write %s was not refused", p)
-		}
-		e := execTool(t, EditTool(env), map[string]any{"path": p, "edits": []any{map[string]any{"oldText": "TOPSECRET", "newText": "x"}}})
-		if !e.IsError {
-			t.Errorf("edit %s was not refused", p)
+		if data, _ := os.ReadFile(file); string(data) != "TOPSECRET" {
+			t.Fatalf("%s changed the file through %s: %q", op, vol, data)
 		}
 	}
-	if data, _ := os.ReadFile(file); string(data) != "TOPSECRET" {
-		t.Errorf("the file was changed: %q", data)
-	}
+	refused("read", resultText(execTool(t, ReadTool(env), map[string]any{"path": vol})))
+	refused("edit", resultText(execTool(t, EditTool(env), map[string]any{"path": vol, "edits": []any{map[string]any{"oldText": "TOPSECRET", "newText": "x"}}})))
+	refused("write", resultText(execTool(t, WriteTool(env), map[string]any{"path": vol, "content": "x"})))
 }
