@@ -32,6 +32,9 @@ func startSandbox(cwd string, s claudesettings.Settings, perms claudesettings.Pe
 	if !s.Sandbox.IsEnabled() {
 		return nil, nil
 	}
+	for _, w := range claudesettings.SandboxRuleWarnings(perms, cwd) {
+		warn(w)
+	}
 	cfg := sandbox.FromSettings(s, perms, cwd)
 	m := sandbox.New(cfg, sandboxOptions(sandbox.Options{Cwd: cwd, Roots: gate.Roots}))
 	if err := m.Unavailable(); err != nil {
@@ -67,6 +70,7 @@ func sandboxReport(cwd string, s claudesettings.Settings) (line string, problems
 		}
 		return "off (sandbox.enabled is not set; " + mech + ")", problems
 	}
+	problems = append(problems, claudesettings.SandboxRuleWarnings(s.Permissions, cwd)...)
 	cfg := sandbox.FromSettings(s, s.Permissions, cwd)
 	m := sandbox.New(cfg, sandboxOptions(sandbox.Options{Cwd: cwd}))
 	if err := m.Unavailable(); err != nil {

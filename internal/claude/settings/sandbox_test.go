@@ -31,14 +31,14 @@ func TestLoadSettingsSandboxMerge(t *testing.T) {
 		"enabled": true, "autoAllowBashIfSandboxed": false,
 		"excludedCommands": ["docker *"],
 		"filesystem": {"allowWrite": ["~/.kube", "./out", "/tmp/build/**"], "denyRead": ["~/.aws/credentials/"]},
-		"network": {"allowedDomains": ["github.com"], "deniedDomains": ["uploads.github.com"]},
+		"network": {"allowedDomains": ["github.com"], "deniedDomains": ["uploads.github.com"], "allowLocalBinding": true, "httpProxyPort": 8080},
 		"someFutureKey": {"x": 1}
 	}}`)
 	put(t, filepath.Join(cwd, ".claude", "settings.json"), `{"sandbox":{
 		"autoAllowBashIfSandboxed": true,
 		"excludedCommands": ["gh *"],
 		"filesystem": {"allowWrite": ["./out", "//abs/x"], "denyWrite": ["secrets"]},
-		"network": {"allowedDomains": ["*.npmjs.org"], "allowLocalBinding": true, "httpProxyPort": 8080}
+		"network": {"allowedDomains": ["*.npmjs.org"]}
 	}}`)
 
 	sb := LoadSettings(cwd, LoadOptions{}).Sandbox
