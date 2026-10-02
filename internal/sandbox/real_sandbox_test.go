@@ -363,3 +363,41 @@ func TestRealSandboxTerminal(t *testing.T) {
 		t.Errorf("/dev/null must stay writable: %d %q", code, out)
 	}
 }
+
+// A submodule's git directory is as protected as the top-level one: its
+// config (whose core.fsmonitor git status runs, outside the sandbox) and
+// hooks cannot be written, including in a module directory created after
+// the command started (macOS; Linux binds the ones that exist).
+func TestRealSandboxSubmoduleGitDir(t *testing.T) {
+	r := newRealRig(t, Config{}, nil)
+	mod := filepath.Join(r.ws, ".git", "modules", "sub")
+	if err := os.MkdirAll(filepath.Join(mod, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(mod, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644)
+	os.WriteFile(filepath.Join(mod, "config"), []byte("[core]\n"), 0o644)
+
+	for _, cmd := range []string{
+		`echo "fsmonitor = /tmp/evil" >> .git/modules/sub/config`,
+		"echo evil > .git/modules/sub/hooks/post-checkout",
+		"echo evil > .git/config.worktree",
+	} {
+		if out, code := r.run(cmd); code == 0 {
+			t.Errorf("%s: allowed: %q", cmd, out)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(mod, "config")); strings.Contains(string(b), "fsmonitor") {
+		t.Error("submodule config changed")
+	}
+	mustNotExist(t, filepath.Join(mod, "hooks", "post-checkout"))
+	if runtime.GOOS == "darwin" {
+		if out, code := r.run("mkdir -p .git/modules/new/hooks && echo evil > .git/modules/new/config"); code == 0 {
+			t.Errorf("new module config allowed: %q", out)
+		}
+		mustNotExist(t, filepath.Join(r.ws, ".git", "modules", "new", "config"))
+	}
+	// The rest of .git stays writable: git needs its index and objects.
+	if out, code := r.run("echo x > .git/modules/sub/index && echo ok"); code != 0 {
+		t.Errorf("module index write refused: %q", out)
+	}
+}

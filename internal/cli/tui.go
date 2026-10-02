@@ -471,7 +471,10 @@ func readGitStatusAt(ctx context.Context, cwd string) (tui.GitStatus, bool) {
 	if err != nil {
 		return tui.GitStatus{}, false
 	}
-	porcelain, err := runGit(tctx, cwd, "status", "--porcelain")
+	// Run outside any sandbox on a repository a sandboxed command may have
+	// written to: no fsmonitor command, no descent into submodules (whose
+	// config a command could have changed).
+	porcelain, err := runGit(tctx, cwd, "-c", "core.fsmonitor=false", "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		return tui.GitStatus{}, false
 	}
