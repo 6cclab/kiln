@@ -19,14 +19,14 @@ func TestSandboxAutoAllowHiddenNames(t *testing.T) {
 		"git --git-dir=.git push", "npx npm publish x", "npm exec -- npm publish x",
 	} {
 		g := sandboxGate(t, perms, settings.ModeManual, on, nil)
-		r, out, _ := g.CheckWithOutcome(context.Background(), bashReq(c, false))
+		r, out, _ := g.CheckWithOutcome(context.Background(), sandboxBashReq(c, false))
 		if r == nil || out == OutcomeAuto {
 			t.Errorf("%q auto-allowed under deny/ask rules", c)
 		}
 	}
 	// Ordinary commands still are.
 	g := sandboxGate(t, perms, settings.ModeManual, on, nil)
-	if r, out, _ := g.CheckWithOutcome(context.Background(), bashReq("git -C . status", false)); r != nil || out != OutcomeAuto {
+	if r, out, _ := g.CheckWithOutcome(context.Background(), sandboxBashReq("git -C . status", false)); r != nil || out != OutcomeAuto {
 		t.Errorf("git -C . status: %+v %s", r, out)
 	}
 }
@@ -37,7 +37,7 @@ func TestDenyRuleSeesGitGlobalOptions(t *testing.T) {
 	perms := settings.Permissions{Deny: []string{"Bash(git push *)"}}
 	g := sandboxGate(t, perms, settings.ModeBypassPermissions, fakeSandbox{}, nil)
 	for _, c := range []string{"git -C . push origin", "git -c a=b push"} {
-		if r, _ := g.Check(context.Background(), bashReq(c, false)); r == nil {
+		if r, _ := g.Check(context.Background(), sandboxBashReq(c, false)); r == nil {
 			t.Errorf("%q not denied", c)
 		}
 	}

@@ -47,7 +47,7 @@ func sandboxGate(t *testing.T, perms settings.Permissions, mode settings.Permiss
 	return g
 }
 
-func bashReq(cmd string, disable bool) Request {
+func sandboxBashReq(cmd string, disable bool) Request {
 	args := map[string]any{"command": cmd}
 	if disable {
 		args[DisableSandboxArg] = true
@@ -63,26 +63,26 @@ func TestSandboxAutoAllow(t *testing.T) {
 	// A command that writes asks in manual mode without a sandbox...
 	cmd := "touch made.txt"
 	g := sandboxGate(t, settings.Permissions{}, settings.ModeManual, fakeSandbox{}, nil)
-	if r, _ := g.Check(ctx, bashReq(cmd, false)); r == nil {
+	if r, _ := g.Check(ctx, sandboxBashReq(cmd, false)); r == nil {
 		t.Fatal("without a sandbox a writing command must ask (and be refused with no prompter)")
 	}
 	// ...and runs without a prompt when sandboxed, in manual, acceptEdits
 	// and dontAsk mode alike.
 	for _, mode := range []settings.PermissionMode{settings.ModeManual, settings.ModeAcceptEdits, settings.ModeDontAsk} {
 		g = sandboxGate(t, settings.Permissions{}, mode, on, nil)
-		r, out, err := g.CheckWithOutcome(ctx, bashReq(cmd, false))
+		r, out, err := g.CheckWithOutcome(ctx, sandboxBashReq(cmd, false))
 		if err != nil || r != nil || out != OutcomeAuto {
 			t.Errorf("%s: sandboxed command not auto-allowed: %+v %s %v", mode, r, out, err)
 		}
 	}
 	// autoAllowBashIfSandboxed false: the regular flow.
 	g = sandboxGate(t, settings.Permissions{}, settings.ModeManual, fakeSandbox{active: true}, nil)
-	if r, _ := g.Check(ctx, bashReq(cmd, false)); r == nil {
+	if r, _ := g.Check(ctx, sandboxBashReq(cmd, false)); r == nil {
 		t.Error("regular permissions mode should still ask")
 	}
 	// An inactive sandbox (enabled but unavailable) auto-allows nothing.
 	g = sandboxGate(t, settings.Permissions{}, settings.ModeManual, fakeSandbox{autoAllow: true}, nil)
-	if r, _ := g.Check(ctx, bashReq(cmd, false)); r == nil {
+	if r, _ := g.Check(ctx, sandboxBashReq(cmd, false)); r == nil {
 		t.Error("an inactive sandbox must not auto-allow")
 	}
 }
@@ -112,7 +112,7 @@ func TestSandboxAutoAllowExceptions(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			p := &promptLog{answer: PromptDeny}
 			g := sandboxGate(t, c.perms, c.mode, on, p)
-			r, _, err := g.CheckWithOutcome(ctx, bashReq(c.cmd, false))
+			r, _, err := g.CheckWithOutcome(ctx, sandboxBashReq(c.cmd, false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -140,34 +140,34 @@ func TestSandboxUnsandboxedRetry(t *testing.T) {
 
 	p := &promptLog{answer: PromptAllow}
 	g := sandboxGate(t, settings.Permissions{}, settings.ModeManual, on, p)
-	if r, _ := g.Check(ctx, bashReq("touch x", true)); r != nil || len(p.reqs) != 1 || !p.reqs[0].Unsandboxed {
+	if r, _ := g.Check(ctx, sandboxBashReq("touch x", true)); r != nil || len(p.reqs) != 1 || !p.reqs[0].Unsandboxed {
 		t.Errorf("manual retry should prompt, marked unsandboxed: %+v %+v", r, p.reqs)
 	}
 
 	g = sandboxGate(t, settings.Permissions{}, settings.ModeBypassPermissions, on, nil)
-	if r, _ := g.Check(ctx, bashReq("touch x", true)); r != nil {
+	if r, _ := g.Check(ctx, sandboxBashReq("touch x", true)); r != nil {
 		t.Error("bypassPermissions runs the retry without a prompt")
 	}
 
 	g = sandboxGate(t, settings.Permissions{}, settings.ModeDontAsk, on, nil)
-	if r, _ := g.Check(ctx, bashReq("touch x", true)); r == nil {
+	if r, _ := g.Check(ctx, sandboxBashReq("touch x", true)); r == nil {
 		t.Error("dontAsk must refuse the retry")
 	}
 	g = sandboxGate(t, settings.Permissions{Allow: []string{"Bash(touch *)"}}, settings.ModeDontAsk, on, nil)
-	if r, _ := g.Check(ctx, bashReq("touch x", true)); r != nil {
+	if r, _ := g.Check(ctx, sandboxBashReq("touch x", true)); r != nil {
 		t.Error("an allow rule approves the retry, even in dontAsk")
 	}
 
 	askRule := settings.Permissions{Allow: []string{"Bash(touch *)"}, Ask: []string{"Bash(dangerouslyDisableSandbox:true)"}}
 	p = &promptLog{answer: PromptDeny}
 	g = sandboxGate(t, askRule, settings.ModeBypassPermissions, on, p)
-	if r, _ := g.Check(ctx, bashReq("touch x", true)); r == nil || len(p.reqs) != 1 {
+	if r, _ := g.Check(ctx, sandboxBashReq("touch x", true)); r == nil || len(p.reqs) != 1 {
 		t.Errorf("the dangerouslyDisableSandbox ask rule must prompt even in bypass: %+v %d", r, len(p.reqs))
 	}
 	// The same rule does not touch a sandboxed call.
 	p = &promptLog{answer: PromptDeny}
 	g = sandboxGate(t, askRule, settings.ModeManual, on, p)
-	if r, _ := g.Check(ctx, bashReq("touch x", false)); r != nil || len(p.reqs) != 0 {
+	if r, _ := g.Check(ctx, sandboxBashReq("touch x", false)); r != nil || len(p.reqs) != 0 {
 		t.Errorf("a sandboxed call should still be auto-allowed: %+v %d", r, len(p.reqs))
 	}
 
@@ -175,7 +175,7 @@ func TestSandboxUnsandboxedRetry(t *testing.T) {
 	// is sandboxed and auto-allowed.
 	strict := fakeSandbox{active: true, autoAllow: true}
 	g = sandboxGate(t, settings.Permissions{}, settings.ModeManual, strict, nil)
-	if r, out, _ := g.CheckWithOutcome(ctx, bashReq("touch x", true)); r != nil || out != OutcomeAuto {
+	if r, out, _ := g.CheckWithOutcome(ctx, sandboxBashReq("touch x", true)); r != nil || out != OutcomeAuto {
 		t.Errorf("strict sandbox: %+v %s", r, out)
 	}
 }
