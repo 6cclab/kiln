@@ -114,7 +114,7 @@ func InspectCommands(deps InspectDeps) Source {
 					statuses = deps.MCPStatuses()
 				}
 				if len(statuses) == 0 {
-					return Result{Output: []string{"No MCP servers configured. They are read from ~/.claude.json"}}, nil
+					return Result{Output: []string{"No MCP servers configured. Add one with kiln mcp add; kiln also reads ~/.claude.json and .mcp.json"}}, nil
 				}
 				var ok, failed, connecting []ServerStatus
 				tools := 0

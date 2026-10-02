@@ -308,7 +308,9 @@ mode** · **2 Yes, manually approve edits** · **3 Tell kiln what to change**
 
 ## 7. MCP servers and postures
 
-MCP servers are read from `~/.claude.json` (or `--mcp-config`) and connect in
+MCP servers are read from Claude Code's files (`~/.claude.json`, `.mcp.json`) and
+kiln's (`~/.kiln/mcp.json`, `.kiln/mcp.json`, written by `kiln mcp add`), or
+`--mcp-config`; see `docs/configuration.md`. They connect in
 the background after the prompt appears; the footer reports progress, and a
 failed server is named once with a reason. `/mcp` opens a dialog: a
 sectioned server list with a status glyph, `↑`/`↓` to move, `Enter` for a
