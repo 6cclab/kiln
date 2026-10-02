@@ -82,9 +82,14 @@ func (g *Gate) annotateSandbox(req Request) Request {
 //     a file it names) still asks; a bare Bash or Bash(*) ask rule is
 //     skipped for it, outside plan mode;
 //   - an rm/rmdir of a critical path goes through the regular flow;
-//   - in plan mode auto-allow does not widen approvals, and in auto mode
-//     the call goes through the regular flow (where the mode's own review
-//     applies).
+//   - in plan mode auto-allow does not widen approvals.
+//
+// In auto mode it is approved here too, before the classifier: Claude
+// Code's auto mode approves sandboxed shell commands ahead of its
+// classifier step (code.claude.com/docs/en/permission-modes, "How the
+// classifier evaluates actions"); its exceptions, server-side review and
+// per-command allowed domains, do not exist in kiln. Commands outside the
+// sandbox take the regular flow, where auto mode's classifier reviews them.
 //
 // A command that asked to run unsandboxed (dangerouslyDisableSandbox,
 // honoured only when allowUnsandboxedCommands is on) goes through the
@@ -99,7 +104,7 @@ func (g *Gate) checkSandboxed(ctx context.Context, req Request, permissions sett
 	}
 	disable := disableRequested(req)
 	if p.WillSandbox(req.PrimaryArg, disable) {
-		if !p.AutoAllow() || mode == settings.ModePlan || mode == settings.ModeAuto {
+		if !p.AutoAllow() || mode == settings.ModePlan {
 			return nil, OutcomeNone, false, nil
 		}
 		if hits.Deny {
