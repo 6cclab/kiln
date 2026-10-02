@@ -322,6 +322,12 @@ type GuardOptions struct {
 	Check          CheckFunc
 	PrimaryArgOf   PrimaryArgOfFunc
 	OnNotice       func(message string)
+	// CheckArgs, if set, vets hook-rewritten input before the gate judges
+	// it (tool.CheckArgs, via harness.Harness.CheckToolArgs): a rewrite
+	// whose keys the gate and the tool would read differently is refused
+	// without asking the gate. The turn loop already checked the model's
+	// own input before any hook ran.
+	CheckArgs func(args map[string]any) error
 }
 
 // GuardResult is the outcome of GuardToolCall.
@@ -372,6 +378,11 @@ func GuardToolCall(opts GuardOptions) (GuardResult, error) {
 			merged[k] = v
 		}
 		args = merged
+		if opts.CheckArgs != nil {
+			if err := opts.CheckArgs(args); err != nil {
+				return GuardResult{Blocked: &Blocked{Reason: fmt.Sprintf("The call to %s did not run: a PreToolUse hook rewrote its input, and %s.", opts.ToolName, err.Error())}, ByHook: true}, nil
+			}
+		}
 		if opts.OnNotice != nil {
 			primary, _ := opts.PrimaryArgOf(args)
 			opts.OnNotice(fmt.Sprintf("rewrote %s: %s", opts.ToolName, primary))
