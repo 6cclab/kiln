@@ -42,11 +42,21 @@ on provider; only the budget tier differs.
 
 ## Install
 
-Requires Go 1.26.
+Requires Go 1.26 and git.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/6cclab/kiln/main/scripts/install.sh | sh
+```
+
+`scripts/install.sh` builds kiln from source and installs it to `~/.local/bin`.
+`--ref <branch|tag|commit>` picks the version, `--dir <path>` the install directory,
+and `--source <checkout>` builds a local checkout instead of cloning. Running it again
+updates kiln in place; a kiln that is already running keeps its old binary.
+
+From a checkout:
 
 ```bash
 make build                 # bin/kiln, installed to Go's bin dir (~/go/bin)
-go install ./cmd/kiln      # or: puts `kiln` on $GOBIN / ~/go/bin
 ```
 
 ## Use
