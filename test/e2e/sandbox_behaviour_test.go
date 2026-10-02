@@ -13,11 +13,15 @@ package e2e
 
 import (
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 const sandboxEscapeScript = `model: faux-1
@@ -74,5 +78,62 @@ func TestSandbox_EscapeFailsAndTranscriptSaysSo(t *testing.T) {
 		if !strings.Contains(transcript, want) {
 			t.Errorf("transcript lacks %q", want)
 		}
+	}
+}
+
+// sandboxNetScript has the model fetch a local server's address through
+// the sandbox proxy. NO_PROXY (localhost, 127.0.0.1) would send the
+// request direct, which the sandbox blocks, so curl is told not to bypass
+// the proxy.
+const sandboxNetScript = `model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "curl -sS -m 20 --noproxy '' http://127.0.0.1:%d/"}, id: n1}
+  - on_tool_result: n1
+    then:
+      - text: "net done"
+`
+
+// TestSandbox_NetworkApprovalPrompt: in manual mode, a sandboxed command
+// reaching a host outside the allowlist pauses on a prompt (Claude Code's
+// sandboxing docs, "Hosts outside your allowed domains"); answering Yes
+// lets the connection through the proxy, and the command completes.
+func TestSandbox_NetworkApprovalPrompt(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("needs sandbox-exec")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "served-through-proxy")
+	}))
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+
+	proj, home, sessDir, addr, _ := tuiFixture(t, fmt.Sprintf(sandboxNetScript, port))
+	permWriteJSON(t, proj, map[string]any{"sandbox": map[string]any{"enabled": true}})
+
+	s := startTUI(t, 110, 34, proj, home, sessDir, addr, "--permission-mode", "manual")
+	defer s.Close()
+	waitReady(t, s)
+	s.Send("fetch it")
+	s.SendKey("enter")
+	target := fmt.Sprintf("127.0.0.1:%d", port)
+	if err := s.WaitFor("sandbox network", 10*time.Second); err != nil {
+		t.Fatalf("no network approval prompt: %v\n%s", err, strings.Join(s.Rows(), "\n"))
+	}
+	if err := s.WaitFor(target, 2*time.Second); err != nil {
+		t.Fatalf("the prompt does not name %s: %v", target, err)
+	}
+	s.SendKey("1") // Yes
+	if err := s.WaitFor("net done", 20*time.Second); err != nil {
+		t.Fatalf("the run did not finish after approval: %v\n%s", err, strings.Join(s.Rows(), "\n"))
+	}
+	data, err := os.ReadFile(sessionFile(t, sessDir, proj))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "served-through-proxy") {
+		t.Errorf("the approved request did not reach the server; transcript:\n%s", data)
+	}
+	if _, err := os.Stat(filepath.Join(proj, ".kiln", "settings.local.json")); err == nil {
+		t.Error("a plain Yes must not save a rule")
 	}
 }
