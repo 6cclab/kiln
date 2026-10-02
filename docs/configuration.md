@@ -371,8 +371,11 @@ allowRead,disabled}`, `network.{allowedDomains,deniedDomains,allowUnixSockets,al
 allowLocalBinding,allowMachLookup,strictAllowlist,httpProxyPort,socksProxyPort}`,
 `credentials.{files,envVars}`. `filesystem.disabled`, `allowAppleEvents`,
 `network.strictAllowlist` and credential `mask` entries count only from user settings and
-`--settings`. Sandboxed commands get `$TMPDIR` set to `/tmp/kiln-<uid>` on macOS (the system
-temp dir's `kiln-<uid>` on Linux), `HTTP(S)_PROXY`/`ALL_PROXY` pointing at kiln's proxy, and
+`--settings`. A repository's settings cannot turn the sandbox off over the user's `enabled: true`
+or widen it (catch-all `excludedCommands`, writes covering home, `*` domains, Unix sockets,
+local binding, proxy ports); those entries are ignored with a startup warning. Sandboxed commands get `$TMPDIR` set to `/tmp/kiln-<uid>` on macOS (the system
+temp dir's `kiln-<uid>` on Linux), `HTTP(S)_PROXY`/`ALL_PROXY` pointing at kiln's proxy (with the session's proxy credential in
+the URL), and
 `KILN_SANDBOX=1`. What is matched and what is not: `docs/claude-code-parity.md`, "Bash sandbox".
 
 ### Permission modes
@@ -450,7 +453,7 @@ Namespace: the relative path under `commands/` with `.md` stripped; every direct
 
 Discovery: `~/.claude/CLAUDE.md` and `~/.kiln/CLAUDE.md` (user; the second holds `#` notes kiln saves when the project has no `CLAUDE.md`), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
 
-`@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently.
+`@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently. An import in a project memory file (`CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md`) whose path resolves outside the working directory is external: as in Claude Code, it loads only once external imports are approved for the project. kiln has no approval dialog; it honours the approval recorded when you accepted Claude Code's dialog for the project, and otherwise renders `<!-- external import not loaded ... -->` and warns at startup. Imports in your user memory files always load.
 
 Budget: `LoadMemory(cwd, budgetTokens)` estimates tokens as `ceil(len/4)`; the budget is the tier's `SystemPromptTokens` (10% of the context window, 2k–32k). CLAUDE.md files always load in full. Rules load in full while the budget allows, project rules first; the rest are listed in a `<memory-index>` block, one line each with the rule's path and its frontmatter `description` (else its first heading), and the model is told to read a rule before doing work it covers. `Assembled.Indexed` lists those paths (logged at startup); if the CLAUDE.md files alone exceed the budget they load anyway and kiln prints a warning.
 
