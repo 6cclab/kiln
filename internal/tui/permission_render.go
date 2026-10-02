@@ -31,6 +31,9 @@ type PermissionRequest struct {
 	// AutoModeNote is permission.Request's: why auto mode asked instead of
 	// deciding. Committed as a system note just above the prompt.
 	AutoModeNote string
+	// InAutoMode leaves out the bash prompt's "switch to auto mode"
+	// option: that mode is already on.
+	InAutoMode bool
 }
 
 // declinedNoteText builds the "✕ Declined …" note's text for a denied
@@ -202,6 +205,8 @@ type BashPermissionRequest struct {
 	// it (or without rules) the option is left out and the rest move up.
 	Grantable    bool
 	DontAskRules []string
+	// InAutoMode leaves out "switch to auto mode" (promptOptionsFor).
+	InAutoMode bool
 }
 
 // dontAskLabel is option 2's label: every rule the answer saves, in
@@ -276,10 +281,10 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 	if req.Grantable && len(req.DontAskRules) > 0 {
 		options = append(options, dontAskLabel(req.DontAskRules, width-4))
 	}
-	options = append(options,
-		"Yes, and switch to auto mode · auto mode handles these prompts for you",
-		"No",
-	)
+	if !req.InAutoMode {
+		options = append(options, "Yes, and switch to auto mode · auto mode handles these prompts for you")
+	}
+	options = append(options, "No")
 	for i, opt := range options {
 		key := fmt.Sprintf("%d", i+1)
 		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected, maxInt(width-1, 1)))

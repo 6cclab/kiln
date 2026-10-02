@@ -93,6 +93,16 @@ func promptOptionsFor(req PermissionRequest) []promptOptionKind {
 	if !offersDontAsk(req) {
 		opts = append(opts[:1:1], opts[2:]...)
 	}
+	if req.InAutoMode {
+		// Auto mode is already on: no "switch to auto mode".
+		kept := opts[:0:0]
+		for _, o := range opts {
+			if o != optSwitchAutoAllow {
+				kept = append(kept, o)
+			}
+		}
+		opts = kept
+	}
 	return opts
 }
 
@@ -783,7 +793,7 @@ func (p *PromptState) Render(width int) []string {
 			fb = &feedback
 		}
 		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc, Feedback: fb,
-			Grantable: req.Grantable, DontAskRules: req.DontAskRules}, width, p.pending.selected)
+			Grantable: req.Grantable, DontAskRules: req.DontAskRules, InAutoMode: req.InAutoMode}, width, p.pending.selected)
 	case "edit":
 		return RenderEditPermissionPrompt(EditPermissionRequest{
 			Kind:  EditKindEdit,

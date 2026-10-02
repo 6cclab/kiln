@@ -1424,6 +1424,7 @@ func (b *Bridge) Prompter(cwd string) permission.Prompter {
 				Grantable:        req.Grantable,
 				DontAskRules:     req.DontAskRules,
 				AutoModeNote:     req.AutoModeNote,
+				InAutoMode:       req.InAutoMode,
 			},
 			Reply: reply,
 		})
