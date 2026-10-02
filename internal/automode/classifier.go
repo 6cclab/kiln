@@ -135,6 +135,10 @@ func (c *Classifier) Classify(ctx context.Context, req permission.ClassifyReques
 		err = errors.New("no response")
 	case am.StopReason == msg.StopError || am.StopReason == msg.StopAborted:
 		err = fmt.Errorf("model error: %s", firstNonEmpty(am.ErrorMessage, string(am.StopReason)))
+	case am.StopReason != msg.StopStop:
+		// Cut off (max tokens) or ended any other way: a prefix can still
+		// parse as an answer, but it is not the model's whole answer.
+		err = fmt.Errorf("answer did not finish (stop reason %q)", am.StopReason)
 	}
 	if am != nil {
 		usage = am.Usage

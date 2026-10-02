@@ -378,6 +378,9 @@ func TestClassify_FailuresAreErrors(t *testing.T) {
 		"provider error": {err: errors.New("503 overloaded")},
 		"model error":    {answer: &msg.AssistantMessage{StopReason: msg.StopError, ErrorMessage: "invalid api key"}},
 		"no response":    {},
+		// Cut off at max_tokens: what arrived may parse ({"decision":"allow"}
+		// before a "reason" that never came), but it is not a whole answer.
+		"truncated": {answer: &msg.AssistantMessage{StopReason: msg.StopLength, Content: msg.Blocks{msg.Text(`{"decision":"allow"}`)}}},
 	}
 	for name, s := range cases {
 		if v, err := classifierWith(s).Classify(context.Background(), bash("make deploy")); err == nil {
