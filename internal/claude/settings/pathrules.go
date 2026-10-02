@@ -181,6 +181,7 @@ type pathRule struct {
 	// cmpBase is base in the form the rule compares in.
 	cmpBase string
 	segs    []string
+	rawSegs []string // segs before loosening (deny and ask rules only)
 	// loose compares in NFC and, where foldCase, without case (cmpBase and
 	// segs are already in that form).
 	loose bool
@@ -446,6 +447,7 @@ func (r pathRule) loosened(list ruleList) pathRule {
 		return r
 	}
 	r.loose = true
+	r.rawSegs = r.segs // as written, for the sandbox (sandbox_rules.go)
 	r.cmpBase = loosen(r.base)
 	segs := make([]string, len(r.segs))
 	for i, s := range r.segs {
