@@ -56,18 +56,36 @@ type autoRun struct {
 	}
 	classifier []tkfaux.Request // faux-2 requests
 	main       []tkfaux.Request // faux-1 requests
+	sessDir    string
 }
 
-func runAuto(t *testing.T, script, prompt string, setup func(proj string)) (autoRun, string) {
+// writeUserFastRole points the "fast" role at faux-2 in the scratch HOME's
+// user settings: the only place, with --settings, the classifier takes its
+// model from.
+func writeUserFastRole(t *testing.T, home string) {
+	t.Helper()
+	dir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"modelRoles": {"fast": "` + fauxprovider.ProviderID + "/" + fauxprovider.ModelID2 + `"}}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runAuto(t *testing.T, script, prompt string, setup func(proj, home string)) (autoRun, string) {
 	t.Helper()
 	addr, srv := startFaux(t, script)
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
-	writeModelRolesSettings(t, proj, map[string]string{"fast": fauxprovider.ProviderID + "/" + fauxprovider.ModelID2})
 	if setup != nil {
-		setup(proj)
+		setup(proj, home)
+	} else {
+		writeUserFastRole(t, home)
 	}
 	var r autoRun
+	r.sessDir = sessDir
 	r.res, r.log = subagentRunLog(t, proj, baseEnv(home, sessDir, addr),
 		"-p", prompt, "--output-format", "json", "--permission-mode", "auto")
 	if err := json.Unmarshal([]byte(r.res.Stdout), &r.out); err != nil {
@@ -88,7 +106,8 @@ func runAuto(t *testing.T, script, prompt string, setup func(proj string)) (auto
 // model as the tool result, the model carries on, and the classifier never
 // saw the file contents (neither the @mention's nor the read tool's).
 func TestAutoMode_BlockedActionReasonReachesModel(t *testing.T) {
-	r, proj := runAuto(t, autoBlockScript, "set up the project as notes @notes.txt describe", func(proj string) {
+	r, proj := runAuto(t, autoBlockScript, "set up the project as notes @notes.txt describe", func(proj, home string) {
+		writeUserFastRole(t, home)
 		if err := os.WriteFile(filepath.Join(proj, "notes.txt"), []byte(autoInjection+"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -133,6 +152,15 @@ func TestAutoMode_BlockedActionReasonReachesModel(t *testing.T) {
 		if !strings.Contains(sent, want) {
 			t.Errorf("classifier request lacks %q:\n%s", want, sent)
 		}
+	}
+	// The session stores the line as typed beside the prompt kiln built,
+	// which is what the classifier reads, also after a resume.
+	session, err := os.ReadFile(sessionFile(t, r.sessDir, proj))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(session), `"kilnTyped":"set up the project as notes @notes.txt describe"`) {
+		t.Errorf("the session does not record the typed line:\n%s", session)
 	}
 	if len(r.classifier[0].Tools) != 0 {
 		t.Errorf("classifier request offered tools: %+v", r.classifier[0].Tools)
@@ -192,5 +220,23 @@ func TestAutoMode_UnreadableAnswerRefusesInPrintMode(t *testing.T) {
 	}
 	if !strings.Contains(r.log, "decision=error") {
 		t.Error("no error decision in the run log")
+	}
+}
+
+// A repository's own settings cannot choose the classifier's model: a
+// project modelRoles.fast is ignored for it, with a warning, and the
+// classifier runs on the session model instead.
+func TestAutoMode_ProjectFastRoleIgnored(t *testing.T) {
+	r, _ := runAuto(t, autoAllowScript, "set up the project", func(proj, home string) {
+		writeModelRolesSettings(t, proj, map[string]string{"fast": fauxprovider.ProviderID + "/" + fauxprovider.ModelID2})
+	})
+	if len(r.classifier) != 0 {
+		t.Errorf("the classifier ran on the project's fast role (%d faux-2 requests)", len(r.classifier))
+	}
+	if !strings.Contains(r.res.Stderr, "is not used for the auto mode classifier") {
+		t.Errorf("no warning about the ignored role:\n%s", r.res.Stderr)
+	}
+	if !strings.Contains(r.log, `msg="auto mode classifier"`) || !strings.Contains(r.log, "model=faux/faux-1") {
+		t.Errorf("want the classifier on the session model in the run log:\n%s", r.log)
 	}
 }

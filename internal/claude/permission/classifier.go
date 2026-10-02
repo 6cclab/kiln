@@ -51,6 +51,11 @@ type ClassifyRequest struct {
 	// of it the model may see (internal/automode's transcript boundary);
 	// the gate passes it through untouched.
 	History []msg.Message
+	// Delegated marks History as a subagent's: its user messages are the
+	// task the parent agent wrote, not the user's words. UserHistory is
+	// then the root session's history, where the user's own lines are.
+	Delegated   bool
+	UserHistory []msg.Message
 }
 
 // Verdict is the classifier's answer.
@@ -123,8 +128,8 @@ func (g *Gate) rules() (settings.Permissions, settings.PermissionMode) {
 	return p, mode
 }
 
-// autoSucceeded ends a run of blocks: any call auto mode lets through,
-// classified or not, and any prompt the user approves.
+// autoSucceeded ends a run of blocks: a classifier allow, or a prompt the
+// user approved in auto mode. A call that skipped the classifier does not.
 func (g *Gate) autoSucceeded() {
 	g.mu.Lock()
 	g.auto.consecutive = 0
@@ -143,6 +148,11 @@ func (g *Gate) autoSkipsClassifier(req Request, hits settings.Hits) bool {
 		if !ok || g.protectedPath(path) {
 			return false
 		}
+	}
+	if settings.IsBashTool(name) && g.bashTouchesProtected(req.PrimaryArg) {
+		// Even past an allow rule or the read-only fast path: a redirect
+		// into .git/config, git config, or a file kiln cannot name.
+		return false
 	}
 	switch {
 	case hits.Allow:
@@ -171,19 +181,24 @@ func (g *Gate) classifyAuto(ctx context.Context, req Request) (*BlockResult, Out
 	c := g.classifier
 	g.mu.Unlock()
 
-	var history []msg.Message
+	var history, userHistory []msg.Message
 	if req.History != nil {
 		history = req.History()
+	}
+	if req.UserHistory != nil {
+		userHistory = req.UserHistory()
 	}
 	var verdict Verdict
 	err := errNoClassifier
 	if c != nil {
 		verdict, err = c.Classify(ctx, ClassifyRequest{
-			ToolName:   req.ToolName,
-			PrimaryArg: req.PrimaryArg,
-			Args:       req.Args,
-			CallID:     req.CallID,
-			History:    history,
+			ToolName:    req.ToolName,
+			PrimaryArg:  req.PrimaryArg,
+			Args:        req.Args,
+			CallID:      req.CallID,
+			History:     history,
+			Delegated:   req.Delegated,
+			UserHistory: userHistory,
 		})
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -193,6 +208,7 @@ func (g *Gate) classifyAuto(ctx context.Context, req Request) (*BlockResult, Out
 		return nil, OutcomeNone, fmt.Sprintf("Auto mode could not check this action (%s), so it needs your approval.", err), nil
 	}
 	if !verdict.Block {
+		g.autoSucceeded()
 		return nil, OutcomeAuto, "", nil
 	}
 

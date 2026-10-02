@@ -314,7 +314,15 @@ type SystemMessage struct {
 
 // UserMessage is a human turn.
 type UserMessage struct {
-	Content   Blocks `json:"content"`
+	Content Blocks `json:"content"`
+	// KilnTyped is the line the user typed, when kiln built Content around
+	// it (hook context, @file contents, a command's expansion). kiln's own
+	// field, absent from pi's type: written to the session so auto mode's
+	// classifier can tell what the user said from what was attached, also
+	// after a resume (internal/automode). Never sent to a provider. Empty
+	// for a message no user typed (a subagent's delegated task, kiln's own
+	// follow-ups) and in sessions written before it existed.
+	KilnTyped string `json:"kilnTyped,omitempty"`
 	Role      Role   `json:"role"`
 	Timestamp int64  `json:"timestamp"`
 }

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -43,8 +44,6 @@ type Classifier struct {
 	// Memory is the CLAUDE.md text the session loaded, shown to the
 	// classifier as the user's configuration.
 	Memory string
-	// Intents maps stored prompts back to what the user typed.
-	Intents *Intents
 	// Timeout bounds one call; zero means DefaultTimeout.
 	Timeout time.Duration
 }
@@ -58,7 +57,7 @@ func (c *Classifier) Request(req permission.ClassifyRequest) (system, user strin
 	if err != nil {
 		return "", "", err
 	}
-	lines := transcriptLines(req.History, c.Intents, req.CallID)
+	lines := transcriptLines(req.UserHistory, req.History, req.Delegated, req.CallID)
 	return systemPrompt(c.Config), userPrompt(c.Memory, lines, action), nil
 }
 
@@ -158,24 +157,61 @@ func ParseAnswer(text string) (permission.Verdict, error) {
 		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
 		s = strings.TrimSpace(s)
 	}
-	var ans struct {
-		Decision *string `json:"decision"`
-		Reason   string  `json:"reason"`
+	fields, ok := singleObject(s)
+	unreadable := fmt.Errorf("unreadable classifier answer %q", clip(text, 200))
+	if !ok {
+		return permission.Verdict{}, unreadable
 	}
-	dec := json.NewDecoder(strings.NewReader(s))
-	if err := dec.Decode(&ans); err != nil || ans.Decision == nil {
-		return permission.Verdict{}, fmt.Errorf("unreadable classifier answer %q", clip(text, 200))
+	var decision, reason string
+	raw, ok := fields["decision"]
+	if !ok || json.Unmarshal(raw, &decision) != nil {
+		return permission.Verdict{}, unreadable
 	}
-	if dec.More() {
-		return permission.Verdict{}, fmt.Errorf("unreadable classifier answer %q", clip(text, 200))
+	if r, ok := fields["reason"]; ok && json.Unmarshal(r, &reason) != nil {
+		return permission.Verdict{}, unreadable
 	}
-	switch strings.ToLower(strings.TrimSpace(*ans.Decision)) {
+	reason = strings.TrimSpace(reason)
+	switch strings.ToLower(strings.TrimSpace(decision)) {
 	case "allow":
-		return permission.Verdict{Reason: strings.TrimSpace(ans.Reason)}, nil
+		return permission.Verdict{Reason: reason}, nil
 	case "block":
-		return permission.Verdict{Block: true, Reason: strings.TrimSpace(ans.Reason)}, nil
+		return permission.Verdict{Block: true, Reason: reason}, nil
 	}
-	return permission.Verdict{}, fmt.Errorf("classifier answered decision %q", *ans.Decision)
+	return permission.Verdict{}, fmt.Errorf("classifier answered decision %q", decision)
+}
+
+// singleObject reads s as exactly one JSON object and nothing after it but
+// whitespace, keyed by lower-cased name. A key given twice, in any letter
+// case, makes it unreadable: which one counts must not be a guess.
+func singleObject(s string) (map[string]json.RawMessage, bool) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, false
+	}
+	fields := map[string]json.RawMessage{}
+	for dec.More() {
+		tok, err := dec.Token()
+		key, isKey := tok.(string)
+		if err != nil || !isKey {
+			return nil, false
+		}
+		key = strings.ToLower(key)
+		if _, dup := fields[key]; dup {
+			return nil, false
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, false
+		}
+		fields[key] = v
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false
+	}
+	return fields, true
 }
 
 func firstNonEmpty(a, b string) string {

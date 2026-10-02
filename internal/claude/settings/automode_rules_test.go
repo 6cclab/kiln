@@ -12,6 +12,11 @@ func TestIsBroadAutoModeAllow(t *testing.T) {
 		"Bash(npm run:*)", "Bash(npm run *)", "Bash(pnpm exec *)", "Bash(npx *)", "Bash(go run *)",
 		"Bash(env *)", "Bash(xargs:*)", "Bash(sudo *)", "Bash(ssh *)", "Bash(eval *)",
 		"Task", "Task(general-purpose)", "Agent", "Agent(*)",
+		// A path or a version in the program name, and any wildcard after a
+		// package manager, git or go.
+		"Bash(/bin/sh *)", "Bash(/usr/bin/env *)", "Bash(python3.12 *)", "Bash(./node_modules/.bin/tsx *)",
+		"Bash(npm *)", "Bash(npm exec:*)", "Bash(git *)", "Bash(git -c *)", "Bash(go test *)", "Bash(cargo test *)",
+		"Bash(make *)", "Bash(py*)", "Bash(*.sh)",
 	}
 	for _, r := range broad {
 		if !IsBroadAutoModeAllow(r) {
@@ -19,7 +24,7 @@ func TestIsBroadAutoModeAllow(t *testing.T) {
 		}
 	}
 	narrow := []string{
-		"Bash(npm test)", "Bash(npm run test)", "Bash(go test *)", "Bash(git status)", "Bash(shellcheck *)",
+		"Bash(npm test)", "Bash(npm run test)", "Bash(go test ./...)", "Bash(git status)", "Bash(shellcheck *)",
 		"Bash(envsubst *)", "Bash(python scripts/check.py)", "Bash(make build)",
 		"Read", "Edit(src/**)", "WebFetch(domain:example.com)", "mcp__db",
 	}

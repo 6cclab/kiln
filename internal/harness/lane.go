@@ -234,6 +234,12 @@ func (l *Lane) Abort() error {
 // tip on the queued entry's behalf, from the same goroutine that is
 // already serializing every other tip write for this lane.
 func (l *Lane) Steer(text string) error {
+	return l.SteerAs(text, "")
+}
+
+// SteerAs is Steer for a follow-up the user typed, recorded as typed
+// (msg.UserMessage.KilnTyped); see PromptAs.
+func (l *Lane) SteerAs(text, typed string) error {
 	st, err := l.laneState()
 	if err != nil {
 		return err
@@ -242,7 +248,7 @@ func (l *Lane) Steer(text string) error {
 	entryWrite := session.EntryWrite{Entry: session.Entry{
 		ID:      entryID,
 		Type:    session.EntryMessage,
-		Message: msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(text)}, Timestamp: l.now()},
+		Message: msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(text)}, KilnTyped: typed, Timestamp: l.now()},
 	}}
 	st.Inbox = append(st.Inbox, session.InboxItem{EntryID: entryID, Kind: "steer"})
 	w, err := session.SetValue(session.LaneStateValue(l.name), st)

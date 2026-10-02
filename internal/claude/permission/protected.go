@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/execenv"
 )
 
@@ -29,39 +30,77 @@ var protectedFiles = map[string]bool{
 	"gradle-wrapper.properties": true, "maven-wrapper.properties": true,
 	".devcontainer.json": true, ".ripgreprc": true, "pyrightconfig.json": true,
 	".mcp.json": true, ".claude.json": true,
+	// Memory files a later session loads as instructions: kiln's addition
+	// to Claude Code's list (its own .claude/rules is under .claude).
+	"claude.md": true, "claude.local.md": true,
 }
 
-// protectedPath reports a path, as written or as it resolves through
-// symlinks, that is or lies under a protected directory, or names a
-// protected file. .claude/worktrees is exempt, as in Claude Code.
+// protectedPath reports a path that is or lies under a protected directory,
+// or names a protected file: as written, as it resolves through symlinks,
+// and in the OS's own spelling of it (execenv.CanonicalPath: firmlinks,
+// /.vol paths), each compared case- and normalization-insensitively where
+// the filesystem is (settings.CaseFoldPath, APFS folding included) — the
+// same spellings deny rules are checked in. .claude/worktrees is exempt,
+// as in Claude Code.
 func (g *Gate) protectedPath(path string) bool {
 	base := "."
 	if len(g.roots) > 0 {
 		base = g.roots[0]
 	}
 	full := execenv.ResolveToolPath(base, path)
-	candidates := []string{full}
-	if real, ok := execenv.RealPath(full); ok {
-		candidates = append(candidates, real)
-	} else {
+	real, ok := execenv.RealPath(full)
+	if !ok {
 		return true // unresolvable: do not wave it through
 	}
-	for _, p := range candidates {
-		parts := strings.Split(filepath.ToSlash(filepath.Clean(p)), "/")
-		for i, part := range parts {
-			part = strings.ToLower(part)
-			if protectedDirs[part] && !(part == ".claude" && i+1 < len(parts) && strings.EqualFold(parts[i+1], "worktrees")) {
-				return true
-			}
-			if part == ".config" && i+1 < len(parts) && strings.EqualFold(parts[i+1], "git") {
-				return true
-			}
-		}
-		if protectedFiles[strings.ToLower(parts[len(parts)-1])] {
+	for _, p := range []string{full, real, execenv.CanonicalPath(full)} {
+		if protectedSpelling(p) {
 			return true
 		}
 	}
 	return false
+}
+
+// bashTouchesProtected reports a bash command line auto mode classifies
+// whatever rule allows it: one that writes a protected path, changes git's
+// configuration, or writes something kiln cannot name.
+func (g *Gate) bashTouchesProtected(cmd string) bool {
+	writes, complete, gitConfig := settings.BashAutoModeWrites(cmd, g.cwd())
+	if !complete || gitConfig {
+		return true
+	}
+	for _, w := range writes {
+		if g.protectedPath(w) {
+			return true
+		}
+	}
+	return false
+}
+
+// fold is a path component as protectedDirs and protectedFiles key it:
+// lower-cased everywhere, and folded as the filesystem folds names where
+// it does.
+func fold(s string) string {
+	return strings.ToLower(settings.CaseFoldPath(s))
+}
+
+func protectedSpelling(p string) bool {
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(p)), "/")
+	for i := range parts {
+		parts[i] = fold(parts[i])
+	}
+	for i, part := range parts {
+		next := ""
+		if i+1 < len(parts) {
+			next = parts[i+1]
+		}
+		if protectedDirs[part] && !(part == ".claude" && next == "worktrees") {
+			return true
+		}
+		if part == ".config" && next == "git" {
+			return true
+		}
+	}
+	return protectedFiles[parts[len(parts)-1]]
 }
 
 // soleEditPath is the edit/write call's path when exactly one argument key

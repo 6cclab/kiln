@@ -68,6 +68,38 @@ func TestLoadAutoMode_ReadsOnlyUserAndFlagSettings(t *testing.T) {
 	}
 }
 
+// The classifier's model comes from modelRoles.fast in user settings or
+// --settings only: a repository must not pick the model that reviews the
+// agent. A project or local fast role is reported, not used.
+func TestLoadAutoMode_FastRoleOnlyFromTrustedFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	writeJSONFile(t, filepath.Join(cwd, ".claude", "settings.json"), `{"modelRoles": {"fast": "ollama/tiny"}}`)
+	writeJSONFile(t, filepath.Join(cwd, ".kiln", "settings.local.json"), `{"modelRoles": {"fast": "ollama/tinier"}}`)
+
+	cfg := LoadAutoMode(cwd, LoadOptions{})
+	if cfg.FastRole != "" {
+		t.Errorf("FastRole = %q from project settings, want none", cfg.FastRole)
+	}
+	if len(cfg.FastRoleIgnored) != 2 || cfg.Ignored != nil {
+		t.Errorf("FastRoleIgnored = %q, Ignored = %q", cfg.FastRoleIgnored, cfg.Ignored)
+	}
+	if w := FastRoleIgnoredWarning(cwd, cfg.FastRoleIgnored); !strings.Contains(w, "not used for the auto mode classifier") {
+		t.Errorf("warning = %q", w)
+	}
+
+	writeJSONFile(t, filepath.Join(home, ".claude", "settings.json"), `{"modelRoles": {"fast": "anthropic/claude-haiku-4-5"}}`)
+	if got := LoadAutoMode(cwd, LoadOptions{}).FastRole; got != "anthropic/claude-haiku-4-5" {
+		t.Errorf("user fast role = %q", got)
+	}
+	extra := filepath.Join(t.TempDir(), "flag.json")
+	writeJSONFile(t, extra, `{"modelRoles": {"fast": "faux/faux-2"}}`)
+	if got := LoadAutoMode(cwd, LoadOptions{Extra: extra}).FastRole; got != "faux/faux-2" {
+		t.Errorf("--settings fast role = %q, want it to win", got)
+	}
+}
+
 func TestLoadAutoMode_SettingSourcesExcludeUser(t *testing.T) {
 	cwd, _ := autoModeFixture(t)
 	cfg := LoadAutoMode(cwd, LoadOptions{Sources: []paths.Scope{paths.ScopeProject}})

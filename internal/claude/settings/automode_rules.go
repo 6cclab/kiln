@@ -1,6 +1,9 @@
 package settings
 
-import "strings"
+import (
+	"path"
+	"strings"
+)
 
 // Broad allow rules in auto mode. Claude Code sets aside, for as long as
 // auto mode is on, allow rules that would let arbitrary code run without
@@ -12,22 +15,45 @@ import "strings"
 // shell commands through the classifier"). Deny and ask rules are never
 // touched.
 
-// codeRunners are command prefixes that run whatever code their arguments
-// name: shells, interpreters, package runners, and wrappers that run
-// another command. A wildcard after one of them allows arbitrary code.
-var codeRunners = []string{
+// codeRunners run whatever code their arguments name: shells,
+// interpreters, one-shot package runners, and wrappers that run another
+// command. The rule is broad when the program is the whole rule or is
+// followed by a wildcard.
+var codeRunners = map[string]bool{
 	// shells
-	"bash", "sh", "zsh", "fish", "dash", "ksh", "pwsh",
-	// interpreters
-	"python", "python2", "python3", "node", "deno", "bun", "tsx", "ts-node",
-	"ruby", "perl", "php", "lua", "osascript",
-	// package-manager and project runners
-	"npx", "bunx", "pnpx", "uvx",
-	"npm run", "npm exec", "yarn run", "yarn exec", "yarn dlx",
-	"pnpm run", "pnpm exec", "pnpm dlx", "bun run", "bun x",
-	"uv run", "poetry run", "pipx run", "cargo run", "go run",
+	"bash": true, "sh": true, "zsh": true, "fish": true, "dash": true, "ksh": true, "pwsh": true,
+	// interpreters (a versioned name, python3.12, counts as its family)
+	"python": true, "pypy": true, "node": true, "deno": true, "bun": true, "tsx": true, "ts-node": true,
+	"ruby": true, "perl": true, "php": true, "lua": true, "osascript": true,
+	// one-shot package runners
+	"npx": true, "bunx": true, "pnpx": true, "uvx": true,
 	// wrappers that run the command they are given
-	"eval", "exec", "env", "xargs", "sudo", "ssh", "nohup", "timeout", "nice", "command", "watch",
+	"eval": true, "exec": true, "env": true, "xargs": true, "sudo": true, "ssh": true,
+	"nohup": true, "timeout": true, "nice": true, "command": true, "watch": true,
+}
+
+// toolchains are package managers and build tools whose subcommands run
+// project scripts or arbitrary programs (npm run/exec, git aliases and -c,
+// go test -exec, make targets): any wildcard after one is broad. The docs
+// name package-manager run commands; git, go and the build tools are
+// kiln's own extension of the same reasoning.
+var toolchains = map[string]bool{
+	"npm": true, "pnpm": true, "yarn": true, "bun": true, "deno": true,
+	"pip": true, "pipx": true, "uv": true, "poetry": true, "cargo": true, "go": true, "git": true,
+	"make": true, "gradle": true, "gradlew": true, "mvn": true, "mvnw": true, "dotnet": true,
+	"bundle": true, "rake": true, "composer": true, "gem": true, "mix": true, "swift": true,
+}
+
+// programFamily is a command word's program: the base name, without a
+// version suffix ("/usr/bin/python3.12" → "python", "./gradlew" → "gradlew").
+func programFamily(word string) string {
+	base := path.Base(strings.ReplaceAll(word, `\`, "/"))
+	if trimmed := strings.TrimRight(base, "0123456789."); trimmed != "" && trimmed != base {
+		if codeRunners[trimmed] || toolchains[trimmed] {
+			return trimmed
+		}
+	}
+	return base
 }
 
 // IsBroadAutoModeAllow reports an allow rule auto mode sets aside.
@@ -52,17 +78,20 @@ func IsBroadAutoModeAllow(rule string) bool {
 	if strings.HasSuffix(c, ":*") {
 		c = strings.TrimSuffix(c, ":*") + " *"
 	}
-	for _, r := range codeRunners {
-		if !strings.HasPrefix(c, r) {
-			continue
-		}
-		rest := c[len(r):]
-		switch {
-		case rest == "", strings.HasPrefix(rest, "*"), rest == " *":
-			return true
-		case strings.HasPrefix(rest, " -") && strings.HasSuffix(rest, "*"):
-			return true // python -c *, sh -c *
-		}
+	first, rest, _ := strings.Cut(c, " ")
+	wild := strings.Contains(c, "*")
+	// A wildcard in the program itself (python*, *, py*) can name any
+	// interpreter.
+	if strings.Contains(first, "*") {
+		return true
+	}
+	fam := programFamily(first)
+	switch {
+	case codeRunners[fam]:
+		// The program alone, or any wildcard after it (python *, sh -c *).
+		return rest == "" || wild
+	case toolchains[fam]:
+		return wild
 	}
 	return false
 }

@@ -31,6 +31,13 @@ type Frame struct {
 // the lane's branch and drives the turn loop (assistant request -> tool
 // execution -> ... ) until the run stops.
 func (l *Lane) Prompt(ctx context.Context, text string, images []msg.ImageContent) (RunResult, error) {
+	return l.PromptAs(ctx, text, "", images)
+}
+
+// PromptAs is Prompt for a prompt a user typed: typed is the line as typed,
+// recorded on the stored message (msg.UserMessage.KilnTyped) apart from
+// whatever kiln built around it. "" records nothing.
+func (l *Lane) PromptAs(ctx context.Context, text, typed string, images []msg.ImageContent) (RunResult, error) {
 	l.mu.Lock()
 	if l.running {
 		l.mu.Unlock()
@@ -81,7 +88,7 @@ func (l *Lane) Prompt(ctx context.Context, text string, images []msg.ImageConten
 		ID:       promptEntryID,
 		ParentID: parent,
 		Type:     session.EntryMessage,
-		Message:  msg.UserMessage{Role: msg.RoleUser, Content: blocks, Timestamp: now},
+		Message:  msg.UserMessage{Role: msg.RoleUser, Content: blocks, KilnTyped: typed, Timestamp: now},
 	}
 	entryWrite := session.EntryWrite{Entry: userEntry}
 	tipWrite, err := session.SetValue(session.BranchTip(l.name), &promptEntryID)

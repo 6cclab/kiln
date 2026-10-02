@@ -30,6 +30,13 @@ type AutoModeConfig struct {
 	// Ignored lists settings files that had an autoMode block kiln did not
 	// read (project and local settings), for a startup warning.
 	Ignored []string
+	// FastRole is modelRoles.fast from the same trusted files, the model
+	// the classifier runs on ("" means the session model). A repository
+	// must not pick the model that reviews the agent, any more than the
+	// rules it reviews by. FastRoleIgnored lists project and local files
+	// whose modelRoles.fast was not used for the classifier.
+	FastRole        string
+	FastRoleIgnored []string
 }
 
 type rawAutoMode struct {
@@ -37,6 +44,9 @@ type rawAutoMode struct {
 	Allow       []string `json:"allow"`
 	SoftDeny    []string `json:"soft_deny"`
 	HardDeny    []string `json:"hard_deny"`
+
+	unset bool   // the file has no autoMode block
+	fast  string // the file's modelRoles.fast
 }
 
 // LoadAutoMode reads the "autoMode" block from the settings files the
@@ -60,14 +70,26 @@ func LoadAutoMode(cwd string, opts LoadOptions) AutoModeConfig {
 			return nil, false
 		}
 		var raw struct {
-			AutoMode *rawAutoMode `json:"autoMode"`
+			AutoMode   *rawAutoMode      `json:"autoMode"`
+			ModelRoles map[string]string `json:"modelRoles"`
 		}
-		if err := json.Unmarshal(data, &raw); err != nil || raw.AutoMode == nil {
+		if err := json.Unmarshal(data, &raw); err != nil {
 			return nil, false
 		}
+		if raw.AutoMode == nil {
+			raw.AutoMode = &rawAutoMode{}
+			raw.AutoMode.unset = true
+		}
+		raw.AutoMode.fast = raw.ModelRoles["fast"]
 		return raw.AutoMode, true
 	}
 	add := func(r *rawAutoMode) {
+		if r.fast != "" {
+			cfg.FastRole = r.fast // last wins, as modelRoles merges
+		}
+		if r.unset {
+			return
+		}
 		cfg.Environment = appendSet(cfg.Environment, r.Environment)
 		cfg.Allow = appendSet(cfg.Allow, r.Allow)
 		cfg.SoftDeny = appendSet(cfg.SoftDeny, r.SoftDeny)
@@ -79,7 +101,12 @@ func LoadAutoMode(cwd string, opts LoadOptions) AutoModeConfig {
 			continue
 		}
 		if f.Scope != paths.ScopeUser {
-			cfg.Ignored = append(cfg.Ignored, f.Path)
+			if !r.unset {
+				cfg.Ignored = append(cfg.Ignored, f.Path)
+			}
+			if r.fast != "" {
+				cfg.FastRoleIgnored = append(cfg.FastRoleIgnored, f.Path)
+			}
 			continue
 		}
 		if wants(opts.Sources, f.Scope) {
@@ -135,6 +162,15 @@ func autoModeIgnoredName(cwd, path string) string {
 		return rel
 	}
 	return path
+}
+
+// FastRoleIgnoredWarning is the startup warning for a project or local
+// modelRoles.fast the classifier does not use, "" when there is none.
+func FastRoleIgnoredWarning(cwd string, ignored []string) string {
+	if len(ignored) == 0 {
+		return ""
+	}
+	return "modelRoles.fast in " + autoModeIgnoredName(cwd, ignored[0]) + " is not used for the auto mode classifier, which takes its model only from ~/.claude/settings.json, ~/.kiln/settings.json or --settings (subagents still use it)."
 }
 
 // AutoModeIgnoredWarning is the startup warning for autoMode blocks kiln

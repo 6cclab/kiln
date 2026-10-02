@@ -277,7 +277,7 @@ steps:
 		t.Fatalf("classifier asked %d times, want 1", len(c.reqs))
 	}
 	req := c.reqs[0]
-	if req.ToolName != "bash" || !strings.HasSuffix(req.CallID, "tc1") {
+	if req.ToolName != "bash" || !strings.HasSuffix(req.CallID, "tc1") || !req.Delegated {
 		t.Errorf("classified %+v", req)
 	}
 	if len(req.History) == 0 || !strings.Contains(msg.TextOf(req.History[0].(msg.UserMessage).Content), "tidy the build directory") {

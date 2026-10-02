@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	fauxprovider "github.com/andrepato/harness/internal/provider/faux"
 )
 
 // tuiAutoModeScript: three mutating commands in a row, each blocked by the
@@ -43,7 +41,7 @@ const tuiAutoModeScript = `models:
 // approving that prompt runs the command.
 func TestTUI_AutoMode_BlocksThenPausesToAsk(t *testing.T) {
 	proj, home, sessDir, addr, _ := tuiFixture(t, tuiAutoModeScript)
-	writeModelRolesSettings(t, proj, map[string]string{"fast": fauxprovider.ProviderID + "/" + fauxprovider.ModelID2})
+	writeUserFastRole(t, home)
 
 	s := startTUI(t, 100, 40, proj, home, sessDir, addr, "--permission-mode", "auto")
 	waitReady(t, s)

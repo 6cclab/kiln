@@ -57,6 +57,11 @@ type Request struct {
 	// read only when it runs. Either may be empty.
 	CallID  string
 	History func() []msg.Message
+	// Delegated and UserHistory are set for a subagent's call: History is
+	// the subagent's own, whose user messages are its delegated task, and
+	// UserHistory the root session's (ClassifyRequest).
+	Delegated   bool
+	UserHistory func() []msg.Message
 	// AutoModeNote is set by the gate on a prompt auto mode raised instead
 	// of deciding itself (the classifier failed, or blocked too often): why
 	// the user is being asked. A UI shows it with the prompt.
@@ -711,10 +716,11 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 // the tool block that follows.
 func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult, Outcome, error) {
 	r, out, err := g.checkWithOutcome(ctx, req)
-	// In auto mode, any call that goes ahead — classified, fast-pathed,
-	// rule-allowed or approved at a prompt — ends a run of classifier
-	// blocks (classifier.go).
-	if r == nil && err == nil && g.Mode() == settings.ModeAuto {
+	// In auto mode, a call the user approved at a prompt ends a run of
+	// classifier blocks; so does a classifier allow (classifyAuto). A call
+	// that skipped the classifier does not: reads between blocks must not
+	// keep the streak from ever reaching its limit.
+	if r == nil && err == nil && out == OutcomeApproved && g.Mode() == settings.ModeAuto {
 		g.autoSucceeded()
 	}
 	return r, out, err

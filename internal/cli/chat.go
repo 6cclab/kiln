@@ -997,7 +997,17 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	if w := claudesettings.AutoModeIgnoredWarning(cwd, autoModeConfig.Ignored); w != "" {
 		startupWarn(w)
 	}
-	intents := wireAutoMode(gate, reg, settings.ModelRoles, started, memory.Text, autoModeConfig)
+	// A project's modelRoles.fast is ordinary subagent configuration; that
+	// the classifier does not use it matters only in auto mode, so it is a
+	// startup warning there and a run-log line otherwise.
+	if w := claudesettings.FastRoleIgnoredWarning(cwd, autoModeConfig.FastRoleIgnored); w != "" {
+		if gate.Mode() == claudesettings.ModeAuto {
+			startupWarn(w)
+		} else {
+			diag.L().Info("auto mode", "note", w)
+		}
+	}
+	wireAutoMode(gate, reg, started, memory.Text, autoModeConfig)
 
 	// applyMCP registers the catalog once the background connect is done:
 	// adapters and a rebuilt tool_search into the tool set, the posture
@@ -1019,6 +1029,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// (during a turn, from taskTool's Execute), by which point started is
 	// always set — see the dispatcher construction above.
 	dispatcher.Parent = started
+	dispatcher.UserHistory = func(ctx context.Context) []msg.Message { return automode.BranchMessages(ctx, started.Lane) }
 
 	sessionID := started.SessionID
 	transcriptPath := started.TranscriptPath
@@ -1473,7 +1484,6 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			Dispatcher:      dispatcher,
 			HookConfig:      hookConfig,
 			SessionStart:    sessionStart,
-			Intents:         intents,
 			ScreenReader:    args.ScreenReader,
 			Fullscreen:      args.Fullscreen,
 			// Both --resume/-r (args.ResumeSet) and --continue/-c
@@ -1503,7 +1513,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return exitCode
 	}
 
-	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry, intents)
+	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)
 
 	// Nothing outlives the session: a background shell started during this
 	// run must not hold a port open after the process exits. Killed BEFORE
@@ -1547,7 +1557,7 @@ func readStdin(r io.Reader) string {
 // wrapping here, in print mode, rather than leaving it absent until phase 7.
 // That is the one place this implementation intentionally diverges from
 // cli.ts's control flow instead of following it.
-func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry, intents *automode.Intents) int {
+func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry) int {
 	if args.MaxTurnsErr != "" {
 		fmt.Fprintln(stderr, args.MaxTurnsErr)
 		return 1
@@ -1708,8 +1718,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 		defer unsubStart()
 	}
 
-	intents.Record(prompt, typed)
-	runResult, promptErr := started.Lane.Prompt(ctx, prompt, resolvedMentions.Images)
+	runResult, promptErr := started.Lane.PromptAs(ctx, prompt, typed, resolvedMentions.Images)
 	ok := runResult.Status == harness.StatusCompleted
 	reason := ""
 	if maxTurnsHit {
