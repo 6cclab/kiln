@@ -49,10 +49,15 @@ type Plan struct {
 	AllowLocalBinding   bool
 	AllowAllUnixSockets bool
 	UnixSockets         []string
-	MachLookup          []string
-	WeakerNested        bool
-	WeakerNetwork       bool
-	AppleEvents         bool
+	// HiddenSockets are well-known Unix sockets (the session bus, docker,
+	// the ssh agent) a Linux sandboxed command must not reach: bwrap binds
+	// /dev/null over each one that exists. Seatbelt needs no list; it
+	// denies every Unix socket the settings do not name.
+	HiddenSockets []string
+	MachLookup    []string
+	WeakerNested  bool
+	WeakerNetwork bool
+	AppleEvents   bool
 
 	Env   map[string]string
 	Unset []string
@@ -74,6 +79,7 @@ func buildPlan(cfg Config, cwd string, roots []string, tmpDir, home string, http
 		WeakerNested:        cfg.WeakerNested,
 		WeakerNetwork:       cfg.WeakerNetwork,
 		AppleEvents:         cfg.AppleEvents,
+		HiddenSockets:       hiddenSockets(cfg, os.Getuid(), os.Getenv),
 		DenyRead:            cfg.DenyRead,
 		AllowRead:           cfg.AllowRead,
 	}
@@ -126,6 +132,48 @@ func buildPlan(cfg Config, cwd string, roots []string, tmpDir, home string, http
 	}
 	p.Unset = append(p.Unset, cfg.DenyEnv...)
 	return p
+}
+
+// hiddenSockets lists the Unix sockets the Linux sandbox hides: in its
+// own network namespace a command still reaches any socket file it can
+// see, and these hand out control of the user's session (D-Bus, systemd),
+// the host (docker, podman) or the user's keys (ssh and gpg agents).
+// allowAllUnixSockets hides none; an allowUnixSockets entry un-hides the
+// sockets at or under it.
+func hiddenSockets(cfg Config, uid int, getenv func(string) string) []string {
+	if cfg.AllowAllUnixSockets {
+		return nil
+	}
+	run := "/run/user/" + strconv.Itoa(uid)
+	list := []string{
+		run + "/bus", run + "/systemd/private", run + "/docker.sock",
+		run + "/podman/podman.sock", run + "/gnupg/S.gpg-agent", run + "/gnupg/S.gpg-agent.ssh",
+		"/run/dbus/system_bus_socket", "/var/run/dbus/system_bus_socket",
+		"/run/docker.sock", "/var/run/docker.sock", "/run/podman/podman.sock",
+		"/run/containerd/containerd.sock",
+	}
+	if rt := getenv("XDG_RUNTIME_DIR"); rt != "" && rt != run {
+		list = append(list, rt+"/bus", rt+"/docker.sock", rt+"/podman/podman.sock")
+	}
+	for _, k := range []string{"SSH_AUTH_SOCK", "DOCKER_HOST"} {
+		v := strings.TrimPrefix(getenv(k), "unix://")
+		if filepath.IsAbs(v) {
+			list = append(list, filepath.Clean(v))
+		}
+	}
+	var out []string
+	for _, s := range dedupe(list) {
+		allowed := false
+		for _, a := range cfg.UnixSockets {
+			if a = filepath.Clean(a); s == a || strings.HasPrefix(s, a+"/") {
+				allowed = true
+			}
+		}
+		if !allowed {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // shellStartupFiles are written to only by the user: a command that could
@@ -261,7 +309,12 @@ func gitDirProtections(gitdir string) []Rule {
 // nestedGitDirs returns gitdir and the git directories under its modules/
 // and worktrees/ (directories holding a HEAD), not descending into objects,
 // refs or logs.
-func nestedGitDirs(gitdir string) []string {
+func nestedGitDirs(gitdir string) []string { return walkNested(gitdir, true) }
+
+// walkNested returns gitdir and the directories under its modules/ and
+// worktrees/ (skipping object and ref storage); with needHead, only those
+// holding a HEAD file, that is git directories already set up.
+func walkNested(gitdir string, needHead bool) []string {
 	out := []string{gitdir}
 	for _, nested := range []string{"modules", "worktrees"} {
 		_ = filepath.WalkDir(filepath.Join(gitdir, nested), func(p string, d os.DirEntry, err error) error {
@@ -272,7 +325,7 @@ func nestedGitDirs(gitdir string) []string {
 			case "objects", "refs", "logs", "hooks", "info":
 				return filepath.SkipDir
 			}
-			if _, err := os.Lstat(filepath.Join(p, "HEAD")); err == nil {
+			if _, err := os.Lstat(filepath.Join(p, "HEAD")); err == nil || !needHead {
 				out = append(out, p)
 			}
 			return nil

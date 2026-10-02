@@ -196,13 +196,13 @@ func seatbeltProfile(p Plan) (string, error) {
 		w("(allow network-outbound (remote unix-socket))")
 		w("(allow network-bind (local unix-socket))")
 	} else if len(p.UnixSockets) > 0 {
-		var socks []string
+		// One rule per path: several path-literals inside one
+		// (remote unix-socket ...) filter match no socket at all.
 		for _, s := range p.UnixSockets {
 			for _, sp := range spellings(s) {
-				socks = append(socks, "(path-literal "+str(sp)+")")
+				w("(allow network-outbound (remote unix-socket (path-literal %s)))", str(sp))
 			}
 		}
-		w("(allow network-outbound (remote unix-socket %s))", strings.Join(socks, " "))
 	}
 	if bad != nil {
 		return "", bad
