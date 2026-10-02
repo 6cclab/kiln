@@ -117,6 +117,13 @@ func (g *Gate) checkSandboxed(ctx context.Context, req Request, permissions sett
 		if hits.Unsure || contentAskHit(permissions, g.cwd(), req) || p.CriticalRemoval(req.PrimaryArg) {
 			return nil, OutcomeNone, false, nil
 		}
+		// In auto mode a write to a protected path (protected.go) goes to
+		// the classifier even past an allow, and so past the sandbox: its
+		// own protected list is narrower, since it must leave git and
+		// builds working.
+		if mode == settings.ModeAuto && g.bashTouchesProtected(req.PrimaryArg) {
+			return nil, OutcomeNone, false, nil
+		}
 		return nil, OutcomeAuto, true, nil
 	}
 	if !disable || !p.UnsandboxedAllowed() || hits.Deny {
