@@ -1,7 +1,12 @@
 # `!echo hi` (bang: runs directly in the user's shell, never reaches the
-# model) and `#remember to run tests` (memory: appended to CLAUDE.md,
-# never reaches the model) — internal/tui/inputmodes.go ClassifyInput,
-# RunBang and AddMemory. Neither consumes a faux turn.
+# model) — internal/tui/inputmodes.go ClassifyInput, RunBang. Does not
+# consume a faux turn.
+#
+# kiln has no `#` memory-note mode (dropped to match Claude Code, whose own
+# prompt input has none - only a bash prefix and a plain prompt): a
+# line starting with `#` is now an ordinary prompt, which this scenario
+# confirms by sending one and seeing it echoed and answered like any other
+# message, never "Saved to ... CLAUDE.md".
 @faux testdata/faux/hello.yaml
 @size 120x40
 
@@ -15,9 +20,9 @@ EXPECT_NOT /! echo hi/
 EXPECT_NOT /Hello from faux/
 TYPE #remember to run tests
 KEY enter
-WAITFOR /Saved to .*CLAUDE\.md/ 20
-SHOT memory-note
-EXPECT /Saved to .*CLAUDE\.md/
-EXPECT /applies from the next session/
-EXPECT_NOT /Hello from faux/
+WAITFOR /Hello from faux/ 20
+SHOT hash-is-a-prompt
+EXPECT /#remember to run tests/
+EXPECT /Hello from faux/
+EXPECT_NOT /Saved to/
 EXPECT_NOT /panic|goroutine/

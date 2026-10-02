@@ -1368,7 +1368,7 @@ func assertAXFooterInvariant(t *testing.T, s *screen.Screen) {
 	}
 }
 
-// --- 10. `!` and `#` input modes -------------------------------------------
+// --- 10. `!` (and the dropped `#`) input modes -----------------------
 
 func TestTUI_BangCommand(t *testing.T) {
 	proj, home, sessDir, addr, requests := tuiFixture(t, fixBugScript)
@@ -1391,42 +1391,44 @@ func TestTUI_BangCommand(t *testing.T) {
 	}
 }
 
-func TestTUI_MemoryNote(t *testing.T) {
-	proj, home, sessDir, addr, _ := tuiFixture(t, fixBugScript)
-
-	// A ~/.claude directory, as on a real machine: kiln reads it but must
-	// not write the note there.
-	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+// TestTUI_HashIsAnOrdinaryPrompt: kiln dropped its own `#` memory-note
+// input mode to match Claude Code, whose own prompt input has no such
+// shortcut (only a bash prefix and a plain prompt). A line starting with
+// `#` must reach the model like any other message, and kiln must create
+// no CLAUDE.md of its own anywhere.
+func TestTUI_HashIsAnOrdinaryPrompt(t *testing.T) {
+	const script = `model: faux-1
+steps:
+  - text: "Noted."
+    usage: {input: 10, output: 5}
+`
+	proj, home, sessDir, addr, requests := tuiFixture(t, script)
 
 	s := startTUI(t, 100, 24, proj, home, sessDir, addr)
 	waitReady(t, s)
 
 	s.Send("#remember to use tabs")
 	s.SendKey("enter")
-	if err := s.WaitFor("Saved to ~/.kiln/CLAUDE.md · applies from the next session", 3*time.Second); err != nil {
+	if err := s.WaitFor("Noted.", 3*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	// The note is a system note of its own, not rows under "you".
+	if got := len(requests()); got != 1 {
+		t.Fatalf("#remember to use tabs sent %d requests to faux, want 1 (it is an ordinary prompt, not a memory-note mode)", got)
+	}
 	rows := strings.Join(s.Rows(), "\n")
-	if !regexp.MustCompile(`system ─+\n\s*Saved to`).MatchString(rows) {
-		t.Errorf("the saved note is not its own system block:\n%s", rows)
+	if !strings.Contains(rows, "#remember to use tabs") {
+		t.Errorf("the line should be echoed as the user's own message:\n%s", rows)
+	}
+	if strings.Contains(rows, "Saved to") {
+		t.Errorf("there must be no \"Saved to\" memory-note note:\n%s", rows)
 	}
 
-	// scratchProject's dir has no CLAUDE.md yet, so AddMemory (see
-	// internal/claude/memory/memory.go's AddMemory) falls back to kiln's
-	// user-level file, $HOME/.kiln/CLAUDE.md; ~/.claude stays empty.
-	if entries, _ := os.ReadDir(filepath.Join(home, ".claude")); len(entries) != 0 {
-		t.Errorf("kiln wrote into ~/.claude: %d entries", len(entries))
+	// kiln writes no CLAUDE.md of its own, anywhere.
+	if _, err := os.Stat(filepath.Join(home, ".kiln", "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Errorf("~/.kiln/CLAUDE.md should not exist, got err=%v", err)
 	}
-	path := filepath.Join(home, ".kiln", "CLAUDE.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	if !strings.Contains(string(data), "remember to use tabs") {
-		t.Errorf("%s does not contain the note:\n%s", path, data)
+	if _, err := os.Stat(filepath.Join(proj, "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Errorf("<proj>/CLAUDE.md should not exist, got err=%v", err)
 	}
 }
 
