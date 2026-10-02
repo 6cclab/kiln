@@ -262,6 +262,7 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 | `statusLine.type`, `statusLine.command`, `statusLine.padding` | `*StatusLineConfig` | replaced wholesale, only when the later scope's `command` is non-empty |
 | `autoMemoryEnabled` | `*bool` | last non-nil wins (§7's "Auto memory") |
 | `autoMemoryDirectory` | `string` | last non-empty wins; absolute or `~/`-prefixed (§7's "Auto memory") |
+| `autoMode.environment`, `autoMode.allow`, `autoMode.soft_deny`, `autoMode.hard_deny` | `AutoModeConfig` (`settings/automode.go`, `LoadAutoMode`) | read **only** from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`, concatenated in that order; ignored in project and local settings, with a startup warning (see "Auto mode classifier") |
 
 ### Permission rule syntax (`MatchesRule`, `settings.go`)
 
@@ -310,7 +311,7 @@ Order: deny rules first (absolute — deny wins even under `bypassPermissions`) 
 | `plan` | allow if the tool is read-only, or `bash`/`bash_background` running a read-only command (the gate still asks when it reads outside the workspace, as in manual mode); ask for any other shell command — Claude Code's "any other shell command goes through the regular permission flow while you are still planning", so an allow rule or a session grant runs it; otherwise **deny outright**, not ask (edits are denied even when a rule allows them) |
 | `acceptEdits` | allow if `edit`, `write`, or read-only; otherwise ask |
 | `dontAsk` | allow if read-only or matched by an allow rule; otherwise **deny**, never ask (Claude Code's meaning: for CI and locked-down runs) |
-| `auto` | allow everything (still subject to deny rules and the outside-workspace check) |
+| `auto` | allow as far as rules go; the gate then applies the outside-workspace check and sends the rest past the auto mode classifier (below) |
 | `manual` | allow if read-only; otherwise ask |
 | (unrecognized) | ask |
 
@@ -321,6 +322,21 @@ Read-only set: `read`, `glob`, `grep`, `session_search`, `tool_search`, `bash_ou
 `internal/claude/permission/permission.go`. After `Decide` returns a verdict, if the call carries a path argument (`path`/`file_path`/`filePath`) that resolves outside the gate's registered roots, an otherwise-allowed call is forced to prompt (or denied, headless with no prompter) — unless the mode is `bypassPermissions`, which skips this check too. `WithinRoots` (`permission.go`) resolves the path as the tools do (`execenv.ResolveToolPath`: `@`, `~`, `file://`, relative to the first root) and rejects any `..`-escape. On macOS and Windows the comparison is case- and normalization-insensitive (`settings.CaseFoldPath`, the same folding deny rules use), so `/Users/me/PROJ/a.go` is inside the root `/Users/me/Proj`; on Linux it is exact.
 
 `GateOptions.ReadOnlyRoots` (`AddReadOnlyRoot`/`WithinReadOnlyRoots`) is a second, narrower set of roots: a path there escapes this check only for a tool in `settings.ReadOnly`, never for a mutating one — used for Claude Code's auto-memory directory (§7) so reading a topic file doesn't prompt while a write there is still gated exactly as any other outside-workspace path.
+
+### Auto mode classifier
+
+`internal/claude/permission/classifier.go` (the gate's side), `internal/automode` (the model call). Auto mode behaves as Claude Code documents it (code.claude.com/docs/en/permission-modes, "Eliminate permission prompts with auto mode"; code.claude.com/docs/en/auto-mode-config):
+
+- **Order.** Deny rules, ask rules and the outside-workspace check are settled first, exactly as in every other mode. The classifier only judges what they leave allowed, so it can narrow auto mode, never widen it.
+- **What skips it.** Calls an allow rule or a session "don't ask again" grant approves; read-only tools; `edit`/`write` inside the workspace; a bash command that provably only reads, inside the workspace. Everything else is classified: other shell commands, `web_fetch`, MCP tools, `task` dispatches.
+- **What it sees** (`automode/transcript.go`): what the user typed, the agent's earlier tool calls other than read-only lookups, the CLAUDE.md memory the session loaded, and the action. Never tool results, the agent's prose or thinking, compaction summaries, `<hook-context>` blocks or `@file` contents. Every value is JSON-encoded inside its tag; an action over 20,000 bytes is not reviewed at all (the user is asked).
+- **Model.** The `fast` entry of `modelRoles` when it resolves, else the session's current model. One request per classified call, no tools, a 1,024-token answer cap, a 60s timeout.
+- **Verdicts.** Allow runs the call. Block returns `auto mode blocked this action: <reason>…` to the model as the tool result; the TUI shows the tool block with `blocked by auto mode` in its meta. The third block in a row, or the twentieth in a session, asks the user instead, after a system note naming the streak and the latest reason; approving resets the streak, and the total resets when its own limit trips (Claude Code's numbers). Subagents share the gate, so they share the counts.
+- **Failures.** An error, a timeout, an unreadable answer or no classifier at all asks the user; in print mode, which has nobody to ask, the call is refused. Never allowed. Failures do not count as blocks.
+- **Settings.** `autoMode.environment`, `allow`, `soft_deny` and `hard_deny` are prose lists added to the classifier's instructions. A list containing `"$defaults"` keeps kiln's built-in entries at that position; a list without it replaces them. Read from user settings and `--settings` only: a repository cannot tell the classifier what to allow.
+- **Run log.** Each call logs `auto mode classifier` with `tool`, `decision` (`allow`/`block`/`error`), `model`, `ms`, `input_tokens`, `output_tokens`, `cache_read`, `cache_write`, and the reason or error.
+
+Not implemented from Claude Code's auto mode: dropping broad allow rules (`Bash(*)`, interpreter wildcards) while auto mode is on, `autoMode.classifyAllShell`, protected and critical paths, reviewing a subagent's report before the parent reads it, and the `claude auto-mode` subcommands.
 
 ### `task` role-crossing gate
 

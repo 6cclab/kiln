@@ -253,7 +253,7 @@ the model as a prompt. Source: `internal/claude/skills`, `internal/commands/sour
 | `manual` (default) | read-only tools | asks |
 | `acceptEdits` | read-only tools, edits and writes | asks |
 | `plan` | read-only tools | denied outright, not asked |
-| `auto` | everything (deny rules and the workspace boundary still apply) | — |
+| `auto` | reads, edits in the workspace, read-only commands; anything else a classifier model approves (deny and ask rules and the workspace boundary still apply) | a classifier block goes back to the model; the 3rd block in a row, or a failed check, asks |
 | `dontAsk` | everything | — |
 | `bypassPermissions` | everything, including the outside-workspace check | deny rules still apply |
 

@@ -226,7 +226,7 @@ shows in the footer when it is not the default.
 |---|---|
 | `manual` | ask before every tool use |
 | `acceptEdits` | file edits auto-approved, other tools still prompt |
-| `auto` | read-only tools allowed, anything that can change something still asks |
+| `auto` | done: deny/ask rules and the workspace boundary first; reads, workspace edits and read-only bash run; everything else goes past a classifier model that sees user messages, earlier non-read-only tool calls and CLAUDE.md, never tool results. A block goes back to the model; 3 in a row or 20 in a session ask instead; a failed check asks. `autoMode` settings from user settings and `--settings` only (code.claude.com/docs/en/permission-modes, /auto-mode-config). Details: `configuration.md` "Auto mode classifier" |
 | `dontAsk` | never prompt: reads and allow-rule matches run, anything that would prompt is denied |
 | `bypassPermissions` | skip all checks |
 | `plan` | read-only; no edits or mutations, produce a plan |
