@@ -315,6 +315,54 @@ func TestAutoMode_AllowRuleSkipsClassifier(t *testing.T) {
 	}
 }
 
+// Broad allow rules are set aside while auto mode is on: what they would
+// approve goes to the classifier. A narrow rule still skips it, and the
+// broad ones apply again once the mode changes.
+func TestAutoMode_BroadAllowRulesSetAside(t *testing.T) {
+	perms := settings.Permissions{Allow: []string{"Bash(*)", "Bash(python3:*)", "Bash(npm run:*)", "Task", "Bash(npm test)"}}
+	ctx := context.Background()
+	classified := []Request{
+		bashReq("rm -rf ~"),
+		bashReq("python3 -c 'import os; os.system(\"x\")'"),
+		bashReq("npm run deploy"),
+		{ToolName: "task", Args: map[string]any{"prompt": "deploy"}},
+	}
+	for _, req := range classified {
+		c := allowAll()
+		g := autoGate(t, c, perms)
+		if _, _, err := g.CheckWithOutcome(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+		if len(c.calls) != 1 {
+			t.Errorf("%s(%s): classifier called %d times, want 1 (the broad rule must not skip it)", req.ToolName, req.PrimaryArg, len(c.calls))
+		}
+	}
+
+	c := blockAll("should not be asked")
+	g := autoGate(t, c, perms)
+	if blocked, _, _ := g.CheckWithOutcome(ctx, bashReq("npm test")); blocked != nil || len(c.calls) != 0 {
+		t.Errorf("narrow rule: blocked=%+v calls=%d, want allowed without the classifier", blocked, len(c.calls))
+	}
+
+	// Leaving auto mode puts the rules back.
+	g.SetMode(settings.ModeManual)
+	p := &promptRecorder{kind: PromptDeny}
+	g.SetPrompter(p.prompt)
+	manual := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{work(t)}})
+	manual.SetPrompter(p.prompt)
+	if _, _, err := manual.CheckWithOutcome(ctx, bashReq("make deploy")); err != nil || len(p.reqs) != 1 || p.reqs[0].InAutoMode {
+		t.Errorf("manual-mode prompt: err=%v prompts=%+v, want one not marked as auto mode", err, p.reqs)
+	}
+	p.reqs = nil
+	blocked, out, err := g.CheckWithOutcome(ctx, bashReq("npm run deploy"))
+	if err != nil || blocked != nil || out != OutcomeAuto || len(p.reqs) != 0 {
+		t.Errorf("manual mode: blocked=%+v out=%q prompts=%d, want the allow rule to apply again", blocked, out, len(p.reqs))
+	}
+	if got := g.Permissions().Allow; len(got) != 5 {
+		t.Errorf("gate rules = %q, want all five kept", got)
+	}
+}
+
 func TestAutoMode_OtherModesNeverClassify(t *testing.T) {
 	for _, mode := range []settings.PermissionMode{settings.ModeManual, settings.ModeAcceptEdits, settings.ModeBypassPermissions, settings.ModeDontAsk, settings.ModePlan} {
 		c := allowAll()
@@ -353,6 +401,9 @@ func TestAutoMode_ConsecutiveBlocksFallBackToPrompt(t *testing.T) {
 	}
 	if len(p.reqs) != 1 || !strings.Contains(p.reqs[0].AutoModeNote, "3 actions in a row") || !strings.Contains(p.reqs[0].AutoModeNote, "force-pushes to main") {
 		t.Fatalf("prompts = %+v, want one naming the streak and the latest reason", p.reqs)
+	}
+	if !p.reqs[0].InAutoMode {
+		t.Error("the prompt is not marked as raised in auto mode")
 	}
 	if consecutive, _ := g.AutoBlocks(); consecutive != 0 {
 		t.Errorf("streak = %d after the user approved, want 0", consecutive)

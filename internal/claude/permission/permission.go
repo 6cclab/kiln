@@ -61,6 +61,9 @@ type Request struct {
 	// of deciding itself (the classifier failed, or blocked too often): why
 	// the user is being asked. A UI shows it with the prompt.
 	AutoModeNote string
+	// InAutoMode is set by the gate on a prompt raised while auto mode is
+	// on, so a UI does not offer to switch to the mode already active.
+	InAutoMode bool
 }
 
 // Prompter asks the user. Implemented by the TUI; absent in headless runs.
@@ -191,6 +194,9 @@ type Gate struct {
 	// (classifier.go), guarded by mu.
 	classifier Classifier
 	auto       autoState
+	// autoAsideLogged: the broad allow rules auto mode sets aside were
+	// logged for this stretch of auto mode (rules, classifier.go).
+	autoAsideLogged bool
 }
 
 // NewGate builds a Gate. Roots are resolved to absolute paths and
@@ -717,9 +723,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult, Outcome, error) {
 	k := key(req.ToolName, req.PrimaryArg)
 
-	g.mu.Lock()
-	permissions, mode := g.permissions, g.mode
-	g.mu.Unlock()
+	permissions, mode := g.rules()
 
 	// A file tool is judged on its path argument, resolved the way the
 	// tool resolves it (settings/pathrules.go), whatever PrimaryArgOf
@@ -891,9 +895,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// The rules may have changed while this call waited for another
 	// prompt: a "don't ask again" there can have saved a rule covering
 	// this command.
-	g.mu.Lock()
-	permissions, mode = g.permissions, g.mode
-	g.mu.Unlock()
+	permissions, mode = g.rules()
 	if settings.IsBashTool(req.ToolName) {
 		if h := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg); h.Allow && !h.Deny && !h.Ask && !h.Unsure {
 			return nil, OutcomeAuto, nil
@@ -929,6 +931,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 // would promise a grant the next identical call does not get.
 func (g *Gate) promptRequest(req Request, permissions settings.Permissions, mode settings.PermissionMode, grantable bool) Request {
 	req.Grantable, req.DontAskRules = grantable, nil
+	req.InAutoMode = mode == settings.ModeAuto
 	if !grantable || !settings.IsBashTool(req.ToolName) {
 		return req
 	}

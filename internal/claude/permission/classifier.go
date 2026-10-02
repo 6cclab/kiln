@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/msg"
 )
 
@@ -98,6 +99,28 @@ func (g *Gate) AutoBlocks() (consecutive, total int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.auto.consecutive, g.auto.total
+}
+
+// rules is the rule set and mode a decision uses. In auto mode the broad
+// allow rules (settings.IsBroadAutoModeAllow) are set aside, so what they
+// would approve goes to the classifier; they apply again as soon as the
+// mode changes, since nothing is removed from the gate's own rules.
+// Claude Code drops them silently; kiln logs them to the run log, once per
+// stretch of auto mode.
+func (g *Gate) rules() (settings.Permissions, settings.PermissionMode) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	p, mode := g.permissions, g.mode
+	if mode != settings.ModeAuto {
+		g.autoAsideLogged = false
+		return p, mode
+	}
+	p, aside := settings.WithoutBroadAutoModeAllows(p)
+	if len(aside) > 0 && !g.autoAsideLogged {
+		g.autoAsideLogged = true
+		diag.L().Info("auto mode sets aside broad allow rules", "rules", strings.Join(aside, ", "))
+	}
+	return p, mode
 }
 
 // autoSucceeded ends a run of blocks: any call auto mode lets through,
