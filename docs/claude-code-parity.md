@@ -45,9 +45,11 @@ see `kiln-design.md`'s "Input" section, not the notes column below.
 | `/` | slash command; opens the command palette | `[obs]` |
 | `@` | file mention; fuzzy path completion inline, contents inlined into the prompt on submit | `[obs]` |
 | `!` | run a bash command directly, output into transcript | `[obs]` |
-| `#` | write to memory / CLAUDE.md | `[obs]` project `CLAUDE.md` preferred, falls back to `~/.kiln/CLAUDE.md` (kiln never writes `~/.claude`; the file is read with `~/.claude/CLAUDE.md`) — `TestAddMemoryPrefersProjectFile`, `TestAddMemoryFallsBackToUserFile` (`internal/claude/memory/memory_test.go`) |
 
-All four are token-boundary triggers, matching `AutocompleteProvider.triggerCharacters`.
+All three are token-boundary triggers, matching `AutocompleteProvider.triggerCharacters`.
+Claude Code's own prompt input has only these two live modes (bash and plain
+prompt) - no `#` memory shortcut. kiln's earlier `#` mode was removed to
+match; a line starting with `#` is now an ordinary prompt.
 
 ## 3. Slash command palette
 
@@ -333,22 +335,26 @@ Seven; the first six are additive:
    subagents of its own, up to two levels deep from the root session before
    the tool stops being offered at all. Claude Code's subagents cannot
    dispatch subagents of their own `[chk]`.
-7. **kiln reads `.claude`, writes `.kiln`** — kiln reads Claude Code's settings,
-   memory and rules exactly as Claude Code does, but never writes them. What
-   kiln saves goes to `<repo>/.kiln/settings.local.json` (approved rules,
-   `/permissions` edits), `~/.kiln/settings.json` (`/model` default) and
-   `~/.kiln/CLAUDE.md` (`#` notes when the project has no `CLAUDE.md`). Each
-   kiln file joins its Claude Code scope and wins for single values; deny rules
-   win everywhere. A git-tracked or symlinked `.kiln/settings.local.json` is
-   held until the folder is trusted.
+7. **kiln reads `.claude`, writes `.kiln`** — kiln reads Claude Code's
+   settings, memory and rules exactly as Claude Code does, but never writes
+   them. What kiln saves for itself goes to `<repo>/.kiln/settings.local.json`
+   (approved rules, `/permissions` edits) and `~/.kiln/settings.json` (`/model`
+   default). Each kiln file joins its Claude Code scope and wins for single
+   values; deny rules win everywhere. A git-tracked or symlinked
+   `.kiln/settings.local.json` is held until the folder is trusted.
 
-   Open, not yet moved:
-   - `kiln mcp add/remove` still writes Claude Code's `~/.claude.json` (local
-     and user scope) and `.mcp.json` (project scope). Moving it needs a kiln
-     MCP config file and a reader that merges it with Claude Code's.
-   - `/memory user` opens `~/.claude/CLAUDE.md` in `$EDITOR`. kiln writes
-     nothing itself; decide whether it should open `~/.kiln/CLAUDE.md`
-     instead.
+   MCP is the deliberate exception: kiln has no MCP config file of its own.
+   `kiln mcp add`/`add-json`/`remove` write the same files `claude mcp add`
+   does (`~/.claude.json` for `local`/`user` scope, `.mcp.json` for
+   `project` scope), so a server either tool adds is one set, usable by
+   both - not a kiln-owned mirror to keep in sync.
+
+   kiln also has no writable memory or auto-memory store of its own: it
+   reads `CLAUDE.md` (user and project) and Claude Code's own
+   auto-memory directory read-only, and has dropped its earlier `#`
+   memory-note input mode and `~/.kiln/CLAUDE.md` file (see §2) rather than
+   invent a CLAUDE.md of its own. Open item: a kiln-native, writable memory
+   store (auto or otherwise) does not exist yet.
 
 ## Explicit non-goals
 

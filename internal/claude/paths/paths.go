@@ -100,12 +100,6 @@ func KilnLocalSettingsPath(cwd string) string {
 	return filepath.Join(cwd, KilnDir, "settings.local.json")
 }
 
-// KilnUserMemoryPath is ~/.kiln/CLAUDE.md, where a "#" note goes when the
-// project has no CLAUDE.md; read after ~/.claude/CLAUDE.md.
-func KilnUserMemoryPath() string {
-	return filepath.Join(homeDir(), KilnDir, CLAUDEMD)
-}
-
 // SettingsSource is one settings file kiln reads; Kiln marks kiln's own.
 type SettingsSource struct {
 	SettingsFile

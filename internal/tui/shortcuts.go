@@ -14,7 +14,6 @@ var shortcutColumns = [2][]shortcut{
 		{"!", "run a shell command"},
 		{"/", "commands"},
 		{"@", "add files"},
-		{"#", "save a memory note"},
 		{"shift+⏎", "new line"},
 	},
 	{

@@ -95,7 +95,6 @@ visual detail — colours, glyphs, exact block anatomy — is
 | `/` | slash command — opens the command palette |
 | `@` | file (or image) mention — fuzzy path completion |
 | `!` | run a shell command directly; output goes to the transcript, never to the model |
-| `#` | append a note to `CLAUDE.md` (project or user memory) |
 
 `@path` inlines the file's contents into your message so the model has it
 without spending a turn on a read, split across however many `@mentions` are
@@ -104,9 +103,11 @@ tokens); a mention outside the workspace, or a directory, is skipped and
 reported rather than inlined. `@screenshot.png` attaches the image instead of
 inlining text. A `!command` line runs in your own shell/environment (capped
 at 64KB / 2000 lines of captured output) and is never fed back to the model —
-reference its output yourself in your next message if the model needs it. A
-`#note` line writes straight to memory and reports where. Source:
-`internal/cli/mentions.go`, `internal/tui/inputmodes.go`.
+reference its output yourself in your next message if the model needs it.
+kiln has no `#` memory-note shortcut: Claude Code's own prompt input has
+none either (only a bash prefix and a plain prompt), so a line starting with
+`#` is an ordinary message. Use `/memory` (§5) to open a CLAUDE.md in your
+editor instead. Source: `internal/cli/mentions.go`, `internal/tui/inputmodes.go`.
 
 **Autocomplete.** Typing `@` anywhere opens fuzzy file completion; typing `/`
 at the start of the line opens command completion, then argument completion
@@ -172,7 +173,7 @@ is won by the later one — see precedence below).
 | `/resume` | `[id]` | switch to a past session here: type `/resume ` to pick one by its first prompt, or give an id prefix; with no argument, list recent sessions |
 | `/rewind` | `[entry-id]` | list recent turns, or move the conversation's branch tip back to one |
 | `/export` | `[path]` | write this conversation to a Markdown file |
-| `/memory` | `[user\|project]` | open `CLAUDE.md` in `$EDITOR`/`$VISUAL`, or print its path |
+| `/memory` | `[user\|project\|auto]` | no args: list the available CLAUDE.md files and the auto-memory folder; a name: open that CLAUDE.md in `$EDITOR`/`$VISUAL` (or print its path with none set), or name the auto-memory folder |
 | `/add-dir` | `<path>` | let tools touch another directory without prompting; no args lists current roots |
 | `/init` | — | ask the model to write/refresh this project's `CLAUDE.md` |
 | `/config` | — | list the settings files in effect and their scope |
@@ -308,8 +309,9 @@ mode** · **2 Yes, manually approve edits** · **3 Tell kiln what to change**
 
 ## 7. MCP servers and postures
 
-MCP servers are read from `~/.claude.json` (or `--mcp-config`) and connect in
-the background after the prompt appears; the footer reports progress, and a
+MCP servers are read from `~/.claude.json`/`.mcp.json` (the same files
+`kiln mcp add` writes - see `docs/configuration.md`) or `--mcp-config`, and
+connect in the background after the prompt appears; the footer reports progress, and a
 failed server is named once with a reason. `/mcp` opens a dialog: a
 sectioned server list with a status glyph, `↑`/`↓` to move, `Enter` for a
 server's tool list and connect latency, `Esc` back or to close.

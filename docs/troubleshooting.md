@@ -149,7 +149,9 @@ window.
 
 ## MCP servers
 
-Read from `~/.claude.json`'s `mcpServers` map (`internal/mcp/config.go`).
+Read from `~/.claude.json` and `.mcp.json` - the same files `claude mcp add`
+writes, and `kiln mcp add` writes them too (`internal/mcp/config.go`; scopes
+and precedence in `docs/configuration.md`).
 Servers connect sequentially, name-sorted; one failing doesn't block the rest
 (`internal/mcp/hub.go`).
 
@@ -159,8 +161,11 @@ HARNESS_MCP_CONNECT_TIMEOUT=90s kiln        # default 30s (internal/mcp/hub.go)
 kiln --strict-mcp-config --mcp-config ./project-mcp.json
 ```
 
-- **`No MCP servers configured. They are read from ~/.claude.json`**
-  (`internal/mcp/status.go`). Missing, empty, or unparsable `mcpServers`
+- **`No MCP servers configured. Add one with kiln mcp add — it writes
+  ~/.claude.json/.mcp.json, the same files claude mcp add uses`**
+  (`internal/mcp/status.go`; `kiln mcp list`'s own empty message in
+  `internal/cli/mcp_cmd.go` is similar: `Add one with: kiln mcp add <name>
+  -- <command> [args...]`). Missing, empty, or unparsable `mcpServers`
   (silently treated as empty, `internal/mcp/config.go`).
 
 - **`⚠ 1 MCP server unavailable · run /mcp`** / **`⚠ %d MCP servers unavailable

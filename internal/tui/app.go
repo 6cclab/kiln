@@ -1908,11 +1908,9 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	return m.beginTurn(prompt, images)
 }
 
-// runMode executes a `!` or `#` line and returns a Cmd that commits its
-// output. `!` may take real time (a build, a slow command), so it runs on
-// its own goroutine rather than blocking Update; `#` is fast local file
-// I/O and is committed synchronously by the caller instead — see
-// handleSubmit, which never calls runMode for ModeMemory.
+// runMode executes a `!` line and returns a Cmd that commits its output.
+// It may take real time (a build, a slow command), so it runs on its own
+// goroutine rather than blocking Update.
 func (m Model) runMode(c Classified) tea.Cmd {
 	switch c.Mode {
 	case ModeBang:
@@ -1932,14 +1930,6 @@ func (m Model) runMode(c Classified) tea.Cmd {
 			_ = cwd
 			return nil
 		}
-	case ModeMemory:
-		// A system note of its own, not rows under the user's "you" block.
-		note, ok := AddMemory(c.Body, m.cfg.Cwd)
-		if !ok {
-			m.commit(RenderError(note))
-			break
-		}
-		m.commitNote(note)
 	}
 	return nil
 }

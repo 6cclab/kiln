@@ -23,7 +23,7 @@ func truncate(text string, max int) string {
 // 90 runes.
 func RenderMCPReport(statuses []ServerStatus) string {
 	if len(statuses) == 0 {
-		return "No MCP servers configured. They are read from ~/.claude.json"
+		return "No MCP servers configured. Add one with kiln mcp add — it writes ~/.claude.json/.mcp.json, the same files claude mcp add uses"
 	}
 
 	var ok, failed []ServerStatus

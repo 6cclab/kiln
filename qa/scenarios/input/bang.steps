@@ -1,0 +1,28 @@
+# `!echo hi` (bang: runs directly in the user's shell, never reaches the
+# model) — internal/tui/inputmodes.go ClassifyInput, RunBang. Does not
+# consume a faux turn.
+#
+# kiln has no `#` memory-note mode (dropped to match Claude Code, whose own
+# prompt input has none - only a bash prefix and a plain prompt): a
+# line starting with `#` is now an ordinary prompt, which this scenario
+# confirms by sending one and seeing it echoed and answered like any other
+# message, never "Saved to ... CLAUDE.md".
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+TYPE !echo hi
+KEY enter
+WAITFOR /shell ─/ 20
+SHOT bang-echo
+EXPECT /shell ─+\s+→ hi/
+EXPECT_NOT /! echo hi/
+EXPECT_NOT /Hello from faux/
+TYPE #remember to run tests
+KEY enter
+WAITFOR /Hello from faux/ 20
+SHOT hash-is-a-prompt
+EXPECT /#remember to run tests/
+EXPECT /Hello from faux/
+EXPECT_NOT /Saved to/
+EXPECT_NOT /panic|goroutine/

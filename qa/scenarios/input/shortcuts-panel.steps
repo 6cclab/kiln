@@ -10,8 +10,9 @@ SHOT shortcuts-panel
 EXPECT /!\s+run a shell command\s+⇧⇥\s+cycle permission mode/
 EXPECT /\/\s+commands\s+esc esc\s+rewind the conversation/
 EXPECT /@\s+add files\s+ctrl\+o\s+verbose transcript/
-EXPECT /#\s+save a memory note\s+ctrl\+f\s+fullscreen or inline/
-EXPECT /shift\+⏎\s+new line\s+ctrl\+c ×2\s+exit/
+EXPECT /shift\+⏎\s+new line\s+ctrl\+f\s+fullscreen or inline/
+EXPECT /ctrl\+c ×2\s+exit/
+EXPECT_NOT /save a memory note/
 KEY a
 SHOT shortcuts-dismissed
 EXPECT_NOT /run a shell command/

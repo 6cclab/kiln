@@ -1,6 +1,8 @@
 # A Claude Code user opens an existing, untrusted repo that has no
-# CLAUDE.md yet: trust dialog, /help, /init, a memory note, /memory, then a
-# small real task.
+# CLAUDE.md yet: trust dialog, /help, /init, /memory, then a small real
+# task. kiln has no "#" memory-note shortcut (Claude Code's own reference
+# source has none either - only a bash prefix and a plain prompt), so this
+# no longer exercises one; a line starting with "#" is an ordinary prompt.
 @real
 @untrusted
 @home scratch
@@ -19,12 +21,8 @@ EXPECT /init/
 TURN /init
 RUN test -f {PROJ}/CLAUDE.md
 SHOT after-init
-SEND # Always run the tests with -v
-WAIT 1
-SHOT memory-note
 SEND /memory
 WAIT 1
 SHOT memory-command
 TURN Add a -version flag to the CLI that prints "greeter v1.0" and exit.
 SHOT task-done
-RUN grep -q 'Always run the tests with -v' {PROJ}/CLAUDE.md

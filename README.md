@@ -137,22 +137,41 @@ credential wins over an environment variable for the same provider.
 
 ## `.claude/` compatibility
 
-Reads your existing configuration. It writes back in two places only:
-`/permissions` saves rules to `.claude/settings.local.json`, and `/model`
-saves the default model to `~/.claude/settings.json`. A project's shared
-`.claude/settings.json` is never written.
+kiln reads your existing Claude Code configuration exactly as Claude Code
+does. For its own settings it never writes `~/.claude` or `<repo>/.claude` -
+that goes under `.kiln` instead (`~/.kiln` for user-scope state, `<repo>/.kiln`
+for project/local state), joining the Claude Code hierarchy at the same
+scope and winning for a single value (model). MCP is the one deliberate
+exception: `kiln mcp add`/`add-json`/`remove` write the *same* files
+`claude mcp add` does (`~/.claude.json`, `.mcp.json`) - kiln has no MCP file
+of its own, so a server either tool adds is one set, usable by both.
 
-| Asset | Behavior |
+| kiln writes | From | Mirrors |
+|---|---|---|
+| `<repo>/.kiln/settings.local.json` | `/permissions`, "don't ask again" | `.claude/settings.local.json` |
+| `~/.kiln/settings.json` | `/model`'s default | `~/.claude/settings.json` |
+
+A git-tracked or symlinked `<repo>/.kiln/settings.local.json` is held until
+the folder is trusted - only its deny/ask rules apply until then. kiln has
+no writable memory or auto-memory store of its own (open item - see
+`docs/claude-code-parity.md`'s divergence #7); `/memory` only opens Claude
+Code's own `CLAUDE.md` files in your editor.
+
+| Asset read (never written) | Behavior |
 |---|---|
 | `~/.claude/skills`, `.claude/skills` | loaded, user-invocable ones become slash commands |
 | `.claude/commands/*.md` | slash commands; nested dirs become `namespace:command` |
 | `CLAUDE.md`, `@imports`, `.claude/rules/*.md` | system prompt, budgeted against the tier |
 | `.claude/settings.json` | permissions, merged `user` → `project` → `local` |
-| `~/.claude.json` | MCP servers |
+| `~/.claude/projects/<project>/memory/MEMORY.md` | Claude Code's auto memory, read-only |
 | `.claude/agents/*.md` | subagents, dispatched with the `task` tool |
 | `.claude/settings.json` `modelRoles` | model roles for `task` dispatch (fast/structured/heavy → provider/model) |
 | `~/.claude/keybindings.json` | editor key overrides; conflicts reported at startup |
 | `.claude/settings.json` `hooks` | `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `SubagentStop`, `Notification`, `PreCompact` |
+
+| kiln and Claude Code share (written by either) | Behavior |
+|---|---|
+| `~/.claude.json`, `.mcp.json` | MCP servers; `kiln mcp add -s local\|user` writes `~/.claude.json`, `-s project` writes `.mcp.json` |
 
 A `PreToolUse` hook may rewrite a command before it runs. Hooks are applied
 **before** the permission gate, so the gate judges what will actually execute

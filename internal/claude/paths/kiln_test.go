@@ -33,7 +33,4 @@ func TestAllSettingsFiles(t *testing.T) {
 	if got := KilnLocalSettingsPath(cwd); got != filepath.Join(cwd, ".kiln", "settings.local.json") {
 		t.Errorf("KilnLocalSettingsPath = %q", got)
 	}
-	if got := KilnUserMemoryPath(); got != filepath.Join(home, ".kiln", "CLAUDE.md") {
-		t.Errorf("KilnUserMemoryPath = %q", got)
-	}
 }
