@@ -263,6 +263,46 @@ func TestAutoMode_FastPathsSkipClassifier(t *testing.T) {
 	}
 }
 
+// Writes that can change how code runs later, or how the agent is
+// configured, are classified even inside the workspace and even past an
+// allow rule; so is a write whose path key the gate does not recognise
+// (the tools decode "PATH" as "path").
+func TestAutoMode_ProtectedAndAmbiguousWritesAreClassified(t *testing.T) {
+	root := t.TempDir()
+	in := func(p string) string { return filepath.Join(root, p) }
+	classified := []map[string]any{
+		{"path": in(".git/config")},
+		{"path": in(".git/hooks/pre-commit")},
+		{"path": in(".claude/settings.json")},
+		{"path": in(".kiln/settings.local.json")},
+		{"path": in(".zshrc")},
+		{"path": in("web/.npmrc")},
+		{"path": in(".mcp.json")},
+		{"PATH": in("src/a.go")},
+		{"path": in("src/a.go"), "Path": in(".git/config")},
+	}
+	for _, args := range classified {
+		for _, perms := range []settings.Permissions{{}, {Allow: []string{"Edit", "Write"}}} {
+			c := allowAll()
+			g := NewGate(GateOptions{Permissions: perms, Mode: settings.ModeAuto, Roots: []string{root}, Classifier: c})
+			if _, _, err := g.CheckWithOutcome(context.Background(), Request{ToolName: "write", Args: args}); err != nil {
+				t.Fatal(err)
+			}
+			if len(c.calls) != 1 {
+				t.Errorf("write %v (allow %v): classifier called %d times, want 1", args, perms.Allow, len(c.calls))
+			}
+		}
+	}
+	for _, p := range []string{in("src/a.go"), in(".claude/worktrees/w1/a.go"), in("docs/git.md")} {
+		c := blockAll("should not be asked")
+		g := NewGate(GateOptions{Mode: settings.ModeAuto, Roots: []string{root}, Classifier: c})
+		blocked, _, err := g.CheckWithOutcome(context.Background(), Request{ToolName: "edit", PrimaryArg: p, Args: map[string]any{"path": p}})
+		if err != nil || blocked != nil || len(c.calls) != 0 {
+			t.Errorf("edit %s: blocked=%+v calls=%d, want the fast path", p, blocked, len(c.calls))
+		}
+	}
+}
+
 func TestAutoMode_AllowRuleSkipsClassifier(t *testing.T) {
 	c := blockAll("should not be asked")
 	g := autoGate(t, c, settings.Permissions{Allow: []string{"Bash(go test *)"}})

@@ -113,6 +113,14 @@ func (g *Gate) autoSucceeded() {
 // already been applied.
 func (g *Gate) autoSkipsClassifier(req Request, hits settings.Hits) bool {
 	name := strings.ToLower(req.ToolName)
+	if settings.IsFileTool(name) && !settings.ReadOnly[name] {
+		// A write to a protected path is classified even past an allow
+		// rule; so is one whose path argument kiln cannot pin down.
+		path, ok := soleEditPath(req.Args)
+		if !ok || g.protectedPath(path) {
+			return false
+		}
+	}
 	switch {
 	case hits.Allow:
 		return true
