@@ -495,7 +495,9 @@ func (rt *runtime) runJob(ctx context.Context, workerRoot string, j job, fauxSrv
 	}
 
 	env := filterEnv(os.Environ())
-	env = append(env, "HOME="+home, "HARNESS_SESSIONS_DIR="+sessDir, "HARNESS_LOG_DIR="+logDir)
+	env = append(env, "HOME="+home, "HARNESS_SESSIONS_DIR="+sessDir, "HARNESS_LOG_DIR="+logDir,
+		// The session scratchpad stays inside the job's own HOME.
+		"KILN_TMPDIR="+filepath.Join(home, "tmp"))
 	apiShape := fauxAPIShape(j.sc)
 	if j.mc.Faux {
 		env = append(env, "HARNESS_FAUX_ADDR="+fauxAddr, "HARNESS_FAUX_API="+apiShape)

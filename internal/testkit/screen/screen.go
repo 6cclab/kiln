@@ -277,6 +277,8 @@ func buildEnv(cfg *config, home string) []string {
 	m["TERM"] = "xterm-256color"
 	m["COLORTERM"] = "truecolor"
 	m["HOME"] = home
+	// kiln's session scratchpads go under the scratch HOME, not /tmp.
+	m["KILN_TMPDIR"] = filepath.Join(home, "tmp")
 	// A fresh HOME has trusted no folder; the trust dialog is exercised by
 	// the test that opts back in with WithEnv("HARNESS_TRUST_ALL", "").
 	m["HARNESS_TRUST_ALL"] = "1"

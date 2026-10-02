@@ -119,6 +119,15 @@ func runBinary(t *testing.T, bin, dir string, env map[string]string, timeout tim
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
+	// Session scratchpads go under the test's HOME (or a temp dir), never
+	// the real /tmp, whatever env the caller built.
+	if _, ok := env["KILN_TMPDIR"]; !ok {
+		tmp := t.TempDir()
+		if home := env["HOME"]; home != "" {
+			tmp = filepath.Join(home, "tmp")
+		}
+		cmd.Env = append(cmd.Env, "KILN_TMPDIR="+tmp)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
