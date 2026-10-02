@@ -285,18 +285,14 @@ func (m *Manager) network() (httpPort, socksPort int, proxy *Proxy, err error) {
 }
 
 // tmpDir returns (creating it) the per-user directory sandboxed commands
-// use as $TMPDIR. It must be a real directory this user owns, not a link
+// use as $TMPDIR: kiln's temp root (execenv.TempRoot, the parent of the
+// session scratchpad, so sandboxed commands can write the scratchpad), or
+// Options.TmpDir. It must be a real directory this user owns, not a link
 // someone planted.
 func (m *Manager) tmpDir() (string, error) {
 	dir := m.opts.TmpDir
 	if dir == "" {
-		// As Claude Code's default: /tmp/claude-{uid} on macOS, the
-		// system temp directory on Linux.
-		base := os.TempDir()
-		if m.opts.GOOS == "darwin" {
-			base = "/tmp"
-		}
-		dir = filepath.Join(base, "kiln-"+strconv.Itoa(os.Getuid()))
+		return execenv.EnsureTempRoot()
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
