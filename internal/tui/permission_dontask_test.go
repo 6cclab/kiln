@@ -121,6 +121,7 @@ func TestPromptState_DontAskHiddenKeys(t *testing.T) {
 // (the classifier failed or blocked too often) does not offer to switch to
 // auto mode. The rows below move up; keys and rendering agree.
 func TestPromptState_AutoModeHasNoSwitchToAuto(t *testing.T) {
+	withRenderEnv(t, 80)
 	req := PermissionRequest{ToolName: "bash", PrimaryArg: "npm test", InAutoMode: true, Grantable: true, DontAskRules: []string{"npm test *"}}
 	got := promptOptionsFor(req)
 	want := []promptOptionKind{optAllow, optAllowAlways, optDenyOutright}
@@ -130,7 +131,7 @@ func TestPromptState_AutoModeHasNoSwitchToAuto(t *testing.T) {
 
 	p := NewPromptState("/tmp")
 	reply := p.AskTool(req)
-	rendered := strings.Join(p.Render(80), "\n")
+	rendered := stripANSI(strings.Join(p.Render(80), "\n"))
 	if strings.Contains(rendered, "switch to auto mode") || !strings.Contains(rendered, "3  No") {
 		t.Errorf("rendered:\n%s", rendered)
 	}
