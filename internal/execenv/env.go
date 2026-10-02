@@ -55,6 +55,10 @@ type Env struct {
 	// path itself as a read. Left nil, DidYouMeanHint scans the parent
 	// directory unconditionally.
 	DidYouMeanDirAllowed func(dir string) bool
+
+	// Sandbox, when set, decides which commands the bash tools run inside
+	// an OS sandbox (wrap.go). Nil runs everything unsandboxed.
+	Sandbox Sandbox
 }
 
 // New builds an Env rooted at cwd.
