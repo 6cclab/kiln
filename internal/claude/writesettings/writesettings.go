@@ -2,7 +2,6 @@ package writesettings
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -53,58 +52,22 @@ func read(path string) localSettings {
 	return parsed
 }
 
-// kilnGitignore is written into a freshly created .kiln directory. Most
-// kiln files (settings.local.json, mcp.json's local/user entries when that
-// directory is ~/.kiln) are machine-local and must never be committed, so
-// the default is "ignore everything" - except <repo>/.kiln/mcp.json, which
-// is meant to be committed like Claude Code's own .mcp.json, so it (and
-// the .gitignore file itself) is carved back out.
-const kilnGitignore = "*\n!mcp.json\n!.gitignore\n"
-
 // write replaces path with settings atomically (a temp file in the same
 // directory, renamed over it). A .kiln directory it creates gets a
-// .gitignore (kilnGitignore) so kiln's machine-local files never show up
-// in git status, while mcp.json stays committable. Refuses to write
-// through a symlinked file or a symlinked .kiln directory: planting one is
-// a way to redirect kiln's write outside the location the user expects.
+// .gitignore of "*", so kiln's files never show up in git status.
 func write(path string, settings localSettings) error {
-	return WriteJSON(path, settings)
-}
-
-// RefuseSymlink reports an error if path, or the directory that holds it,
-// is itself a symlink. Called before every kiln write so a planted symlink
-// cannot redirect the write outside the location the user expects.
-func RefuseSymlink(path string) error {
-	for _, p := range []string{path, filepath.Dir(path)} {
-		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symlink; refusing to write through it", p)
-		}
-	}
-	return nil
-}
-
-// WriteJSON atomically replaces path with v, marshaled as indented JSON
-// with a trailing newline (a temp file in the same directory, renamed over
-// it). A .kiln directory it creates gets kilnGitignore. Every kiln writer
-// (settings, MCP config) shares this so file safety lives in one place;
-// see RefuseSymlink for the write-time symlink check callers should run
-// first.
-func WriteJSON(path string, v any) error {
-	if err := RefuseSymlink(path); err != nil {
-		return err
-	}
 	dir := filepath.Dir(path)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 		if filepath.Base(dir) == paths.KilnDir {
-			if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(kilnGitignore), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*\n"), 0o644); err != nil {
 				return err
 			}
 		}
 	}
-	data, err := json.MarshalIndent(v, "", "  ")
+	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}

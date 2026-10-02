@@ -9,38 +9,31 @@ import (
 	"path/filepath"
 
 	"github.com/andrepato/harness/internal/claude/paths"
-	"github.com/andrepato/harness/internal/claude/writesettings"
 )
 
 // ErrNotFound is returned by RemoveServer when the name is not configured
-// in the given scope's kiln file.
+// in the given scope.
 var ErrNotFound = errors.New("no such MCP server")
 
-// AddServer writes one server into scope, in kiln's own files: user and
-// local go into ~/.kiln/mcp.json (the top-level "mcpServers" and
-// "projects"[cwd].mcpServers, mirroring how Claude Code shapes
-// ~/.claude.json), project into <cwd>/.kiln/mcp.json ("mcpServers"), meant
-// to be committed like Claude Code's own .mcp.json. kiln never writes
-// ~/.claude.json or .mcp.json - Claude Code's own files - only reads them
-// (see Resolve). An existing kiln entry of the same name is replaced. It
+// AddServer writes one server into scope the way `claude mcp add --scope`
+// does, so either tool sees it: local and user go into ~/.claude.json
+// (projects[cwd].mcpServers and the top-level mcpServers), project into
+// <cwd>/.mcp.json. An existing entry of the same name is replaced. It
 // returns the file it wrote.
 func AddServer(scope, cwd, name string, cfg ServerConfig) (string, error) {
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return "", err
 	}
-	return kilnEditScope(scope, cwd, func(servers map[string]json.RawMessage) error {
+	return editScope(scope, cwd, func(servers map[string]json.RawMessage) error {
 		servers[name] = raw
 		return nil
 	})
 }
 
-// RemoveServer deletes name from scope's kiln file; ErrNotFound when it is
-// not there. It never touches a Claude Code file - a name that exists
-// only in one of those is the caller's (mcp_cmd.go's) job to detect and
-// report, via KilnServerIn/ServerIn, before calling this.
+// RemoveServer deletes name from scope; ErrNotFound when it is not there.
 func RemoveServer(scope, cwd, name string) (string, error) {
-	return kilnEditScope(scope, cwd, func(servers map[string]json.RawMessage) error {
+	return editScope(scope, cwd, func(servers map[string]json.RawMessage) error {
 		if _, ok := servers[name]; !ok {
 			return ErrNotFound
 		}
@@ -49,35 +42,22 @@ func RemoveServer(scope, cwd, name string) (string, error) {
 	})
 }
 
-// kilnEditScope loads scope's mcpServers map from kiln's own file, applies
-// edit, and writes the file back, returning its path. Mirrors editScope's
-// shape (raw-message pass-through for every other key) but targets
-// paths.KilnUserMCPPath / paths.KilnProjectMCPPath instead of Claude
-// Code's ~/.claude.json / .mcp.json.
-func kilnEditScope(scope, cwd string, edit func(map[string]json.RawMessage) error) (string, error) {
+// editScope loads scope's mcpServers map, applies edit, and writes the file
+// back, returning its path.
+//
+// ~/.claude.json is Claude Code's own state file and holds far more than
+// MCP servers, so only the objects on the way to one mcpServers map are
+// decoded; every other value is carried through as raw JSON, byte for
+// byte, and numbers are never round-tripped through float64. The write is
+// atomic (temp file + rename) and keeps the file's permissions.
+func editScope(scope, cwd string, edit func(map[string]json.RawMessage) error) (string, error) {
 	switch scope {
 	case ScopeProject:
-		return editServersAt(paths.KilnProjectMCPPath(cwd), "", edit)
-	case ScopeUser:
-		return editServersAt(paths.KilnUserMCPPath(), "", edit)
-	case ScopeLocal:
-		return editServersAt(paths.KilnUserMCPPath(), cwd, edit)
-	}
-	return "", fmt.Errorf("unknown scope %q (want local, project or user)", scope)
-}
-
-// editServersAt loads path's mcpServers map - top-level, or
-// projects[cwd].mcpServers when cwd is non-empty (kiln's local scope,
-// mirroring ~/.claude.json's own projects[cwd].mcpServers) - applies edit,
-// and writes the file back atomically through writesettings.WriteJSON,
-// which refuses to write through a symlinked file or .kiln directory
-// first.
-func editServersAt(path, cwd string, edit func(map[string]json.RawMessage) error) (string, error) {
-	doc, err := readObject(path)
-	if err != nil {
-		return "", err
-	}
-	if cwd == "" {
+		path := filepath.Join(cwd, ".mcp.json")
+		doc, err := readObject(path)
+		if err != nil {
+			return "", err
+		}
 		servers, err := object(doc["mcpServers"])
 		if err != nil {
 			return "", fmt.Errorf("%s: mcpServers: %w", path, err)
@@ -88,39 +68,59 @@ func editServersAt(path, cwd string, edit func(map[string]json.RawMessage) error
 		if doc["mcpServers"], err = marshalObject(servers); err != nil {
 			return "", err
 		}
-		return path, writesettings.WriteJSON(path, doc)
+		return path, writeObject(path, doc, 0o644)
+	case ScopeUser, ScopeLocal:
+		path := paths.ClaudeJSONPath()
+		doc, err := readObject(path)
+		if err != nil {
+			return "", err
+		}
+		if scope == ScopeUser {
+			servers, err := object(doc["mcpServers"])
+			if err != nil {
+				return "", fmt.Errorf("%s: mcpServers: %w", path, err)
+			}
+			if err := edit(servers); err != nil {
+				return "", err
+			}
+			if doc["mcpServers"], err = marshalObject(servers); err != nil {
+				return "", err
+			}
+			return path, writeObject(path, doc, 0o600)
+		}
+		projects, err := object(doc["projects"])
+		if err != nil {
+			return "", fmt.Errorf("%s: projects: %w", path, err)
+		}
+		key := projectKey(projects, cwd)
+		project, err := object(projects[key])
+		if err != nil {
+			return "", fmt.Errorf("%s: projects[%s]: %w", path, key, err)
+		}
+		servers, err := object(project["mcpServers"])
+		if err != nil {
+			return "", fmt.Errorf("%s: projects[%s].mcpServers: %w", path, key, err)
+		}
+		if err := edit(servers); err != nil {
+			return "", err
+		}
+		if project["mcpServers"], err = marshalObject(servers); err != nil {
+			return "", err
+		}
+		if projects[key], err = marshalObject(project); err != nil {
+			return "", err
+		}
+		if doc["projects"], err = marshalObject(projects); err != nil {
+			return "", err
+		}
+		return path, writeObject(path, doc, 0o600)
 	}
-	projects, err := object(doc["projects"])
-	if err != nil {
-		return "", fmt.Errorf("%s: projects: %w", path, err)
-	}
-	key := projectKey(projects, cwd)
-	project, err := object(projects[key])
-	if err != nil {
-		return "", fmt.Errorf("%s: projects[%s]: %w", path, key, err)
-	}
-	servers, err := object(project["mcpServers"])
-	if err != nil {
-		return "", fmt.Errorf("%s: projects[%s].mcpServers: %w", path, key, err)
-	}
-	if err := edit(servers); err != nil {
-		return "", err
-	}
-	if project["mcpServers"], err = marshalObject(servers); err != nil {
-		return "", err
-	}
-	if projects[key], err = marshalObject(project); err != nil {
-		return "", err
-	}
-	if doc["projects"], err = marshalObject(projects); err != nil {
-		return "", err
-	}
-	return path, writesettings.WriteJSON(path, doc)
+	return "", fmt.Errorf("unknown scope %q (want local, project or user)", scope)
 }
 
 // projectKey is the projects entry for cwd: an existing key matching cwd
 // as given or with symlinks resolved, else cwd with symlinks resolved (what
-// Claude Code records, and what kiln mirrors for its own local scope).
+// Claude Code records).
 func projectKey(projects map[string]json.RawMessage, cwd string) string {
 	if _, ok := projects[cwd]; ok {
 		return cwd
@@ -170,7 +170,7 @@ func object(raw json.RawMessage) (map[string]json.RawMessage, error) {
 }
 
 // marshalObject encodes m without json.Marshal's HTML escaping, which
-// would rewrite "<" in other tools' values as <.
+// would rewrite "<" in other tools' values as \u003c.
 func marshalObject(m map[string]json.RawMessage) (json.RawMessage, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -179,4 +179,36 @@ func marshalObject(m map[string]json.RawMessage) (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")), nil
+}
+
+// writeObject writes doc indented with two spaces, atomically. An existing
+// file keeps its mode; a new one gets mode.
+func writeObject(path string, doc map[string]json.RawMessage, mode os.FileMode) error {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(doc); err != nil {
+		return err
+	}
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-"+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

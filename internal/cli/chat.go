@@ -624,7 +624,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		warnFailedServers(stderr, hub.Statuses())
 		if len(pendingMCP) > 0 {
 			fmt.Fprintf(stderr, "kiln: not starting %s from %s: this folder is not trusted (start kiln here interactively and trust it)\n",
-				plural.Count(len(pendingMCP), "MCP server"), strings.Join(pendingProjectFiles(resolvedMCP), " and "))
+				plural.Count(len(pendingMCP), "MCP server"), resolvedMCP.ProjectFile)
 		}
 	}
 	defer hub.Close(context.Background())

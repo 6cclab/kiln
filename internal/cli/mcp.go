@@ -118,20 +118,6 @@ func truncateRunes100(s string) string {
 	return string(r[:100])
 }
 
-// pendingProjectFiles is the distinct project-scope MCP config files held
-// back by r (ProjectFile - .mcp.json - and/or KilnProjectFile -
-// <cwd>/.kiln/mcp.json), for the "not trusted yet" message.
-func pendingProjectFiles(r mcpgate.Resolved) []string {
-	var out []string
-	if r.ProjectFile != "" {
-		out = append(out, r.ProjectFile)
-	}
-	if r.KilnProjectFile != "" {
-		out = append(out, r.KilnProjectFile)
-	}
-	return out
-}
-
 // scopedMCPTools filters tools to the ones active's posture makes
 // searchable, mirroring cli.ts's `mcpTools.filter((t) => inPosture(t, activePosture))`.
 func scopedMCPTools(tools []mcpgate.McpTool, active mcpgate.Posture) []mcpgate.McpTool {

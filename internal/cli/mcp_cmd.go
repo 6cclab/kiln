@@ -1,9 +1,7 @@
 // Package cli, this file: `kiln mcp add|add-json|remove|list|get`, the
 // Claude Code-compatible way to wire MCP servers from the shell. Entries
-// land in kiln's own files (~/.kiln/mcp.json, <cwd>/.kiln/mcp.json - see
-// internal/mcp's AddServer), never in Claude Code's ~/.claude.json or
-// .mcp.json; `kiln mcp list`/`get`/`remove` still see servers configured
-// either way (see internal/mcp's Resolve).
+// land in the same files `claude mcp` writes (see internal/mcp's
+// AddServer), so a server added with either tool works in both.
 package cli
 
 import (
@@ -33,11 +31,8 @@ const mcpUsage = `usage:
   kiln mcp list
   kiln mcp get <name>
 
-scopes: local (default; this project, only you, in ~/.kiln/mcp.json), project (<repo>/.kiln/mcp.json,
-shared through the repo once committed), user (every project, ~/.kiln/mcp.json)
-
-kiln writes only its own files (never ~/.claude.json or .mcp.json); list/get/remove still see
-servers Claude Code configured, remove just won't touch them.`
+scopes: local (default; this project, only you, in ~/.claude.json), project (.mcp.json, shared
+through the repo), user (every project, ~/.claude.json)`
 
 // MCPCommand runs one `kiln mcp <sub>` command; argv starts at <sub>.
 func MCPCommand(ctx context.Context, argv []string, stdout, stderr io.Writer) int {
@@ -234,7 +229,7 @@ func writeServer(scope, cwd, name string, cfg mcpgate.ServerConfig, stdout, stde
 	}
 	fmt.Fprintf(stdout, "Added %s MCP server %s (%s) to %s\n", describeTransport(cfg), name, scope, path)
 	if scope == mcpgate.ScopeProject {
-		fmt.Fprintln(stdout, "It starts in kiln sessions once this folder is trusted. Commit this file, like .mcp.json, to share it through the repo.")
+		fmt.Fprintln(stdout, "It starts in kiln sessions once this folder is trusted.")
 	}
 	return 0
 }
@@ -256,15 +251,9 @@ func mcpRemove(argv []string, cwd string, stdout, stderr io.Writer) int {
 	scopes := []string{f.scope}
 	if f.scope == "" {
 		// Like `claude mcp remove`: without --scope, remove it from the one
-		// scope that has it, and refuse to guess between several. Only
-		// kiln's own files are candidates - kiln never edits Claude
-		// Code's.
-		scopes = scopesWithKiln(name, cwd)
+		// scope that has it, and refuse to guess between several.
+		scopes = scopesWith(name, cwd)
 		if len(scopes) == 0 {
-			if ccScopes := scopesWithCC(name, cwd); len(ccScopes) > 0 {
-				fmt.Fprintf(stderr, "kiln mcp remove: %s is configured in %s; kiln doesn't edit Claude Code's config\n", name, strings.Join(ccFilesFor(ccScopes, cwd), " and "))
-				return 1
-			}
 			fmt.Fprintf(stderr, "kiln mcp remove: no MCP server named %s\n", name)
 			return 1
 		}
@@ -272,13 +261,6 @@ func mcpRemove(argv []string, cwd string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "kiln mcp remove: %s is configured in several scopes (%s); pass -s to pick one\n", name, strings.Join(scopes, ", "))
 			return 1
 		}
-	} else if !mcpgate.KilnServerIn(scopes[0], cwd, name) {
-		if mcpgate.ServerIn(scopes[0], cwd, name) {
-			fmt.Fprintf(stderr, "kiln mcp remove: %s is configured in %s scope's %s; kiln doesn't edit Claude Code's config\n", name, scopes[0], mcpgate.CCFileFor(scopes[0], cwd))
-			return 1
-		}
-		fmt.Fprintf(stderr, "kiln mcp remove: no MCP server named %s in %s scope\n", name, scopes[0])
-		return 1
 	}
 	path, err := mcpgate.RemoveServer(scopes[0], cwd, name)
 	if errors.Is(err, mcpgate.ErrNotFound) {
@@ -293,40 +275,12 @@ func mcpRemove(argv []string, cwd string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// scopesWithKiln lists every scope whose kiln file configures name,
-// shadowed or not.
-func scopesWithKiln(name, cwd string) []string {
-	var out []string
-	for _, scope := range []string{mcpgate.ScopeLocal, mcpgate.ScopeProject, mcpgate.ScopeUser} {
-		if mcpgate.KilnServerIn(scope, cwd, name) {
-			out = append(out, scope)
-		}
-	}
-	return out
-}
-
-// scopesWithCC lists every scope whose Claude Code file configures name,
-// shadowed or not - for `kiln mcp remove`'s refusal message.
-func scopesWithCC(name, cwd string) []string {
+// scopesWith lists every scope that configures name, shadowed or not.
+func scopesWith(name, cwd string) []string {
 	var out []string
 	for _, scope := range []string{mcpgate.ScopeLocal, mcpgate.ScopeProject, mcpgate.ScopeUser} {
 		if mcpgate.ServerIn(scope, cwd, name) {
 			out = append(out, scope)
-		}
-	}
-	return out
-}
-
-// ccFilesFor is the distinct Claude Code files backing scopes, for the
-// refusal message ("configured in ~/.claude.json and .mcp.json").
-func ccFilesFor(scopes []string, cwd string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, s := range scopes {
-		f := mcpgate.CCFileFor(s, cwd)
-		if !seen[f] {
-			seen[f] = true
-			out = append(out, f)
 		}
 	}
 	return out
@@ -355,7 +309,7 @@ func mcpList(ctx context.Context, cwd string, stdout io.Writer) int {
 	fmt.Fprintln(stdout)
 	for _, name := range mcpgate.SortedNames(all) {
 		cfg := all[name]
-		line := fmt.Sprintf("%s (%s, from %s): %s", name, cfg.Scope, cfg.Source, targetOf(cfg))
+		line := fmt.Sprintf("%s (%s): %s", name, cfg.Scope, targetOf(cfg))
 		st, ok := status[name]
 		switch {
 		case !ok:
@@ -381,7 +335,7 @@ func mcpGet(argv []string, cwd string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "kiln mcp get: no MCP server named %s\n", argv[0])
 		return 1
 	}
-	fmt.Fprintf(stdout, "%s:\n  Scope: %s\n  From: %s\n  Type: %s\n", argv[0], cfg.Scope, cfg.Source, mcpgate.TransportType(cfg))
+	fmt.Fprintf(stdout, "%s:\n  Scope: %s\n  Type: %s\n", argv[0], cfg.Scope, mcpgate.TransportType(cfg))
 	if cfg.URL != "" {
 		fmt.Fprintf(stdout, "  URL: %s\n", cfg.URL)
 	} else {

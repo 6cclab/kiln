@@ -9,7 +9,7 @@ import (
 
 func TestRenderMCPReportEmpty(t *testing.T) {
 	got := mcpgate.RenderMCPReport(nil)
-	want := "No MCP servers configured. Add one with kiln mcp add; kiln also reads ~/.claude.json and .mcp.json"
+	want := "No MCP servers configured. Add one with kiln mcp add — it writes ~/.claude.json/.mcp.json, the same files claude mcp add uses"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

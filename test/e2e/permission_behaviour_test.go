@@ -458,8 +458,8 @@ steps:
 			t.Errorf("%s holds %d entries, want %d: kiln wrote into it", dir, len(entries), want)
 		}
 	}
-	if data, err := os.ReadFile(filepath.Join(proj, ".kiln", ".gitignore")); err != nil || string(data) != "*\n!mcp.json\n!.gitignore\n" {
-		t.Errorf(".kiln/.gitignore = %q (%v), want the mcp.json-carved-out pattern", data, err)
+	if data, err := os.ReadFile(filepath.Join(proj, ".kiln", ".gitignore")); err != nil || string(data) != "*\n" {
+		t.Errorf(".kiln/.gitignore = %q (%v)", data, err)
 	}
 }
 
