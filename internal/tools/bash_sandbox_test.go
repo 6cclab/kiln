@@ -85,23 +85,27 @@ func TestBashToolRunsThroughSandbox(t *testing.T) {
 	}
 }
 
-// A miscased parameter name is refused, not decoded: the permission gate
-// reads arguments by their exact names, and the two must judge the same
-// command and the same sandbox choice.
-func TestBashToolRefusesMiscasedKeys(t *testing.T) {
+// A miscased or repeated sandbox flag never reaches the gate or the tool:
+// the turn loop's input check (tool.CheckArgs, run before hooks, the gate
+// and the tool) refuses it, because the bash schema declares the flag
+// whenever it is offered. The gate reads it by its exact name and the tool
+// decodes it case-insensitively; this check is what keeps them agreeing.
+// When the flag is not offered it has no effect (WillSandbox ignores it).
+func TestBashSandboxFlagSpellingRefusedAtInputCheck(t *testing.T) {
 	env := execenv.New(t.TempDir())
 	env.Sandbox = &fakeSandbox{offers: true}
 	bash := BashTool(env)
 	for _, raw := range []string{
 		`{"command":"echo hi","DangerouslyDisableSandbox":true}`,
+		`{"command":"echo hi","dangerouslydisablesandbox":true}`,
+		`{"command":"echo hi","dangerouslyDisableSandbox":false,"dangerouslyDisableSandbox":true}`,
 		`{"Command":"echo hi"}`,
 	} {
-		res, err := bash.Execute(context.Background(), json.RawMessage(raw), func(tool.Result) {}, tool.Invocation{})
-		if err != nil {
-			t.Fatal(err)
+		if err := tool.CheckArgsFor(bash, json.RawMessage(raw)); err == nil {
+			t.Errorf("%s: accepted", raw)
 		}
-		if !res.IsError || !strings.Contains(resultText(res), "case-sensitive") {
-			t.Errorf("%s: ran: %q", raw, resultText(res))
-		}
+	}
+	if err := tool.CheckArgsFor(bash, json.RawMessage(`{"command":"echo hi","dangerouslyDisableSandbox":true}`)); err != nil {
+		t.Errorf("the exact spelling was refused: %v", err)
 	}
 }
