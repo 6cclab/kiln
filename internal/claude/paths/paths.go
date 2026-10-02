@@ -106,6 +106,21 @@ func KilnUserMemoryPath() string {
 	return filepath.Join(homeDir(), KilnDir, CLAUDEMD)
 }
 
+// KilnUserMCPPath is ~/.kiln/mcp.json, where kiln saves MCP servers added
+// with `kiln mcp add -s user` (top-level "mcpServers") and `-s local`
+// ("projects"[<abs project dir>].mcpServers), mirroring how Claude Code
+// shapes ~/.claude.json. kiln never writes ~/.claude.json.
+func KilnUserMCPPath() string {
+	return filepath.Join(homeDir(), KilnDir, "mcp.json")
+}
+
+// KilnProjectMCPPath is <cwd>/.kiln/mcp.json, where kiln saves MCP servers
+// added with `kiln mcp add -s project` ("mcpServers"). Meant to be
+// committed, like Claude Code's .mcp.json, which kiln never writes.
+func KilnProjectMCPPath(cwd string) string {
+	return filepath.Join(cwd, KilnDir, "mcp.json")
+}
+
 // SettingsSource is one settings file kiln reads; Kiln marks kiln's own.
 type SettingsSource struct {
 	SettingsFile

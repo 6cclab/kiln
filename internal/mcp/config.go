@@ -26,6 +26,12 @@ type ServerConfig struct {
 	// ScopeProject or ScopeFlag); set by Resolve, never read from or
 	// written to a config file.
 	Scope string `json:"-"`
+	// Source is the file this entry was read from - a Claude Code file
+	// (~/.claude.json, .mcp.json) or one of kiln's own (~/.kiln/mcp.json,
+	// <cwd>/.kiln/mcp.json); set by Resolve, never read from or written to
+	// a config file. `kiln mcp list`/`get` show it so it is clear which
+	// tool owns an entry.
+	Source string `json:"-"`
 }
 
 // Configuration scopes, the same three Claude Code uses (`claude mcp add
@@ -107,9 +113,13 @@ type ResolveOptions struct {
 // decides that and connects Project then.
 type Resolved struct {
 	Servers map[string]ServerConfig // user, local and --mcp-config entries
-	Project map[string]ServerConfig // .mcp.json entries not shadowed by the above
+	Project map[string]ServerConfig // .mcp.json and kiln project-scope entries not shadowed by the above
 	// ProjectFile is the .mcp.json that was read ("" when none).
 	ProjectFile string
+	// KilnProjectFile is the <cwd>/.kiln/mcp.json that was read ("" when
+	// none or empty). Held to the same trust gate as ProjectFile - its
+	// entries land in Project too.
+	KilnProjectFile string
 }
 
 // All is Servers and Project together.
@@ -126,35 +136,58 @@ func (r Resolved) All() map[string]ServerConfig {
 
 // Resolve reads every MCP server the way Claude Code does, so servers a
 // user added with `claude mcp add` (any scope) or checked in as .mcp.json
-// work in kiln unchanged. Precedence on a name clash: --mcp-config, then
-// local, then project, then user. --strict-mcp-config uses only the
+// work in kiln unchanged - plus kiln's own files
+// (paths.KilnUserMCPPath/paths.KilnProjectMCPPath), which `kiln mcp add`
+// writes to instead (kiln never writes ~/.claude.json or .mcp.json).
+// Precedence on a name clash: --mcp-config, then local, then project, then
+// user; within a scope, a kiln entry wins over a Claude Code entry of the
+// same name (kiln's files are read after, so they simply overwrite before
+// cross-scope shadowing runs). --strict-mcp-config uses only the
 // --mcp-config file (nothing when none is given). ${VAR} and
 // ${VAR:-default} in commands, arguments, env values, URLs and headers are
 // expanded from the environment, as in Claude Code's .mcp.json.
 func Resolve(opts ResolveOptions) Resolved {
 	out := Resolved{Servers: map[string]ServerConfig{}, Project: map[string]ServerConfig{}}
-	add := func(dst map[string]ServerConfig, servers map[string]ServerConfig, scope string) {
+	add := func(dst map[string]ServerConfig, servers map[string]ServerConfig, scope, source string) {
 		for name, cfg := range servers {
 			cfg.Scope = scope
+			cfg.Source = source
 			dst[name] = expandConfig(cfg)
 		}
 	}
 	if opts.Strict {
 		if opts.Path != "" {
-			add(out.Servers, ReadServerConfigs(opts.Path), ScopeFlag)
+			add(out.Servers, ReadServerConfigs(opts.Path), ScopeFlag, opts.Path)
 		}
 		return out
 	}
-	doc := readClaudeJSON(paths.ClaudeJSONPath())
-	add(out.Servers, doc.MCPServers, ScopeUser)
+	ccPath := paths.ClaudeJSONPath()
+	doc := readClaudeJSON(ccPath)
+	add(out.Servers, doc.MCPServers, ScopeUser, ccPath)
 	projectFile := FindProjectFile(opts.Cwd)
 	if projectFile != "" {
 		out.ProjectFile = projectFile
-		add(out.Project, readMCPJSON(projectFile), ScopeProject)
+		add(out.Project, readMCPJSON(projectFile), ScopeProject, projectFile)
 	}
-	add(out.Servers, doc.localServers(opts.Cwd), ScopeLocal)
+	add(out.Servers, doc.localServers(opts.Cwd), ScopeLocal, ccPath)
+
+	// kiln's own files, read the same way and merged on top: within a
+	// scope a kiln entry of the same name replaces the Claude Code one
+	// (added after, into the same map). The kiln project file is held to
+	// the same trust gate as .mcp.json simply by landing in out.Project
+	// too - the caller (internal/cli/chat.go, kiln mcp list) does not
+	// start anything in out.Project until the folder is trusted.
+	kilnUserPath := paths.KilnUserMCPPath()
+	kilnDoc := readClaudeJSON(kilnUserPath)
+	add(out.Servers, kilnDoc.MCPServers, ScopeUser, kilnUserPath)
+	kilnProjectFile := paths.KilnProjectMCPPath(opts.Cwd)
+	if kilnProjectServers := readMCPJSON(kilnProjectFile); len(kilnProjectServers) > 0 {
+		out.KilnProjectFile = kilnProjectFile
+		add(out.Project, kilnProjectServers, ScopeProject, kilnProjectFile)
+	}
+	add(out.Servers, kilnDoc.localServers(opts.Cwd), ScopeLocal, kilnUserPath)
 	if opts.Path != "" {
-		add(out.Servers, ReadServerConfigs(opts.Path), ScopeFlag)
+		add(out.Servers, ReadServerConfigs(opts.Path), ScopeFlag, opts.Path)
 	}
 	for name, cfg := range out.Servers {
 		if cfg.Scope == ScopeUser {
@@ -285,8 +318,9 @@ func expandConfig(cfg ServerConfig) ServerConfig {
 	return cfg
 }
 
-// ServerIn reports whether scope's own file configures name (shadowed or
-// not), for `mcp remove` without --scope.
+// ServerIn reports whether scope's own Claude Code file configures name
+// (shadowed or not), for `mcp remove` to tell the user a name it won't
+// touch is configured there instead.
 func ServerIn(scope, cwd, name string) bool {
 	var servers map[string]ServerConfig
 	switch scope {
@@ -299,6 +333,32 @@ func ServerIn(scope, cwd, name string) bool {
 	}
 	_, ok := servers[name]
 	return ok
+}
+
+// KilnServerIn reports whether scope's own kiln file configures name
+// (shadowed or not), for `kiln mcp remove` without --scope.
+func KilnServerIn(scope, cwd, name string) bool {
+	var servers map[string]ServerConfig
+	switch scope {
+	case ScopeProject:
+		servers = readMCPJSON(paths.KilnProjectMCPPath(cwd))
+	case ScopeUser:
+		servers = readClaudeJSON(paths.KilnUserMCPPath()).MCPServers
+	case ScopeLocal:
+		servers = readClaudeJSON(paths.KilnUserMCPPath()).localServers(cwd)
+	}
+	_, ok := servers[name]
+	return ok
+}
+
+// CCFileFor is the Claude Code file that scope's own MCP entries live in -
+// used to name the file in `kiln mcp remove`'s refusal when a name is
+// configured only there.
+func CCFileFor(scope, cwd string) string {
+	if scope == ScopeProject {
+		return filepath.Join(cwd, ".mcp.json")
+	}
+	return paths.ClaudeJSONPath()
 }
 
 // SortedNames is the map's keys in order.

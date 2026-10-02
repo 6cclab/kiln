@@ -102,37 +102,57 @@ func TestResolve_ExpandsEnvReferences(t *testing.T) {
 	}
 }
 
-// TestAddServer_PreservesClaudeJSON: ~/.claude.json is Claude Code's state
-// file; adding a server must leave every other value byte-identical,
+// TestAddServer_WritesKilnFilesOnly: AddServer/RemoveServer never touch
+// Claude Code's ~/.claude.json or .mcp.json - they write kiln's own
+// ~/.kiln/mcp.json (user and local scope) and <cwd>/.kiln/mcp.json
+// (project scope), preserving every other key already in those files,
 // including large numbers.
-func TestAddServer_PreservesClaudeJSON(t *testing.T) {
-	orig := `{"numStartups": 1790554359302123, "tipsHistory": {"x": 3}, "projects": {"/other": {"allowedTools": ["Bash"], "history": [{"display": "é <b>"}]}}, "mcpServers": {"old": {"command": "old"}}}`
-	home, proj := scopeFixture(t, orig)
+func TestAddServer_WritesKilnFilesOnly(t *testing.T) {
+	ccOrig := `{"numStartups": 1790554359302123, "tipsHistory": {"x": 3}, "projects": {"/other": {"allowedTools": ["Bash"], "history": [{"display": "é <b>"}]}}, "mcpServers": {"old": {"command": "old"}}}`
+	home, proj := scopeFixture(t, ccOrig)
+	ccPath := filepath.Join(home, ".claude.json")
+	kilnUserPath := filepath.Join(home, ".kiln", "mcp.json")
+	// Seed kiln's own user file with an unrelated key, to prove it survives.
+	if err := os.MkdirAll(filepath.Dir(kilnUserPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kilnUserPath, []byte(`{"mcpServers":{"old-kiln":{"command":"old-kiln"}},"unrelatedKey":42}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	path, err := AddServer(ScopeLocal, proj, "inc", ServerConfig{Command: "/bin/inc", Args: []string{"-v"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != filepath.Join(home, ".claude.json") {
-		t.Errorf("wrote %s", path)
+	if path != kilnUserPath {
+		t.Errorf("wrote %s, want %s", path, kilnUserPath)
 	}
 	if _, err := AddServer(ScopeUser, proj, "u2", ServerConfig{URL: "https://example.invalid/mcp", Type: "http"}); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(path)
-	for _, keep := range []string{`1790554359302123`, `"tipsHistory"`, `"allowedTools"`, `é <b>`, `"old"`} {
+
+	// ~/.claude.json is byte-identical: AddServer never touches it.
+	if cc, _ := os.ReadFile(ccPath); string(cc) != ccOrig {
+		t.Errorf("~/.claude.json changed:\n%s", cc)
+	}
+
+	data, _ := os.ReadFile(kilnUserPath)
+	for _, keep := range []string{`"unrelatedKey": 42`, `"old-kiln"`} {
 		if !strings.Contains(string(data), keep) {
-			t.Errorf("lost %s:\n%s", keep, data)
+			t.Errorf("lost %s from %s:\n%s", keep, kilnUserPath, data)
 		}
 	}
-	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
-		t.Errorf("mode = %v, want 0600 kept", st.Mode().Perm())
-	}
 	r := Resolve(ResolveOptions{Cwd: proj})
-	if r.Servers["inc"].Command != "/bin/inc" || r.Servers["inc"].Scope != ScopeLocal {
+	if r.Servers["inc"].Command != "/bin/inc" || r.Servers["inc"].Scope != ScopeLocal || r.Servers["inc"].Source != kilnUserPath {
 		t.Errorf("inc = %+v", r.Servers["inc"])
 	}
-	if r.Servers["u2"].URL == "" || r.Servers["u2"].Scope != ScopeUser {
+	if r.Servers["u2"].URL == "" || r.Servers["u2"].Scope != ScopeUser || r.Servers["u2"].Source != kilnUserPath {
 		t.Errorf("u2 = %+v", r.Servers["u2"])
+	}
+	// Claude Code's "old" entry is still visible through Resolve (kiln
+	// only stopped writing ~/.claude.json, it still reads it).
+	if r.Servers["old"].Command != "old" {
+		t.Errorf("old (Claude Code's own) = %+v, want still readable", r.Servers["old"])
 	}
 
 	if _, err := RemoveServer(ScopeLocal, proj, "inc"); err != nil {
@@ -141,27 +161,119 @@ func TestAddServer_PreservesClaudeJSON(t *testing.T) {
 	if _, err := RemoveServer(ScopeLocal, proj, "inc"); err != ErrNotFound {
 		t.Errorf("second remove: %v, want ErrNotFound", err)
 	}
-	if ServerIn(ScopeLocal, proj, "inc") || !ServerIn(ScopeUser, proj, "u2") {
-		t.Error("ServerIn disagrees with the file")
+	if KilnServerIn(ScopeLocal, proj, "inc") || !KilnServerIn(ScopeUser, proj, "u2") {
+		t.Error("KilnServerIn disagrees with the kiln file")
+	}
+	if !ServerIn(ScopeUser, proj, "old") {
+		t.Error("ServerIn should still see Claude Code's own 'old' entry")
 	}
 }
 
-// TestAddServer_ProjectScopeAndBrokenFile: project scope writes .mcp.json;
-// a file that is not valid JSON is refused, never overwritten.
-func TestAddServer_ProjectScopeAndBrokenFile(t *testing.T) {
-	home, proj := scopeFixture(t, "")
-	if _, err := AddServer(ScopeProject, proj, "inc", ServerConfig{Command: "inc"}); err != nil {
+// TestAddServer_ProjectScopeWritesKilnFile: project scope writes
+// <cwd>/.kiln/mcp.json, never <cwd>/.mcp.json; a kiln file that is not
+// valid JSON is refused, never overwritten.
+func TestAddServer_ProjectScopeWritesKilnFile(t *testing.T) {
+	_, proj := scopeFixture(t, "")
+	kilnProjectPath := filepath.Join(proj, ".kiln", "mcp.json")
+	path, err := AddServer(ScopeProject, proj, "inc", ServerConfig{Command: "inc"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if path != kilnProjectPath {
+		t.Errorf("wrote %s, want %s", path, kilnProjectPath)
+	}
+	if _, err := os.Stat(filepath.Join(proj, ".mcp.json")); !os.IsNotExist(err) {
+		t.Error(".mcp.json should not have been created")
 	}
 	if got := Resolve(ResolveOptions{Cwd: proj}).Project["inc"].Command; got != "inc" {
 		t.Errorf("project inc = %q", got)
 	}
+
 	broken := `{"mcpServers": {` // truncated
-	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(broken), 0o600)
-	if _, err := AddServer(ScopeUser, proj, "x", ServerConfig{Command: "x"}); err == nil {
-		t.Fatal("wrote over an unparseable ~/.claude.json")
+	if err := os.WriteFile(kilnProjectPath, []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if data, _ := os.ReadFile(filepath.Join(home, ".claude.json")); string(data) != broken {
+	if _, err := AddServer(ScopeProject, proj, "x", ServerConfig{Command: "x"}); err == nil {
+		t.Fatal("wrote over an unparseable .kiln/mcp.json")
+	}
+	if data, _ := os.ReadFile(kilnProjectPath); string(data) != broken {
 		t.Errorf("broken file changed: %q", data)
+	}
+}
+
+// TestKilnMCPFile_CommittableGitignore: the project .kiln directory's
+// .gitignore carves mcp.json back out, so `kiln mcp add -s project`
+// produces a file meant to be committed, like .mcp.json - not one buried
+// under the blanket ".kiln/*" ignore settings.local.json relies on.
+func TestKilnMCPFile_CommittableGitignore(t *testing.T) {
+	_, proj := scopeFixture(t, "")
+	if _, err := AddServer(ScopeProject, proj, "inc", ServerConfig{Command: "inc"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(proj, ".kiln", ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "!mcp.json") {
+		t.Errorf(".kiln/.gitignore = %q, want mcp.json carved out of the blanket ignore", data)
+	}
+}
+
+// TestAddServer_RefusesSymlinkedFile: AddServer refuses to write through a
+// symlinked kiln file, the same safety writesettings.WriteJSON applies
+// everywhere else.
+func TestAddServer_RefusesSymlinkedFile(t *testing.T) {
+	_, proj := scopeFixture(t, "")
+	outside := filepath.Join(t.TempDir(), "elsewhere.json")
+	if err := os.MkdirAll(filepath.Join(proj, ".kiln"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(proj, ".kiln", "mcp.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddServer(ScopeProject, proj, "inc", ServerConfig{Command: "inc"}); err == nil {
+		t.Fatal("AddServer wrote through a symlinked .kiln/mcp.json")
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Error("AddServer wrote to the symlink's target")
+	}
+}
+
+// TestResolve_KilnEntryWinsOverClaudeCodeSameScope: a kiln entry with the
+// same name as a Claude Code entry in the same scope wins.
+func TestResolve_KilnEntryWinsOverClaudeCodeSameScope(t *testing.T) {
+	home, proj := scopeFixture(t, `{"mcpServers":{"both":{"command":"cc-user"}}}`)
+	kilnUserPath := filepath.Join(home, ".kiln", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(kilnUserPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kilnUserPath, []byte(`{"mcpServers":{"both":{"command":"kiln-user"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolve(ResolveOptions{Cwd: proj})
+	if got := r.Servers["both"].Command; got != "kiln-user" {
+		t.Errorf("both = %q, want kiln-user (kiln wins in the same scope)", got)
+	}
+	if r.Servers["both"].Source != kilnUserPath {
+		t.Errorf("Source = %q, want %q", r.Servers["both"].Source, kilnUserPath)
+	}
+}
+
+// TestMCPRemove_KilnServerInVsServerIn: KilnServerIn only ever reports on
+// kiln's own files; ServerIn only ever reports on Claude Code's. A name
+// that exists only in a Claude Code file is invisible to KilnServerIn, so
+// RemoveServer (which only edits kiln files) correctly reports ErrNotFound
+// for it - the caller (internal/cli's mcpRemove) uses ServerIn to tell the
+// user why.
+func TestMCPRemove_KilnServerInVsServerIn(t *testing.T) {
+	_, proj := scopeFixture(t, `{"mcpServers":{"cc-only":{"command":"x"}}}`)
+	if KilnServerIn(ScopeUser, proj, "cc-only") {
+		t.Error("KilnServerIn should not see a Claude-Code-only entry")
+	}
+	if !ServerIn(ScopeUser, proj, "cc-only") {
+		t.Error("ServerIn should see it")
+	}
+	if _, err := RemoveServer(ScopeUser, proj, "cc-only"); err != ErrNotFound {
+		t.Errorf("RemoveServer(cc-only) = %v, want ErrNotFound (kiln never edits Claude Code's file)", err)
 	}
 }
