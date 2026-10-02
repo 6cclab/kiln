@@ -584,6 +584,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Mode:           permissionMode,
 		PlanLedgerPath: experimentLedgerPath,
 	})
+	// A "did you mean" hint (internal/execenv/didyoumean.go) scans a
+	// failed read/edit/write's parent directory before it can suggest a
+	// near-identical name; it must never reveal an entry from a directory
+	// the gate would not otherwise let this session read silently. Gating
+	// it on WithinRoots/WithinReadOnlyRoots keeps the hint inside exactly
+	// the directories a read already reaches without a prompt - anything
+	// that would need to ask (or would be refused) gets no hint instead.
+	env.DidYouMeanDirAllowed = func(dir string) bool {
+		return gate.WithinRoots(dir) || gate.WithinReadOnlyRoots(dir)
+	}
 
 	// --- MCP ---------------------------------------------------------
 	// Ported from cli.ts's MCP block (src/cli.ts:180-348): connect every

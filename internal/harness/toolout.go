@@ -5,8 +5,41 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/compaction"
+	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
 )
+
+// sanitizeToolResult strips raw terminal control sequences (ANSI/SGR
+// colour codes, OSC/DCS strings, CSI cursor moves, stray C0 control
+// bytes) out of every text block in a tool result, via
+// execenv.StripControlSequences. It is the one choke point every tool's
+// result passes through in beginTool (turn.go), before
+// truncateToolResult and before the result is committed to the session
+// log or handed to the model — so a tool that happens to print raw
+// escape sequences (a script building terminal art, a program that
+// doesn't know its stdout is piped) can never put unreadable bracket-code
+// gibberish in the model's context or, by extension, in anything
+// rendered from the committed transcript (internal/tui/transcript.go's
+// Summarize reads the same stored content).
+//
+// Unlike truncateToolResult, this always runs regardless of the token
+// budget: stripping control sequences is a safety property, not a
+// size cap, so it applies even when ToolOutputTokens is 0 (unlimited).
+// Image and other non-text blocks are left untouched.
+func sanitizeToolResult(content msg.Blocks) msg.Blocks {
+	if len(content) == 0 {
+		return content
+	}
+	out := make(msg.Blocks, len(content))
+	for i, b := range content {
+		if t, ok := b.(msg.TextContent); ok {
+			out[i] = msg.Text(execenv.StripControlSequences(t.Text))
+			continue
+		}
+		out[i] = b
+	}
+	return out
+}
 
 // truncationMarkerFmt is appended to a text block that got capped. It names
 // both the shown and the true size so the model can act on it (e.g. ask for

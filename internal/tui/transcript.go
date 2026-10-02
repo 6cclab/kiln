@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/tools"
 )
@@ -1035,7 +1036,19 @@ func Summarize(result any) []string {
 // summarizeLines splits, dropping the empty final element a trailing
 // newline produces. Command output almost always ends in a newline;
 // kept, it renders as a blank row under every tool call.
+//
+// It also strips raw terminal control sequences
+// (execenv.StripControlSequences) before splitting. This is defense in
+// depth, not the primary guarantee: internal/harness/toolout.go's
+// sanitizeToolResult already strips every tool result's text before it
+// is committed to the session log, but Summarize is the one function
+// both the live transcript (bridge.go's summarizeToolResult) and a
+// replayed one (replay.go, Ctrl+O, Ctrl+F, Rewind) funnel through, and a
+// session recorded before that fix shipped can still carry raw escape
+// sequences in its stored content — this is what keeps those out of the
+// rendered screen too.
 func summarizeLines(text string) []string {
+	text = execenv.StripControlSequences(text)
 	// Leading blank lines too: a result that starts with one otherwise
 	// shows a bare "→" row above its first real line.
 	text = strings.TrimLeft(text, "\r\n")

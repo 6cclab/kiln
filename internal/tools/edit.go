@@ -87,7 +87,11 @@ func EditTool(env *execenv.Env) *tool.Tool {
 				}
 				info, err := env.Stat(absolutePath)
 				if err != nil {
-					return tool.Errorf("Could not edit file: %s. Error code: %s.", in.Path, errCode(err)), nil
+					errText := fmt.Sprintf("Could not edit file: %s. Error code: %s.", in.Path, errCode(err))
+					if hint := env.DidYouMeanHint(absolutePath); hint != "" {
+						errText += " " + hint
+					}
+					return tool.Errorf("%s", errText), nil
 				}
 				if info.Kind != execenv.KindFile {
 					return tool.Errorf("Could not edit file: %s. Path is not a file.", in.Path), nil

@@ -753,7 +753,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	}
 
 	return msg.ToolResultMessage{
-		Content:    truncateToolResult(result.Content, l.h.opts.ToolOutputTokens),
+		Content:    truncateToolResult(sanitizeToolResult(result.Content), l.h.opts.ToolOutputTokens),
 		Details:    result.Details,
 		IsError:    result.IsError,
 		Role:       msg.RoleToolResult,

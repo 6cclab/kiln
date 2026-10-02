@@ -72,7 +72,11 @@ func WriteTool(env *execenv.Env) *tool.Tool {
 				existing, readErr := env.ReadFile(absolutePath)
 				newFile := readErr != nil
 				if err := env.WriteFile(absolutePath, []byte(in.Content)); err != nil {
-					return tool.Errorf("%s", err), nil
+					errText := err.Error()
+					if hint := env.DidYouMeanHint(absolutePath); hint != "" {
+						errText += " " + hint
+					}
+					return tool.Errorf("%s", errText), nil
 				}
 				if ctx.Err() != nil {
 					return tool.Errorf("Operation aborted"), nil

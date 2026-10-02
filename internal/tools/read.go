@@ -64,7 +64,11 @@ func ReadTool(env *execenv.Env) *tool.Tool {
 			}
 			bytes, err := env.ReadFile(absolutePath)
 			if err != nil {
-				return tool.Errorf("%s", err), nil
+				errText := err.Error()
+				if hint := env.DidYouMeanHint(absolutePath); hint != "" {
+					errText += " " + hint
+				}
+				return tool.Errorf("%s", errText), nil
 			}
 
 			if mimeType := detectSupportedImageMimeType(bytes); mimeType != "" {
