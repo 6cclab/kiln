@@ -148,8 +148,10 @@ func (g *Gate) autoSkipsClassifier(req Request, hits settings.Hits) bool {
 	name := strings.ToLower(req.ToolName)
 	if settings.IsFileTool(name) && !settings.ReadOnly[name] {
 		// A write to a protected path is classified even past an allow
-		// rule; so is one whose path argument kiln cannot pin down.
-		path, ok := soleEditPath(req.Args)
+		// rule; so is one with no path argument. (Input whose keys the gate
+		// and the tool would read differently never gets here: the turn
+		// loop refuses it, tool.CheckArgs.)
+		path, ok := PathArgOf(req.Args)
 		if !ok || g.protectedPath(path) {
 			return false
 		}

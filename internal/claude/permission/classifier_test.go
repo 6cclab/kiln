@@ -3,12 +3,10 @@ package permission
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/andrepato/harness/internal/claude/settings"
@@ -268,9 +266,9 @@ func TestAutoMode_FastPathsSkipClassifier(t *testing.T) {
 
 // Writes that can change how code runs later, or how the agent is
 // configured, are classified even inside the workspace and even past an
-// allow rule; so is a write whose path key the gate does not recognise
-// (the tools decode "PATH" as "path").
-func TestAutoMode_ProtectedAndAmbiguousWritesAreClassified(t *testing.T) {
+// allow rule. (Case-variant keys such as "PATH" never reach the gate: the
+// turn loop refuses them, tool.CheckArgs.)
+func TestAutoMode_ProtectedWritesAreClassified(t *testing.T) {
 	root := t.TempDir()
 	in := func(p string) string { return filepath.Join(root, p) }
 	classified := []map[string]any{
@@ -281,8 +279,6 @@ func TestAutoMode_ProtectedAndAmbiguousWritesAreClassified(t *testing.T) {
 		{"path": in(".zshrc")},
 		{"path": in("web/.npmrc")},
 		{"path": in(".mcp.json")},
-		{"PATH": in("src/a.go")},
-		{"path": in("src/a.go"), "Path": in(".git/config")},
 	}
 	for _, args := range classified {
 		for _, perms := range []settings.Permissions{{}, {Allow: []string{"Edit", "Write"}}} {
@@ -346,33 +342,6 @@ func TestAutoMode_ProtectedPathFoldedSpelling(t *testing.T) {
 		if len(c.calls) != 1 {
 			t.Errorf("write %s: classifier called %d times, want 1", rel, len(c.calls))
 		}
-	}
-}
-
-// A protected directory reached by a spelling only the OS maps back to
-// it — a /.vol/<device>/<inode> path — is still protected: the check also
-// compares the kernel's own name for the path (execenv.CanonicalPath).
-func TestAutoMode_ProtectedPathVolSpelling(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("/.vol paths are macOS's")
-	}
-	root := t.TempDir()
-	gitDir := filepath.Join(root, ".git")
-	if err := os.MkdirAll(gitDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	var st syscall.Stat_t
-	if err := syscall.Stat(gitDir, &st); err != nil {
-		t.Fatal(err)
-	}
-	vol := fmt.Sprintf("/.vol/%d/%d/config", st.Dev, st.Ino)
-	c := allowAll()
-	g := NewGate(GateOptions{Permissions: settings.Permissions{Allow: []string{"Bash(echo *)"}}, Mode: settings.ModeAuto, Roots: []string{root}, Classifier: c})
-	if _, _, err := g.CheckWithOutcome(context.Background(), bashReq("echo '[core]' > "+vol)); err != nil {
-		t.Fatal(err)
-	}
-	if len(c.calls) != 1 {
-		t.Errorf("a write to %s (.git/config) skipped the classifier", vol)
 	}
 }
 

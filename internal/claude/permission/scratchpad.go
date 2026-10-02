@@ -57,7 +57,7 @@ func (g *Gate) scratchpadCall(req Request, hits settings.Hits) bool {
 	name := strings.ToLower(req.ToolName)
 	switch {
 	case settings.IsFileTool(name):
-		path, ok := soleEditPath(req.Args)
+		path, ok := PathArgOf(req.Args)
 		return ok && g.InScratchpad(path)
 	case settings.IsBashTool(name):
 		return settings.BashWritesOnlyInside(req.PrimaryArg, g.cwd(), g.InScratchpad, g.WithinRoots)

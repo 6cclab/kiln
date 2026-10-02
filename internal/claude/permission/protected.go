@@ -107,25 +107,3 @@ func protectedSpelling(p string) bool {
 	}
 	return protectedFiles[parts[len(parts)-1]]
 }
-
-// soleEditPath is the edit/write call's path when exactly one argument key
-// names it. The tools decode their arguments case-insensitively, so a
-// "PATH" key reaches the tool while PathArgOf, which matches keys exactly,
-// does not see it; any such spelling, or two path keys, is ambiguous, and
-// auto mode then classifies instead of fast-pathing.
-func soleEditPath(args map[string]any) (string, bool) {
-	var found string
-	n := 0
-	for k, v := range args {
-		switch strings.ToLower(k) {
-		case "path", "file_path", "filepath":
-			n++
-			s, ok := v.(string)
-			if !ok || (k != "path" && k != "file_path" && k != "filePath") {
-				return "", false
-			}
-			found = s
-		}
-	}
-	return found, n == 1 && found != ""
-}
