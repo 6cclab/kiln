@@ -334,7 +334,9 @@ func SessionCommands(deps SessionCommandDeps) Source {
 					}
 					desc := filepath.Join(deps.Cwd, paths.CLAUDEMD)
 					if scope == "user" {
-						desc = filepath.Join(userHome(), ".claude", paths.CLAUDEMD)
+						// kiln never writes ~/.claude/CLAUDE.md - this is
+						// the same ~/.kiln/CLAUDE.md "#" notes go to.
+						desc = paths.KilnUserMemoryPath()
 					}
 					out = append(out, Completion{Value: scope, Label: scope, Description: desc})
 				}
@@ -347,7 +349,25 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				}
 				var path string
 				if scope == "user" {
-					path = filepath.Join(userHome(), ".claude", paths.CLAUDEMD)
+					// kiln reads ~/.claude/CLAUDE.md but never writes it;
+					// /memory user opens the same ~/.kiln/CLAUDE.md "#"
+					// notes go to (memory.AddMemory), creating it (and its
+					// directory) if it does not exist yet, so there is
+					// always a real file to open. The project path below
+					// stays <cwd>/CLAUDE.md as Claude Code shapes it: that
+					// file is the user's own project documentation, not a
+					// Claude-Code-owned config file, so opening (or, via
+					// the editor, creating) it here is the user's action,
+					// not kiln writing it.
+					path = paths.KilnUserMemoryPath()
+					if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+						return Result{}, fmt.Errorf("could not create %s: %w", filepath.Dir(path), err)
+					}
+					if _, err := os.Stat(path); os.IsNotExist(err) {
+						if err := os.WriteFile(path, nil, 0o644); err != nil {
+							return Result{}, fmt.Errorf("could not create %s: %w", path, err)
+						}
+					}
 				} else {
 					path = filepath.Join(deps.Cwd, paths.CLAUDEMD)
 				}

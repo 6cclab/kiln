@@ -122,6 +122,41 @@ func TestMemoryCompletionsOfferUserAndProject(t *testing.T) {
 	}
 }
 
+// TestMemoryUserOpensKilnFileNotClaudeCode: /memory user must open
+// ~/.kiln/CLAUDE.md - the same file "#" notes go to (memory.AddMemory) -
+// creating it (and ~/.kiln) if missing, and never create or touch
+// ~/.claude/CLAUDE.md, which kiln reads but never writes.
+func TestMemoryUserOpensKilnFileNotClaudeCode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+	cwd := t.TempDir()
+	source := SessionCommands(SessionCommandDeps{Cwd: cwd})
+
+	// The completion for "user" points at kiln's file.
+	items := findCmd(t, source, "memory").ArgumentCompletions("user")
+	if len(items) != 1 || items[0].Description != filepath.Join(home, ".kiln", "CLAUDE.md") {
+		t.Fatalf("user completion = %+v, want ~/.kiln/CLAUDE.md", items)
+	}
+
+	res, err := findCmd(t, source, "memory").Run(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kilnPath := filepath.Join(home, ".kiln", "CLAUDE.md")
+	joined := strings.Join(res.Output, "\n")
+	if !strings.Contains(joined, kilnPath) {
+		t.Fatalf("got %q, want it to name %s", joined, kilnPath)
+	}
+	if _, err := os.Stat(kilnPath); err != nil {
+		t.Fatalf("~/.kiln/CLAUDE.md should have been created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Fatalf("~/.claude/CLAUDE.md should not have been created, got err=%v", err)
+	}
+}
+
 func TestAddDirWithNoGateSaysUnenforced(t *testing.T) {
 	source := SessionCommands(SessionCommandDeps{Cwd: t.TempDir()})
 	res, err := findCmd(t, source, "add-dir").Run(context.Background(), "")
