@@ -13,9 +13,6 @@ package e2e
 
 import (
 	"fmt"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -81,13 +78,15 @@ func TestSandbox_EscapeFailsAndTranscriptSaysSo(t *testing.T) {
 	}
 }
 
-// sandboxNetScript has the model fetch a local server's address through
-// the sandbox proxy. NO_PROXY (localhost, 127.0.0.1) would send the
-// request direct, which the sandbox blocks, so curl is told not to bypass
-// the proxy.
+// sandboxNetScript has the model fetch a host outside the allowlist. It
+// is a reserved .invalid name: a local address (127.0.0.1) is never
+// offered for approval, and no name in a test can resolve to a public
+// address that reaches a local server, so after approval the proxy's dial
+// fails. Reaching a server through an approved host is covered by the
+// real-sandbox network tests in internal/sandbox, which use a test resolver.
 const sandboxNetScript = `model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "curl -sS -m 20 --noproxy '' http://127.0.0.1:%d/"}, id: n1}
+  - tool_call: {name: bash, args: {command: "curl -sS -m 20 http://approve-me.invalid/"}, id: n1}
   - on_tool_result: n1
     then:
       - text: "net done"
@@ -96,18 +95,13 @@ steps:
 // TestSandbox_NetworkApprovalPrompt: in manual mode, a sandboxed command
 // reaching a host outside the allowlist pauses on a prompt (Claude Code's
 // sandboxing docs, "Hosts outside your allowed domains"); answering Yes
-// lets the connection through the proxy, and the command completes.
+// lets the request past the proxy's checks (it then fails to resolve, a
+// 502 from the proxy rather than its 403 block), and the command completes.
 func TestSandbox_NetworkApprovalPrompt(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("needs sandbox-exec")
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, "served-through-proxy")
-	}))
-	defer srv.Close()
-	port := srv.Listener.Addr().(*net.TCPAddr).Port
-
-	proj, home, sessDir, addr, _ := tuiFixture(t, fmt.Sprintf(sandboxNetScript, port))
+	proj, home, sessDir, addr, _ := tuiFixture(t, sandboxNetScript)
 	permWriteJSON(t, proj, map[string]any{"sandbox": map[string]any{"enabled": true}})
 
 	s := startTUI(t, 110, 34, proj, home, sessDir, addr, "--permission-mode", "manual")
@@ -115,7 +109,7 @@ func TestSandbox_NetworkApprovalPrompt(t *testing.T) {
 	waitReady(t, s)
 	s.Send("fetch it")
 	s.SendKey("enter")
-	target := fmt.Sprintf("127.0.0.1:%d", port)
+	target := "approve-me.invalid"
 	if err := s.WaitFor("sandbox network", 10*time.Second); err != nil {
 		t.Fatalf("no network approval prompt: %v\n%s", err, strings.Join(s.Rows(), "\n"))
 	}
@@ -130,8 +124,8 @@ func TestSandbox_NetworkApprovalPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "served-through-proxy") {
-		t.Errorf("the approved request did not reach the server; transcript:\n%s", data)
+	if !strings.Contains(string(data), "kiln sandbox proxy: ") || strings.Contains(string(data), "Blocked network access: approve-me.invalid") {
+		t.Errorf("the approved request was not let past the proxy's checks; transcript:\n%s", data)
 	}
 	if _, err := os.Stat(filepath.Join(proj, ".kiln", "settings.local.json")); err == nil {
 		t.Error("a plain Yes must not save a rule")
