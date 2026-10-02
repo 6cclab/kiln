@@ -332,3 +332,34 @@ func refusedWrite() string {
 	}
 	return "Operation not permitted"
 }
+
+// The user's terminal is out of reach: a sandboxed command cannot open a
+// tty device this user owns (where it could read keystrokes or inject
+// input), though the same open works outside the sandbox.
+func TestRealSandboxTerminal(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Linux: bwrap's --new-session and private /dev cover this")
+	}
+	var tty string
+	matches, _ := filepath.Glob("/dev/ttys*")
+	for _, m := range matches {
+		if f, err := os.OpenFile(m, os.O_RDONLY, 0); err == nil {
+			f.Close()
+			tty = m
+			break
+		}
+	}
+	if tty == "" {
+		t.Skip("no terminal device this user can open")
+	}
+	r := newRealRig(t, Config{}, nil)
+	if out, code := r.run("exec 3<" + tty + " && echo opened"); code == 0 || strings.Contains(out, "opened") {
+		t.Errorf("sandboxed command opened %s for reading: %q", tty, out)
+	}
+	if out, code := r.run("exec 3>" + tty + " && echo opened"); code == 0 || strings.Contains(out, "opened") {
+		t.Errorf("sandboxed command opened %s for writing: %q", tty, out)
+	}
+	if out, code := r.run("echo ok > /dev/null && echo fine"); code != 0 || !strings.Contains(out, "fine") {
+		t.Errorf("/dev/null must stay writable: %d %q", code, out)
+	}
+}
