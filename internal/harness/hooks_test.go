@@ -70,6 +70,45 @@ steps:
 	}
 }
 
+// TestBeforeToolErrorBlocks: a before_tool handler that errors or panics
+// (the permission gate failing: a cancelled prompt or classifier call)
+// blocks the call. It must never let the call run as if it had been
+// checked.
+func TestBeforeToolErrorBlocks(t *testing.T) {
+	for name, hook := range map[string]func(context.Context, msg.ToolCall) (BeforeToolResult, error){
+		"error": func(context.Context, msg.ToolCall) (BeforeToolResult, error) {
+			return BeforeToolResult{}, context.Canceled
+		},
+		"panic": func(context.Context, msg.ToolCall) (BeforeToolResult, error) {
+			panic("gate broke")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newTestRig(t, "", []string{"bash"})
+			marker := filepath.Join(t.TempDir(), "marker")
+			script := `
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "touch ` + marker + `"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "done"
+`
+			if err := rig.Faux.LoadScriptYAML(script); err != nil {
+				t.Fatal(err)
+			}
+			lane := rig.mustLane("main")
+			rig.H.Hooks().OnBeforeTool(hook)
+			if _, err := lane.Prompt(context.Background(), "go", nil); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Fatal("the call ran after its permission check failed")
+			}
+		})
+	}
+}
+
 // TestAbortMidStream aborts a lane while its provider request is in
 // flight (a scripted delay gives us a window) and asserts the run ends
 // with status "aborted" and a clean pi.result (no dangling pi.op.* keys).
