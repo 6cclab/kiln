@@ -260,6 +260,8 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 | `modelRoles` | `map[string]string` | shallow-merged per key; a scope overrides only the role names it sets |
 | `env` | `map[string]string` | shallow-merged per key, unconditionally (no empty check) |
 | `statusLine.type`, `statusLine.command`, `statusLine.padding` | `*StatusLineConfig` | replaced wholesale, only when the later scope's `command` is non-empty |
+| `autoMemoryEnabled` | `*bool` | last non-nil wins (§7's "Auto memory") |
+| `autoMemoryDirectory` | `string` | last non-empty wins; absolute or `~/`-prefixed (§7's "Auto memory") |
 
 ### Permission rule syntax (`MatchesRule`, `settings.go`)
 
@@ -317,6 +319,8 @@ Read-only set: `read`, `glob`, `grep`, `session_search`, `tool_search`, `bash_ou
 ### Outside-workspace rule
 
 `internal/claude/permission/permission.go`. After `Decide` returns a verdict, if the call carries a path argument (`path`/`file_path`/`filePath`) that resolves outside the gate's registered roots, an otherwise-allowed call is forced to prompt (or denied, headless with no prompter) — unless the mode is `bypassPermissions`, which skips this check too. `WithinRoots` (`permission.go`) resolves the path as the tools do (`execenv.ResolveToolPath`: `@`, `~`, `file://`, relative to the first root) and rejects any `..`-escape. On macOS and Windows the comparison is case- and normalization-insensitive (`settings.CaseFoldPath`, the same folding deny rules use), so `/Users/me/PROJ/a.go` is inside the root `/Users/me/Proj`; on Linux it is exact.
+
+`GateOptions.ReadOnlyRoots` (`AddReadOnlyRoot`/`WithinReadOnlyRoots`) is a second, narrower set of roots: a path there escapes this check only for a tool in `settings.ReadOnly`, never for a mutating one — used for Claude Code's auto-memory directory (§7) so reading a topic file doesn't prompt while a write there is still gated exactly as any other outside-workspace path.
 
 ### `task` role-crossing gate
 
@@ -406,6 +410,28 @@ Discovery: `~/.claude/CLAUDE.md` and `~/.kiln/CLAUDE.md` (user; the second holds
 `@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently.
 
 Budget: `LoadMemory(cwd, budgetTokens)` estimates tokens as `ceil(len/4)`; the budget is the tier's `SystemPromptTokens` (10% of the context window, 2k–32k). CLAUDE.md files always load in full. Rules load in full while the budget allows, project rules first; the rest are listed in a `<memory-index>` block, one line each with the rule's path and its frontmatter `description` (else its first heading), and the model is told to read a rule before doing work it covers. `Assembled.Indexed` lists those paths (logged at startup); if the CLAUDE.md files alone exceed the budget they load anyway and kiln prints a warning.
+
+### Auto memory (Claude Code's `MEMORY.md`), read-only
+
+`internal/claude/memory/automemory.go`. kiln reads Claude Code's own auto-memory index — it never writes one; auto memory is otherwise Claude Code's feature, not kiln's (see `~/.claude/plans/kiln-self-improvement.md`'s "Claude Code parity" for the scope decision, and internal/learn for kiln's own, separate learned-preference store).
+
+**Location** (`ResolveAutoMemoryDir`): `~/.claude/projects/<project>/memory/MEMORY.md`, where `<project>` is the current git repository's root directory (resolved via `git rev-parse --git-common-dir`, not `--show-toplevel`, so every worktree of a repository — which each have their own toplevel but share one `.git` — and every subdirectory of it resolve to the same `<project>`) with every character that isn't an ASCII letter or digit replaced by `-`, one-for-one (`projectDirName`). Verified against real `~/.claude/projects/` directory names on the machine this was written on: `/` (`/Users/andrepato/projects/harness` -> `-Users-andrepato-projects-harness`) and `_` (this machine's own `$TMPDIR`, which has underscores, maps to a directory name with `-` in their place, not `_` — an earlier version of this function only replaced `/` and got `_` wrong). No real example with a `.` in the path was available to confirm `.` specifically, but it follows the same one-rule-for-every-punctuation-character pattern the `_` evidence already established. Outside a git repository, `<project>` is derived from cwd itself. The `autoMemoryDirectory` setting (below), when set and safe (see "Permissions" below), overrides this resolution outright.
+
+**Loading** (`LoadAutoMemory`), at session start, within the tier's remaining `SystemPromptTokens` budget after CLAUDE.md/rules:
+
+- The first 200 lines or 25KB of `MEMORY.md`, whichever comes first (Claude Code's own cap) — never more, and topic files (`user_role.md`, `feedback_testing.md`, ...) are **never preloaded**; the model reads them on demand with the normal read tool once told where the directory is.
+- Framed with a short neutral header naming the directory (`<auto-memory dir="...">`) and presented as project context, not instructions, matching how CLAUDE.md content is framed.
+- Trimmed further, past Claude Code's own cap, to fit what budget remains after CLAUDE.md — and skipped entirely (not merely trimmed) on the small context tier, which has no headroom to spare once CLAUDE.md content (which always loads in full) has claimed its share.
+- `/context` reports the outcome as `auto-memory   <loaded|trimmed|skipped> (...)`.
+
+**Disabling**: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` (env), or `autoMemoryEnabled: false` in `settings.json` (user or project scope — see §5's keys table; a project can turn off what the user's settings turned on, last-non-nil scope wins).
+
+**`autoMemoryDirectory` safety** (`resolveAutoMemoryDir`, `trustedAutoMemoryDirectory` in `chat.go`): since the resolved directory becomes a read-only permission root (below), an `autoMemoryDirectory` value is trusted only under two conditions, both required:
+
+- **Folder trust.** A project- or local-scope `autoMemoryDirectory` (a repo's own, possibly untrusted, checked-in or `.local` settings) is honoured only once the folder is trusted in kiln's own trust store (`internal/claude/trust`, same gate `chat.go` uses for `.mcp.json`'s project-scope servers). Until then, only the user's own `~/.claude/settings.json` (and an explicit `--settings <file>` the person typed themselves) may set it; an ignored project-scope value falls back to the default directory and prints a one-line startup warning. Matches Claude Code's own rule for this setting (docs: "Storage location" — honoured from project/local settings only under the same workspace-trust rule as hooks).
+- **Not the filesystem root, home, or an ancestor of home**, trusted or not (`unsafeAutoMemoryDirectory`). Any of these, added as a read-only root, would turn the setting into "read anything under my home directory (or the whole disk) without asking." A rejected value falls back to the default directory and prints a one-line startup warning (`AutoMemory.DirectoryOverrideRejected`).
+
+**Permissions**: the resolved directory is added to the permission gate as a **read-only root** (`GateOptions.ReadOnlyRoots`, `permission.go`'s `WithinReadOnlyRoots`) — a read-only tool's (`settings.ReadOnly`) path there is not treated as outside the workspace, so reading a topic file never prompts. `WithinReadOnlyRoots` resolves symlinks on both the stored root and the checked path before comparing, so a symlink planted inside the directory that points elsewhere does not inherit the root's no-prompt treatment for wherever it actually points. A mutating tool's path there is **not** exempted: it is checked only against the regular `Roots`, so a write or edit into the auto-memory directory is refused/asked exactly as any other outside-workspace path always was. kiln never writes auto memory, by construction, not just by convention.
 
 ### Keybindings
 

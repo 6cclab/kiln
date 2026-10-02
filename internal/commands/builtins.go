@@ -95,6 +95,11 @@ type BuiltinDeps struct {
 
 	// SessionsDir is shown by /status.
 	SessionsDir string
+	// AutoMemoryStatus, if set, reports /context's one-line summary of
+	// Claude Code's auto-memory index for this project: whether it
+	// loaded, was trimmed, or was skipped, and why. "" (or a nil func)
+	// omits the line.
+	AutoMemoryStatus func() string
 
 	// OnClear starts the conversation over: the model sees no earlier
 	// turns afterwards.
@@ -441,6 +446,11 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 					fmt.Sprintf("system prompt %d max", t.SystemPromptTokens),
 					fmt.Sprintf("reserved      %d", t.Compaction.ReserveTokens),
 					fmt.Sprintf("available     %d for conversation", budget.UsableTokens(t)),
+				}
+				if deps.AutoMemoryStatus != nil {
+					if status := deps.AutoMemoryStatus(); status != "" {
+						out = append(out, fmt.Sprintf("auto-memory   %s", status))
+					}
 				}
 				return Result{Output: out, Context: buildContextBreakdown(deps, t)}, nil
 			},

@@ -7,4 +7,12 @@
 // input mode) rather than anything in memory.ts, which has no such
 // function; it is grouped here because it operates on the same CLAUDE.md
 // files this package reads.
+//
+// automemory.go reads Claude Code's own auto memory
+// (~/.claude/projects/<project>/memory/MEMORY.md) read-only: kiln never
+// writes there (see docs/configuration.md and
+// ~/.claude/plans/kiln-self-improvement.md's "Claude Code parity"
+// section). There is no TS/JS source to port this from — auto memory postdates
+// this codebase's pi port — so it is implemented straight from Claude
+// Code's own docs (https://code.claude.com/docs/en/memory).
 package memory

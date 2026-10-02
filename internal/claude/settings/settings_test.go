@@ -215,3 +215,59 @@ func TestLoadSettingsModelRoles(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadSettingsAutoMemory fails without the autoMemoryEnabled/
+// autoMemoryDirectory raw fields and their merge rules: a project scope
+// must be able to turn off what the user's settings turned on, and a later
+// scope's autoMemoryDirectory must win over an earlier one, matching
+// Claude Code's docs (autoMemoryEnabled is read from user and project
+// scopes; autoMemoryDirectory from any scope).
+func TestLoadSettingsAutoMemory(t *testing.T) {
+	writeJSON := func(t *testing.T, path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("unset stays nil", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		cwd := t.TempDir()
+		got := LoadSettings(cwd, LoadOptions{})
+		if got.AutoMemoryEnabled != nil {
+			t.Errorf("AutoMemoryEnabled = %v, want nil", got.AutoMemoryEnabled)
+		}
+	})
+
+	t.Run("project scope can turn off what user settings turned on", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		cwd := t.TempDir()
+
+		writeJSON(t, filepath.Join(home, ".claude", "settings.json"), `{"autoMemoryEnabled": true}`)
+		writeJSON(t, filepath.Join(cwd, ".claude", "settings.json"), `{"autoMemoryEnabled": false}`)
+
+		got := LoadSettings(cwd, LoadOptions{})
+		if got.AutoMemoryEnabled == nil || *got.AutoMemoryEnabled {
+			t.Errorf("AutoMemoryEnabled = %v, want false", got.AutoMemoryEnabled)
+		}
+	})
+
+	t.Run("autoMemoryDirectory: later scope wins", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		cwd := t.TempDir()
+
+		writeJSON(t, filepath.Join(home, ".claude", "settings.json"), `{"autoMemoryDirectory": "~/mem-a"}`)
+		writeJSON(t, filepath.Join(cwd, ".claude", "settings.json"), `{"autoMemoryDirectory": "~/mem-b"}`)
+
+		got := LoadSettings(cwd, LoadOptions{})
+		if got.AutoMemoryDirectory != "~/mem-b" {
+			t.Errorf("AutoMemoryDirectory = %q, want %q", got.AutoMemoryDirectory, "~/mem-b")
+		}
+	})
+}

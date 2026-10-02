@@ -77,6 +77,17 @@ type Settings struct {
 	Env        map[string]string
 	// StatusLine is the configured status line command, nil when unset.
 	StatusLine *StatusLineConfig
+	// AutoMemoryEnabled mirrors Claude Code's autoMemoryEnabled setting:
+	// nil means unset (auto memory defaults to on), a set value from a
+	// later scope overrides an earlier one, so a project can turn off what
+	// the user's settings turned on. kiln only reads this - it never
+	// writes auto memory itself, but honours the same switch Claude Code
+	// does so a project that opted out stays opted out here too.
+	AutoMemoryEnabled *bool
+	// AutoMemoryDirectory mirrors Claude Code's autoMemoryDirectory
+	// setting: an absolute path or one starting with "~/", overriding
+	// where the auto-memory directory is resolved to. "" means unset.
+	AutoMemoryDirectory string
 	// LoadedFrom records which scopes actually contributed, for diagnostics.
 	LoadedFrom []paths.Scope
 	// HeldAllow are the allow rules of a <cwd>/.kiln/settings.local.json
@@ -106,12 +117,14 @@ type rawPermissions struct {
 }
 
 type rawSettings struct {
-	Permissions *rawPermissions   `json:"permissions"`
-	Model       string            `json:"model"`
-	EffortLevel string            `json:"effortLevel"`
-	ModelRoles  map[string]string `json:"modelRoles"`
-	Env         map[string]string `json:"env"`
-	StatusLine  *StatusLineConfig `json:"statusLine"`
+	Permissions         *rawPermissions   `json:"permissions"`
+	Model               string            `json:"model"`
+	EffortLevel         string            `json:"effortLevel"`
+	ModelRoles          map[string]string `json:"modelRoles"`
+	Env                 map[string]string `json:"env"`
+	StatusLine          *StatusLineConfig `json:"statusLine"`
+	AutoMemoryEnabled   *bool             `json:"autoMemoryEnabled"`
+	AutoMemoryDirectory string            `json:"autoMemoryDirectory"`
 }
 
 // LoadOptions configures LoadSettings.
@@ -280,6 +293,12 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 			for k, v := range raw.Env {
 				merged.Env[k] = v
 			}
+		}
+		if raw.AutoMemoryEnabled != nil {
+			merged.AutoMemoryEnabled = raw.AutoMemoryEnabled
+		}
+		if raw.AutoMemoryDirectory != "" {
+			merged.AutoMemoryDirectory = raw.AutoMemoryDirectory
 		}
 	}
 

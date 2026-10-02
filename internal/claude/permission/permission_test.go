@@ -87,6 +87,87 @@ func TestGateWorkspaceBoundary(t *testing.T) {
 		}
 	})
 
+	t.Run("read-only root: a read does not prompt, but a write is still blocked exactly as before", func(t *testing.T) {
+		// Regression for the auto-memory read-only root
+		// (internal/claude/memory.LoadAutoMemory): adding a directory via
+		// AddReadOnlyRoot must relax reads there without opening it up to
+		// writes, which stay gated the same way any other
+		// outside-workspace path is.
+		memDir := filepath.Join(os.TempDir(), "harness-test-automemory")
+		g := newGate(t)
+
+		readPath := filepath.Join(memDir, "MEMORY.md")
+		blocked, err := g.Check(ctx, Request{ToolName: "read", PrimaryArg: readPath, Args: map[string]any{"path": readPath}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked == nil {
+			t.Fatal("expected a read outside the workspace to be blocked before adding the read-only root")
+		}
+
+		g.AddReadOnlyRoot(memDir)
+
+		blocked, err = g.Check(ctx, Request{ToolName: "read", PrimaryArg: readPath, Args: map[string]any{"path": readPath}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked != nil {
+			t.Errorf("expected the read to pass once the directory is a read-only root, got %+v", blocked)
+		}
+
+		writePath := filepath.Join(memDir, "notes.md")
+		blocked, err = g.Check(ctx, Request{ToolName: "write", PrimaryArg: writePath, Args: map[string]any{"path": writePath}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked == nil {
+			t.Error("a write into a read-only root must still be blocked exactly as any other outside-workspace write")
+		}
+	})
+
+	t.Run("read-only root: a symlink inside it pointing outside still asks", func(t *testing.T) {
+		// Regression: WithinReadOnlyRoots must resolve symlinks before
+		// comparing, or a symlink planted inside a read-only root (e.g.
+		// Claude Code's auto-memory directory) pointing at a file
+		// outside it would inherit the root's no-prompt treatment for
+		// wherever it actually points.
+		memDir := t.TempDir()
+		secretDir := t.TempDir()
+		secret := filepath.Join(secretDir, "secret.txt")
+		if err := os.WriteFile(secret, []byte("hunter2"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		evilLink := filepath.Join(memDir, "evil")
+		if err := os.Symlink(secret, evilLink); err != nil {
+			t.Fatal(err)
+		}
+
+		g := newGate(t)
+		g.AddReadOnlyRoot(memDir)
+
+		blocked, err := g.Check(ctx, Request{ToolName: "read", PrimaryArg: evilLink, Args: map[string]any{"path": evilLink}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked == nil {
+			t.Error("expected a read through a symlink pointing outside the read-only root to still be blocked")
+		}
+
+		// Control: a real (non-symlinked) file directly under the same
+		// root still passes, so the fix isn't just blocking everything.
+		real := filepath.Join(memDir, "real.txt")
+		if err := os.WriteFile(real, []byte("fine"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		blocked, err = g.Check(ctx, Request{ToolName: "read", PrimaryArg: real, Args: map[string]any{"path": real}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked != nil {
+			t.Errorf("expected a real file directly under the read-only root to pass, got %+v", blocked)
+		}
+	})
+
 	t.Run("refuses rather than proceeds when there is no way to ask", func(t *testing.T) {
 		g := NewGate(GateOptions{Mode: settings.ModeManual, Roots: []string{work(t)}})
 		p := filepath.Join(work(t), "a.ts")
