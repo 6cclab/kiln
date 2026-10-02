@@ -77,6 +77,9 @@ type Sandbox struct {
 	// unsandboxedHeld is a false allowUnsandboxedCommands from a trusted
 	// source, which a project's true does not override.
 	unsandboxedHeld bool
+	// enabledHeld is a true enabled from a trusted source, which a
+	// project's false does not override.
+	enabledHeld bool
 }
 
 // SandboxFilesystem is sandbox.filesystem.
@@ -157,6 +160,14 @@ func mergeSandbox(merged *Settings, data []byte, src sandboxSource) {
 	}
 	s := &merged.Sandbox
 	s.set = true
+	// repoIgnored reports a value kiln takes only from user settings or
+	// --settings, found in a repository's settings (kiln's addition to
+	// Claude Code's scope rules: a cloned repository must not switch the
+	// sandbox off or open it wide).
+	repoIgnored := func(what string) {
+		merged.SandboxWarnings = append(merged.SandboxWarnings,
+			fmt.Sprintf("%s: sandbox %s is ignored in a project's settings; set it in ~/.claude/settings.json or --settings", src.file, what))
+	}
 	warn := func(key string) {
 		merged.SandboxWarnings = append(merged.SandboxWarnings, fmt.Sprintf("%s: sandbox.%s has the wrong type; ignored", src.file, key))
 	}
@@ -226,7 +237,12 @@ func mergeSandbox(merged *Settings, data []byte, src sandboxSource) {
 	}
 
 	if v := boolKey(obj, "", "enabled"); v != nil {
-		s.Enabled = v
+		if !*v && s.enabledHeld && !src.trusted {
+			repoIgnored("enabled: false (user settings or --settings turned the sandbox on)")
+		} else {
+			s.Enabled = v
+			s.enabledHeld = *v && src.trusted
+		}
 	}
 	if v := boolKey(obj, "", "failIfUnavailable"); v != nil {
 		s.FailIfUnavailable = v
@@ -257,7 +273,13 @@ func mergeSandbox(merged *Settings, data []byte, src sandboxSource) {
 	if v := boolKey(obj, "", "allowAppleEvents"); v != nil && src.trusted {
 		s.AllowAppleEvents = v
 	}
-	s.ExcludedCommands = append(s.ExcludedCommands, strings_(obj, "", "excludedCommands")...)
+	for _, e := range strings_(obj, "", "excludedCommands") {
+		if !src.trusted && catchAllCommand(e) {
+			repoIgnored(fmt.Sprintf("excludedCommands entry %q (it takes every command out of the sandbox)", e))
+			continue
+		}
+		s.ExcludedCommands = append(s.ExcludedCommands, e)
+	}
 	if raw, ok := obj["ignoreViolations"]; ok {
 		var m map[string][]string
 		if err := json.Unmarshal(raw, &m); err != nil {
@@ -272,21 +294,52 @@ func mergeSandbox(merged *Settings, data []byte, src sandboxSource) {
 		}
 	}
 
-	s.Filesystem.AllowWrite = append(s.Filesystem.AllowWrite, paths(fs, "filesystem.", "allowWrite")...)
+	for _, p := range paths(fs, "filesystem.", "allowWrite") {
+		if !src.trusted && coversHome(p.Path, src.home) {
+			repoIgnored(fmt.Sprintf("filesystem.allowWrite entry %q (it opens the home directory or more)", p.Path))
+			continue
+		}
+		s.Filesystem.AllowWrite = append(s.Filesystem.AllowWrite, p)
+	}
 	s.Filesystem.AllowRead = append(s.Filesystem.AllowRead, paths(fs, "filesystem.", "allowRead")...)
 	if v := boolKey(fs, "filesystem.", "disabled"); v != nil && src.trusted {
 		s.Filesystem.Disabled = v
 	}
 
-	s.Network.AllowedDomains = append(s.Network.AllowedDomains, strings_(net, "network.", "allowedDomains")...)
-	s.Network.AllowUnixSockets = append(s.Network.AllowUnixSockets, paths(net, "network.", "allowUnixSockets")...)
-	s.Network.AllowMachLookup = append(s.Network.AllowMachLookup, strings_(net, "network.", "allowMachLookup")...)
-	if v := boolKey(net, "network.", "allowAllUnixSockets"); v != nil {
-		s.Network.AllowAllUnixSockets = v
+	for _, d := range strings_(net, "network.", "allowedDomains") {
+		if !src.trusted && strings.TrimSpace(d) == "*" {
+			repoIgnored(`network.allowedDomains entry "*" (it allows every host)`)
+			continue
+		}
+		s.Network.AllowedDomains = append(s.Network.AllowedDomains, d)
 	}
-	if v := boolKey(net, "network.", "allowLocalBinding"); v != nil {
-		s.Network.AllowLocalBinding = v
+	if socks := paths(net, "network.", "allowUnixSockets"); len(socks) > 0 {
+		if src.trusted {
+			s.Network.AllowUnixSockets = append(s.Network.AllowUnixSockets, socks...)
+		} else {
+			repoIgnored("network.allowUnixSockets (a socket can reach a service outside the sandbox)")
+		}
 	}
+	for _, n := range strings_(net, "network.", "allowMachLookup") {
+		if !src.trusted && strings.TrimSpace(n) == "*" {
+			repoIgnored(`network.allowMachLookup entry "*" (it allows every system service)`)
+			continue
+		}
+		s.Network.AllowMachLookup = append(s.Network.AllowMachLookup, n)
+	}
+	trustedBool := func(key string, dst **bool, why string) {
+		v := boolKey(net, "network.", key)
+		if v == nil {
+			return
+		}
+		if *v && !src.trusted {
+			repoIgnored("network." + key + ": true (" + why + ")")
+			return
+		}
+		*dst = v
+	}
+	trustedBool("allowAllUnixSockets", &s.Network.AllowAllUnixSockets, "every Unix socket can reach a service outside the sandbox")
+	trustedBool("allowLocalBinding", &s.Network.AllowLocalBinding, "it opens local ports to sandboxed commands")
 	port := func(key string) *int {
 		raw, ok := net[key]
 		if !ok {
@@ -299,11 +352,20 @@ func mergeSandbox(merged *Settings, data []byte, src sandboxSource) {
 		}
 		return &n
 	}
-	if p := port("httpProxyPort"); p != nil {
-		s.Network.HTTPProxyPort = p
-	}
-	if p := port("socksProxyPort"); p != nil {
-		s.Network.SOCKSProxyPort = p
+	for _, key := range []string{"httpProxyPort", "socksProxyPort"} {
+		p := port(key)
+		if p == nil {
+			continue
+		}
+		if !src.trusted {
+			repoIgnored("network." + key + " (the proxy on that port would decide what sandboxed commands reach)")
+			continue
+		}
+		if key == "httpProxyPort" {
+			s.Network.HTTPProxyPort = p
+		} else {
+			s.Network.SOCKSProxyPort = p
+		}
 	}
 }
 
@@ -430,4 +492,23 @@ func sandboxSourceFor(cwd, file string, scope paths.Scope, cli, held bool) sandb
 func sandboxHome() string {
 	h, _ := os.UserHomeDir()
 	return h
+}
+
+// catchAllCommand reports an excludedCommands entry that matches every
+// command ("*", "* *").
+func catchAllCommand(e string) bool {
+	return strings.Trim(strings.TrimSpace(e), "* ") == ""
+}
+
+// coversHome reports a path that is the home directory, or above it.
+func coversHome(p, home string) bool {
+	p = filepath.Clean(p)
+	if p == "/" {
+		return true
+	}
+	if home == "" {
+		return false
+	}
+	rel, err := filepath.Rel(p, filepath.Clean(home))
+	return err == nil && (rel == "." || !strings.HasPrefix(rel, ".."))
 }
