@@ -96,9 +96,12 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 				a = append(a, "--ro-bind", "/dev/null", path)
 			}
 		}
+		a = hideSockets(a, p.HiddenSockets)
 		for _, path := range remount {
 			a = append(a, "--remount-ro", path)
 		}
+	} else {
+		a = hideSockets(a, p.HiddenSockets)
 	}
 
 	for _, br := range bridges {
@@ -135,6 +138,22 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 	}
 	a = append(a, "--", shell, "-c", script, shell, command)
 	return a, nil
+}
+
+// hideSockets binds /dev/null over each listed socket that exists, after
+// the writable roots are mounted (a root bound over a socket's directory
+// would otherwise bring it back). A connect to it then fails.
+func hideSockets(a []string, socks []string) []string {
+	var real []string
+	for _, s := range socks {
+		if exists(s) {
+			real = append(real, realPath(s))
+		}
+	}
+	for _, r := range dedupe(real) {
+		a = append(a, "--ro-bind", "/dev/null", r)
+	}
+	return a
 }
 
 func shellQuote(s string) string {

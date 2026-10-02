@@ -385,7 +385,6 @@ func TestRealSandboxSubmoduleGitDir(t *testing.T) {
 	for _, cmd := range []string{
 		`echo "fsmonitor = /tmp/evil" >> .git/modules/sub/config`,
 		"echo evil > .git/modules/sub/hooks/post-checkout",
-		"echo evil > .git/config.worktree",
 	} {
 		if out, code := r.run(cmd); code == 0 {
 			t.Errorf("%s: allowed: %q", cmd, out)
@@ -395,12 +394,18 @@ func TestRealSandboxSubmoduleGitDir(t *testing.T) {
 		t.Error("submodule config changed")
 	}
 	mustNotExist(t, filepath.Join(mod, "hooks", "post-checkout"))
-	if runtime.GOOS == "darwin" {
-		if out, code := r.run("mkdir -p .git/modules/new/hooks && echo evil > .git/modules/new/config"); code == 0 {
-			t.Errorf("new module config allowed: %q", out)
+	// Entries that did not exist yet: macOS refuses the write; Linux
+	// (which can bind only what exists) removes them when the command ends.
+	for _, cmd := range []string{
+		"echo evil > .git/config.worktree",
+		"mkdir -p .git/modules/new/hooks && echo evil > .git/modules/new/config",
+	} {
+		if out, code := r.run(cmd); code == 0 && runtime.GOOS == "darwin" {
+			t.Errorf("%s: allowed: %q", cmd, out)
 		}
-		mustNotExist(t, filepath.Join(r.ws, ".git", "modules", "new", "config"))
 	}
+	mustNotExist(t, filepath.Join(r.ws, ".git", "config.worktree"))
+	mustNotExist(t, filepath.Join(r.ws, ".git", "modules", "new", "config"))
 	// The rest of .git stays writable: git needs its index and objects.
 	if out, code := r.run("echo x > .git/modules/sub/index && echo ok"); code != 0 {
 		t.Errorf("module index write refused: %q", out)

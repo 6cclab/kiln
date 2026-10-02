@@ -65,7 +65,10 @@ type gitSnapshot map[string]bool
 func snapshotGitDirs(dirs []string) gitSnapshot {
 	s := gitSnapshot{}
 	for _, d := range dirs {
-		for _, g := range nestedGitDirs(d) {
+		// Every directory under modules/ and worktrees/, set up or not: a
+		// command can make one and write a config there that a later git
+		// (or a HEAD written after the command) would take up.
+		for _, g := range walkNested(d, false) {
 			for _, e := range gitSensitive {
 				p := filepath.Join(g, e)
 				if _, err := os.Lstat(p); err == nil {
