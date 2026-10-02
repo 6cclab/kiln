@@ -451,7 +451,7 @@ Namespace: the relative path under `commands/` with `.md` stripped; every direct
 
 ### Memory (`CLAUDE.md`)
 
-Discovery: `~/.claude/CLAUDE.md` and `~/.kiln/CLAUDE.md` (user; the second holds `#` notes kiln saves when the project has no `CLAUDE.md`), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
+Discovery: `~/.claude/CLAUDE.md` (user), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
 
 `@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently. An import in a project memory file (`CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md`) whose path resolves outside the working directory is external: as in Claude Code, it loads only once external imports are approved for the project. kiln has no approval dialog; it honours the approval recorded when you accepted Claude Code's dialog for the project, and otherwise renders `<!-- external import not loaded ... -->` and warns at startup. Imports in your user memory files always load.
 
