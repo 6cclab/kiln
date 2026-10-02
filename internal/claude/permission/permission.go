@@ -69,6 +69,9 @@ type Request struct {
 	// InAutoMode is set by the gate on a prompt raised while auto mode is
 	// on, so a UI does not offer to switch to the mode already active.
 	InAutoMode bool
+	// Unsandboxed marks a bash call that runs outside an active OS
+	// sandbox (excludedCommands, or dangerouslyDisableSandbox): sandbox.go.
+	Unsandboxed bool
 }
 
 // Prompter asks the user. Implemented by the TUI; absent in headless runs.
@@ -204,6 +207,9 @@ type Gate struct {
 	autoAsideLogged bool
 	// scratchpad is the session scratchpad (scratchpad.go), guarded by mu.
 	scratchpad []string
+	// sandbox is the session's OS sandbox (SetSandbox, sandbox.go); nil
+	// when none is configured.
+	sandbox SandboxPolicy
 }
 
 // NewGate builds a Gate. Roots are resolved to absolute paths and
@@ -748,6 +754,13 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// plan mode included, once deny and ask rules have had their say.
 	if g.scratchpadCall(req, hits) {
 		return nil, OutcomeAuto, nil
+	}
+
+	// The OS sandbox's part of the flow (sandbox.go): auto-allowing a
+	// sandboxed command, and the unsandboxed retry's extra checks.
+	req = g.annotateSandbox(req)
+	if r, out, done, err := g.checkSandboxed(ctx, req, permissions, mode, hits); done || err != nil {
+		return r, out, err
 	}
 
 	// A session "don't ask again" grant stands in for an allow rule, so
