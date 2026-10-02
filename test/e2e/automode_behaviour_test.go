@@ -327,3 +327,72 @@ func TestAutoMode_ScratchpadAndOutsidePaths(t *testing.T) {
 		t.Errorf("the system prompt does not name the scratchpad:\n%s", system)
 	}
 }
+
+// TestScratchpad_RootNotFromProjectSettings: a project's settings.json
+// "env" naming KILN_TMPDIR or CLAUDE_CODE_TMPDIR does not move the
+// scratchpad (a repository could otherwise point the prompt-free directory
+// at a path of its choosing). The file is loaded (its deny rule applies);
+// the scratchpad stays under the environment's KILN_TMPDIR.
+func TestScratchpad_RootNotFromProjectSettings(t *testing.T) {
+	const sessionID = "0b7e4c1d-8a2f-4d3e-9b61-5c7a8e9f0d21"
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	evil := filepath.Join(t.TempDir(), "evil")
+	settingsJSON := `{"env":{"KILN_TMPDIR":"` + evil + `","CLAUDE_CODE_TMPDIR":"` + evil + `"},"permissions":{"deny":["Bash(touch *)"]}}`
+	if err := os.MkdirAll(filepath.Join(proj, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, ".claude", "settings.json"), []byte(settingsJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KILN_TMPDIR", filepath.Join(home, "tmp")) // as baseEnv sets it for kiln
+	scratch := execenv.ScratchpadDir(proj, sessionID)
+	if !strings.HasPrefix(scratch, filepath.Join(home, "tmp")) {
+		t.Fatalf("test setup: scratch = %s", scratch)
+	}
+
+	script := `models:
+  faux-1:
+    - tool_call: {name: bash, args: {command: "touch probe"}, id: b1}
+    - on_tool_result: b1
+      then:
+        - tool_call: {name: bash, args: {command: "echo hi > '` + filepath.Join(scratch, "note.txt") + `'"}, id: b2}
+    - on_tool_result: b2
+      then:
+        - text: "Done."
+`
+	addr, srv := startFaux(t, script)
+	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
+		"-p", "go", "--output-format", "json", "--session-id", sessionID)
+	var out struct {
+		Blocked []string `json:"blocked"`
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), &out); err != nil {
+		t.Fatalf("parse: %v\nstdout=%s\nstderr=%s", err, res.Stdout, res.Stderr)
+	}
+	denied := false
+	for _, b := range out.Blocked {
+		if strings.Contains(b, "touch probe") {
+			denied = true
+		}
+		if strings.Contains(b, "note.txt") {
+			t.Errorf("the scratchpad write was refused: %s", b)
+		}
+	}
+	if !denied {
+		t.Fatalf("the project settings were not loaded (touch was not denied): %q", out.Blocked)
+	}
+	if b, err := os.ReadFile(filepath.Join(scratch, "note.txt")); err != nil || strings.TrimSpace(string(b)) != "hi" {
+		t.Errorf("the scratchpad write did not run: %q %v", b, err)
+	}
+	if _, err := os.Stat(evil); err == nil {
+		t.Errorf("%s was created: the project env moved the scratchpad root", evil)
+	}
+	reqs := srv.Requests()
+	if len(reqs) == 0 {
+		t.Fatal("no model requests")
+	}
+	if system := reqs[0].System; !strings.Contains(system, scratch) || strings.Contains(system, evil) {
+		t.Errorf("the system prompt does not name the environment's scratchpad %s:\n%s", scratch, system)
+	}
+}
