@@ -118,10 +118,13 @@ func buildPlan(cfg Config, cwd string, roots []string, tmpDir, home string, http
 			all = "socks5h://127.0.0.1:" + itoa(socksPort)
 		}
 		p.Env["ALL_PROXY"], p.Env["all_proxy"] = all, all
-		noProxy := "localhost,127.0.0.1,::1"
-		p.Env["NO_PROXY"], p.Env["no_proxy"] = noProxy, noProxy
+		// No NO_PROXY: a sandboxed command has no direct route to
+		// loopback, so localhost goes through the proxy as well (where it
+		// needs an exact allowedDomains entry), and an inherited NO_PROXY
+		// would only send requests where they cannot go.
+		p.Unset = append(p.Unset, "NO_PROXY", "no_proxy")
 	}
-	p.Unset = append([]string(nil), cfg.DenyEnv...)
+	p.Unset = append(p.Unset, cfg.DenyEnv...)
 	return p
 }
 
