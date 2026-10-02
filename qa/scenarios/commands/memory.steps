@@ -4,6 +4,12 @@
 WAITFOR /describe a task/ 20
 TYPE /memory
 KEY enter
+WAITFOR /Memory files:/ 20
+EXPECT /user .*CLAUDE\.md/
+EXPECT /project .*CLAUDE\.md/
+EXPECT /Open one: \/memory <name>/
+TYPE /memory project
+KEY enter
 WAITFOR /No changes to CLAUDE\.md|Saved .*CLAUDE\.md/ 20
 SHOT memory
 EXPECT /No changes to CLAUDE\.md|Saved .*CLAUDE\.md/
