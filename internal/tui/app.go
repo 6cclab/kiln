@@ -943,6 +943,13 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgPermissionPrompt:
 		m = m.flushGroup()
+		// Auto mode asking instead of deciding (its classifier failed, or
+		// blocked too often) says why first, as a system note. Committed
+		// here, on the Update loop, so it lands after the tool blocks
+		// already sent.
+		if msg.Request.AutoModeNote != "" {
+			m.commitNote(msg.Request.AutoModeNote)
+		}
 		// The design's "approval needed" block stands alone: no pre-prompt
 		// tool header commits above it (docs/kiln-design-handoff/README.md
 		// "Interactions"). The tool's own block commits after the decision,
@@ -1963,7 +1970,7 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		default:
 			m.queued = append(m.queued, line)
 			if m.cfg.Lane != nil {
-				if err := m.cfg.Lane.Steer(line); err != nil {
+				if err := m.cfg.Lane.SteerAs(line, line); err != nil {
 					m.commit(RenderError(err.Error()))
 				}
 			}
@@ -2108,8 +2115,7 @@ func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 	if len(hookContext) > 0 {
 		prompt = "<hook-context>\n" + strings.Join(hookContext, "\n\n") + "\n</hook-context>\n\n" + prompt
 	}
-
-	return m.beginTurn(prompt, images)
+	return m.beginTurn(prompt, line, images)
 }
 
 // commitCommandOutput shows a slash command's result in the transcript.
@@ -2167,7 +2173,9 @@ func (m Model) runMode(c Classified) tea.Cmd {
 	return nil
 }
 
-func (m Model) beginTurn(prompt string, images []msg.ImageContent) (tea.Model, tea.Cmd) {
+// beginTurn sends prompt; typed is the line the user typed for it, stored
+// with it for auto mode's classifier (harness.Lane.PromptAs).
+func (m Model) beginTurn(prompt, typed string, images []msg.ImageContent) (tea.Model, tea.Cmd) {
 	m.busy = true
 	m.turnStartedAt = time.Now()
 	// Seeded from zero, as app.ts's `spinner.start(turn++)` is, so the
@@ -2193,7 +2201,7 @@ func (m Model) beginTurn(prompt string, images []msg.ImageContent) (tea.Model, t
 		result := harness.RunResult{}
 		var err error
 		if lane != nil {
-			result, err = lane.Prompt(context.Background(), prompt, images)
+			result, err = lane.PromptAs(context.Background(), prompt, typed, images)
 		}
 		seconds := int(time.Since(startedAt).Round(time.Second) / time.Second)
 		if seconds < 1 {

@@ -117,6 +117,35 @@ func TestPromptState_DontAskHiddenKeys(t *testing.T) {
 	}
 }
 
+// TestPromptState_AutoModeHasNoSwitchToAuto: a prompt raised in auto mode
+// (the classifier failed or blocked too often) does not offer to switch to
+// auto mode. The rows below move up; keys and rendering agree.
+func TestPromptState_AutoModeHasNoSwitchToAuto(t *testing.T) {
+	withRenderEnv(t, 80)
+	req := PermissionRequest{ToolName: "bash", PrimaryArg: "npm test", InAutoMode: true, Grantable: true, DontAskRules: []string{"npm test *"}}
+	got := promptOptionsFor(req)
+	want := []promptOptionKind{optAllow, optAllowAlways, optDenyOutright}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("options = %v, want %v", got, want)
+	}
+
+	p := NewPromptState("/tmp")
+	reply := p.AskTool(req)
+	rendered := stripANSI(strings.Join(p.Render(80), "\n"))
+	if strings.Contains(rendered, "switch to auto mode") || !strings.Contains(rendered, "3  No") {
+		t.Errorf("rendered:\n%s", rendered)
+	}
+	p.HandleKey(key("3"))
+	if choice := <-reply; choice.Kind != ChoiceDeny || p.switchMode != "" {
+		t.Errorf(`"3" = %+v switchMode=%q, want deny`, choice, p.switchMode)
+	}
+
+	// Outside auto mode the option is still there.
+	if n := len(promptOptionsFor(PermissionRequest{ToolName: "bash"})); n != 3 {
+		t.Errorf("manual-mode options = %d, want 3 (Yes / switch to auto / No)", n)
+	}
+}
+
 // TestPromptState_BashGrantableWithoutRulesHidden: a bash request the gate
 // marked grantable but without rules cannot name what it saves, so the
 // option is not offered.

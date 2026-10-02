@@ -207,7 +207,7 @@ func TestModel_SubagentsPanel_ClearedOnNextTurn(t *testing.T) {
 		t.Fatalf("setup: panel should not be empty before the next turn")
 	}
 
-	next, _ := m.beginTurn("do another thing", nil)
+	next, _ := m.beginTurn("do another thing", "do another thing", nil)
 	nm, ok := next.(Model)
 	if !ok {
 		t.Fatalf("beginTurn did not return a Model")

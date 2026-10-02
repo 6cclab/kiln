@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/andrepato/harness/internal/claude/agents"
@@ -231,6 +232,56 @@ steps:
 	// actually have executed.
 	if _, err := os.Stat(filepath.Join(cwd, "blocked.txt")); !os.IsNotExist(err) {
 		t.Fatalf("blocked.txt exists (or stat failed unexpectedly: %v) — the deny rule did not apply inside the subagent", err)
+	}
+}
+
+// recordingClassifier blocks every action and keeps what it was asked.
+type recordingClassifier struct {
+	mu   sync.Mutex
+	reqs []permission.ClassifyRequest
+}
+
+func (c *recordingClassifier) Classify(ctx context.Context, req permission.ClassifyRequest) (permission.Verdict, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reqs = append(c.reqs, req)
+	return permission.Verdict{Block: true, Reason: "not part of the task"}, nil
+}
+
+// A subagent inherits auto mode and its classifier through the shared
+// gate: its mutating call is classified against its own conversation (the
+// delegated task first), and a block stops the command.
+func TestDispatchSubagentCallsGoPastAutoModeClassifier(t *testing.T) {
+	c := &recordingClassifier{}
+	gate := permission.NewGate(permission.GateOptions{Mode: settings.ModeAuto, Classifier: c})
+	script := `
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "touch subagent-ran.txt"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "done"
+`
+	d, _, cwd := newParentAndDispatcher(t, script, gate)
+	gate.AddRoot(cwd)
+
+	if _, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "general-purpose", Description: "x", Prompt: "tidy the build directory"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "subagent-ran.txt")); !os.IsNotExist(err) {
+		t.Fatal("the subagent's blocked command ran")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.reqs) != 1 {
+		t.Fatalf("classifier asked %d times, want 1", len(c.reqs))
+	}
+	req := c.reqs[0]
+	if req.ToolName != "bash" || !strings.HasSuffix(req.CallID, "tc1") || !req.Delegated {
+		t.Errorf("classified %+v", req)
+	}
+	if len(req.History) == 0 || !strings.Contains(msg.TextOf(req.History[0].(msg.UserMessage).Content), "tidy the build directory") {
+		t.Errorf("history = %+v, want the subagent's own conversation, task first", req.History)
 	}
 }
 

@@ -215,6 +215,11 @@ func (l *Lane) invokeBeforeTool(ctx context.Context, call msg.ToolCall) BeforeTo
 		})
 		if err != nil {
 			l.h.events.Emit(Event{Type: EventHandlerError, Lane: l.name, HookName: "before_tool", Err: err})
+			// before_tool is where the permission gate runs: a handler
+			// that failed did not approve the call, so it does not run.
+			if result.Block == nil {
+				result.Block = &ToolBlock{Reason: "the permission check failed (" + err.Error() + "), so the call did not run."}
+			}
 			continue
 		}
 		if result.Block == nil && r.Block != nil {

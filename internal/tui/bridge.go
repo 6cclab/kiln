@@ -1245,6 +1245,8 @@ func toolMeta(ts *turnState, ev harness.Event) string {
 		parts = append(parts, "auto-approved")
 	case string(permission.OutcomeHookBlocked):
 		parts = append(parts, "blocked by hook")
+	case string(permission.OutcomeClassifierBlocked):
+		parts = append(parts, "blocked by auto mode")
 	}
 	if elapsed, ok := toolElapsed(ts, ev.ToolCallID); ok {
 		parts = append(parts, elapsed)
@@ -1427,6 +1429,8 @@ func (b *Bridge) Prompter(cwd string) permission.Prompter {
 				Args:             req.Args,
 				Grantable:        req.Grantable,
 				DontAskRules:     req.DontAskRules,
+				AutoModeNote:     req.AutoModeNote,
+				InAutoMode:       req.InAutoMode,
 			},
 			Reply: reply,
 		})

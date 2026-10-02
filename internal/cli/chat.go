@@ -32,6 +32,7 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/auth/login"
+	"github.com/andrepato/harness/internal/automode"
 	"github.com/andrepato/harness/internal/budget"
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudecommands "github.com/andrepato/harness/internal/claude/commands"
@@ -727,8 +728,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// it on WithinRoots/WithinReadOnlyRoots keeps the hint inside exactly
 	// the directories a read already reaches without a prompt - anything
 	// that would need to ask (or would be refused) gets no hint instead.
+	// The session scratchpad is read without a prompt in every mode too
+	// (set later, once the session id is known; read at call time).
 	env.DidYouMeanDirAllowed = func(dir string) bool {
-		return gate.WithinRoots(dir) || gate.WithinReadOnlyRoots(dir)
+		return gate.WithinRoots(dir) || gate.WithinReadOnlyRoots(dir) || gate.InScratchpad(dir)
 	}
 
 	// --- MCP ---------------------------------------------------------
@@ -937,6 +940,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// --append-system-prompt, the plan-mode prompt (only in plan mode),
 	// memory, the skills index, the MCP tool index.
 	envBlock := environmentPrompt(ctx, cwd, time.Now())
+	// scratchpadPrompt names the session scratchpad once it exists (it
+	// needs the session id, known after agent.Start).
+	var scratchpadPrompt string
 	buildSystemPrompt := func(mcpIndexText string) string {
 		systemPromptBase := args.SystemPrompt
 		if systemPromptBase == "" {
@@ -956,7 +962,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if reviewEnabled() {
 			promptParts = append(promptParts, reviewPrompt)
 		}
-		promptParts = append(promptParts, memory.Text, autoMemory.Text, skillsIndex, mcpIndexText)
+		promptParts = append(promptParts, scratchpadPrompt, memory.Text, autoMemory.Text, skillsIndex, mcpIndexText)
 		return strings.Join(nonEmpty(promptParts), "\n\n")
 	}
 	systemPrompt := buildSystemPrompt(mcpIndexText)
@@ -992,6 +998,27 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	diag.L().Info("run log", "session", started.SessionID, "path", logPath)
 	logHarnessEvents(started.Harness)
 
+	autoModeConfig := claudesettings.LoadAutoMode(cwd, claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings})
+	if w := claudesettings.AutoModeIgnoredWarning(cwd, autoModeConfig.Ignored); w != "" {
+		startupWarn(w)
+	}
+	// A project's modelRoles.fast is ordinary subagent configuration; that
+	// the classifier does not use it matters only in auto mode, so it is a
+	// startup warning there and a run-log line otherwise.
+	if w := claudesettings.FastRoleIgnoredWarning(cwd, autoModeConfig.FastRoleIgnored); w != "" {
+		if gate.Mode() == claudesettings.ModeAuto {
+			startupWarn(w)
+		} else {
+			diag.L().Info("auto mode", "note", w)
+		}
+	}
+	wireAutoMode(gate, reg, started, memory.Text, autoModeConfig)
+
+	if dir := setupScratchpad(gate, cwd, started.SessionID); dir != "" {
+		scratchpadPrompt = scratchpadInstructions(dir)
+		started.Harness.SetSystemPrompt(buildSystemPrompt(mcpIndexText))
+	}
+
 	// applyMCP registers the catalog once the background connect is done:
 	// adapters and a rebuilt tool_search into the tool set, the posture
 	// index into the prompt, and a re-gate so the active list reflects the
@@ -1012,6 +1039,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// (during a turn, from taskTool's Execute), by which point started is
 	// always set — see the dispatcher construction above.
 	dispatcher.Parent = started
+	dispatcher.UserHistory = func(ctx context.Context) []msg.Message { return automode.BranchMessages(ctx, started.Lane) }
 
 	sessionID := started.SessionID
 	transcriptPath := started.TranscriptPath
@@ -1263,7 +1291,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			TranscriptPath: transcriptPath,
 			Cwd:            cwd,
 			Check: func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any) (*claudehooks.Blocked, error) {
-				blocked, out, err := gate.CheckWithOutcome(ctx, permission.Request{ToolName: toolName, PrimaryArg: primaryArg, Args: args})
+				blocked, out, err := gate.CheckWithOutcome(ctx, permission.Request{ToolName: toolName, PrimaryArg: primaryArg, Args: args,
+					CallID: call.ID, History: autoModeHistory(ctx, started.Lane)})
 				outcome = out
 				if err != nil {
 					return nil, err
@@ -1551,6 +1580,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 	if promptText == "" {
 		promptText = readStdin(stdin)
 	}
+	typed := promptText // what auto mode's classifier reads as the user's request
 	if strings.TrimSpace(promptText) == "" {
 		fmt.Fprintln(stderr, `usage: kiln -p "your prompt"   (or pipe text on stdin)`)
 		return 1
@@ -1706,7 +1736,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 		defer unsubStart()
 	}
 
-	runResult, promptErr := started.Lane.Prompt(ctx, prompt, resolvedMentions.Images)
+	runResult, promptErr := started.Lane.PromptAs(ctx, prompt, typed, resolvedMentions.Images)
 	ok := runResult.Status == harness.StatusCompleted
 	reason := ""
 	if maxTurnsHit {

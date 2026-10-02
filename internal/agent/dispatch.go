@@ -38,6 +38,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/andrepato/harness/internal/automode"
 	"github.com/andrepato/harness/internal/claude/agents"
 	"github.com/andrepato/harness/internal/claude/permission"
 	"github.com/andrepato/harness/internal/diag"
@@ -99,6 +100,11 @@ type Dispatcher struct {
 	// OnEvent reports dispatch progress, for the TUI. Never shown to the
 	// model.
 	OnEvent func(SubagentEvent)
+	// UserHistory returns the root session's conversation, for auto mode's
+	// classifier: in a subagent the user's own words are only there, and
+	// the subagent's first message is a task the parent agent wrote. Child
+	// dispatchers inherit it. Nil leaves the classifier only the task.
+	UserHistory func(ctx context.Context) []msg.Message
 	// Depth is how many dispatches deep this Dispatcher sits: 0 for the
 	// top-level Dispatcher wired up once per process (cli.go's own
 	// `dispatcher`), 1 for the Dispatcher a depth-0 dispatch builds for its
@@ -257,6 +263,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			Env:            d.Env,
 			OnEvent:        d.OnEvent,
 			OnSubagentStop: d.OnSubagentStop,
+			UserHistory:    d.UserHistory,
 			Depth:          depth,
 		}
 		extraTools = append(extraTools, tools.TaskTool(adaptDispatch(child.Dispatch), d.Agents, d.Roles, resolved.Tier))
@@ -298,12 +305,24 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	// between session creation and the hook being attached.
 	if d.Gate != nil {
 		gate := d.Gate
+		var userHistory func() []msg.Message
+		if d.UserHistory != nil {
+			userHistory = func() []msg.Message { return d.UserHistory(ctx) }
+		}
 		started.Harness.Hooks().OnBeforeTool(func(ctx context.Context, call msg.ToolCall) (harness.BeforeToolResult, error) {
 			primaryArg, _ := permission.PrimaryArgOf(call.Arguments)
 			blocked, err := gate.Check(ctx, permission.Request{
 				ToolName:   call.Name,
 				PrimaryArg: primaryArg,
 				Args:       call.Arguments,
+				// In auto mode the classifier judges a subagent's call
+				// against the subagent's own conversation, whose user
+				// messages are the delegated task (Delegated: data, not
+				// the user's words), and the root session's typed lines.
+				CallID:      call.ID,
+				History:     func() []msg.Message { return automode.BranchMessages(ctx, started.Lane) },
+				Delegated:   true,
+				UserHistory: userHistory,
 			})
 			if err != nil {
 				return harness.BeforeToolResult{}, err

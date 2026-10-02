@@ -12,6 +12,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/tool"
 )
 
@@ -51,6 +52,23 @@ type Request struct {
 	// answer saves, one per command still needing approval
 	// (settings.BashDontAskRules). Set only on a grantable bash request.
 	DontAskRules []string
+	// CallID is the tool call's id, and History returns the conversation
+	// so far; both feed auto mode's classifier (classifier.go) and are
+	// read only when it runs. Either may be empty.
+	CallID  string
+	History func() []msg.Message
+	// Delegated and UserHistory are set for a subagent's call: History is
+	// the subagent's own, whose user messages are its delegated task, and
+	// UserHistory the root session's (ClassifyRequest).
+	Delegated   bool
+	UserHistory func() []msg.Message
+	// AutoModeNote is set by the gate on a prompt auto mode raised instead
+	// of deciding itself (the classifier failed, or blocked too often): why
+	// the user is being asked. A UI shows it with the prompt.
+	AutoModeNote string
+	// InAutoMode is set by the gate on a prompt raised while auto mode is
+	// on, so a UI does not offer to switch to the mode already active.
+	InAutoMode bool
 }
 
 // Prompter asks the user. Implemented by the TUI; absent in headless runs.
@@ -120,6 +138,9 @@ type GateOptions struct {
 	// adds the rule to its own set either way. Errors are the caller's to
 	// report.
 	SaveRule func(rule string)
+	// Classifier judges what auto mode would otherwise allow
+	// (classifier.go). Nil makes auto mode ask instead; it never allows.
+	Classifier Classifier
 }
 
 // Gate is the permission gate for tool calls: pi's before_tool hook.
@@ -173,6 +194,16 @@ type Gate struct {
 	// planLedgerPath mirrors GateOptions.PlanLedgerPath; see its doc
 	// comment.
 	planLedgerPath string
+
+	// classifier and auto are auto mode's classifier and its block counts
+	// (classifier.go), guarded by mu.
+	classifier Classifier
+	auto       autoState
+	// autoAsideLogged: the broad allow rules auto mode sets aside were
+	// logged for this stretch of auto mode (rules, classifier.go).
+	autoAsideLogged bool
+	// scratchpad is the session scratchpad (scratchpad.go), guarded by mu.
+	scratchpad []string
 }
 
 // NewGate builds a Gate. Roots are resolved to absolute paths and
@@ -184,6 +215,7 @@ func NewGate(opts GateOptions) *Gate {
 		prompter:      opts.Prompt,
 		sessionAllows: map[string]bool{},
 		saveRule:      opts.SaveRule,
+		classifier:    opts.Classifier,
 	}
 	if opts.PlanLedgerPath != "" {
 		if full, err := filepath.Abs(opts.PlanLedgerPath); err == nil {
@@ -685,11 +717,21 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 // internal/cli/chat.go) that wants to report "approved"/"auto-approved" on
 // the tool block that follows.
 func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult, Outcome, error) {
+	r, out, err := g.checkWithOutcome(ctx, req)
+	// In auto mode, a call the user approved at a prompt ends a run of
+	// classifier blocks; so does a classifier allow (classifyAuto). A call
+	// that skipped the classifier does not: reads between blocks must not
+	// keep the streak from ever reaching its limit.
+	if r == nil && err == nil && out == OutcomeApproved && g.Mode() == settings.ModeAuto {
+		g.autoSucceeded()
+	}
+	return r, out, err
+}
+
+func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult, Outcome, error) {
 	k := key(req.ToolName, req.PrimaryArg)
 
-	g.mu.Lock()
-	permissions, mode := g.permissions, g.mode
-	g.mu.Unlock()
+	permissions, mode := g.rules()
 
 	// A file tool is judged on its path argument, resolved the way the
 	// tool resolves it (settings/pathrules.go), whatever PrimaryArgOf
@@ -701,6 +743,12 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 	}
 	hits := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg)
+
+	// The session scratchpad is the model's own: no prompt in any mode,
+	// plan mode included, once deny and ask rules have had their say.
+	if g.scratchpadCall(req, hits) {
+		return nil, OutcomeAuto, nil
+	}
 
 	// A session "don't ask again" grant stands in for an allow rule, so
 	// like one it never beats a deny or ask rule — including one added
@@ -772,12 +820,32 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		break
 	}
 	if escaped && verdict == settings.Allow && mode != settings.ModeBypassPermissions {
+		// Auto mode sends what would otherwise ask here to the classifier,
+		// with the path marked as outside the workspace, as Claude Code's
+		// auto mode does. A write to a protected path outside still asks.
+		outsideNote := ""
+		if mode == settings.ModeAuto && !(g.mutatingFileTool(req.ToolName) && g.protectedPath(path)) {
+			creq := req
+			creq.OutsideWorkspace = true
+			r, out, note, err := g.classifyAuto(ctx, creq)
+			if err != nil {
+				return nil, OutcomeNone, err
+			}
+			if r != nil || out != OutcomeNone {
+				return r, out, nil
+			}
+			outsideNote = note
+		}
 		if mode == settings.ModeDontAsk {
 			r := g.record(req, fmt.Sprintf("%s is outside the workspace, and don't-ask mode refuses anything that would need approval.", path))
 			return &r, OutcomeNone, nil
 		}
 		if g.prompter == nil {
-			r := g.record(req, fmt.Sprintf("%s is outside the workspace and cannot be confirmed.", path))
+			reason := fmt.Sprintf("%s is outside the workspace and cannot be confirmed.", path)
+			if outsideNote != "" {
+				reason = outsideNote + " " + reason
+			}
+			r := g.record(req, reason)
 			return &r, OutcomeNone, nil
 		}
 		g.promptMu.Lock()
@@ -787,6 +855,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 		promptReq := g.promptRequest(req, permissions, mode, grantable)
 		promptReq.OutsideWorkspace = true
+		promptReq.AutoModeNote = outsideNote
 		choice, err := g.prompter(ctx, promptReq)
 		if err != nil {
 			return nil, OutcomeNone, err
@@ -799,6 +868,28 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 			g.grant(k, promptReq)
 		}
 		return nil, OutcomeApproved, nil
+	}
+
+	// Auto mode: what rules and the boundary leave allowed goes past the
+	// classifier, unless it is a call auto mode never classifies
+	// (classifier.go). When the classifier cannot decide, or has blocked
+	// too often, the call takes the ask path below, with a note saying why.
+	autoNote := ""
+	if verdict == settings.Allow && mode == settings.ModeAuto && settings.IsBashTool(req.ToolName) {
+		if p := g.bashProtectedOutside(req.PrimaryArg); p != "" {
+			verdict = settings.Ask
+			autoNote = fmt.Sprintf("Auto mode asks before writing %s: it is a protected path outside the workspace.", p)
+		}
+	}
+	if verdict == settings.Allow && mode == settings.ModeAuto && !g.autoSkipsClassifier(req, hits) {
+		r, out, note, err := g.classifyAuto(ctx, req)
+		if err != nil {
+			return nil, OutcomeNone, err
+		}
+		if r != nil || out != OutcomeNone {
+			return r, out, nil
+		}
+		verdict, autoNote = settings.Ask, note
 	}
 
 	if verdict == settings.Allow {
@@ -829,7 +920,11 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		// Headless with no way to ask. Refusing beats proceeding: an
 		// unattended run must not silently take an action the policy said
 		// required confirmation.
-		r := g.record(req, "requires confirmation and no prompt is available.")
+		reason := "requires confirmation and no prompt is available."
+		if autoNote != "" {
+			reason = autoNote + " " + reason
+		}
+		r := g.record(req, reason)
 		return &r, OutcomeNone, nil
 	}
 
@@ -841,15 +936,14 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// The rules may have changed while this call waited for another
 	// prompt: a "don't ask again" there can have saved a rule covering
 	// this command.
-	g.mu.Lock()
-	permissions, mode = g.permissions, g.mode
-	g.mu.Unlock()
+	permissions, mode = g.rules()
 	if settings.IsBashTool(req.ToolName) {
 		if h := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg); h.Allow && !h.Deny && !h.Ask && !h.Unsure {
 			return nil, OutcomeAuto, nil
 		}
 	}
 	promptReq := g.promptRequest(req, permissions, mode, grantable)
+	promptReq.AutoModeNote = autoNote
 	choice, err := g.prompter(ctx, promptReq)
 	if err != nil {
 		return nil, OutcomeNone, err
@@ -878,6 +972,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 // would promise a grant the next identical call does not get.
 func (g *Gate) promptRequest(req Request, permissions settings.Permissions, mode settings.PermissionMode, grantable bool) Request {
 	req.Grantable, req.DontAskRules = grantable, nil
+	req.InAutoMode = mode == settings.ModeAuto
 	if !grantable || !settings.IsBashTool(req.ToolName) {
 		return req
 	}

@@ -119,6 +119,15 @@ func runBinary(t *testing.T, bin, dir string, env map[string]string, timeout tim
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
+	// Session scratchpads go under the test's HOME (or a temp dir), never
+	// the real /tmp, whatever env the caller built.
+	if _, ok := env["KILN_TMPDIR"]; !ok {
+		tmp := t.TempDir()
+		if home := env["HOME"]; home != "" {
+			tmp = filepath.Join(home, "tmp")
+		}
+		cmd.Env = append(cmd.Env, "KILN_TMPDIR="+tmp)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -160,6 +169,8 @@ func baseEnv(home, sessDir, fauxAddr string) map[string]string {
 		"HARNESS_FAUX_ADDR":    fauxAddr,
 		"HARNESS_FAUX_API":     "anthropic-messages",
 		"HARNESS_MODEL":        "faux/faux-1",
+		// The session scratchpad goes under the scratch HOME, not /tmp.
+		"KILN_TMPDIR": filepath.Join(home, "tmp"),
 	}
 }
 

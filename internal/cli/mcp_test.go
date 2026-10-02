@@ -24,7 +24,16 @@ import (
 var realEnviron = os.Environ()
 
 func TestMain(m *testing.M) {
+	// Session scratchpads (execenv.EnsureScratchpad) go to a temp dir for
+	// this run, never the real /tmp/kiln-<uid>.
+	tmp, err := os.MkdirTemp("", "kiln-cli-test-tmp-")
+	if err == nil {
+		os.Setenv("KILN_TMPDIR", tmp)
+	}
 	code := m.Run()
+	if tmp != "" {
+		os.RemoveAll(tmp)
+	}
 	if fixtureBinPath != "" {
 		os.RemoveAll(filepath.Dir(fixtureBinPath))
 	}

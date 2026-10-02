@@ -1,0 +1,135 @@
+package permission
+
+import (
+	"path/filepath"
+	"strings"
+
+	"github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/execenv"
+)
+
+// Protected paths: writes that can change how code runs later (git hooks
+// and config, shell startup files, package-manager and editor config) or
+// how the agent itself is configured. Claude Code never auto-approves a
+// write to these; in auto mode it routes them to the classifier, even past
+// an allow rule (code.claude.com/docs/en/permission-modes, "Protected
+// paths"). kiln follows that in auto mode, and adds its own .kiln.
+var protectedDirs = map[string]bool{
+	".git": true, ".vscode": true, ".idea": true, ".husky": true, ".cargo": true,
+	".devcontainer": true, ".yarn": true, ".mvn": true, ".claude": true, ".kiln": true,
+	// kiln's additions: ssh keys and config (authorized_keys grants a
+	// login, config can run a ProxyCommand).
+	".ssh": true,
+}
+
+// protectedPairs are directories named by their last two components
+// (folded): kiln's additions for what starts programs at login or boot.
+var protectedPairs = map[string]bool{
+	"library/launchagents": true, "library/launchdaemons": true,
+	".config/autostart": true, ".config/systemd": true,
+}
+
+var protectedFiles = map[string]bool{
+	".gitconfig": true, ".gitmodules": true,
+	".bashrc": true, ".bash_profile": true, ".bash_login": true, ".bash_aliases": true, ".bash_logout": true,
+	".zshrc": true, ".zprofile": true, ".zshenv": true, ".zlogin": true, ".zlogout": true, ".profile": true, ".envrc": true,
+	".npmrc": true, ".yarnrc": true, ".yarnrc.yml": true, ".pnp.cjs": true, ".pnp.loader.mjs": true, ".pnpmfile.cjs": true,
+	"bunfig.toml": true, ".bunfig.toml": true,
+	".bazelrc": true, ".bazelversion": true, ".bazeliskrc": true,
+	".pre-commit-config.yaml": true, "lefthook.yml": true, "lefthook.yaml": true, ".lefthook.yml": true, ".lefthook.yaml": true,
+	"gradle-wrapper.properties": true, "maven-wrapper.properties": true,
+	".devcontainer.json": true, ".ripgreprc": true, "pyrightconfig.json": true,
+	".mcp.json": true, ".claude.json": true,
+	// Memory files a later session loads as instructions: kiln's addition
+	// to Claude Code's list (its own .claude/rules is under .claude).
+	"claude.md": true, "claude.local.md": true,
+}
+
+// protectedPath reports a path that is or lies under a protected directory,
+// or names a protected file: as written, as it resolves through symlinks,
+// and in the OS's own spelling of it (execenv.CanonicalPath: firmlinks,
+// /.vol paths), each compared case- and normalization-insensitively where
+// the filesystem is (settings.CaseFoldPath, APFS folding included) — the
+// same spellings deny rules are checked in. .claude/worktrees is exempt,
+// as in Claude Code.
+func (g *Gate) protectedPath(path string) bool {
+	base := "."
+	if len(g.roots) > 0 {
+		base = g.roots[0]
+	}
+	full := execenv.ResolveToolPath(base, path)
+	real, ok := execenv.RealPath(full)
+	if !ok {
+		return true // unresolvable: do not wave it through
+	}
+	for _, p := range []string{full, real, execenv.CanonicalPath(full)} {
+		if protectedSpelling(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// mutatingFileTool reports a file tool that writes (edit, write, …).
+func (g *Gate) mutatingFileTool(name string) bool {
+	return settings.IsFileTool(name) && !settings.ReadOnly[strings.ToLower(name)]
+}
+
+// bashTouchesProtected reports a bash command line auto mode classifies
+// whatever rule allows it: one that writes a protected path, changes git's
+// configuration, or writes something kiln cannot name.
+func (g *Gate) bashTouchesProtected(cmd string) bool {
+	writes, complete, gitConfig := settings.BashAutoModeWrites(cmd, g.cwd())
+	if !complete || gitConfig {
+		return true
+	}
+	for _, w := range writes {
+		if g.protectedPath(w) {
+			return true
+		}
+	}
+	return false
+}
+
+// bashProtectedOutside returns a protected path outside the workspace that
+// a bash command line writes, or "": auto mode asks about that, as it does
+// for a file tool writing one, instead of classifying it.
+func (g *Gate) bashProtectedOutside(cmd string) string {
+	writes, _, _ := settings.BashAutoModeWrites(cmd, g.cwd())
+	for _, w := range writes {
+		if !g.WithinRoots(w) && g.protectedPath(w) {
+			return w
+		}
+	}
+	return ""
+}
+
+// fold is a path component as protectedDirs and protectedFiles key it:
+// lower-cased everywhere, and folded as the filesystem folds names where
+// it does.
+func fold(s string) string {
+	return strings.ToLower(settings.CaseFoldPath(s))
+}
+
+func protectedSpelling(p string) bool {
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(p)), "/")
+	for i := range parts {
+		parts[i] = fold(parts[i])
+	}
+	for i, part := range parts {
+		next := ""
+		if i+1 < len(parts) {
+			next = parts[i+1]
+		}
+		if protectedDirs[part] && !(part == ".claude" && next == "worktrees") {
+			return true
+		}
+		if part == ".config" && next == "git" {
+			return true
+		}
+		if protectedPairs[part+"/"+next] {
+			return true
+		}
+	}
+	return protectedFiles[parts[len(parts)-1]]
+}
