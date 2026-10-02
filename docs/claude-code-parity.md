@@ -397,7 +397,7 @@ Code: `internal/claude/settings/sandbox.go` (parsing and merge),
 | Local targets (loopback, private, link-local and unspecified addresses, IP literals and `localhost` alike) need an exact `allowedDomains` entry; `*`, `*.x` and bypass-mode approval never reach them | done (kiln is stricter) | `TestProxyLocalTargets` |
 | Hosts are compared in one form: lower case, no trailing dot, IPv4-mapped IPv6 unmapped, internationalised names in punycode (entries and requests) | done | `TestHostCanonicalForms` |
 | Deny and ask rules see the command behind git global options (`git -C dir -c k=v push`) and package runners (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`, `uvx`, `pipx run`, `uv run`, `poetry run`, `bundle exec`); a command whose name the gate cannot read (`$x`, `$(...)`) is not auto-allowed | done | `TestDenyRuleSeesGitGlobalOptions`, `TestSandboxAutoAllowHiddenNames` |
-| `autoAllowBashIfSandboxed` (default true): sandboxed commands run without a prompt; deny rules, content ask rules and critical `rm`/`rmdir` targets still apply; a bare `Bash` ask rule is skipped except in plan mode; plan mode does not widen | done | sandboxing "Auto-allow mode"; `TestSandboxAutoAllow*`, e2e `TestSandbox_EscapeFailsAndTranscriptSaysSo` |
+| `autoAllowBashIfSandboxed` (default true): sandboxed commands run without a prompt; deny rules, content ask rules and critical `rm`/`rmdir` targets still apply; a bare `Bash` ask rule is skipped except in plan mode; plan mode does not widen. In auto mode it is approved before the classifier, which reviews only commands outside the sandbox (excluded ones, unsandboxed retries) | done | sandboxing "Sandbox modes", permission-modes "How the classifier evaluates actions"; `TestSandboxAutoAllow*`, `TestSandboxAutoAllowSkipsClassifierInAutoMode`, e2e `TestSandbox_EscapeFailsAndTranscriptSaysSo` |
 | `excludedCommands`: Bash-rule syntax, every command in the call must match, the text is matched, sudo/eval/xargs/cd/substitutions/subshells/control flow/redirects/variable names/escaping `git clone` stay sandboxed; excluded commands take the regular flow | done | settings reference `excludedCommands`; `TestExcluded` |
 | `dangerouslyDisableSandbox` retry (offered only when `allowUnsandboxedCommands` is true): regular flow, prompt marked "runs outside the sandbox"; bypass runs it; dontAsk refuses it unless an allow rule matches; `Bash(dangerouslyDisableSandbox:true)` ask rule prompts in every mode | done | sandboxing "The unsandboxed retry escape hatch"; `TestSandboxUnsandboxedRetry` |
 | A failed sandboxed command's result names the blocked hosts and how to retry | done | sandboxing "The unsandboxed retry escape hatch"; e2e test |
@@ -422,9 +422,8 @@ Open, not matched yet:
   Claude Code treats mask files on macOS.
 - **Upstream corporate proxy.** kiln's proxy dials hosts directly; it does not
   chain to `HTTPS_PROXY`.
-- **Per-command allowed domains in auto mode** and classifier review of
-  sandboxed commands. In auto mode a sandboxed command takes the regular flow
-  and an unlisted host is refused.
+- **Per-command allowed domains in auto mode** and server-side classifier
+  review of sandboxed commands. In auto mode an unlisted host is refused.
 - **Managed settings and their locks** (`allowManagedDomainsOnly`,
   `allowManagedReadPathsOnly`, admin-required repository locks, `bwrapPath`,
   `socatPath`): kiln has no managed tier.
