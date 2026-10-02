@@ -159,11 +159,6 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			},
 			OnNotice: bridge.HookNotice,
 		})
-		// Auto mode asking instead of deciding (its classifier failed, or
-		// blocked too often) says why first, as a system note.
-		if req.AutoModeNote != "" {
-			bridge.CommitNote(req.AutoModeNote)
-		}
 		return prompter(ctx, req)
 	})
 	if deps.SetPlanApprover != nil {

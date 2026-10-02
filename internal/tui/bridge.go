@@ -1423,6 +1423,7 @@ func (b *Bridge) Prompter(cwd string) permission.Prompter {
 				Args:             req.Args,
 				Grantable:        req.Grantable,
 				DontAskRules:     req.DontAskRules,
+				AutoModeNote:     req.AutoModeNote,
 			},
 			Reply: reply,
 		})

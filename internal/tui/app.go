@@ -944,6 +944,13 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgPermissionPrompt:
 		m = m.flushGroup()
+		// Auto mode asking instead of deciding (its classifier failed, or
+		// blocked too often) says why first, as a system note. Committed
+		// here, on the Update loop, so it lands after the tool blocks
+		// already sent.
+		if msg.Request.AutoModeNote != "" {
+			m.commitNote(msg.Request.AutoModeNote)
+		}
 		// The design's "approval needed" block stands alone: no pre-prompt
 		// tool header commits above it (docs/kiln-design-handoff/README.md
 		// "Interactions"). The tool's own block commits after the decision,

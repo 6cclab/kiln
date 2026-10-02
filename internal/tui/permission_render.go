@@ -28,6 +28,9 @@ type PermissionRequest struct {
 	// that answer saves.
 	Grantable    bool
 	DontAskRules []string
+	// AutoModeNote is permission.Request's: why auto mode asked instead of
+	// deciding. Committed as a system note just above the prompt.
+	AutoModeNote string
 }
 
 // declinedNoteText builds the "✕ Declined …" note's text for a denied
