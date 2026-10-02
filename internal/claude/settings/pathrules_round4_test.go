@@ -1,11 +1,9 @@
 package settings
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"testing"
 )
 
@@ -80,34 +78,8 @@ func TestRound4_Firmlink(t *testing.T) {
 	}
 }
 
-// TestRound4_VolInodePath (HIGH 3): /.vol/<dev>/<inode> is the file it
-// names; and a bash operand under /.vol that no rule matches is unsure.
-func TestRound4_VolInodePath(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("macOS only")
-	}
-	f := newPathFixture(t)
-	mkfile(t, f.h("secrets/k"))
-	var st syscall.Stat_t
-	if err := syscall.Stat(f.h("secrets/k"), &st); err != nil {
-		t.Fatal(err)
-	}
-	alias := fmt.Sprintf("/.vol/%d/%d", st.Dev, st.Ino)
-	if _, err := os.Stat(alias); err != nil {
-		t.Skip("no /.vol here")
-	}
-	p := Permissions{Deny: []string{"Read(~/secrets/**)"}}
-	if Decide(p, "read", alias, ModeAuto) != Deny {
-		t.Errorf("read %s was not denied", alias)
-	}
-	if got := bashVerdict(p, "cat "+alias); got != Deny {
-		t.Errorf("bash cat %s = %v, want deny", alias, got)
-	}
-	other := Permissions{Deny: []string{"Read(.env)"}}
-	if got := bashVerdict(other, "cat "+alias); got != Ask {
-		t.Errorf("bash cat of a /.vol path = %v, want ask", got)
-	}
-}
+// TestRound4_VolInodePath (HIGH 3) moved to pathrules_round4_darwin_test.go:
+// it needs syscall.Stat_t, which only darwin defines.
 
 // TestRound4_LineContinuation (MED 4): backslash-newline is removed before
 // words are split.
