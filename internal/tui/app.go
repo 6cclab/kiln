@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -21,6 +22,7 @@ import (
 	"github.com/andrepato/harness/internal/commands"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/harness"
+	"github.com/andrepato/harness/internal/imgpath"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/tui/editor"
@@ -196,6 +198,22 @@ type Model struct {
 	// the live region, until a later Prompt call's own drain (Lane.Prompt
 	// drains the inbox before its own entry is parented) delivers them.
 	queued []string
+	// deferredCmds holds slash-command (and `!`-bang) lines typed while a
+	// turn is busy that are not on the small immediate-command allowlist
+	// (isImmediateCommand): they must never reach Lane.Steer (which would
+	// deliver their literal text to the model as a user message — the
+	// "/mcp" sent to the model as prose bug), so they are held here and
+	// run for real, through the normal command path, once the turn ends
+	// (finishTurn's drainDeferredCommands).
+	deferredCmds []string
+	// pendingImages holds images already resolved and placeholder-
+	// substituted by a prior bracketed paste of a dragged/pasted image
+	// path (tea.PasteMsg's imgpath.Resolve call) for the message still
+	// being composed. handleSubmit prepends these to whatever
+	// imgpath.ResolveEmbedded finds in the rest of the line, so "[Image
+	// #N]"'s numbering is continuous across both sources, then clears
+	// this on submit.
+	pendingImages []msg.ImageContent
 	// popup is the `/` or `@` autocomplete list, non-nil while one of the
 	// two triggers matches the editor's current line/cursor. Rebuilt from
 	// scratch on every keystroke by refreshPopup — see autocomplete.go.
@@ -655,6 +673,20 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			m.prompt.Paste(msg.Content)
 			return m, nil
 		}
+		// A dragged/pasted image's path is the terminal's own bracketed
+		// paste, one shell word (escaped spaces and all): the whole-paste
+		// case of fix #1 (U+202F macOS screenshot names, backslash
+		// escapes). Only when the whole paste is that one path does it
+		// become an attachment; anything else (prose, multiple words,
+		// a path to a non-image or to nothing on disk) is pasted exactly
+		// as before.
+		if placeholder, img, ok := pasteAsImage(msg.Content, m.cfg.Cwd, len(m.pendingImages)); ok {
+			m.pendingImages = append(m.pendingImages, img)
+			ed, cmd, _ := m.editor.Update(tea.PasteMsg{Content: placeholder})
+			m.editor = ed
+			m = m.refreshPopup()
+			return m, cmd
+		}
 		ed, cmd, _ := m.editor.Update(msg)
 		m.editor = ed
 		m = m.refreshPopup()
@@ -945,7 +977,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msgTurnResult:
-		return m.finishTurn(msg), nil
+		return m.finishTurn(msg)
 
 	case msgClearModeHint:
 		if msg.gen == m.modeHintGen {
@@ -955,6 +987,82 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// pasteAsImage checks whether a bracketed paste's entire content, once
+// shell-cleaned, is a single path (imgpath.HasUnescapedWhitespace false)
+// that resolves (imgpath.Resolve) to an attachable image. ok is false for
+// anything else — plain text, several words, a path to a non-image, or to
+// nothing on disk — in which case the paste is handled exactly as before.
+// startIndex continues "[Image #N]"'s numbering across more than one
+// pasted image in the same composed message.
+func pasteAsImage(content, cwd string, startIndex int) (string, msg.ImageContent, bool) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || imgpath.HasUnescapedWhitespace(trimmed) {
+		return "", msg.ImageContent{}, false
+	}
+	v, ok := imgpath.Resolve(trimmed, cwd)
+	if !ok || v.Image == nil {
+		return "", msg.ImageContent{}, false
+	}
+	return fmt.Sprintf("[Image #%d]", startIndex+1), *v.Image, true
+}
+
+// immediateCommandNames is kiln's allowlist of slash commands safe to run
+// while a turn is busy: every one of these only reads state (model/tier,
+// MCP status, hooks, permissions, tools, agents, cost/context/usage
+// figures) or is pure UI (help, exit/quit, config's settings-file
+// listing) — none of them touches the lane's conversation or its running
+// operation. Decided by reading each command's Run in internal/commands
+// (builtins.go, inspect_commands.go, account_commands.go,
+// plugin_commands.go, inline.go's bashes/todos): every name here always
+// behaves this way regardless of its arguments. Commands left off this
+// list on purpose because they mutate something the in-flight turn
+// depends on: model (model switch mid-request), clear/compact (rewrite
+// the conversation the running turn is reading), plan (permission mode),
+// posture (admitted-tools re-gating, even its no-arg "show" form — kept
+// off rather than special-cased per argument), resume/rewind/export/
+// memory/add-dir/init (session/filesystem changes), login/logout (auth
+// state mid-request), and any plugin/project/personal/skill command,
+// which this allowlist cannot vouch for.
+var immediateCommandNames = map[string]bool{
+	"help": true, "status": true, "doctor": true, "hooks": true,
+	"mcp": true, "cost": true, "context": true, "tools": true,
+	"agents": true, "exit": true, "quit": true, "permissions": true,
+	"config": true, "usage": true, "terminal-setup": true,
+	"plugin": true, "bashes": true, "todos": true,
+}
+
+// isImmediateCommand reports whether line's slash command is safe to run
+// while a turn is busy (immediateCommandNames), or is a name the registry
+// does not recognise at all — an "Unknown command" error is exactly as
+// safe to show immediately as to defer, and showing it right away is
+// less confusing than waiting for the turn to finish first.
+func isImmediateCommand(line string, reg *commands.Registry) bool {
+	name := commandNameOf(line)
+	if immediateCommandNames[name] {
+		return true
+	}
+	if reg == nil {
+		return true
+	}
+	_, ok := reg.Get(name)
+	return !ok
+}
+
+// commandNameOf extracts a slash-command line's bare name: leading
+// slashes collapsed (Registry.Execute does the same, for a completion bug
+// that once turned "/" + "/model" into "//model"), up to the first run of
+// whitespace. A namespaced plugin command's qualified name ("ns:cmd")
+// passes through unchanged — never on immediateCommandNames, so always
+// deferred, which is the conservative default for a command this
+// allowlist cannot vouch for.
+func commandNameOf(line string) string {
+	stripped := strings.TrimLeft(strings.TrimSpace(line), "/")
+	if i := strings.IndexFunc(stripped, unicode.IsSpace); i >= 0 {
+		stripped = stripped[:i]
+	}
+	return stripped
 }
 
 func nonZeroOr(v, fallback int) *int {
@@ -994,7 +1102,7 @@ func (m Model) handleThinking(msg MsgThinking) Model {
 	}
 }
 
-func (m Model) finishTurn(msg msgTurnResult) Model {
+func (m Model) finishTurn(msg msgTurnResult) (Model, tea.Cmd) {
 	m = m.flushGroup()
 	m.busy = false
 	m.spinner.Stop()
@@ -1079,7 +1187,39 @@ func (m Model) finishTurn(msg msgTurnResult) Model {
 	}
 	m.footer.SetNote("")
 	m.editor.SetPlaceholder(editor.DefaultPlaceholder)
-	return m.refreshMode()
+	m = m.refreshMode()
+	return m.drainDeferredCommands()
+}
+
+// drainDeferredCommands runs, in order, every slash/bang line
+// handleSubmit's busy branch held in m.deferredCmds rather than handing
+// to Lane.Steer (bug #2: a non-immediate command typed mid-turn must
+// never reach the model as text) — now that the turn that busied them has
+// ended, each one runs for real, through executeLine, exactly as if typed
+// while idle. Stops early, leaving the remainder queued for the next
+// turn's end, if running one starts a new turn (beginTurn, e.g. /init's
+// Result.Prompt) or opens a dialog/suspends the terminal (tea.ExecProcess,
+// a /model-style Modal): each of those needs to finish or be dismissed on
+// its own before the next queued command can run sensibly.
+func (m Model) drainDeferredCommands() (Model, tea.Cmd) {
+	if len(m.deferredCmds) == 0 {
+		return m, nil
+	}
+	pending := m.deferredCmds
+	m.deferredCmds = nil
+	var cmds []tea.Cmd
+	for i, line := range pending {
+		mi, cmd := m.executeLine(line, imgpath.LeadingTokenIsPath(line, m.cfg.Cwd))
+		m = mi.(Model)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if m.busy || m.dialog != nil {
+			m.deferredCmds = append(m.deferredCmds, pending[i+1:]...)
+			break
+		}
+	}
+	return m, tea.Batch(cmds...)
 }
 
 // refreshMode re-reads the gate's permission mode into the footer, as
@@ -1754,50 +1894,88 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		editor.Append(m.cfg.HistoryPath, line)
 	}
 
+	// A leading "/..." that is actually a dragged/pasted file path — a
+	// second "/" or a backslash escape in it, or one that simply exists
+	// on disk — is never a command attempt, matching Claude Code's own
+	// rule that an absolute path at the start of the prompt is not run as
+	// a slash command. Both the busy-mode routing below and executeLine's
+	// command dispatch skip it for exactly this reason.
+	pathLeading := imgpath.LeadingTokenIsPath(line, m.cfg.Cwd)
+
 	// A follow-up typed while a turn is running (and no prompt is waiting
 	// on an answer — that keystroke belongs to the prompt, never to a new
-	// message) queues instead of starting a second turn
+	// message) does not reach the model as text. A small allowlist of
+	// read-only/UI-only slash commands (isImmediateCommand) still runs
+	// right away, same as idle — Claude Code lets /mcp, /status and
+	// similar run mid-turn since they never touch the conversation.
+	// Everything else that looks like a command (or a `!` bash line) is
+	// held in m.deferredCmds and actually run, as a command, once the
+	// turn ends (finishTurn's drainDeferredCommands) — never handed to
+	// Lane.Steer, which would deliver its literal text to the model as a
+	// user message (the "/mcp" sent to the model as prose bug). Plain
+	// text still queues through Lane.Steer as before
 	// (docs/kiln-design-handoff/README.md's "Queued follow-up"): it shows
-	// in the live region with a "queued" meta (liveTail, RenderQueuedFollowUp)
-	// rather than committing to the transcript right away — committing it
-	// immediately read out of order, above the reply to the turn it
-	// interrupted (defect 20260926T232249Z-queued-block-order). Lane.Steer
-	// still queues the raw text for the harness's own next-turn injection
-	// (harness/lane.go's pi.lane.state.inbox); MsgQueue{Len:0} (the lane's
-	// own drain, EventQueueUpdate) is what actually commits it, as an
-	// ordinary `you` block with no meta, once the lane has re-parented it
-	// onto the branch.
+	// in the live region with a "queued" meta (liveTail,
+	// RenderQueuedFollowUp) rather than committing to the transcript
+	// right away — committing it immediately read out of order, above
+	// the reply to the turn it interrupted (defect
+	// 20260926T232249Z-queued-block-order). MsgQueue{Len:0} (the lane's
+	// own drain, EventQueueUpdate) is what actually commits a plain-text
+	// follow-up, as an ordinary `you` block with no meta, once the lane
+	// has re-parented it onto the branch.
 	if m.busy && !m.prompt.Active() {
-		m.queued = append(m.queued, line)
-		if m.cfg.Lane != nil {
-			if err := m.cfg.Lane.Steer(line); err != nil {
-				m.commit(RenderError(err.Error()))
+		isSlash := !pathLeading && strings.HasPrefix(line, "/")
+		isBang := !pathLeading && strings.HasPrefix(line, "!")
+		switch {
+		case isSlash && isImmediateCommand(line, m.cfg.Registry):
+			m.editor.SetValue("")
+			return m.executeLine(line, pathLeading)
+		case isSlash, isBang:
+			m.deferredCmds = append(m.deferredCmds, line)
+			m.editor.SetValue("")
+			m.commit(RenderQueuedFollowUp(line, m.contentWidth()))
+			return m, nil
+		default:
+			m.queued = append(m.queued, line)
+			if m.cfg.Lane != nil {
+				if err := m.cfg.Lane.Steer(line); err != nil {
+					m.commit(RenderError(err.Error()))
+				}
 			}
+			m.editor.SetValue("")
+			return m, nil
 		}
-		m.editor.SetValue("")
-		return m, nil
 	}
 
+	return m.executeLine(line, pathLeading)
+}
+
+// executeLine runs a non-busy submit (or a busy-but-immediate command):
+// bang mode, the command registry, @mention/image resolution and
+// beginTurn. pathLeading (imgpath.LeadingTokenIsPath) skips command
+// dispatch entirely when line's leading "/" is actually a path, falling
+// through to ordinary text/image handling instead.
+func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 	width := m.contentWidth()
 	echo := func() {
 		m.commit(RenderUserMessage(line, width))
 	}
 
-	if classified, ok := ClassifyInput(line); ok {
+	if classified, ok := ClassifyInput(line); !pathLeading && ok {
 		echo()
 		return m, m.runMode(classified)
 	}
 
 	// A bare /rewind opens the same picker as esc esc; the command's text
 	// listing is for print mode, where there is no picker.
-	if strings.TrimSpace(line) == "/rewind" && m.cfg.Lane != nil {
+	if !pathLeading && strings.TrimSpace(line) == "/rewind" && m.cfg.Lane != nil {
 		m.editor.SetValue("")
 		return m.openRewind(), nil
 	}
 
 	ctx := context.Background()
 	var handled *commands.Result
-	if m.cfg.Registry != nil {
+	if !pathLeading && m.cfg.Registry != nil {
 		result, err := m.cfg.Registry.Execute(ctx, line)
 		if err != nil {
 			m.commit(RenderError(err.Error()))
@@ -1805,6 +1983,26 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		}
 		handled = result
 	}
+
+	// Images resolved from this line's own text: a prior whole-paste
+	// attachment (m.pendingImages, tea.PasteMsg's pasteAsImage) plus
+	// anything imgpath.ResolveEmbedded finds elsewhere in the line — a
+	// dragged/pasted path typed as part of a longer line (fix #1's
+	// second case, "Add the kiln <path> header…"). Both replace their
+	// path text with "[Image #N]" so the echoed line and the prompt sent
+	// to the model show the placeholder, never the raw escaped path. Only
+	// meaningful when this line is not itself a real command (handled ==
+	// nil); a command line's pending images, an unlikely combination,
+	// are not attached.
+	pendingImages := m.pendingImages
+	m.pendingImages = nil
+	var embeddedImages []msg.ImageContent
+	if handled == nil {
+		newLine, found := imgpath.ResolveEmbedded(line, m.cfg.Cwd, len(pendingImages))
+		line = newLine
+		embeddedImages = append(append([]msg.ImageContent{}, pendingImages...), found...)
+	}
+
 	if handled != nil {
 		if handled.Exit {
 			echo()
@@ -1874,7 +2072,7 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	}
 
 	prompt := line
-	var images []msg.ImageContent
+	images := embeddedImages
 	if handled != nil && handled.Prompt != "" {
 		prompt = handled.Prompt
 	} else if m.cfg.ResolveMentions != nil {
@@ -1882,7 +2080,7 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		if resolvedPrompt != "" {
 			prompt = resolvedPrompt
 		}
-		images = resolvedImages
+		images = append(images, resolvedImages...)
 		if len(describe) > 0 {
 			m.commit(append(describe, ""))
 		}

@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 
+	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/commands"
@@ -771,5 +772,35 @@ func TestColorProfileMsgSelectsPaletteSurfaces(t *testing.T) {
 	m.Update(tea.ColorProfileMsg{Profile: colorprofile.TrueColor})
 	if got := CurrentSurfaceHex().DiffAdd; got != hexDiffAddBg {
 		t.Errorf("DiffAdd under truecolor = %s, want the design's %s", got, hexDiffAddBg)
+	}
+}
+
+// TestMsgModelInfo_UpdatesContextWindow checks that switching models (the
+// /model flow's bridge.ModelSwitch -> MsgModelInfo) moves the footer's
+// context-window denominator to the new model's tier, not just its label.
+// Before this fix, MsgModelInfo{Label: label} never carried ContextWindow,
+// so nonZeroOr kept the window the footer started with (ollama/qwen3.8's
+// here) even after switching to a model with a different one.
+func TestMsgModelInfo_UpdatesContextWindow(t *testing.T) {
+	m := NewModel(Config{
+		Cwd:         "/tmp",
+		ModelLabel:  "ollama/qwen3.8",
+		Tier:        budget.Tier{ContextWindow: 8192},
+		InitialMode: "manual",
+		StartedAt:   time.Unix(0, 0),
+	})
+	m.width, m.height = 80, 24
+	if got := m.footer.State().ContextWindow; got != 8192 {
+		t.Fatalf("initial ContextWindow = %d, want 8192", got)
+	}
+
+	mi, _ := m.Update(MsgModelInfo{Label: "anthropic/claude-opus-4-8", ContextWindow: 200000})
+	m = mi.(Model)
+
+	if got := m.footer.State().ContextWindow; got != 200000 {
+		t.Errorf("ContextWindow after model switch = %d, want 200000", got)
+	}
+	if got := m.footer.State().ModelLabel; got != "anthropic/claude-opus-4-8" {
+		t.Errorf("ModelLabel after model switch = %q, want the new model", got)
 	}
 }
