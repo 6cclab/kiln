@@ -99,6 +99,10 @@ type Settings struct {
 	HeldFrom  []RuleSource
 	// HeldFile is that file, "" when nothing was held.
 	HeldFile string
+	// Sandbox is the merged "sandbox" object (sandbox.go), and
+	// SandboxWarnings the entries in it that were skipped.
+	Sandbox         Sandbox
+	SandboxWarnings []string
 }
 
 // StatusLineConfig is Claude Code's settings.json "statusLine" object: a
@@ -188,6 +192,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		paths.SettingsFile
 		root string // RuleSource.Root for this file's rules
 		held bool   // only deny and ask rules apply; allow is held
+		cli  bool   // --settings
 	}
 	files := []source{}
 	for _, f := range paths.AllSettingsFiles(cwd) {
@@ -205,7 +210,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 					held = repoSupplied(cwd, f.Path)
 				}
 			}
-			files = append(files, source{f.SettingsFile, root, held})
+			files = append(files, source{f.SettingsFile, root, held, false})
 		}
 	}
 	if opts.Extra != "" {
@@ -216,7 +221,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		if abs, err := filepath.Abs(root); err == nil {
 			root = abs
 		}
-		files = append(files, source{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false})
+		files = append(files, source{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false, true})
 	}
 
 	for _, f := range files {
@@ -233,6 +238,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		}
 
 		merged.LoadedFrom = append(merged.LoadedFrom, f.Scope)
+		mergeSandbox(&merged, data, sandboxSourceFor(cwd, f.Path, f.Scope, f.cli, f.held))
 		if f.held {
 			merged.HeldFile = f.Path
 			if raw.Permissions != nil {

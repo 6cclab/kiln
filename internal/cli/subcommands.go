@@ -390,6 +390,10 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	agentsList := append([]claudeagents.Definition{agent.GeneralPurpose}, claudeagents.LoadAgents(cwd)...)
 	lines = append(lines, fmt.Sprintf("agents     %d available", len(agentsList)))
 
+	sandboxLine, sandboxProblems := sandboxReport(cwd, settings)
+	lines = append(lines, "sandbox    "+sandboxLine)
+	problems = append(problems, sandboxProblems...)
+
 	loadedFrom := make([]string, 0, len(settings.LoadedFrom))
 	for _, s := range settings.LoadedFrom {
 		loadedFrom = append(loadedFrom, string(s))

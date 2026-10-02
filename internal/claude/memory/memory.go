@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -59,6 +60,9 @@ type Assembled struct {
 	// OverBudget is set when the instruction files alone exceed the
 	// budget; they load in full anyway.
 	OverBudget bool
+	// ExternalSkipped are the project memory files' imports of paths
+	// outside the working directory that were not loaded (importGuard).
+	ExternalSkipped []string
 }
 
 // estimate is a rough token estimate, only used for budgeting, never
@@ -76,10 +80,73 @@ func expandHome(path string) string {
 
 var importLineRe = regexp.MustCompile(`^@(\S+)\s*$`)
 
+// importGuard holds back the external imports of project memory files:
+// an import whose path resolves outside the working directory. A
+// repository's CLAUDE.md could otherwise pull any file the user can read
+// (~/.ssh/id_ed25519, a token file) into the model's context. Claude Code
+// loads such imports only after the user approves them for the project
+// (code.claude.com/docs/en/memory, "Import additional files"); kiln has no
+// approval dialog and honours the approval Claude Code recorded.
+type importGuard struct {
+	cwd     []string // the working directory, as given and resolved
+	allowed bool     // external imports approved for this project
+	skipped []string // external imports held back
+}
+
+func (g *importGuard) external(path string) bool {
+	if g == nil || g.allowed {
+		return false
+	}
+	real := path
+	if r, err := filepath.EvalSymlinks(path); err == nil {
+		real = r
+	}
+	for _, c := range g.cwd {
+		if real == c || strings.HasPrefix(real, strings.TrimSuffix(c, string(filepath.Separator))+string(filepath.Separator)) {
+			return false
+		}
+	}
+	return true
+}
+
+func newImportGuard(cwd string) *importGuard {
+	g := &importGuard{cwd: []string{filepath.Clean(cwd)}, allowed: externalImportsApproved(cwd)}
+	if r, err := filepath.EvalSymlinks(cwd); err == nil && r != g.cwd[0] {
+		g.cwd = append(g.cwd, r)
+	}
+	return g
+}
+
+// externalImportsApproved reports the per-project approval of external
+// imports Claude Code keeps in ~/.claude.json (kiln reads it, never
+// writes it).
+func externalImportsApproved(cwd string) bool {
+	data, err := os.ReadFile(paths.ClaudeJSONPath())
+	if err != nil {
+		return false
+	}
+	var doc struct {
+		Projects map[string]struct {
+			Approved bool `json:"hasClaudeMdExternalIncludesApproved"`
+		} `json:"projects"`
+	}
+	if json.Unmarshal(data, &doc) != nil {
+		return false
+	}
+	if p, ok := doc.Projects[cwd]; ok {
+		return p.Approved
+	}
+	if r, err := filepath.EvalSymlinks(cwd); err == nil {
+		return doc.Projects[r].Approved
+	}
+	return false
+}
+
 // resolveImports resolves @path imports recursively. seen guards against
 // cycles: two files importing each other would otherwise recurse forever,
-// and a self-import is an easy typo.
-func resolveImports(content, fromFile string, seen map[string]bool, depth int) string {
+// and a self-import is an easy typo. guard, non-nil for project memory
+// files, holds back their external imports.
+func resolveImports(content, fromFile string, seen map[string]bool, depth int, guard *importGuard) string {
 	if depth >= maxImportDepth {
 		return content
 	}
@@ -108,6 +175,11 @@ func resolveImports(content, fromFile string, seen map[string]bool, depth int) s
 			continue
 		}
 		seen[path] = true
+		if guard.external(path) {
+			guard.skipped = append(guard.skipped, path)
+			out = append(out, fmt.Sprintf("<!-- external import not loaded (not approved for this project): %s -->", m[1]))
+			continue
+		}
 
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -117,7 +189,7 @@ func resolveImports(content, fromFile string, seen map[string]bool, depth int) s
 			out = append(out, fmt.Sprintf("<!-- missing import: %s -->", m[1]))
 			continue
 		}
-		out = append(out, resolveImports(string(data), path, seen, depth+1))
+		out = append(out, resolveImports(string(data), path, seen, depth+1, guard))
 	}
 	return strings.Join(out, "\n")
 }
@@ -135,7 +207,14 @@ func resolveImports(content, fromFile string, seen map[string]bool, depth int) s
 // cost.
 func LoadMemory(cwd string, budgetTokens int) Assembled {
 	var instructions, rules []File
+	projectGuard := newImportGuard(cwd)
 	for _, root := range paths.ClaudeRoots(cwd) {
+		// The user's own memory files are trusted like the rest of their
+		// configuration; a project's are what a repository brings.
+		guard := projectGuard
+		if root.Scope == paths.ScopeUser {
+			guard = nil
+		}
 		var candidates []string
 		if root.Scope == paths.ScopeUser {
 			candidates = []string{filepath.Join(root.Dir, paths.CLAUDEMD)}
@@ -146,13 +225,13 @@ func LoadMemory(cwd string, budgetTokens int) Assembled {
 		}
 		for _, path := range candidates {
 			if raw, err := os.ReadFile(path); err == nil {
-				content := resolveImports(string(raw), path, map[string]bool{path: true}, 0)
+				content := resolveImports(string(raw), path, map[string]bool{path: true}, 0, guard)
 				instructions = append(instructions, File{Path: path, Scope: root.Scope, Content: content})
 			}
 		}
 		for _, rule := range listRules(filepath.Join(root.Dir, "rules")) {
 			if raw, err := os.ReadFile(rule); err == nil {
-				content := resolveImports(string(raw), rule, map[string]bool{rule: true}, 0)
+				content := resolveImports(string(raw), rule, map[string]bool{rule: true}, 0, guard)
 				rules = append(rules, File{Path: rule, Scope: root.Scope, Content: content})
 			}
 		}
@@ -205,6 +284,7 @@ func LoadMemory(cwd string, budgetTokens int) Assembled {
 		Indexed:         indexedPaths,
 		EstimatedTokens: used,
 		OverBudget:      used > budgetTokens,
+		ExternalSkipped: projectGuard.skipped,
 	}
 }
 

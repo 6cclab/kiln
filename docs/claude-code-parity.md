@@ -364,6 +364,91 @@ Seven; the first six are additive:
   parity, and re-verifying `[chk]` items is about behavior, not appearance.
 
 
+## Bash sandbox
+
+The `sandbox` settings object, as Claude Code documents it in
+[Sandboxing](https://code.claude.com/docs/en/sandboxing) and the
+[settings reference](https://code.claude.com/docs/en/settings-reference#sandbox-settings).
+Code: `internal/claude/settings/sandbox.go` (parsing and merge),
+`internal/sandbox` (mechanism, proxy), `internal/claude/permission/sandbox.go`
+(gate), `internal/cli/sandbox.go` (startup, doctor).
+
+| Behavior | Status | Source / test |
+|---|---|---|
+| `sandbox.enabled` turns it on; off by default | done | settings reference; `TestLoadSettingsSandboxDefaults` |
+| Booleans: later scope wins; arrays combine across scopes; unknown keys ignored, wrong types skipped with a warning | done | settings reference "Sandbox settings"; `TestLoadSettingsSandboxMerge`, `TestLoadSettingsSandboxBadTypes` |
+| Path prefixes: `/` and `//` absolute, `~/` home, `./` or none = project root (project settings) or the settings file's directory (user settings); trailing `/` and `/**` stripped | done | settings reference "Sandbox path prefixes" |
+| `filesystem.disabled`, `allowAppleEvents`, `network.strictAllowlist`, credential `mask` entries honoured only from user settings and `--settings` | done | settings reference; `TestLoadSettingsSandboxTrustedOnlyKeys` |
+| `allowUnsandboxedCommands: false` in user settings holds against a project's `true` | done | settings reference; `TestLoadSettingsSandboxUnsandboxedHold` |
+| macOS: Seatbelt (`sandbox-exec`); Linux: bubblewrap + socat; Windows: unsupported | done | sandboxing "OS-level enforcement"; `TestRealSandbox*` (macOS, and Linux under bwrap in a container), `TestManagerDetect` |
+| Writes: working directory, added directories (`/add-dir`, `--add-dir`), a per-user temp dir (`$TMPDIR` set to it), `allowWrite`, `Edit(...)` allow rules; minus `denyWrite` and `Edit(...)` deny rules | done | sandboxing "Filesystem isolation"; `TestRealSandboxWrites` |
+| Protected paths stay unwritable inside writable roots: `.claude` settings/skills/agents/commands/hooks/workflows and `.mcp.json` in the cwd and its parents; shell startup files, `.gitconfig`, `.vscode`, `.idea`, `.git/hooks`, `.git/config` in the cwd; bare-repo files; `~/.claude`, `~/.claude.json`. kiln adds: `.kiln`, `~/.kiln`, `~/.harness`; the same `.claude` entries, `.mcp.json` and `.git` entries in nested directories under every writable root (macOS; Linux holds the ones that exist); and, when home or a directory holding it is writable, the shell startup files, `~/Library/LaunchAgents`, `~/.config/autostart` and `~/.config/systemd` | done | sandboxing "Protected paths"; `TestRealSandboxDefaultsHomeAndGit`, `TestProtectedPaths`, `TestRealSandboxNestedProjectConfig`, `TestRealSandboxHomeAsRoot` |
+| Git directories in writable roots: only what git writes (objects, refs, logs, the index, `*_HEAD` and message files, rebase/sequencer state, `packed-refs`, `shallow`, gc files and their locks) may be written, so `commondir`, `gitdir`, `info/attributes`, `config*` and `hooks` cannot be planted or redirected (macOS, by pattern, including module and worktree dirs created later; Linux: existing entries bound read-only, new ones removed when the command ends). Commit, checkout, stash, rebase, fetch and gc work; adding a submodule or worktree does not | done (kiln; Claude Code protects `.git/hooks` and `.git/config`) | `TestRealSandboxGitDirRedirect`, `TestRealSandboxGitWorkflow`, `TestRealSandboxSubmoduleGitDir` |
+| kiln's own `git status` (status line) runs inside the sandbox with `--no-optional-locks`, `core.fsmonitor=false` and `core.hooksPath=/dev/null`, so a repository a sandboxed command wrote cannot run code through it | done (kiln) | `TestKilnGitRunsInSandbox`, `TestReadGitStatusIgnoresFsmonitor` |
+| A repository's settings (`.claude/settings.json`, `.claude/settings.local.json`) cannot switch the sandbox off over a user `enabled: true`, nor widen it: catch-all `excludedCommands`, `allowWrite` or `Edit(...)` allows covering home, `allowedDomains: ["*"]` or `WebFetch(domain:*)`, `allowUnixSockets`, `allowMachLookup: ["*"]`, `allowAllUnixSockets`/`allowLocalBinding: true` and proxy ports are ignored from them with a startup warning | done (kiln is stricter than the documented merge) | settings reference; `TestLoadSettingsSandboxRepositoryCannotWiden`, `TestSandboxRulesFromRepositoryDoNotWiden` |
+| A linked worktree may write the shared `.git` dir except its `hooks` and `config` | done | sandboxing "Filesystem isolation"; `TestWorktreeGitDirs` |
+| Reads: everything except `denyRead`, `Read(...)` deny rules and `credentials.files`; `allowRead` re-opens a narrower path; the narrower rule wins | done | sandboxing "Configure sandboxing"; `TestRealSandboxReadRules` |
+| Symlinks cannot widen access (the kernel-resolved path is judged) | done | `TestRealSandboxSymlinkEscape` |
+| Network: no direct route out; a local proxy checks each host against `allowedDomains` / `deniedDomains` (plus `WebFetch(domain:...)` rules); `HTTP(S)_PROXY` and `ALL_PROXY` set; `NO_PROXY` removed, since a sandboxed command has no direct route to loopback either | done | sandboxing "Network isolation"; `TestRealSandboxNetwork`, `TestProxyDecisions` |
+| The proxy serves only the session: each session's proxy has a random credential carried in the proxy URLs it hands sandboxed commands; a request without it gets 407 before any decision or prompt. curl, git, npm, pip and Go programs send it | done (kiln) | `TestProxyRequiresCredential`, `TestRealSandboxProxyClients` |
+| Domain syntax: `*.x` subdomains, bare `*`, `:port`, bracketed IPv6, trailing dot; ambiguous IPv6 read strictly | done | settings reference `allowedDomains`; `TestHostRules` |
+| Hosts outside the lists: bypass allows, manual/acceptEdits/plan ask, auto/dontAsk refuse, print mode refuses; `strictAllowlist` always refuses; "Yes" lasts the session, "don't ask again" saves `WebFetch(domain:host)` (to `.kiln/settings.local.json`) | done | sandboxing "Hosts outside your allowed domains"; `TestApproveNetwork` |
+| A hostname resolving only to local addresses is refused unless the IP is allowlisted; `localhost`/`*.localhost` may resolve to loopback | done | sandboxing "Hostnames that resolve to local addresses"; `TestProxyLocalAddressCheck` |
+| Local targets (loopback, private, link-local and unspecified addresses, IP literals and `localhost` alike) need an exact `allowedDomains` entry; `*`, `*.x` and bypass-mode approval never reach them | done (kiln is stricter) | `TestProxyLocalTargets` |
+| Hosts are compared in one form: lower case, no trailing dot, IPv4-mapped IPv6 unmapped, internationalised names in punycode (entries and requests) | done | `TestHostCanonicalForms` |
+| Deny and ask rules see the command behind git global options (`git -C dir -c k=v push`) and package runners (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`, `uvx`, `pipx run`, `uv run`, `poetry run`, `bundle exec`); a command whose name the gate cannot read (`$x`, `$(...)`) is not auto-allowed | done | `TestDenyRuleSeesGitGlobalOptions`, `TestSandboxAutoAllowHiddenNames` |
+| `autoAllowBashIfSandboxed` (default true): sandboxed commands run without a prompt; deny rules, content ask rules and critical `rm`/`rmdir` targets still apply; a bare `Bash` ask rule is skipped except in plan mode; plan mode does not widen. In auto mode it is approved before the classifier, which reviews commands outside the sandbox (excluded ones, unsandboxed retries) and sandboxed ones that write a path on auto mode's protected list (`permission/protected.go`, wider than the sandbox's own list, which must leave git and builds working) | done | sandboxing "Sandbox modes", permission-modes "How the classifier evaluates actions"; `TestSandboxAutoAllow*`, `TestSandboxAutoAllowSkipsClassifierInAutoMode`, e2e `TestSandbox_EscapeFailsAndTranscriptSaysSo` |
+| `excludedCommands`: Bash-rule syntax, every command in the call must match, the text is matched, sudo/eval/xargs/cd/substitutions/subshells/control flow/redirects/variable names/escaping `git clone` stay sandboxed; excluded commands take the regular flow | done | settings reference `excludedCommands`; `TestExcluded` |
+| `dangerouslyDisableSandbox` retry (offered only when `allowUnsandboxedCommands` is true): regular flow, prompt marked "runs outside the sandbox"; bypass runs it; dontAsk refuses it unless an allow rule matches; `Bash(dangerouslyDisableSandbox:true)` ask rule prompts in every mode | done | sandboxing "The unsandboxed retry escape hatch"; `TestSandboxUnsandboxedRetry` |
+| A failed sandboxed command's result names the blocked hosts and how to retry | done | sandboxing "The unsandboxed retry escape hatch"; e2e test |
+| `failIfUnavailable`: refuse to start; otherwise run unsandboxed with one startup warning | done | settings reference `failIfUnavailable`; `TestRun_Sandbox_Unavailable` |
+| `credentials.envVars` deny entries unset in sandboxed commands | done | sandboxing "Protect credentials"; `TestRealSandboxDenyEnv` |
+| `enableWeakerNestedSandbox`, `enableWeakerNetworkIsolation`, `allowLocalBinding`, `allowUnixSockets`, `allowAllUnixSockets`, `allowMachLookup`, `httpProxyPort`, `socksProxyPort` | done | settings reference; `TestSeatbeltProfileShape`, `TestBwrapArgs` |
+| `allowLocalBinding` (macOS): commands may listen and accept connections on local addresses. Divergence: it opens no direct outbound route to loopback ports (Claude Code's docs say it lets commands connect to any localhost port); a local service is reached through the proxy with an exact entry. As with Claude Code, a listener on `0.0.0.0` accepts connections from other machines: Seatbelt's `local ip` filter accepts only `*` or `localhost` and `localhost` matches every local address | done (divergence) | sandboxing "A command fails to reach a server on localhost"; `TestRealSandboxLocalBinding` |
+| `allowUnixSockets` entries open each socket, under each spelling of its path | done | `TestRealSandboxHidesAgentSockets` |
+| Linux: without a seccomp filter kiln hides well-known Unix sockets instead (session and system bus, systemd user socket, docker/podman/containerd, gpg agent, `$SSH_AUTH_SOCK`, `$DOCKER_HOST`) by binding `/dev/null` over them, unless `allowAllUnixSockets` or an `allowUnixSockets` entry opens them | done (partial: other sockets stay reachable) | sandboxing "Set up Linux and WSL2"; `TestHiddenSockets`, `TestRealSandboxHidesAgentSockets` |
+| macOS runs `/usr/bin/sandbox-exec` only; `PATH` is never searched | done | `TestDetectUsesSystemSandboxExec` |
+| A process a sandboxed command leaves running (`nohup … & disown`) is not killed when the command returns, as Claude Code leaves it; it stays in the sandbox and keeps the proxy (and its allowlist and prompts) until kiln exits. On Linux it ends with bwrap's PID namespace | done | tools reference "Background commands"; `TestRealSandboxLeftoverStaysConfined` |
+| Outside the sandbox: file tools, hooks, MCP servers, the status line, `!` commands | done (checked: they never go through `execenv.Sandbox`) | sandboxing "What runs outside the sandbox" |
+| Subagents use the parent's sandbox | done (shared `execenv.Env` and gate) | sandboxing "Scope" |
+| `kiln doctor` / `/doctor` show status, mechanism, mode, or why it cannot run | done | `TestDoctor_Sandbox` |
+
+Open, not matched yet:
+
+- **SOCKS proxy.** kiln runs an HTTP/CONNECT proxy only; `ALL_PROXY` points at it.
+  Tools that need SOCKS (git over SSH on Linux) cannot connect.
+- **TLS termination and credential masking** (`network.tlsTerminate`, `mask`
+  entries, `awsPairs`, `sigv4`). A `mask` entry is enforced as `deny`, the way
+  Claude Code treats mask files on macOS.
+- **Upstream corporate proxy.** kiln's proxy dials hosts directly; it does not
+  chain to `HTTPS_PROXY`.
+- **Per-command allowed domains in auto mode** and server-side classifier
+  review of sandboxed commands. In auto mode an unlisted host is refused.
+- **Managed settings and their locks** (`allowManagedDomainsOnly`,
+  `allowManagedReadPathsOnly`, admin-required repository locks, `bwrapPath`,
+  `socatPath`): kiln has no managed tier.
+- **`permissions.blockReadsOutsideWorkingDirectories`** and
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`.
+- **Violation reporting.** kiln does not monitor the kernel's violation log;
+  a failure is annotated when its output looks like a sandbox refusal.
+  `ignoreViolations` is accepted and has no effect.
+- **Linux:** a protected path that does not exist yet is held by an empty
+  placeholder, and a new entry in a git directory is removed when the command
+  ends; nested `.claude`/`.mcp.json` entries that do not exist are not held
+  (macOS holds them by pattern); wildcard `denyRead`/`allowRead` entries are
+  skipped, not expanded; no seccomp filter, so only the well-known sockets
+  above are hidden (doctor says so).
+- **Submodules and worktrees inside the sandbox.** `git submodule update --init`
+  and `git worktree add` write a `config` or `gitdir` file into a new git
+  directory, which the sandbox refuses; run them outside it.
+- **Live reload.** Sandbox settings and rules added mid-session (an `Edit`
+  allow from "don't ask again") apply from the next start.
+- **`/sandbox`** panel; `bash_background` has no `dangerouslyDisableSandbox`
+  (an `excludedCommands` entry is how a background command leaves the sandbox).
+- **macOS limits of Seatbelt itself:** setuid binaries (`ps`, `sudo`) cannot run
+  inside it, and `mktemp` without a template uses the system temp directory,
+  which is outside the sandbox; `mktemp "$TMPDIR/x.XXXXXX"` works.
+
 ## Hooks
 
 `.claude/settings.json` hooks run as shell commands with a JSON payload on
