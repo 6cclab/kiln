@@ -1,0 +1,105 @@
+package cli
+
+import (
+	"fmt"
+	"runtime"
+	"strings"
+
+	"github.com/andrepato/harness/internal/claude/permission"
+	claudesettings "github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/sandbox"
+)
+
+// startSandbox sets up the session's OS sandbox for the bash tools from
+// the "sandbox" settings (Claude Code's sandboxing,
+// code.claude.com/docs/en/sandboxing): it binds the sandbox to the
+// permission gate (auto-allow, the unsandboxed retry, network approvals)
+// and to env (what the bash tools run under).
+//
+// When sandbox.enabled is set but the sandbox cannot start (no
+// sandbox-exec, no bubblewrap or socat, an unsupported platform), Claude
+// Code runs commands unsandboxed unless sandbox.failIfUnavailable is set,
+// in which case it refuses to start. kiln does the same, and says so with
+// one startup warning: it never runs unsandboxed silently. The error
+// return is that refusal.
+//
+// It returns nil when sandboxing is off. The caller closes the manager.
+func startSandbox(cwd string, s claudesettings.Settings, perms claudesettings.Permissions, gate *permission.Gate, env *execenv.Env, warn func(string)) (*sandbox.Manager, error) {
+	for _, w := range s.SandboxWarnings {
+		warn(w)
+	}
+	if !s.Sandbox.IsEnabled() {
+		return nil, nil
+	}
+	cfg := sandbox.FromSettings(s, perms, cwd)
+	m := sandbox.New(cfg, sandboxOptions(sandbox.Options{Cwd: cwd, Roots: gate.Roots}))
+	if err := m.Unavailable(); err != nil {
+		if cfg.FailIfUnavailable {
+			return nil, fmt.Errorf("sandbox.enabled and sandbox.failIfUnavailable are set, but the sandbox cannot start: %v", err)
+		}
+		warn(fmt.Sprintf("sandbox.enabled is set, but the sandbox cannot start (%v): bash commands run without it. Set sandbox.failIfUnavailable to refuse to start instead.", err))
+		return m, nil
+	}
+	gate.SetSandbox(m)
+	env.Sandbox = m
+	m.SetNetworkDecider(gate.ApproveNetwork, gate.SaveNetworkRule)
+	return m, nil
+}
+
+// sandboxOptions lets a test stand in for the platform (an unsupported
+// GOOS, a missing bwrap).
+var sandboxOptions = func(o sandbox.Options) sandbox.Options { return o }
+
+// sandboxReport is doctor's sandbox section: the status line and any
+// problems.
+func sandboxReport(cwd string, s claudesettings.Settings) (line string, problems []string) {
+	problems = append(problems, s.SandboxWarnings...)
+	if !s.Sandbox.IsEnabled() {
+		mech := "sandbox-exec"
+		switch runtime.GOOS {
+		case "linux":
+			mech = "bubblewrap"
+		case "darwin":
+		default:
+			mech = "unsupported on " + runtime.GOOS
+		}
+		return "off (sandbox.enabled is not set; " + mech + ")", problems
+	}
+	cfg := sandbox.FromSettings(s, s.Permissions, cwd)
+	m := sandbox.New(cfg, sandboxOptions(sandbox.Options{Cwd: cwd}))
+	if err := m.Unavailable(); err != nil {
+		if cfg.FailIfUnavailable {
+			problems = append(problems, "sandbox cannot start and failIfUnavailable is set, so kiln refuses to start: "+err.Error())
+		} else {
+			problems = append(problems, "sandbox is enabled but cannot start, so bash commands run unsandboxed: "+err.Error())
+		}
+		return "enabled, unavailable: " + err.Error(), problems
+	}
+	var parts []string
+	parts = append(parts, "on ("+m.Mechanism()+")")
+	if cfg.AutoAllow {
+		parts = append(parts, "auto-allow")
+	} else {
+		parts = append(parts, "regular permissions")
+	}
+	if !cfg.AllowUnsandboxed {
+		parts = append(parts, "strict (no unsandboxed retry)")
+	}
+	if n := len(cfg.Excluded); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d excluded command pattern(s)", n))
+	}
+	if n := len(cfg.AllowedDomains); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d allowed domain(s)", n))
+	} else {
+		parts = append(parts, "no allowed domains")
+	}
+	if cfg.FilesystemDisabled {
+		parts = append(parts, "filesystem isolation off")
+	}
+	if runtime.GOOS == "linux" {
+		problems = append(problems, "sandbox: Unix sockets are not filtered on Linux (kiln has no seccomp filter)")
+	}
+	problems = append(problems, cfg.Notes...)
+	return strings.Join(parts, ", "), problems
+}

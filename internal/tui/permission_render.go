@@ -22,7 +22,10 @@ type PermissionRequest struct {
 	ToolName         string
 	PrimaryArg       string
 	OutsideWorkspace bool
-	Args             map[string]any
+	// Unsandboxed marks a command that runs outside the OS sandbox
+	// (permission.Request.Unsandboxed).
+	Unsandboxed bool
+	Args        map[string]any
 	// Grantable and DontAskRules are permission.Request's: whether the
 	// prompt offers "don't ask again" (offersDontAsk), and the bash rules
 	// that answer saves.
@@ -104,6 +107,9 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 	// it.
 	if req.OutsideWorkspace {
 		lines = append(lines, " "+Muted("outside the workspace"))
+	}
+	if req.Unsandboxed {
+		lines = append(lines, " "+Muted(unsandboxedNote))
 	}
 
 	// Show the actual change for edits and writes. A path alone says
@@ -207,7 +213,13 @@ type BashPermissionRequest struct {
 	DontAskRules []string
 	// InAutoMode leaves out "switch to auto mode" (promptOptionsFor).
 	InAutoMode bool
+	// Unsandboxed marks a command that runs outside the OS sandbox.
+	Unsandboxed bool
 }
+
+// unsandboxedNote is said under a command that runs outside an active OS
+// sandbox (Claude Code titles that prompt "Bash command (unsandboxed)").
+const unsandboxedNote = "runs outside the sandbox"
 
 // dontAskLabel is option 2's label: every rule the answer saves, in
 // order. When they do not all fit avail columns, it names as many as fit
@@ -263,6 +275,9 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 	}
 	if req.Description != "" {
 		lines = append(lines, "   "+Muted(req.Description))
+	}
+	if req.Unsandboxed {
+		lines = append(lines, "   "+Muted(unsandboxedNote))
 	}
 	lines = append(lines, "")
 
