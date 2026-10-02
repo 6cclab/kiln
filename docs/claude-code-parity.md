@@ -364,6 +364,73 @@ Seven; the first six are additive:
   parity, and re-verifying `[chk]` items is about behavior, not appearance.
 
 
+## Bash sandbox
+
+The `sandbox` settings object, as Claude Code documents it in
+[Sandboxing](https://code.claude.com/docs/en/sandboxing) and the
+[settings reference](https://code.claude.com/docs/en/settings-reference#sandbox-settings).
+Code: `internal/claude/settings/sandbox.go` (parsing and merge),
+`internal/sandbox` (mechanism, proxy), `internal/claude/permission/sandbox.go`
+(gate), `internal/cli/sandbox.go` (startup, doctor).
+
+| Behavior | Status | Source / test |
+|---|---|---|
+| `sandbox.enabled` turns it on; off by default | done | settings reference; `TestLoadSettingsSandboxDefaults` |
+| Booleans: later scope wins; arrays combine across scopes; unknown keys ignored, wrong types skipped with a warning | done | settings reference "Sandbox settings"; `TestLoadSettingsSandboxMerge`, `TestLoadSettingsSandboxBadTypes` |
+| Path prefixes: `/` and `//` absolute, `~/` home, `./` or none = project root (project settings) or the settings file's directory (user settings); trailing `/` and `/**` stripped | done | settings reference "Sandbox path prefixes" |
+| `filesystem.disabled`, `allowAppleEvents`, `network.strictAllowlist`, credential `mask` entries honoured only from user settings and `--settings` | done | settings reference; `TestLoadSettingsSandboxTrustedOnlyKeys` |
+| `allowUnsandboxedCommands: false` in user settings holds against a project's `true` | done | settings reference; `TestLoadSettingsSandboxUnsandboxedHold` |
+| macOS: Seatbelt (`sandbox-exec`); Linux: bubblewrap + socat; Windows: unsupported | done | sandboxing "OS-level enforcement"; `TestRealSandbox*` (macOS, and Linux under bwrap in a container), `TestManagerDetect` |
+| Writes: working directory, added directories (`/add-dir`, `--add-dir`), a per-user temp dir (`$TMPDIR` set to it), `allowWrite`, `Edit(...)` allow rules; minus `denyWrite` and `Edit(...)` deny rules | done | sandboxing "Filesystem isolation"; `TestRealSandboxWrites` |
+| Protected paths stay unwritable inside writable roots: `.claude` settings/skills/agents/commands/hooks/workflows and `.mcp.json` in the cwd and its parents; shell startup files, `.gitconfig`, `.vscode`, `.idea`, `.git/hooks`, `.git/config` in the cwd; bare-repo files; `~/.claude`, `~/.claude.json` (kiln adds `.kiln`, `~/.kiln`, `~/.harness`) | done | sandboxing "Protected paths"; `TestRealSandboxDefaultsHomeAndGit`, `TestProtectedPaths` |
+| A linked worktree may write the shared `.git` dir except its `hooks` and `config` | done | sandboxing "Filesystem isolation"; `TestWorktreeGitDirs` |
+| Reads: everything except `denyRead`, `Read(...)` deny rules and `credentials.files`; `allowRead` re-opens a narrower path; the narrower rule wins | done | sandboxing "Configure sandboxing"; `TestRealSandboxReadRules` |
+| Symlinks cannot widen access (the kernel-resolved path is judged) | done | `TestRealSandboxSymlinkEscape` |
+| Network: no direct route out; a local proxy checks each host against `allowedDomains` / `deniedDomains` (plus `WebFetch(domain:...)` rules); `HTTP(S)_PROXY`, `ALL_PROXY`, `NO_PROXY` set | done | sandboxing "Network isolation"; `TestRealSandboxNetwork`, `TestProxyDecisions` |
+| Domain syntax: `*.x` subdomains, bare `*`, `:port`, bracketed IPv6, trailing dot; ambiguous IPv6 read strictly | done | settings reference `allowedDomains`; `TestHostRules` |
+| Hosts outside the lists: bypass allows, manual/acceptEdits/plan ask, auto/dontAsk refuse, print mode refuses; `strictAllowlist` always refuses; "Yes" lasts the session, "don't ask again" saves `WebFetch(domain:host)` (to `.kiln/settings.local.json`) | done | sandboxing "Hosts outside your allowed domains"; `TestApproveNetwork` |
+| A hostname resolving only to local addresses is refused unless the IP is allowlisted; `localhost`/`*.localhost` may resolve to loopback | done | sandboxing "Hostnames that resolve to local addresses"; `TestProxyLocalAddressCheck` |
+| `autoAllowBashIfSandboxed` (default true): sandboxed commands run without a prompt; deny rules, content ask rules and critical `rm`/`rmdir` targets still apply; a bare `Bash` ask rule is skipped except in plan mode; plan mode does not widen | done | sandboxing "Auto-allow mode"; `TestSandboxAutoAllow*`, e2e `TestSandbox_EscapeFailsAndTranscriptSaysSo` |
+| `excludedCommands`: Bash-rule syntax, every command in the call must match, the text is matched, sudo/eval/xargs/cd/substitutions/subshells/control flow/redirects/variable names/escaping `git clone` stay sandboxed; excluded commands take the regular flow | done | settings reference `excludedCommands`; `TestExcluded` |
+| `dangerouslyDisableSandbox` retry (offered only when `allowUnsandboxedCommands` is true): regular flow, prompt marked "runs outside the sandbox"; bypass runs it; dontAsk refuses it unless an allow rule matches; `Bash(dangerouslyDisableSandbox:true)` ask rule prompts in every mode | done | sandboxing "The unsandboxed retry escape hatch"; `TestSandboxUnsandboxedRetry` |
+| A failed sandboxed command's result names the blocked hosts and how to retry | done | sandboxing "The unsandboxed retry escape hatch"; e2e test |
+| `failIfUnavailable`: refuse to start; otherwise run unsandboxed with one startup warning | done | settings reference `failIfUnavailable`; `TestRun_Sandbox_Unavailable` |
+| `credentials.envVars` deny entries unset in sandboxed commands | done | sandboxing "Protect credentials"; `TestRealSandboxDenyEnv` |
+| `enableWeakerNestedSandbox`, `enableWeakerNetworkIsolation`, `allowLocalBinding`, `allowUnixSockets`, `allowAllUnixSockets`, `allowMachLookup`, `httpProxyPort`, `socksProxyPort` | done | settings reference; `TestSeatbeltProfileShape`, `TestBwrapArgs` |
+| Outside the sandbox: file tools, hooks, MCP servers, the status line, `!` commands | done (checked: they never go through `execenv.Sandbox`) | sandboxing "What runs outside the sandbox" |
+| Subagents use the parent's sandbox | done (shared `execenv.Env` and gate) | sandboxing "Scope" |
+| `kiln doctor` / `/doctor` show status, mechanism, mode, or why it cannot run | done | `TestDoctor_Sandbox` |
+
+Open, not matched yet:
+
+- **SOCKS proxy.** kiln runs an HTTP/CONNECT proxy only; `ALL_PROXY` points at it.
+  Tools that need SOCKS (git over SSH on Linux) cannot connect.
+- **TLS termination and credential masking** (`network.tlsTerminate`, `mask`
+  entries, `awsPairs`, `sigv4`). A `mask` entry is enforced as `deny`, the way
+  Claude Code treats mask files on macOS.
+- **Upstream corporate proxy.** kiln's proxy dials hosts directly; it does not
+  chain to `HTTPS_PROXY`.
+- **Per-command allowed domains in auto mode** and classifier review of
+  sandboxed commands. In auto mode a sandboxed command takes the regular flow
+  and an unlisted host is refused.
+- **Managed settings and their locks** (`allowManagedDomainsOnly`,
+  `allowManagedReadPathsOnly`, admin-required repository locks, `bwrapPath`,
+  `socatPath`): kiln has no managed tier.
+- **`permissions.blockReadsOutsideWorkingDirectories`** and
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`.
+- **Violation reporting.** kiln does not monitor the kernel's violation log;
+  a failure is annotated when its output looks like a sandbox refusal.
+  `ignoreViolations` is accepted and has no effect.
+- **Linux:** wildcard `denyRead`/`allowRead` entries are skipped, not expanded;
+  no seccomp filter, so Unix sockets are not blocked (doctor says so).
+- **Live reload.** Sandbox settings and rules added mid-session (an `Edit`
+  allow from "don't ask again") apply from the next start.
+- **`/sandbox`** panel; `bash_background` has no `dangerouslyDisableSandbox`
+  (an `excludedCommands` entry is how a background command leaves the sandbox).
+- **macOS limits of Seatbelt itself:** setuid binaries (`ps`, `sudo`) cannot run
+  inside it, and `mktemp` without a template uses the system temp directory,
+  which is outside the sandbox; `mktemp "$TMPDIR/x.XXXXXX"` works.
+
 ## Hooks
 
 `.claude/settings.json` hooks run as shell commands with a JSON payload on

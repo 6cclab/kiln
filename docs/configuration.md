@@ -263,6 +263,7 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 | `autoMemoryEnabled` | `*bool` | last non-nil wins (§7's "Auto memory") |
 | `autoMemoryDirectory` | `string` | last non-empty wins; absolute or `~/`-prefixed (§7's "Auto memory") |
 | `autoMode.environment`, `autoMode.allow`, `autoMode.soft_deny`, `autoMode.hard_deny` | `AutoModeConfig` (`settings/automode.go`, `LoadAutoMode`) | read **only** from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`, concatenated in that order; ignored in project and local settings, with a startup warning (see "Auto mode classifier") |
+| `sandbox` | `Sandbox` (`sandbox.go`) | Claude Code's rules: booleans last-set wins, arrays combined; some keys only from user settings or `--settings` (see "Sandbox" below) |
 
 ### Permission rule syntax (`MatchesRule`, `settings.go`)
 
@@ -356,6 +357,23 @@ d.Gate.Check(ctx, permission.Request{ToolName: "task", PrimaryArg: "role:" + req
 ```
 
 So a rule like `task(role:heavy)` matches this specific check via the paren-form syntax above. Same-provider role reuse, free models, and non-crossing dispatches never hit this gate — they're covered by the subagent's own tool calls being checked generically as they happen.
+
+### Sandbox
+
+`internal/claude/settings/sandbox.go`, `internal/sandbox`, `internal/claude/permission/sandbox.go`.
+The `sandbox` object runs the `bash` and `bash_background` commands inside an OS sandbox, as
+Claude Code's [sandboxing](https://code.claude.com/docs/en/sandboxing) does: `sandbox-exec` on
+macOS, `bwrap` plus `socat` on Linux, unsupported elsewhere. Keys read: `enabled`,
+`failIfUnavailable`, `autoAllowBashIfSandboxed` (default true), `allowUnsandboxedCommands`
+(default true), `excludedCommands`, `enableWeakerNestedSandbox`, `enableWeakerNetworkIsolation`,
+`allowAppleEvents`, `ignoreViolations` (no effect), `filesystem.{allowWrite,denyWrite,denyRead,
+allowRead,disabled}`, `network.{allowedDomains,deniedDomains,allowUnixSockets,allowAllUnixSockets,
+allowLocalBinding,allowMachLookup,strictAllowlist,httpProxyPort,socksProxyPort}`,
+`credentials.{files,envVars}`. `filesystem.disabled`, `allowAppleEvents`,
+`network.strictAllowlist` and credential `mask` entries count only from user settings and
+`--settings`. Sandboxed commands get `$TMPDIR` set to `/tmp/kiln-<uid>` on macOS (the system
+temp dir's `kiln-<uid>` on Linux), `HTTP(S)_PROXY`/`ALL_PROXY` pointing at kiln's proxy, and
+`KILN_SANDBOX=1`. What is matched and what is not: `docs/claude-code-parity.md`, "Bash sandbox".
 
 ### Permission modes
 
