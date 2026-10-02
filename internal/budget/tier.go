@@ -66,6 +66,18 @@ type Tier struct {
 	// ToolOutputTokens is the ceiling for a single tool result before it is
 	// truncated.
 	ToolOutputTokens int
+	// SkillsListingTokens is the ceiling for the model-visible skills
+	// catalog (internal/cli's formatSkillsIndex): every project, user and
+	// plugin skill's name/description/location, budgeted the same way
+	// CLAUDE.md's rules index is - truncate descriptions, then fall back
+	// to name-only entries, before any skill is left off the listing
+	// entirely (and even then it stays invocable by exact name, just
+	// unlisted). A resident catalog that scales with the window instead
+	// of a flat allowance is what this fixes: a 24-skill catalog (mostly
+	// from enabled plugins) cost ~4.9k tokens flat regardless of model
+	// size, which is a third of a 49k-token window's first request
+	// before a single message existed.
+	SkillsListingTokens int
 }
 
 // TOOL_STRATEGY_COST measured cost of each tool strategy, in tokens, via
@@ -117,6 +129,13 @@ const (
 	shareReserve      = 0.1
 	shareKeepRecent   = 0.25
 	shareToolOutput   = 0.12
+	// shareSkillsListing is 1% of the window, in tokens. Observed
+	// behaviour elsewhere caps an equivalent model-visible skills listing
+	// at about the same share (there, expressed as a character budget
+	// against the window's token count using a 4-chars-per-token
+	// estimate, which comes out to the same 1% once converted to tokens -
+	// the same conversion this package already uses throughout).
+	shareSkillsListing = 0.01
 )
 
 // TierForWindow resolves the operating posture for a context window.
@@ -157,6 +176,11 @@ func TierForWindow(contextWindow int) Tier {
 	reserveTokens := budget(shareReserve, 2_048, 32_768)
 	keepRecentTokens := budget(shareKeepRecent, 4_096, 100_000)
 	toolOutputTokens := budget(shareToolOutput, 2_048, 49_152)
+	// Floor and ceiling well below the system prompt's: a skills catalog
+	// is a discovery index, not instructions, so even the smallest window
+	// keeps a usable sliver of it, and the largest never needs more than a
+	// few thousand tokens of it either.
+	skillsListingTokens := budget(shareSkillsListing, 256, 8_192)
 
 	return Tier{
 		Name:          name,
@@ -169,9 +193,10 @@ func TierForWindow(contextWindow int) Tier {
 			ReserveTokens:    reserveTokens,
 			KeepRecentTokens: keepRecentTokens,
 		},
-		ToolStrategy:       toolStrategy,
-		SystemPromptTokens: systemPromptTokens,
-		ToolOutputTokens:   toolOutputTokens,
+		ToolStrategy:        toolStrategy,
+		SystemPromptTokens:  systemPromptTokens,
+		ToolOutputTokens:    toolOutputTokens,
+		SkillsListingTokens: skillsListingTokens,
 	}
 }
 
@@ -229,5 +254,5 @@ func TierFor(contextWindow int) Tier {
 // window. Surfacing that as a number beats discovering it as a truncated
 // first turn.
 func UsableTokens(tier Tier) int {
-	return tier.ContextWindow - tier.SystemPromptTokens - ToolStrategyCost[tier.ToolStrategy] - tier.Compaction.ReserveTokens
+	return tier.ContextWindow - tier.SystemPromptTokens - tier.SkillsListingTokens - ToolStrategyCost[tier.ToolStrategy] - tier.Compaction.ReserveTokens
 }

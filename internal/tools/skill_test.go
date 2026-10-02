@@ -10,27 +10,30 @@ import (
 	"github.com/andrepato/harness/internal/tool"
 )
 
-func TestSkillTool_DescriptionListsEveryRecord(t *testing.T) {
-	tl := SkillTool([]SkillRecord{
+// TestSkillTool_DescriptionDoesNotDuplicateCatalog documents the fix for
+// double-paying the skills catalog: the tool's description is fixed and
+// generic regardless of how many records it is built from, or how long
+// their descriptions are - the catalog (name/description/location) lives
+// exactly once, in the system prompt's <available_skills> index
+// (internal/cli/chat.go's formatSkillsIndex), not here too.
+func TestSkillTool_DescriptionDoesNotDuplicateCatalog(t *testing.T) {
+	long := strings.Repeat("x", 500)
+	withRecords := SkillTool([]SkillRecord{
 		{Name: "greet", Description: "says hi", Body: "Hello.", Dir: "/skills/greet"},
 		{Name: "demo:review", Description: "reviews code", Body: "Review it.", Dir: "/plugins/demo/commands"},
+		{Name: "verbose", Description: long, Body: "b", Dir: "/d"},
 	})
-	if !strings.Contains(tl.Description, "- greet: says hi") {
-		t.Errorf("description missing greet entry: %q", tl.Description)
+	empty := SkillTool(nil)
+	if withRecords.Description != empty.Description {
+		t.Errorf("description must not vary with the record set; got %q vs %q", withRecords.Description, empty.Description)
 	}
-	if !strings.Contains(tl.Description, "- demo:review: reviews code") {
-		t.Errorf("description missing plugin entry: %q", tl.Description)
+	for _, name := range []string{"greet", "demo:review", "says hi", "reviews code", long} {
+		if strings.Contains(withRecords.Description, name) {
+			t.Errorf("description must not embed per-skill catalog data, found %q in %q", name, withRecords.Description)
+		}
 	}
-}
-
-func TestSkillTool_DescriptionTruncatesLongDescriptions(t *testing.T) {
-	long := strings.Repeat("x", 500)
-	tl := SkillTool([]SkillRecord{{Name: "verbose", Description: long, Body: "b", Dir: "/d"}})
-	if strings.Contains(tl.Description, long) {
-		t.Error("expected the long description to be truncated, found it verbatim")
-	}
-	if !strings.Contains(tl.Description, strings.Repeat("x", descriptionTruncateLen)) {
-		t.Error("expected a 200-char prefix of the description")
+	if !strings.Contains(withRecords.Description, "<available_skills>") {
+		t.Errorf("description should point at the system prompt's index, got %q", withRecords.Description)
 	}
 }
 
@@ -82,9 +85,6 @@ func TestSkillTool_UnknownSkillListsAvailable(t *testing.T) {
 
 func TestSkillTool_NoSkillsIsUsable(t *testing.T) {
 	tl := SkillTool(nil)
-	if !strings.Contains(tl.Description, "No skills are currently available") {
-		t.Errorf("got %q", tl.Description)
-	}
 	res, err := tl.Execute(context.Background(), json.RawMessage(`{"skill":"anything"}`), func(tool.Result) {}, tool.Invocation{})
 	if err != nil {
 		t.Fatal(err)
