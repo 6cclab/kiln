@@ -723,7 +723,7 @@ func BenchmarkSystemPromptAssembly(b *testing.B) {
 	memoryText := benchClaudeMD()
 	skillList := benchSkillList(30)
 	mcpTools := benchMCPTools(100)
-	skillsIndex := formatSkillsIndex(skillList)
+	skillsIndex := formatSkillsIndex(skillList, 2_000)
 	active := mcpgate.Postures[0]
 	appendSystemPrompt := "Additional operator-supplied instructions for this session."
 

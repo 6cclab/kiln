@@ -126,9 +126,20 @@ credential wins over an environment variable for the same provider.
 - **Postures.** A `coding` posture does not index UniFi or Grafana at all. This
   does more work than dynamic gating: indexing everything still costs 18% of a
   32k window, while a posture index costs 5%.
-- **Skills.** Only `name` + `description` stay resident; bodies load on
-  invocation. Measured on a real `~/.claude/skills`: 841 tokens resident versus
-  8,316 if bodies were loaded.
+- **Skills.** Only `name` + `description` stay resident, in one place: the
+  system prompt's skills index. The `skill` tool itself names no skill, so the
+  catalog is never paid for twice. The index is budgeted at 1% of the context
+  window (`internal/budget`'s `SkillsListingTokens`); over budget, descriptions
+  shrink before any skill is dropped from the listing, project/user skills
+  outlast plugin ones, and a skill that still doesn't fit stays invocable by
+  exact name - just unlisted, with a pointer line saying so. Measured against a
+  real config (24 skills, mostly from enabled plugins) with a local capture
+  server standing in for Ollama: a 49,152-token window's first request fell
+  from ~13.3k to ~8.7k tokens (chars/4 estimate of the system prompt + tool
+  schemas), and a 32,768-token window's from ~12.6k to ~7.8k; the `skill`
+  tool's own schema, which used to re-embed every skill's name and
+  description, fell from ~1,500 tokens to a fixed ~216 regardless of catalog
+  size. Bodies still load only on invocation.
 - **Subagents.** A `task` runs in its own session and window; the parent pays
   for one paragraph.
 - **Roles.** `settings.json`'s `modelRoles` (fast/structured/heavy →

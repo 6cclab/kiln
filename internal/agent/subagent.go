@@ -226,17 +226,13 @@ func TaskParameters(defs []agents.Definition, roles map[string]string) json.RawM
 func TaskDescription(defs []agents.Definition, roles map[string]string, tier budget.Tier) string {
 	catalog := DescribeAgents(defs, tier)
 	parts := []string{
-		"Dispatch a task to a subagent with its own context window. The subagent's tool calls and reasoning",
-		"do not enter your context - you receive only its final report.",
+		"Dispatch a task to a subagent with its own context window; you get back only its final report, not its tool calls or reasoning.",
 		"",
-		"Use it when answering would mean reading across many files, or for independent work that can run",
-		"without your supervision. For a single lookup where you already know the file, read it yourself:",
-		"dispatch costs a full round-trip. When the user asks for subagents or parallel agents, use them.",
+		"Use it for work spanning many files, or independent work needing no supervision. Skip it for a single lookup where you already know the file - read it yourself; dispatch costs a full round-trip. Use it when the user asks for subagents or parallel agents.",
 		"",
-		"To run several at once, make every task call in the same message; they run in parallel.",
+		"Call it several times in one message to run those tasks in parallel.",
 		"",
-		"The subagent cannot ask you questions and does not see this conversation. Put everything it needs in",
-		"the prompt.",
+		"The subagent sees none of this conversation and cannot ask you questions - put everything it needs in the prompt.",
 		"",
 		"Available agents:",
 		catalog,

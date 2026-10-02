@@ -18,12 +18,12 @@ var editParameters = json.RawMessage(`{
 		"path": {"type": "string", "description": "Path to the file to edit (relative or absolute)"},
 		"edits": {
 			"type": "array",
-			"description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+			"description": "One or more targeted replacements, each matched against the original file (not incrementally). Must not overlap or nest; merge edits that touch the same or nearby lines instead.",
 			"items": {
 				"type": "object",
 				"properties": {
-					"oldText": {"type": "string", "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."},
-					"newText": {"type": "string", "description": "Replacement text for this targeted edit."}
+					"oldText": {"type": "string", "description": "Exact text for one replacement; unique in the file and non-overlapping with the other edits[].oldText."},
+					"newText": {"type": "string", "description": "Replacement text for this edit."}
 				},
 				"required": ["oldText", "newText"]
 			}
@@ -32,7 +32,12 @@ var editParameters = json.RawMessage(`{
 	"required": ["path", "edits"]
 }`)
 
-const editDescription = "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes."
+// editDescription stays short: edits[]'s own schema description already
+// carries the uniqueness/overlap rule, so the top-level description
+// doesn't repeat it - that repetition used to cost tokens on every turn
+// for no new information (see the budget cleanup this comment's commit
+// belongs to).
+const editDescription = "Edit a single file using exact text replacement; see edits[] for how each replacement must be structured."
 
 type editOneArgs struct {
 	OldText string `json:"oldText"`

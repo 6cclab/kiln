@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/andrepato/harness/internal/claude/paths"
@@ -132,5 +133,35 @@ func LoadSkills(cwd string) []Skill {
 	for _, name := range order {
 		out = append(out, byName[name])
 	}
+	return out
+}
+
+// scopeIndexWeight ranks a skill's scope for OrderForIndex: project (and
+// its local override) first, then the person's own user-scope skills,
+// then everything else (plugin skills - installed by the person, but
+// authored by someone else, and the largest source of catalog bulk in
+// practice: a handful of enabled plugins routinely contribute more
+// skills than a project and its user ever do).
+func scopeIndexWeight(s paths.Scope) int {
+	switch s {
+	case paths.ScopeProject, paths.ScopeLocal:
+		return 0
+	case paths.ScopeUser:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// OrderForIndex orders skills project/local first, user next, plugin
+// last, stable within each group. This is the priority a budgeted
+// model-visible listing keeps when not everything fits: the skills the
+// person wrote for this project or for themselves survive truncation
+// before the ones that came bundled with a plugin they merely enabled.
+func OrderForIndex(list []Skill) []Skill {
+	out := append([]Skill(nil), list...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return scopeIndexWeight(out[i].Scope) < scopeIndexWeight(out[j].Scope)
+	})
 	return out
 }

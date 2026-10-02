@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -217,34 +218,169 @@ func escapeXML(v string) string {
 	return v
 }
 
-// formatSkillsIndex renders the loaded skills as pi-agent-core's
-// formatSkillsForSystemPrompt does (dist/harness/system-prompt.js):
-// name/description/location per skill, inside <available_skills>.
+// skillIndexEntry renders one skill's <skill> block. An empty
+// description omits the <description> line entirely: formatSkillsIndex's
+// "names only" fallback, for when even a one-line description cannot fit
+// the remaining budget.
+func skillIndexEntry(s skills.Skill, description string) []string {
+	lines := []string{
+		"  <skill>",
+		fmt.Sprintf("    <name>%s</name>", escapeXML(s.Name)),
+	}
+	if description != "" {
+		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapeXML(description)))
+	}
+	lines = append(lines,
+		fmt.Sprintf("    <location>%s</location>", escapeXML(s.FilePath)),
+		"  </skill>",
+	)
+	return lines
+}
+
+// estimateTextTokens is the same chars/4 heuristic used throughout this
+// port (internal/claude/memory's own estimate, internal/compaction's
+// EstimateTokens): rough, budgeting-only, never reported as exact.
+func estimateTextTokens(s string) int {
+	if s == "" {
+		return 0
+	}
+	return (len(s) + 3) / 4
+}
+
+func linesTokens(lines []string) int {
+	return estimateTextTokens(strings.Join(lines, "\n"))
+}
+
+// minDescriptionTokens is the floor below which a truncated description
+// is judged not worth keeping over the bare (name + location) entry: a
+// handful of characters of ellipsis-truncated description reads as noise,
+// not a usable discovery hint.
+const minDescriptionTokens = 5
+
+// skillsListingPointer is appended when some skills could not fit the
+// listing even bare (name + location only): never dropped outright, only
+// unlisted here - the model can still invoke one of them by its exact
+// name through the skill tool, and this line says so, the same promise
+// internal/claude/memory's rule index makes for CLAUDE.md rules that
+// don't fit their own budget.
+func skillsListingPointer(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return fmt.Sprintf("  <!-- %s not listed here for space; invoke any of them by exact name with the skill tool: %s -->",
+		plural.Count(len(names), "more skill"), strings.Join(names, ", "))
+}
+
+// formatSkillsIndex renders the loaded skills as a Go port of the
+// equivalent catalog Claude Code injects into the conversation for its
+// own Skill tool: name/description/location per skill, inside
+// <available_skills>, budgeted against budgetTokens (the tier's
+// SkillsListingTokens - internal/budget, 1% of the context window,
+// matching the share observed there).
+//
+// Priority order when not everything fits is skills.OrderForIndex's:
+// project/local skills first, then the user's own, then plugin skills
+// last — plugins are routinely the largest source of catalog bulk (a
+// handful of enabled plugins can contribute more skills than a project
+// and its user combined) and the skills a person did not author
+// themselves are the ones this index gives up first.
+//
+// Truncation happens in two stages, same order Claude Code's own listing
+// budget uses: first every description is held at full length; if that
+// doesn't fit, descriptions shrink (truncated with an ellipsis) until
+// they do; if a description would shrink below minDescriptionTokens, every
+// entry instead goes bare (name + location, no description) rather than
+// print noise. Only if even every entry bare still doesn't fit does a
+// skill get left off the listing — in priority order, least-priority
+// first — and even then it is never silently lost: skillsListingPointer
+// names it.
 //
 // Deviation: pi's Skill carries disableModelInvocation and filters on it;
 // this port's claude/skills.Skill has no such field (it only tracks
 // UserInvocable, which controls slash-command exposure, a different
 // question — see skills.go's doc comment). Every loaded skill is indexed
 // here; nothing is hidden from the model for lack of that field.
-func formatSkillsIndex(list []skills.Skill) string {
+func formatSkillsIndex(list []skills.Skill, budgetTokens int) string {
 	if len(list) == 0 {
 		return ""
 	}
-	lines := []string{
+	ordered := skills.OrderForIndex(list)
+
+	header := []string{
 		"The following skills provide specialized instructions for specific tasks.",
 		"Read the full skill file when the task matches its description.",
 		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool slashcommands.",
 		"",
 		"<available_skills>",
 	}
-	for _, s := range list {
-		lines = append(lines,
-			"  <skill>",
-			fmt.Sprintf("    <name>%s</name>", escapeXML(s.Name)),
-			fmt.Sprintf("    <description>%s</description>", escapeXML(s.Description)),
-			fmt.Sprintf("    <location>%s</location>", escapeXML(s.FilePath)),
-			"  </skill>",
-		)
+
+	full := make([][]string, len(ordered))
+	bare := make([][]string, len(ordered))
+	fullTok := make([]int, len(ordered))
+	bareTok := make([]int, len(ordered))
+	fullTotal, bareTotal := 0, 0
+	for i, s := range ordered {
+		full[i] = skillIndexEntry(s, s.Description)
+		bare[i] = skillIndexEntry(s, "")
+		fullTok[i] = linesTokens(full[i])
+		bareTok[i] = linesTokens(bare[i])
+		fullTotal += fullTok[i]
+		bareTotal += bareTok[i]
+	}
+
+	var body [][]string
+	var overflow []string
+
+	switch {
+	case budgetTokens <= 0 || fullTotal <= budgetTokens:
+		// Everything fits with full descriptions: no change.
+		body = full
+
+	case bareTotal > budgetTokens:
+		// Even the bare form doesn't fit for everyone: keep as many as the
+		// budget allows, in priority order; the rest are named in the
+		// trailing pointer line instead of silently disappearing.
+		used := 0
+		for i := range ordered {
+			if used+bareTok[i] > budgetTokens {
+				overflow = append(overflow, ordered[i].Name)
+				continue
+			}
+			used += bareTok[i]
+			body = append(body, bare[i])
+		}
+
+	default:
+		// Every skill fits bare; the room left over is split evenly across
+		// descriptions, each truncated to fit. Below minDescriptionTokens
+		// per entry, truncation stops helping - fall back to bare instead.
+		remaining := budgetTokens - bareTotal
+		perEntry := remaining / len(ordered)
+		if perEntry < minDescriptionTokens {
+			body = bare
+		} else {
+			maxChars := perEntry * 4
+			for _, s := range ordered {
+				desc := s.Description
+				if len(desc) > maxChars {
+					cut := maxChars - 1
+					if cut < 0 {
+						cut = 0
+					}
+					desc = strings.TrimRight(desc[:cut], " \t") + "…"
+				}
+				body = append(body, skillIndexEntry(s, desc))
+			}
+		}
+	}
+
+	lines := append([]string{}, header...)
+	for _, e := range body {
+		lines = append(lines, e...)
+	}
+	if p := skillsListingPointer(overflow); p != "" {
+		lines = append(lines, p)
 	}
 	lines = append(lines, "</available_skills>")
 	return strings.Join(lines, "\n")
@@ -519,7 +655,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 	}
 	allSkills := append(append([]skills.Skill{}, skillList...), pluginSkills...)
-	skillsIndex := formatSkillsIndex(allSkills)
+	skillsIndex := formatSkillsIndex(allSkills, resolved.Tier.SkillsListingTokens)
 
 	// The `skill` tool's catalog: every project/user/plugin skill except
 	// ones marked disable-model-invocation:true (deliverable 3 —

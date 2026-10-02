@@ -18,12 +18,6 @@ import (
 	"github.com/andrepato/harness/internal/tool"
 )
 
-// descriptionTruncateLen bounds each listed skill's description in the
-// tool's own description, which is sent on every turn: a handful of
-// verbose skills must not blow up the fixed cost of having the tool
-// available at all.
-const descriptionTruncateLen = 200
-
 // SkillRecord is one skill the `skill` tool can invoke: already
 // qualified (project/user skills keep their bare name; plugin skills are
 // "<plugin>:<name>" — see internal/claude/plugins.Skills), and already
@@ -43,7 +37,7 @@ type SkillRecord struct {
 var skillParameters = json.RawMessage(`{
 	"type": "object",
 	"properties": {
-		"skill": {"type": "string", "description": "The skill's name, exactly as listed in this tool's description."},
+		"skill": {"type": "string", "description": "The skill's name, exactly as listed in the system prompt's <available_skills> index."},
 		"args": {"type": "string", "description": "Optional further instructions for the skill."}
 	},
 	"required": ["skill"]
@@ -54,12 +48,18 @@ type skillArgs struct {
 	Args  string `json:"args"`
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
+// skillToolDescription is fixed, generic text: it names no skill. The
+// catalog (every skill's name, description and location) is carried
+// exactly once, in the system prompt's <available_skills> index
+// (internal/cli/chat.go's formatSkillsIndex) — paying for it again here,
+// per skill, on every turn, would double its cost for no new
+// information. This tool's own cost stays flat regardless of how many
+// skills are installed.
+const skillToolDescription = `Invoke a named skill by its exact name to read its full instructions and act on them. Pass the skill name and, optionally, further instructions for it.
+
+Available skills are listed in the system prompt's <available_skills> index. When a skill there matches the task, invoke it with this tool before doing the task any other way.
+
+Invoking an unknown or unlisted name returns an error naming what is available; a skill omitted from the index for space is still invocable here by its exact name.`
 
 // SkillTool builds the `skill` tool from the already-resolved,
 // already-filtered set of model-invocable skills for this session
@@ -79,21 +79,10 @@ func SkillTool(records []SkillRecord) *tool.Tool {
 	}
 	sort.Strings(names)
 
-	var desc strings.Builder
-	desc.WriteString("Invoke a named skill to read its full instructions. Pass the skill name and, optionally, further instructions for it.\n\n")
-	if len(names) == 0 {
-		desc.WriteString("No skills are currently available.")
-	} else {
-		desc.WriteString("Available skills:\n")
-		for _, name := range names {
-			desc.WriteString(fmt.Sprintf("- %s: %s\n", name, truncate(byName[name].Description, descriptionTruncateLen)))
-		}
-	}
-
 	return &tool.Tool{
 		Name:        "skill",
 		Label:       "Skill",
-		Description: desc.String(),
+		Description: skillToolDescription,
 		Parameters:  skillParameters,
 		Execute: func(ctx context.Context, raw json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
 			var a skillArgs
