@@ -12,6 +12,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/tool"
 )
 
@@ -51,6 +52,15 @@ type Request struct {
 	// answer saves, one per command still needing approval
 	// (settings.BashDontAskRules). Set only on a grantable bash request.
 	DontAskRules []string
+	// CallID is the tool call's id, and History returns the conversation
+	// so far; both feed auto mode's classifier (classifier.go) and are
+	// read only when it runs. Either may be empty.
+	CallID  string
+	History func() []msg.Message
+	// AutoModeNote is set by the gate on a prompt auto mode raised instead
+	// of deciding itself (the classifier failed, or blocked too often): why
+	// the user is being asked. A UI shows it with the prompt.
+	AutoModeNote string
 }
 
 // Prompter asks the user. Implemented by the TUI; absent in headless runs.
@@ -120,6 +130,9 @@ type GateOptions struct {
 	// adds the rule to its own set either way. Errors are the caller's to
 	// report.
 	SaveRule func(rule string)
+	// Classifier judges what auto mode would otherwise allow
+	// (classifier.go). Nil makes auto mode ask instead; it never allows.
+	Classifier Classifier
 }
 
 // Gate is the permission gate for tool calls: pi's before_tool hook.
@@ -173,6 +186,11 @@ type Gate struct {
 	// planLedgerPath mirrors GateOptions.PlanLedgerPath; see its doc
 	// comment.
 	planLedgerPath string
+
+	// classifier and auto are auto mode's classifier and its block counts
+	// (classifier.go), guarded by mu.
+	classifier Classifier
+	auto       autoState
 }
 
 // NewGate builds a Gate. Roots are resolved to absolute paths and
@@ -184,6 +202,7 @@ func NewGate(opts GateOptions) *Gate {
 		prompter:      opts.Prompt,
 		sessionAllows: map[string]bool{},
 		saveRule:      opts.SaveRule,
+		classifier:    opts.Classifier,
 	}
 	if opts.PlanLedgerPath != "" {
 		if full, err := filepath.Abs(opts.PlanLedgerPath); err == nil {
@@ -685,6 +704,17 @@ func (g *Gate) Check(ctx context.Context, req Request) (*BlockResult, error) {
 // internal/cli/chat.go) that wants to report "approved"/"auto-approved" on
 // the tool block that follows.
 func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult, Outcome, error) {
+	r, out, err := g.checkWithOutcome(ctx, req)
+	// In auto mode, any call that goes ahead — classified, fast-pathed,
+	// rule-allowed or approved at a prompt — ends a run of classifier
+	// blocks (classifier.go).
+	if r == nil && err == nil && g.Mode() == settings.ModeAuto {
+		g.autoSucceeded()
+	}
+	return r, out, err
+}
+
+func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult, Outcome, error) {
 	k := key(req.ToolName, req.PrimaryArg)
 
 	g.mu.Lock()
@@ -801,6 +831,22 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		return nil, OutcomeApproved, nil
 	}
 
+	// Auto mode: what rules and the boundary leave allowed goes past the
+	// classifier, unless it is a call auto mode never classifies
+	// (classifier.go). When the classifier cannot decide, or has blocked
+	// too often, the call takes the ask path below, with a note saying why.
+	autoNote := ""
+	if verdict == settings.Allow && mode == settings.ModeAuto && !g.autoSkipsClassifier(req, hits) {
+		r, out, note, err := g.classifyAuto(ctx, req)
+		if err != nil {
+			return nil, OutcomeNone, err
+		}
+		if r != nil || out != OutcomeNone {
+			return r, out, nil
+		}
+		verdict, autoNote = settings.Ask, note
+	}
+
 	if verdict == settings.Allow {
 		// Read-only tools (settings.ReadOnly) are never gated in any mode —
 		// nothing to report. Anything else that reached Allow without
@@ -829,7 +875,11 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		// Headless with no way to ask. Refusing beats proceeding: an
 		// unattended run must not silently take an action the policy said
 		// required confirmation.
-		r := g.record(req, "requires confirmation and no prompt is available.")
+		reason := "requires confirmation and no prompt is available."
+		if autoNote != "" {
+			reason = autoNote + " " + reason
+		}
+		r := g.record(req, reason)
 		return &r, OutcomeNone, nil
 	}
 
@@ -850,6 +900,7 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 	}
 	promptReq := g.promptRequest(req, permissions, mode, grantable)
+	promptReq.AutoModeNote = autoNote
 	choice, err := g.prompter(ctx, promptReq)
 	if err != nil {
 		return nil, OutcomeNone, err

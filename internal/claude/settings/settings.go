@@ -658,8 +658,10 @@ func decideRules(h Hits, toolName, primaryArg string, mode PermissionMode) Decis
 		}
 		return Ask
 	case ModeAuto:
-		// Blanket allow, still subject to deny rules above and to the
-		// workspace boundary enforced separately by the gate.
+		// Allow as far as rules go, still subject to deny and ask rules
+		// above. The gate then applies the workspace boundary and sends
+		// what is left past the auto mode classifier
+		// (internal/claude/permission/classifier.go).
 		return Allow
 	case ModeManual:
 		// Read-only tools never prompt, as Claude Code's Read/Glob/Grep
