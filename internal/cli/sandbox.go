@@ -43,6 +43,7 @@ func startSandbox(cwd string, s claudesettings.Settings, perms claudesettings.Pe
 	}
 	gate.SetSandbox(m)
 	env.Sandbox = m
+	setGitSandbox(m.Always())
 	m.SetNetworkDecider(gate.ApproveNetwork, gate.SaveNetworkRule)
 	return m, nil
 }

@@ -145,6 +145,11 @@ func seatbeltProfile(p Plan) (string, error) {
 			`(literal "/dev/null")`, `(literal "/dev/zero")`, `(literal "/dev/dtracehelper")`,
 			`(literal "/dev/stdout")`, `(literal "/dev/stderr")`, `(regex #"^/dev/fd/")`)
 		w("(allow file-write* %s)", strings.Join(allow, " "))
+		for _, g := range p.GitDirs {
+			for _, rule := range gitDirRules(g) {
+				w("%s", rule)
+			}
+		}
 		var deny []string
 		for _, r := range p.DenyWrite {
 			deny = append(deny, matchers(r, true)...)

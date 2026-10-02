@@ -31,6 +31,10 @@ type Plan struct {
 	DenyRead         []Rule
 	AllowRead        []Rule
 	TmpDir           string
+	// GitDirs are the git directories inside the writable roots (each
+	// root's .git, a linked worktree's): only what git itself writes may
+	// be written there (seatbelt.go gitDirRules; Linux: sweepGitDirs).
+	GitDirs []string
 	// Placeholders are empty read-only files kiln created (Linux) where a
 	// protected path did not exist yet, so it cannot be created.
 	Placeholders []string
@@ -87,6 +91,13 @@ func buildPlan(cfg Config, cwd string, roots []string, tmpDir, home string, http
 	gitDirs := worktreeGitDirs(cwd)
 	writable = append(writable, gitDirs...)
 	p.WriteRoots = dedupe(writable)
+	var gds []string
+	for _, r := range roots {
+		if g := filepath.Join(r, ".git"); isDir(g) {
+			gds = append(gds, g)
+		}
+	}
+	p.GitDirs = dedupe(append(gds, gitDirs...))
 
 	p.DenyWrite = append([]Rule(nil), cfg.DenyWrite...)
 	prot, literal := protectedPaths(roots, home, gitDirs)
@@ -136,16 +147,25 @@ var claudeConfigEntries = []string{
 //   - in each workspace root and every directory above it: the .claude
 //     settings files and its skills, agents, commands, hooks and workflows,
 //     .mcp.json, and kiln's .kiln directory;
+//   - the same at any depth inside a workspace root (a nested project's
+//     .claude, .mcp.json, .kiln and .git/hooks), as kiln trusts a folder's
+//     subdirectories with it (macOS: by pattern; Linux binds paths that
+//     exist, so it holds the ones in the roots and their parents);
 //   - in each workspace root: shell startup files, .gitconfig, .vscode,
-//     .idea, and .git's hooks and config;
+//     .idea, and in its git directory what git reads code or redirection
+//     from (gitDirProtections);
 //   - files that would turn a workspace root into a bare git repository:
 //     HEAD, objects and refs at the top level, config unless it is a
 //     directory with no HEAD beside it, and hooks when a HEAD exists;
-//   - ~/.claude, ~/.claude.json, and kiln's own ~/.kiln and ~/.harness;
-//   - a linked worktree's shared git directory's hooks and config.
+//   - in the home directory, whatever the roots: ~/.claude, ~/.claude.json,
+//     kiln's ~/.kiln and ~/.harness, shell startup files, and the places
+//     that start programs at login (~/Library/LaunchAgents,
+//     ~/.config/autostart, ~/.config/systemd), so a home directory added
+//     as a workspace root does not open them;
+//   - a linked worktree's git directories.
 //
-// literal lists the directories whose own entry is held (.claude, .kiln,
-// .git, .vscode, .idea), so one cannot be renamed away and replaced.
+// literal lists the directories whose own entry is held (.claude, .git),
+// so one cannot be renamed away and replaced.
 func protectedPaths(roots []string, home string, gitDirs []string) (rules []Rule, literal []string) {
 	add := func(p string) { rules = append(rules, Rule{Path: p}) }
 	seen := map[string]bool{}
@@ -163,6 +183,15 @@ func protectedPaths(roots []string, home string, gitDirs []string) (rules []Rule
 			if d == filepath.Dir(d) {
 				break
 			}
+		}
+		for _, e := range claudeConfigEntries {
+			rules = append(rules, Rule{Path: root, Segs: []string{"**", ".claude", e}})
+		}
+		for _, e := range []string{".mcp.json", ".kiln"} {
+			rules = append(rules, Rule{Path: root, Segs: []string{"**", e}})
+		}
+		for _, s := range gitSensitive {
+			rules = append(rules, Rule{Path: root, Segs: []string{"**", ".git", s}})
 		}
 		for _, f := range shellStartupFiles {
 			add(filepath.Join(root, f))
@@ -190,10 +219,13 @@ func protectedPaths(roots []string, home string, gitDirs []string) (rules []Rule
 		}
 	}
 	if home != "" {
-		add(filepath.Join(home, ".claude"))
-		add(filepath.Join(home, ".claude.json"))
-		add(filepath.Join(home, ".kiln"))
-		add(filepath.Join(home, ".harness"))
+		for _, p := range []string{".claude", ".claude.json", ".kiln", ".harness",
+			filepath.Join("Library", "LaunchAgents"), filepath.Join(".config", "autostart"), filepath.Join(".config", "systemd")} {
+			add(filepath.Join(home, p))
+		}
+		for _, f := range shellStartupFiles {
+			add(filepath.Join(home, f))
+		}
 	}
 	for _, g := range gitDirs {
 		rules = append(rules, gitDirProtections(g)...)
@@ -201,34 +233,44 @@ func protectedPaths(roots []string, home string, gitDirs []string) (rules []Rule
 	return rules, dedupe(literal)
 }
 
-// gitDirProtections holds what git reads code from in a git directory:
-// its hooks, config and config.worktree, and the same in every nested git
-// directory under it — submodules' (modules/<name>) and linked worktrees'
-// (worktrees/<name>). A submodule's config is reached by git commands kiln
-// and the user run outside the sandbox (git status runs its
-// core.fsmonitor), so it is as sensitive as the top-level one.
-//
-// The wildcard rules cover nested directories created later (macOS); the
-// ones that exist now are also listed by path, for Linux, whose sandbox
-// binds concrete paths only.
+// gitSensitive are the entries of a git directory git reads code or
+// redirection from: hooks; config and config.worktree (core.fsmonitor,
+// filters, hooksPath); commondir and gitdir, which point git at another
+// directory's hooks and config; info (attributes select filters).
+var gitSensitive = []string{"hooks", "config", "config.worktree", "commondir", "gitdir", "info"}
+
+// gitDirProtections lists, for a git directory and every git directory
+// nested in it now (submodules under modules/, linked worktrees under
+// worktrees/), the gitSensitive entries. On macOS the whole git directory
+// is deny-by-default anyway (seatbelt.go, gitWritable); these paths are
+// what Linux binds read-only, with sweepGitDirs removing any created
+// during a command.
 func gitDirProtections(gitdir string) []Rule {
-	sensitive := []string{"hooks", "config", "config.worktree"}
 	var out []Rule
-	for _, s := range sensitive {
-		out = append(out, Rule{Path: filepath.Join(gitdir, s)})
-		for _, nested := range []string{"modules", "worktrees"} {
-			out = append(out, Rule{Path: filepath.Join(gitdir, nested), Segs: []string{"**", s}})
+	for _, g := range nestedGitDirs(gitdir) {
+		for _, s := range gitSensitive {
+			out = append(out, Rule{Path: filepath.Join(g, s)})
 		}
 	}
+	return out
+}
+
+// nestedGitDirs returns gitdir and the git directories under its modules/
+// and worktrees/ (directories holding a HEAD), not descending into objects,
+// refs or logs.
+func nestedGitDirs(gitdir string) []string {
+	out := []string{gitdir}
 	for _, nested := range []string{"modules", "worktrees"} {
 		_ = filepath.WalkDir(filepath.Join(gitdir, nested), func(p string, d os.DirEntry, err error) error {
 			if err != nil || !d.IsDir() {
 				return nil
 			}
+			switch d.Name() {
+			case "objects", "refs", "logs", "hooks", "info":
+				return filepath.SkipDir
+			}
 			if _, err := os.Lstat(filepath.Join(p, "HEAD")); err == nil {
-				for _, s := range sensitive {
-					out = append(out, Rule{Path: filepath.Join(p, s)})
-				}
+				out = append(out, p)
 			}
 			return nil
 		})
