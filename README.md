@@ -136,25 +136,24 @@ credential wins over an environment variable for the same provider.
 ## `.claude/` compatibility
 
 kiln reads your existing Claude Code configuration exactly as Claude Code
-does, but never writes any of `~/.claude`, `<repo>/.claude`, `~/.claude.json`
-or `<repo>/.mcp.json`. Everything kiln itself saves goes under `.kiln`
-instead - `~/.kiln` for user-scope state, `<repo>/.kiln` for project/local
-state - and each kiln file joins the Claude Code hierarchy at the same scope,
-winning for a single value (model) and adding to a list (permission rules,
-MCP servers). A `.kiln` directory kiln creates gets a `.gitignore` that
-ignores everything except `mcp.json`, which (like Claude Code's `.mcp.json`)
-is meant to be committed.
+does. For its own settings it never writes `~/.claude` or `<repo>/.claude` -
+that goes under `.kiln` instead (`~/.kiln` for user-scope state, `<repo>/.kiln`
+for project/local state), joining the Claude Code hierarchy at the same
+scope and winning for a single value (model). MCP is the one deliberate
+exception: `kiln mcp add`/`add-json`/`remove` write the *same* files
+`claude mcp add` does (`~/.claude.json`, `.mcp.json`) - kiln has no MCP file
+of its own, so a server either tool adds is one set, usable by both.
 
 | kiln writes | From | Mirrors |
 |---|---|---|
 | `<repo>/.kiln/settings.local.json` | `/permissions`, "don't ask again" | `.claude/settings.local.json` |
 | `~/.kiln/settings.json` | `/model`'s default | `~/.claude/settings.json` |
-| `~/.kiln/CLAUDE.md` | a `#note`, and `/memory user`, when the project has no `CLAUDE.md` | `~/.claude/CLAUDE.md` |
-| `~/.kiln/mcp.json` | `kiln mcp add -s user\|local` | `~/.claude.json`'s top-level `mcpServers` / `projects[<dir>].mcpServers` |
-| `<repo>/.kiln/mcp.json` | `kiln mcp add -s project` | `.mcp.json` |
 
 A git-tracked or symlinked `<repo>/.kiln/settings.local.json` is held until
-the folder is trusted - only its deny/ask rules apply until then.
+the folder is trusted - only its deny/ask rules apply until then. kiln has
+no writable memory or auto-memory store of its own (open item - see
+`docs/claude-code-parity.md`'s divergence #7); `/memory` only opens Claude
+Code's own `CLAUDE.md` files in your editor.
 
 | Asset read (never written) | Behavior |
 |---|---|
@@ -162,11 +161,15 @@ the folder is trusted - only its deny/ask rules apply until then.
 | `.claude/commands/*.md` | slash commands; nested dirs become `namespace:command` |
 | `CLAUDE.md`, `@imports`, `.claude/rules/*.md` | system prompt, budgeted against the tier |
 | `.claude/settings.json` | permissions, merged `user` → `project` → `local` |
-| `~/.claude.json`, `.mcp.json` | MCP servers, merged with kiln's own `mcp.json` files (same-scope kiln entry wins) |
+| `~/.claude/projects/<project>/memory/MEMORY.md` | Claude Code's auto memory, read-only |
 | `.claude/agents/*.md` | subagents, dispatched with the `task` tool |
 | `.claude/settings.json` `modelRoles` | model roles for `task` dispatch (fast/structured/heavy → provider/model) |
 | `~/.claude/keybindings.json` | editor key overrides; conflicts reported at startup |
 | `.claude/settings.json` `hooks` | `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `SubagentStop`, `Notification`, `PreCompact` |
+
+| kiln and Claude Code share (written by either) | Behavior |
+|---|---|
+| `~/.claude.json`, `.mcp.json` | MCP servers; `kiln mcp add -s local\|user` writes `~/.claude.json`, `-s project` writes `.mcp.json` |
 
 A `PreToolUse` hook may rewrite a command before it runs. Hooks are applied
 **before** the permission gate, so the gate judges what will actually execute

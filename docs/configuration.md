@@ -476,31 +476,27 @@ A plugin's install directory (`installPath`, `${CLAUDE_PLUGIN_ROOT}` in its own 
 
 ### Config files
 
-Three Claude Code scopes, read exactly as `claude mcp` writes them, plus
-kiln's own files for the same three scopes (`internal/mcp/config.go`'s
-`Resolve`); kiln never writes `~/.claude.json` or `.mcp.json` (see
-`docs/claude-code-parity.md`'s divergence #7):
+Three scopes, the same ones `claude mcp add --scope` uses, and kiln writes
+and reads the identical files - kiln has no MCP config file of its own (see
+`docs/claude-code-parity.md`'s divergence #7: settings are `.kiln`, MCP is
+shared):
 
-| Scope | Claude Code's file | kiln's own file |
-|---|---|---|
-| `user` | `~/.claude.json`, top-level `mcpServers` | `~/.kiln/mcp.json`, top-level `mcpServers` |
-| `local` | `~/.claude.json`, `projects[<abs project dir>].mcpServers` | `~/.kiln/mcp.json`, `projects[<abs project dir>].mcpServers` |
-| `project` | `<repo>/.mcp.json` (nearest ancestor up to the repo root), gated on folder trust | `<repo>/.kiln/mcp.json`, gated on the same folder trust |
+| Scope | File |
+|---|---|
+| `user` | `~/.claude.json`, top-level `mcpServers` |
+| `local` (default) | `~/.claude.json`, `projects[<abs project dir>].mcpServers` |
+| `project` | `<repo>/.mcp.json` (nearest ancestor up to the repo root), gated on folder trust |
 
-`kiln mcp add [-s local\|project\|user]` (default `local`) and
-`kiln mcp add-json` write only to kiln's own file for that scope;
-`kiln mcp remove` only ever deletes from a kiln file — a name configured
-only in a Claude Code file is refused, naming that file, rather than
-silently doing nothing or guessing which scope to touch. `kiln mcp
-list`/`get` show both Claude Code's and kiln's entries, each labelled with
-the file it came from.
+`kiln mcp add [-s local\|project\|user]`, `kiln mcp add-json` and
+`kiln mcp remove` write exactly what `claude mcp` does, so a server either
+tool adds works in both, and either tool's `remove` deletes it for both
+(`internal/mcp/config_write.go`'s `AddServer`/`RemoveServer`, a raw
+pass-through that preserves every other key, written atomically and
+keeping the file's permissions).
 
 Precedence on a name clash: `--mcp-config`, then local, then project, then
-user; within a scope, a kiln entry wins over a Claude Code entry of the same
-name (kiln's own files are read after, and simply replace before cross-scope
-shadowing runs). A read/parse failure or missing file returns an empty
-server map for that file rather than erroring — a broken config never
-blocks startup.
+user. A read/parse failure or missing file returns an empty server map
+rather than erroring — a broken config never blocks startup.
 
 Server entry (one struct covers both transports):
 
