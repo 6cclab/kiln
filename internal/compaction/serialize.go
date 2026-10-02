@@ -40,6 +40,13 @@ func sortedArgKeys(args map[string]any) []string {
 // is a system/user/assistant/toolResult message. System messages are
 // skipped, matching pi's switch (which has no "system" case).
 func SerializeConversation(messages []msg.Message) string {
+	return strings.Join(serializeParts(messages), "\n\n")
+}
+
+// serializeParts is SerializeConversation before the final join: one
+// string per "[Role]: ..." block, the unit a summary request is split on
+// (fit.go).
+func serializeParts(messages []msg.Message) []string {
 	var parts []string
 	for _, m := range messages {
 		switch t := m.(type) {
@@ -80,5 +87,5 @@ func SerializeConversation(messages []msg.Message) string {
 			}
 		}
 	}
-	return strings.Join(parts, "\n\n")
+	return parts
 }

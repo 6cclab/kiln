@@ -168,6 +168,12 @@ func maxTokensFor(fraction float64, reserveTokens int, modelMaxTokens int) int {
 // pi's completeSimpleWithRetries + retryAssistantCall: no retry policy, no
 // telemetry context, since neither exists on this side of the port yet.
 func runSimple(ctx context.Context, streamer Streamer, model provider.Model, systemPrompt, userText string, maxTokens int, thinkingLevel provider.ThinkingLevel) (string, msg.Usage, error) {
+	return runSimpleWatched(ctx, streamer, model, systemPrompt, userText, maxTokens, thinkingLevel, Options{}, 1, 1)
+}
+
+// runSimpleEach is runSimple's body, calling onEvent for every streamed
+// event.
+func runSimpleEach(ctx context.Context, streamer Streamer, model provider.Model, systemPrompt, userText string, maxTokens int, thinkingLevel provider.ThinkingLevel, onEvent func(msg.StreamEvent)) (string, msg.Usage, error) {
 	opts := provider.StreamOptions{SystemPrompt: systemPrompt, MaxTokens: maxTokens}
 	if model.Reasoning && thinkingLevel != "" && thinkingLevel != provider.ThinkingOff {
 		opts.ThinkingLevel = thinkingLevel
@@ -176,8 +182,10 @@ func runSimple(ctx context.Context, streamer Streamer, model provider.Model, sys
 		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(userText)}, Timestamp: time.Now().UnixMilli()},
 	}
 	ch, wait := streamer.Stream(ctx, model, transcript, opts)
-	for range ch {
-		// Drain; Compact only needs the final assistant message.
+	for ev := range ch {
+		// Compact only needs the final assistant message; the events
+		// only feed the watchdog and progress.
+		onEvent(ev)
 	}
 	am, err := wait()
 	if err != nil {
@@ -203,74 +211,91 @@ func runSimple(ctx context.Context, streamer Streamer, model provider.Model, sys
 	return msg.TextOf(am.Content), am.Usage, nil
 }
 
-// generateSummary is pi's generateSummaryWithRequest (harness/compaction/
-// compaction.js), specialized to a Streamer.
-func generateSummary(ctx context.Context, streamer Streamer, model provider.Model, reserveTokens int, customInstructions, previousSummary *string, thinkingLevel provider.ThinkingLevel, currentMessages []msg.Message) (string, msg.Usage, error) {
-	basePrompt := summarizationPrompt
-	if previousSummary != nil {
-		basePrompt = updateSummarizationPrompt
-	}
-	if customInstructions != nil && *customInstructions != "" {
-		basePrompt = basePrompt + "\n\nAdditional focus: " + *customInstructions
-	}
+// turnPrefixUpdatePrompt continues a split turn's prefix summary when the
+// prefix itself is too large for one request (fit.go). kiln's own wording:
+// pi always sends the prefix in one request.
+const turnPrefixUpdatePrompt = `The messages above are the NEXT part of the same turn PREFIX. The summary of its earlier part is in <previous-summary> tags.
 
-	conversationText := SerializeConversation(currentMessages)
-	promptText := "<conversation>\n" + conversationText + "\n</conversation>\n\n"
-	if previousSummary != nil {
-		promptText += "<previous-summary>\n" + *previousSummary + "\n</previous-summary>\n\n"
-	}
-	promptText += basePrompt
+Produce one summary of the whole prefix so far, in the same format:
 
-	maxTokens := maxTokensFor(0.8, reserveTokens, model.MaxTokens)
-	return runSimple(ctx, streamer, model, SummarizationSystemPrompt, promptText, maxTokens, thinkingLevel)
-}
+## Original Request
+[What did the user ask for in this turn?]
 
-// generateTurnPrefixSummary is pi's generateTurnPrefixSummary.
-func generateTurnPrefixSummary(ctx context.Context, streamer Streamer, model provider.Model, reserveTokens int, thinkingLevel provider.ThinkingLevel, messages []msg.Message) (string, msg.Usage, error) {
-	conversationText := SerializeConversation(messages)
-	promptText := "<conversation>\n" + conversationText + "\n</conversation>\n\n" + turnPrefixSummarizationPrompt
-	maxTokens := maxTokensFor(0.5, reserveTokens, model.MaxTokens)
-	return runSimple(ctx, streamer, model, SummarizationSystemPrompt, promptText, maxTokens, thinkingLevel)
-}
+## Early Progress
+- [Key decisions and work done in the prefix]
+
+## Context for Suffix
+- [Information needed to understand the retained recent work]
+
+Be concise. Focus on what's needed to understand the kept suffix.`
 
 // Compact is pi's compactWithRequest (harness/compaction/compaction.js):
 // generate the summary (or, for a split turn, the history summary and the
 // turn-prefix summary, joined), append file-operation tags, and return a
 // Result ready to store as a session.EntryCompaction.
 func Compact(ctx context.Context, prep *Preparation, streamer Streamer, model provider.Model, customInstructions *string, thinkingLevel provider.ThinkingLevel) (Result, error) {
+	return CompactWith(ctx, prep, streamer, model, customInstructions, thinkingLevel, Options{})
+}
+
+// CompactWith is Compact with progress reporting and stall limits. Unlike
+// pi, it never sends a request larger than model's window: history that
+// does not fit one request is summarised in parts (fit.go).
+func CompactWith(ctx context.Context, prep *Preparation, streamer Streamer, model provider.Model, customInstructions *string, thinkingLevel provider.ThinkingLevel, opts Options) (Result, error) {
+	reserve := prep.Settings.ReserveTokens
+	history := summaryRequest{
+		first:     summarizationPrompt,
+		update:    updateSummarizationPrompt,
+		maxOutput: maxTokensFor(0.8, reserve, model.MaxTokens),
+		previous:  prep.PreviousSummary,
+		messages:  prep.MessagesToSummarize,
+	}
+	prefix := summaryRequest{
+		first:     turnPrefixSummarizationPrompt,
+		update:    turnPrefixUpdatePrompt,
+		maxOutput: maxTokensFor(0.5, reserve, model.MaxTokens),
+		messages:  prep.TurnPrefixMessages,
+	}
+	splitTurn := prep.IsSplitTurn && len(prep.TurnPrefixMessages) > 0
+	haveHistory := !splitTurn || len(prep.MessagesToSummarize) > 0
+
+	s := &summarizer{streamer: streamer, model: model, thinking: thinkingLevel, custom: customInstructions, opts: opts}
+	var historyEnds, prefixEnds []int
+	var hFirst, hLater, pFirst, pLater int
+	var err error
+	if haveHistory {
+		if historyEnds, hFirst, hLater, err = history.plan(model, customInstructions); err != nil {
+			return Result{}, err
+		}
+		s.parts += len(historyEnds)
+	}
+	if splitTurn {
+		// pi sends the turn prefix without the custom focus.
+		if prefixEnds, pFirst, pLater, err = prefix.plan(model, nil); err != nil {
+			return Result{}, err
+		}
+		s.parts += len(prefixEnds)
+	}
+
 	var summary string
 	var summaryUsage msg.Usage
-
-	if prep.IsSplitTurn && len(prep.TurnPrefixMessages) > 0 {
-		historyText := "No prior history."
-		var historyUsage msg.Usage
-		haveHistoryUsage := false
-		if len(prep.MessagesToSummarize) > 0 {
-			text, usage, err := generateSummary(ctx, streamer, model, prep.Settings.ReserveTokens, customInstructions, prep.PreviousSummary, thinkingLevel, prep.MessagesToSummarize)
-			if err != nil {
-				return Result{}, err
-			}
-			historyText = text
-			historyUsage = usage
-			haveHistoryUsage = true
-		}
-		prefixText, prefixUsage, err := generateTurnPrefixSummary(ctx, streamer, model, prep.Settings.ReserveTokens, thinkingLevel, prep.TurnPrefixMessages)
+	if haveHistory {
+		text, usage, err := s.run(ctx, history, historyEnds, hFirst, hLater)
 		if err != nil {
 			return Result{}, err
 		}
-		summary = historyText + "\n\n---\n\n**Turn Context (split turn):**\n\n" + prefixText
-		if haveHistoryUsage {
-			summaryUsage = historyUsage.Add(prefixUsage)
-		} else {
-			summaryUsage = prefixUsage
+		summary, summaryUsage = text, usage
+	}
+	if splitTurn {
+		if !haveHistory {
+			summary = "No prior history."
 		}
-	} else {
-		text, usage, err := generateSummary(ctx, streamer, model, prep.Settings.ReserveTokens, customInstructions, prep.PreviousSummary, thinkingLevel, prep.MessagesToSummarize)
+		s.custom = nil
+		prefixText, prefixUsage, err := s.run(ctx, prefix, prefixEnds, pFirst, pLater)
 		if err != nil {
 			return Result{}, err
 		}
-		summary = text
-		summaryUsage = usage
+		summary = summary + "\n\n---\n\n**Turn Context (split turn):**\n\n" + prefixText
+		summaryUsage = summaryUsage.Add(prefixUsage)
 	}
 
 	readFiles, modifiedFiles := ComputeFileLists(prep.FileOps)
