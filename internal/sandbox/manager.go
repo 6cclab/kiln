@@ -173,6 +173,17 @@ func (m *Manager) ForCommand(command string, disable bool) execenv.CommandSandbo
 	return &commandSandbox{m: m}
 }
 
+// Always returns a wrapper that runs a command inside the sandbox whatever
+// excludedCommands says, or nil when the sandbox is not active. kiln uses
+// it for its own git calls on a repository sandboxed commands may have
+// written to.
+func (m *Manager) Always() execenv.CommandSandbox {
+	if m == nil || !m.Active() {
+		return nil
+	}
+	return &commandSandbox{m: m}
+}
+
 // Close stops the proxy and relays.
 func (m *Manager) Close() {
 	if m == nil {
@@ -360,11 +371,16 @@ func (c *commandSandbox) Wrap(shell, command, cwd string) (execenv.Wrapped, erro
 			}
 			bridges = append(bridges, bwrapBridge{Port: port, Socket: sock})
 		}
-		held, release, err := c.m.placeholders(p)
+		held, releaseHeld, err := c.m.placeholders(p)
 		if err != nil {
 			return execenv.Wrapped{}, err
 		}
 		p.Placeholders = held
+		before := snapshotGitDirs(p.GitDirs)
+		release := func() {
+			releaseHeld()
+			sweepGitDirs(p.GitDirs, before)
+		}
 		argv, err := bwrapArgs(p, c.m.bwrap, c.m.socat, shell, command, bridges)
 		if err != nil {
 			release()

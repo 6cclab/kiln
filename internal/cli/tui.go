@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"sort"
 	"strings"
@@ -471,10 +470,9 @@ func readGitStatusAt(ctx context.Context, cwd string) (tui.GitStatus, bool) {
 	if err != nil {
 		return tui.GitStatus{}, false
 	}
-	// Run outside any sandbox on a repository a sandboxed command may have
-	// written to: no fsmonitor command, no descent into submodules (whose
-	// config a command could have changed).
-	porcelain, err := runGit(tctx, cwd, "-c", "core.fsmonitor=false", "status", "--porcelain", "--ignore-submodules=all")
+	// No descent into submodules, whose config a command could have
+	// changed; runGit (gitstatus.go) also keeps git's own commands off.
+	porcelain, err := runGit(tctx, cwd, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		return tui.GitStatus{}, false
 	}
@@ -482,10 +480,7 @@ func readGitStatusAt(ctx context.Context, cwd string) (tui.GitStatus, bool) {
 }
 
 func runGit(ctx context.Context, cwd string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
-	return string(out), err
+	return runKilnGit(ctx, cwd, args...)
 }
 
 // mcpFailureNotice is the one-line, dim aside for servers that did not

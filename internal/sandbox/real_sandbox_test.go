@@ -93,6 +93,11 @@ func (r *realRig) run(command string) (string, int) {
 	if err != nil {
 		r.t.Fatalf("exec %q: %v", command, err)
 	}
+	// A profile sandbox-exec cannot load fails every command, which a test
+	// expecting a refusal would take for one.
+	if strings.Contains(res.Text, "sandbox-exec: ") || strings.Contains(res.Text, "bwrap: ") {
+		r.t.Fatalf("the sandbox itself failed for %q: %s", command, res.Text)
+	}
 	return res.Text, res.ExitCode
 }
 

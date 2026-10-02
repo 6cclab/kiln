@@ -25,6 +25,12 @@ func (m *Manager) placeholders(p Plan) (held []string, release func(), err error
 		if exists(path) || !underAny(path, p.WriteRoots) {
 			continue
 		}
+		// Inside a git directory an empty file is not inert (an empty
+		// commondir points git at the wrong place); sweepGitDirs removes
+		// what appears there instead.
+		if underAny(path, p.GitDirs) {
+			continue
+		}
 		// The first missing component, or the file in the way of one (a
 		// placeholder another command already holds).
 		first := path
