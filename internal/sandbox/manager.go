@@ -204,15 +204,11 @@ func (m *Manager) Close() {
 func (m *Manager) detect() {
 	switch m.opts.GOOS {
 	case "darwin":
-		path, err := m.opts.LookPath("sandbox-exec")
-		if err != nil {
-			if _, statErr := os.Stat("/usr/bin/sandbox-exec"); statErr != nil {
-				m.availErr = errors.New("sandbox-exec was not found")
-				return
-			}
-			path = "/usr/bin/sandbox-exec"
-		}
-		if err := m.probe([]string{path, "-p", "(version 1)(allow default)", "/usr/bin/true"}); err != nil {
+		// Only the system binary: a sandbox-exec earlier on PATH (planted
+		// in a repository's bin directory, say) must neither run with
+		// kiln's profile nor make the probe fail and drop to unsandboxed.
+		// A missing binary fails the probe below.
+		if err := m.probe([]string{seatbeltPath, "-p", "(version 1)(allow default)", "/usr/bin/true"}); err != nil {
 			m.availErr = fmt.Errorf("sandbox-exec does not run here: %v", err)
 			return
 		}
@@ -371,7 +367,7 @@ func (c *commandSandbox) Wrap(shell, command, cwd string) (execenv.Wrapped, erro
 			return execenv.Wrapped{}, err
 		}
 		return execenv.Wrapped{
-			Argv:  []string{"/usr/bin/sandbox-exec", "-p", profile, shell, "-c", command},
+			Argv:  []string{seatbeltPath, "-p", profile, shell, "-c", command},
 			Env:   p.Env,
 			Unset: p.Unset,
 		}, nil

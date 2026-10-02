@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// seatbeltPath is the only sandbox-exec kiln runs; PATH is never searched.
+const seatbeltPath = "/usr/bin/sandbox-exec"
+
 // The macOS sandbox: a Seatbelt profile run through /usr/bin/sandbox-exec.
 //
 // The profile denies everything by default and allows what a shell and
