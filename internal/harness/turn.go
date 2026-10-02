@@ -160,6 +160,10 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	l.invokeBeforeDrive(ctx)
 	firstIteration := true
 	compactFirst := true
+	// overflowRecoveryUsed: this operation has already compacted once
+	// because a request did not fit; it does not loop on it (pi's
+	// overflowRecoveryUsed).
+	overflowRecoveryUsed := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return l.finishAborted(operationID, tip)
@@ -207,12 +211,18 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 			return l.finishFailed(operationID, tip, err)
 		}
 
-		entries, err := l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "oldestFirst"})
+		// The request must fit the model's window: a provider like Ollama
+		// does not refuse an oversized prompt, it truncates it silently.
+		// fitRequest compacts once if it does not fit and refuses to send
+		// one that still does not.
+		var transcript []msg.Message
+		tip, transcript, err = l.fitRequest(ctx, tip, &overflowRecoveryUsed)
 		if err != nil {
+			if ctx.Err() != nil {
+				return l.finishAborted(operationID, tip)
+			}
 			return l.finishFailed(operationID, tip, err)
 		}
-		transcript := entriesToTranscript(entries)
-		transcript = l.invokeTransformContext(ctx, transcript)
 
 		laneStateNow, _ := l.laneState()
 		laneStateWrite, _ := session.SetValue(session.LaneStateValue(l.name), laneStateNow)
@@ -230,6 +240,21 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		l.h.events.Emit(Event{Type: EventMessageStart, Lane: l.name, OperationID: operationID, EntryID: responseEntryID})
 
 		final, err := l.requestWithRetry(ctx, operationID, transcript, cfg)
+		if err != nil && ctx.Err() == nil && !overflowRecoveryUsed && isContextOverflow(err) {
+			// The provider refused a request the estimate said would fit
+			// (chars/4 undercounts dense text). Compact once and resend,
+			// as pi and Claude Code do on an overflow error.
+			overflowRecoveryUsed = true
+			if newTip, compacted := l.compactForOverflow(ctx, tip); compacted {
+				tip = newTip
+				var fitErr error
+				if tip, transcript, fitErr = l.fitRequest(ctx, tip, &overflowRecoveryUsed); fitErr != nil {
+					err = fitErr
+				} else {
+					final, err = l.requestWithRetry(ctx, operationID, transcript, cfg)
+				}
+			}
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return l.finishAborted(operationID, tip)
