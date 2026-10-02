@@ -74,6 +74,10 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 		for _, r := range sortedByDepth(dedupe(ro)) {
 			a = append(a, "--ro-bind", r, r)
 		}
+		// A denied directory becomes an empty tmpfs, made read-only only
+		// after any narrower allowRead inside it is bound back in: bwrap
+		// creates those mount points inside the tmpfs.
+		var remount []string
 		for _, r := range orderedReadRules(p.DenyRead, p.AllowRead) {
 			if r.rule.glob() {
 				continue
@@ -86,10 +90,14 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 			case !r.deny:
 				a = append(a, "--ro-bind", path, path)
 			case isDir(path):
-				a = append(a, "--tmpfs", path, "--remount-ro", path)
+				a = append(a, "--tmpfs", path)
+				remount = append(remount, path)
 			default:
 				a = append(a, "--ro-bind", "/dev/null", path)
 			}
+		}
+		for _, path := range remount {
+			a = append(a, "--remount-ro", path)
 		}
 	}
 

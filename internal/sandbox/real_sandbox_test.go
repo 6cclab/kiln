@@ -1,10 +1,11 @@
-//go:build darwin
+//go:build darwin || linux
 
 package sandbox
 
-// These tests run commands under the real /usr/bin/sandbox-exec with the
-// profile kiln generates, through execenv.Exec exactly as the bash tool
-// does. They need no network: the "internet" is an httptest server on
+// These tests run commands under the real mechanism — /usr/bin/sandbox-exec
+// with the profile kiln generates on macOS, bubblewrap on Linux — through
+// execenv.Exec exactly as the bash tool does. On macOS they always run; on
+// Linux they skip when bwrap or socat is missing. They need no network: the "internet" is an httptest server on
 // loopback, reached through kiln's proxy by an allowlisted name the test
 // resolver maps to it. Every path is under t.TempDir(), including HOME.
 
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +27,7 @@ import (
 	"github.com/andrepato/harness/internal/execenv"
 )
 
-type darwinRig struct {
+type realRig struct {
 	t       *testing.T
 	scratch string // everything lives under here
 	home    string
@@ -35,13 +37,10 @@ type darwinRig struct {
 	env     *execenv.Env
 }
 
-func newDarwinRig(t *testing.T, cfg Config, lookup map[string]string) *darwinRig {
+func newRealRig(t *testing.T, cfg Config, lookup map[string]string) *realRig {
 	t.Helper()
-	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
-		t.Skip("no sandbox-exec")
-	}
 	scratch := t.TempDir()
-	r := &darwinRig{t: t, scratch: scratch,
+	r := &realRig{t: t, scratch: scratch,
 		home:    filepath.Join(scratch, "home"),
 		ws:      filepath.Join(scratch, "ws"),
 		outside: filepath.Join(scratch, "outside"),
@@ -68,6 +67,9 @@ func newDarwinRig(t *testing.T, cfg Config, lookup map[string]string) *darwinRig
 	r.m = New(cfg, opts)
 	t.Cleanup(r.m.Close)
 	if err := r.m.Unavailable(); err != nil {
+		if runtime.GOOS == "linux" {
+			t.Skipf("no Linux sandbox here: %v", err)
+		}
 		t.Fatalf("sandbox unavailable on this Mac: %v", err)
 	}
 	r.env = execenv.New(r.ws)
@@ -77,7 +79,7 @@ func newDarwinRig(t *testing.T, cfg Config, lookup map[string]string) *darwinRig
 
 // run runs command sandboxed (as the bash tool would) and returns its
 // combined output and exit code.
-func (r *darwinRig) run(command string) (string, int) {
+func (r *realRig) run(command string) (string, int) {
 	r.t.Helper()
 	sb := r.m.ForCommand(command, false)
 	if sb == nil {
@@ -101,8 +103,8 @@ func mustNotExist(t *testing.T, p string) {
 	}
 }
 
-func TestDarwinSandboxWrites(t *testing.T) {
-	r := newDarwinRig(t, Config{AllowUnsandboxed: true}, nil)
+func TestRealSandboxWrites(t *testing.T) {
+	r := newRealRig(t, Config{AllowUnsandboxed: true}, nil)
 
 	out, code := r.run("touch inside.txt && echo made")
 	if code != 0 || !strings.Contains(out, "made") {
@@ -113,8 +115,8 @@ func TestDarwinSandboxWrites(t *testing.T) {
 	}
 
 	out, code = r.run("touch " + filepath.Join(r.outside, "x"))
-	if code == 0 || !strings.Contains(out, "Operation not permitted") {
-		t.Errorf("write outside the workspace: exit %d %q, want Operation not permitted", code, out)
+	if code == 0 || !strings.Contains(out, refusedWrite()) {
+		t.Errorf("write outside the workspace: exit %d %q, want %s", code, out, refusedWrite())
 	}
 	mustNotExist(t, filepath.Join(r.outside, "x"))
 
@@ -127,8 +129,8 @@ func TestDarwinSandboxWrites(t *testing.T) {
 
 // A symlink in the workspace pointing outside it does not make its target
 // writable: Seatbelt judges the resolved path.
-func TestDarwinSandboxSymlinkEscape(t *testing.T) {
-	r := newDarwinRig(t, Config{}, nil)
+func TestRealSandboxSymlinkEscape(t *testing.T) {
+	r := newRealRig(t, Config{}, nil)
 	if err := os.Symlink(r.outside, filepath.Join(r.ws, "link")); err != nil {
 		t.Fatal(err)
 	}
@@ -151,8 +153,8 @@ func TestDarwinSandboxSymlinkEscape(t *testing.T) {
 // files included, unless denyRead says otherwise; inside the workspace the
 // protected paths (.git/hooks, .git/config, .claude settings, shell
 // startup files) stay unwritable.
-func TestDarwinSandboxDefaultsHomeAndGit(t *testing.T) {
-	r := newDarwinRig(t, Config{}, nil)
+func TestRealSandboxDefaultsHomeAndGit(t *testing.T) {
+	r := newRealRig(t, Config{}, nil)
 	if err := os.WriteFile(filepath.Join(r.home, ".ssh", "id_test"), []byte("KEY"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -174,15 +176,18 @@ func TestDarwinSandboxDefaultsHomeAndGit(t *testing.T) {
 		{"~/.bashrc", "echo evil >> " + filepath.Join(r.home, ".bashrc"), filepath.Join(r.home, ".bashrc")},
 		{"~/.ssh", "echo evil > " + filepath.Join(r.home, ".ssh", "authorized_keys"), filepath.Join(r.home, ".ssh", "authorized_keys")},
 		{".git/hooks", "echo evil > .git/hooks/pre-commit", filepath.Join(r.ws, ".git", "hooks", "pre-commit")},
-		{".git/hooks, other case", "echo evil > .GIT/HOOKS/post-checkout", filepath.Join(r.ws, ".git", "hooks", "post-checkout")},
+		{".git/hooks, other case (macOS)", "echo evil > .GIT/HOOKS/post-checkout", filepath.Join(r.ws, ".git", "hooks", "post-checkout")},
 		{".claude/settings.json", "mkdir -p .claude; echo '{}' > .claude/settings.json", filepath.Join(r.ws, ".claude", "settings.json")},
-		{".claude/settings.local.json, other case", "echo '{}' > .CLAUDE/SETTINGS.LOCAL.JSON", filepath.Join(r.ws, ".claude", "settings.local.json")},
+		{".claude/settings.local.json, other case (macOS)", "echo '{}' > .CLAUDE/SETTINGS.LOCAL.JSON", filepath.Join(r.ws, ".claude", "settings.local.json")},
 		{".kiln", "mkdir -p .kiln && echo '{}' > .kiln/settings.local.json", filepath.Join(r.ws, ".kiln", "settings.local.json")},
 		{"workspace .bashrc", "echo evil > .bashrc", filepath.Join(r.ws, ".bashrc")},
 		{".mcp.json", "echo '{}' > .mcp.json", filepath.Join(r.ws, ".mcp.json")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if strings.HasSuffix(c.name, "(macOS)") && runtime.GOOS != "darwin" {
+				t.Skip("case-insensitive filesystem only")
+			}
 			out, code := r.run(c.cmd)
 			if code == 0 {
 				t.Errorf("%s: write allowed: %q", c.cmd, out)
@@ -221,8 +226,8 @@ func TestDarwinSandboxDefaultsHomeAndGit(t *testing.T) {
 
 // denyRead blocks a path; allowRead re-opens a narrower one inside it; a
 // narrower denyRead holds inside a broader allowRead.
-func TestDarwinSandboxReadRules(t *testing.T) {
-	scratchHome := func(r *darwinRig, rel, body string) {
+func TestRealSandboxReadRules(t *testing.T) {
+	scratchHome := func(r *realRig, rel, body string) {
 		p := filepath.Join(r.home, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -232,7 +237,7 @@ func TestDarwinSandboxReadRules(t *testing.T) {
 		}
 	}
 	// Built after the rig exists, since the rules name its home.
-	r := newDarwinRig(t, Config{}, nil)
+	r := newRealRig(t, Config{}, nil)
 	r.m.cfg.DenyRead = []Rule{{Path: r.home}, {Path: r.home, Segs: []string{"**", ".env"}}}
 	r.m.cfg.AllowRead = []Rule{{Path: filepath.Join(r.home, "projects")}}
 	scratchHome(r, "secret.txt", "SECRET")
@@ -245,6 +250,9 @@ func TestDarwinSandboxReadRules(t *testing.T) {
 	if out, code := r.run("cat " + filepath.Join(r.home, "projects", "readme.txt")); code != 0 || !strings.Contains(out, "README") {
 		t.Errorf("allowRead ~/projects did not re-open: %d %q", code, out)
 	}
+	if runtime.GOOS != "darwin" {
+		return // wildcard read rules are macOS-only for now (bwrap.go)
+	}
 	if out, code := r.run("cat " + filepath.Join(r.home, "projects", "app", ".env")); code == 0 || strings.Contains(out, "TOKEN") {
 		t.Errorf("wildcard denyRead inside allowRead did not hold: %d %q", code, out)
 	}
@@ -254,7 +262,7 @@ func TestDarwinSandboxReadRules(t *testing.T) {
 // through only allowlisted hosts. The target is a local server, reached
 // by an allowlisted name (and its address allowlisted, as the docs
 // require for a name that resolves to loopback).
-func TestDarwinSandboxNetwork(t *testing.T) {
+func TestRealSandboxNetwork(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, "hello-from-allowed")
 	}))
@@ -271,7 +279,7 @@ func TestDarwinSandboxNetwork(t *testing.T) {
 		AllowedDomains:   []string{"allowed.test", fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("127.0.0.1:%d", tlsPort)},
 		StrictAllowlist:  true,
 	}
-	r := newDarwinRig(t, cfg, map[string]string{"allowed.test": "127.0.0.1", "blocked.test": "127.0.0.1"})
+	r := newRealRig(t, cfg, map[string]string{"allowed.test": "127.0.0.1", "blocked.test": "127.0.0.1"})
 
 	out, code := r.run(fmt.Sprintf("curl -sS -m 10 http://allowed.test:%d/", port))
 	if code != 0 || !strings.Contains(out, "hello-from-allowed") {
@@ -308,11 +316,19 @@ func TestDarwinSandboxNetwork(t *testing.T) {
 }
 
 // Credential env vars listed with mode deny are removed.
-func TestDarwinSandboxDenyEnv(t *testing.T) {
+func TestRealSandboxDenyEnv(t *testing.T) {
 	t.Setenv("KILN_TEST_SECRET", "s3cret")
-	r := newDarwinRig(t, Config{DenyEnv: []string{"KILN_TEST_SECRET"}}, nil)
+	r := newRealRig(t, Config{DenyEnv: []string{"KILN_TEST_SECRET"}}, nil)
 	out, code := r.run(`echo "[${KILN_TEST_SECRET:-unset}] [$KILN_SANDBOX]"`)
 	if code != 0 || !strings.Contains(out, "[unset] [1]") {
 		t.Errorf("env: %d %q", code, out)
 	}
+}
+
+// refusedWrite is what a write the sandbox refuses prints.
+func refusedWrite() string {
+	if runtime.GOOS == "linux" {
+		return "Read-only file system"
+	}
+	return "Operation not permitted"
 }

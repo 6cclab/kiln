@@ -263,6 +263,23 @@ func TestBwrapArgs(t *testing.T) {
 		t.Error("the command was spliced into the script")
 	}
 
+	// A denied directory is remounted read-only only after a narrower
+	// allowRead inside it is bound back (bwrap makes that mount point in
+	// the tmpfs; seen failing under real bwrap with "Can't mkdir").
+	denied := filepath.Join(filepath.Dir(p.TmpDir), "home", ".aws")
+	allowed := filepath.Join(denied, "config")
+	if err := os.MkdirAll(allowed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	argv, _ = bwrapArgs(p, "bwrap", "socat", "/bin/sh", "true", nil)
+	joined = strings.Join(argv, "\x00")
+	tmpfsAt := idx("--tmpfs", realPath(denied))
+	rebindAt := idx("--ro-bind", realPath(allowed))
+	remountAt := idx("--remount-ro", realPath(denied))
+	if tmpfsAt < 0 || rebindAt < tmpfsAt || remountAt < rebindAt {
+		t.Errorf("read rule mounts out of order: tmpfs %d, rebind %d, remount %d", tmpfsAt, rebindAt, remountAt)
+	}
+
 	p.WeakerNested = true
 	argv, _ = bwrapArgs(p, "bwrap", "socat", "/bin/sh", "true", nil)
 	if !strings.Contains(strings.Join(argv, " "), "--bind /proc /proc") {
