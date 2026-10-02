@@ -88,6 +88,11 @@ type Config struct {
 	ResolveMentions ResolveMentionsFunc
 	RunPromptHooks  RunPromptHooksFunc
 	GitStatus       GitStatusFunc
+	// RecordPrompt, if set, is told each prompt sent to the model (stored)
+	// and the line the user typed for it, before the turn starts: auto
+	// mode's classifier reads what was typed, not the hook context and
+	// @file contents around it (internal/automode).
+	RecordPrompt func(stored, typed string)
 
 	// HistoryPath, if set, is appended to (editor.Append) after every
 	// submitted line.
@@ -2101,6 +2106,9 @@ func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 	}
 	if len(hookContext) > 0 {
 		prompt = "<hook-context>\n" + strings.Join(hookContext, "\n\n") + "\n</hook-context>\n\n" + prompt
+	}
+	if m.cfg.RecordPrompt != nil {
+		m.cfg.RecordPrompt(prompt, line)
 	}
 
 	return m.beginTurn(prompt, images)

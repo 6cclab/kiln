@@ -38,6 +38,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/andrepato/harness/internal/automode"
 	"github.com/andrepato/harness/internal/claude/agents"
 	"github.com/andrepato/harness/internal/claude/permission"
 	"github.com/andrepato/harness/internal/diag"
@@ -304,6 +305,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 				ToolName:   call.Name,
 				PrimaryArg: primaryArg,
 				Args:       call.Arguments,
+				// In auto mode the classifier judges a subagent's call
+				// against the subagent's own conversation, whose first
+				// user message is the delegated task.
+				CallID:  call.ID,
+				History: func() []msg.Message { return automode.BranchMessages(ctx, started.Lane) },
 			})
 			if err != nil {
 				return harness.BeforeToolResult{}, err

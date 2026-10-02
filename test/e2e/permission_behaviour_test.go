@@ -125,8 +125,13 @@ func TestPermission_ModesAgainstEditAndBash(t *testing.T) {
 		{mode: "manual", wantEditBlocked: true, wantBashBlocked: true, blockReasonHas: "requires confirmation"},
 		// acceptEdits: edit/write are auto-allowed; everything else still asks.
 		{mode: "acceptEdits", wantEditBlocked: false, wantBashBlocked: true, blockReasonHas: "requires confirmation"},
-		// auto: blanket allow (still subject to deny rules, none set here).
-		{mode: "auto", wantEditBlocked: false, wantBashBlocked: false},
+		// auto: the edit is inside the workspace and skips the classifier;
+		// the bash write goes to the classifier, which here is the session
+		// model (no "fast" role) answering from a script written for the
+		// conversation, not with a verdict. An unreadable verdict fails
+		// closed, and print mode refuses. automode_behaviour_test.go covers
+		// real allow and block verdicts.
+		{mode: "auto", wantEditBlocked: false, wantBashBlocked: true, blockReasonHas: "Auto mode could not check"},
 		// dontAsk (Claude Code's meaning): nothing prompts; what would have
 		// prompted is refused. Edit and a non-read-only bash both would.
 		{mode: "dontAsk", wantEditBlocked: true, wantBashBlocked: true, blockReasonHas: "don't-ask mode refuses"},

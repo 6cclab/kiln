@@ -1239,6 +1239,8 @@ func toolMeta(ts *turnState, ev harness.Event) string {
 		parts = append(parts, "auto-approved")
 	case string(permission.OutcomeHookBlocked):
 		parts = append(parts, "blocked by hook")
+	case string(permission.OutcomeClassifierBlocked):
+		parts = append(parts, "blocked by auto mode")
 	}
 	if elapsed, ok := toolElapsed(ts, ev.ToolCallID); ok {
 		parts = append(parts, elapsed)

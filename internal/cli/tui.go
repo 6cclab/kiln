@@ -26,6 +26,7 @@ import (
 	term "github.com/charmbracelet/x/term"
 
 	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/automode"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
@@ -58,7 +59,10 @@ type InteractiveDeps struct {
 	Dispatcher     *agent.Dispatcher
 	HookConfig     claudehooks.Config
 	SessionStart   claudehooks.Outcome
-	ScreenReader   bool
+	// Intents records what the user typed for each prompt, for auto mode's
+	// classifier (wireAutoMode). Nil records nothing.
+	Intents      *automode.Intents
+	ScreenReader bool
 	// Fullscreen selects kiln's alt-screen TUI mode (--fullscreen). Falls
 	// back to inline when ScreenReader is set — see RunInteractive.
 	Fullscreen bool
@@ -155,6 +159,11 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			},
 			OnNotice: bridge.HookNotice,
 		})
+		// Auto mode asking instead of deciding (its classifier failed, or
+		// blocked too often) says why first, as a system note.
+		if req.AutoModeNote != "" {
+			bridge.CommitNote(req.AutoModeNote)
+		}
 		return prompter(ctx, req)
 	})
 	if deps.SetPlanApprover != nil {
@@ -218,6 +227,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		Registry:       deps.Registry,
 		Bridge:         bridge,
 
+		RecordPrompt: deps.Intents.Record,
 		ResolveMentions: func(ctx context.Context, line string) (string, []msg.ImageContent, []string) {
 			resolved, err := ResolveMentions(line, Options{Cwd: deps.Cwd, Tier: &deps.Resolved.Tier, Roots: deps.Gate.Roots()})
 			if err != nil || len(resolved.Mentions) == 0 {

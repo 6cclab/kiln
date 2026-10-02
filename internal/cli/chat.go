@@ -32,6 +32,7 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/auth/login"
+	"github.com/andrepato/harness/internal/automode"
 	"github.com/andrepato/harness/internal/budget"
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudecommands "github.com/andrepato/harness/internal/claude/commands"
@@ -992,6 +993,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	diag.L().Info("run log", "session", started.SessionID, "path", logPath)
 	logHarnessEvents(started.Harness)
 
+	autoModeConfig := claudesettings.LoadAutoMode(cwd, claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings})
+	if w := claudesettings.AutoModeIgnoredWarning(cwd, autoModeConfig.Ignored); w != "" {
+		startupWarn(w)
+	}
+	intents := wireAutoMode(gate, reg, settings.ModelRoles, started, memory.Text, autoModeConfig)
+
 	// applyMCP registers the catalog once the background connect is done:
 	// adapters and a rebuilt tool_search into the tool set, the posture
 	// index into the prompt, and a re-gate so the active list reflects the
@@ -1260,7 +1267,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			TranscriptPath: transcriptPath,
 			Cwd:            cwd,
 			Check: func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any) (*claudehooks.Blocked, error) {
-				blocked, out, err := gate.CheckWithOutcome(ctx, permission.Request{ToolName: toolName, PrimaryArg: primaryArg, Args: args})
+				blocked, out, err := gate.CheckWithOutcome(ctx, permission.Request{ToolName: toolName, PrimaryArg: primaryArg, Args: args,
+					CallID: call.ID, History: autoModeHistory(ctx, started.Lane)})
 				outcome = out
 				if err != nil {
 					return nil, err
@@ -1465,6 +1473,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			Dispatcher:      dispatcher,
 			HookConfig:      hookConfig,
 			SessionStart:    sessionStart,
+			Intents:         intents,
 			ScreenReader:    args.ScreenReader,
 			Fullscreen:      args.Fullscreen,
 			// Both --resume/-r (args.ResumeSet) and --continue/-c
@@ -1494,7 +1503,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return exitCode
 	}
 
-	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)
+	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry, intents)
 
 	// Nothing outlives the session: a background shell started during this
 	// run must not hold a port open after the process exits. Killed BEFORE
@@ -1538,7 +1547,7 @@ func readStdin(r io.Reader) string {
 // wrapping here, in print mode, rather than leaving it absent until phase 7.
 // That is the one place this implementation intentionally diverges from
 // cli.ts's control flow instead of following it.
-func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry) int {
+func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry, intents *automode.Intents) int {
 	if args.MaxTurnsErr != "" {
 		fmt.Fprintln(stderr, args.MaxTurnsErr)
 		return 1
@@ -1548,6 +1557,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 	if promptText == "" {
 		promptText = readStdin(stdin)
 	}
+	typed := promptText // what auto mode's classifier reads as the user's request
 	if strings.TrimSpace(promptText) == "" {
 		fmt.Fprintln(stderr, `usage: kiln -p "your prompt"   (or pipe text on stdin)`)
 		return 1
@@ -1698,6 +1708,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 		defer unsubStart()
 	}
 
+	intents.Record(prompt, typed)
 	runResult, promptErr := started.Lane.Prompt(ctx, prompt, resolvedMentions.Images)
 	ok := runResult.Status == harness.StatusCompleted
 	reason := ""
