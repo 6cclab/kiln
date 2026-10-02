@@ -49,18 +49,13 @@ func isBashCall(req Request) bool {
 	return settings.IsBashTool(req.ToolName) || strings.EqualFold(req.ToolName, "bash_background")
 }
 
-// disableRequested reads dangerouslyDisableSandbox the way the tool
-// decodes it (encoding/json matches keys without regard to case), so the
-// gate and the tool never disagree on whether a call runs sandboxed.
+// disableRequested reads dangerouslyDisableSandbox by its exact name. The
+// tool decodes it case-insensitively; the turn loop's input check
+// (tool.CheckArgs) refuses any other spelling of a declared parameter
+// before the gate or the tool sees the call, so the two agree.
 func disableRequested(req Request) bool {
-	for k, v := range req.Args {
-		if strings.EqualFold(k, DisableSandboxArg) {
-			if b, _ := v.(bool); b {
-				return true
-			}
-		}
-	}
-	return false
+	b, _ := req.Args[DisableSandboxArg].(bool)
+	return b
 }
 
 // annotateSandbox marks a bash call that will run outside an active

@@ -230,17 +230,3 @@ func TestApproveNetwork(t *testing.T) {
 		t.Errorf("the session's rules should now allow the host: %v", g.Permissions().Allow)
 	}
 }
-
-// The gate reads dangerouslyDisableSandbox whatever its key's case, as the
-// tool's JSON decoding does, so a miscased key cannot make the gate
-// auto-allow a call the tool then runs unsandboxed.
-func TestSandboxDisableKeyCase(t *testing.T) {
-	on := fakeSandbox{active: true, autoAllow: true, unsandboxed: true}
-	p := &promptLog{answer: PromptDeny}
-	g := sandboxGate(t, settings.Permissions{}, settings.ModeManual, on, p)
-	req := Request{ToolName: "bash", PrimaryArg: "touch x", Args: map[string]any{"command": "touch x", "DangerouslyDisableSandbox": true}}
-	r, out, _ := g.CheckWithOutcome(context.Background(), req)
-	if out == OutcomeAuto || r == nil || len(p.reqs) != 1 || !p.reqs[0].Unsandboxed {
-		t.Errorf("miscased flag: outcome %s, block %+v, prompts %+v", out, r, p.reqs)
-	}
-}
