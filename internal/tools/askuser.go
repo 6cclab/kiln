@@ -91,23 +91,23 @@ var askUserQuestionParameters = json.RawMessage(`{
 			"type": "array",
 			"minItems": 1,
 			"maxItems": 4,
-			"description": "1-4 multiple-choice questions to ask the user, shown one at a time.",
+			"description": "1-4 multiple-choice questions, shown one at a time.",
 			"items": {
 				"type": "object",
 				"properties": {
-					"question": {"type": "string", "description": "The full question text, ending with \"?\"."},
-					"header": {"type": "string", "maxLength": 12, "description": "Tab label of at most 12 characters, one or two words: \"Scope\", \"Tests\", \"PUT rule\"."},
-					"multiSelect": {"type": "boolean", "description": "Allow choosing more than one option. Default false."},
+					"question": {"type": "string", "description": "Full question text, ending with \"?\"."},
+					"header": {"type": "string", "maxLength": 12, "description": "Tab label, at most 12 characters: \"Scope\", \"Tests\", \"PUT rule\"."},
+					"multiSelect": {"type": "boolean", "description": "Allow more than one choice. Default false."},
 					"options": {
 						"type": "array",
 						"minItems": 2,
 						"maxItems": 4,
-						"description": "2-4 choices. The user can also always type a free-text \"Other\" answer; do not add it yourself.",
+						"description": "2-4 choices. A free-text \"Other\" is always offered too; do not add it yourself.",
 						"items": {
 							"type": "object",
 							"properties": {
-								"label": {"type": "string", "description": "1-5 words naming this choice."},
-								"description": {"type": "string", "description": "One sentence explaining the choice."}
+								"label": {"type": "string", "description": "1-5 words naming the choice."},
+								"description": {"type": "string", "description": "One sentence explaining it."}
 							},
 							"required": ["label", "description"]
 						}
@@ -240,10 +240,9 @@ func AskUserQuestionTool() *tool.Tool {
 	return &tool.Tool{
 		Name:  "ask_user_question",
 		Label: "Ask a question",
-		Description: "Ask the user one or more multiple-choice questions when you need a decision only they can make - " +
-			"which approach to take, which of several ambiguous readings is right, a preference with no clearly correct " +
-			"answer. Up to 4 questions, each with 2-4 short options; the user can also type a free-text answer. Do not " +
-			"use this for things you can figure out yourself by reading code or running commands.",
+		Description: "Ask the user one or more multiple-choice questions for a decision only they can make - which approach " +
+			"to take, which ambiguous reading is right, a preference with no clearly correct answer. Up to 4 questions, " +
+			"each with 2-4 short options plus a free-text answer. Not for things you can figure out yourself by reading code or running commands.",
 		Parameters: askUserQuestionParameters,
 		Execute: func(ctx context.Context, raw json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
 			var a askUserQuestionArgs
