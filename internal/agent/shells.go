@@ -148,9 +148,17 @@ func (b *BackgroundShells) Start(ctx context.Context, command string, env *exece
 	b.order = append(b.order, id)
 	b.mu.Unlock()
 
+	// A background command runs in the OS sandbox like a foreground one
+	// (bash_background has no dangerouslyDisableSandbox: excludedCommands
+	// is how one leaves it).
+	var sandbox execenv.CommandSandbox
+	if env.Sandbox != nil {
+		sandbox = env.Sandbox.ForCommand(command, false)
+	}
 	go func() {
 		result, err := env.Exec(runCtx, command, execenv.ExecOptions{
 			InheritEnv: true,
+			Sandbox:    sandbox,
 			OnUpdate: func(update execenv.ShellOutputUpdate) {
 				entry.absorb(update)
 			},
