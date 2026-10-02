@@ -69,18 +69,23 @@ func TestInstallScript_FromLocalSource(t *testing.T) {
 // clone path failed; this covers it.
 func TestInstallScript_ClonesARef(t *testing.T) {
 	root := repoRootDir(t)
+	// A bare repository holding this checkout's HEAD on a named branch. CI
+	// checks out a detached merge commit that no branch points at, so a
+	// plain `git clone --bare` of the checkout would not contain it.
 	repo := filepath.Join(t.TempDir(), "repo.git")
-	if out, err := exec.Command("git", "clone", "--quiet", "--bare", root, repo).CombinedOutput(); err != nil {
-		t.Fatalf("git clone --bare: %v\n%s", err, out)
+	for _, args := range [][]string{
+		{"init", "--quiet", "--bare", repo},
+		{"-C", root, "push", "--quiet", repo, "HEAD:refs/heads/kiln-install-test"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
 	}
 	head, err := exec.Command("git", "-C", root, "rev-parse", "--short", "HEAD").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	branch, err := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
+	branch := []byte("kiln-install-test")
 	for _, ref := range []string{strings.TrimSpace(string(branch)), strings.TrimSpace(string(head))} {
 		t.Run(ref, func(t *testing.T) {
 			dir, tmp := t.TempDir(), t.TempDir()
