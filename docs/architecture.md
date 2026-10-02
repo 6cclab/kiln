@@ -366,15 +366,19 @@ asked for `dangerouslyDisableSandbox` and that is allowed) and pass the
 result as `ExecOptions.Sandbox`; `Exec` then runs the wrapped argv
 (`execenv/wrap.go`). The manager resolves a `Plan` per command from the
 settings and the gate's current roots (`plan.go`: writable roots, protected
-paths, read rules, proxy ports) and renders it as a deny-default Seatbelt
+paths, read rules, proxy ports; `gitdir.go` limits git directories to what
+git writes) and renders it as a deny-default Seatbelt
 profile for `/usr/bin/sandbox-exec` on macOS (`seatbelt.go`) or a bubblewrap
 argv with a private network namespace on Linux (`bwrap.go`, with socat
 relaying the loopback proxy port in through a Unix socket). Network access
-goes through `Proxy` (`proxy.go`), which enforces the domain lists and asks
-the gate (`Gate.ApproveNetwork`) about other hosts. The gate auto-allows a
+goes through `Proxy` (`proxy.go`), which serves only requests carrying the
+session's credential (in the proxy URLs the plan sets), enforces the domain
+lists and asks the gate (`Gate.ApproveNetwork`) about other hosts. The gate auto-allows a
 call that will run sandboxed (`permission/sandbox.go`), computing
 "sandboxed" with the same `WillSandbox` the tool uses. The user's `!`
-commands, hooks, MCP servers and the status line never go through it.
+commands, hooks, MCP servers and the status line never go through it; kiln's
+own `git status` for the status line does (`cli/gitstatus.go`, through
+`Manager.Always`), since it reads a repository sandboxed commands write.
 
 ## Permissions and hooks
 

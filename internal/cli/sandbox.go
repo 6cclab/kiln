@@ -103,7 +103,7 @@ func sandboxReport(cwd string, s claudesettings.Settings) (line string, problems
 		parts = append(parts, "filesystem isolation off")
 	}
 	if runtime.GOOS == "linux" {
-		problems = append(problems, "sandbox: Unix sockets are not filtered on Linux (kiln has no seccomp filter)")
+		problems = append(problems, "sandbox: Unix sockets are not filtered on Linux (no seccomp filter); only the bus, docker, podman, gpg and ssh agent sockets are hidden")
 	}
 	problems = append(problems, cfg.Notes...)
 	return strings.Join(parts, ", "), problems
