@@ -34,6 +34,8 @@ type ExecOptions struct {
 	Spill bool
 	// OnUpdate is called with every incremental output change.
 	OnUpdate func(ShellOutputUpdate)
+	// Sandbox, when set, runs the command inside an OS sandbox (wrap.go).
+	Sandbox CommandSandbox
 }
 
 // ExecResult is the outcome of one Exec call, mirroring pi's
@@ -130,9 +132,11 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 		return ExecResult{}, fmt.Errorf("working directory does not exist: %s", cwd)
 	}
 
-	cmd := exec.CommandContext(ctx, shellPath, "-c", command)
-	cmd.Dir = cwd
-	cmd.Env = buildEnv(opts.Env, opts.InheritEnv)
+	cmd, cleanup, err := shellCommand(ctx, shellPath, command, cwd, opts)
+	if err != nil {
+		return ExecResult{}, err
+	}
+	defer cleanup()
 	SetProcGroup(cmd)
 	// exec.CommandContext's default cancel (ctx.Done) sends the process a
 	// plain Kill signal to the leader only; override so the whole process
