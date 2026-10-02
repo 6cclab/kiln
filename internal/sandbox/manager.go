@@ -145,11 +145,9 @@ func (m *Manager) CriticalRemoval(command string) bool {
 // permission mode and the user), and onSave, called for a host the user
 // chose never to be asked about again.
 func (m *Manager) SetNetworkDecider(decide func(ctx context.Context, host string, port int) (allow, always bool, err error), onSave func(host string)) {
+	// The proxy always asks decideNetwork, which reads these under mu.
 	m.mu.Lock()
 	m.decide, m.onSave = decide, onSave
-	if m.proxy != nil {
-		m.proxy.Decide = m.decideNetwork
-	}
 	m.mu.Unlock()
 }
 

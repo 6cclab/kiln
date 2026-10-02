@@ -159,21 +159,17 @@ func (p *Proxy) decide(ctx context.Context, host string, port int) error {
 	if p.Decide == nil {
 		return errBlocked{p.block(host, port, "the host is not in sandbox.network.allowedDomains")}
 	}
-	allow, always, err := p.Decide(ctx, host, port)
+	allow, _, err := p.Decide(ctx, host, port)
 	if err != nil {
 		return errBlocked{p.block(host, port, "the network request could not be approved: "+err.Error())}
 	}
 	if !allow {
 		return errBlocked{p.block(host, port, "the host is not in sandbox.network.allowedDomains and was not approved")}
 	}
-	if always {
-		p.Allow(host)
-	} else {
-		// "Yes" allows the host for the rest of the session too (Claude
-		// Code: "Claude Code allows the host for the rest of the current
-		// session"); "don't ask again" also saves it.
-		p.Allow(host)
-	}
+	// "Yes" allows the host for the rest of the session (Claude Code:
+	// "allows the host for the rest of the current session"); "don't ask
+	// again" also saves it, which Decide's caller does.
+	p.Allow(host)
 	return nil
 }
 
