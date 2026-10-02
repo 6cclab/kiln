@@ -728,8 +728,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// it on WithinRoots/WithinReadOnlyRoots keeps the hint inside exactly
 	// the directories a read already reaches without a prompt - anything
 	// that would need to ask (or would be refused) gets no hint instead.
+	// The session scratchpad is read without a prompt in every mode too
+	// (set later, once the session id is known; read at call time).
 	env.DidYouMeanDirAllowed = func(dir string) bool {
-		return gate.WithinRoots(dir) || gate.WithinReadOnlyRoots(dir)
+		return gate.WithinRoots(dir) || gate.WithinReadOnlyRoots(dir) || gate.InScratchpad(dir)
 	}
 
 	// --- MCP ---------------------------------------------------------

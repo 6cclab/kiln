@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andrepato/harness/internal/execenv"
 )
 
 // TestPrint_ReadMissingFile_DidYouMeanHint drives the real kiln binary
@@ -144,5 +146,45 @@ steps:
 	secondTurn := string(reqs[1].Messages)
 	if strings.Contains(secondTurn, "Did you mean") {
 		t.Errorf("second request's messages leaked a Did-you-mean hint for a directory outside the gate's roots:\n%s", secondTurn)
+	}
+}
+
+// TestPrint_ReadMissingFile_DidYouMeanHint_Scratchpad: the session
+// scratchpad is read without a prompt in every mode, so a misspelled read
+// there gets the hint as a workspace read does. Default (manual) mode, so
+// the read reaches the tool only through the scratchpad's own allowance.
+func TestPrint_ReadMissingFile_DidYouMeanHint_Scratchpad(t *testing.T) {
+	const sessionID = "3c9d2e7a-1f4b-4a8c-b6d5-7e8f9a0b1c2d"
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	t.Setenv("KILN_TMPDIR", filepath.Join(home, "tmp")) // as baseEnv sets it for kiln
+	scratch := execenv.ScratchpadDir(proj, sessionID)
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	real := "scratch" + " " + "notes.txt" // U+00A0 NO-BREAK SPACE
+	if err := os.WriteFile(filepath.Join(scratch, real), []byte("scratch contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	script := `model: faux-1
+steps:
+  - tool_call: {name: read, args: {path: "` + filepath.Join(scratch, "scratch notes.txt") + `"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Got the result."
+`
+	addr, srv := startFaux(t, script)
+	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
+		"-p", "read the scratch notes", "--output-format", "stream-json", "--session-id", sessionID)
+	if res.Code != 0 {
+		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
+	}
+	reqs := srv.Requests()
+	if len(reqs) < 2 {
+		t.Fatalf("expected at least 2 recorded requests, got %d\nstdout=%s", len(reqs), res.Stdout)
+	}
+	if second := string(reqs[1].Messages); !strings.Contains(second, "Did you mean") || !strings.Contains(second, "U+00A0 NO-BREAK SPACE") {
+		t.Errorf("no Did-you-mean hint for a misspelled scratchpad read:\n%s", second)
 	}
 }
