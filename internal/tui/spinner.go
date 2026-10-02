@@ -41,6 +41,14 @@ func (s *SpinnerState) Start(seed int) {
 	s.queueLen = 0
 }
 
+// StartLabel begins the spinner for work that is not a model turn (a
+// background /compact), under a fixed label instead of a turn's gerund.
+func (s *SpinnerState) StartLabel(label string) {
+	s.Start(0)
+	s.label = label
+	s.baseLabel = label
+}
+
 // SetQueueLen sets the busy line's " · N queued" suffix (0 hides it).
 func (s *SpinnerState) SetQueueLen(n int) {
 	s.queueLen = n

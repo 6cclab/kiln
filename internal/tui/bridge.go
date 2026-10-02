@@ -812,6 +812,12 @@ func (b *Bridge) Wire(started *agent.Started, toolOutputTokens int) func() {
 			}
 		case harness.EventMessageEnd:
 			b.Send(MsgSpinnerReset{})
+		case harness.EventCompactionStart:
+			b.Send(MsgCompaction{Label: compactionLabel("", 0, 0, 0, 0)})
+		case harness.EventCompactionProgress:
+			b.Send(MsgCompaction{Label: compactionLabel(ev.CompactionModel, ev.CompactionPart, ev.CompactionParts, ev.CompactionPromptTokens, ev.CompactionOutputTokens)})
+		case harness.EventCompactionEnd:
+			b.Send(MsgCompaction{Done: true})
 		}
 	})
 	return func() {
