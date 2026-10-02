@@ -38,6 +38,23 @@ type Env struct {
 	// default: /bin/bash if present, else the first "bash" on PATH, else
 	// "sh".
 	ShellPath string
+
+	// DidYouMeanDirAllowed, when set, gates which directories
+	// DidYouMeanHint (didyoumean.go) is willing to list for a "did you
+	// mean" hint: it is called with the directory DidYouMeanHint would
+	// scan, and a false return means no hint for that directory, just the
+	// tool's bare not-found error.
+	//
+	// By the time a tool's Execute runs (and so DidYouMeanHint), the
+	// permission gate has already checked the path the model actually
+	// asked for. This field is about the parent directory's *other*
+	// entries, which were never individually checked: a caller that wants
+	// those names held to the same gate (so a hint never names a file in
+	// a directory the gate would otherwise refuse to let the tool read)
+	// wires this to ask it, the same way it would check the directory
+	// path itself as a read. Left nil, DidYouMeanHint scans the parent
+	// directory unconditionally.
+	DidYouMeanDirAllowed func(dir string) bool
 }
 
 // New builds an Env rooted at cwd.

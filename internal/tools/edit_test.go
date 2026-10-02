@@ -249,3 +249,28 @@ func TestEditToolMissingFile(t *testing.T) {
 		t.Fatal("expected IsError for a missing file")
 	}
 }
+
+// TestEditToolMissingFileDidYouMeanHint: editing a no-break-space
+// mismatch gets the same "Did you mean" hint appended to its not-found
+// error. (Not a case mismatch: macOS's default volume is case-insensitive,
+// so "config.yaml" and "config.YAML" would already name the same file.)
+func TestEditToolMissingFileDidYouMeanHint(t *testing.T) {
+	dir := t.TempDir()
+	real := "config" + " " + "final.yaml"
+	os.WriteFile(filepath.Join(dir, real), []byte("a: 1"), 0o644)
+	env := execenv.New(dir)
+	et := EditTool(env)
+	result := execTool(t, et, map[string]any{
+		"path":  "config final.yaml",
+		"edits": []map[string]string{{"oldText": "a: 1", "newText": "a: 2"}},
+	})
+	if !result.IsError {
+		t.Fatal("expected IsError for missing file")
+	}
+	if !strings.Contains(resultText(result), "Did you mean") {
+		t.Fatalf("text = %q, want a Did-you-mean hint", resultText(result))
+	}
+	if !strings.Contains(resultText(result), "U+00A0 NO-BREAK SPACE") {
+		t.Fatalf("text = %q, want it to call out U+00A0", resultText(result))
+	}
+}

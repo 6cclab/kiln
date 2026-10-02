@@ -105,3 +105,29 @@ func TestReadToolMissingFile(t *testing.T) {
 		t.Fatal("expected IsError for missing file")
 	}
 }
+
+// TestReadToolMissingFileDidYouMeanHint: a read for a no-break-space
+// mismatch outside " AM."/" PM." (so ReadPathVariants' own narrow-space
+// retry, which is scoped to that one pattern, does not already resolve it
+// — this exercises DidYouMeanHint, not the existing variant retry) gets a
+// "Did you mean" hint naming the real file appended to the bare
+// not-found error. (A case-mismatch would not do here: macOS's default
+// volume is case-insensitive, so "readme.txt" and "README.txt" name the
+// same file and the read would simply succeed.)
+func TestReadToolMissingFileDidYouMeanHint(t *testing.T) {
+	dir := t.TempDir()
+	real := "notes" + " " + "final.txt"
+	os.WriteFile(filepath.Join(dir, real), []byte("hi"), 0o644)
+	env := execenv.New(dir)
+	rt := ReadTool(env)
+	result := execTool(t, rt, map[string]any{"path": "notes final.txt"})
+	if !result.IsError {
+		t.Fatal("expected IsError for missing file")
+	}
+	if !strings.Contains(resultText(result), "Did you mean") {
+		t.Fatalf("text = %q, want a Did-you-mean hint", resultText(result))
+	}
+	if !strings.Contains(resultText(result), "U+00A0 NO-BREAK SPACE") {
+		t.Fatalf("text = %q, want it to call out U+00A0", resultText(result))
+	}
+}
