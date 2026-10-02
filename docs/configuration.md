@@ -60,7 +60,7 @@ Both tool-list flags accept `Read,Write,Edit` (commas) and `Bash(git *) Edit` (w
 |---|---|
 | `--settings <file>` | extra settings file, read last, highest precedence for scalars (see §5) |
 | `--setting-sources <list>` | `user,project,local`; restricts which settings-file scopes are read |
-| `--mcp-config <file>` | MCP servers from this file instead of `~/.claude.json` |
+| `--mcp-config <file>` | MCP servers from this file instead of the usual scopes (see §8) |
 | `--strict-mcp-config` | use only `--mcp-config`; with no `--mcp-config` given, connects to nothing (see §8) |
 | `--system-prompt <text>` | replaces the base prompt (default: `agent.BasePrompt`, `internal/agent/prompt.go`) |
 | `--append-system-prompt <text>` | appended after the base/replaced persona |
@@ -474,9 +474,33 @@ A plugin's install directory (`installPath`, `${CLAUDE_PLUGIN_ROOT}` in its own 
 
 `internal/mcp/config.go`, `internal/mcp/gating.go`, `internal/mcp/hub.go`, `internal/cli/mcp.go`
 
-### Config file
+### Config files
 
-`~/.claude.json` (`paths.ClaudeJSONPath`), top-level key `mcpServers`. A read/parse failure or missing file returns an empty server map rather than erroring — a broken config never blocks startup.
+Three Claude Code scopes, read exactly as `claude mcp` writes them, plus
+kiln's own files for the same three scopes (`internal/mcp/config.go`'s
+`Resolve`); kiln never writes `~/.claude.json` or `.mcp.json` (see
+`docs/claude-code-parity.md`'s divergence #7):
+
+| Scope | Claude Code's file | kiln's own file |
+|---|---|---|
+| `user` | `~/.claude.json`, top-level `mcpServers` | `~/.kiln/mcp.json`, top-level `mcpServers` |
+| `local` | `~/.claude.json`, `projects[<abs project dir>].mcpServers` | `~/.kiln/mcp.json`, `projects[<abs project dir>].mcpServers` |
+| `project` | `<repo>/.mcp.json` (nearest ancestor up to the repo root), gated on folder trust | `<repo>/.kiln/mcp.json`, gated on the same folder trust |
+
+`kiln mcp add [-s local\|project\|user]` (default `local`) and
+`kiln mcp add-json` write only to kiln's own file for that scope;
+`kiln mcp remove` only ever deletes from a kiln file — a name configured
+only in a Claude Code file is refused, naming that file, rather than
+silently doing nothing or guessing which scope to touch. `kiln mcp
+list`/`get` show both Claude Code's and kiln's entries, each labelled with
+the file it came from.
+
+Precedence on a name clash: `--mcp-config`, then local, then project, then
+user; within a scope, a kiln entry wins over a Claude Code entry of the same
+name (kiln's own files are read after, and simply replace before cross-scope
+shadowing runs). A read/parse failure or missing file returns an empty
+server map for that file rather than erroring — a broken config never
+blocks startup.
 
 Server entry (one struct covers both transports):
 
@@ -488,9 +512,9 @@ Server entry (one struct covers both transports):
 }
 ```
 
-`type` is inferred when absent: explicit `type` if set, else `"http"` if `url` is set, else `"stdio"`. No project-scoped `.mcp.json` support was found anywhere in the Go source (exhaustive grep, zero matches) — every server comes from the one file above.
+`type` is inferred when absent: explicit `type` if set, else `"http"` if `url` is set, else `"stdio"`.
 
-`--mcp-config <file>` **replaces** the server set entirely (reads only that file; never merges with `~/.claude.json`). `--strict-mcp-config` with no `--mcp-config` connects to **nothing** — it does not fall back to the default file.
+`--mcp-config <file>` **replaces** the server set entirely (reads only that file; never merges with any of the files above). `--strict-mcp-config` with no `--mcp-config` connects to **nothing** — it does not fall back to the default files.
 
 ### Connect timeout
 

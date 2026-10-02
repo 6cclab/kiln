@@ -334,21 +334,26 @@ Seven; the first six are additive:
    the tool stops being offered at all. Claude Code's subagents cannot
    dispatch subagents of their own `[chk]`.
 7. **kiln reads `.claude`, writes `.kiln`** — kiln reads Claude Code's settings,
-   memory and rules exactly as Claude Code does, but never writes them. What
-   kiln saves goes to `<repo>/.kiln/settings.local.json` (approved rules,
-   `/permissions` edits), `~/.kiln/settings.json` (`/model` default) and
-   `~/.kiln/CLAUDE.md` (`#` notes when the project has no `CLAUDE.md`). Each
-   kiln file joins its Claude Code scope and wins for single values; deny rules
-   win everywhere. A git-tracked or symlinked `.kiln/settings.local.json` is
-   held until the folder is trusted.
+   memory, rules and MCP config exactly as Claude Code does, but never writes
+   them. What kiln saves goes to `<repo>/.kiln/settings.local.json` (approved
+   rules, `/permissions` edits), `~/.kiln/settings.json` (`/model` default),
+   `~/.kiln/CLAUDE.md` (`#` notes when the project has no `CLAUDE.md`, and
+   `/memory user`), `~/.kiln/mcp.json` (`kiln mcp add -s user|local`, mirroring
+   `~/.claude.json`'s top-level `mcpServers` / `projects[<dir>].mcpServers`)
+   and `<repo>/.kiln/mcp.json` (`kiln mcp add -s project`, mirroring
+   `.mcp.json` - meant to be committed, so the `.kiln` directory's
+   `.gitignore` carves it back out of the blanket ignore). Each kiln file
+   joins its Claude Code scope and wins for single values (and, for MCP, for
+   a same-named server in the same scope); deny rules win everywhere. A
+   git-tracked or symlinked `.kiln/settings.local.json` is held until the
+   folder is trusted; `kiln mcp add -s project`'s file is held to the same
+   trust gate `.mcp.json` already uses (it is merged into the same
+   trust-gated set).
 
-   Open, not yet moved:
-   - `kiln mcp add/remove` still writes Claude Code's `~/.claude.json` (local
-     and user scope) and `.mcp.json` (project scope). Moving it needs a kiln
-     MCP config file and a reader that merges it with Claude Code's.
-   - `/memory user` opens `~/.claude/CLAUDE.md` in `$EDITOR`. kiln writes
-     nothing itself; decide whether it should open `~/.kiln/CLAUDE.md`
-     instead.
+   `kiln mcp remove` only ever edits kiln's own files: a name configured only
+   in a Claude Code file is refused, naming that file, rather than silently
+   doing nothing or guessing which scope to touch. `kiln mcp list`/`get` show
+   which file (Claude Code's or kiln's) each server came from.
 
 ## Explicit non-goals
 

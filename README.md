@@ -135,18 +135,34 @@ credential wins over an environment variable for the same provider.
 
 ## `.claude/` compatibility
 
-Reads your existing configuration. It writes back in two places only:
-`/permissions` saves rules to `.claude/settings.local.json`, and `/model`
-saves the default model to `~/.claude/settings.json`. A project's shared
-`.claude/settings.json` is never written.
+kiln reads your existing Claude Code configuration exactly as Claude Code
+does, but never writes any of `~/.claude`, `<repo>/.claude`, `~/.claude.json`
+or `<repo>/.mcp.json`. Everything kiln itself saves goes under `.kiln`
+instead - `~/.kiln` for user-scope state, `<repo>/.kiln` for project/local
+state - and each kiln file joins the Claude Code hierarchy at the same scope,
+winning for a single value (model) and adding to a list (permission rules,
+MCP servers). A `.kiln` directory kiln creates gets a `.gitignore` that
+ignores everything except `mcp.json`, which (like Claude Code's `.mcp.json`)
+is meant to be committed.
 
-| Asset | Behavior |
+| kiln writes | From | Mirrors |
+|---|---|---|
+| `<repo>/.kiln/settings.local.json` | `/permissions`, "don't ask again" | `.claude/settings.local.json` |
+| `~/.kiln/settings.json` | `/model`'s default | `~/.claude/settings.json` |
+| `~/.kiln/CLAUDE.md` | a `#note`, and `/memory user`, when the project has no `CLAUDE.md` | `~/.claude/CLAUDE.md` |
+| `~/.kiln/mcp.json` | `kiln mcp add -s user\|local` | `~/.claude.json`'s top-level `mcpServers` / `projects[<dir>].mcpServers` |
+| `<repo>/.kiln/mcp.json` | `kiln mcp add -s project` | `.mcp.json` |
+
+A git-tracked or symlinked `<repo>/.kiln/settings.local.json` is held until
+the folder is trusted - only its deny/ask rules apply until then.
+
+| Asset read (never written) | Behavior |
 |---|---|
 | `~/.claude/skills`, `.claude/skills` | loaded, user-invocable ones become slash commands |
 | `.claude/commands/*.md` | slash commands; nested dirs become `namespace:command` |
 | `CLAUDE.md`, `@imports`, `.claude/rules/*.md` | system prompt, budgeted against the tier |
 | `.claude/settings.json` | permissions, merged `user` → `project` → `local` |
-| `~/.claude.json` | MCP servers |
+| `~/.claude.json`, `.mcp.json` | MCP servers, merged with kiln's own `mcp.json` files (same-scope kiln entry wins) |
 | `.claude/agents/*.md` | subagents, dispatched with the `task` tool |
 | `.claude/settings.json` `modelRoles` | model roles for `task` dispatch (fast/structured/heavy → provider/model) |
 | `~/.claude/keybindings.json` | editor key overrides; conflicts reported at startup |
