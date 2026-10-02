@@ -20,8 +20,49 @@ func BashAutoModeWrites(cmd, cwd string) (writes []string, complete, gitConfig b
 		if gitChangesConfig(bc.name, bc.line) {
 			gitConfig = true
 		}
+		if unmodelledWriter(bc.name, bc.line) {
+			complete = false
+		}
 	}
 	return a.writes, complete, gitConfig
+}
+
+// unmodelledWriters are programs that write files kiln's analysis does not
+// name: a download's output (curl -o, wget, wget -O), an archive's members
+// (tar -x -C, unzip -d), a sync or copy over the network, a patch, the
+// pieces of a split. Auto mode cannot tell what they write, so it
+// classifies them even past a narrow allow rule.
+var unmodelledWriters = set(
+	"curl", "wget", "aria2c", "tar", "bsdtar", "gtar", "unzip", "zip", "7z", "7za", "7zz", "unrar",
+	"gzip", "gunzip", "bzip2", "bunzip2", "xz", "unxz", "zstd", "unzstd", "lz4", "cpio", "pax", "ditto",
+	"rsync", "scp", "sftp", "patch", "split", "csplit", "hdiutil",
+)
+
+// gitFileWriters are git subcommands that write files outside the
+// repository's own bookkeeping, at a path they are given.
+var gitFileWriters = set("clone", "init", "worktree", "archive", "bundle", "format-patch", "submodule")
+
+// unmodelledWriter reports a command whose written files kiln cannot name.
+func unmodelledWriter(name, line string) bool {
+	name = path.Base(name)
+	if unmodelledWriters[name] {
+		return true
+	}
+	if name != "git" {
+		return false
+	}
+	words := strings.Fields(line)
+	for i := 1; i < len(words); i++ {
+		w := words[i]
+		switch {
+		case w == "-C" || w == "-c" || w == "--git-dir" || w == "--work-tree" || w == "--namespace" || w == "--exec-path":
+			i++
+		case strings.HasPrefix(w, "-"):
+		default:
+			return gitFileWriters[w]
+		}
+	}
+	return false
 }
 
 // gitChangesConfig reports a git invocation that writes git's

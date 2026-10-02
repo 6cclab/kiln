@@ -17,6 +17,16 @@ import (
 var protectedDirs = map[string]bool{
 	".git": true, ".vscode": true, ".idea": true, ".husky": true, ".cargo": true,
 	".devcontainer": true, ".yarn": true, ".mvn": true, ".claude": true, ".kiln": true,
+	// kiln's additions: ssh keys and config (authorized_keys grants a
+	// login, config can run a ProxyCommand).
+	".ssh": true,
+}
+
+// protectedPairs are directories named by their last two components
+// (folded): kiln's additions for what starts programs at login or boot.
+var protectedPairs = map[string]bool{
+	"library/launchagents": true, "library/launchdaemons": true,
+	".config/autostart": true, ".config/systemd": true,
 }
 
 var protectedFiles = map[string]bool{
@@ -81,6 +91,19 @@ func (g *Gate) bashTouchesProtected(cmd string) bool {
 	return false
 }
 
+// bashProtectedOutside returns a protected path outside the workspace that
+// a bash command line writes, or "": auto mode asks about that, as it does
+// for a file tool writing one, instead of classifying it.
+func (g *Gate) bashProtectedOutside(cmd string) string {
+	writes, _, _ := settings.BashAutoModeWrites(cmd, g.cwd())
+	for _, w := range writes {
+		if !g.WithinRoots(w) && g.protectedPath(w) {
+			return w
+		}
+	}
+	return ""
+}
+
 // fold is a path component as protectedDirs and protectedFiles key it:
 // lower-cased everywhere, and folded as the filesystem folds names where
 // it does.
@@ -102,6 +125,9 @@ func protectedSpelling(p string) bool {
 			return true
 		}
 		if part == ".config" && next == "git" {
+			return true
+		}
+		if protectedPairs[part+"/"+next] {
 			return true
 		}
 	}

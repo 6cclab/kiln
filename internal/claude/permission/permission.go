@@ -875,6 +875,12 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// (classifier.go). When the classifier cannot decide, or has blocked
 	// too often, the call takes the ask path below, with a note saying why.
 	autoNote := ""
+	if verdict == settings.Allow && mode == settings.ModeAuto && settings.IsBashTool(req.ToolName) {
+		if p := g.bashProtectedOutside(req.PrimaryArg); p != "" {
+			verdict = settings.Ask
+			autoNote = fmt.Sprintf("Auto mode asks before writing %s: it is a protected path outside the workspace.", p)
+		}
+	}
 	if verdict == settings.Allow && mode == settings.ModeAuto && !g.autoSkipsClassifier(req, hits) {
 		r, out, note, err := g.classifyAuto(ctx, req)
 		if err != nil {

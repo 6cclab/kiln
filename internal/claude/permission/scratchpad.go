@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/execenv"
 )
 
 // The session scratchpad (execenv.EnsureScratchpad): a directory the model
@@ -38,12 +39,23 @@ func (g *Gate) Scratchpad() string {
 }
 
 // InScratchpad reports a path inside the session scratchpad, as written
-// and through symlinks.
+// and through symlinks. A file there with another hard link is not inside:
+// the same file has a name elsewhere (the workspace, a dotfile), and no
+// path check can say where. Deny rules and the workspace check are
+// path-based and do not look at link counts; the scratchpad does because
+// it is the one place a call skips every prompt.
 func (g *Gate) InScratchpad(path string) bool {
 	g.mu.Lock()
 	roots := g.scratchpad
 	g.mu.Unlock()
-	return g.within(path, roots)
+	if !g.within(path, roots) {
+		return false
+	}
+	base := "."
+	if len(g.roots) > 0 {
+		base = g.roots[0]
+	}
+	return !execenv.SharedFile(execenv.ResolveToolPath(base, path))
 }
 
 // scratchpadCall reports a call that only touches the scratchpad: a file

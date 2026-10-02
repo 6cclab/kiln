@@ -486,6 +486,19 @@ func (a *bashAnalysis) command1(words []evalWord, in stdinSource, argsFromStdin 
 	if !known {
 		return
 	}
+	if dir, rest, ok := targetDirOption(name, args); ok {
+		// cp/mv/ln/install -t DIR src...: DIR is the destination, each
+		// source lands in it, and the sources are read (moved, for mv).
+		a.operand(dir, false, true)
+		srcs, _, _ := a.operands(name, rest)
+		for _, s := range srcs {
+			a.operand(s, name != "mv", name == "mv")
+			if dir.literal && s.literal {
+				a.operand(litWord(joinRaw(dir.text(), filepath.Base(s.text()))), false, true)
+			}
+		}
+		return
+	}
 	ops, inPlace, scriptGiven := a.operands(name, args)
 	switch role {
 	case roleRead:
@@ -505,6 +518,73 @@ func (a *bashAnalysis) command1(words []evalWord, in stdinSource, argsFromStdin 
 		write := role == roleWrite || (role == roleLastWrite && i == len(ops)-1)
 		a.operand(o, !write, write)
 	}
+}
+
+// targetDirValueOpts are, per command taking -t/--target-directory, the
+// other short options whose value follows them (GNU coreutils): a cluster
+// ends at one of them.
+var targetDirValueOpts = map[string]string{
+	"cp": "S", "mv": "S", "ln": "S", "install": "gmoS",
+}
+
+// targetDirOption finds a destination given by option (GNU cp, mv, ln,
+// install: -t DIR, -tDIR, -vt DIR, --target-directory[=]DIR and its
+// unambiguous abbreviations) and returns it with the remaining words.
+// The last one given wins, as with getopt.
+func targetDirOption(name string, args []evalWord) (dir evalWord, rest []evalWord, ok bool) {
+	valueOpts, takes := targetDirValueOpts[name]
+	if !takes {
+		return evalWord{}, nil, false
+	}
+	const long = "--target-directory"
+	for i := 0; i < len(args); i++ {
+		w := args[i].text()
+		if w == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		switch {
+		case strings.HasPrefix(w, "--t") && strings.HasPrefix(long, strings.SplitN(w, "=", 2)[0]):
+			if eq := strings.IndexByte(w, '='); eq > 0 {
+				dir, ok = sliceWord(args[i], eq+1), true
+			} else if i+1 < len(args) {
+				dir, ok = args[i+1], true
+				i++
+			}
+			continue
+		case strings.HasPrefix(w, "-") && !strings.HasPrefix(w, "--") && len(w) > 1:
+			found, skipValue := false, false
+			for j := 1; j < len(w); j++ {
+				c := w[j]
+				if c == 't' {
+					if j+1 < len(w) {
+						dir, ok = sliceWord(args[i], j+1), true
+					} else if i+1 < len(args) {
+						dir, ok = args[i+1], true
+						i++
+					}
+					found = true
+					break
+				}
+				if strings.IndexByte(valueOpts, c) >= 0 {
+					// The rest of the cluster, or the next word, is its
+					// value (install -m 0755): not a source.
+					skipValue = j == len(w)-1
+					break
+				}
+			}
+			if found {
+				continue
+			}
+			if skipValue {
+				rest = append(rest, args[i])
+				i++
+				continue
+			}
+		}
+		rest = append(rest, args[i])
+	}
+	return dir, rest, ok
 }
 
 // shellValueOpts are bash/sh/zsh/dash/ksh options whose value is the next

@@ -16,6 +16,9 @@ import (
 // A protected directory reached by a spelling only the OS maps back to
 // it — a /.vol/<device>/<inode> path — is still protected: the check also
 // compares the kernel's own name for the path (execenv.CanonicalPath).
+// The spelling is not inside the workspace as written, so the write is a
+// protected path outside it and asks; either way it is never waved
+// through.
 func TestAutoMode_ProtectedPathVolSpelling(t *testing.T) {
 	root := t.TempDir()
 	gitDir := filepath.Join(root, ".git")
@@ -29,10 +32,12 @@ func TestAutoMode_ProtectedPathVolSpelling(t *testing.T) {
 	vol := fmt.Sprintf("/.vol/%d/%d/config", st.Dev, st.Ino)
 	c := allowAll()
 	g := NewGate(GateOptions{Permissions: settings.Permissions{Allow: []string{"Bash(echo *)"}}, Mode: settings.ModeAuto, Roots: []string{root}, Classifier: c})
+	p := &promptRecorder{kind: PromptDeny}
+	g.SetPrompter(p.prompt)
 	if _, _, err := g.CheckWithOutcome(context.Background(), bashReq("echo '[core]' > "+vol)); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.calls) != 1 {
-		t.Errorf("a write to %s (.git/config) skipped the classifier", vol)
+	if len(c.calls)+len(p.reqs) != 1 {
+		t.Errorf("a write to %s (.git/config) skipped the classifier and the prompt", vol)
 	}
 }
