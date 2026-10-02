@@ -236,16 +236,27 @@ estimated context usage nears the window, then `FindCutPoint` (turn-aware:
 never splits a tool call from its result except for a deliberately
 "split turn" case) picks the boundary between what gets summarized and what
 is kept verbatim (bounded by `Settings.KeepRecentTokens`). `Compact` calls
-the lane's own provider/model (no separate compaction-only provider) with a
+the lane's own provider/model (`Lane.CompactWith` may name another: `/compact`
+right after a switch to a smaller window uses the outgoing model) with a
 fixed structured-summary prompt (`SummarizationSystemPrompt` /
 `summarizationPrompt`, or `updateSummarizationPrompt` when extending a prior
-summary), appends a read-files/modified-files tag block, and returns a
+summary). History too large for one request to that model is summarised in
+parts that each fit its window, each carrying the summary so far through
+`updateSummarizationPrompt` (`fit.go`); every request has a stall watchdog.
+It appends a read-files/modified-files tag block, and returns a
 `Result` stored as a new `session.EntryCompaction` carrying `Summary`,
 `RetainedTail` and `TokensBefore`. On the next request the lane projects the
 branch through `compaction.ContextMessages` (`entriesToTranscript` in
 `internal/harness/lane.go`): everything before the last compaction entry is
 replaced by that entry's summary and retained tail, so compaction shrinks
-the request itself, not only the session's bookkeeping.
+the request itself, not only the session's bookkeeping. Before sending, the
+turn loop checks the request against the window (`Lane.fitRequest`):
+compacting once if it does not fit and refusing with a
+`ContextOverflowError` if it still does not, since Ollama truncates an
+oversized prompt silently instead of refusing it. A provider that does
+refuse one as too long gets one compaction and one retry. `/compact` runs as
+a background command (`commands.Result.Background`), off the TUI's event
+loop, so Esc cancels it.
 `SummarizeBranch`/`PrepareBranchSummary` are the sibling path used when
 navigation abandons a branch.
 
