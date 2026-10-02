@@ -11,6 +11,8 @@ import (
 // tools consult it, the user's own "!" commands do not (Claude Code runs
 // those outside the sandbox).
 type Sandbox interface {
+	// Active reports that commands are being sandboxed at all.
+	Active() bool
 	// ForCommand returns how command runs, or nil to run it unsandboxed.
 	// disable is the model's dangerouslyDisableSandbox request.
 	ForCommand(command string, disable bool) CommandSandbox
