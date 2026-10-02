@@ -99,12 +99,33 @@ func TestExportWritesMarkdown(t *testing.T) {
 	}
 }
 
+// TestMemoryBareListsThePicker: a bare /memory lists the picker's items
+// (user, project, auto) as text rather than opening one directly - kiln
+// has no modal picker, so this is its stand-in for Claude Code's own
+// /memory chooser.
+func TestMemoryBareListsThePicker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	source := SessionCommands(SessionCommandDeps{Cwd: cwd})
+	res, err := findCmd(t, source, "memory").Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(res.Output, "\n")
+	for _, want := range []string{"user", filepath.Join(home, ".claude", "CLAUDE.md"), "project", filepath.Join(cwd, "CLAUDE.md"), "auto", "/memory <name>"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("got %q, missing %q", joined, want)
+		}
+	}
+}
+
 func TestMemoryWithNoEditorNamesThePath(t *testing.T) {
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", "")
 	cwd := t.TempDir()
 	source := SessionCommands(SessionCommandDeps{Cwd: cwd})
-	res, err := findCmd(t, source, "memory").Run(context.Background(), "")
+	res, err := findCmd(t, source, "memory").Run(context.Background(), "project")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,19 +135,28 @@ func TestMemoryWithNoEditorNamesThePath(t *testing.T) {
 	}
 }
 
-func TestMemoryCompletionsOfferUserAndProject(t *testing.T) {
+func TestMemoryCompletionsOfferUserProjectAndAuto(t *testing.T) {
 	source := SessionCommands(SessionCommandDeps{Cwd: t.TempDir()})
 	items := findCmd(t, source, "memory").ArgumentCompletions("")
-	if len(items) != 2 {
-		t.Fatalf("got %d completions, want 2", len(items))
+	if len(items) != 3 {
+		t.Fatalf("got %d completions, want 3 (user, project, auto): %+v", len(items), items)
+	}
+	names := map[string]bool{}
+	for _, it := range items {
+		names[it.Value] = true
+	}
+	for _, want := range []string{"user", "project", "auto"} {
+		if !names[want] {
+			t.Errorf("missing completion %q in %+v", want, items)
+		}
 	}
 }
 
-// TestMemoryUserOpensKilnFileNotClaudeCode: /memory user must open
-// ~/.kiln/CLAUDE.md - the same file "#" notes go to (memory.AddMemory) -
-// creating it (and ~/.kiln) if missing, and never create or touch
-// ~/.claude/CLAUDE.md, which kiln reads but never writes.
-func TestMemoryUserOpensKilnFileNotClaudeCode(t *testing.T) {
+// TestMemoryUserOpensClaudeCodeFileAndCreatesNothing: /memory user opens
+// ~/.claude/CLAUDE.md - the same file Claude Code's own /memory would -
+// and kiln never creates it (or ~/.kiln/CLAUDE.md, which no longer
+// exists): a missing file stays missing until the editor saves one.
+func TestMemoryUserOpensClaudeCodeFileAndCreatesNothing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("VISUAL", "")
@@ -134,26 +164,43 @@ func TestMemoryUserOpensKilnFileNotClaudeCode(t *testing.T) {
 	cwd := t.TempDir()
 	source := SessionCommands(SessionCommandDeps{Cwd: cwd})
 
-	// The completion for "user" points at kiln's file.
+	ccPath := filepath.Join(home, ".claude", "CLAUDE.md")
 	items := findCmd(t, source, "memory").ArgumentCompletions("user")
-	if len(items) != 1 || items[0].Description != filepath.Join(home, ".kiln", "CLAUDE.md") {
-		t.Fatalf("user completion = %+v, want ~/.kiln/CLAUDE.md", items)
+	if len(items) != 1 || items[0].Description != ccPath {
+		t.Fatalf("user completion = %+v, want %s", items, ccPath)
 	}
 
 	res, err := findCmd(t, source, "memory").Run(context.Background(), "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	kilnPath := filepath.Join(home, ".kiln", "CLAUDE.md")
 	joined := strings.Join(res.Output, "\n")
-	if !strings.Contains(joined, kilnPath) {
-		t.Fatalf("got %q, want it to name %s", joined, kilnPath)
+	if !strings.Contains(joined, ccPath) {
+		t.Fatalf("got %q, want it to name %s", joined, ccPath)
 	}
-	if _, err := os.Stat(kilnPath); err != nil {
-		t.Fatalf("~/.kiln/CLAUDE.md should have been created: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(ccPath); !os.IsNotExist(err) {
 		t.Fatalf("~/.claude/CLAUDE.md should not have been created, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".kiln")); !os.IsNotExist(err) {
+		t.Fatalf("~/.kiln should not have been created, got err=%v", err)
+	}
+}
+
+// TestMemoryAutoNamesTheFolderWithoutOpeningIt: /memory auto reports
+// Claude Code's auto-memory directory as a path, since kiln only reads
+// that directory (internal/claude/memory/automemory.go) and has no
+// folder-opener; it never creates the directory either.
+func TestMemoryAutoNamesTheFolderWithoutOpeningIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	source := SessionCommands(SessionCommandDeps{Cwd: cwd})
+	res, err := findCmd(t, source, "memory").Run(context.Background(), "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Output) != 1 || !strings.Contains(res.Output[0], "Auto-memory folder:") {
+		t.Fatalf("got %+v", res)
 	}
 }
 

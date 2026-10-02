@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andrepato/harness/internal/claude/memory"
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
@@ -322,55 +323,56 @@ func SessionCommands(deps SessionCommandDeps) Source {
 			},
 		},
 		{
-			Name:         "memory",
-			Description:  "Open CLAUDE.md in your editor",
-			ArgumentHint: "[user|project]",
+			Name:        "memory",
+			Description: "Pick a CLAUDE.md to open in your editor, or see where auto memory lives",
+			// Claude Code's own /memory is a picker: user CLAUDE.md,
+			// project CLAUDE.md (and any other instruction file
+			// LoadMemory loaded), plus "Open auto-memory folder". kiln
+			// has no modal picker for this, so a bare /memory lists the
+			// same items as text and a name opens one - ArgumentHint/
+			// ArgumentCompletions double as the picker's menu.
+			ArgumentHint: "[user|project|auto]",
 			ArgumentCompletions: func(prefix string) []Completion {
 				trimmed := strings.TrimSpace(prefix)
 				var out []Completion
-				for _, scope := range []string{"user", "project"} {
-					if !strings.HasPrefix(scope, trimmed) {
+				for _, item := range memoryItems(deps.Cwd) {
+					if !strings.HasPrefix(item.name, trimmed) {
 						continue
 					}
-					desc := filepath.Join(deps.Cwd, paths.CLAUDEMD)
-					if scope == "user" {
-						// kiln never writes ~/.claude/CLAUDE.md - this is
-						// the same ~/.kiln/CLAUDE.md "#" notes go to.
-						desc = paths.KilnUserMemoryPath()
-					}
-					out = append(out, Completion{Value: scope, Label: scope, Description: desc})
+					out = append(out, Completion{Value: item.name, Label: item.name, Description: item.path})
 				}
 				return out
 			},
 			Run: func(ctx context.Context, args string) (Result, error) {
-				scope := strings.TrimSpace(args)
-				if scope == "" {
-					scope = "project"
-				}
-				var path string
-				if scope == "user" {
-					// kiln reads ~/.claude/CLAUDE.md but never writes it;
-					// /memory user opens the same ~/.kiln/CLAUDE.md "#"
-					// notes go to (memory.AddMemory), creating it (and its
-					// directory) if it does not exist yet, so there is
-					// always a real file to open. The project path below
-					// stays <cwd>/CLAUDE.md as Claude Code shapes it: that
-					// file is the user's own project documentation, not a
-					// Claude-Code-owned config file, so opening (or, via
-					// the editor, creating) it here is the user's action,
-					// not kiln writing it.
-					path = paths.KilnUserMemoryPath()
-					if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-						return Result{}, fmt.Errorf("could not create %s: %w", filepath.Dir(path), err)
+				items := memoryItems(deps.Cwd)
+				name := strings.TrimSpace(args)
+				if name == "" {
+					lines := []string{"Memory files:"}
+					for _, item := range items {
+						lines = append(lines, fmt.Sprintf("  %-7s %s", item.name, item.path))
 					}
-					if _, err := os.Stat(path); os.IsNotExist(err) {
-						if err := os.WriteFile(path, nil, 0o644); err != nil {
-							return Result{}, fmt.Errorf("could not create %s: %w", path, err)
-						}
-					}
-				} else {
-					path = filepath.Join(deps.Cwd, paths.CLAUDEMD)
+					lines = append(lines, "", "Open one: /memory <name>")
+					return Result{Output: lines}, nil
 				}
+				var chosen *memoryItem
+				for i := range items {
+					if items[i].name == name {
+						chosen = &items[i]
+						break
+					}
+				}
+				if chosen == nil {
+					return Result{Output: []string{"No memory file named " + name + ". Try: /memory"}}, nil
+				}
+				if chosen.auto {
+					// Claude Code's auto-memory directory holds files the
+					// model writes, not a CLAUDE.md; kiln only reads it
+					// (internal/claude/memory/automemory.go) and has no
+					// folder-opener elsewhere, so this names the path
+					// rather than shelling out to one.
+					return Result{Output: []string{"Auto-memory folder: " + chosen.path}}, nil
+				}
+				path := chosen.path
 
 				editor := os.Getenv("VISUAL")
 				if editor == "" {
@@ -381,7 +383,10 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				}
 
 				// $EDITOR may carry flags ("code --wait"), so it runs through
-				// the shell with the path as a positional argument.
+				// the shell with the path as a positional argument. A
+				// missing file is not created here - kiln writes nothing
+				// of its own; if the editor creates it on save, that's
+				// the user's action.
 				cmd := exec.Command("/bin/sh", "-c", editor+` "$1"`, "sh", path)
 				before := modTime(path)
 				shown := path
@@ -522,6 +527,38 @@ func modTime(path string) time.Time {
 		return info.ModTime()
 	}
 	return time.Time{}
+}
+
+// memoryItem is one entry /memory's picker can open: a CLAUDE.md by path,
+// or (auto) the folder Claude Code's auto memory lives in.
+type memoryItem struct {
+	name string
+	path string
+	auto bool
+}
+
+// memoryItems is /memory's picker menu: the user's own CLAUDE.md, the
+// project's (both names Claude Code recognizes - <cwd>/CLAUDE.md always
+// offered so a missing one can be created by saving in the editor, and
+// <cwd>/.claude/CLAUDE.md only when it already exists, since that one is
+// easy to create by accident), and Claude Code's auto-memory folder
+// (internal/claude/memory/automemory.go resolves the same directory
+// LoadAutoMemory reads, read-only - kiln writes nothing there).
+func memoryItems(cwd string) []memoryItem {
+	items := []memoryItem{
+		{name: "user", path: filepath.Join(userHome(), ".claude", paths.CLAUDEMD)},
+		{name: "project", path: filepath.Join(cwd, paths.CLAUDEMD)},
+	}
+	if alt := filepath.Join(cwd, ".claude", paths.CLAUDEMD); fileExists(alt) {
+		items = append(items, memoryItem{name: "project-local", path: alt})
+	}
+	items = append(items, memoryItem{name: "auto", path: memory.ResolveAutoMemoryDir(cwd, ""), auto: true})
+	return items
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // resolveSessionID finds the past session in this directory whose id is,
