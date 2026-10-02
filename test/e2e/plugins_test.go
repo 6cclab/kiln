@@ -132,11 +132,13 @@ func TestPlugins_SkillToolListsAndInvokesPluginSkill(t *testing.T) {
 		t.Fatal("faux recorded no requests")
 	}
 
-	// The `skill` tool's own catalog (its description, sent on the first
-	// request) lists the plugin skill under its namespaced name.
+	// The system prompt's skills index (not the `skill` tool's own
+	// description, which stays fixed and generic - see
+	// internal/cli/skills_index_test.go) lists the plugin skill under its
+	// namespaced name, on the first request.
 	firstBody := string(reqs[0].Body)
 	if !strings.Contains(firstBody, "demo:greet") {
-		t.Errorf("first request's tool catalog did not mention demo:greet:\n%s", firstBody)
+		t.Errorf("first request's skills index did not mention demo:greet:\n%s", firstBody)
 	}
 
 	// The plugin's MCP server connected and is offered under its
