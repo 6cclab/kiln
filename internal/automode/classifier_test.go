@@ -179,6 +179,26 @@ func TestRequest_InvisibleCharactersEscaped(t *testing.T) {
 	}
 }
 
+// An action on a path outside the workspace is marked as such, next to the
+// workspace directories, so the classifier can judge the location.
+func TestRequest_OutsideWorkspaceShown(t *testing.T) {
+	_, got, err := (&Classifier{}).Request(permission.ClassifyRequest{
+		ToolName: "write", Args: map[string]any{"path": "/tmp/kiln-banner.png"},
+		OutsideWorkspace: true, Workspace: []string{"/Users/me/proj"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"<workspace>\n{\"directories\":[\"/Users/me/proj\"]}\n</workspace>",
+		`{"tool":"write","input":{"path":"/tmp/kiln-banner.png"},"outside_workspace":true}`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("request lacks %s:\n%s", want, got)
+		}
+	}
+}
+
 func TestBranchMessages_SkipsSummaries(t *testing.T) {
 	m1, m2 := user("first"), user("second")
 	lister := fakeLister{entries: []session.Entry{ // newest first

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrepato/harness/internal/execenv"
 	fauxprovider "github.com/andrepato/harness/internal/provider/faux"
 	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
 )
@@ -238,5 +239,91 @@ func TestAutoMode_ProjectFastRoleIgnored(t *testing.T) {
 	}
 	if !strings.Contains(r.log, `msg="auto mode classifier"`) || !strings.Contains(r.log, "model=faux/faux-1") {
 		t.Errorf("want the classifier on the session model in the run log:\n%s", r.log)
+	}
+}
+
+// TestAutoMode_ScratchpadAndOutsidePaths: in auto mode a bash write to the
+// session scratchpad runs with no prompt and no classifier call; a write
+// outside the workspace goes to the classifier instead of a prompt and runs
+// when it allows; one it blocks is refused. The system prompt names the
+// scratchpad.
+func TestAutoMode_ScratchpadAndOutsidePaths(t *testing.T) {
+	const sessionID = "6f1c2a9e-3b7d-4e1a-9c55-2d8e4f6a7b10"
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeUserFastRole(t, home)
+	t.Setenv("KILN_TMPDIR", filepath.Join(home, "tmp")) // as baseEnv sets it for kiln
+	scratch := execenv.ScratchpadDir(proj, sessionID)
+	outside := t.TempDir()
+
+	script := `models:
+  faux-1:
+    - tool_call: {name: bash, args: {command: "echo hi > '` + filepath.Join(scratch, "note.txt") + `'"}, id: b1}
+    - on_tool_result: b1
+      then:
+        - tool_call: {name: write, args: {path: "` + filepath.Join(outside, "allowed.txt") + `", content: "ok"}, id: w1}
+    - on_tool_result: w1
+      then:
+        - tool_call: {name: write, args: {path: "` + filepath.Join(outside, "blocked.txt") + `", content: "no"}, id: w2}
+    - on_tool_result: w2
+      then:
+        - text: "Done."
+  faux-2:
+    - text: '{"decision":"allow","reason":"a scratch file the task needs"}'
+      end_turn: true
+    - text: '{"decision":"block","reason":"not part of the task"}'
+      end_turn: true
+`
+	addr, srv := startFaux(t, script)
+	res, runLog := subagentRunLog(t, proj, baseEnv(home, sessDir, addr),
+		"-p", "make the banner", "--output-format", "json", "--permission-mode", "auto", "--session-id", sessionID)
+	var out struct {
+		OK      bool     `json:"ok"`
+		Blocked []string `json:"blocked"`
+	}
+	if err := json.Unmarshal([]byte(res.Stdout), &out); err != nil {
+		t.Fatalf("parse: %v\nstdout=%s\nstderr=%s", err, res.Stdout, res.Stderr)
+	}
+
+	if b, err := os.ReadFile(filepath.Join(scratch, "note.txt")); err != nil || strings.TrimSpace(string(b)) != "hi" {
+		t.Errorf("the scratchpad write did not run: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "allowed.txt")); err != nil {
+		t.Error("the outside write the classifier allowed did not run")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "blocked.txt")); err == nil {
+		t.Error("the outside write the classifier blocked ran")
+	}
+	var blocked bool
+	for _, b := range out.Blocked {
+		if strings.HasPrefix(b, "write(") && strings.Contains(b, "not part of the task") {
+			blocked = true
+		}
+		if strings.Contains(b, "allowed.txt") || strings.Contains(b, "note.txt") {
+			t.Errorf("refused: %s", b)
+		}
+	}
+	if !blocked {
+		t.Errorf("blocked = %q, want the blocked write", out.Blocked)
+	}
+
+	var classifier []tkfaux.Request
+	var system string
+	for _, r := range srv.Requests() {
+		if r.Model == fauxprovider.ModelID2 {
+			classifier = append(classifier, r)
+		} else if system == "" {
+			system = r.System
+		}
+	}
+	if len(classifier) != 2 {
+		t.Log(runLog)
+		t.Fatalf("classifier got %d requests, want 2 (the two outside writes; the scratchpad write needs none)", len(classifier))
+	}
+	if !strings.Contains(string(classifier[0].Messages), "outside_workspace") {
+		t.Errorf("the classifier was not told the path is outside the workspace:\n%s", classifier[0].Messages)
+	}
+	if !strings.Contains(system, "# Scratchpad") || !strings.Contains(system, "scratchpad") {
+		t.Errorf("the system prompt does not name the scratchpad:\n%s", system)
 	}
 }

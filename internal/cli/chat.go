@@ -938,6 +938,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// --append-system-prompt, the plan-mode prompt (only in plan mode),
 	// memory, the skills index, the MCP tool index.
 	envBlock := environmentPrompt(ctx, cwd, time.Now())
+	// scratchpadPrompt names the session scratchpad once it exists (it
+	// needs the session id, known after agent.Start).
+	var scratchpadPrompt string
 	buildSystemPrompt := func(mcpIndexText string) string {
 		systemPromptBase := args.SystemPrompt
 		if systemPromptBase == "" {
@@ -957,7 +960,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if reviewEnabled() {
 			promptParts = append(promptParts, reviewPrompt)
 		}
-		promptParts = append(promptParts, memory.Text, autoMemory.Text, skillsIndex, mcpIndexText)
+		promptParts = append(promptParts, scratchpadPrompt, memory.Text, autoMemory.Text, skillsIndex, mcpIndexText)
 		return strings.Join(nonEmpty(promptParts), "\n\n")
 	}
 	systemPrompt := buildSystemPrompt(mcpIndexText)
@@ -1008,6 +1011,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 	}
 	wireAutoMode(gate, reg, started, memory.Text, autoModeConfig)
+
+	if dir := setupScratchpad(gate, cwd, started.SessionID); dir != "" {
+		scratchpadPrompt = scratchpadInstructions(dir)
+		started.Harness.SetSystemPrompt(buildSystemPrompt(mcpIndexText))
+	}
 
 	// applyMCP registers the catalog once the background connect is done:
 	// adapters and a rebuilt tool_search into the tool set, the posture

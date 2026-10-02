@@ -202,6 +202,8 @@ type Gate struct {
 	// autoAsideLogged: the broad allow rules auto mode sets aside were
 	// logged for this stretch of auto mode (rules, classifier.go).
 	autoAsideLogged bool
+	// scratchpad is the session scratchpad (scratchpad.go), guarded by mu.
+	scratchpad []string
 }
 
 // NewGate builds a Gate. Roots are resolved to absolute paths and
@@ -742,6 +744,12 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	hits := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg)
 
+	// The session scratchpad is the model's own: no prompt in any mode,
+	// plan mode included, once deny and ask rules have had their say.
+	if g.scratchpadCall(req, hits) {
+		return nil, OutcomeAuto, nil
+	}
+
 	// A session "don't ask again" grant stands in for an allow rule, so
 	// like one it never beats a deny or ask rule — including one added
 	// after the grant (Claude Code: deny, then ask, then allow). Nor does
@@ -812,12 +820,32 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		break
 	}
 	if escaped && verdict == settings.Allow && mode != settings.ModeBypassPermissions {
+		// Auto mode sends what would otherwise ask here to the classifier,
+		// with the path marked as outside the workspace, as Claude Code's
+		// auto mode does. A write to a protected path outside still asks.
+		outsideNote := ""
+		if mode == settings.ModeAuto && !(g.mutatingFileTool(req.ToolName) && g.protectedPath(path)) {
+			creq := req
+			creq.OutsideWorkspace = true
+			r, out, note, err := g.classifyAuto(ctx, creq)
+			if err != nil {
+				return nil, OutcomeNone, err
+			}
+			if r != nil || out != OutcomeNone {
+				return r, out, nil
+			}
+			outsideNote = note
+		}
 		if mode == settings.ModeDontAsk {
 			r := g.record(req, fmt.Sprintf("%s is outside the workspace, and don't-ask mode refuses anything that would need approval.", path))
 			return &r, OutcomeNone, nil
 		}
 		if g.prompter == nil {
-			r := g.record(req, fmt.Sprintf("%s is outside the workspace and cannot be confirmed.", path))
+			reason := fmt.Sprintf("%s is outside the workspace and cannot be confirmed.", path)
+			if outsideNote != "" {
+				reason = outsideNote + " " + reason
+			}
+			r := g.record(req, reason)
 			return &r, OutcomeNone, nil
 		}
 		g.promptMu.Lock()
@@ -827,6 +855,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 		promptReq := g.promptRequest(req, permissions, mode, grantable)
 		promptReq.OutsideWorkspace = true
+		promptReq.AutoModeNote = outsideNote
 		choice, err := g.prompter(ctx, promptReq)
 		if err != nil {
 			return nil, OutcomeNone, err

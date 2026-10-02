@@ -56,6 +56,11 @@ type ClassifyRequest struct {
 	// then the root session's history, where the user's own lines are.
 	Delegated   bool
 	UserHistory []msg.Message
+	// OutsideWorkspace marks an action on a path outside the workspace,
+	// which in auto mode is the classifier's to judge; Workspace is the
+	// workspace roots, so it can see where the path lies.
+	OutsideWorkspace bool
+	Workspace        []string
 }
 
 // Verdict is the classifier's answer.
@@ -192,13 +197,15 @@ func (g *Gate) classifyAuto(ctx context.Context, req Request) (*BlockResult, Out
 	err := errNoClassifier
 	if c != nil {
 		verdict, err = c.Classify(ctx, ClassifyRequest{
-			ToolName:    req.ToolName,
-			PrimaryArg:  req.PrimaryArg,
-			Args:        req.Args,
-			CallID:      req.CallID,
-			History:     history,
-			Delegated:   req.Delegated,
-			UserHistory: userHistory,
+			ToolName:         req.ToolName,
+			PrimaryArg:       req.PrimaryArg,
+			Args:             req.Args,
+			CallID:           req.CallID,
+			History:          history,
+			Delegated:        req.Delegated,
+			UserHistory:      userHistory,
+			OutsideWorkspace: req.OutsideWorkspace,
+			Workspace:        g.Roots(),
 		})
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {

@@ -53,12 +53,12 @@ var _ permission.Classifier = (*Classifier)(nil)
 // Request builds the classifier's system prompt and its one user message
 // for req. Exported so tests can assert on exactly what the model is sent.
 func (c *Classifier) Request(req permission.ClassifyRequest) (system, user string, err error) {
-	action, err := actionJSON(req.ToolName, req.PrimaryArg, req.Args)
+	action, err := actionJSON(req.ToolName, req.PrimaryArg, req.Args, req.OutsideWorkspace)
 	if err != nil {
 		return "", "", err
 	}
 	lines := transcriptLines(req.UserHistory, req.History, req.Delegated, req.CallID)
-	return systemPrompt(c.Config), userPrompt(c.Memory, lines, action), nil
+	return systemPrompt(c.Config), userPrompt(c.Memory, req.Workspace, lines, action), nil
 }
 
 // Classify sends req to the classifier model. Any failure — no model, a

@@ -160,6 +160,8 @@ func baseEnv(home, sessDir, fauxAddr string) map[string]string {
 		"HARNESS_FAUX_ADDR":    fauxAddr,
 		"HARNESS_FAUX_API":     "anthropic-messages",
 		"HARNESS_MODEL":        "faux/faux-1",
+		// The session scratchpad goes under the scratch HOME, not /tmp.
+		"KILN_TMPDIR": filepath.Join(home, "tmp"),
 	}
 }
 

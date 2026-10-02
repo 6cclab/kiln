@@ -60,6 +60,11 @@ func (g *Gate) protectedPath(path string) bool {
 	return false
 }
 
+// mutatingFileTool reports a file tool that writes (edit, write, …).
+func (g *Gate) mutatingFileTool(name string) bool {
+	return settings.IsFileTool(name) && !settings.ReadOnly[strings.ToLower(name)]
+}
+
 // bashTouchesProtected reports a bash command line auto mode classifies
 // whatever rule allows it: one that writes a protected path, changes git's
 // configuration, or writes something kiln cannot name.
