@@ -12,6 +12,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/tool"
 )
 
 // PromptChoice is the user's answer to a permission prompt.
@@ -589,8 +590,12 @@ func key(toolName, primaryArg string) string {
 
 // PathArgOf returns the path a call targets, if any. Used for the
 // workspace-boundary check.
+//
+// Keys are read exactly. That is sound only because the turn loop refuses
+// input with case-variant keys before the gate runs (tool.CheckArgs in
+// internal/harness beginTool): the tools decode case-insensitively.
 func PathArgOf(args map[string]any) (string, bool) {
-	for _, k := range []string{"path", "file_path", "filePath"} {
+	for _, k := range tool.PathKeys {
 		if v, ok := args[k]; ok {
 			if s, ok := v.(string); ok {
 				return s, true
@@ -600,10 +605,26 @@ func PathArgOf(args map[string]any) (string, bool) {
 	return "", false
 }
 
+// pathArgsOf returns every path-valued key a call carries, in
+// tool.PathKeys order. A built-in tool declares at most one of them (and
+// may not be sent the others: tool.CheckArgs refuses undeclared keys),
+// but an MCP tool's input goes to a server that may read any of them, so
+// the workspace check has to hold for all, not just the first.
+func pathArgsOf(args map[string]any) []string {
+	var out []string
+	for _, k := range tool.PathKeys {
+		if s, ok := args[k].(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // PrimaryArgOf returns the identifying argument for a call, mirroring what
-// the transcript shows. Permission rules match on this.
+// the transcript shows. Permission rules match on this. Keys are read
+// exactly; see PathArgOf.
 func PrimaryArgOf(args map[string]any) (string, bool) {
-	for _, k := range []string{"command", "path", "file_path", "filePath", "pattern", "query", "url"} {
+	for _, k := range tool.PrimaryKeys {
 		if v, ok := args[k]; ok {
 			if s, ok := v.(string); ok {
 				return s, true
@@ -739,11 +760,16 @@ func (g *Gate) CheckWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// (GateOptions.ReadOnlyRoots, e.g. Claude Code's auto-memory
 	// directory) is not treated as escaped. A mutating tool's path is
 	// never checked against readOnlyRoots, only against roots, so this
-	// can only ever relax a read.
-	path, hasPath := PathArgOf(req.Args)
-	escaped := hasPath && !g.WithinRoots(path)
-	if escaped && settings.ReadOnly[strings.ToLower(req.ToolName)] && g.WithinReadOnlyRoots(path) {
-		escaped = false
+	// can only ever relax a read. Every path-valued key is checked, not
+	// just the first (see pathArgsOf).
+	var path string
+	escaped := false
+	for _, p := range pathArgsOf(req.Args) {
+		if g.WithinRoots(p) || (settings.ReadOnly[strings.ToLower(req.ToolName)] && g.WithinReadOnlyRoots(p)) {
+			continue
+		}
+		path, escaped = p, true
+		break
 	}
 	if escaped && verdict == settings.Allow && mode != settings.ModeBypassPermissions {
 		if mode == settings.ModeDontAsk {

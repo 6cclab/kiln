@@ -438,6 +438,9 @@ func ToHarnessTool(hub *Hub, t McpTool) *tool.Tool {
 		Label:       fmt.Sprintf("%s: %s", t.Server, t.Name),
 		Description: t.Description,
 		Parameters:  schema,
+		// The server validates its own input; kiln only refuses keys the
+		// gate and the server could read differently (tool.CheckArgs).
+		PassThroughArgs: true,
 		Execute: func(ctx context.Context, args json.RawMessage, onUpdate tool.Update, inv tool.Invocation) (tool.Result, error) {
 			var params map[string]any
 			if len(args) > 0 {

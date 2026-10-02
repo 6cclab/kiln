@@ -1126,6 +1126,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			},
 			PrimaryArgOf: permission.PrimaryArgOf,
 			OnNotice:     notice,
+			CheckArgs: func(args map[string]any) error {
+				return started.Harness.CheckToolArgs(call.Name, args)
+			},
 		})
 		if err != nil {
 			return harness.BeforeToolResult{}, err

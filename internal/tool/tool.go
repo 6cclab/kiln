@@ -74,6 +74,13 @@ type Tool struct {
 	// run: a provider that actually offered this tool always resolves the
 	// call itself and never emits a client-side msg.ToolCall for it.
 	ServerTool json.RawMessage
+
+	// PassThroughArgs marks a tool whose input is forwarded to something
+	// that owns its own schema (an MCP server), so CheckArgs allows keys
+	// Parameters does not declare. Built-in tools leave it false: they
+	// decode into structs that drop undeclared keys, which the permission
+	// gate might still read, so such keys are refused (see argcheck.go).
+	PassThroughArgs bool
 }
 
 // Set is a name-indexed collection with stable order.
