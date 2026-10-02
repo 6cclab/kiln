@@ -33,6 +33,9 @@ const (
 
 	EventCompactionStart EventType = "compaction_start"
 	EventCompactionEnd   EventType = "compaction_end"
+	// EventCompactionProgress reports a running compaction's part and
+	// streamed output (kiln's own; pi has no equivalent).
+	EventCompactionProgress EventType = "compaction_progress"
 
 	EventNavigationStart EventType = "navigation_start"
 	EventNavigationEnd   EventType = "navigation_end"
@@ -112,6 +115,18 @@ type Event struct {
 
 	// compaction_*
 	CompactionSummary string
+	// CompactionTrigger is "manual" (/compact), "auto" (the context neared
+	// the window) or "overflow" (the next request would not fit), on
+	// compaction_start.
+	CompactionTrigger string
+	// CompactionModel is "provider/id" of the summarising model.
+	CompactionModel string
+	// CompactionPart/CompactionParts: the request being sent, 1-based, and
+	// how many the compaction plans (compaction_progress).
+	CompactionPart, CompactionParts int
+	// CompactionPromptTokens/CompactionOutputTokens: the part's estimated
+	// prompt size and what it has streamed back so far (compaction_progress).
+	CompactionPromptTokens, CompactionOutputTokens int
 
 	// navigation_*
 	TargetEntryID string

@@ -15,6 +15,7 @@ import (
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/session"
 )
 
 // BuiltinDeps is everything builtinCommands binds against. The package
@@ -392,6 +393,7 @@ func modelRolesTable(roles map[string]string, models []provider.Model) []string 
 // exists).
 func BuiltinCommands(deps BuiltinDeps) Source {
 	cache := &modelCache{}
+	sw := &switchFit{}
 
 	cmds := []Command{
 		{
@@ -420,18 +422,37 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				if deps.Lane == nil {
 					return Result{Output: []string{"No active lane to compact."}}, nil
 				}
-				before, _ := deps.Lane.EstimateConversationTokens()
-				if err := deps.Lane.Compact(ctx, nil); err != nil {
-					return Result{}, err
-				}
-				after, err := deps.Lane.EstimateConversationTokens()
-				if err != nil || before == 0 {
-					return Result{Output: []string{"Context compacted."}}, nil
-				}
-				if after >= before {
-					return Result{Output: []string{fmt.Sprintf("Nothing to compact yet: the conversation (~%s tokens) is all recent turns, which are kept as they are.", formatTokens(before))}}, nil
-				}
-				return Result{Output: []string{fmt.Sprintf("Context compacted: conversation ~%s → ~%s tokens.", formatTokens(before), formatTokens(after))}}, nil
+				// The summary can take minutes on a slow or local model, so
+				// the work runs in the background: the TUI stays live and
+				// Esc cancels it (Result.Background).
+				return Result{
+					BusyLabel:  "Compacting conversation",
+					CancelNote: "Compaction cancelled. The conversation is as it was.",
+					Background: func(ctx context.Context) (Result, error) {
+						before, _ := deps.Lane.EstimateConversationTokens()
+						summariser := sw.summariserFor(conversationSize(deps), deps.CurrentTier())
+						var ref *session.ModelRef
+						if summariser != "" {
+							p, m, _ := splitProviderModel(summariser)
+							ref = &session.ModelRef{Provider: p, ModelID: m}
+						}
+						if err := deps.Lane.CompactWith(ctx, nil, ref); err != nil {
+							return Result{}, err
+						}
+						after, err := deps.Lane.EstimateConversationTokens()
+						if err != nil || before == 0 {
+							return Result{Output: []string{"Context compacted."}}, nil
+						}
+						if after >= before {
+							return Result{Output: []string{fmt.Sprintf("Nothing to compact yet: the conversation (~%s tokens) is all recent turns, which are kept as they are.", formatTokens(before))}}, nil
+						}
+						by := ""
+						if summariser != "" {
+							by = ", summarised by " + summariser
+						}
+						return Result{Output: []string{fmt.Sprintf("Context compacted: conversation ~%s → ~%s tokens%s.", formatTokens(before), formatTokens(after), by)}}, nil
+					},
+				}, nil
 			},
 		},
 		{
@@ -547,23 +568,39 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				return out
 			},
 			Run: func(ctx context.Context, args string) (Result, error) {
-				apply := func(target string) (string, error) {
+				// apply switches and returns the confirmation and, when
+				// the conversation is larger than the new model's window,
+				// a warning saying what happens next (switchFit.switched).
+				apply := func(target string) (string, string, error) {
 					providerID, mID, ok := splitProviderModel(target)
 					if !ok {
-						return "", fmt.Errorf(`"%s" is not provider/model`, target)
+						return "", "", fmt.Errorf(`"%s" is not provider/model`, target)
 					}
 					if deps.SwitchModel == nil {
-						return "", fmt.Errorf("model switching is not wired up")
+						return "", "", fmt.Errorf("model switching is not wired up")
 					}
+					outgoing := ""
+					if p, m := deps.CurrentModel(); p != "" {
+						outgoing = p + "/" + m
+					}
+					outgoingWindow := deps.CurrentTier().ContextWindow
+					size := conversationSize(deps)
 					tier, err := deps.SwitchModel(ctx, providerID, mID)
 					if err != nil {
-						return "", err
+						return "", "", err
 					}
 					label := providerID + "/" + mID
 					if deps.OnModelChanged != nil {
 						deps.OnModelChanged(label, tier)
 					}
-					return fmt.Sprintf("Now on %s · %s tier · %s usable", label, tier.Name, formatTokens(budget.UsableTokens(tier))), nil
+					warning := sw.switched(outgoing, outgoingWindow, label, tier, size)
+					return fmt.Sprintf("Now on %s · %s tier · %s usable", label, tier.Name, formatTokens(budget.UsableTokens(tier))), warning, nil
+				}
+				withWarning := func(status, warning string) string {
+					if warning == "" {
+						return status
+					}
+					return status + ". " + warning
 				}
 
 				trimmed := strings.TrimSpace(args)
@@ -575,11 +612,11 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 					return Result{Output: modelRolesTable(deps.ModelRoles, models)}, nil
 				}
 				if trimmed != "" {
-					msgOut, err := apply(trimmed)
+					msgOut, warning, err := apply(trimmed)
 					if err != nil {
 						return Result{}, err
 					}
-					return Result{Output: []string{msgOut}}, nil
+					return Result{Output: []string{withWarning(msgOut, warning)}}, nil
 				}
 
 				curProvider, curModel := deps.CurrentModel()
@@ -631,18 +668,18 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						if !ok {
 							return "", fmt.Errorf(`"%s" is not provider/model`, value)
 						}
-						msg, err := apply(providerID + "/" + mID)
+						msg, warning, err := apply(providerID + "/" + mID)
 						if err != nil {
 							return "", err
 						}
-						return msg + " (this session only)", nil
+						return withWarning(msg+" (this session only)", warning), nil
 					},
 					SelectDefault: func(value string) (string, error) {
 						providerID, mID, ok := splitProviderModel(value)
 						if !ok {
 							return "", fmt.Errorf(`"%s" is not provider/model`, value)
 						}
-						now, err := apply(providerID + "/" + mID)
+						now, warning, err := apply(providerID + "/" + mID)
 						if err != nil {
 							return "", err
 						}
@@ -661,7 +698,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						// one leaked a box-drawing character into plain/
 						// screen-reader mode (defect *screen-reader-mode-
 						// leaves-box-drawing-rules).
-						return now + " (default for new sessions)", nil
+						return withWarning(now+" (default for new sessions)", warning), nil
 					},
 				}
 				return Result{Output: lines, Modal: modal}, nil

@@ -304,10 +304,31 @@ overridable per-hook via `timeout` in settings.json.
 
 - **Compaction trigger**: fires when estimated context tokens exceed
   `contextWindow - ReserveTokens` (`internal/compaction/estimate.go`,
-  `ShouldCompact`), checked at the end of every turn
-  (`internal/harness/compaction.go`). No "compacting…" line in the TUI;
-  it's silent except for firing the `PreCompact` hook
-  (`internal/cli/chat.go`).
+  `ShouldCompact`), checked before an operation's first request and at the
+  end of every turn (`internal/harness/compaction.go`). Before every request
+  the turn loop also checks the request itself (system prompt, tools,
+  conversation) against the window less room for the reply
+  (`harness.RequestLimit`): over it, kiln compacts once; still over it, the
+  turn fails with `the conversation (~N tokens …) does not fit <model>'s
+  window, even after compacting it` instead of sending it. Ollama never
+  refuses an oversized prompt, it truncates it silently, so this check is the
+  only guard. While compaction runs, the busy line reads `Compacting
+  conversation (part N of M) · <model> is reading ~Nk tokens` (the model
+  streams nothing until it has read the whole prompt) or `… is writing the
+  summary`; Esc cancels it and leaves the conversation as it was. The run log
+  has one `compaction_part` line per summary request.
+
+- **Summary requests never exceed the summarising model's window**
+  (`internal/compaction/fit.go`): history too large for one request is
+  summarised in parts, each carrying the summary so far. A model that streams
+  nothing is given up on after 2 minutes plus 1 second per 20 prompt tokens
+  (measured: a 27B model on an Ollama GPU host reads ~200 tokens/s), or 5
+  minutes without a token once it has started.
+
+- **Switching to a smaller model** (`/model`): if the conversation is larger
+  than the new window, the switch says so with the numbers. The next message
+  compacts with the new model, in parts; `/compact` right after the switch
+  summarises with the outgoing model instead, which still holds all of it.
 
 - **`@file`**: capped at the tier's `ToolOutputTokens`, split evenly across
   mentions (`internal/cli/mentions.go`). Unresolvable mentions show

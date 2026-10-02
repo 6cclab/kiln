@@ -125,8 +125,8 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		t = exhaustedTurn()
 	}
 
-	if d := t.totalDelay(); d > 0 {
-		time.Sleep(d)
+	if d := t.totalDelay(); d > 0 && !sleepOrGone(r, d) {
+		return // the client hung up mid-delay (a cancelled request)
 	}
 
 	chatID := fmt.Sprintf("chatcmpl_faux_%d", rec.Seq)

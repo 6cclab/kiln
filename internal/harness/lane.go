@@ -332,13 +332,26 @@ func (l *Lane) NavigateTree(ctx context.Context, targetID *string) error {
 // summarizer's prompt, matching pi's /compact <text>; it does not replace
 // the summary outright).
 func (l *Lane) Compact(ctx context.Context, custom *string) error {
+	return l.CompactWith(ctx, custom, nil)
+}
+
+// CompactWith is Compact with the summary written by summariser instead
+// of the lane's own model, when summariser is non-nil: after a switch to a
+// smaller model, the outgoing one can still read the whole conversation
+// in one request. What is kept and how long the summary may be still
+// follow the lane's current model, which has to hold the result.
+func (l *Lane) CompactWith(ctx context.Context, custom *string, summariser *session.ModelRef) error {
 	_, cfg, err := l.resolveModel()
 	if err != nil {
 		return err
 	}
-	model, ok := l.h.opts.Registry.GetModel(cfg.Model.Provider, cfg.Model.ModelID)
+	ref := cfg.Model
+	if summariser != nil {
+		ref = *summariser
+	}
+	model, ok := l.h.opts.Registry.GetModel(ref.Provider, ref.ModelID)
 	if !ok {
-		return fmt.Errorf("harness: unknown model %s/%s", cfg.Model.Provider, cfg.Model.ModelID)
+		return fmt.Errorf("harness: unknown model %s/%s", ref.Provider, ref.ModelID)
 	}
 	tip, _ := l.GetTipID()
 	if tip == "" {
@@ -348,7 +361,7 @@ func (l *Lane) Compact(ctx context.Context, custom *string) error {
 	if err != nil {
 		return err
 	}
-	return l.runCompaction(ctx, pathEntries, model, cfg, custom)
+	return l.runCompaction(ctx, pathEntries, model, cfg, custom, TriggerManual)
 }
 
 // EstimateConversationTokens estimates the tokens of the conversation the

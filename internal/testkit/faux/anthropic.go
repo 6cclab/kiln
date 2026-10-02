@@ -138,8 +138,8 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		t = exhaustedTurn()
 	}
 
-	if d := t.totalDelay(); d > 0 {
-		time.Sleep(d)
+	if d := t.totalDelay(); d > 0 && !sleepOrGone(r, d) {
+		return // the client hung up mid-delay (a cancelled request)
 	}
 
 	msgID := fmt.Sprintf("msg_faux_%d", rec.Seq)

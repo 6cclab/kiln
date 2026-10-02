@@ -255,6 +255,10 @@ type Model struct {
 	turn          int
 	turnStartedAt time.Time
 
+	// background is a slash command's slow work in flight (a /compact
+	// waiting on the model), run off the event loop: see background.go.
+	background *backgroundState
+
 	quitting bool
 
 	// justKilled is true for exactly the one frame right after a Ctrl+K or
@@ -693,7 +697,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case msgSpinnerTick:
-		if !m.busy {
+		if !m.busy && m.background == nil {
 			return m, nil
 		}
 		m.spinner.Tick()
@@ -979,6 +983,12 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case msgTurnResult:
 		return m.finishTurn(msg)
 
+	case msgBackgroundDone:
+		return m.finishBackground(msg)
+
+	case MsgCompaction:
+		return m.applyCompaction(msg), nil
+
 	case msgClearModeHint:
 		if msg.gen == m.modeHintGen {
 			m.modeHintText = ""
@@ -1214,7 +1224,7 @@ func (m Model) drainDeferredCommands() (Model, tea.Cmd) {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-		if m.busy || m.dialog != nil {
+		if m.busy || m.background != nil || m.dialog != nil {
 			m.deferredCmds = append(m.deferredCmds, pending[i+1:]...)
 			break
 		}
@@ -1592,7 +1602,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// `?` on an empty input shows the shortcuts panel
 	// (docs/claude-code-reference.md §6, shortcuts.txt).
-	if msg.String() == "?" && !m.busy && !m.prompt.Active() && strings.TrimSpace(m.editor.Value()) == "" {
+	if msg.String() == "?" && !m.busy && m.background == nil && !m.prompt.Active() && strings.TrimSpace(m.editor.Value()) == "" {
 		m.shortcuts = true
 		return m, nil
 	}
@@ -1687,7 +1697,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.prompt.HandleKey(msg)
 		},
-		IsBusy:              func() bool { return m.busy },
+		IsBusy:              func() bool { return m.busy || m.background != nil },
 		HasInput:            func() bool { return strings.TrimSpace(m.editor.Value()) != "" },
 		Interrupt:           func() { didAbort = true },
 		ToggleExpanded:      func() { didToggle = true },
@@ -1749,7 +1759,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.modeHintText = hintMessage
 			hintCmd = tea.Tick(modeHintDuration, func(time.Time) tea.Msg { return msgClearModeHint{gen: gen} })
 		}
-		if (didAbort || promptEscInterrupt) && m.cfg.Lane != nil {
+		if didAbort && m.background != nil {
+			// Esc or Ctrl+C during a background command (/compact):
+			// cancel its context; finishBackground reports it.
+			m.background.cancel()
+		} else if (didAbort || promptEscInterrupt) && m.cfg.Lane != nil {
 			_ = m.cfg.Lane.Abort()
 		}
 		if didClear {
@@ -1824,7 +1838,7 @@ func (m Model) syncPromptPlaceholder() Model {
 		m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request))))
 	case m.prompt.plan != nil:
 		m.editor.SetPlaceholder("press 1, 2 or 3")
-	case m.busy:
+	case m.busy || m.background != nil:
 		m.editor.SetPlaceholder("queue a follow-up, or esc to stop")
 	default:
 		m.editor.SetPlaceholder(editor.DefaultPlaceholder)
@@ -1923,7 +1937,13 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	// own drain, EventQueueUpdate) is what actually commits a plain-text
 	// follow-up, as an ordinary `you` block with no meta, once the lane
 	// has re-parented it onto the branch.
-	if m.busy && !m.prompt.Active() {
+	//
+	// A background command (/compact) is busy in exactly the same way: the
+	// same immediate commands run, the same commands and `!` lines wait in
+	// m.deferredCmds, and plain text queues — but there is no running turn
+	// for Lane.Steer to deliver it into, so it waits in m.queued until the
+	// command ends (finishBackground) and is sent then.
+	if (m.busy || m.background != nil) && !m.prompt.Active() {
 		isSlash := !pathLeading && strings.HasPrefix(line, "/")
 		isBang := !pathLeading && strings.HasPrefix(line, "!")
 		switch {
@@ -1934,6 +1954,11 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 			m.deferredCmds = append(m.deferredCmds, line)
 			m.editor.SetValue("")
 			m.commit(RenderQueuedFollowUp(line, m.contentWidth()))
+			return m, nil
+		case !m.busy: // a background command, no turn to steer into
+			m.queued = append(m.queued, line)
+			m.spinner.SetQueueLen(len(m.queued))
+			m.editor.SetValue("")
 			return m, nil
 		default:
 			m.queued = append(m.queued, line)
@@ -2027,6 +2052,9 @@ func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		echo()
+		if handled.Background != nil {
+			return m.startBackground(*handled)
+		}
 		if handled.Exec != nil {
 			// Hand the terminal to the program (an editor for /memory):
 			// the TUI suspends, the program runs in the foreground, and
@@ -2039,29 +2067,7 @@ func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 				return msgExecDone{note: done(err)}
 			})
 		}
-		switch {
-		case handled.Context != nil:
-			// /context gets the structured "context" block
-			// (context.go) instead of its plain Output rows — the
-			// stacked bar and legend are the whole point of the
-			// command in the kiln design (docs/kiln-design-handoff/
-			// README.md, "context" row).
-			m.commitSynthetic(append([]string{""}, RenderContext(*handled.Context, width)...))
-		case len(handled.Output) == 1:
-			// A single-line result reads as a system note in the kiln
-			// design ("/cost", "/compact", "/model", "/agents",
-			// "/help" info form — docs/kiln-design-handoff/README.md's
-			// "note" row example copy), not a "⎿ " continuation under
-			// the echo.
-			if handled.Mistake && m.cfg.Bridge != nil {
-				m.cfg.Bridge.FreezeBefore()
-				m.cfg.Bridge.CommitMistakeNote(handled.Output[0])
-			} else {
-				m.commitNote(handled.Output[0])
-			}
-		case len(handled.Output) > 0:
-			m.commitCommandResult(handled.Name, handled.Output)
-		}
+		m = m.commitCommandOutput(handled)
 		// A command can change the permission mode (/plan).
 		m = m.refreshMode()
 		if handled.Prompt == "" {
@@ -2104,6 +2110,35 @@ func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 	}
 
 	return m.beginTurn(prompt, images)
+}
+
+// commitCommandOutput shows a slash command's result in the transcript.
+func (m Model) commitCommandOutput(handled *commands.Result) Model {
+	width := m.contentWidth()
+	switch {
+	case handled.Context != nil:
+		// /context gets the structured "context" block
+		// (context.go) instead of its plain Output rows — the
+		// stacked bar and legend are the whole point of the
+		// command in the kiln design (docs/kiln-design-handoff/
+		// README.md, "context" row).
+		m.commitSynthetic(append([]string{""}, RenderContext(*handled.Context, width)...))
+	case len(handled.Output) == 1:
+		// A single-line result reads as a system note in the kiln
+		// design ("/cost", "/compact", "/model", "/agents",
+		// "/help" info form — docs/kiln-design-handoff/README.md's
+		// "note" row example copy), not a "⎿ " continuation under
+		// the echo.
+		if handled.Mistake && m.cfg.Bridge != nil {
+			m.cfg.Bridge.FreezeBefore()
+			m.cfg.Bridge.CommitMistakeNote(handled.Output[0])
+		} else {
+			m.commitNote(handled.Output[0])
+		}
+	case len(handled.Output) > 0:
+		m.commitCommandResult(handled.Name, handled.Output)
+	}
+	return m
 }
 
 // runMode executes a `!` line and returns a Cmd that commits its output.

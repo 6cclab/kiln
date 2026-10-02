@@ -389,28 +389,53 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	// background-shell cleanup, no SessionEnd hook, and a dev server the
 	// session started left holding its port. Stop the program instead so
 	// the caller's exit path runs. (SIGINT and SIGTERM are bubbletea's;
-	// see above for why they get no second handler here.)
-	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
+	// see above for why SIGINT gets no second handler here.)
+	//
+	// SIGTERM is also watched here, but only to arm the backstop below,
+	// never to send the program anything: bubbletea's own handler turns it
+	// into a quit message for the event loop. If that loop is stuck in an
+	// Update that never returns (a /compact used to block it on a model
+	// that never answered), neither signal could end the program: the quit
+	// message was never read, and Program.Kill waits for the signal
+	// handler that is itself stuck sending it. So when Run has not
+	// returned shortly after either signal, restore the terminal from the
+	// state saved here before bubbletea changed it, and exit.
+	var savedTTY *term.State
+	if fd := os.Stdin.Fd(); term.IsTerminal(fd) {
+		savedTTY, _ = term.GetState(fd)
+	}
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGTERM)
 	runDone := make(chan struct{})
 	var hungUp atomic.Bool
 	go func() {
 		select {
-		case <-hup:
-			diag.L().Info("sighup: stopping")
-			hungUp.Store(true)
+		case sig := <-sigs:
+			diag.L().Info("signal: stopping", "signal", sig.String())
+			code := 143 // 128 + SIGTERM
+			if sig == syscall.SIGHUP {
+				code = 129
+				hungUp.Store(true)
+				go program.Kill()
+			}
 			// With SIGHUP caught, nothing else ends the process: if
 			// shutdown ever blocked on the dead terminal it would linger
 			// forever, so bound it.
-			time.AfterFunc(10*time.Second, func() { os.Exit(129) })
-			program.Kill()
+			time.AfterFunc(10*time.Second, func() { os.Exit(code) })
+			select {
+			case <-runDone:
+			case <-time.After(signalExitGrace):
+				diag.L().Warn("signal: event loop did not stop; restoring the terminal and exiting", "signal", sig.String())
+				restoreTerminal(savedTTY, bridge.Fullscreen())
+				os.Exit(code)
+			}
 		case <-runDone:
 		}
 	}()
 
 	diag.L().Info("phase tui run", "elapsed", diag.Since())
 	_, err := program.Run()
-	signal.Stop(hup)
+	signal.Stop(sigs)
 	close(runDone)
 	diag.L().Info("phase tui exit", "elapsed", diag.Since(), "err", err)
 	bridge.Stop()
@@ -868,4 +893,25 @@ func abbrevHome(path string) string {
 		return "~" + path[len(home):]
 	}
 	return path
+}
+
+// signalExitGrace is how long SIGTERM/SIGHUP give the event loop to stop
+// on its own before the terminal is restored by hand and the process
+// exits.
+const signalExitGrace = 1500 * time.Millisecond
+
+// restoreTerminal undoes what a bubbletea program sets up, for when the
+// program cannot do it itself: the saved tty mode (raw mode off), the
+// main screen if it was on the alternate one, a visible cursor, and the
+// input reporting modes it enables (bracketed paste, focus events, mouse,
+// kitty and xterm modified-key encodings).
+func restoreTerminal(saved *term.State, altScreen bool) {
+	if saved != nil {
+		_ = term.Restore(os.Stdin.Fd(), saved)
+	}
+	seq := "\x1b[?2004l\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[<u\x1b[>4m\x1b[?25h"
+	if altScreen {
+		seq = "\x1b[?1049l" + seq
+	}
+	_, _ = os.Stdout.WriteString(seq + "\r\n")
 }

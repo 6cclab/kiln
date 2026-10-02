@@ -2,6 +2,7 @@ package faux
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -375,4 +376,19 @@ func (t turn) stopReasonOverride() string {
 		}
 	}
 	return s
+}
+
+// sleepOrGone waits d before a scripted response, returning false early if
+// the client gives up first. A long delay stands for a model that never
+// answers; without this its handler outlived the request the client had
+// already cancelled, and held the server open at test cleanup.
+func sleepOrGone(r *http.Request, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-r.Context().Done():
+		return false
+	}
 }
