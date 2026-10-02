@@ -170,8 +170,7 @@ func protectedPaths(roots []string, home string, gitDirs []string) (rules []Rule
 		for _, d := range []string{".vscode", ".idea"} {
 			add(filepath.Join(root, d))
 		}
-		add(filepath.Join(root, ".git", "hooks"))
-		add(filepath.Join(root, ".git", "config"))
+		rules = append(rules, gitDirProtections(filepath.Join(root, ".git"))...)
 		literal = append(literal, filepath.Join(root, ".git"))
 
 		// A bare repository at the root: git would read hooks and config
@@ -197,11 +196,44 @@ func protectedPaths(roots []string, home string, gitDirs []string) (rules []Rule
 		add(filepath.Join(home, ".harness"))
 	}
 	for _, g := range gitDirs {
-		add(filepath.Join(g, "hooks"))
-		add(filepath.Join(g, "config"))
-		add(filepath.Join(g, "config.worktree"))
+		rules = append(rules, gitDirProtections(g)...)
 	}
 	return rules, dedupe(literal)
+}
+
+// gitDirProtections holds what git reads code from in a git directory:
+// its hooks, config and config.worktree, and the same in every nested git
+// directory under it — submodules' (modules/<name>) and linked worktrees'
+// (worktrees/<name>). A submodule's config is reached by git commands kiln
+// and the user run outside the sandbox (git status runs its
+// core.fsmonitor), so it is as sensitive as the top-level one.
+//
+// The wildcard rules cover nested directories created later (macOS); the
+// ones that exist now are also listed by path, for Linux, whose sandbox
+// binds concrete paths only.
+func gitDirProtections(gitdir string) []Rule {
+	sensitive := []string{"hooks", "config", "config.worktree"}
+	var out []Rule
+	for _, s := range sensitive {
+		out = append(out, Rule{Path: filepath.Join(gitdir, s)})
+		for _, nested := range []string{"modules", "worktrees"} {
+			out = append(out, Rule{Path: filepath.Join(gitdir, nested), Segs: []string{"**", s}})
+		}
+	}
+	for _, nested := range []string{"modules", "worktrees"} {
+		_ = filepath.WalkDir(filepath.Join(gitdir, nested), func(p string, d os.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return nil
+			}
+			if _, err := os.Lstat(filepath.Join(p, "HEAD")); err == nil {
+				for _, s := range sensitive {
+					out = append(out, Rule{Path: filepath.Join(p, s)})
+				}
+			}
+			return nil
+		})
+	}
+	return out
 }
 
 // worktreeGitDirs returns the git directories a linked worktree in cwd

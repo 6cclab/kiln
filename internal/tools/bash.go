@@ -123,6 +123,9 @@ func BashTool(env *execenv.Env) *tool.Tool {
 			if err := json.Unmarshal(args, &in); err != nil {
 				return tool.Errorf("invalid arguments: %s", err), nil
 			}
+			if k := miscasedKey(args, "command", "timeout", "dangerouslyDisableSandbox"); k != "" {
+				return tool.Errorf("invalid arguments: unknown parameter %q (parameter names are case-sensitive)", k), nil
+			}
 			timeout, ok := bashTimeout(in.Timeout)
 			if !ok {
 				return tool.Errorf("Invalid timeout: must be a finite number of seconds"), nil

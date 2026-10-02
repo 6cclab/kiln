@@ -394,7 +394,7 @@ Code: `internal/claude/settings/sandbox.go` (parsing and merge),
 | `allowUnsandboxedCommands: false` in user settings holds against a project's `true` | done | settings reference; `TestLoadSettingsSandboxUnsandboxedHold` |
 | macOS: Seatbelt (`sandbox-exec`); Linux: bubblewrap + socat; Windows: unsupported | done | sandboxing "OS-level enforcement"; `TestRealSandbox*` (macOS, and Linux under bwrap in a container), `TestManagerDetect` |
 | Writes: working directory, added directories (`/add-dir`, `--add-dir`), a per-user temp dir (`$TMPDIR` set to it), `allowWrite`, `Edit(...)` allow rules; minus `denyWrite` and `Edit(...)` deny rules | done | sandboxing "Filesystem isolation"; `TestRealSandboxWrites` |
-| Protected paths stay unwritable inside writable roots: `.claude` settings/skills/agents/commands/hooks/workflows and `.mcp.json` in the cwd and its parents; shell startup files, `.gitconfig`, `.vscode`, `.idea`, `.git/hooks`, `.git/config` in the cwd; bare-repo files; `~/.claude`, `~/.claude.json` (kiln adds `.kiln`, `~/.kiln`, `~/.harness`) | done | sandboxing "Protected paths"; `TestRealSandboxDefaultsHomeAndGit`, `TestProtectedPaths` |
+| Protected paths stay unwritable inside writable roots: `.claude` settings/skills/agents/commands/hooks/workflows and `.mcp.json` in the cwd and its parents; shell startup files, `.gitconfig`, `.vscode`, `.idea`, `.git/hooks`, `.git/config` in the cwd; bare-repo files; `~/.claude`, `~/.claude.json` (kiln adds `.kiln`, `~/.kiln`, `~/.harness`, and `hooks`/`config`/`config.worktree` in every nested git dir under `.git/modules` and `.git/worktrees`) | done | sandboxing "Protected paths"; `TestRealSandboxDefaultsHomeAndGit`, `TestProtectedPaths` |
 | A linked worktree may write the shared `.git` dir except its `hooks` and `config` | done | sandboxing "Filesystem isolation"; `TestWorktreeGitDirs` |
 | Reads: everything except `denyRead`, `Read(...)` deny rules and `credentials.files`; `allowRead` re-opens a narrower path; the narrower rule wins | done | sandboxing "Configure sandboxing"; `TestRealSandboxReadRules` |
 | Symlinks cannot widen access (the kernel-resolved path is judged) | done | `TestRealSandboxSymlinkEscape` |
@@ -433,7 +433,9 @@ Open, not matched yet:
 - **Violation reporting.** kiln does not monitor the kernel's violation log;
   a failure is annotated when its output looks like a sandbox refusal.
   `ignoreViolations` is accepted and has no effect.
-- **Linux:** wildcard `denyRead`/`allowRead` entries are skipped, not expanded;
+- **Linux:** a submodule git dir created after a command starts is not held
+  (bwrap binds paths that exist; macOS holds it by pattern);
+  wildcard `denyRead`/`allowRead` entries are skipped, not expanded;
   no seccomp filter, so Unix sockets are not blocked (doctor says so).
 - **Live reload.** Sandbox settings and rules added mid-session (an `Edit`
   allow from "don't ask again") apply from the next start.

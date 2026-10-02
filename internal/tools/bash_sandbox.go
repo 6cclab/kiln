@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/andrepato/harness/internal/execenv"
 )
@@ -53,4 +54,24 @@ func commandSandbox(env *execenv.Env, command string, disable bool) execenv.Comm
 		return nil
 	}
 	return env.Sandbox.ForCommand(command, disable)
+}
+
+// miscasedKey returns an argument name that differs from one of names only
+// in case ("Command", "DangerouslyDisableSandbox"), or "". encoding/json
+// would decode it into the field, while the permission gate reads the
+// arguments by their exact names: the two must never judge different
+// commands, or a different sandbox choice.
+func miscasedKey(raw json.RawMessage, names ...string) string {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return ""
+	}
+	for k := range m {
+		for _, n := range names {
+			if k != n && strings.EqualFold(k, n) {
+				return k
+			}
+		}
+	}
+	return ""
 }

@@ -84,3 +84,24 @@ func TestBashToolRunsThroughSandbox(t *testing.T) {
 		t.Error("schema offers dangerouslyDisableSandbox with allowUnsandboxedCommands false")
 	}
 }
+
+// A miscased parameter name is refused, not decoded: the permission gate
+// reads arguments by their exact names, and the two must judge the same
+// command and the same sandbox choice.
+func TestBashToolRefusesMiscasedKeys(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	env.Sandbox = &fakeSandbox{offers: true}
+	bash := BashTool(env)
+	for _, raw := range []string{
+		`{"command":"echo hi","DangerouslyDisableSandbox":true}`,
+		`{"Command":"echo hi"}`,
+	} {
+		res, err := bash.Execute(context.Background(), json.RawMessage(raw), func(tool.Result) {}, tool.Invocation{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsError || !strings.Contains(resultText(res), "case-sensitive") {
+			t.Errorf("%s: ran: %q", raw, resultText(res))
+		}
+	}
+}
