@@ -69,19 +69,34 @@ func TestInstallScript_FromLocalSource(t *testing.T) {
 // clone path failed; this covers it.
 func TestInstallScript_ClonesARef(t *testing.T) {
 	root := repoRootDir(t)
-	// A bare repository holding this checkout's HEAD on a named branch. CI
-	// checks out a detached merge commit that no branch points at, so a
-	// plain `git clone --bare` of the checkout would not contain it.
-	repo := filepath.Join(t.TempDir(), "repo.git")
+	// A fresh repository holding this checkout's files in one commit on a
+	// named branch. Built from `git archive` rather than pushed or cloned
+	// from the checkout: CI checks out a shallow, detached merge commit
+	// that can neither be pushed from nor reached by a branch.
+	work := t.TempDir()
+	src, repo := filepath.Join(work, "src"), filepath.Join(work, "repo.git")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("sh", "-c", `git -C "$1" archive HEAD | tar -x -C "$2"`, "sh", root, src).CombinedOutput(); err != nil {
+		t.Fatalf("git archive: %v\n%s", err, out)
+	}
+	gitEnv := append(os.Environ(),
+		"GIT_AUTHOR_NAME=kiln test", "GIT_AUTHOR_EMAIL=test@example.invalid",
+		"GIT_COMMITTER_NAME=kiln test", "GIT_COMMITTER_EMAIL=test@example.invalid")
 	for _, args := range [][]string{
-		{"init", "--quiet", "--bare", repo},
-		{"-C", root, "push", "--quiet", repo, "HEAD:refs/heads/kiln-install-test"},
+		{"-C", src, "init", "--quiet", "--initial-branch", "kiln-install-test"},
+		{"-C", src, "add", "-A"},
+		{"-C", src, "commit", "--quiet", "--no-gpg-sign", "-m", "test"},
+		{"clone", "--quiet", "--bare", src, repo},
 	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		cmd := exec.Command("git", args...)
+		cmd.Env = gitEnv
+		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	head, err := exec.Command("git", "-C", root, "rev-parse", "--short", "HEAD").Output()
+	head, err := exec.Command("git", "-C", src, "rev-parse", "--short", "HEAD").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
