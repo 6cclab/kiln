@@ -144,6 +144,16 @@ func (p *Proxy) decide(ctx context.Context, host string, port int) error {
 	if anyMatches(p.deny, host, port) {
 		return errBlocked{p.block(host, port, "the host is in sandbox.network.deniedDomains")}
 	}
+	// A local destination — a loopback, link-local (169.254.169.254, the
+	// cloud metadata endpoint), unspecified or own address, or a
+	// localhost name — is reached only when an entry names it exactly:
+	// never through "*", a session approval or bypass mode.
+	if kind := p.localTarget(host); kind != "" {
+		if p.explicitlyAllowed(host, port) {
+			return nil
+		}
+		return errBlocked{p.block(host, port, "it is "+kind+"; allow it by its exact address in sandbox.network.allowedDomains")}
+	}
 	if anyMatches(p.allow, host, port) {
 		return nil
 	}
@@ -190,7 +200,9 @@ func (p *Proxy) dial(ctx context.Context, host string, port int) (net.Conn, erro
 	if err != nil {
 		return nil, err
 	}
-	localOK := host == "localhost" || strings.HasSuffix(host, ".localhost")
+	// localhost names may resolve to loopback (Claude Code's rule), but
+	// only when an entry names them exactly (decide).
+	localOK := p.localTarget(host) != "" && p.explicitlyAllowed(host, port)
 	locals := p.localAddrs()
 	var permitted []netip.Addr
 	var kind string
@@ -217,6 +229,33 @@ func (p *Proxy) dial(ctx context.Context, host string, port int) (net.Conn, erro
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// localTarget names why host (an IP literal, unmapped, or a localhost
+// name) is local, or "".
+func (p *Proxy) localTarget(host string) string {
+	if addr, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil {
+		return localKind(addr.Unmap(), p.localAddrs())
+	}
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return "a localhost name"
+	}
+	return ""
+}
+
+// explicitlyAllowed reports an allow entry other than "*" covering
+// host:port.
+func (p *Proxy) explicitlyAllowed(host string, port int) bool {
+	if addr, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil {
+		return p.ipAllowed(addr, port)
+	}
+	for _, r := range p.allow {
+		if !r.any && r.matches(host, port) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Proxy) ipAllowed(a netip.Addr, port int) bool {

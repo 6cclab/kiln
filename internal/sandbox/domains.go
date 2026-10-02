@@ -5,6 +5,8 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
 
 // hostRule is one entry of a domain list (sandbox.network.allowedDomains /
@@ -35,7 +37,15 @@ func parseHostRules(entries []string, deny bool) []hostRule {
 }
 
 func parseHostRule(entry string, deny bool) []hostRule {
-	s := strings.ToLower(strings.TrimSpace(entry))
+	s := strings.TrimSpace(entry)
+	if hp, port, cut := strings.Cut(s, ":"); !strings.HasPrefix(s, "[") && strings.Count(s, ":") <= 1 {
+		hp = canonicalName(hp)
+		if cut {
+			hp += ":" + port
+		}
+		s = hp
+	}
+	s = strings.ToLower(s)
 	if s == "" {
 		return nil
 	}
@@ -168,7 +178,7 @@ func splitHostPort(hostport string, defaultPort int) (string, int, bool) {
 	host, portStr, err := net.SplitHostPort(hostport)
 	if err != nil {
 		if strings.Contains(err.Error(), "missing port") {
-			return strings.Trim(hostport, "[]"), defaultPort, hostport != ""
+			return canonicalHost(hostport), defaultPort, hostport != ""
 		}
 		return "", 0, false
 	}
@@ -176,5 +186,34 @@ func splitHostPort(hostport string, defaultPort int) (string, int, bool) {
 	if !ok || host == "" {
 		return "", 0, false
 	}
-	return host, p, true
+	return canonicalHost(host), p, true
+}
+
+// canonicalName puts a domain-list entry's host part (possibly "*." or
+// "*") in the form canonicalHost gives hosts.
+func canonicalName(h string) string {
+	if h == "*" {
+		return h
+	}
+	if rest, ok := strings.CutPrefix(h, "*."); ok {
+		return "*." + canonicalHost(rest)
+	}
+	return canonicalHost(h)
+}
+
+// canonicalHost is the form a host is decided, shown and matched in: an
+// IP literal unmapped from IPv4-in-IPv6 ("::ffff:127.0.0.1" is
+// 127.0.0.1), a name lower-cased, without a trailing dot, and in its ASCII
+// (punycode) form, so an internationalized name and its punycode spelling
+// are one host.
+func canonicalHost(h string) string {
+	h = strings.Trim(h, "[]")
+	if addr, err := netip.ParseAddr(h); err == nil {
+		return addr.Unmap().String()
+	}
+	h = strings.TrimSuffix(strings.ToLower(h), ".")
+	if a, err := idna.Lookup.ToASCII(h); err == nil {
+		return a
+	}
+	return h
 }
