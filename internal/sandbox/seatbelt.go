@@ -74,7 +74,6 @@ func seatbeltProfile(p Plan) (string, error) {
 	w("(allow signal (target same-sandbox))")
 	w("(allow process-info* (target same-sandbox))")
 	w("(allow sysctl-read)")
-	w("(allow pseudo-tty)")
 	w("(allow file-ioctl)")
 	w("(allow user-preference-read)")
 	w("(allow ipc-posix-sem)")
@@ -144,8 +143,7 @@ func seatbeltProfile(p Plan) (string, error) {
 		}
 		allow = append(allow,
 			`(literal "/dev/null")`, `(literal "/dev/zero")`, `(literal "/dev/dtracehelper")`,
-			`(literal "/dev/stdout")`, `(literal "/dev/stderr")`,
-			`(regex #"^/dev/tty")`, `(regex #"^/dev/fd/")`)
+			`(literal "/dev/stdout")`, `(literal "/dev/stderr")`, `(regex #"^/dev/fd/")`)
 		w("(allow file-write* %s)", strings.Join(allow, " "))
 		var deny []string
 		for _, r := range p.DenyWrite {
@@ -160,6 +158,13 @@ func seatbeltProfile(p Plan) (string, error) {
 			w("(deny file-write* %s)", strings.Join(deny, " "))
 		}
 	}
+
+	// Terminals: a sandboxed command has no terminal of its own (the bash
+	// tools give it pipes), and opening the user's (/dev/tty, a
+	// /dev/ttysNNN) would let it read keystrokes typed to kiln or push
+	// input and escape sequences into the terminal. Last, so nothing
+	// above re-allows it.
+	w(`(deny file-read* file-write* file-ioctl (regex #"^/dev/tty") (regex #"^/dev/pty") (literal "/dev/console") (literal "/dev/ptmx"))`)
 
 	// Network.
 	for _, port := range []int{p.HTTPProxyPort, p.SOCKSProxyPort} {
