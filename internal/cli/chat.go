@@ -1171,7 +1171,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				SessionID:      sessionID,
 				TranscriptPath: transcriptPath,
 				Cwd:            cwd,
-				Trigger:        "auto",
+				// Claude Code's PreCompact trigger is "manual" for
+				// /compact and "auto" otherwise; kiln's overflow
+				// compaction is automatic too.
+				Trigger: map[bool]string{true: "manual", false: "auto"}[ev.CompactionTrigger == harness.TriggerManual],
 			},
 			OnNotice: notice,
 		})
@@ -1564,6 +1567,11 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 	// fallback) prints its Output and returns without running a turn.
 	if strings.HasPrefix(strings.TrimSpace(promptText), "/") {
 		result, err := registry.Execute(ctx, strings.TrimSpace(promptText))
+		if err == nil {
+			// Print mode has no screen to keep live: a background
+			// command (/compact) simply runs here, cancelled with ctx.
+			result, err = slashcommands.RunBackground(ctx, result)
+		}
 		if err != nil {
 			fmt.Fprintln(stderr, "kiln:", err)
 			return 1
@@ -1766,8 +1774,17 @@ func logHarnessEvents(h *harness.Harness) {
 	on(harness.EventRetryScheduled, func(ev harness.Event) []any {
 		return []any{"attempt", ev.Attempt, "delay_ms", ev.DelayMs, "err", ev.RetryError}
 	})
-	on(harness.EventCompactionStart, none)
-	on(harness.EventCompactionEnd, none)
+	on(harness.EventCompactionStart, func(ev harness.Event) []any {
+		return []any{"trigger", ev.CompactionTrigger, "model", ev.CompactionModel}
+	})
+	on(harness.EventCompactionEnd, func(ev harness.Event) []any { return []any{"err", ev.Err} })
+	// One line per summary request as it is sent, not per streamed token.
+	h.Events().On(harness.EventCompactionProgress, func(ev harness.Event) {
+		if ev.CompactionOutputTokens == 0 {
+			diag.L().Info("compaction_part", "lane", ev.Lane, "part", ev.CompactionPart, "parts", ev.CompactionParts,
+				"model", ev.CompactionModel, "prompt_tokens", ev.CompactionPromptTokens)
+		}
+	})
 	on(harness.EventFault, func(ev harness.Event) []any { return []any{"err", ev.Err} })
 	on(harness.EventHandlerError, func(ev harness.Event) []any { return []any{"hook", ev.HookName, "err", ev.Err} })
 	logRequestTiming(h)

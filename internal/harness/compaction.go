@@ -55,7 +55,9 @@ func (l *Lane) autoCompact(ctx context.Context, tip string) string {
 		return tip
 	}
 	if err := l.runCompaction(ctx, pathEntries, model, cfg, nil, TriggerAuto); err != nil {
-		l.h.events.Emit(Event{Type: EventFault, Lane: l.name, Err: fmt.Errorf("harness: auto-compaction failed: %w", err)})
+		if ctx.Err() == nil { // an interrupted turn is not a compaction fault
+			l.h.events.Emit(Event{Type: EventFault, Lane: l.name, Err: fmt.Errorf("harness: auto-compaction failed: %w", err)})
+		}
 		return tip
 	}
 	if newTip, ok := l.GetTipID(); ok {
@@ -185,20 +187,23 @@ func (l *Lane) requestTokens(transcript []msg.Message) int {
 	return n
 }
 
-// requestLimit is the most kiln sends model in one request: its window
-// less room for the reply, which is the compaction reserve but never more
-// than a tenth of the window (the reserve's own share; a test or a tiny
-// window can set a reserve that would leave no room for any prompt). 0
-// when the window is unknown.
-func (l *Lane) requestLimit(model provider.Model) int {
-	if model.ContextWindow <= 0 {
+// RequestLimit is the most kiln sends a model with the given window in
+// one request: the window less room for the reply, which is the
+// compaction reserve but never more than a tenth of the window (the
+// reserve's own share; a test or a tiny window can set a reserve that
+// would leave no room for any prompt). 0 when the window is unknown.
+func RequestLimit(window, reserve int) int {
+	if window <= 0 {
 		return 0
 	}
-	reply := l.h.opts.Compaction.ReserveTokens
-	if tenth := model.ContextWindow / 10; reply > tenth {
-		reply = tenth
+	if tenth := window / 10; reserve <= 0 || reserve > tenth {
+		reserve = tenth
 	}
-	return model.ContextWindow - reply
+	return window - reserve
+}
+
+func (l *Lane) requestLimit(model provider.Model) int {
+	return RequestLimit(model.ContextWindow, l.h.opts.Compaction.ReserveTokens)
 }
 
 // fitRequest builds the transcript for the next request and makes sure it

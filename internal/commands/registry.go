@@ -151,6 +151,33 @@ type Result struct {
 	// print mode, which never runs it.
 	Exec     *exec.Cmd
 	ExecDone func(err error) string
+
+	// Background is the command's real work when it can take minutes (a
+	// /compact waiting on a slow model). The interactive shell runs it
+	// off its event loop, so the screen, Esc and Ctrl+C keep working,
+	// shows BusyLabel while it runs, and cancels ctx on Esc; print mode
+	// runs it inline (RunBackground). Its Result is shown like any other.
+	Background func(ctx context.Context) (Result, error)
+	BusyLabel  string
+	// CancelNote is shown when Background is cancelled.
+	CancelNote string
+}
+
+// RunBackground runs res.Background, if any, and returns its result in
+// res's place: what print mode, which has no event loop to keep free,
+// does with a background command.
+func RunBackground(ctx context.Context, res *Result) (*Result, error) {
+	if res == nil || res.Background == nil {
+		return res, nil
+	}
+	out, err := res.Background(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if out.Name == "" {
+		out.Name = res.Name
+	}
+	return &out, nil
 }
 
 // ContextBreakdown is /context's structured result: how many tokens are
