@@ -1,24 +1,23 @@
 package execenv
 
 import (
-	"regexp"
 	"strings"
 )
 
-// invalidShellOutput strips control bytes and Unicode "interlinear
-// annotation" characters that break terminal rendering, mirroring pi's
-// INVALID_SHELL_OUTPUT pattern. The interlinear-annotation range
-// (U+FFF9..U+FFFB) is built from rune literals rather than a \u escape in
-// the pattern string, which editors and text tooling are prone to
-// silently re-encoding as literal (non-ASCII) source bytes.
-var invalidShellOutput = regexp.MustCompile(
-	"[\x00-\x08\x0b-\x1f" + string(rune(0xFFF9)) + "-" + string(rune(0xFFFB)) + "]",
-)
-
-// SanitizeShellOutput removes bytes that are unsafe to render as shell
-// output, mirroring pi's sanitizeShellOutput.
+// SanitizeShellOutput removes bytes and sequences that are unsafe to
+// render as shell output or to hand back to the model: this was
+// originally a single-byte C0 filter mirroring pi's
+// sanitizeShellOutput/INVALID_SHELL_OUTPUT pattern, and is now
+// StripControlSequences (ansi.go), which does the same C0/interlinear-
+// annotation stripping but also removes whole ANSI/terminal control
+// sequences (SGR colour codes, OSC/DCS strings, CSI cursor moves) instead
+// of leaving their bracket-code text behind once only the leading ESC
+// byte is gone. Kept as its own name because this is the shell-output
+// call site; internal/harness/toolout.go calls StripControlSequences
+// directly for every other tool's result text, so both paths share one
+// implementation.
 func SanitizeShellOutput(text string) string {
-	return invalidShellOutput.ReplaceAllString(text, "")
+	return StripControlSequences(text)
 }
 
 // Retention selects which end of bounded output survives truncation.
