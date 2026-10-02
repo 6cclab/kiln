@@ -111,7 +111,10 @@ func (g *Gate) checkSandboxed(ctx context.Context, req Request, permissions sett
 			r := g.record(req, "blocked by permission rules.")
 			return &r, OutcomeNone, true, nil
 		}
-		if contentAskHit(permissions, g.cwd(), req) || p.CriticalRemoval(req.PrimaryArg) {
+		// Unsure: something runs that kiln cannot name (a command word
+		// from a substitution or a variable) while deny or ask rules
+		// exist; it might be what they name, so it is not auto-allowed.
+		if hits.Unsure || contentAskHit(permissions, g.cwd(), req) || p.CriticalRemoval(req.PrimaryArg) {
 			return nil, OutcomeNone, false, nil
 		}
 		return nil, OutcomeAuto, true, nil
