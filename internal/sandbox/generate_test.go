@@ -81,7 +81,7 @@ func TestSeatbeltProfileShape(t *testing.T) {
 	p.UnixSockets = []string{"/var/run/x.sock"}
 	p.MachLookup = []string{"com.example.*"}
 	prof, _ = seatbeltProfile(p)
-	for _, m := range []string{"(allow appleevent-send)", "com.apple.trustd.agent", `(allow network-bind (local ip "*:*"))`, `(path-literal "/var/run/x.sock")`, `(global-name-prefix "com.example.")`} {
+	for _, m := range []string{"(allow appleevent-send)", "com.apple.trustd.agent", `(allow network-bind (local ip "localhost:*"))`, `(path-literal "/var/run/x.sock")`, `(global-name-prefix "com.example.")`} {
 		if !strings.Contains(prof, m) {
 			t.Errorf("opt-in %q missing", m)
 		}

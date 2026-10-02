@@ -178,9 +178,16 @@ func seatbeltProfile(p Plan) (string, error) {
 		}
 	}
 	if p.AllowLocalBinding {
-		w(`(allow network-bind (local ip "*:*"))`)
-		w(`(allow network-inbound (local ip "*:*"))`)
-		w(`(allow network-outbound (remote ip "localhost:*"))`)
+		// Listen and accept, and open no direct route to loopback ports: a
+		// server there, the command's own or one already running on this
+		// machine, is reached through the proxy, which allows it only for
+		// an exact allowedDomains entry. Seatbelt cannot keep the listener
+		// on loopback: its local-address filter takes only "*" or
+		// "localhost", and "localhost" matches every local address, so a
+		// command that binds 0.0.0.0 accepts connections from the network
+		// (as Claude Code's docs say of this setting).
+		w(`(allow network-bind (local ip "localhost:*"))`)
+		w(`(allow network-inbound (local ip "localhost:*"))`)
 	}
 	if p.AllowAllUnixSockets {
 		w("(allow network-outbound (remote unix-socket))")
