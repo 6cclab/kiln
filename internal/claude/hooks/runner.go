@@ -7,8 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/andrepato/harness/internal/execenv"
 )
 
 // Payload is what a hook receives on stdin as JSON.
@@ -94,7 +95,7 @@ func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv 
 	for k, v := range extraEnv {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	execenv.SetProcGroup(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -125,9 +126,7 @@ func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv 
 	case <-time.After(time.Duration(timeoutSeconds) * time.Second):
 		timedOut = true
 		if cmd.Process != nil {
-			// Negative pid targets the group, which is the point of
-			// Setpgid.
-			if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			if err := execenv.KillProcessGroup(cmd.Process.Pid, execenv.SignalKill); err != nil {
 				_ = cmd.Process.Kill()
 			}
 		}

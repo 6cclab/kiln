@@ -1,0 +1,128 @@
+name: Release
+
+# Builds kiln for every platform scripts/install.sh knows how to fetch a
+# release for, and publishes them on a pushed version tag. No goreleaser:
+# plain `go build` in a matrix, archived and checksummed by hand, so the
+# format here and what install.sh parses stay easy to keep in sync by
+# reading both files side by side.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          # kiln is pure Go (sqlite included, no cgo sqlite driver); a
+          # cross-compiled CGO build would need a cross C toolchain this
+          # runner does not have, so this also doubles as a check that no
+          # cgo dependency crept in.
+          CGO_ENABLED: "0"
+        run: |
+          set -eu
+          VERSION=${GITHUB_REF_NAME}
+          mkdir -p dist
+          BIN=kiln
+          if [ "${{ matrix.goos }}" = "windows" ]; then BIN=kiln.exe; fi
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/andrepato/harness/internal/cli.Version=${VERSION}" \
+            -o "dist/${BIN}" ./cmd/kiln
+
+      - name: archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eu
+          VERSION=${GITHUB_REF_NAME}
+          NAME="kiln_${VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p "out/${NAME}"
+          if [ "${GOOS}" = "windows" ]; then
+            cp dist/kiln.exe "out/${NAME}/kiln.exe"
+            cp README.md LICENSE* "out/${NAME}/" 2>/dev/null || true
+            (cd out && zip -q -r -X "${NAME}.zip" "${NAME}")
+            echo "ARCHIVE=${NAME}.zip" >> "$GITHUB_ENV"
+          else
+            cp dist/kiln "out/${NAME}/kiln"
+            cp README.md LICENSE* "out/${NAME}/" 2>/dev/null || true
+            tar -C out -czf "out/${NAME}.tar.gz" "${NAME}"
+            echo "ARCHIVE=${NAME}.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: checksum
+        run: |
+          set -eu
+          cd out
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiln-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            out/*.tar.gz
+            out/*.zip
+            out/*.sha256
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: kiln-*
+          merge-multiple: true
+
+      - name: build checksums.txt
+        run: |
+          set -eu
+          cd artifacts
+          rm -f checksums.txt
+          for f in *.sha256; do
+            cat "$f" >> checksums.txt
+          done
+          rm -f *.sha256
+          sort -k2 -o checksums.txt checksums.txt
+          cat checksums.txt
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          VERSION=${GITHUB_REF_NAME}
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --generate-notes \
+            artifacts/*.tar.gz artifacts/*.zip artifacts/checksums.txt

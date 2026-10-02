@@ -68,7 +68,7 @@ func KillLeftoverJobs() {
 	leftoverGroups.mu.Lock()
 	defer leftoverGroups.mu.Unlock()
 	for pgid := range leftoverGroups.pgids {
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		_ = KillProcessGroup(pgid, SignalTerm)
 		delete(leftoverGroups.pgids, pgid)
 	}
 }
@@ -133,13 +133,13 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	cmd := exec.CommandContext(ctx, shellPath, "-c", command)
 	cmd.Dir = cwd
 	cmd.Env = buildEnv(opts.Env, opts.InheritEnv)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	SetProcGroup(cmd)
 	// exec.CommandContext's default cancel (ctx.Done) sends the process a
 	// plain Kill signal to the leader only; override so the whole process
 	// group dies, matching pi's killProcessTree.
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = KillProcessGroup(cmd.Process.Pid, SignalKill)
 		}
 		return nil
 	}
@@ -200,7 +200,7 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 		pid := cmd.Process.Pid
 		timer = time.AfterFunc(opts.Timeout, func() {
 			timedOut.Store(true)
-			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			_ = KillProcessGroup(pid, SignalKill)
 		})
 	}
 
@@ -211,7 +211,7 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	// The shell ran in its own process group; if anything is still in it,
 	// the command backgrounded a job that is still running.
 	pgid := cmd.Process.Pid
-	jobsLeft := syscall.Kill(-pgid, 0) == nil
+	jobsLeft := ProcGroupAlive(pgid)
 	if jobsLeft {
 		leftoverGroups.mu.Lock()
 		leftoverGroups.pgids[pgid] = struct{}{}

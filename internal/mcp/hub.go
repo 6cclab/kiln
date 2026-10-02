@@ -14,11 +14,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/tool"
 )
@@ -373,7 +373,7 @@ func buildTransport(cfg ServerConfig) (sdk.Transport, *exec.Cmd, error) {
 		}
 		cmd := exec.Command(cfg.Command, cfg.Args...)
 		cmd.Env = mergeEnv(os.Environ(), cfg.Env)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		execenv.SetProcGroup(cmd)
 		// TerminateDuration is how long Close waits after closing stdin
 		// before it kills the child. It used to equal the connect timeout,
 		// so a server that never answered cost two timeouts: one for the
@@ -403,7 +403,7 @@ func killGroup(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_ = execenv.KillProcessGroup(cmd.Process.Pid, execenv.SignalKill)
 }
 
 // headerTransport is an http.RoundTripper that adds fixed headers to every
