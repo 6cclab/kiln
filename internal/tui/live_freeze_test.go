@@ -118,7 +118,7 @@ func TestLiveFreeze_FinishTurnCommitsPlanOnce(t *testing.T) {
 	m.plan.Set([]TodoView{{Content: "only step", Status: TodoInProgressStatus}})
 	// Nothing else commits mid-turn: finishTurn is the only thing that
 	// ever freezes this plan.
-	nm := m.finishTurn(msgTurnResult{})
+	nm, _ := m.finishTurn(msgTurnResult{})
 	m = nm
 
 	printed := waitForNPrinted(t, f, 1)
@@ -142,7 +142,7 @@ func TestLiveFreeze_FinishTurnCommitsPlanOnce(t *testing.T) {
 	m2.plan.Set([]TodoView{{Content: "frozen early", Status: TodoInProgressStatus}})
 	m2.commit([]string{"mid-turn block"}) // freezes the plan right here
 	waitForNPrinted(t, f2, 2)
-	m2 = m2.finishTurn(msgTurnResult{})
+	m2, _ = m2.finishTurn(msgTurnResult{})
 	time.Sleep(20 * time.Millisecond) // let the committer drain; nothing more should arrive
 	printed2, _ := f2.snapshot()
 	count2 := 0
