@@ -23,7 +23,7 @@ func TestProxyLocalTargets(t *testing.T) {
 	port := target.Listener.Addr().(*net.TCPAddr).Port
 
 	get := func(p *Proxy, hostport string) int {
-		proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", p.Port()))
+		proxyURL, _ := url.Parse(fmt.Sprintf("http://%s@127.0.0.1:%d", p.Userinfo(), p.Port()))
 		c := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
 		resp, err := c.Get("http://" + hostport + "/")
 		if err != nil {

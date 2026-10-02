@@ -2,6 +2,10 @@ package sandbox
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -48,6 +52,7 @@ type Proxy struct {
 
 	mu       sync.Mutex
 	approved map[string]bool // host -> allowed for the session
+	token    string          // the credential Userinfo carries
 	events   []BlockEvent
 
 	ln  net.Listener
@@ -64,12 +69,30 @@ type BlockEvent struct {
 
 // NewProxy builds a proxy for the given allow and deny lists.
 func NewProxy(allowed, denied []string, strict bool) *Proxy {
+	var tok [16]byte
+	_, _ = rand.Read(tok[:])
 	return &Proxy{
 		allow:    parseHostRules(allowed, false),
 		deny:     parseHostRules(denied, true),
 		strict:   strict,
 		approved: map[string]bool{},
+		token:    hex.EncodeToString(tok[:]),
 	}
+}
+
+// proxyUser is the user name in the proxy's credential; the password is
+// the per-session token.
+const proxyUser = "kiln"
+
+// Userinfo is the credential sandboxed commands put in the proxy URL
+// ("kiln:<token>"). The proxy serves only requests that carry it, so
+// another process on this machine cannot use it, nor raise prompts
+// through it.
+func (p *Proxy) Userinfo() string { return proxyUser + ":" + p.token }
+
+func (p *Proxy) authorized(r *http.Request) bool {
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte(p.Userinfo()))
+	return subtle.ConstantTimeCompare([]byte(r.Header.Get("Proxy-Authorization")), []byte(want)) == 1
 }
 
 // Start listens on a loopback port and serves until Close.
@@ -303,6 +326,12 @@ func localKind(a netip.Addr, own []netip.Addr) string {
 
 // ServeHTTP handles CONNECT tunnels and absolute-form HTTP requests.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !p.authorized(r) {
+		w.Header().Set("Proxy-Authenticate", `Basic realm="kiln sandbox"`)
+		http.Error(w, "kiln sandbox proxy: this proxy serves only kiln's sandboxed commands", http.StatusProxyAuthRequired)
+		return
+	}
+	r.Header.Del("Proxy-Authorization")
 	if r.Method == http.MethodConnect {
 		p.serveConnect(w, r)
 		return
