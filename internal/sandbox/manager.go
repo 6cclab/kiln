@@ -328,7 +328,23 @@ func (m *Manager) plan(cwd string) (Plan, *Proxy, error) {
 	if err != nil {
 		return Plan{}, nil, err
 	}
-	return buildPlan(m.cfg, cwd, m.opts.Roots(), tmp, m.opts.Home, httpPort, socksPort), proxy, nil
+	p := buildPlan(m.cfg, cwd, m.opts.Roots(), tmp, m.opts.Home, httpPort, socksPort)
+	if proxy != nil {
+		withProxyCredential(&p, proxy.Userinfo())
+	}
+	return p, proxy, nil
+}
+
+// withProxyCredential puts kiln's proxy credential in the proxy URLs a
+// command is given (curl, git, npm, pip and Go's net/http all send the
+// userinfo of a proxy URL as Proxy-Authorization).
+func withProxyCredential(p *Plan, userinfo string) {
+	prefix := "http://127.0.0.1:" + itoa(p.HTTPProxyPort)
+	for k, v := range p.Env {
+		if v == prefix {
+			p.Env[k] = "http://" + userinfo + "@127.0.0.1:" + itoa(p.HTTPProxyPort)
+		}
+	}
 }
 
 // commandSandbox is one command's sandbox (execenv.CommandSandbox).

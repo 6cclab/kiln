@@ -348,7 +348,7 @@ func TestProxyDecisions(t *testing.T) {
 	}
 	defer p.Close()
 	get := func(host string) (int, string) {
-		proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", p.Port()))
+		proxyURL, _ := url.Parse(fmt.Sprintf("http://%s@127.0.0.1:%d", p.Userinfo(), p.Port()))
 		c := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
 		resp, err := c.Get(fmt.Sprintf("http://%s:%d/", host, port))
 		if err != nil {
@@ -400,7 +400,7 @@ func TestProxyLocalAddressCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", p.Port()))
+	proxyURL, _ := url.Parse(fmt.Sprintf("http://%s@127.0.0.1:%d", p.Userinfo(), p.Port()))
 	c := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
 	resp, err := c.Get(fmt.Sprintf("http://myapp.test:%d/", port))
 	if err != nil {
