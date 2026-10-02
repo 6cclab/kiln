@@ -793,7 +793,8 @@ func (p *PromptState) Render(width int) []string {
 			fb = &feedback
 		}
 		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc, Feedback: fb,
-			Grantable: req.Grantable, DontAskRules: req.DontAskRules, InAutoMode: req.InAutoMode}, width, p.pending.selected)
+			Grantable: req.Grantable, DontAskRules: req.DontAskRules, InAutoMode: req.InAutoMode,
+			Unsandboxed: req.Unsandboxed}, width, p.pending.selected)
 	case "edit":
 		return RenderEditPermissionPrompt(EditPermissionRequest{
 			Kind:  EditKindEdit,

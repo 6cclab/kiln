@@ -734,6 +734,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return gate.WithinRoots(dir) || gate.WithinReadOnlyRoots(dir) || gate.InScratchpad(dir)
 	}
 
+	// The OS sandbox for the bash tools (sandbox.go), bound to the gate
+	// and to env before the tools are built.
+	sandboxMgr, err := startSandbox(cwd, settings, perms, gate, env, startupWarn)
+	if err != nil {
+		fmt.Fprintln(stderr, "kiln:", err)
+		return 1
+	}
+	defer sandboxMgr.Close()
+
 	// --- MCP ---------------------------------------------------------
 	// Ported from cli.ts's MCP block (src/cli.ts:180-348): connect every
 	// configured server, resolve the active posture, build tool_search and
