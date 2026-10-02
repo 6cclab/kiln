@@ -334,6 +334,14 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		// provider/model, the same label the footer showed at startup and
 		// cli.ts's onModelChanged passes.
 		bridge.ModelSwitch(resolved.Model.Provider+"/"+resolved.Model.ID, resolved.Tier.Name, resolved.Tier.ContextWindow)
+		// deps.Resolved is what ResolveMentions (above, closed over
+		// &deps.Resolved.Tier) and anything else built from `deps` reads
+		// for the rest of the session. Without updating it here, a model
+		// switch moved started.Tier (agent.SetModel) and the footer
+		// (bridge.ModelSwitch just above) to the new tier but left this
+		// closure's view of the tier - and so @mention inlining's
+		// per-mention token budget - on the model it started with.
+		deps.Resolved = resolved
 	}
 
 	// Off the main goroutine: Program.Send blocks until the event loop is

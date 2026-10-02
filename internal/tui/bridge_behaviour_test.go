@@ -289,6 +289,32 @@ func TestWebSearchBusyLabel(t *testing.T) {
 	}
 }
 
+// TestBridge_ModelSwitch_CarriesContextWindow checks that ModelSwitch's
+// "usable" argument (the new tier's ContextWindow, as internal/cli/tui.go's
+// OnModelChanged passes resolved.Tier.ContextWindow) reaches MsgModelInfo
+// rather than being dropped on the floor - the bug that left the footer's
+// context meter showing the previous model's window after /model.
+func TestBridge_ModelSwitch_CarriesContextWindow(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+
+	b.ModelSwitch("anthropic/claude-opus-4-8", "opus", 200000)
+
+	got := waitForOneSent(t, f)
+	info, ok := got.(MsgModelInfo)
+	if !ok {
+		t.Fatalf("sent %#v, want MsgModelInfo", got)
+	}
+	if info.Label != "anthropic/claude-opus-4-8" {
+		t.Errorf("Label = %q, want anthropic/claude-opus-4-8", info.Label)
+	}
+	if info.ContextWindow != 200000 {
+		t.Errorf("ContextWindow = %d, want 200000 (it must not stay 0/stale)", info.ContextWindow)
+	}
+}
+
 func TestFaultHint(t *testing.T) {
 	cases := map[string]string{
 		"Unauthorized (401): invalid api key":          "/login",

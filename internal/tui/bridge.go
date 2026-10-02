@@ -1548,7 +1548,13 @@ func (b *Bridge) HookNotice(message string) {
 func (b *Bridge) ModelSwitch(label string, tierName string, usable int) {
 	// No transcript note of its own: /model, the only thing that switches
 	// models, confirms the switch itself, and a second note repeated it.
-	b.SendAsync(MsgModelInfo{Label: label})
+	//
+	// usable is the new tier's ContextWindow (internal/cli/tui.go's call
+	// site passes resolved.Tier.ContextWindow); it must reach the footer
+	// or the context meter keeps the old model's window as its
+	// denominator after a switch (the "% used" figure silently lies about
+	// what it is a percentage of).
+	b.SendAsync(MsgModelInfo{Label: label, ContextWindow: usable})
 }
 
 // --- helpers -------------------------------------------------------------

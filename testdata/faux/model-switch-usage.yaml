@@ -1,0 +1,7 @@
+models:
+  faux-1:
+    - text: "ok"
+      usage: {input: 1280, output: 0}
+  faux-2:
+    - text: "ok2"
+      usage: {input: 1638, output: 0}
