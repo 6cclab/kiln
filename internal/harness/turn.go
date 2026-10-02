@@ -686,15 +686,45 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		refusal = &r
 	}
 
+	// Input the permission gate and the tool would read differently never
+	// reaches either: the gate and the PreToolUse hooks read keys from the
+	// map exactly, while the tools decode it with encoding/json, which
+	// matches keys case-insensitively (see internal/tool/argcheck.go).
+	// Checked here, before every before_tool hook, because this is the one
+	// place every tool call passes through: top-level lanes, subagents
+	// (each runs its own Harness through this same loop) and resumed calls
+	// alike.
+	if refusal == nil && call.InvalidArgs == "" {
+		t, _ := l.h.opts.Tools.Get(call.Name)
+		if err := tool.CheckArgsMapFor(t, call.Arguments); err != nil {
+			diag.L().Info("tool refused: ambiguous input", "lane", l.name, "tool", call.Name, "reason", err.Error())
+			r := argsRefusal(call.Name, err)
+			refusal = &r
+		}
+	}
+
 	var before BeforeToolResult
 	if refusal == nil {
 		before = l.invokeBeforeTool(ctx, call)
 	}
 
 	args := call.Arguments
-	if before.RewrittenArgs != nil {
+	if refusal == nil && before.Block == nil && before.RewrittenArgs != nil {
+		// A PreToolUse hook rewrote the input. The gate judged the
+		// rewritten input (claudehooks.GuardToolCall checks it with
+		// Harness.CheckToolArgs before the gate runs); this re-check makes
+		// it impossible for the tool to run anything else. Falling back to
+		// the original input on an unparsable rewrite, as this once did,
+		// would run what the gate never judged.
+		t, _ := l.h.opts.Tools.Get(call.Name)
 		var rewritten map[string]any
-		if err := json.Unmarshal(before.RewrittenArgs, &rewritten); err == nil {
+		if err := tool.CheckArgsFor(t, before.RewrittenArgs); err != nil {
+			r := argsRefusal(call.Name, err)
+			refusal = &r
+		} else if err := json.Unmarshal(before.RewrittenArgs, &rewritten); err != nil {
+			r := tool.Errorf("The call to %s did not run: a hook rewrote its input into something that is not a JSON object.", call.Name)
+			refusal = &r
+		} else {
 			args = rewritten
 		}
 	}
@@ -731,6 +761,24 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		ToolCallID: call.ID,
 		ToolName:   call.Name,
 	}, before.PermissionOutcome, nil
+}
+
+// argsRefusal is the tool result for input tool.CheckArgs refused.
+func argsRefusal(toolName string, err error) tool.Result {
+	return tool.Errorf("The call to %s did not run: %s. Send each parameter once, spelled exactly as the tool declares it.", toolName, err.Error())
+}
+
+// CheckToolArgs runs tool.CheckArgs on args against the named tool's
+// schema, the same check beginTool applies to every call. A PreToolUse
+// hook wrapper calls it on hook-rewritten input before the permission
+// gate judges that input. An unknown tool name passes: beginTool refuses
+// those itself, before any hook runs.
+func (h *Harness) CheckToolArgs(name string, args map[string]any) error {
+	t, ok := h.opts.Tools.Get(name)
+	if !ok {
+		return nil
+	}
+	return tool.CheckArgsMapFor(t, args)
 }
 
 // commitToolResult writes a tool call's remaining two transactions: the
