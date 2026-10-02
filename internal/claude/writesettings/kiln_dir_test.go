@@ -88,7 +88,8 @@ func TestWritesLandOnlyInKiln(t *testing.T) {
 }
 
 // TestKilnDirGitignore: creating <cwd>/.kiln also creates .kiln/.gitignore
-// holding "*"; an existing one is left alone; no temp file is left behind.
+// ignoring everything except mcp.json (which is meant to be committed, like
+// .mcp.json); an existing one is left alone; no temp file is left behind.
 func TestKilnDirGitignore(t *testing.T) {
 	cwd := t.TempDir()
 	if err := AddRule(cwd, Allow, "Read"); err != nil {
@@ -96,8 +97,8 @@ func TestKilnDirGitignore(t *testing.T) {
 	}
 	gi := filepath.Join(cwd, ".kiln", ".gitignore")
 	data, err := os.ReadFile(gi)
-	if err != nil || string(data) != "*\n" {
-		t.Fatalf(".kiln/.gitignore = %q (%v), want \"*\\n\"", data, err)
+	if err != nil || string(data) != "*\n!mcp.json\n!.gitignore\n" {
+		t.Fatalf(".kiln/.gitignore = %q (%v), want the mcp.json-carved-out pattern", data, err)
 	}
 	if err := os.WriteFile(gi, []byte("custom\n"), 0o644); err != nil {
 		t.Fatal(err)
