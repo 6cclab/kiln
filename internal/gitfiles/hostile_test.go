@@ -1,6 +1,7 @@
 package gitfiles
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,8 +10,11 @@ import (
 	"time"
 )
 
-// within fails the test unless fn returns within a second: a read of
-// /dev/zero or a FIFO must end at once, not allocate or block.
+// within fails the test unless fn returns within half a second: a read of
+// /dev/zero or a FIFO must end at once, not allocate or block. On a
+// timeout it ends the whole test process: fn's goroutine cannot be
+// stopped, and an unbounded read of /dev/zero left running would take
+// gigabytes of memory before the package's other tests finished.
 func within(t *testing.T, what string, fn func()) {
 	t.Helper()
 	done := make(chan struct{})
@@ -20,8 +24,9 @@ func within(t *testing.T, what string, fn func()) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("%s did not return within a second", what)
+	case <-time.After(500 * time.Millisecond):
+		fmt.Fprintf(os.Stderr, "--- FAIL: %s: %s did not return within half a second; exiting so the read cannot keep allocating\n", t.Name(), what)
+		os.Exit(1)
 	}
 }
 
