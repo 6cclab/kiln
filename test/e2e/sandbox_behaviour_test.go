@@ -114,7 +114,11 @@ func TestSandbox_NetworkApprovalPrompt(t *testing.T) {
 	s.Send("fetch it")
 	s.SendKey("enter")
 	target := "approve-me.invalid"
-	if err := s.WaitFor("sandbox network", 10*time.Second); err != nil {
+	// Wording fixed by qa/findings/20261004T205021Z-sandbox-network-
+	// prompt-wording.json: the prompt asks about the host directly
+	// ("Allow network access to <host>?"), not "Allow kiln to use sandbox
+	// network?".
+	if err := s.WaitFor("Allow network access to", 10*time.Second); err != nil {
 		t.Fatalf("no network approval prompt: %v\n%s", err, strings.Join(s.Rows(), "\n"))
 	}
 	if err := s.WaitFor(target, 2*time.Second); err != nil {
