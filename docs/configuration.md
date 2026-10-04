@@ -263,6 +263,7 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 | `autoMemoryEnabled` | `*bool` | last non-nil wins (§7's "Auto memory") |
 | `autoMemoryDirectory` | `string` | last non-empty wins; absolute or `~/`-prefixed (§7's "Auto memory") |
 | `autoMode.environment`, `autoMode.allow`, `autoMode.soft_deny`, `autoMode.hard_deny` | `AutoModeConfig` (`settings/automode.go`, `LoadAutoMode`) | read **only** from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`, concatenated in that order; ignored in project and local settings, with a startup warning (see "Auto mode classifier") |
+| `sandbox` | `Sandbox` (`sandbox.go`) | Claude Code's rules: booleans last-set wins, arrays combined; some keys only from user settings or `--settings` (see "Sandbox" below) |
 
 ### Permission rule syntax (`MatchesRule`, `settings.go`)
 
@@ -346,7 +347,7 @@ A print run has nobody to ask, so what would ask is refused, and the tool result
 
 `execenv/scratchpad.go`, `permission/scratchpad.go`. Each session gets a private directory for temporary files, `<temp root>/<project>/<session id>/scratchpad`, where the temp root is `$KILN_TMPDIR`, else `$CLAUDE_CODE_TMPDIR`, else `/tmp`, joined with `kiln-<uid>`. Every level is created `0700`; a temp root that is a symlink, owned by someone else or open to others is refused, and the session runs without a scratchpad (logged). The system prompt names the directory and tells the model to use it for all temporary files instead of `/tmp` or the project.
 
-Reading and writing it never prompts, in every mode (plan mode included), as Claude Code treats its session scratchpad: file tools whose one path argument is inside it, and bash commands kiln can fully analyse that write only there, read only there or in the workspace, and run only read-only or plain file commands (`mkdir`, `touch`, `cp`, `mv`, `tee`, `rm`, `rmdir`; `cp` only with `-f -i -n -p -v`, `mv` only with `-f -i -n -v`). `ln`, and any `cp`/`mv` option that copies a link or names a destination (`-R`, `-a`, `-P`, `-t`, long options), take a command off the fast path: the analysis sees the filesystem before the line runs, so a link made early in a line (`ln -s ~ $S/l && echo x > $S/l/f`) would otherwise redirect a later write. Deny and ask rules still apply first. A path counts only when it is inside both as written and through symlinks, so a symlink planted in the scratchpad that points elsewhere is gated like its target; and a file there with more than one hard link does not count at all, since the same file has another name elsewhere. Deny rules and the workspace check are path-based and do not look at link counts (a hard link inside the workspace to a file outside is judged by its workspace path); the scratchpad looks because it is the one place that skips every prompt. The temp root comes only from kiln's own environment: a settings file's `env` does not set it. Subagents share the parent session's gate and so its scratchpad. The sandbox branch's writable temp dir is meant to be the same `kiln-<uid>` root (merge note in `execenv/scratchpad.go`).
+Reading and writing it never prompts, in every mode (plan mode included), as Claude Code treats its session scratchpad: file tools whose one path argument is inside it, and bash commands kiln can fully analyse that write only there, read only there or in the workspace, and run only read-only or plain file commands (`mkdir`, `touch`, `cp`, `mv`, `tee`, `rm`, `rmdir`; `cp` only with `-f -i -n -p -v`, `mv` only with `-f -i -n -v`). `ln`, and any `cp`/`mv` option that copies a link or names a destination (`-R`, `-a`, `-P`, `-t`, long options), take a command off the fast path: the analysis sees the filesystem before the line runs, so a link made early in a line (`ln -s ~ $S/l && echo x > $S/l/f`) would otherwise redirect a later write. Deny and ask rules still apply first. A path counts only when it is inside both as written and through symlinks, so a symlink planted in the scratchpad that points elsewhere is gated like its target; and a file there with more than one hard link does not count at all, since the same file has another name elsewhere. Deny rules and the workspace check are path-based and do not look at link counts (a hard link inside the workspace to a file outside is judged by its workspace path); the scratchpad looks because it is the one place that skips every prompt. The temp root comes only from kiln's own environment: a settings file's `env` does not set it. Subagents share the parent session's gate and so its scratchpad. With the OS sandbox on, the same temp root is sandboxed commands' writable `$TMPDIR`, so they can write the scratchpad too.
 
 ### Auto mode classifier
 
@@ -375,6 +376,49 @@ d.Gate.Check(ctx, permission.Request{ToolName: "task", PrimaryArg: "role:" + req
 ```
 
 So a rule like `task(role:heavy)` matches this specific check via the paren-form syntax above. Same-provider role reuse, free models, and non-crossing dispatches never hit this gate — they're covered by the subagent's own tool calls being checked generically as they happen.
+
+### Sandbox
+
+`internal/claude/settings/sandbox.go`, `internal/sandbox`, `internal/claude/permission/sandbox.go`.
+The `sandbox` object runs the `bash` and `bash_background` commands inside an OS sandbox, as
+Claude Code's [sandboxing](https://code.claude.com/docs/en/sandboxing) does: `sandbox-exec` on
+macOS, `bwrap` plus `socat` on Linux, unsupported elsewhere. Keys read: `enabled`,
+`failIfUnavailable`, `autoAllowBashIfSandboxed` (default true), `allowUnsandboxedCommands`
+(default true), `excludedCommands`, `enableWeakerNestedSandbox`, `enableWeakerNetworkIsolation`,
+`allowAppleEvents`, `ignoreViolations` (no effect), `filesystem.{allowWrite,denyWrite,denyRead,
+allowRead,disabled}`, `network.{allowedDomains,deniedDomains,allowUnixSockets,allowAllUnixSockets,
+allowLocalBinding,allowMachLookup,strictAllowlist,httpProxyPort,socksProxyPort}`,
+`credentials.{files,envVars}`. `filesystem.disabled`, `allowAppleEvents`,
+`network.strictAllowlist` and credential `mask` entries count only from user settings and
+`--settings`. A repository's settings cannot turn the sandbox off over the user's `enabled: true`
+or widen it (catch-all `excludedCommands`, writes covering home, `*` domains, Unix sockets,
+local binding, proxy ports); those entries are ignored with a startup warning. Sandboxed commands get `$TMPDIR` set to kiln's temp root (the scratchpad's parent, see
+"Session scratchpad"), `HTTP(S)_PROXY`/`ALL_PROXY` pointing at kiln's proxy (with the session's proxy credential in
+the URL), and
+`KILN_SANDBOX=1`.
+
+Tool caches (a kiln divergence: Claude Code leaves them unwritable, so `go build` or `npm install`
+fail in its sandbox): sandboxed commands get the well-known cache variables pointed at
+`<temp root>/cache/<tool>` (created `0700`, owner-checked): `GOCACHE`, `GOMODCACHE`,
+`npm_config_cache`, `npm_config_store_dir` (pnpm's store), `YARN_CACHE_FOLDER`,
+`BUN_INSTALL_CACHE_DIR`, `DENO_DIR`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `POETRY_CACHE_DIR`,
+`PRE_COMMIT_HOME`, `COMPOSER_CACHE_DIR`, `CCACHE_DIR` and `XDG_CACHE_HOME`, and `GOTMPDIR` set to the
+sandbox's `$TMPDIR`. A variable you set yourself (non-empty in kiln's environment, in the settings
+`env`, or for Go's in `go env -w`'s file) is left as it is, even when that path is out of the
+sandbox's reach. The real cache directories stay unwritable. Commands outside the sandbox are not
+affected. `CARGO_TARGET_DIR` is build output, not a cache, and is not set.
+
+`git init` works in a workspace root that has no `.git`. The new git directory is held to what git
+init writes (on macOS by the profile: no hook under a name git runs, no `commondir`, `gitdir`,
+`config.worktree` or `info/attributes`), and after the command kiln cleans it: hooks other than
+`*.sample` and those redirect files are removed, a `.git` that is a file or a link is removed, and
+`config` keeps only what git init writes, `user.name`/`user.email`, remotes' `url`/`fetch` and
+branches' `remote`/`merge` (a `core.hooksPath`, `core.fsmonitor` or `include.path` is dropped). From
+the next command on it is an existing repository, whose config and hooks are not writable. kiln
+cleans such a repository again after every later command and on exit, since a background process
+can outlive the command that created it.
+
+What is matched and what is not: `docs/claude-code-parity.md`, "Bash sandbox".
 
 ### Permission modes
 
@@ -449,9 +493,9 @@ Namespace: the relative path under `commands/` with `.md` stripped; every direct
 
 ### Memory (`CLAUDE.md`)
 
-Discovery: `~/.claude/CLAUDE.md` and `~/.kiln/CLAUDE.md` (user; the second holds `#` notes kiln saves when the project has no `CLAUDE.md`), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
+Discovery: `~/.claude/CLAUDE.md` (user), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
 
-`@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently.
+`@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently. An import in a project memory file (`CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md`) whose path resolves outside the working directory is external: as in Claude Code, it loads only once external imports are approved for the project. kiln has no approval dialog; it honours the approval recorded when you accepted Claude Code's dialog for the project, and otherwise renders `<!-- external import not loaded ... -->` and warns at startup. Imports in your user memory files always load.
 
 Budget: `LoadMemory(cwd, budgetTokens)` estimates tokens as `ceil(len/4)`; the budget is the tier's `SystemPromptTokens` (10% of the context window, 2k–32k). CLAUDE.md files always load in full. Rules load in full while the budget allows, project rules first; the rest are listed in a `<memory-index>` block, one line each with the rule's path and its frontmatter `description` (else its first heading), and the model is told to read a rule before doing work it covers. `Assembled.Indexed` lists those paths (logged at startup); if the CLAUDE.md files alone exceed the budget they load anyway and kiln prints a warning.
 

@@ -11,12 +11,8 @@ import (
 // The session scratchpad: a per-session directory the model writes
 // temporary files to, without permission prompts, instead of /tmp or the
 // project, as Claude Code's session scratchpad is used. kiln's lives under
-// its own per-user temp root.
-//
-// MERGE NOTE: the sandbox branch makes /tmp/kiln-<uid> the sandbox's
-// writable temp dir ($TMPDIR inside the sandbox). TempRoot is meant to be
-// that same directory, so a sandboxed command can write the scratchpad;
-// reconcile the two helpers into this one at merge.
+// its own per-user temp root, which is also the OS sandbox's writable
+// $TMPDIR (internal/sandbox), so sandboxed commands can write it too.
 
 // TempRoot is kiln's per-user temp root: $KILN_TMPDIR, else
 // $CLAUDE_CODE_TMPDIR (Claude Code's override, which kiln honours as it
@@ -34,6 +30,28 @@ func TempRoot() string {
 	return filepath.Join(base, tempDirName())
 }
 
+// EnsureTempRoot creates TempRoot (0700) and returns its real path,
+// refusing one that is a symlink, not a directory, not owned by this user,
+// or open to others. The OS sandbox uses it as sandboxed commands'
+// writable $TMPDIR, so the session scratchpad under it is writable to them.
+func EnsureTempRoot() (string, error) {
+	root := TempRoot()
+	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(root, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", err
+	}
+	if err := checkPrivateDir(root); err != nil {
+		return "", err
+	}
+	real, ok := RealPath(root)
+	if !ok {
+		return "", fmt.Errorf("temp root %s: cannot resolve", root)
+	}
+	return real, nil
+}
+
 // ScratchpadDir is the scratchpad path for one session of the project in
 // cwd: <TempRoot>/<project slug>/<sessionID>/scratchpad. It is not created.
 func ScratchpadDir(cwd, sessionID string) string {
@@ -46,16 +64,10 @@ func ScratchpadDir(cwd, sessionID string) string {
 // owned by this user, or open to others: in a shared /tmp someone else could
 // have created it first to read or redirect what the model writes.
 func EnsureScratchpad(cwd, sessionID string) (string, error) {
+	if _, err := EnsureTempRoot(); err != nil {
+		return "", err
+	}
 	root := TempRoot()
-	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
-		return "", err
-	}
-	if err := os.Mkdir(root, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		return "", err
-	}
-	if err := checkPrivateDir(root); err != nil {
-		return "", err
-	}
 	dir := ScratchpadDir(cwd, sessionID)
 	rel, _ := filepath.Rel(root, dir)
 	cur := root

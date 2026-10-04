@@ -26,12 +26,12 @@ import (
 // MCP tool, a subagent dispatch — is classified. The docs' decision order
 // ("How the classifier evaluates actions") lists the same steps.
 //
-// Seam for the bash sandbox: a sandboxed bash call that settings allow
-// without asking (autoAllowBashIfSandboxed) is approved by that mechanism,
-// not by the classifier, in Claude Code as well. It should reach this file
-// as an Allow that autoSkipsClassifier reports as skipped — mark it on the
-// Hits (as an allow) or extend autoSkipsClassifier; do not route it through
-// classifyAuto.
+// The bash sandbox: a sandboxed bash call that settings allow without
+// asking (autoAllowBashIfSandboxed) is approved by that mechanism, not by
+// the classifier, in Claude Code as well. checkSandboxed (sandbox.go)
+// approves it before the flow reaches this file; a bash call outside the
+// sandbox (excludedCommands, an unsandboxed retry) is classified like any
+// other.
 
 // Classifier judges one action in auto mode. Implemented by
 // internal/automode on top of a model; tests use fakes.

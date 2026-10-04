@@ -604,6 +604,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	if n := len(memory.Indexed); n > 0 {
 		diag.L().Info("memory: rules indexed, not loaded in full", "count", n, "budget", resolved.Tier.SystemPromptTokens, "paths", memory.Indexed)
 	}
+	if n := len(memory.ExternalSkipped); n > 0 {
+		startupWarn(fmt.Sprintf("%d CLAUDE.md import(s) of files outside this project not loaded: external imports need approval for the project (approve them in Claude Code). %s", n, strings.Join(memory.ExternalSkipped, ", ")))
+	}
 	if memory.OverBudget {
 		startupWarn(fmt.Sprintf("CLAUDE.md files use ~%dk tokens, over this model's %dk memory budget; loaded anyway.", memory.EstimatedTokens/1000, resolved.Tier.SystemPromptTokens/1000))
 	}
@@ -733,6 +736,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	env.DidYouMeanDirAllowed = func(dir string) bool {
 		return gate.WithinRoots(dir) || gate.WithinReadOnlyRoots(dir) || gate.InScratchpad(dir)
 	}
+
+	// The OS sandbox for the bash tools (sandbox.go), bound to the gate
+	// and to env before the tools are built.
+	sandboxMgr, err := startSandbox(cwd, settings, perms, gate, env, startupWarn)
+	if err != nil {
+		fmt.Fprintln(stderr, "kiln:", err)
+		return 1
+	}
+	defer sandboxMgr.Close()
 
 	// --- MCP ---------------------------------------------------------
 	// Ported from cli.ts's MCP block (src/cli.ts:180-348): connect every

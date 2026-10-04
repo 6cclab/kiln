@@ -62,6 +62,9 @@ func bashTimeout(seconds *float64) (time.Duration, bool) {
 type bashArgs struct {
 	Command string   `json:"command"`
 	Timeout *float64 `json:"timeout"`
+	// DangerouslyDisableSandbox asks to run the command outside the OS
+	// sandbox (bash_sandbox.go); offered only while one is active.
+	DangerouslyDisableSandbox bool `json:"dangerouslyDisableSandbox"`
 }
 
 // bashDetails is the machine-readable payload alongside a bash result,
@@ -113,8 +116,8 @@ func BashTool(env *execenv.Env) *tool.Tool {
 	return &tool.Tool{
 		Name:        "bash",
 		Label:       "bash",
-		Description: bashDescription,
-		Parameters:  bashParameters,
+		Description: bashDescription + sandboxDescription(env),
+		Parameters:  bashParametersFor(env),
 		Execute: func(ctx context.Context, args json.RawMessage, onUpdate tool.Update, _ tool.Invocation) (tool.Result, error) {
 			var in bashArgs
 			if err := json.Unmarshal(args, &in); err != nil {
@@ -127,6 +130,7 @@ func BashTool(env *execenv.Env) *tool.Tool {
 
 			onUpdate(tool.Result{})
 
+			sandbox := commandSandbox(env, in.Command, in.DangerouslyDisableSandbox)
 			var view execenv.ShellOutputView
 			var haveView bool
 			result, execErr := env.Exec(ctx, in.Command, execenv.ExecOptions{
@@ -137,7 +141,8 @@ func BashTool(env *execenv.Env) *tool.Tool {
 					MaxLines: execenv.DefaultMaxLines,
 					Retain:   execenv.RetainTail,
 				},
-				Spill: true,
+				Spill:   true,
+				Sandbox: sandbox,
 				OnUpdate: func(update execenv.ShellOutputUpdate) {
 					var current *execenv.ShellOutputView
 					if haveView {
@@ -194,6 +199,11 @@ func BashTool(env *execenv.Env) *tool.Tool {
 			}
 			if result.ExitCode != 0 {
 				text := appendStatus(outputText, fmt.Sprintf("Command exited with code %d", result.ExitCode))
+				if sandbox != nil {
+					if note := sandbox.Explain(outputText, result.ExitCode); note != "" {
+						text += "\n\n" + note
+					}
+				}
 				return tool.Result{Content: msg.Blocks{msg.Text(text)}, Details: detailsJSON, IsError: true}, nil
 			}
 			if outputText == "" {

@@ -823,6 +823,7 @@ func (a *bashAnalysis) simple(assigns []assignment, words []evalWord, in stdinSo
 			cmd.forms = append(cmd.forms, joinWords([]string{base}, u.words[1:]))
 		}
 		cmd.forms = append(cmd.forms, findExecForms(u.words)...)
+		cmd.forms = append(cmd.forms, optionForms(u.words)...)
 	}
 
 	// Allow rules see the command with Claude Code's safe wrappers and
