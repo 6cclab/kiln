@@ -975,20 +975,9 @@ func errorOut(partial *msg.AssistantMessage, events chan<- msg.StreamEvent, abor
 }
 
 // computeAnthropicCost fills usage.Cost from model.Cost, matching pi's
-// calculateCost for the (non-tiered) common case.
+// calculateCost for the (non-tiered) common case (provider.ApplyCost).
 func computeAnthropicCost(model provider.Model, u *msg.Usage) {
-	rates := model.Cost.ModelCostRates
-	u.Cost = msg.Cost{
-		Input:      float64(u.Input) / 1_000_000 * rates.Input,
-		Output:     float64(u.Output) / 1_000_000 * rates.Output,
-		CacheRead:  float64(u.CacheRead) / 1_000_000 * rates.CacheRead,
-		CacheWrite: float64(u.CacheWrite) / 1_000_000 * rates.CacheWrite,
-	}
-	if u.ServerToolUse != nil {
-		// $10 per 1000 web searches, per Anthropic's published pricing.
-		u.Cost.Search = float64(u.ServerToolUse.WebSearchRequests) / 1000 * 10
-	}
-	u.Cost.Total = u.Cost.Input + u.Cost.Output + u.Cost.CacheRead + u.Cost.CacheWrite + u.Cost.Search
+	provider.ApplyCost(model, u)
 }
 
 // hasNonText reports whether blocks holds anything other than text.

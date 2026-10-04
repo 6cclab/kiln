@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/session"
@@ -111,6 +112,29 @@ type ContextUsageEstimate struct {
 	LastUsageIndex *int
 }
 
+// interruptedText is an aborted reply's text, which stays in the
+// conversation: the user interrupted it and usually answers what it said,
+// as in Claude Code, which keeps a partial reply too. pi leaves aborted
+// replies out; kiln keeps their text only (a tool call cut off mid-stream
+// has no result and cannot be sent back, reasoning is scratch work).
+func interruptedText(m msg.Message) (msg.AssistantMessage, bool) {
+	am, ok := m.(msg.AssistantMessage)
+	if !ok || am.StopReason != msg.StopAborted {
+		return msg.AssistantMessage{}, false
+	}
+	var text msg.Blocks
+	for _, b := range am.Content {
+		if t, ok := b.(msg.TextContent); ok && strings.TrimSpace(t.Text) != "" {
+			text = append(text, msg.Text(t.Text))
+		}
+	}
+	if len(text) == 0 {
+		return msg.AssistantMessage{}, false
+	}
+	am.Content = text
+	return am, true
+}
+
 // isContextMessage mirrors session/context.js's isContextMessage: every
 // message counts except an assistant message that ended in error, was
 // aborted, or was deferred (deferred responses have no committed content
@@ -156,6 +180,9 @@ func sessionEntryToContextMessages(e session.Entry) []msg.Message {
 	case session.EntryMessage:
 		if e.Message != nil && isContextMessage(e.Message) {
 			return []msg.Message{e.Message}
+		}
+		if am, ok := interruptedText(e.Message); ok {
+			return []msg.Message{am}
 		}
 		return nil
 	case session.EntryCompaction:

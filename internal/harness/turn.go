@@ -278,6 +278,8 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		}
 		if err != nil {
 			if ctx.Err() != nil {
+				// final is what had streamed when the user interrupted.
+				tip = l.commitInterrupted(operationID, tip, responseEntryID, final, cfg)
 				return l.finishAborted(operationID, tip)
 			}
 			return l.finishFailed(operationID, tip, err)
@@ -542,6 +544,9 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 	promptTokens := l.requestTokens(transcript)
 	retry := l.h.opts.Retry
 	var lastErr error
+	// interrupted is the partial message a stream reported when it ended
+	// early (its error event), for an interrupt to keep.
+	var interrupted *msg.AssistantMessage
 	for attempt := 1; attempt <= retry.MaxAttempts; attempt++ {
 		if attempt > 1 && responseEntryID != "" {
 			// The cut attempt's frames are not this response: a crash-resume
@@ -555,6 +560,9 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 		events, wait := p.Stream(reqCtx, m, transcript, opts)
 		for ev := range events {
 			watch.saw(ev)
+			if ev.Type == msg.EventError && ev.Error != nil {
+				interrupted = ev.Error
+			}
 			if responseEntryID != "" && ev.Type != msg.EventStart {
 				frame := Frame{Type: ev.Type, ContentIndex: ev.ContentIndex, Delta: ev.Delta, Content: ev.Content, ToolCall: ev.ToolCall, Reason: ev.Reason}
 				w, _ := session.AppendListWrite(session.PendingAssistantFrames(operationID, responseEntryID), json.RawMessage(mustMarshal(frame)))
@@ -574,7 +582,8 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 		}
 		lastErr = err
 		if ctx.Err() != nil {
-			return nil, err
+			// Interrupted: hand back what had streamed (drive keeps it).
+			return interrupted, err
 		}
 		if !isRetriable(err) || attempt == retry.MaxAttempts {
 			return nil, err

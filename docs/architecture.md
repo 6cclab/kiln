@@ -139,7 +139,11 @@ Interruption: `Lane.Abort` cancels the lane's `context.CancelFunc` and
 emits `EventOperationAbort`; the turn loop itself notices `ctx.Err() != nil`
 at the top of its next iteration or mid-request and calls `finishAborted`,
 which still writes the terminal `pi.result` transaction with
-`StatusAborted`. `Lane.Steer` queues text into `pi.lane.state.inbox` for
+`StatusAborted`. A reply interrupted mid-stream keeps its text
+(`Lane.commitInterrupted`, `internal/harness/interrupt.go`): it is committed
+as an aborted assistant entry, shown, sent with the next request
+(`compaction.ContextMessages` keeps an aborted reply's text), and its
+usage, with output estimated from what streamed, is counted. `Lane.Steer` queues text into `pi.lane.state.inbox` for
 injection at the next checkpoint (a best-effort approximation of pi's
 mid-stream steering).
 
