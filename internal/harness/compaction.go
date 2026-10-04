@@ -127,6 +127,20 @@ func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, s
 	if prep == nil {
 		return nil // nothing to compact (empty branch, or tip is already a compaction entry)
 	}
+	if len(prep.MessagesToSummarize) == 0 && len(prep.TurnPrefixMessages) == 0 && trigger == TriggerManual {
+		// Asked for explicitly, a compaction summarises even what the
+		// automatic one keeps as recent, as Claude Code's /compact does:
+		// the user wants the room now. Only the latest turn stays
+		// verbatim; a conversation of one turn has nothing to summarise.
+		keepLatest := l.h.opts.Compaction
+		keepLatest.KeepRecentTokens = latestTurnTokens(pathEntries)
+		if prep, err = compaction.Prepare(pathEntries, keepLatest); err != nil {
+			return err
+		}
+		if prep == nil {
+			return nil
+		}
+	}
 	if len(prep.MessagesToSummarize) == 0 && len(prep.TurnPrefixMessages) == 0 {
 		return nil // everything is recent and kept verbatim: no summary call to pay for
 	}
@@ -341,4 +355,25 @@ func (l *Lane) compactForOverflow(ctx context.Context, tip string) (string, bool
 	}
 	newTip, _ := l.GetTipID()
 	return newTip, newTip != tip
+}
+
+// latestTurnTokens estimates the latest turn: every message from the last
+// user message to the end of the branch. As a keep-recent budget it makes
+// compaction.FindCutPoint cut right before that user message.
+func latestTurnTokens(entries []session.Entry) int {
+	n := 0
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Type == session.EntryCompaction {
+			break
+		}
+		if e.Type != session.EntryMessage || e.Message == nil {
+			continue
+		}
+		n += compaction.EstimateTokens(e.Message)
+		if e.Message.MessageRole() == msg.RoleUser {
+			break
+		}
+	}
+	return n
 }

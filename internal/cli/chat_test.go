@@ -660,31 +660,6 @@ func benchClaudeMD() string {
 	return b.String()
 }
 
-// TestUsageRowContextTokens_MatchesTheMeter: /context and the TUI's pinned
-// status meter report the same occupancy — the last request's input,
-// cached input and output (bridge.go's EventUsage sum) — never the
-// session's running totals. With prompt caching nearly all input is
-// cached, so leaving it out reported "53 of 1000k" beside a 1% meter.
-func TestUsageRowContextTokens_MatchesTheMeter(t *testing.T) {
-	row := &msg.Usage{Input: 3_000, Output: 500, CacheRead: 900_000, CacheWrite: 50_000, TotalTokens: 953_500}
-	got, ok := usageRowContextTokens(row)
-	if !ok {
-		t.Fatal("ok = false, want true for a non-nil row")
-	}
-	if got != 953_500 {
-		t.Errorf("usageRowContextTokens = %d, want Input+CacheRead+CacheWrite+Output = 953500", got)
-	}
-}
-
-// TestUsageRowContextTokens_NilBeforeFirstUsageEvent covers the
-// not-yet-reported case: nil until the first EventUsage arrives.
-func TestUsageRowContextTokens_NilBeforeFirstUsageEvent(t *testing.T) {
-	got, ok := usageRowContextTokens(nil)
-	if ok {
-		t.Errorf("ok = true for a nil row (got %d), want false (nothing to report yet)", got)
-	}
-}
-
 // TestFileReadTokensFromToolEnd_OnlyCountsSuccessfulReads covers defect
 // 2's data source: /context's "Files read" segment must be sourced from
 // real "read" tool results, not fabricated, and must not count a tool

@@ -32,25 +32,16 @@ type switchFit struct {
 	outgoingWindow int
 }
 
-// conversationSize estimates what the next request carries: the
-// conversation as the model will see it (after any compaction), the
-// system prompt and the tool schemas, by the same chars/4 estimate the
-// harness checks requests with.
+// conversationSize is what the next request carries, system prompt and
+// tools included: the lane's one context estimate
+// (harness.Lane.ContextTokens), which the footer and /context also show.
+// Read after a switch it is the estimate the harness checks the new
+// model's requests with.
 func conversationSize(deps BuiltinDeps) int {
-	n := 0
-	if deps.Lane != nil {
-		n, _ = deps.Lane.EstimateConversationTokens()
+	if deps.Lane == nil {
+		return 0
 	}
-	if deps.SystemPromptTokens != nil {
-		if t, ok := deps.SystemPromptTokens(); ok {
-			n += t
-		}
-	}
-	if deps.ToolSchemaTokens != nil {
-		if t, ok := deps.ToolSchemaTokens(); ok {
-			n += t
-		}
-	}
+	n, _ := deps.Lane.ContextTokens()
 	return n
 }
 
@@ -80,10 +71,10 @@ func (s *switchFit) switched(outgoing string, outgoingWindow int, label string, 
 	if s.outgoing == label {
 		s.outgoing = ""
 	}
-	warning := fmt.Sprintf("The conversation (~%s tokens) is over %s's %s window: the next message compacts it with %s first, in parts that fit",
-		formatTokens(size), shortModel(label), formatTokens(tier.ContextWindow), shortModel(label))
+	warning := fmt.Sprintf("The conversation (~%s tokens with the system prompt and tools) is more than %s takes in one request (%s of its %s window; the rest is room for the reply): the next message compacts it with %s first, in parts that fit.",
+		formatTokens(size), shortModel(label), formatTokens(limit), formatTokens(tier.ContextWindow), shortModel(label))
 	if s.outgoing != "" {
-		warning += fmt.Sprintf(". Or /compact now to summarise it with %s, which holds all of it", s.outgoing)
+		warning += fmt.Sprintf(" Or /compact now to summarise it with %s, which holds all of it.", s.outgoing)
 	}
 	return warning
 }

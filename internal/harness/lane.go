@@ -389,6 +389,66 @@ func (l *Lane) EstimateConversationTokens() (int, error) {
 	return total, nil
 }
 
+// Model is the provider and model the lane's next request goes to.
+func (l *Lane) Model() (session.ModelRef, error) {
+	cfg, err := l.config()
+	return cfg.Model, err
+}
+
+// ContextTokens is kiln's one estimate of the context the lane's next
+// request carries: system prompt, tools and conversation. The footer's
+// meter, /context, /model's size warning and /compact all read it, so they
+// agree.
+//
+// When the last request after the latest compaction went to the lane's
+// current model, it is that request's measured size (input, cache and
+// output) plus an estimate of whatever came after it, as pi and Claude
+// Code count it. Otherwise (a switch to another model, whose tokenizer may
+// count the same text very differently; a compaction since; no request
+// yet) it is the chars/4 estimate of the whole request, the same figure
+// the turn loop checks a request against the window with (fitRequest).
+func (l *Lane) ContextTokens() (int, error) {
+	cfg, err := l.config()
+	if err != nil {
+		return 0, err
+	}
+	tip, _ := l.GetTipID()
+	var entries []session.Entry
+	if tip != "" {
+		if entries, err = l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "oldestFirst"}); err != nil {
+			return 0, err
+		}
+	}
+	// The last measured request, if it came after the latest compaction.
+	measured := -1
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Type == session.EntryCompaction {
+			break
+		}
+		am, ok := e.Message.(msg.AssistantMessage)
+		if e.Type != session.EntryMessage || !ok || am.StopReason == msg.StopAborted || am.StopReason == msg.StopError {
+			continue
+		}
+		if compaction.TokensFromUsage(am.Usage) > 0 {
+			if am.Provider == cfg.Model.Provider && am.Model == cfg.Model.ModelID {
+				measured = i
+			}
+			break
+		}
+	}
+	if measured < 0 {
+		return l.requestTokens(entriesToTranscript(entries)), nil
+	}
+	n := compaction.TokensFromUsage(entries[measured].Message.(msg.AssistantMessage).Usage)
+	for _, e := range entries[measured+1:] {
+		if e.Type == session.EntryMessage && e.Message != nil {
+			n += compaction.EstimateTokens(e.Message)
+		}
+	}
+	return n, nil
+}
+
 // entriesToTranscript projects entries (already oldest-first, as
 // ScanBranch with Order "oldestFirst" returns them) onto the messages the
 // model sees. It is compaction-aware: history before the last compaction

@@ -562,6 +562,10 @@ type MsgUsage struct {
 type MsgModelInfo struct {
 	Label         string
 	ContextWindow int
+	// ContextUsed is the conversation's size as the new model will be
+	// sent it (harness.Lane.ContextTokens), when known: the meter must not
+	// keep the outgoing model's measured figure over the new window.
+	ContextUsed *int
 }
 
 // MsgGitStatus carries a freshly read git status.
@@ -1571,7 +1575,7 @@ func (b *Bridge) HookNotice(message string) {
 // made from /model's open dialog must land after the "/model" echo, which
 // the app commits only once the dialog closes. SendAsync, because a
 // "/model <name>" argument switch runs on the Update goroutine.
-func (b *Bridge) ModelSwitch(label string, tierName string, usable int) {
+func (b *Bridge) ModelSwitch(label string, tierName string, usable int, contextUsed *int) {
 	// No transcript note of its own: /model, the only thing that switches
 	// models, confirms the switch itself, and a second note repeated it.
 	//
@@ -1580,7 +1584,7 @@ func (b *Bridge) ModelSwitch(label string, tierName string, usable int) {
 	// or the context meter keeps the old model's window as its
 	// denominator after a switch (the "% used" figure silently lies about
 	// what it is a percentage of).
-	b.SendAsync(MsgModelInfo{Label: label, ContextWindow: usable})
+	b.SendAsync(MsgModelInfo{Label: label, ContextWindow: usable, ContextUsed: contextUsed})
 }
 
 // --- helpers -------------------------------------------------------------

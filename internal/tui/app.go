@@ -902,9 +902,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgModelInfo:
 		label := msg.Label
 		window := msg.ContextWindow
-		m.footer.Apply(StatusPatch{ModelLabel: &label, ContextWindow: nonZeroOr(window, m.footer.State().ContextWindow)})
-		var nilInt *int
-		m.footer.Apply(StatusPatch{ContextUsed: nilInt})
+		m.footer.Apply(StatusPatch{ModelLabel: &label, ContextWindow: nonZeroOr(window, m.footer.State().ContextWindow), ContextUsed: msg.ContextUsed})
 		return m, nil
 
 	case MsgGitStatus:

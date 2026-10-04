@@ -332,7 +332,13 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	deps.Started.OnModelChanged = func(ctx context.Context, resolved provider.Resolved) {
 		// provider/model, the same label the footer showed at startup and
 		// cli.ts's onModelChanged passes.
-		bridge.ModelSwitch(resolved.Model.Provider+"/"+resolved.Model.ID, resolved.Tier.Name, resolved.Tier.ContextWindow)
+		// The meter's figure moves to the new model's view of the
+		// conversation, the same estimate /model's warning gives.
+		var used *int
+		if n, err := deps.Started.Lane.ContextTokens(); err == nil && n > 0 {
+			used = &n
+		}
+		bridge.ModelSwitch(resolved.Model.Provider+"/"+resolved.Model.ID, resolved.Tier.Name, resolved.Tier.ContextWindow, used)
 		// deps.Resolved is what ResolveMentions (above, closed over
 		// &deps.Resolved.Tier) and anything else built from `deps` reads
 		// for the rest of the session. Without updating it here, a model

@@ -122,3 +122,37 @@ steps:
 		t.Fatalf("fault text = %q", got)
 	}
 }
+
+// An explicit /compact summarises even when the automatic rule would keep
+// the whole conversation as recent: asked for, it compacts, as Claude
+// Code's /compact does. (It said "Nothing to compact yet" at 68% full.)
+func TestManualCompactSummarisesRecentTurns(t *testing.T) {
+	rig := newTestRig(t, `
+model: faux-1
+steps:
+  - text: "first reply"
+    end_turn: true
+  - text: "second reply"
+    end_turn: true
+  - text: "the summary"
+    end_turn: true
+`, []string{"bash"})
+	// Everything fits in keep-recent: the automatic rule summarises nothing.
+	rig.H.SetCompactionSettings(compaction.Settings{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 100000})
+	lane := rig.mustLane("main")
+	for _, p := range []string{"one", "two"} {
+		if _, err := lane.Prompt(context.Background(), p, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := lane.Compact(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := lane.FindEntries(context.Background())
+	for _, e := range entries {
+		if e.Type == session.EntryCompaction && strings.Contains(e.Summary, "the summary") {
+			return
+		}
+	}
+	t.Fatal("/compact wrote no compaction entry for a conversation of recent turns")
+}

@@ -442,36 +442,6 @@ func subagentEventSink(stderr io.Writer) func(agent.SubagentEvent) {
 	}
 }
 
-// usageRowContextTokens is /context's and /usage's context-occupancy
-// figure: a single request's input+output tokens — the same figure the
-// TUI's pinned status meter computes from its own EventUsage.UsageRow
-// (internal/tui/bridge.go: "ContextUsed comes from the LAST request's
-// input+output, never the running total"). row is nil until the first
-// EventUsage arrives.
-//
-// This deliberately does NOT read row.TotalTokens: for the anthropic
-// provider (internal/provider/api/anthropic_messages.go),
-// TotalTokens = Input+Output+CacheRead+CacheWrite for THAT ONE request,
-// so even TotalTokens on a single row would already differ from the
-// status meter's Input+Output. The defect this fixes was one level worse
-// than that, though: chat.go used to read ev.UsageTotals (the session's
-// running SUM across every turn so far, session.SessionStats.Usage,
-// accumulated turn by turn via msg.Usage.Add in
-// internal/harness/turn.go), not a single row at all — a figure that
-// only grows and was observed at 959.6k/1000k (96%) in a session whose
-// pinned status meter simultaneously and correctly read 2%.
-//
-// Cached input counts: with prompt caching almost the whole conversation
-// is CacheRead (and the newest turn CacheWrite), so Input alone is a few
-// dozen tokens — /context reported "53 of 1000k" for a session whose meter
-// read 1%. This is the meter's own sum (bridge.go's EventUsage handler).
-func usageRowContextTokens(row *msg.Usage) (int, bool) {
-	if row == nil {
-		return 0, false
-	}
-	return row.Input + row.CacheRead + row.CacheWrite + row.Output, true
-}
-
 // fileReadTokensFromToolEnd reports the tokens attributable to one
 // EventToolEnd, for /context's "Files read" segment
 // (docs/kiln-design-handoff/Terminal.dc.html line 227): only the "read"
@@ -1068,34 +1038,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 	})
 
-	// ContextUsed (for /usage and /context) tracks the LAST request's
-	// input+output tokens — never UsageTotals, which is the session's
-	// running sum across every turn (session.SessionStats.Usage, added
-	// turn by turn via msg.Usage.Add in internal/harness/turn.go) and so
-	// grows far past the context window's actual size in any multi-turn
-	// session. That mismatch was defect 1: /context's header derived
-	// contextUsed from UsageTotals.TotalTokens (a cumulative, multi-turn
-	// sum), while the TUI's pinned status meter derives its percentage
-	// from UsageRow.Input+UsageRow.Output — the most recent single
-	// request's tokens, i.e. what is actually resident in the context
-	// window right now (internal/tui/bridge.go's EventUsage case,
-	// "ContextUsed comes from the LAST request's input+output, never the
-	// running total"). The two disagreed because they read different
-	// fields; this reads the same one the status meter does, so /context
-	// and the pinned meter now always agree.
-	var usageMu sync.Mutex
-	lastUsageRow := started.Harness.LastUsage() // a resumed session's last request
-	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
-		usageMu.Lock()
-		defer usageMu.Unlock()
-		if ev.UsageRow != nil {
-			lastUsageRow = ev.UsageRow
-		}
-	})
+	// ContextUsed (for /usage and /context) is the lane's one context
+	// estimate (harness.Lane.ContextTokens): the last request's measured
+	// size while the model that measured it is still the one in use, and
+	// the estimate the turn loop checks requests with after a switch. The
+	// footer's meter and /model's size warning read the same figure, so
+	// the three agree.
 	contextUsed := func() (int, bool) {
-		usageMu.Lock()
-		defer usageMu.Unlock()
-		return usageRowContextTokens(lastUsageRow)
+		n, err := started.Lane.ContextTokens()
+		return n, err == nil && n > 0
 	}
 
 	// fileReadTokens accumulates the tokens attributable to file contents

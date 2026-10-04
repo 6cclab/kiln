@@ -22,7 +22,7 @@ func TestSwitchFit(t *testing.T) {
 	}
 
 	w := sw.switched("anthropic/opus", big.ContextWindow, "ollama/qwen", small, 107000)
-	for _, want := range []string{"~107k tokens", "qwen's 49.2k window", "next message compacts it with qwen", "/compact now to summarise it with anthropic/opus"} {
+	for _, want := range []string{"~107k tokens", "more than qwen takes in one request (44.2k of its 49.2k window", "next message compacts it with qwen", "/compact now to summarise it with anthropic/opus"} {
 		if !strings.Contains(w, want) {
 			t.Errorf("warning %q lacks %q", w, want)
 		}
@@ -32,6 +32,15 @@ func TestSwitchFit(t *testing.T) {
 	}
 	if got := sw.summariserFor(20000, small); got != "" {
 		t.Errorf("summariserFor(20k) = %q, want the current model once it fits", got)
+	}
+
+	// Under the window but over what one request may carry: the warning
+	// compares against that limit, never saying a smaller number is over a
+	// larger one, and ends as a sentence.
+	sw = &switchFit{}
+	w = sw.switched("anthropic/opus", big.ContextWindow, "ollama/qwen", small, 46100)
+	if !strings.Contains(w, "~46.1k tokens with the system prompt and tools) is more than qwen takes in one request (44.2k of its 49.2k window") || strings.Contains(w, "is over") || !strings.HasSuffix(w, ".") {
+		t.Errorf("warning for 46.1k against a 44.2k limit in a 49.2k window: %q", w)
 	}
 
 	// Too big for the outgoing model too: no offer.
