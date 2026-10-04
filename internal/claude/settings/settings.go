@@ -392,8 +392,13 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 
 		merged.LoadedFrom = append(merged.LoadedFrom, LoadedSettingsFile{Scope: f.Scope, Path: f.Path, Kiln: f.kiln})
 		// The sandbox has its own rules for what a repository's file may
-		// set (sandbox.go), which folder trust does not change.
-		mergeSandbox(&merged, data, sandboxSourceFor(cwd, f.Path, f.Scope, f.cli, f.heldAll))
+		// set (sandbox.go). A -p run in a folder never trusted also takes
+		// only the entries that narrow it from a held file: turning it on
+		// would auto-allow bash (autoAllowBashIfSandboxed), and its write
+		// and network lists widen it. Claude Code honours them there; kiln
+		// is stricter. Interactively nothing runs before the dialog, and
+		// trusting it makes them the person's to apply.
+		mergeSandbox(&merged, data, sandboxSourceFor(cwd, f.Path, f.Scope, f.cli, f.heldAll || (f.held && opts.Headless)))
 		if f.held {
 			merged.HeldFiles = append(merged.HeldFiles, f.Path)
 			if raw.Permissions != nil {
