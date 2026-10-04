@@ -32,7 +32,7 @@ func TestLoadSettingsKilnFiles(t *testing.T) {
 	put(t, filepath.Join(home, ".kiln", "settings.json"), `{"model":"kiln/user","permissions":{"deny":["Read(/secret/**)"]}}`)
 	put(t, filepath.Join(cwd, ".claude", "settings.local.json"), `{"model":"cc/local","permissions":{"allow":["Bash(npm test *)"]}}`)
 
-	s := LoadSettings(cwd, LoadOptions{})
+	s := LoadSettings(cwd, LoadOptions{Trusted: true})
 	if s.Model != "cc/local" {
 		t.Errorf("model = %q, want cc/local (local beats user)", s.Model)
 	}
@@ -41,7 +41,7 @@ func TestLoadSettingsKilnFiles(t *testing.T) {
 	}
 
 	put(t, filepath.Join(cwd, ".kiln", "settings.local.json"), `{"model":"kiln/local","permissions":{"allow":["Bash(make build *)"],"deny":["Bash(npm test *)"]}}`)
-	s = LoadSettings(cwd, LoadOptions{})
+	s = LoadSettings(cwd, LoadOptions{Trusted: true})
 	if s.Model != "kiln/local" {
 		t.Errorf("model = %q, want kiln/local", s.Model)
 	}
@@ -53,7 +53,7 @@ func TestLoadSettingsKilnFiles(t *testing.T) {
 
 	put(t, filepath.Join(cwd, ".claude", "settings.local.json"), `{"permissions":{"allow":["Bash(npm test *)"]}}`)
 	put(t, filepath.Join(cwd, ".kiln", "settings.local.json"), `{"permissions":{"allow":["Bash(make build *)"],"deny":["Bash(npm test *)"]}}`)
-	s = LoadSettings(cwd, LoadOptions{})
+	s = LoadSettings(cwd, LoadOptions{Trusted: true})
 	kilnUser := RuleSource{Scope: paths.ScopeUser, File: filepath.Join(home, ".kiln", "settings.json"), Root: filepath.Join(home, ".kiln")}
 	kilnLocal := RuleSource{Scope: paths.ScopeLocal, File: filepath.Join(cwd, ".kiln", "settings.local.json")}
 	if i := indexOf(s.Permissions.Deny, "Read(/secret/**)"); i < 0 || s.Permissions.DenyFrom[i] != kilnUser {
@@ -119,7 +119,9 @@ func indexOf(list []string, s string) int {
 // TestLoadSettingsKilnLocalHeldUntilTrusted: a .kiln/settings.local.json
 // that came with the repository (tracked in git, or reached through a
 // symlinked .kiln) has its allow rules held until the folder is trusted;
-// its deny and ask rules still apply.
+// its deny and ask rules still apply. Under -p, git decides; before an
+// interactive trust dialog every one is held (TestLoadSettings_
+// UntrustedKilnLocalInteractive).
 func TestLoadSettingsKilnLocalHeldUntilTrusted(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -150,7 +152,7 @@ func TestLoadSettingsKilnLocalHeldUntilTrusted(t *testing.T) {
 		cwd  string
 		held bool
 	}{{"tracked", tracked, true}, {"symlinked", linked, true}, {"kiln's own", untracked, false}} {
-		s := LoadSettings(c.cwd, LoadOptions{})
+		s := LoadSettings(c.cwd, LoadOptions{Headless: true})
 		if held := indexOf(s.Permissions.Allow, "Bash(curl *)") < 0; held != c.held {
 			t.Errorf("%s: allow held = %v, want %v", c.name, held, c.held)
 		}

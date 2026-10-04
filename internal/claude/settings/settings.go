@@ -268,53 +268,80 @@ func repoScopedMode(f settingsFile, m PermissionMode) bool {
 }
 
 // holdUntrusted decides whether f, read in a folder that is not trusted,
-// is held (its allow rules wait for trust) and whether
-// every other key of it waits too. User settings are the person's own;
-// the project's .claude/settings.json comes with the repository; a local
-// file is held when it may have: always before an interactive trust
-// dialog (no git is run in an untrusted folder), and under -p only when
-// git tracks it or it is reached through a symlink. kiln's own
-// .kiln/settings.local.json is held whole when the repository supplied
-// it, as before.
+// is held (its allow rules wait for trust) and whether every other key of
+// it waits too. User settings are the person's own; the project's
+// .claude/settings.json comes with the repository. A local file is held
+// when it may have come with it: always before an interactive trust
+// dialog (no git is run in an untrusted folder), and under -p unless git
+// shows it is untracked and it is reached through no symlink
+// (repoSupplied). kiln's own .kiln/settings.local.json is held whole when
+// it may have come with the repository, since kiln never puts one there.
 func holdUntrusted(cwd string, f paths.SettingsSource, headless bool) (held, heldAll bool) {
 	switch f.Scope {
 	case paths.ScopeProject:
 		return true, false
 	case paths.ScopeLocal:
-		if _, err := os.Stat(f.Path); err != nil {
+		if _, err := os.Lstat(f.Path); err != nil {
 			return false, false
 		}
-		if f.Kiln {
-			if repoSupplied(cwd, f.Path) {
-				return true, true
-			}
-			return false, false
+		if !headless || repoSupplied(cwd, f.Path) {
+			return true, f.Kiln
 		}
-		if !headless {
-			return true, false
-		}
-		return repoSupplied(cwd, f.Path), false
 	}
 	return false, false
 }
 
-// repoSupplied reports a settings file that may have come with the
-// repository rather than from this machine: tracked in git, or itself or
-// its directory (.claude, .kiln) a symlink. git runs with the
-// repository's fsmonitor and hooks off, so asking cannot run a command
-// the repository names.
+// repoSupplied reports a local settings file that may have come with the
+// repository rather than from this machine. It is local only when that is
+// shown: neither it nor its directory (.claude, .kiln) is a symlink or a
+// repository of its own, and git either says the folder is in no
+// repository or lists neither the file nor a submodule at its directory,
+// compared case-insensitively (a case-insensitive filesystem opens
+// .Claude/Settings.local.json as the same file). Anything else, a git
+// error or no git at all, counts as supplied.
+//
+// git ls-files reads only the index: it runs no filter, hook or
+// fsmonitor, and the last two are switched off besides, so asking cannot
+// run a command the repository configures.
 func repoSupplied(cwd, path string) bool {
-	for _, p := range []string{path, filepath.Dir(path)} {
-		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+	dir := filepath.Dir(path)
+	for _, p := range []string{path, dir} {
+		if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSymlink != 0 {
 			return true
 		}
 	}
+	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+		return true // a repository (or submodule checkout) of its own
+	}
 	rel, err := filepath.Rel(cwd, path)
-	if err != nil {
+	if err != nil || strings.HasPrefix(rel, "..") {
 		return true
 	}
-	return exec.Command("git", "-C", cwd, "-c", "core.fsmonitor=false", "-c", "core.hooksPath="+os.DevNull,
-		"ls-files", "--error-unmatch", "--", rel).Run() == nil
+	rel = filepath.ToSlash(rel)
+	relDir := filepath.ToSlash(filepath.Dir(rel))
+	cmd := exec.Command("git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath="+os.DevNull,
+		"ls-files", "--stage", "-z", "--", ":(icase,literal)"+rel, ":(icase,literal)"+relDir)
+	cmd.Dir = cwd
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C", "LANGUAGE=") // the message read below
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		// In no repository at all: the file is the person's own.
+		return !(errors.As(err, &exit) && exit.ExitCode() == 128 && strings.Contains(stderr.String(), "not a git repository"))
+	}
+	for _, entry := range strings.Split(string(out), "\x00") {
+		// "<mode> <object> <stage>\t<path>"
+		meta, name, ok := strings.Cut(entry, "\t")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(name, rel) || (strings.EqualFold(name, relDir) && strings.HasPrefix(meta, "160000 ")) {
+			return true
+		}
+	}
+	return false
 }
 
 func wants(sources []paths.Scope, scope paths.Scope) bool {
