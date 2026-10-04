@@ -319,7 +319,7 @@ func TestHandleSubmit_ImmediateCommandRunsWhileBusy(t *testing.T) {
 // never go to Lane.Steer (which is what delivers text to the model).
 func TestHandleSubmit_NonImmediateCommandDefersWhileBusy(t *testing.T) {
 	var calls []string
-	m, _ := newTestModelWithBridge(t)
+	m, f := newTestModelWithBridge(t)
 	m.cfg.Registry = busyTestRegistry(&calls)
 	m.busy = true
 
@@ -334,6 +334,16 @@ func TestHandleSubmit_NonImmediateCommandDefersWhileBusy(t *testing.T) {
 	}
 	if len(nm.deferredCmds) != 1 || nm.deferredCmds[0] != "/compact" {
 		t.Errorf("m.deferredCmds = %#v, want [\"/compact\"]", nm.deferredCmds)
+	}
+	// A deferred command must still be visible: it commits the same dim
+	// "you · queued" block a queued plain-text follow-up gets, so the
+	// person has some sign it is held rather than silently dropped
+	// (qa/findings/20261004T205021Z-deferred-slash-command-no-feedback.json:
+	// typing "/model" mid-turn cleared the input with nothing shown until
+	// the panel popped up, unannounced, once the turn ended).
+	printed := waitForPrinted(t, f, "/compact")
+	if !strings.Contains(printed, "queued") {
+		t.Errorf("deferred command block = %q, want it to carry the \"queued\" meta", printed)
 	}
 }
 

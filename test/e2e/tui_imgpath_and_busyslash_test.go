@@ -173,6 +173,14 @@ steps:
 	if strings.Contains(beforeEnd, "Nothing to compact") || strings.Contains(beforeEnd, "Context compacted") {
 		t.Fatalf("/compact ran before the turn ended:\n%s", beforeEnd)
 	}
+	// Held is not the same as silent: a dim "you · queued" block (the same
+	// style a queued plain-text follow-up gets) must show the command is
+	// waiting, not just disappear from the input until the panel/note
+	// appears, unannounced, once the turn ends
+	// (qa/findings/20261004T205021Z-deferred-slash-command-no-feedback.json).
+	if !strings.Contains(beforeEnd, "queued") || !strings.Contains(beforeEnd, "/compact") {
+		t.Fatalf("deferred /compact must show a \"queued\" block while held:\n%s", beforeEnd)
+	}
 
 	waitTurnSettled(t, s)
 	if err := s.WaitFor(regexp.MustCompile(`Nothing to compact|Context compacted`), 3*time.Second); err != nil {
