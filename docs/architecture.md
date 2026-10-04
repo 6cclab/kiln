@@ -128,6 +128,13 @@ triggered by `isRetriable`: HTTP 429/529/5xx (via a `RetriableError`
 carrying a status code), a `net.Error`, `context.DeadlineExceeded`, or a
 string match on common transient-failure text.
 
+A model request has no total deadline: provider HTTP clients bound only
+connecting (`api.NewStreamingClient`). `requestWithRetry` instead ends a
+request that goes quiet (`internal/harness/stall.go`, a retriable
+`StallError`): no first token within compaction's allowance for the
+prompt's size (two minutes plus 20 tokens a second), or no further token
+for five minutes.
+
 Interruption: `Lane.Abort` cancels the lane's `context.CancelFunc` and
 emits `EventOperationAbort`; the turn loop itself notices `ctx.Err() != nil`
 at the top of its next iteration or mid-request and calls `finishAborted`,

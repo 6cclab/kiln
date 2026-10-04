@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -525,6 +526,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 		}
 	}
 
+	promptTokens := l.requestTokens(transcript)
 	retry := l.h.opts.Retry
 	var lastErr error
 	for attempt := 1; attempt <= retry.MaxAttempts; attempt++ {
@@ -534,8 +536,12 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 			// answers together.
 			_, _ = l.h.opts.Storage.Commit([]session.Write{session.DeleteListWrite(session.PendingAssistantFrames(operationID, responseEntryID))})
 		}
-		events, wait := p.Stream(ctx, m, transcript, opts)
+		reqCtx, cancelReq := context.WithCancelCause(ctx)
+		first, idle := l.h.opts.stallLimits(promptTokens)
+		watch := watchStall(cancelReq, first, idle, promptTokens)
+		events, wait := p.Stream(reqCtx, m, transcript, opts)
 		for ev := range events {
+			watch.saw(ev)
 			if responseEntryID != "" && ev.Type != msg.EventStart {
 				frame := Frame{Type: ev.Type, ContentIndex: ev.ContentIndex, Delta: ev.Delta, Content: ev.Content, ToolCall: ev.ToolCall, Reason: ev.Reason}
 				w, _ := session.AppendListWrite(session.PendingAssistantFrames(operationID, responseEntryID), json.RawMessage(mustMarshal(frame)))
@@ -544,6 +550,12 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 			l.h.events.Emit(Event{Type: EventMessageUpdate, Lane: l.name, OperationID: operationID, EntryID: responseEntryID, StreamEvent: &ev})
 		}
 		final, err := wait()
+		watch.stop()
+		var stalled *StallError
+		if err != nil && ctx.Err() == nil && errors.As(context.Cause(reqCtx), &stalled) {
+			err = stalled
+		}
+		cancelReq(nil)
 		if err == nil {
 			return final, nil
 		}

@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"runtime"
 	"sort"
@@ -99,9 +98,10 @@ func ollamaOptionsFromEnv() ollama.Options {
 			serverDefault = n
 		}
 	}
-	// Local models can take a while to load into memory on first use; the
-	// package default (15s) is tuned for discovery calls, not generation.
-	return ollama.Options{URL: url, ServerDefaultContext: serverDefault, HTTPClient: &http.Client{Timeout: 3 * time.Minute}}
+	// No HTTPClient: ollama's default streaming client bounds connecting,
+	// not the response. A 3-minute whole-request Timeout here cut off
+	// compactions and turns on a slow local model mid-stream.
+	return ollama.Options{URL: url, ServerDefaultContext: serverDefault}
 }
 
 // refreshRoleProviders refreshes the model list of every provider a role

@@ -761,3 +761,12 @@ func TestEffortOrSetting(t *testing.T) {
 		}
 	}
 }
+
+// kiln's Ollama options must not put a whole-request Timeout on generation:
+// a 3-minute one cut compactions on a slow local model off mid-stream.
+func TestOllamaOptionsHaveNoWholeRequestTimeout(t *testing.T) {
+	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
+	if c := ollamaOptionsFromEnv().HTTPClient; c != nil && c.Timeout != 0 {
+		t.Fatalf("ollama HTTPClient.Timeout = %s, want none", c.Timeout)
+	}
+}

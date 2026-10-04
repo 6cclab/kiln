@@ -38,6 +38,13 @@ type Options struct {
 
 	Retry RetryPolicy
 
+	// StallFirstEvent and StallIdle bound a model request that has gone
+	// quiet (stall.go): the wait for its first token, given the prompt's
+	// estimated size, and the longest gap between tokens after that.
+	// Zero values use compaction's defaults. There is no total deadline.
+	StallFirstEvent func(promptTokens int) time.Duration
+	StallIdle       time.Duration
+
 	Cwd string
 
 	// Now, if set, replaces time.Now for entry/operation timestamps
