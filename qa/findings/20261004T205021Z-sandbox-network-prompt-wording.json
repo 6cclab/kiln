@@ -1,0 +1,26 @@
+{
+ "id": "20261004T205021Z-sandbox-network-prompt-wording",
+ "found_at": "2026-10-04T20:50:21Z",
+ "scenario": "manual-qa/sandbox",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "Sandbox network prompt reads 'Allow kiln to use sandbox network? $ httpbin.org:443' and hides which command asked",
+ "observed": "kiln defect (UX). allowedDomains [example.com, proxy.golang.org, sum.golang.org]. curl to example.com ran (200). curl to httpbin.org opened 'Allow kiln to use sandbox network?' with '$ httpbin.org:443' (a shell-prompt glyph before a host), options Yes / Yes, and don't ask again for this / No, and tell kiln what to do instead. The curl command that triggered it was not visible above the prompt. Esc declined, which aborted the whole turn ('Command aborted', '■ Interrupted'), while the aborted bash block still said 'auto-approved · 8.7s'.",
+ "expected": "Wording like 'Allow network access to httpbin.org:443 (from: curl -s … https://httpbin.org/get)?', no '$' glyph, and say what 'don't ask again' covers (this host, this session or saved). Do not label an aborted command 'auto-approved'.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s3 (*sb2*, *sb2b*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go"
+  ],
+  "regression_test": "TestRenderPermissionPrompt_SandboxNetwork_AsksAboutTheHost",
+  "updated_at": "2026-10-04T21:18:22Z"
+ }
+}

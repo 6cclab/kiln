@@ -91,6 +91,18 @@ func describeConnectError(cfg ServerConfig, err error) string {
 	case strings.Contains(lower, "no such host"):
 		return "host not found" + atURL(cfg)
 	case strings.Contains(lower, "unauthorized") || strings.Contains(text, " 401"):
+		// "Check its token" assumes a token was configured to check — true
+		// for a server whose headers already carry one (it is probably
+		// wrong or expired), but an HTTP/SSE server with none set is
+		// OAuth-only: there is nothing to check, and the generic wording
+		// is just confusing. Claude Code reports that case as "needs
+		// authentication" (and offers to sign in); kiln has no MCP OAuth
+		// flow yet, so it says that plainly instead of claiming a token
+		// exists (qa/findings/20261004T203042Z-mcp-oauth-server-says-
+		// check-token.json).
+		if t := TransportType(cfg); (t == "http" || t == "sse") && !hasAuthHeader(cfg.Headers) {
+			return "needs authentication (OAuth sign-in isn't supported yet; sign in once with Claude Code, or add a token under this server's \"headers\")" + atURL(cfg)
+		}
 		return "unauthorized (check its token)" + atURL(cfg)
 	case strings.Contains(lower, "forbidden") || strings.Contains(text, " 403"):
 		return "forbidden" + atURL(cfg)
@@ -107,6 +119,25 @@ func describeConnectError(cfg ServerConfig, err error) string {
 		inner = next
 	}
 	return strings.TrimSpace(inner.Error())
+}
+
+// hasAuthHeader reports whether cfg carries a header that looks like a
+// credential (Authorization, or anything ending in "-key"/"-token" —
+// X-Api-Key and friends are common for a bearer-style HTTP MCP server),
+// with a non-empty value. Used only to tell "this server has a token that
+// is probably wrong" apart from "this server was never given one at all
+// and needs an OAuth sign-in kiln doesn't support".
+func hasAuthHeader(headers map[string]string) bool {
+	for k, v := range headers {
+		if v == "" {
+			continue
+		}
+		lower := strings.ToLower(k)
+		if lower == "authorization" || strings.HasSuffix(lower, "-key") || strings.HasSuffix(lower, "-token") {
+			return true
+		}
+	}
+	return false
 }
 
 func atURL(cfg ServerConfig) string {

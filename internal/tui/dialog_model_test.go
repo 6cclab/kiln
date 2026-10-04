@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -167,6 +168,82 @@ func TestDialogModel_PickMovesCurrentMark(t *testing.T) {
 	}
 	if spec.Items[1].Marker != "✔" {
 		t.Errorf("Apply mutated the caller's items slice")
+	}
+}
+
+// manyModelItems builds n single-line-description items (no wrap, so each
+// is exactly one row) with distinct labels, standing in for a real
+// catalog's 17+ models.
+func manyModelItems(n int) []commands.Item {
+	items := make([]commands.Item, n)
+	for i := range items {
+		items[i] = commands.Item{
+			Value:       string(rune('a' + i)),
+			Label:       fmt.Sprintf("model-%02d", i),
+			Description: "short",
+		}
+	}
+	return items
+}
+
+// TestDialogModel_Render_ShortHeightKeepsHintRowAndWindowsOptions is the
+// regression test for qa/findings/20261004T204953Z-narrow-footer-and-
+// panel-clipping.json: at 80x24 (Render's height budget after the chrome
+// around it is far short of title+17 models+effort+legend), the panel
+// used to just render everything and hard-truncate the result to height,
+// which always cuts the *bottom* — dropping the legend ("Enter to set as
+// default...") and the effort row whatever the cursor was on. Render must
+// now keep the legend and effort row always, and instead window the
+// options list down to what fits, scrolled to keep the cursor visible.
+func TestDialogModel_Render_ShortHeightKeepsHintRowAndWindowsOptions(t *testing.T) {
+	spec := commands.ModalSpec{Items: manyModelItems(17), Effort: "medium"}
+	d := NewDialogModel(spec).(*dialogModel)
+	d.cursor = 0
+
+	const height = 12 // short enough that 17 one-row options don't fit
+	got := d.Render(100, height)
+
+	if len(got) > height {
+		t.Fatalf("Render returned %d rows, want at most %d", len(got), height)
+	}
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "Enter to set as default") {
+		t.Errorf("legend/hint row missing at height %d:\n%s", height, joined)
+	}
+	if !strings.Contains(joined, "effort") {
+		t.Errorf("effort row missing at height %d:\n%s", height, joined)
+	}
+	if !strings.Contains(joined, "more below") {
+		t.Errorf("expected a \"… +N more below\" row documenting the hidden options:\n%s", joined)
+	}
+
+	options, hiddenAbove, hiddenBelow := renderModelOptionRowsWindowed(spec.Items, d.cursor, 100, 4)
+	if len(options) == 0 {
+		t.Fatalf("windowed options empty")
+	}
+	if hiddenAbove != 0 {
+		t.Errorf("cursor at item 0: hiddenAbove = %d, want 0", hiddenAbove)
+	}
+	if hiddenBelow == 0 {
+		t.Errorf("hiddenBelow = 0, want some items hidden past a 4-row budget over 17 items")
+	}
+}
+
+// TestDialogModel_Render_CursorStaysVisibleWhenWindowed checks the window
+// scrolls with the cursor rather than always showing the first few items:
+// with the cursor on the last item, that item's row must still appear.
+func TestDialogModel_Render_CursorStaysVisibleWhenWindowed(t *testing.T) {
+	spec := commands.ModalSpec{Items: manyModelItems(17)}
+	d := NewDialogModel(spec).(*dialogModel)
+	d.cursor = 16 // last item
+
+	got := d.Render(100, 12)
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "model-16") {
+		t.Errorf("cursor's item (model-16, the last one) not shown in windowed render:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Enter to set as default") {
+		t.Errorf("legend/hint row missing with cursor at the end:\n%s", joined)
 	}
 }
 

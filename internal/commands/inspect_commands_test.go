@@ -122,3 +122,45 @@ func TestDoctorFlagsNoResidentTools(t *testing.T) {
 		t.Fatalf("got %q", joined)
 	}
 }
+
+// TestDoctorShowsSandboxState checks /doctor's "sandbox" row reflects
+// InspectDeps.SandboxLine (cli's sandboxReport) instead of being absent —
+// qa/findings/20261004T205021Z-doctor-misses-sandbox-and-hook-events.json:
+// nothing in /doctor said whether the sandbox was on.
+func TestDoctorShowsSandboxState(t *testing.T) {
+	source := InspectCommands(InspectDeps{
+		ActiveTools: func() ([]string, error) { return []string{"bash"}, nil },
+		SandboxLine: "on (seatbelt), regular permissions, no allowed domains",
+	})
+	res, err := findCmd(t, source, "doctor").Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(res.Output, "\n")
+	if !strings.Contains(joined, "sandbox    on (seatbelt)") {
+		t.Fatalf("sandbox row missing/wrong, got %q", joined)
+	}
+}
+
+// TestDoctorFlagsUnsupportedHookEvents checks a settings.json hook
+// registered for an event kiln does not fire (PermissionRequest) shows up
+// as a named problem, instead of silently vanishing from the hook count —
+// qa/findings/20261004T205021Z-doctor-misses-sandbox-and-hook-events.json.
+func TestDoctorFlagsUnsupportedHookEvents(t *testing.T) {
+	cfg := hooks.Config{
+		hooks.PreToolUse:           []hooks.Matcher{{Hooks: []hooks.Command{{Command: "echo hi"}}}},
+		hooks.Event("PostCompact"): []hooks.Matcher{{Hooks: []hooks.Command{{Command: "echo pc"}}}},
+	}
+	source := InspectCommands(InspectDeps{
+		Hooks:       cfg,
+		ActiveTools: func() ([]string, error) { return []string{"bash"}, nil },
+	})
+	res, err := findCmd(t, source, "doctor").Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(res.Output, "\n")
+	if !strings.Contains(joined, "PostCompact") {
+		t.Fatalf("expected the unsupported event named in the problem list, got %q", joined)
+	}
+}

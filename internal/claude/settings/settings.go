@@ -88,8 +88,14 @@ type Settings struct {
 	// setting: an absolute path or one starting with "~/", overriding
 	// where the auto-memory directory is resolved to. "" means unset.
 	AutoMemoryDirectory string
-	// LoadedFrom records which scopes actually contributed, for diagnostics.
-	LoadedFrom []paths.Scope
+	// LoadedFrom records which files actually contributed, for
+	// diagnostics — Claude Code's own settings.json and kiln's own (same
+	// scope, different file: ~/.claude/settings.json and
+	// ~/.kiln/settings.json are both ScopeUser) are kept separate so a
+	// report naming only the scope can't conflate them
+	// (qa/findings/20261004T205021Z-doctor-misses-sandbox-and-hook-
+	// events.json: /doctor printed "user, user, project", indistinguishable).
+	LoadedFrom []LoadedSettingsFile
 	// HeldAllow are the allow rules of a <cwd>/.kiln/settings.local.json
 	// held back because the folder is not trusted and the file came with
 	// the repository (tracked in git, or reached through a symlink):
@@ -103,6 +109,32 @@ type Settings struct {
 	// SandboxWarnings the entries in it that were skipped.
 	Sandbox         Sandbox
 	SandboxWarnings []string
+}
+
+// LoadedSettingsFile is one settings file that actually contributed to a
+// merge (Settings.LoadedFrom): its scope, its path, and whether it is
+// kiln's own file (~/.kiln/settings.json, <cwd>/.kiln/settings.local.json)
+// rather than Claude Code's (~/.claude/settings.json, <cwd>/.claude/
+// settings.json, <cwd>/.claude/settings.local.json).
+type LoadedSettingsFile struct {
+	Scope paths.Scope
+	Path  string
+	Kiln  bool
+}
+
+// Label is this file's short, human name for a diagnostics report ("/doctor",
+// "kiln doctor", /config): the owning directory, "~/" abbreviated for the
+// user scope — "~/.claude", "~/.kiln", ".claude" (project and local scopes
+// are not distinguished here; both read as the project's own directory).
+func (f LoadedSettingsFile) Label() string {
+	dir := ".claude"
+	if f.Kiln {
+		dir = ".kiln"
+	}
+	if f.Scope == paths.ScopeUser {
+		return "~/" + dir
+	}
+	return dir
 }
 
 // StatusLineConfig is Claude Code's settings.json "statusLine" object: a
@@ -193,6 +225,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		root string // RuleSource.Root for this file's rules
 		held bool   // only deny and ask rules apply; allow is held
 		cli  bool   // --settings
+		kiln bool   // kiln's own file, not Claude Code's (LoadedSettingsFile.Kiln)
 	}
 	files := []source{}
 	for _, f := range paths.AllSettingsFiles(cwd) {
@@ -210,7 +243,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 					held = repoSupplied(cwd, f.Path)
 				}
 			}
-			files = append(files, source{f.SettingsFile, root, held, false})
+			files = append(files, source{f.SettingsFile, root, held, false, f.Kiln})
 		}
 	}
 	if opts.Extra != "" {
@@ -221,7 +254,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		if abs, err := filepath.Abs(root); err == nil {
 			root = abs
 		}
-		files = append(files, source{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false, true})
+		files = append(files, source{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false, true, false})
 	}
 
 	for _, f := range files {
@@ -237,7 +270,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 			continue
 		}
 
-		merged.LoadedFrom = append(merged.LoadedFrom, f.Scope)
+		merged.LoadedFrom = append(merged.LoadedFrom, LoadedSettingsFile{Scope: f.Scope, Path: f.Path, Kiln: f.kiln})
 		mergeSandbox(&merged, data, sandboxSourceFor(cwd, f.Path, f.Scope, f.cli, f.held))
 		if f.held {
 			merged.HeldFile = f.Path

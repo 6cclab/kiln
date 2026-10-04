@@ -280,9 +280,28 @@ func (b *Bridge) Commit(lines []string) {
 // RenderTranscriptEntries splices these back in after a Ctrl+O/Ctrl+F
 // replay, which otherwise only knows about entries actually written to the
 // session log.
+//
+// Lines is the block as committed, at that commit's width — the fallback
+// for a caller that has nothing cheaper to recompute from. Rebuild, when
+// set, re-renders the same block at a new width instead: without it, a
+// resize's replay (msgResizeRewrap -> replayTranscript) spliced back the
+// old width's literal text, so a "system" note's label rule kept its old
+// width indefinitely after a resize while every block drawn straight from
+// a session entry reflowed (qa/findings/…-system-blocks-not-reflowed-
+// on-resize.json).
 type SyntheticCommit struct {
 	AfterEntryID string
 	Lines        []string
+	Rebuild      func(width int) []string
+}
+
+// Render returns this synthetic commit's lines at width: Rebuild(width) if
+// set, else the literal Lines it was committed with.
+func (sc SyntheticCommit) Render(width int) []string {
+	if sc.Rebuild != nil {
+		return sc.Rebuild(width)
+	}
+	return sc.Lines
 }
 
 // MarkCoveredCall records a task call whose outcome the subagents panel
@@ -315,7 +334,20 @@ func (b *Bridge) CoveredCalls() map[string]bool {
 // CommitCommandResult, and the /context block — must go through this
 // instead of Commit, or Ctrl+O/Ctrl+F silently drops it (RenderTranscriptEntries
 // only ever sees session entries otherwise).
+//
+// Use CommitSyntheticRebuild instead when a width-independent rebuild is
+// cheap (see its own doc comment) — a plain CommitSynthetic block never
+// reflows on resize, only on the next full Ctrl+O-style content change.
 func (b *Bridge) CommitSynthetic(lines []string) {
+	b.CommitSyntheticRebuild(lines, nil)
+}
+
+// CommitSyntheticRebuild is CommitSynthetic with an explicit rebuild func:
+// SyntheticCommit.Render(width) calls it to redraw the block at a resize's
+// new width instead of replaying the literal commit-time Lines (see
+// SyntheticCommit's doc comment). rebuild may be nil, same as
+// CommitSynthetic.
+func (b *Bridge) CommitSyntheticRebuild(lines []string, rebuild func(width int) []string) {
 	if len(lines) == 0 {
 		return
 	}
@@ -323,6 +355,7 @@ func (b *Bridge) CommitSynthetic(lines []string) {
 	b.synthetics = append(b.synthetics, SyntheticCommit{
 		AfterEntryID: b.lastEntryID,
 		Lines:        append([]string(nil), lines...),
+		Rebuild:      rebuild,
 	})
 	b.synthMu.Unlock()
 	b.Commit(lines)
@@ -473,9 +506,49 @@ func RenderCommandResult(name string, lines []string, width int) []string {
 	// /context's legend under their label rules; the command's own
 	// columns (key/value pairs, nested lists) carry through unchanged.
 	for _, l := range lines {
-		out = append(out, FitStatus(l, width))
+		out = append(out, fitCommandResultRow(l, width))
 	}
 	return out
+}
+
+// fitCommandResultRow fits one command-result row to width. Most rows are
+// prose and truncate at the tail (FitStatus); a row shaped "label   value"
+// whose value is an absolute or home-relative path instead left-truncates
+// just the path, so the file/directory name at the end survives rather
+// than being hidden behind a trailing "…" — /status's "sessions  <path>"
+// and /memory's "user  <path>"/"project  <path>"/"auto  <path>" otherwise
+// all read identically once the path runs past the terminal width
+// (qa/findings/…-paths-truncated-at-tail.json).
+func fitCommandResultRow(line string, width int) string {
+	if VisibleWidth(line) <= width {
+		return line
+	}
+	if prefix, path, ok := splitTrailingPath(line); ok {
+		room := width - VisibleWidth(prefix)
+		if room > 0 {
+			return prefix + ShortenPathLeft(path, room)
+		}
+	}
+	return FitStatus(line, width)
+}
+
+// splitTrailingPath finds a path value at the end of a "label   value" row:
+// the first "/" or "~" that starts a token (preceded by whitespace, or at
+// the very start of the line) and runs to the end of the line. Command
+// rows here never append anything after a path value, so this is
+// unambiguous for the rows that matter (/status, /memory) and simply
+// doesn't match rows with no path (e.g. "auth      configured").
+func splitTrailingPath(line string) (prefix, path string, ok bool) {
+	for i, r := range line {
+		if r != '/' && r != '~' {
+			continue
+		}
+		if i > 0 && line[i-1] != ' ' {
+			continue
+		}
+		return line[:i], line[i:], true
+	}
+	return "", "", false
 }
 
 // CommitCommandResult commits a slash command's multi-line result as its
@@ -488,9 +561,10 @@ func (b *Bridge) CommitCommandResult(name string, lines []string) {
 	if len(lines) == 0 {
 		return
 	}
-	width := ruleWidth()
-	out := append([]string{""}, RenderCommandResult(name, lines, width)...)
-	b.CommitSynthetic(out)
+	rebuild := func(w int) []string {
+		return append([]string{""}, RenderCommandResult(name, lines, w)...)
+	}
+	b.CommitSyntheticRebuild(rebuild(ruleWidth()), rebuild)
 }
 
 // Send delivers msg to the program's Update loop. tea.Program.Send already

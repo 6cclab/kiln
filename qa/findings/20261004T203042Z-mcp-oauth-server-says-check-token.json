@@ -1,0 +1,27 @@
+{
+ "id": "20261004T203042Z-mcp-oauth-server-says-check-token",
+ "found_at": "2026-10-04T20:30:42Z",
+ "scenario": "manual-qa/mcp",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "An OAuth-only HTTP MCP server (sentry) is reported as 'unauthorized (check its token)', but it has no token to check and kiln offers no way to sign in",
+ "observed": "kiln defect (UX/parity). ~/.claude.json has sentry as {type:http, url:https://mcp.sentry.dev/mcp}, with no headers or token (Claude Code signs in by OAuth). Startup shows '2 MCP servers unavailable · run /mcp'. /mcp lists '✕ sentry' with no reason on the list row; Enter shows 'failed: unauthorized (check its token) at https://mcp.sentry.dev/mcp / connect: calling \"initialize\": sending \"initialize\": Unauthorized'. proxmox is explained well ('command not found: …/tsx'). The list hint 'Run kiln --debug to see error logs' is not actionable here.",
+ "expected": "Claude Code marks such a server 'needs authentication' (src/components/mcp/MCPListPanel.tsx, src/cli/handlers/mcp.tsx '! Needs authentication') and offers to authenticate. kiln should at least say the server needs an OAuth sign-in that kiln does not support (or sign in once in Claude Code), not 'check its token'. Showing the short reason on the list row would save a keypress.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1 (*mcp-sentry*, *mcp-midturn*)",
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/logs/harness-20261004-154307-73447.log (15:43:07 mcp failed server=sentry)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/mcp/hub.go"
+  ],
+  "regression_test": "TestDescribeConnectError",
+  "updated_at": "2026-10-04T21:19:55Z"
+ }
+}

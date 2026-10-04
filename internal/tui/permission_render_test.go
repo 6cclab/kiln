@@ -578,6 +578,32 @@ func TestLineDiffHunks_KeepsUnchangedLinesAsContext(t *testing.T) {
 
 // TestRenderPermissionPromptNamesMCPToolAndServer: an MCP tool's qualified
 // id reads as the tool and its server in the approval question.
+// TestRenderPermissionPrompt_SandboxNetwork_AsksAboutTheHost checks the
+// sandbox network approval (permission.NetworkToolName == "sandbox_network")
+// asks about the host directly, with no "$" shell-prompt glyph and a
+// "don't ask again" option naming the host it actually covers — the
+// regression for qa/findings/20261004T205021Z-sandbox-network-prompt-
+// wording.json: the old generic rendering read "Allow kiln to use sandbox
+// network?" over a "$ httpbin.org:443" row (as if httpbin.org:443 were a
+// shell command), and "Yes, and don't ask again for this" didn't say for
+// what.
+func TestRenderPermissionPrompt_SandboxNetwork_AsksAboutTheHost(t *testing.T) {
+	req := PermissionRequest{ToolName: "sandbox_network", PrimaryArg: "httpbin.org:443", Grantable: true}
+	full := stripANSI(strings.Join(RenderPermissionPrompt(req, "/", 100, 0, false, ""), "\n"))
+	if !strings.Contains(full, "Allow network access to httpbin.org:443?") {
+		t.Errorf("prompt does not ask about the host plainly:\n%s", full)
+	}
+	if strings.Contains(full, "sandbox network") {
+		t.Errorf("prompt still reads as a feature toggle (\"sandbox network\"):\n%s", full)
+	}
+	if strings.Contains(full, "$ httpbin.org") || strings.Contains(full, "$ ") {
+		t.Errorf("prompt still shows a shell-prompt \"$\" glyph for a bare host:\n%s", full)
+	}
+	if !strings.Contains(full, "don't ask again for httpbin.org:443") {
+		t.Errorf("\"don't ask again\" option does not name the host it covers:\n%s", full)
+	}
+}
+
 func TestRenderPermissionPromptNamesMCPToolAndServer(t *testing.T) {
 	req := PermissionRequest{ToolName: "mcp__incidents__list_incidents", Grantable: true}
 	full := stripANSI(strings.Join(RenderPermissionPrompt(req, "/", 100, 0, false, ""), "\n"))

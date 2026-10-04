@@ -1,0 +1,27 @@
+{
+ "id": "20261004T205021Z-paths-truncated-at-tail",
+ "found_at": "2026-10-04T20:50:21Z",
+ "scenario": "manual-qa/input-ux",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "/status and /memory cut long paths at the end, hiding the file name",
+ "observed": "kiln defect (UX). At 120 cols in a project under a long temp path: /status 'sessions  /private/tmp/claude-501/-Users-…/scratchpad…'; /memory lists 'user /private/tmp/…/scratchpad…', 'project /private/…/scratchpad…', 'auto /private/…/scratchpad…', so all three rows look identical and the CLAUDE.md file names are invisible.",
+ "expected": "Truncate from the start or middle (…/work/linkshort/CLAUDE.md), as the status line already does with '…/scratchpad/qa/work/linkshort', or wrap.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1 (*busy-status*)",
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s3 (*memory*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestRenderCommandResult_LongPathRowKeepsTailNotHead",
+  "updated_at": "2026-10-04T20:55:04Z"
+ }
+}

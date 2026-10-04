@@ -93,6 +93,44 @@ func TestLoadHooks(t *testing.T) {
 	})
 }
 
+// TestUnsupportedEvents_ReportsEventsKilnDoesNotFire checks a settings.json
+// hook config for an event Claude Code recognizes but kiln does not (e.g.
+// PermissionRequest) is flagged by name, while a known event (PreToolUse)
+// and an event with no hooks registered under it are not — the regression
+// for qa/findings/20261004T205021Z-doctor-misses-sandbox-and-hook-
+// events.json: such events used to be silently dropped from /doctor's
+// hook count with no note that kiln simply doesn't fire them.
+func TestUnsupportedEvents_ReportsEventsKilnDoesNotFire(t *testing.T) {
+	cfg := Config{
+		PreToolUse:                 []Matcher{{Hooks: []Command{{Type: "command", Command: "echo hi"}}}},
+		Event("PermissionRequest"): []Matcher{{Hooks: []Command{{Type: "command", Command: "echo pr"}}}},
+		Event("PostCompact"):       []Matcher{{Hooks: []Command{{Type: "command", Command: "echo pc"}}}},
+		Event("StopFailure"):       nil, // no hooks actually registered
+	}
+	got := UnsupportedEvents(cfg)
+	want := []Event{"PermissionRequest", "PostCompact"}
+	if len(got) != len(want) {
+		t.Fatalf("UnsupportedEvents = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("UnsupportedEvents[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestUnsupportedEvents_EmptyForKnownOnly checks a config using only the
+// nine known events reports nothing unsupported.
+func TestUnsupportedEvents_EmptyForKnownOnly(t *testing.T) {
+	cfg := Config{
+		PreToolUse: []Matcher{{Hooks: []Command{{Type: "command", Command: "echo hi"}}}},
+		Stop:       []Matcher{{Hooks: []Command{{Type: "command", Command: "echo bye"}}}},
+	}
+	if got := UnsupportedEvents(cfg); len(got) != 0 {
+		t.Errorf("UnsupportedEvents = %v, want none", got)
+	}
+}
+
 func mustMkdir(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

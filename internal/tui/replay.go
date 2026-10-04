@@ -75,7 +75,7 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 			flush()
 		}
 		for _, sc := range bySynthetic[afterID] {
-			out = append(out, sc.Lines...)
+			out = append(out, sc.Render(width)...)
 		}
 	}
 

@@ -1,0 +1,27 @@
+{
+ "id": "20261004T204953Z-narrow-footer-and-panel-clipping",
+ "found_at": "2026-10-04T20:49:53Z",
+ "scenario": "manual-qa/input-ux",
+ "step": null,
+ "terminals": [
+  "kiln-drive-80x24"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "At 80x24 the /model panel overflows the screen (key hints and later models cut off), and the status line drops different items per width",
+ "observed": "kiln defect (layout). RESIZE 80 24 then /model: the panel lists models 1-17 and runs off the bottom; the 'Enter to set as default · s … · Esc' hint row, the effort row and models 18+ are not visible, and the input and status line are pushed off. Status line: at 80 cols it shows '…ort · main*  anthropic/claude-opus-4-8 ctx … 6%' (cost dropped, cwd cut to the meaningless '…ort'); at 60 cols it drops the model but shows the cost.",
+ "expected": "The panel windows its list to the rows available and always shows its hint row. The status line drops items in one fixed priority order and keeps a recognisable cwd tail (e.g. 'linkshort').",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1c (*model-panel-80*, *size-80x24*, *size-60x24*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/status.go",
+   "internal/tui/dialog_model.go"
+  ],
+  "regression_test": "TestRenderStatusLine_ModelDropOrder,TestDialogModel_Render_ShortHeightKeepsHintRowAndWindowsOptions",
+  "updated_at": "2026-10-04T21:08:11Z"
+ }
+}

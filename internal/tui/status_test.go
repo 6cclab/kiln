@@ -309,16 +309,21 @@ func TestRenderStatusLine_ModelFollowsSwitch(t *testing.T) {
 }
 
 // TestRenderStatusLine_ModelDropOrder: as the row narrows, cost goes
-// first (the model stays), then the model; cost may come back beside the
-// location once the model no longer fits, and the location goes last. The
-// row never overflows.
+// first (the model stays), then the model, and only then the location.
+// The order is fixed and monotonic — once a segment is gone it never
+// comes back at a narrower width (qa/findings/20261004T204953Z-narrow-
+// footer-and-panel-clipping.json: the old code let cost come back by
+// dropping the model instead once the model no longer fit on its own,
+// so a wider terminal could show fewer segments than a narrower one).
+// The row never overflows.
 func TestRenderStatusLine_ModelDropOrder(t *testing.T) {
 	s := baseState()
 	s.Cwd = "~/src/a-rather-long/project/path/relay-api"
 	s.Git = &GitStatus{Branch: "main"}
 	s.Cost = 1.23
 	s.ContextUsed = intPtr(1000)
-	modelGone, sawModelNoCost := false, false
+	costGone, modelGone, locGone := false, false, false
+	sawModelNoCost := false
 	for w := 140; w >= 20; w-- {
 		out := stripANSI(RenderStatusLine(s, w))
 		if VisibleWidth(out) > w {
@@ -327,22 +332,38 @@ func TestRenderStatusLine_ModelDropOrder(t *testing.T) {
 		hasModel := strings.Contains(out, "ollama/qwen3.8")
 		hasCost := strings.Contains(out, "$1.23")
 		hasLoc := strings.Contains(out, "main")
+
+		if hasCost && costGone {
+			t.Fatalf("width %d: cost came back after it dropped: %q", w, out)
+		}
 		if hasModel && modelGone {
 			t.Fatalf("width %d: the model came back after it dropped: %q", w, out)
 		}
+		if hasLoc && locGone {
+			t.Fatalf("width %d: the location came back after it dropped: %q", w, out)
+		}
+		// Fixed order: cost must already be gone by the time the model
+		// drops, and the model must already be gone by the time the
+		// location drops.
+		if !hasCost && hasModel {
+			costGone = true
+		}
 		if !hasModel {
+			if hasCost {
+				t.Fatalf("width %d: cost outlived the model: %q", w, out)
+			}
 			modelGone = true
 		}
-		if hasCost && !hasModel && !sawModelNoCost {
-			t.Fatalf("width %d: the model dropped before cost did: %q", w, out)
-		}
-		if hasModel && !hasLoc {
-			t.Fatalf("width %d: location dropped while the model is still shown: %q", w, out)
+		if !hasLoc {
+			if hasModel {
+				t.Fatalf("width %d: the model outlived the location: %q", w, out)
+			}
+			locGone = true
 		}
 		sawModelNoCost = sawModelNoCost || (hasModel && !hasCost && hasLoc)
 	}
-	if !sawModelNoCost || !modelGone {
-		t.Errorf("drop stages not all reached: model-without-cost=%v model-dropped=%v", sawModelNoCost, modelGone)
+	if !sawModelNoCost || !modelGone || !locGone {
+		t.Errorf("drop stages not all reached: model-without-cost=%v model-dropped=%v location-dropped=%v", sawModelNoCost, modelGone, locGone)
 	}
 }
 

@@ -1,0 +1,30 @@
+{
+ "id": "20261004T205021Z-doctor-misses-sandbox-and-hook-events",
+ "found_at": "2026-10-04T20:50:21Z",
+ "scenario": "manual-qa/sandbox",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "Nothing shows the sandbox is on, /doctor says 'settings user, user, project', and unsupported hook events go unreported",
+ "observed": "kiln defect (UX). With ~/.kiln/settings.json sandbox.enabled=true, sandboxed commands ran and blocked writes outside the workspace ('Operation not permitted'), but the banner, status line, bash block meta ('auto-approved') and /doctor never mention the sandbox. /doctor prints 'settings   user, user, project' (~/.claude/settings.json and ~/.kiln/settings.json both labelled 'user') and 'hooks 8 hooks on 7 events'. The user settings define 13 hook events; PermissionRequest, PostCompact, PostToolUseFailure, StopFailure, SubagentStart and TeammateIdle are dropped without a note.",
+ "expected": "/doctor (and ideally the bash block meta) shows sandbox state; settings rows name the file (~/.claude, ~/.kiln); hook events kiln does not fire are listed as unsupported.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s3 (*doctor*, *sb3*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/commands/inspect_commands.go",
+   "internal/claude/hooks/hooks.go",
+   "internal/claude/settings/settings.go",
+   "internal/cli/chat.go",
+   "internal/cli/subcommands.go"
+  ],
+  "regression_test": "TestDoctorShowsSandboxState,TestDoctorFlagsUnsupportedHookEvents,TestLoadSettingsLoadedFrom_DistinguishesKilnFromClaudeCode",
+  "updated_at": "2026-10-04T21:14:53Z"
+ }
+}

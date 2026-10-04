@@ -66,6 +66,12 @@ type registryDeps struct {
 	Shells         *agent.BackgroundShells
 
 	SettingsLoadedFrom []string
+	// SandboxLine/SandboxProblems are /doctor's sandbox section (cli's
+	// sandboxReport, computed once at startup from the same cwd/settings
+	// startSandbox used) — InspectDeps has no settings.Settings of its
+	// own to build this from.
+	SandboxLine     string
+	SandboxProblems []string
 	// ModelRoles is settings.json's modelRoles map, threaded through to
 	// /model roles. Nil when none are configured.
 	ModelRoles map[string]string
@@ -259,6 +265,8 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		ModelLabel:         deps.ModelLabel,
 		ActiveTools:        func() ([]string, error) { return started.Lane.GetActiveTools() },
 		SettingsLoadedFrom: deps.SettingsLoadedFrom,
+		SandboxLine:        deps.SandboxLine,
+		SandboxProblems:    deps.SandboxProblems,
 	}))
 
 	registry.Add(slashcommands.ManageCommands(slashcommands.ManageDeps{

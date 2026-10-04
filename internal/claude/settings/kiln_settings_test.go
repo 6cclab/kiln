@@ -77,6 +77,36 @@ func TestLoadSettingsKilnFiles(t *testing.T) {
 	}
 }
 
+// TestLoadSettingsLoadedFrom_DistinguishesKilnFromClaudeCode checks
+// LoadedFrom tells ~/.claude/settings.json and ~/.kiln/settings.json
+// (both ScopeUser) apart, rather than recording the scope alone twice —
+// the regression for qa/findings/20261004T205021Z-doctor-misses-sandbox-
+// and-hook-events.json: /doctor used to print "settings   user, user,
+// project", indistinguishable.
+func TestLoadSettingsLoadedFrom_DistinguishesKilnFromClaudeCode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	put(t, filepath.Join(home, ".claude", "settings.json"), `{"model":"cc/user"}`)
+	put(t, filepath.Join(home, ".kiln", "settings.json"), `{}`)
+	put(t, filepath.Join(cwd, ".claude", "settings.json"), `{}`)
+
+	s := LoadSettings(cwd, LoadOptions{})
+	labels := make([]string, len(s.LoadedFrom))
+	for i, f := range s.LoadedFrom {
+		labels[i] = f.Label()
+	}
+	want := []string{"~/.claude", "~/.kiln", ".claude"}
+	if len(labels) != len(want) {
+		t.Fatalf("labels = %v, want %v", labels, want)
+	}
+	for i := range want {
+		if labels[i] != want[i] {
+			t.Errorf("labels[%d] = %q, want %q (full: %v)", i, labels[i], want[i], labels)
+		}
+	}
+}
+
 func indexOf(list []string, s string) int {
 	for i, x := range list {
 		if x == s {

@@ -1,0 +1,28 @@
+{
+ "id": "20261004T205021Z-deferred-slash-command-no-feedback",
+ "found_at": "2026-10-04T20:50:21Z",
+ "scenario": "manual-qa/input-ux",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "/model typed during a turn is deferred with no visible sign; the panel pops up unannounced when the turn ends",
+ "observed": "kiln defect (UX). During a busy turn, typing '/model' + Enter cleared the input and showed nothing: no queued block (plain text and '!ls' do get a 'you · queued' block), no note. When the turn finished, the model panel opened over the transcript. /status and /mcp mid-turn ran immediately (good).",
+ "expected": "Show the deferred command as queued (like a queued message), or say '/model will open when this turn ends'.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s3 (*model-midturn*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go",
+   "internal/tui/app_behaviour_test.go",
+   "test/e2e/tui_imgpath_and_busyslash_test.go"
+  ],
+  "regression_test": "TestHandleSubmit_NonImmediateCommandDefersWhileBusy",
+  "updated_at": "2026-10-04T20:58:07Z"
+ }
+}

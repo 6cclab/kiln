@@ -244,3 +244,71 @@ func TestTUI_ResizeSweep_MidStream(t *testing.T) {
 	waitTurnSettled(t, s)
 	assertFooterInvariant(t, s)
 }
+
+// --- System block reflows on resize ----------------------------------------
+
+// TestTUI_SystemNoteBlock_ReflowsOnResize drives the same Esc-interrupt
+// flow as TestTUI_Esc_Interrupts to land a "system" note block ("■
+// Interrupted. Tell kiln what to do instead.") in the transcript, then
+// resizes narrower and wider and checks the note's label rule redraws at
+// each new width — same right margin as every other block — instead of
+// keeping whatever width was live when it first committed
+// (qa/findings/20261004T204953Z-system-blocks-not-reflowed-on-resize.json:
+// the rule ran to the terminal edge at 80x24/60x24 after starting at
+// 120x40, and stopped short of it at 160x40).
+func TestTUI_SystemNoteBlock_ReflowsOnResize(t *testing.T) {
+	script := loadFauxScript(t, "behaviour-esc")
+	proj, home, sessDir, addr, _ := tuiFixture(t, script)
+
+	s := startTUI(t, 120, 40, proj, home, sessDir, addr,
+		"--permission-mode", "bypassPermissions",
+	)
+	waitReady(t, s)
+
+	s.Send("run a slow command")
+	s.SendKey("enter")
+	if err := s.WaitFor("Running sleep 5", 3*time.Second); err != nil {
+		t.Fatalf("never saw the busy line switch to \"Running sleep 5\": %v", err)
+	}
+	s.SendKey("esc")
+	if err := s.WaitFor("Interrupted. Tell kiln what to do instead.", 5*time.Second); err != nil {
+		t.Fatalf("never saw the interrupted note: %v", err)
+	}
+	if err := waitQuiescent(s, 200*time.Millisecond, 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	systemRuleRow := func() string {
+		for _, r := range s.Rows() {
+			if strings.HasPrefix(strings.TrimSpace(r), "system ") {
+				return r
+			}
+		}
+		return ""
+	}
+
+	if row := systemRuleRow(); row == "" {
+		t.Fatalf("no \"system\" label rule found after the interrupt:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+
+	// contentMarginCols (2) + ContentWidth(w) = w - 2: the column the rule
+	// ends at, regardless of terminal width, same formula every other
+	// block's rule follows (layout_margin.go).
+	for _, w := range []int{80, 60, 160} {
+		s.Resize(w, 24)
+		if err := waitQuiescent(s, 150*time.Millisecond, 2*time.Second); err != nil {
+			t.Fatalf("resize to %dx24: %v", w, err)
+		}
+		row := systemRuleRow()
+		if row == "" {
+			t.Fatalf("resize to %dx24: \"system\" label rule vanished:\n%s", w, strings.Join(s.Rows(), "\n"))
+		}
+		want := w - 2
+		if w < 40 {
+			want = w
+		}
+		if got := len([]rune(row)); got != want {
+			t.Errorf("resize to %dx24: system rule row width = %d, want %d (same margin as every other block)", w, got, want)
+		}
+	}
+}

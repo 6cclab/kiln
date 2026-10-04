@@ -244,8 +244,12 @@ func AbbrevHome(path, home string) string {
 // RenderStatusLine renders the one-row status line: mode segment, location
 // segment, model, a flexible spacer, then the context meter and cost —
 // fitted so the right side ends at width-1. When the row does not fit, the
-// cwd shortens first, then segments drop in order: cost, the model, the
-// location itself; past that the row is truncated outright with FitStatus.
+// cwd shortens first, then segments drop in a fixed, monotonic order: cost,
+// then the model, then the location itself; past that the row is truncated
+// outright with FitStatus. Monotonic means never recombining — a row that
+// has already dropped cost never brings it back by dropping the model
+// instead, so two widths one column apart show a consistent, predictable
+// set of segments.
 func RenderStatusLine(s StatusState, width int) string {
 	p := IsPlain()
 
@@ -382,13 +386,16 @@ func RenderStatusLine(s StatusState, width int) string {
 		return tryLoc(0)
 	}
 
-	// Drop order as the row narrows: shorten the cwd (inside build), then
-	// cost, then the model (cost comes back if it fits once the model is
-	// gone), and only then the location itself; past that, keep the model
-	// over cost.
+	// Drop order as the row narrows, fixed and monotonic: shorten the cwd
+	// (inside build) first, then drop cost, then the model, and only then
+	// the location itself. Each step is strictly narrower than the last —
+	// nothing comes back once dropped — so two terminal widths one column
+	// apart never show a different combination of segments (defect:
+	// trying {cost, no model} before giving up on cost let a wider row
+	// drop cost while a narrower one kept it by keeping the model instead,
+	// qa/findings/20261004T204953Z-narrow-footer-and-panel-clipping.json).
 	for _, try := range []struct{ cost, model, needLoc bool }{
-		{true, true, true}, {false, true, true}, {true, false, true}, {false, false, true},
-		{false, true, false}, {false, false, false},
+		{true, true, true}, {false, true, true}, {false, false, true}, {false, false, false},
 	} {
 		if out := build(try.cost, try.model, try.needLoc); out != "" {
 			return out
