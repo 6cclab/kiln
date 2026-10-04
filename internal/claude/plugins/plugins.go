@@ -202,9 +202,16 @@ func pluginManifest(root, name, marketplace string) (manifestRaw, bool) {
 // a diag warning); a missing installed_plugins.json means no plugins are
 // installed, which is the normal case, not an error.
 func LoadPlugins(cwd string) []Plugin {
+	return LoadPluginsFrom(cwd, nil)
+}
+
+// LoadPluginsFrom is LoadPlugins with enabledPlugins read only from the
+// settings scopes in sources (nil: every scope), as --setting-sources
+// restricts which settings files are read.
+func LoadPluginsFrom(cwd string, sources []paths.Scope) []Plugin {
 	seen := map[string]bool{}
 	var out []Plugin
-	for _, ins := range ListInstalled(cwd) {
+	for _, ins := range listInstalled(cwd, sources) {
 		if !ins.Enabled || !ins.Applicable || seen[ins.Key] {
 			continue
 		}
@@ -255,6 +262,10 @@ type Installed struct {
 // missing installed_plugins.json means no plugins are installed, the
 // normal case, not an error.
 func ListInstalled(cwd string) []Installed {
+	return listInstalled(cwd, nil)
+}
+
+func listInstalled(cwd string, sources []paths.Scope) []Installed {
 	data, err := os.ReadFile(installedPluginsPath(cwd))
 	if err != nil {
 		return nil
@@ -265,7 +276,7 @@ func ListInstalled(cwd string) []Installed {
 		return nil
 	}
 
-	enabled := settings.LoadEnabledPlugins(cwd)
+	enabled := settings.LoadEnabledPluginsFrom(cwd, sources)
 
 	var out []Installed
 	for key, entries := range installed.Plugins {

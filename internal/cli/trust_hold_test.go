@@ -114,6 +114,42 @@ func TestRun_Print_ProjectHooksFollowSettingSources(t *testing.T) {
 	}
 }
 
+// The same holds for a plugin the person installed but only the project
+// enables: with --setting-sources user it is not loaded, so its hooks do
+// not run.
+func TestRun_Print_ProjectEnabledPluginFollowsSettingSources(t *testing.T) {
+	startFaux(t, bashCallScript)
+	proj := scratchProject(t)
+	t.Setenv("HARNESS_TRUST_ALL", "")
+	home := os.Getenv("HOME")
+	marker := filepath.Join(proj, "plugin-hook-ran")
+	root := filepath.Join(home, "plugins", "demo")
+	for path, body := range map[string]string{
+		filepath.Join(home, ".claude", "plugins", "installed_plugins.json"): `{"version":2,"plugins":{"demo@market":[{"scope":"user","installPath":"` + root + `","version":"1.0.0"}]}}`,
+		filepath.Join(root, ".claude-plugin", "plugin.json"):                `{"name":"demo","version":"1.0.0"}`,
+		filepath.Join(root, "hooks", "hooks.json"):                          `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch ` + marker + `"}]}]}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeProjectSettings(t, proj, `{"enabledPlugins":{"demo@market":true}}`)
+
+	args := baseArgs()
+	args.SettingSources = []string{"user"}
+	printBlocked(t, args)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("--setting-sources user: the hook of a plugin only the project enables ran")
+	}
+	printBlocked(t, baseArgs())
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("-p, every source: the plugin's hook did not run: %v", err)
+	}
+}
+
 func TestTrustedHooks_HeldUntilEnabled(t *testing.T) {
 	cfg := claudehooks.Config{claudehooks.SessionStart: {{Hooks: []claudehooks.Command{{Type: "command", Command: "true"}}}}}
 	h := newTrustedHooks(cfg, false)

@@ -641,7 +641,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Active plugins (installed and enabled — internal/claude/plugins).
 	// Loaded once here so skills, commands, agents, hooks and MCP servers
 	// all see the same set for this run.
-	activePlugins := claudeplugins.LoadPlugins(cwd)
+	// --setting-sources decides whose enabledPlugins count, as in Claude
+	// Code. A plugin only the project enables still runs nothing before an
+	// interactive session's folder is trusted: hooks and MCP servers wait
+	// for the dialog.
+	activePlugins := claudeplugins.LoadPluginsFrom(cwd, settingsSources(args.SettingSources))
 	var pluginSkills []skills.Skill
 	var pluginCommands []claudecommands.CommandFile
 	var pluginAgents []claudeagents.Definition

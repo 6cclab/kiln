@@ -7,7 +7,31 @@ import (
 	"testing"
 
 	"github.com/andrepato/harness/internal/claude/hooks"
+	"github.com/andrepato/harness/internal/claude/paths"
 )
+
+// --setting-sources decides whose enabledPlugins count, as in Claude
+// Code: a plugin only the project's settings enable stays off with
+// `--setting-sources user`, and the user's own enabling still counts.
+func TestLoadPluginsFrom_HonoursSettingSources(t *testing.T) {
+	home, root := newHomeWithInstall(t, "user", "")
+	writeManifest(t, root, "demo", "1.0.0", nil)
+	proj := filepath.Join(home, "proj")
+	writeJSON(t, filepath.Join(proj, ".claude", "settings.json"), map[string]any{
+		"enabledPlugins": map[string]bool{"demo@market": true},
+	})
+	user := []paths.Scope{paths.ScopeUser}
+	if got := LoadPluginsFrom(proj, user); len(got) != 0 {
+		t.Errorf("--setting-sources user, project-enabled plugin: %+v", got)
+	}
+	if got := LoadPluginsFrom(proj, nil); len(got) != 1 {
+		t.Errorf("every source: %+v, want the plugin", got)
+	}
+	enableInHome(t, home, "demo@market", true)
+	if got := LoadPluginsFrom(proj, user); len(got) != 1 {
+		t.Errorf("--setting-sources user, user-enabled plugin: %+v", got)
+	}
+}
 
 // writeFile writes content to path, creating parent directories.
 func writeFile(t *testing.T, path, content string) {

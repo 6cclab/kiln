@@ -149,7 +149,9 @@ func LoadHooks(cwd string) Config {
 // LoadHooksFrom is LoadHooks restricted to the scopes in sources, as
 // --setting-sources restricts which settings files are read at all (nil:
 // every scope). `--setting-sources user` is how a -p run in a repository
-// the person did not write keeps that repository's hooks from running.
+// the person did not write keeps that repository's hooks from running,
+// together with plugins.LoadPluginsFrom, which leaves out the plugins
+// only the repository's settings enable (and so their hooks).
 func LoadHooksFrom(cwd string, sources []paths.Scope) Config {
 	merged := Config{}
 	for _, f := range paths.SettingsFiles(cwd) {
