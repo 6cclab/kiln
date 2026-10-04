@@ -200,15 +200,30 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	}
 
 	banner := newBanner(deps, bannerContentWidth(stdout))
+	// A resumed session's footer starts from its own figures.
+	var initialUsed *int
+	var initialCost *float64
+	if !deps.Started.Created {
+		if n, err := deps.Started.Lane.ContextTokens(); err == nil && n > 0 {
+			if tip, ok := deps.Started.Lane.GetTipID(); ok && tip != "" {
+				initialUsed = &n
+			}
+		}
+		if c := deps.Started.Harness.Stats().Usage.Cost.Total; c > 0 {
+			initialCost = &c
+		}
+	}
 	cfg := tui.Config{
-		Cwd:            deps.Cwd,
-		ModelLabel:     deps.ModelLabel,
-		Tier:           deps.Resolved.Tier,
-		InitialMode:    string(deps.Gate.Mode()),
-		StartedAt:      time.Now(),
-		Plain:          deps.ScreenReader,
-		Fullscreen:     deps.Fullscreen,
-		StartupContext: append([]string(nil), deps.SessionStart.Context...),
+		InitialContextUsed: initialUsed,
+		InitialCost:        initialCost,
+		Cwd:                deps.Cwd,
+		ModelLabel:         deps.ModelLabel,
+		Tier:               deps.Resolved.Tier,
+		InitialMode:        string(deps.Gate.Mode()),
+		StartedAt:          time.Now(),
+		Plain:              deps.ScreenReader,
+		Fullscreen:         deps.Fullscreen,
+		StartupContext:     append([]string(nil), deps.SessionStart.Context...),
 
 		Env:            deps.Env,
 		Gate:           deps.Gate,
@@ -332,7 +347,13 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	deps.Started.OnModelChanged = func(ctx context.Context, resolved provider.Resolved) {
 		// provider/model, the same label the footer showed at startup and
 		// cli.ts's onModelChanged passes.
-		bridge.ModelSwitch(resolved.Model.Provider+"/"+resolved.Model.ID, resolved.Tier.Name, resolved.Tier.ContextWindow)
+		// The meter's figure moves to the new model's view of the
+		// conversation, the same estimate /model's warning gives.
+		var used *int
+		if n, err := deps.Started.Lane.ContextTokens(); err == nil && n > 0 {
+			used = &n
+		}
+		bridge.ModelSwitch(resolved.Model.Provider+"/"+resolved.Model.ID, resolved.Tier.Name, resolved.Tier.ContextWindow, used)
 		// deps.Resolved is what ResolveMentions (above, closed over
 		// &deps.Resolved.Tier) and anything else built from `deps` reads
 		// for the rest of the session. Without updating it here, a model

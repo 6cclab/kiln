@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 
@@ -27,44 +28,90 @@ const (
 
 // autoCompact checks whether the lane's branch at tip has crossed the
 // configured compaction threshold and, if so, runs one compaction pass. It
-// is called at the end of each turn in drive(); errors are surfaced as
-// fault events rather than failing the run, matching pi's "compaction is
-// best-effort, a run's assistant response is not" behavior.
+// is called before an operation's first request and at the end of each
+// tool step in drive(). Compaction is best-effort, a run's assistant
+// response is not (pi's behaviour), so a failure does not fail the run:
+// autoCompact returns it as a *CompactionFailedError for drive to report
+// once it knows whether the request recovered (fitRequest may still
+// compact it to fit, see drive).
 // autoCompact returns the branch's tip after the check: unchanged if no
 // compaction ran, or the new compaction entry's id if one did (the caller
 // must update its own tip bookkeeping, since this commits directly to
 // storage rather than through drive()'s normal write sequence).
-func (l *Lane) autoCompact(ctx context.Context, tip string) string {
+func (l *Lane) autoCompact(ctx context.Context, tip string) (string, error) {
 	if !l.h.opts.Compaction.Enabled {
-		return tip
+		return tip, nil
 	}
 	pathEntries, err := l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "oldestFirst"})
 	if err != nil {
-		return tip
+		return tip, nil
 	}
 	_, cfg, err := l.resolveModel()
 	if err != nil {
-		return tip
+		return tip, nil
 	}
 	model, ok := l.h.opts.Registry.GetModel(cfg.Model.Provider, cfg.Model.ModelID)
 	if !ok {
-		return tip
+		return tip, nil
 	}
 	usage := compaction.CalculateContextTokens(pathEntries)
 	if !compaction.ShouldCompact(usage.Tokens, model.ContextWindow, l.h.opts.Compaction) {
-		return tip
+		return tip, nil
 	}
 	if err := l.runCompaction(ctx, pathEntries, model, cfg, nil, TriggerAuto); err != nil {
-		if ctx.Err() == nil { // an interrupted turn is not a compaction fault
-			l.h.events.Emit(Event{Type: EventFault, Lane: l.name, Err: fmt.Errorf("harness: auto-compaction failed: %w", err)})
+		if ctx.Err() != nil { // an interrupted turn is not a compaction fault
+			return tip, nil
 		}
-		return tip
+		return tip, &CompactionFailedError{Err: err}
 	}
 	if newTip, ok := l.GetTipID(); ok {
-		return newTip
+		return newTip, nil
 	}
-	return tip
+	return tip, nil
 }
+
+// CompactionFailedError is an automatic compaction that failed, retry
+// included, in words for the user: CompactionReason says why without
+// transport jargon.
+type CompactionFailedError struct{ Err error }
+
+func (e *CompactionFailedError) Error() string {
+	return "Auto-compaction failed: " + CompactionReason(e.Err) + ". The conversation is as it was"
+}
+
+func (e *CompactionFailedError) Unwrap() error { return e.Err }
+
+// CompactionReason says in plain words why a compaction request failed:
+// the model went quiet, the connection dropped, or the error itself when
+// it is not one of those.
+func CompactionReason(err error) string {
+	var stalled *StallError
+	var cerr *compaction.Error
+	var si provider.StreamInterrupted
+	switch {
+	case errors.As(err, &stalled), errors.As(err, &cerr) && cerr.Code == "stalled":
+		return "the model stopped responding"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "the request timed out"
+	case errors.As(err, &si):
+		return "the connection to the model dropped mid-answer"
+	}
+	return err.Error()
+}
+
+// compactionRetriable reports whether a failed compaction request is worth
+// sending again: the same transient failures a model request retries, and
+// a stalled summary.
+func compactionRetriable(err error) bool {
+	var cerr *compaction.Error
+	if errors.As(err, &cerr) && cerr.Code == "stalled" {
+		return true
+	}
+	return isRetriable(err)
+}
+
+// compactionAttempts is how many times one compaction is tried.
+const compactionAttempts = 2
 
 // runCompaction is the shared body of Lane.Compact and autoCompact: prepare
 // the cut point, call summariser to summarize, and commit the resulting
@@ -79,6 +126,20 @@ func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, s
 	}
 	if prep == nil {
 		return nil // nothing to compact (empty branch, or tip is already a compaction entry)
+	}
+	if len(prep.MessagesToSummarize) == 0 && len(prep.TurnPrefixMessages) == 0 && trigger == TriggerManual {
+		// Asked for explicitly, a compaction summarises even what the
+		// automatic one keeps as recent, as Claude Code's /compact does:
+		// the user wants the room now. Only the latest turn stays
+		// verbatim; a conversation of one turn has nothing to summarise.
+		keepLatest := l.h.opts.Compaction
+		keepLatest.KeepRecentTokens = latestTurnTokens(pathEntries)
+		if prep, err = compaction.Prepare(pathEntries, keepLatest); err != nil {
+			return err
+		}
+		if prep == nil {
+			return nil
+		}
 	}
 	if len(prep.MessagesToSummarize) == 0 && len(prep.TurnPrefixMessages) == 0 {
 		return nil // everything is recent and kept verbatim: no summary call to pay for
@@ -99,13 +160,28 @@ func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, s
 	label := summariser.Provider + "/" + summariser.ID
 	l.h.events.Emit(Event{Type: EventCompactionStart, Lane: l.name, CompactionTrigger: trigger, CompactionModel: label})
 
-	result, err := compaction.CompactWith(ctx, prep, p, summariser, customInstructions, provider.ThinkingLevel(cfg.ThinkingLevel), compaction.Options{
-		OnProgress: func(pr compaction.Progress) {
-			l.h.events.Emit(Event{Type: EventCompactionProgress, Lane: l.name, CompactionModel: pr.Model,
-				CompactionPart: pr.Part, CompactionParts: pr.Parts,
-				CompactionPromptTokens: pr.PromptTokens, CompactionOutputTokens: pr.OutputTokens})
-		},
-	})
+	// One retry for a transient failure (a stall, a dropped connection),
+	// said on the progress row, so a compaction that recovers leaves no
+	// error behind.
+	var result compaction.Result
+	lastPart := 0
+	for attempt := 1; ; attempt++ {
+		result, err = compaction.CompactWith(ctx, prep, p, summariser, customInstructions, provider.ThinkingLevel(cfg.ThinkingLevel), compaction.Options{
+			OnProgress: func(pr compaction.Progress) {
+				lastPart = pr.Part
+				l.h.events.Emit(Event{Type: EventCompactionProgress, Lane: l.name, CompactionModel: pr.Model,
+					CompactionPart: pr.Part, CompactionParts: pr.Parts,
+					CompactionPromptTokens: pr.PromptTokens, CompactionOutputTokens: pr.OutputTokens})
+			},
+			FirstEventTimeout: l.h.opts.StallFirstEvent,
+			IdleTimeout:       l.h.opts.StallIdle,
+		})
+		if err == nil || ctx.Err() != nil || attempt >= compactionAttempts || !compactionRetriable(err) {
+			break
+		}
+		l.h.events.Emit(Event{Type: EventCompactionRetry, Lane: l.name, CompactionTrigger: trigger, CompactionModel: label,
+			CompactionPart: lastPart, Attempt: attempt + 1, MaxAttempts: compactionAttempts, RetryError: CompactionReason(err), Err: err})
+	}
 	if err != nil {
 		// compaction_end always follows compaction_start, so a status line
 		// that showed the start can clear on failure and cancellation too.
@@ -279,4 +355,25 @@ func (l *Lane) compactForOverflow(ctx context.Context, tip string) (string, bool
 	}
 	newTip, _ := l.GetTipID()
 	return newTip, newTip != tip
+}
+
+// latestTurnTokens estimates the latest turn: every message from the last
+// user message to the end of the branch. As a keep-recent budget it makes
+// compaction.FindCutPoint cut right before that user message.
+func latestTurnTokens(entries []session.Entry) int {
+	n := 0
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Type == session.EntryCompaction {
+			break
+		}
+		if e.Type != session.EntryMessage || e.Message == nil {
+			continue
+		}
+		n += compaction.EstimateTokens(e.Message)
+		if e.Message.MessageRole() == msg.RoleUser {
+			break
+		}
+	}
+	return n
 }

@@ -300,7 +300,7 @@ func TestBridge_ModelSwitch_CarriesContextWindow(t *testing.T) {
 	f := &fakeSink{}
 	b.setSink(f)
 
-	b.ModelSwitch("anthropic/claude-opus-4-8", "opus", 200000)
+	b.ModelSwitch("anthropic/claude-opus-4-8", "opus", 200000, nil)
 
 	got := waitForOneSent(t, f)
 	info, ok := got.(MsgModelInfo)

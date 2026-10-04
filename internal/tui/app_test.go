@@ -804,3 +804,33 @@ func TestMsgModelInfo_UpdatesContextWindow(t *testing.T) {
 		t.Errorf("ModelLabel after model switch = %q, want the new model", got)
 	}
 }
+
+// After a switch the meter shows the conversation as the new model will be
+// sent it, not the outgoing model's measured size over the new window
+// (which read 196% for a conversation /model said fit in 46k of 49k).
+func TestMsgModelInfo_ReplacesContextUsed(t *testing.T) {
+	m := NewModel(Config{Cwd: "/tmp", ModelLabel: "anthropic/opus", Tier: budget.Tier{ContextWindow: 1000000}, InitialMode: "manual", StartedAt: time.Unix(0, 0)})
+	m.width, m.height = 80, 24
+	measured := 96000
+	mi, _ := m.Update(MsgUsage{ContextUsed: &measured})
+	m = mi.(Model)
+
+	estimate := 46100
+	mi, _ = m.Update(MsgModelInfo{Label: "ollama/qwen", ContextWindow: 49152, ContextUsed: &estimate})
+	m = mi.(Model)
+	if got := m.footer.State().ContextUsed; got == nil || *got != 46100 {
+		t.Fatalf("ContextUsed after the switch = %v, want 46100", got)
+	}
+}
+
+// A resumed session's footer starts from its own context and cost, not
+// "ctx 0% $0.00" until the first request.
+func TestResumedFooterStartsFromTheSession(t *testing.T) {
+	used, cost := 60000, 6.04
+	m := NewModel(Config{Cwd: "/tmp", ModelLabel: "anthropic/opus", Tier: budget.Tier{ContextWindow: 1000000}, InitialMode: "manual", StartedAt: time.Unix(0, 0),
+		InitialContextUsed: &used, InitialCost: &cost})
+	st := m.footer.State()
+	if st.ContextUsed == nil || *st.ContextUsed != 60000 || st.Cost != 6.04 {
+		t.Fatalf("footer starts at used=%v cost=%v, want 60000 and 6.04", st.ContextUsed, st.Cost)
+	}
+}

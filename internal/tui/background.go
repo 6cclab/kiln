@@ -153,6 +153,16 @@ func (m Model) applyCompaction(msg MsgCompaction) Model {
 	return m
 }
 
+// compactionRetryLabel is the busy-line text while a failed compaction
+// request is sent again: what went wrong, in the harness's plain words
+// (harness.CompactionReason), and that kiln is retrying.
+func compactionRetryLabel(part int, reason string) string {
+	if part > 0 {
+		return fmt.Sprintf("Compacting conversation · part %d: %s, retrying", part, reason)
+	}
+	return fmt.Sprintf("Compacting conversation · %s, retrying", reason)
+}
+
 // compactionLabel is the busy-line text for a compaction: which part, and
 // whether the model is still reading the prompt (nothing streams until it
 // has) or already writing the summary. The spinner adds the elapsed time.

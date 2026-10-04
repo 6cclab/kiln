@@ -36,6 +36,11 @@ const (
 	// EventCompactionProgress reports a running compaction's part and
 	// streamed output (kiln's own; pi has no equivalent).
 	EventCompactionProgress EventType = "compaction_progress"
+	// EventCompactionRetry reports that a compaction request failed for a
+	// transient reason and is being sent again (kiln's own): Attempt is
+	// the attempt starting, RetryError the reason in plain words, Err the
+	// error itself.
+	EventCompactionRetry EventType = "compaction_retry"
 
 	EventNavigationStart EventType = "navigation_start"
 	EventNavigationEnd   EventType = "navigation_end"
@@ -145,6 +150,12 @@ type Event struct {
 	// usage
 	UsageRow    *msg.Usage
 	UsageTotals *msg.Usage
+	// SideUsage is a model call made beside the conversation (auto mode's
+	// classifier), recorded in the session's usage but not part of the
+	// context; UsageSource names it ("auto-mode classifier · provider/id").
+	// UsageRow is nil on such an event.
+	SideUsage   *msg.Usage
+	UsageSource string
 
 	// run_end / turn_end
 	Status string // "completed" | "aborted" | "failed"

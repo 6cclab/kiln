@@ -46,6 +46,9 @@ type Classifier struct {
 	Memory string
 	// Timeout bounds one call; zero means DefaultTimeout.
 	Timeout time.Duration
+	// OnUsage, if set, receives every call's usage, answered or not: the
+	// tokens are spent either way, and the session's cost must show them.
+	OnUsage func(model provider.Model, usage msg.Usage)
 }
 
 var _ permission.Classifier = (*Classifier)(nil)
@@ -53,12 +56,33 @@ var _ permission.Classifier = (*Classifier)(nil)
 // Request builds the classifier's system prompt and its one user message
 // for req. Exported so tests can assert on exactly what the model is sent.
 func (c *Classifier) Request(req permission.ClassifyRequest) (system, user string, err error) {
-	action, err := actionJSON(req.ToolName, req.PrimaryArg, req.Args, req.OutsideWorkspace)
+	system, blocks, err := c.request(req)
 	if err != nil {
 		return "", "", err
 	}
+	var b strings.Builder
+	for _, blk := range blocks {
+		b.WriteString(blk.(msg.TextContent).Text)
+	}
+	return system, b.String(), nil
+}
+
+// request is Request as sent: the user message as text blocks, the one
+// that ends the transcript asking for a cache breakpoint (userParts).
+func (c *Classifier) request(req permission.ClassifyRequest) (string, msg.Blocks, error) {
+	action, err := actionJSON(req.ToolName, req.PrimaryArg, req.Args, req.OutsideWorkspace)
+	if err != nil {
+		return "", nil, err
+	}
 	lines := transcriptLines(req.UserHistory, req.History, req.Delegated, req.CallID)
-	return systemPrompt(c.Config), userPrompt(c.Memory, req.Workspace, lines, action), nil
+	parts, cacheAt := userParts(c.Memory, req.Workspace, lines, action)
+	blocks := make(msg.Blocks, len(parts))
+	for i, p := range parts {
+		t := msg.Text(p)
+		t.CacheBreak = i == cacheAt
+		blocks[i] = t
+	}
+	return systemPrompt(c.Config), blocks, nil
 }
 
 // Classify sends req to the classifier model. Any failure — no model, a
@@ -95,7 +119,7 @@ func (c *Classifier) Classify(ctx context.Context, req permission.ClassifyReques
 		diag.L().Info("auto mode classifier", kv...)
 	}()
 
-	system, user, err := c.Request(req)
+	system, user, err := c.request(req)
 	if err != nil {
 		return verdict, err
 	}
@@ -121,7 +145,7 @@ func (c *Classifier) Classify(ctx context.Context, req permission.ClassifyReques
 		maxTokens = model.MaxTokens
 	}
 	ch, wait := streamer.Stream(callCtx, model, []msg.Message{
-		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(user)}, Timestamp: time.Now().UnixMilli()},
+		msg.UserMessage{Role: msg.RoleUser, Content: user, Timestamp: time.Now().UnixMilli()},
 	}, provider.StreamOptions{SystemPrompt: system, MaxTokens: maxTokens})
 	for range ch {
 	}
@@ -142,6 +166,9 @@ func (c *Classifier) Classify(ctx context.Context, req permission.ClassifyReques
 	}
 	if am != nil {
 		usage = am.Usage
+		if c.OnUsage != nil && (usage.Input != 0 || usage.Output != 0 || usage.CacheRead != 0 || usage.CacheWrite != 0) {
+			c.OnUsage(model, usage)
+		}
 	}
 	if err != nil {
 		return verdict, err

@@ -444,7 +444,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 							return Result{Output: []string{"Context compacted."}}, nil
 						}
 						if after >= before {
-							return Result{Output: []string{fmt.Sprintf("Nothing to compact yet: the conversation (~%s tokens) is all recent turns, which are kept as they are.", formatTokens(before))}}, nil
+							return Result{Output: []string{fmt.Sprintf("Nothing to compact yet: the conversation (~%s tokens) is its latest turn, which compaction keeps as it is.", formatTokens(before))}}, nil
 						}
 						by := ""
 						if summariser != "" {
@@ -584,11 +584,14 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						outgoing = p + "/" + m
 					}
 					outgoingWindow := deps.CurrentTier().ContextWindow
-					size := conversationSize(deps)
 					tier, err := deps.SwitchModel(ctx, providerID, mID)
 					if err != nil {
 						return "", "", err
 					}
+					// Measured after the switch: the size the new model's
+					// requests are checked against, and the one the footer
+					// now shows.
+					size := conversationSize(deps)
 					label := providerID + "/" + mID
 					if deps.OnModelChanged != nil {
 						deps.OnModelChanged(label, tier)

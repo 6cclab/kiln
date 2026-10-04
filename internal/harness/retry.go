@@ -79,6 +79,10 @@ func isRetriable(err error) bool {
 	if errors.As(err, &si) {
 		return true
 	}
+	var stalled *StallError
+	if errors.As(err, &stalled) {
+		return true
+	}
 	var re RetriableError
 	if errors.As(err, &re) {
 		code := re.StatusCode()

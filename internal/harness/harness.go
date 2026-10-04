@@ -1,11 +1,14 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
-	"github.com/andrepato/harness/internal/msg"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/tool"
@@ -37,6 +40,13 @@ type Options struct {
 	ToolOutputTokens int
 
 	Retry RetryPolicy
+
+	// StallFirstEvent and StallIdle bound a model request that has gone
+	// quiet (stall.go): the wait for its first token, given the prompt's
+	// estimated size, and the longest gap between tokens after that.
+	// Zero values use compaction's defaults. There is no total deadline.
+	StallFirstEvent func(promptTokens int) time.Duration
+	StallIdle       time.Duration
 
 	Cwd string
 
@@ -201,7 +211,9 @@ func (h *Harness) UsageByModel(fallback string) map[string]msg.Usage {
 	out := map[string]msg.Usage{}
 	for _, r := range rows {
 		key := fallback
-		if e, ok := entries[r.EntryID]; ok {
+		if src := sideUsageSource(r.Details); src != "" {
+			key = src
+		} else if e, ok := entries[r.EntryID]; ok {
 			if am, ok := e.Message.(msg.AssistantMessage); ok && am.Provider != "" && am.Model != "" {
 				key = am.Provider + "/" + am.Model
 			}
@@ -209,6 +221,40 @@ func (h *Harness) UsageByModel(fallback string) map[string]msg.Usage {
 		out[key] = out[key].Add(r.Usage)
 	}
 	return out
+}
+
+// sideUsageDetails is a side call's usage row details: what made it.
+type sideUsageDetails struct {
+	Source string `json:"source"`
+}
+
+func sideUsageSource(details json.RawMessage) string {
+	if len(details) == 0 {
+		return ""
+	}
+	var d sideUsageDetails
+	if json.Unmarshal(details, &d) != nil {
+		return ""
+	}
+	return d.Source
+}
+
+// RecordSideUsage records the usage of a model call made beside the
+// conversation, such as auto mode's classifier, as a session usage row
+// (no entry; its details name source), so the session's cost, the footer
+// and /cost include it, also after a resume. It emits EventUsage with
+// SideUsage set and no UsageRow: the call is not part of the context.
+func (h *Harness) RecordSideUsage(source string, u msg.Usage) error {
+	details, err := json.Marshal(sideUsageDetails{Source: source})
+	if err != nil {
+		return err
+	}
+	if _, err := h.opts.Storage.Commit([]session.Write{session.UsageWrite{Row: session.UsageRow{ID: uuid.NewString(), Usage: u, Details: details}}}); err != nil {
+		return err
+	}
+	totals := h.opts.Storage.GetStats().Usage
+	h.events.Emit(Event{Type: EventUsage, SideUsage: &u, UsageSource: source, UsageTotals: &totals})
+	return nil
 }
 
 // Lane returns the named lane, creating it (and writing its initial

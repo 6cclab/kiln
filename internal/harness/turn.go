@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -18,6 +19,13 @@ import (
 // replay it. This phase's Resume never actually replays frames (partial
 // streaming state is always re-requested from scratch, see Resume), but
 // the frames are still written so the on-disk write sequence matches pi's.
+//
+// Only block boundaries are recorded (start, end, a finished tool call,
+// done), never the per-token deltas: an end frame carries its block's
+// whole text (Content) or call (ToolCall), so the deltas repeated it a few
+// characters per line. They were 96% of a long session's lines and two
+// thirds of its bytes, kept for good once the reply committed, because the
+// file is append-only (recordedFrame).
 type Frame struct {
 	Type         msg.EventType  `json:"type"`
 	ContentIndex int            `json:"contentIndex"`
@@ -171,6 +179,9 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	// because a request did not fit; it does not loop on it (pi's
 	// overflowRecoveryUsed).
 	overflowRecoveryUsed := false
+	// compactErr is an automatic compaction's failure, held until the
+	// next request is built (see fitRequest below).
+	var compactErr error
 	for {
 		if err := ctx.Err(); err != nil {
 			return l.finishAborted(operationID, tip)
@@ -210,7 +221,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		// turns end in text never compacted however full it got.
 		if compactFirst {
 			compactFirst = false
-			tip = l.autoCompact(ctx, tip)
+			tip, compactErr = l.autoCompact(ctx, tip)
 		}
 
 		_, cfg, err := l.resolveModel()
@@ -223,12 +234,22 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		// fitRequest compacts once if it does not fit and refuses to send
 		// one that still does not.
 		var transcript []msg.Message
+		beforeFit := tip
 		tip, transcript, err = l.fitRequest(ctx, tip, &overflowRecoveryUsed)
 		if err != nil {
 			if ctx.Err() != nil {
 				return l.finishAborted(operationID, tip)
 			}
 			return l.finishFailed(operationID, tip, err)
+		}
+		// A failed automatic compaction is reported only if nothing made
+		// up for it: when fitRequest compacted the conversation to fit,
+		// the turn recovered and an error block would only mislead.
+		if compactErr != nil {
+			if tip == beforeFit {
+				l.h.events.Emit(Event{Type: EventFault, Lane: l.name, OperationID: operationID, Err: compactErr})
+			}
+			compactErr = nil
 		}
 
 		laneStateNow, _ := l.laneState()
@@ -264,6 +285,8 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		}
 		if err != nil {
 			if ctx.Err() != nil {
+				// final is what had streamed when the user interrupted.
+				tip = l.commitInterrupted(operationID, tip, responseEntryID, final, cfg)
 				return l.finishAborted(operationID, tip)
 			}
 			return l.finishFailed(operationID, tip, err)
@@ -374,7 +397,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 			i = j
 		}
 		l.h.events.Emit(Event{Type: EventTurnEnd, Lane: l.name, OperationID: operationID})
-		tip = l.autoCompact(ctx, tip)
+		tip, compactErr = l.autoCompact(ctx, tip)
 		// loop back for the next assistant turn.
 	}
 }
@@ -525,8 +548,12 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 		}
 	}
 
+	promptTokens := l.requestTokens(transcript)
 	retry := l.h.opts.Retry
 	var lastErr error
+	// interrupted is the partial message a stream reported when it ended
+	// early (its error event), for an interrupt to keep.
+	var interrupted *msg.AssistantMessage
 	for attempt := 1; attempt <= retry.MaxAttempts; attempt++ {
 		if attempt > 1 && responseEntryID != "" {
 			// The cut attempt's frames are not this response: a crash-resume
@@ -534,9 +561,16 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 			// answers together.
 			_, _ = l.h.opts.Storage.Commit([]session.Write{session.DeleteListWrite(session.PendingAssistantFrames(operationID, responseEntryID))})
 		}
-		events, wait := p.Stream(ctx, m, transcript, opts)
+		reqCtx, cancelReq := context.WithCancelCause(ctx)
+		first, idle := l.h.opts.stallLimits(promptTokens)
+		watch := watchStall(cancelReq, first, idle, promptTokens)
+		events, wait := p.Stream(reqCtx, m, transcript, opts)
 		for ev := range events {
-			if responseEntryID != "" && ev.Type != msg.EventStart {
+			watch.saw(ev)
+			if ev.Type == msg.EventError && ev.Error != nil {
+				interrupted = ev.Error
+			}
+			if responseEntryID != "" && recordedFrame(ev.Type) {
 				frame := Frame{Type: ev.Type, ContentIndex: ev.ContentIndex, Delta: ev.Delta, Content: ev.Content, ToolCall: ev.ToolCall, Reason: ev.Reason}
 				w, _ := session.AppendListWrite(session.PendingAssistantFrames(operationID, responseEntryID), json.RawMessage(mustMarshal(frame)))
 				_, _ = l.h.opts.Storage.Commit([]session.Write{w})
@@ -544,12 +578,19 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 			l.h.events.Emit(Event{Type: EventMessageUpdate, Lane: l.name, OperationID: operationID, EntryID: responseEntryID, StreamEvent: &ev})
 		}
 		final, err := wait()
+		watch.stop()
+		var stalled *StallError
+		if err != nil && ctx.Err() == nil && errors.As(context.Cause(reqCtx), &stalled) {
+			err = stalled
+		}
+		cancelReq(nil)
 		if err == nil {
 			return final, nil
 		}
 		lastErr = err
 		if ctx.Err() != nil {
-			return nil, err
+			// Interrupted: hand back what had streamed (drive keeps it).
+			return interrupted, err
 		}
 		if !isRetriable(err) || attempt == retry.MaxAttempts {
 			return nil, err
@@ -562,6 +603,16 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 		l.h.events.Emit(Event{Type: EventRetryStart, Lane: l.name, OperationID: operationID, Attempt: attempt + 1})
 	}
 	return nil, lastErr
+}
+
+// recordedFrame reports whether a stream event is written as a pending
+// frame: every event but the start and the per-token deltas (see Frame).
+func recordedFrame(t msg.EventType) bool {
+	switch t {
+	case msg.EventStart, msg.EventTextDelta, msg.EventThinkingDelta, msg.EventToolCallDelta:
+		return false
+	}
+	return true
 }
 
 func mustMarshal(v any) []byte {

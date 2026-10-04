@@ -232,8 +232,16 @@ type Options struct {
 	// RequireTools drops models that cannot call tools. Default true: the
 	// agent loop needs them.
 	RequireTools *bool
-	HTTPClient   *http.Client
+	// HTTPClient carries generation requests. Leave it nil for
+	// api.NewStreamingClient, which bounds connecting but not the
+	// response: a whole-request Timeout here cut off a slow local model
+	// mid-answer. Discovery calls always get discoveryTimeout on top.
+	HTTPClient *http.Client
 }
+
+// discoveryTimeout bounds each model-listing call (/api/tags, /api/ps,
+// /api/show): they answer from metadata, without loading a model.
+const discoveryTimeout = 15 * time.Second
 
 func (o Options) requireTools() bool {
 	if o.RequireTools == nil {
@@ -250,11 +258,24 @@ func (o Options) baseURL() string {
 	return strings.TrimRight(u, "/")
 }
 
+// client is the discovery client: the configured transport, with
+// discoveryTimeout per call.
 func (o Options) client() *http.Client {
+	c := &http.Client{Timeout: discoveryTimeout}
+	if o.HTTPClient != nil {
+		c.Transport = o.HTTPClient.Transport
+	}
+	return c
+}
+
+// streamClient carries generation requests. It has no total deadline: the
+// harness ends a request that has gone quiet (internal/harness/stall.go),
+// sized to the prompt, and Esc ends any request.
+func (o Options) streamClient() *http.Client {
 	if o.HTTPClient != nil {
 		return o.HTTPClient
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	return api.NewStreamingClient()
 }
 
 // DiscoverModels discovers models and their true serving windows.
@@ -316,7 +337,7 @@ type Provider struct {
 // New builds an Ollama provider. Models are empty until RefreshModels is
 // called (matching pi's getModels() returning [] before the first refresh).
 func New(opts Options) *Provider {
-	return &Provider{opts: opts, client: &api.OpenAICompletionsClient{HTTPClient: opts.client()}}
+	return &Provider{opts: opts, client: &api.OpenAICompletionsClient{HTTPClient: opts.streamClient()}}
 }
 
 func (p *Provider) ID() string   { return ProviderID }
@@ -342,7 +363,7 @@ func (p *Provider) RefreshModels(ctx context.Context) error {
 // login() which fails at login rather than at first turn.
 func Login(ctx context.Context, url, apiKey string) error {
 	base := strings.TrimRight(url, "/")
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: discoveryTimeout}
 	var tags tagsResponse
 	return getJSON(ctx, client, base, "/api/tags", apiKey, "", nil, &tags)
 }

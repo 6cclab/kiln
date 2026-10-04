@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -885,5 +884,8 @@ func ollamaOptionsFromEnv() ollama.Options {
 			serverDefault = n
 		}
 	}
-	return ollama.Options{URL: url, ServerDefaultContext: serverDefault, HTTPClient: &http.Client{Timeout: 3 * time.Minute}}
+	// No HTTPClient: ollama's default streaming client bounds connecting,
+	// not the response. A 3-minute whole-request Timeout here cut off
+	// compactions and turns on a slow local model mid-stream.
+	return ollama.Options{URL: url, ServerDefaultContext: serverDefault}
 }
