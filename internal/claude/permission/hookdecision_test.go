@@ -107,6 +107,25 @@ func TestHookAllowDoesNotBeatRules(t *testing.T) {
 			t.Fatalf("prompts=%d, want one prompt with no grant", len(p.reqs))
 		}
 	})
+	t.Run("a bash write to a protected path still asks", func(t *testing.T) {
+		for _, mode := range []settings.PermissionMode{settings.ModeManual, settings.ModeAcceptEdits} {
+			g, p, _ := hookGate(t, mode, settings.Permissions{}, nil)
+			if _, _, err := g.CheckWithOutcome(context.Background(), hookReq(bashReq("echo '[core]' >> .git/config"), HookAllow, "")); err != nil {
+				t.Fatal(err)
+			}
+			if len(p.reqs) != 1 {
+				t.Errorf("%s: prompts=%d, want one", mode, len(p.reqs))
+			}
+		}
+		c := allowAll()
+		g, p, _ := hookGate(t, settings.ModeAuto, settings.Permissions{}, c)
+		if _, _, err := g.CheckWithOutcome(context.Background(), hookReq(bashReq("git config core.hooksPath /tmp/h"), HookAllow, "")); err != nil {
+			t.Fatal(err)
+		}
+		if len(c.calls)+len(p.reqs) == 0 {
+			t.Error("auto mode: a hook allow skipped both the classifier and the user for a git config write")
+		}
+	})
 	t.Run("protected path refused in dontAsk", func(t *testing.T) {
 		g, _, root := hookGate(t, settings.ModeDontAsk, settings.Permissions{}, nil)
 		path := filepath.Join(root, ".claude", "settings.json")
