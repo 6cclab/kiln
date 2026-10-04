@@ -77,6 +77,12 @@ type Config struct {
 	// input box (`◐ medium · /effort`, docs/claude-code-reference.md §2).
 	// Empty defaults to "medium" in NewModel.
 	Effort string
+	// InitialContextUsed and InitialCost seed the footer for a resumed
+	// session: its conversation's size (harness.Lane.ContextTokens) and
+	// what it has cost so far, so the meter does not read 0% and $0.00
+	// until the first request. Nil for a new session.
+	InitialContextUsed *int
+	InitialCost        *float64
 
 	Env            *execenv.Env
 	Gate           *permission.Gate
@@ -388,7 +394,7 @@ func NewModel(cfg Config) Model {
 	m := Model{
 		cfg:            cfg,
 		editor:         ed,
-		footer:         NewFooterState(StatusState{ModelLabel: cfg.ModelLabel, ContextWindow: cfg.Tier.ContextWindow, Mode: cfg.InitialMode, StartedAt: cfg.StartedAt, Cwd: abbrevHomeEnv(cfg.Cwd)}),
+		footer:         NewFooterState(StatusState{ModelLabel: cfg.ModelLabel, ContextWindow: cfg.Tier.ContextWindow, Mode: cfg.InitialMode, StartedAt: cfg.StartedAt, Cwd: abbrevHomeEnv(cfg.Cwd), ContextUsed: cfg.InitialContextUsed, Cost: derefFloat(cfg.InitialCost)}),
 		prompt:         NewPromptState(cfg.Cwd),
 		subagents:      NewSubagentPanelState(),
 		plan:           &planLiveState{},
@@ -2864,3 +2870,10 @@ func rightAlign(s string, width int) string {
 // The mode dot/label colour mapping now lives in status.go's modeLabel
 // (RenderStatusLine's mode segment), which app.go's renderStatusRow above
 // reaches through m.footer.RenderLine.
+
+func derefFloat(f *float64) float64 {
+	if f == nil {
+		return 0
+	}
+	return *f
+}

@@ -822,3 +822,15 @@ func TestMsgModelInfo_ReplacesContextUsed(t *testing.T) {
 		t.Fatalf("ContextUsed after the switch = %v, want 46100", got)
 	}
 }
+
+// A resumed session's footer starts from its own context and cost, not
+// "ctx 0% $0.00" until the first request.
+func TestResumedFooterStartsFromTheSession(t *testing.T) {
+	used, cost := 60000, 6.04
+	m := NewModel(Config{Cwd: "/tmp", ModelLabel: "anthropic/opus", Tier: budget.Tier{ContextWindow: 1000000}, InitialMode: "manual", StartedAt: time.Unix(0, 0),
+		InitialContextUsed: &used, InitialCost: &cost})
+	st := m.footer.State()
+	if st.ContextUsed == nil || *st.ContextUsed != 60000 || st.Cost != 6.04 {
+		t.Fatalf("footer starts at used=%v cost=%v, want 60000 and 6.04", st.ContextUsed, st.Cost)
+	}
+}

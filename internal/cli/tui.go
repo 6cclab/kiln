@@ -200,15 +200,30 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	}
 
 	banner := newBanner(deps, bannerContentWidth(stdout))
+	// A resumed session's footer starts from its own figures.
+	var initialUsed *int
+	var initialCost *float64
+	if !deps.Started.Created {
+		if n, err := deps.Started.Lane.ContextTokens(); err == nil && n > 0 {
+			if tip, ok := deps.Started.Lane.GetTipID(); ok && tip != "" {
+				initialUsed = &n
+			}
+		}
+		if c := deps.Started.Harness.Stats().Usage.Cost.Total; c > 0 {
+			initialCost = &c
+		}
+	}
 	cfg := tui.Config{
-		Cwd:            deps.Cwd,
-		ModelLabel:     deps.ModelLabel,
-		Tier:           deps.Resolved.Tier,
-		InitialMode:    string(deps.Gate.Mode()),
-		StartedAt:      time.Now(),
-		Plain:          deps.ScreenReader,
-		Fullscreen:     deps.Fullscreen,
-		StartupContext: append([]string(nil), deps.SessionStart.Context...),
+		InitialContextUsed: initialUsed,
+		InitialCost:        initialCost,
+		Cwd:                deps.Cwd,
+		ModelLabel:         deps.ModelLabel,
+		Tier:               deps.Resolved.Tier,
+		InitialMode:        string(deps.Gate.Mode()),
+		StartedAt:          time.Now(),
+		Plain:              deps.ScreenReader,
+		Fullscreen:         deps.Fullscreen,
+		StartupContext:     append([]string(nil), deps.SessionStart.Context...),
 
 		Env:            deps.Env,
 		Gate:           deps.Gate,

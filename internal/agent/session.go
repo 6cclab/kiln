@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -220,6 +221,16 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 	lane, err := h.Lane(MainLane)
 	if err != nil {
 		return nil, fmt.Errorf("agent: create main lane: %w", err)
+	}
+	// A resumed lane keeps the model its session recorded; this run's
+	// model (resolved for its tier, footer and budgets) must be the one it
+	// sends to, or kiln would show one model and talk to another. The
+	// caller picks the session's own model when it should continue on it
+	// (ResumedModel).
+	if ref, err := lane.Model(); err == nil && (ref.Provider != model.Provider || ref.ModelID != model.ID) {
+		if err := lane.SetModel(session.ModelRef{Provider: model.Provider, ModelID: model.ID}, ""); err != nil {
+			return nil, fmt.Errorf("agent: set resumed lane's model: %w", err)
+		}
 	}
 	// The level this run asks for (--effort, or Claude Code's effortLevel)
 	// applies to a resumed session too: effort is a setting, not part of
@@ -458,4 +469,50 @@ func newSessionID(createdAtMs int64) (string, error) {
 	b[6] = 0x70 | (b[6] & 0x0F)
 	b[8] = 0x80 | (b[8] & 0x3F)
 	return uuid.UUID(b).String(), nil
+}
+
+// ResumedModel reports the model the session that opts would resume last
+// ran on (its main lane's configuration), so the caller can resume on it
+// rather than on the default, as pi does. ok is false when opts resumes
+// nothing (no Resume/ResumeLatest, or no matching session) or the session
+// records no model. Claude Code resumes on the settings model instead; kiln
+// follows pi, whose session format it writes, because a resumed
+// conversation sized for one model's window may not fit another's.
+func ResumedModel(opts Options) (session.ModelRef, bool) {
+	if opts.Resume == "" && !opts.ResumeLatest {
+		return session.ModelRef{}, false
+	}
+	cwd := opts.Cwd
+	if cwd == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return session.ModelRef{}, false
+		}
+		cwd = wd
+	}
+	root := opts.SessionsRoot
+	if root == "" {
+		root = os.Getenv(defaultSessionsDirEnv)
+	}
+	repo, err := jsonl.NewRepo(root)
+	if err != nil {
+		return session.ModelRef{}, false
+	}
+	candidates, err := repo.List(cwd)
+	if err != nil {
+		return session.ModelRef{}, false
+	}
+	match, err := selectResumeCandidate(candidates, opts.Resume, opts.ResumeLatest)
+	if err != nil || match == nil {
+		return session.ModelRef{}, false
+	}
+	raw, ok := jsonl.LastValue(match.Path, session.NamespaceLaneConfig, MainLane)
+	if !ok {
+		return session.ModelRef{}, false
+	}
+	var cfg session.LaneConfiguration
+	if json.Unmarshal(raw, &cfg) != nil || cfg.Model.Provider == "" || cfg.Model.ModelID == "" {
+		return session.ModelRef{}, false
+	}
+	return cfg.Model, true
 }

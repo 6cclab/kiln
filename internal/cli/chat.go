@@ -490,51 +490,6 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		KilnLocalTrusted: folderTrusted(cwd),
 	})
 
-	// Precedence: --model > settings.json (only in "provider/model" form —
-	// see cli.ts's comment: settings.model may hold a Claude Code alias like
-	// "opus[1m]" that names nothing on this machine) > HARNESS_MODEL > the
-	// harness's own default.
-	wanted := args.Model
-	if wanted == "" && strings.Contains(settings.Model, "/") {
-		wanted = settings.Model
-	}
-	if wanted == "" {
-		wanted = os.Getenv("HARNESS_MODEL")
-	}
-	if wanted == "" {
-		wanted = defaultModel
-	}
-	providerID, modelID, ok := splitProviderModel(wanted)
-	if !ok {
-		fmt.Fprintf(stderr, "kiln: invalid model %q: expected provider/model\n", wanted)
-		return 1
-	}
-	if err := offlineGuard(providerID); err != nil {
-		fmt.Fprintln(stderr, "kiln:", err)
-		return 1
-	}
-
-	reg := buildRegistry()
-	if p, ok := reg.Provider(providerID); ok {
-		if err := p.RefreshModels(ctx); err != nil {
-			// A refresh failure is not fatal here: static-catalog providers
-			// never need one, and a dynamic one (Ollama) that fails to
-			// refresh still resolves against whatever this process already
-			// knew, surfacing as "unknown model" below if that is empty.
-			fmt.Fprintf(stderr, "kiln: refreshing %s: %v\n", providerID, err)
-		}
-	}
-	resolved, err := reg.Resolve(providerID, modelID)
-	if err != nil {
-		var tooSmall *budget.ContextTooSmallError
-		if errors.As(err, &tooSmall) {
-			fmt.Fprintln(stderr, tooSmall.Error())
-			return 1
-		}
-		fmt.Fprintln(stderr, "kiln:", err)
-		return 1
-	}
-
 	// startupWarn reports a problem found while starting: to stderr in
 	// print mode, and as a note under the banner interactively, where
 	// stderr is hidden behind the fullscreen TUI until exit.
@@ -545,6 +500,75 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			return
 		}
 		startupNotes = append(startupNotes, msg)
+	}
+
+	// Precedence: --model > the resumed session's own model > settings.json
+	// (only in "provider/model" form — see cli.ts's comment: settings.model
+	// may hold a Claude Code alias like "opus[1m]" that names nothing on
+	// this machine) > HARNESS_MODEL > the harness's own default.
+	//
+	// A resumed session continues on the model it last ran on, as pi does
+	// (agent.ResumedModel): its conversation was sized for that model's
+	// window. Claude Code resumes on the settings model instead.
+	configured := ""
+	if strings.Contains(settings.Model, "/") {
+		configured = settings.Model
+	}
+	if configured == "" {
+		configured = os.Getenv("HARNESS_MODEL")
+	}
+	if configured == "" {
+		configured = defaultModel
+	}
+	wanted := args.Model
+	restoring := ""
+	if wanted == "" {
+		if ref, ok := agent.ResumedModel(agent.Options{Cwd: cwd, Resume: args.Resume, ResumeLatest: args.ResumeLatest || args.ContinueLatest}); ok {
+			restoring = ref.Provider + "/" + ref.ModelID
+			wanted = restoring
+		}
+	}
+	if wanted == "" {
+		wanted = configured
+	}
+
+	reg := buildRegistry()
+	var providerID, modelID string
+	var resolved provider.Resolved
+	var resolveErr error
+	for {
+		var ok bool
+		providerID, modelID, ok = splitProviderModel(wanted)
+		if !ok {
+			resolveErr = fmt.Errorf("invalid model %q: expected provider/model", wanted)
+		} else if resolveErr = offlineGuard(providerID); resolveErr == nil {
+			if p, ok := reg.Provider(providerID); ok {
+				if err := p.RefreshModels(ctx); err != nil {
+					// A refresh failure is not fatal here: static-catalog providers
+					// never need one, and a dynamic one (Ollama) that fails to
+					// refresh still resolves against whatever this process already
+					// knew, surfacing as "unknown model" below if that is empty.
+					fmt.Fprintf(stderr, "kiln: refreshing %s: %v\n", providerID, err)
+				}
+			}
+			resolved, resolveErr = reg.Resolve(providerID, modelID)
+		}
+		if resolveErr == nil || restoring == "" || wanted != restoring {
+			break
+		}
+		// The session's model is gone (or refused): say so and carry on
+		// with the configured one, as pi does.
+		startupWarn(fmt.Sprintf("Could not resume on this session's model %s (%v); using %s.", restoring, resolveErr, configured))
+		wanted = configured
+	}
+	if resolveErr != nil {
+		var tooSmall *budget.ContextTooSmallError
+		if errors.As(resolveErr, &tooSmall) {
+			fmt.Fprintln(stderr, tooSmall.Error())
+			return 1
+		}
+		fmt.Fprintln(stderr, "kiln:", resolveErr)
+		return 1
 	}
 
 	// modelRoles warnings: reported once, up front, so a broken role is
