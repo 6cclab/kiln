@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 )
 
@@ -87,6 +88,44 @@ func TestRun_Print_ProjectBypassModeIgnored(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "Ignoring permissions.defaultMode in "+filepath.Join(".claude", "settings.json")) {
 		t.Errorf("stderr = %q, want the ignored mode named", stderr)
+	}
+}
+
+// A -p run runs hooks in an untrusted folder, as Claude Code does (trust
+// is implied there), unless --setting-sources leaves the project's
+// settings out: then its hooks are not read at all.
+func TestRun_Print_ProjectHooksFollowSettingSources(t *testing.T) {
+	startFaux(t, bashCallScript)
+	proj := scratchProject(t)
+	t.Setenv("HARNESS_TRUST_ALL", "")
+	marker := filepath.Join(proj, "session-started")
+	writeProjectSettings(t, proj, `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch `+marker+`"}]}]}}`)
+
+	args := baseArgs()
+	args.SettingSources = []string{"user"}
+	printBlocked(t, args)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatalf("--setting-sources user: the project's SessionStart hook ran")
+	}
+
+	printBlocked(t, baseArgs())
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("-p: the project's SessionStart hook did not run: %v", err)
+	}
+}
+
+func TestTrustedHooks_HeldUntilEnabled(t *testing.T) {
+	cfg := claudehooks.Config{claudehooks.SessionStart: {{Hooks: []claudehooks.Command{{Type: "command", Command: "true"}}}}}
+	h := newTrustedHooks(cfg, false)
+	if h.get() != nil {
+		t.Fatal("hooks active before trust")
+	}
+	h.enable()
+	if len(h.get()[claudehooks.SessionStart]) != 1 {
+		t.Fatal("hooks not active after trust")
+	}
+	if newTrustedHooks(cfg, true).get() == nil {
+		t.Fatal("hooks held in a trusted folder")
 	}
 }
 

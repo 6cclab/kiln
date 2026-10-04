@@ -55,9 +55,11 @@ type InteractiveDeps struct {
 	Registry       *slashcommands.Registry
 	Env            *execenv.Env
 	Dispatcher     *agent.Dispatcher
-	HookConfig     claudehooks.Config
-	SessionStart   claudehooks.Outcome
-	ScreenReader   bool
+	// Hooks is the hooks to run now: none until the folder is trusted
+	// in an interactive session (trustedHooks).
+	Hooks        func() claudehooks.Config
+	SessionStart claudehooks.Outcome
+	ScreenReader bool
 	// Fullscreen selects kiln's alt-screen TUI mode (--fullscreen). Falls
 	// back to inline when ScreenReader is set — see RunInteractive.
 	Fullscreen bool
@@ -78,10 +80,15 @@ type InteractiveDeps struct {
 	// only once the trust dialog is accepted.
 	PendingMCPCount   int
 	ConnectPendingMCP func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus
-	// ApplyHeldRules adds the allow rules settings held back while the
-	// folder was untrusted (claudesettings.Settings.HeldAllow); run once
-	// the trust dialog is accepted.
+	// ApplyHeldRules applies what waited for the folder to be trusted:
+	// the allow rules settings held (claudesettings.Settings.HeldAllow)
+	// and the hooks. Run once the trust dialog is accepted, on the TUI's
+	// goroutine, so it must not block.
 	ApplyHeldRules func()
+	// TrustedSessionStart runs the SessionStart hooks that waited for
+	// trust and returns their context for the next prompt. Run off the
+	// TUI's goroutine once the trust dialog is accepted; nil to skip.
+	TrustedSessionStart func() []string
 	// Effort is the reasoning effort label shown in the banner ("medium");
 	// AuthKind is how the model's provider is authenticated ("Claude
 	// subscription", "API key", "Ollama").
@@ -143,7 +150,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	prompter := bridge.Prompter(deps.Cwd)
 	deps.Gate.SetPrompter(func(ctx context.Context, req permission.Request) (permission.PromptChoice, error) {
 		claudehooks.RunHooks(claudehooks.RunOptions{
-			Config: deps.HookConfig,
+			Config: deps.Hooks(),
 			Event:  claudehooks.Notification,
 			Payload: claudehooks.Payload{
 				SessionID:        deps.Started.SessionID,
@@ -241,7 +248,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		},
 		RunPromptHooks: func(ctx context.Context, line string) (string, []string) {
 			outcome := claudehooks.RunHooks(claudehooks.RunOptions{
-				Config: deps.HookConfig,
+				Config: deps.Hooks(),
 				Event:  claudehooks.UserPromptSubmit,
 				Payload: claudehooks.Payload{
 					SessionID:      deps.Started.SessionID,
@@ -294,6 +301,13 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			}
 			if deps.ApplyHeldRules != nil {
 				deps.ApplyHeldRules()
+			}
+			if deps.TrustedSessionStart != nil {
+				go func() {
+					if lines := deps.TrustedSessionStart(); len(lines) > 0 {
+						bridge.Send(tui.MsgStartupContext{Lines: lines})
+					}
+				}()
 			}
 			if deps.ConnectPendingMCP != nil && deps.PendingMCPCount > 0 {
 				go connectInBackground(bridge, deps.PendingMCPCount, deps.ConnectPendingMCP)

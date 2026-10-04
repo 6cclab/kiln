@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 
 	"github.com/andrepato/harness/internal/claude/paths"
@@ -142,8 +143,19 @@ type rawSettings struct {
 // formatting hook should not silently disable the user's global audit
 // hook. Both run.
 func LoadHooks(cwd string) Config {
+	return LoadHooksFrom(cwd, nil)
+}
+
+// LoadHooksFrom is LoadHooks restricted to the scopes in sources, as
+// --setting-sources restricts which settings files are read at all (nil:
+// every scope). `--setting-sources user` is how a -p run in a repository
+// the person did not write keeps that repository's hooks from running.
+func LoadHooksFrom(cwd string, sources []paths.Scope) Config {
 	merged := Config{}
 	for _, f := range paths.SettingsFiles(cwd) {
+		if sources != nil && !slices.Contains(sources, f.Scope) {
+			continue
+		}
 		data, err := os.ReadFile(f.Path)
 		if err != nil {
 			continue

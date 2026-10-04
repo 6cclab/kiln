@@ -485,7 +485,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Settings are read before the model is chosen, because `model` may
 	// come from them.
 	// In a folder not yet trusted, the allow rules a repository can supply
-	// wait for trust (claudesettings.LoadOptions.Trusted).
+	// wait for trust (claudesettings.LoadOptions.Trusted); so do hooks in
+	// an interactive session (trustedHooks, below).
 	trustedAtStart := folderTrusted(cwd)
 	settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{
 		Sources:  settingsSources(args.SettingSources),
@@ -1193,10 +1194,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Hooks from .claude/settings.json, accumulated across scopes, plus
 	// every active plugin's own hooks (each already carrying
 	// CLAUDE_PLUGIN_ROOT — see claudeplugins.Hooks).
-	hookConfig := claudehooks.LoadHooks(cwd)
+	hookConfig := claudehooks.LoadHooksFrom(cwd, settingsSources(args.SettingSources))
 	for event, groups := range pluginHooks {
 		hookConfig[event] = append(hookConfig[event], groups...)
 	}
+	// Interactively, no hook runs before the folder is trusted, as in
+	// Claude Code: they run commands a repository can ship. A -p run never
+	// shows the dialog and runs them, as Claude Code does there.
+	hooks := newTrustedHooks(hookConfig, args.Print || trustedAtStart)
 
 	// The four events the TS parsed but never fired. Stop runs when the
 	// parent's run ends; a blocking Stop hook is reported to the user, not
@@ -1209,7 +1214,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	stopHookActive := false
 	started.Harness.Events().On(harness.EventRunEnd, func(ev harness.Event) {
 		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
-			Config: hookConfig,
+			Config: hooks.get(),
 			Event:  claudehooks.Stop,
 			Payload: claudehooks.Payload{
 				SessionID:      sessionID,
@@ -1225,7 +1230,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	})
 	started.Harness.Events().On(harness.EventCompactionStart, func(ev harness.Event) {
 		claudehooks.RunHooks(claudehooks.RunOptions{
-			Config: hookConfig,
+			Config: hooks.get(),
 			Event:  claudehooks.PreCompact,
 			Payload: claudehooks.Payload{
 				SessionID:      sessionID,
@@ -1246,7 +1251,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			addUsage(sub.Model.Provider, sub.Model.ID, sub.Harness.Stats().Usage)
 		}
 		claudehooks.RunHooks(claudehooks.RunOptions{
-			Config: hookConfig,
+			Config: hooks.get(),
 			Event:  claudehooks.SubagentStop,
 			Payload: claudehooks.Payload{
 				SessionID:      subSession,
@@ -1318,7 +1323,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		// permission.Outcome's doc comment.
 		var outcome permission.Outcome
 		guard, err := claudehooks.GuardToolCall(claudehooks.GuardOptions{
-			Config:         hookConfig,
+			Config:         hooks.get(),
 			ToolName:       call.Name,
 			Args:           call.Arguments,
 			SessionID:      sessionID,
@@ -1422,7 +1427,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			toolResponse = result.Content
 		}
 		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
-			Config:      hookConfig,
+			Config:      hooks.get(),
 			Event:       claudehooks.PostToolUse,
 			ToolName:    call.Name,
 			HasToolName: true,
@@ -1456,18 +1461,23 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// SessionStart fires once, before the first turn. Its stdout becomes
 	// context for that first prompt only (see the <hook-context> wrapping
 	// below).
-	phase("hooks SessionStart start")
-	sessionStart := claudehooks.RunHooks(claudehooks.RunOptions{
-		Config: hookConfig,
-		Event:  claudehooks.SessionStart,
-		Payload: claudehooks.Payload{
-			SessionID:      sessionID,
-			TranscriptPath: transcriptPath,
-			Cwd:            cwd,
-		},
-		OnNotice: notice,
-	})
-	phase("hooks SessionStart end")
+	runSessionStart := func() claudehooks.Outcome {
+		phase("hooks SessionStart start")
+		defer phase("hooks SessionStart end")
+		return claudehooks.RunHooks(claudehooks.RunOptions{
+			Config: hooks.get(),
+			Event:  claudehooks.SessionStart,
+			Payload: claudehooks.Payload{
+				SessionID:      sessionID,
+				TranscriptPath: transcriptPath,
+				Cwd:            cwd,
+			},
+			OnNotice: notice,
+		})
+	}
+	// Before trust no hook is active, so this runs none; the session
+	// starts for hooks once the dialog is accepted (TrustAccepted).
+	sessionStart := runSessionStart()
 
 	if !args.Print {
 		// phase 7: the interactive TUI. Everything above (registry,
@@ -1505,7 +1515,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			},
 			PendingMCPCount: len(pendingMCP),
 			// The allow rules held until the folder is trusted, re-read
-			// from the files as they are now.
+			// from the files as they are now, and the hooks held with them.
 			ApplyHeldRules: func() {
 				heldApplied.Store(true)
 				// On the TUI's goroutine: rules apply before the next
@@ -1514,6 +1524,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				onTrust := reloader
 				onTrust.notice = func(s string) { go notice(s) }
 				onTrust.applyTrust()
+				hooks.enable()
+			},
+			// SessionStart for a session whose hooks waited for trust.
+			TrustedSessionStart: func() []string {
+				if trustedAtStart {
+					return nil
+				}
+				return runSessionStart().Context
 			},
 			ConnectPendingMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
 				hub.OnServer = progress
@@ -1536,7 +1554,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			Registry:        registry,
 			Env:             env,
 			Dispatcher:      dispatcher,
-			HookConfig:      hookConfig,
+			Hooks:           hooks.get,
 			SessionStart:    sessionStart,
 			ScreenReader:    args.ScreenReader,
 			Fullscreen:      args.Fullscreen,
@@ -1554,7 +1572,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		shells.KillAll()
 		execenv.KillLeftoverJobs()
 		claudehooks.RunHooks(claudehooks.RunOptions{
-			Config: hookConfig,
+			Config: hooks.get(),
 			Event:  claudehooks.SessionEnd,
 			Payload: claudehooks.Payload{
 				SessionID:      sessionID,
@@ -1567,7 +1585,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return exitCode
 	}
 
-	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)
+	exitCode := runPrintMode(ctx, args, started, gate, resolved, hooks.get(), sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)
 
 	// Nothing outlives the session: a background shell started during this
 	// run must not hold a port open after the process exits. Killed BEFORE
@@ -1577,7 +1595,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	execenv.KillLeftoverJobs()
 
 	claudehooks.RunHooks(claudehooks.RunOptions{
-		Config: hookConfig,
+		Config: hooks.get(),
 		Event:  claudehooks.SessionEnd,
 		Payload: claudehooks.Payload{
 			SessionID:      sessionID,
