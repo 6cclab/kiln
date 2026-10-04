@@ -70,8 +70,7 @@ func (c *Classifier) Request(req permission.ClassifyRequest) (system, user strin
 // request is Request as sent: the user message as text blocks, the one
 // that ends the transcript asking for a cache breakpoint (userParts).
 func (c *Classifier) request(req permission.ClassifyRequest) (string, msg.Blocks, error) {
-	typed := typedByUser(req.ToolName, req.PrimaryArg, req.Args, typedLines(req.UserHistory, req.History, req.Delegated))
-	action, err := actionJSON(req.ToolName, req.PrimaryArg, req.Args, req.OutsideWorkspace, typed)
+	action, err := actionJSON(req.ToolName, req.PrimaryArg, req.Args, req.OutsideWorkspace)
 	if err != nil {
 		return "", nil, err
 	}
