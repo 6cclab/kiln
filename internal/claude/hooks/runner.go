@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"time"
 
@@ -362,7 +363,23 @@ func RunHooks(opts RunOptions) Outcome {
 		if len(label) > 60 {
 			label = label[:60]
 		}
+		// This hook's own decision, apart from the earlier hooks'.
+		prevDecision, prevReason := outcome.Decision, outcome.DecisionReason
+		outcome.Decision, outcome.DecisionReason = "", ""
 		interpret(out, &outcome, label, opts.Event)
+		decided, decidedReason := outcome.Decision, outcome.DecisionReason
+		outcome.Decision, outcome.DecisionReason = prevDecision, prevReason
+		// An earlier hook's "allow" judged the input it was shown. A hook
+		// that then changes the input without deciding anything itself
+		// leaves a call nobody allowed: the allow is dropped, and the
+		// regular permission flow judges the rewrite. (Claude Code runs
+		// hooks side by side on the same input and applies an allow to a
+		// passthrough hook's rewrite; kiln's hooks run in turn, so it can
+		// tell.) An "ask" stays.
+		if decided == "" && outcome.Decision == DecisionAllow && changedInput(current.ToolInput, outcome.UpdatedInput) {
+			outcome.Decision, outcome.DecisionReason = "", ""
+		}
+		outcome.merge(decided, decidedReason)
 		if opts.OnNotice != nil {
 			for _, n := range outcome.Notices[before:] {
 				opts.OnNotice(n)
@@ -378,6 +395,17 @@ func RunHooks(opts RunOptions) Outcome {
 	}
 
 	return outcome
+}
+
+// changedInput reports whether updated (the rewrites so far, merged over
+// the original by key) gives a key a value other than the one seen.
+func changedInput(seen, updated map[string]any) bool {
+	for k, v := range updated {
+		if old, ok := seen[k]; !ok || !reflect.DeepEqual(old, v) {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckFunc is the permission check, already bound to a gate. decision and
