@@ -268,9 +268,9 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 ### Permission rule syntax (`MatchesRule`, `settings.go`)
 
 - Bare tool name (no parens): case-insensitive exact match, e.g. `Read` matches any `Read` call regardless of argument.
-- Bare `mcp__` prefix: matches every tool whose name starts with it, e.g. `mcp__homelab-kb` matches every tool from that server.
+- MCP rules, as in Claude Code: `mcp__server` (or `mcp__server__*`) matches every tool of exactly that server, and `mcp__server__tool` that one tool. They are not string prefixes: `mcp__homelab` does not match the tools of a server named `homelab-kb`.
 - Paren form `Tool(pattern)`: tool name must match exactly (case-insensitive); `pattern` is glob-compiled (`*` → `.*`, everything else escaped) and anchored against the tool's primary argument. A `Tool(cmd:*)` colon suffix is rewritten to `Tool(cmd *)` first. A pattern ending in a wildcard also matches the bare command with no arguments (e.g. `Bash(git *)` matches both `git status` and bare `git`).
-- Examples: `Bash(git *)` matches `git status`, `git commit -m x`, and bare `git`. `mcp__homelab-kb` matches `mcp__homelab-kb__hk_search` and every other tool from that server.
+- Examples: `Bash(git *)` matches `git status`, `git commit -m x`, and bare `git`. `mcp__homelab-kb` matches `mcp__homelab-kb__hk_search` and every other tool from that server, and nothing from `homelab`.
 - A malformed pattern fails closed (never matches) rather than erroring.
 - A bare `Edit` rule covers every edit tool (`edit`, `write`, …) and a bare `Read` every read tool; any other bare rule (`Write`) matches its own tool only.
 

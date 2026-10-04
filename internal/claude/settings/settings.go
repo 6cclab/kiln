@@ -355,7 +355,9 @@ var regexMeta = regexp.MustCompile(`[.*+?^${}()|[\]\\]`)
 // Shapes:
 //
 //	Read             whole tool, by name
-//	mcp__homelab     PREFIX - every tool from that MCP server
+//	mcp__homelab     every tool of that MCP server, and no other server
+//	mcp__homelab__*  the same
+//	mcp__homelab__x  that one MCP tool
 //	Bash(find:*)     colon form: commands beginning with `find`
 //	Bash(git *)      glob form, as documented by `claude --help`
 //	Read(src/**)     a Read/Edit path rule, gitignore-style (pathrules.go)
@@ -370,11 +372,18 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 
 	m := parenRule.FindStringSubmatch(rule)
 	if m == nil {
-		bare := strings.ToLower(rule)
-		if strings.HasPrefix(bare, "mcp__") {
-			return strings.HasPrefix(tool, bare)
+		bare := strings.ToLower(strings.TrimSpace(rule))
+		if strings.HasPrefix(bare, "mcp__") || strings.HasPrefix(tool, "mcp__") {
+			return mcpRuleMatches(bare, tool)
 		}
 		return sameTool(bare, tool) || bareFamilyMatches(bare, tool)
+	}
+	if name := strings.ToLower(strings.TrimSpace(m[1])); strings.HasPrefix(name, "mcp__") || strings.HasPrefix(tool, "mcp__") {
+		// An MCP tool's name is compared whole: sameTool's underscore
+		// folding would make mcp__a_b__c and mcp__ab__c one tool.
+		if name != tool {
+			return false
+		}
 	}
 	if f, ok := splitFileRule(rule); ok {
 		// A Read/Edit path rule (pathrules.go), judged here as a deny
@@ -431,6 +440,36 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 		return false
 	}
 	return re.MatchString(strings.TrimSpace(primaryArg))
+}
+
+// mcpRuleMatches matches a bare rule against a tool when either is an MCP
+// name ("mcp__server" or "mcp__server__tool"), as Claude Code's
+// toolMatchesRule does: the whole name, or a rule naming only the server
+// (or the server and "*") and the tool's server being exactly that one. A
+// rule is never a string prefix: "mcp__homelab" says nothing about server
+// "homelab-kb". Both arguments are lower-cased already. As in Claude Code,
+// a server name holding "__" splits at the first one.
+func mcpRuleMatches(rule, tool string) bool {
+	if rule == tool {
+		return true
+	}
+	ruleServer, ruleTool, ok := mcpParts(rule)
+	if !ok || (ruleTool != "" && ruleTool != "*") {
+		return false
+	}
+	toolServer, _, ok := mcpParts(tool)
+	return ok && ruleServer == toolServer
+}
+
+// mcpParts splits "mcp__server__tool" into its server and tool; tool is ""
+// for "mcp__server". Not ok for a name that is not an MCP one.
+func mcpParts(name string) (server, tool string, ok bool) {
+	rest, ok := strings.CutPrefix(name, "mcp__")
+	if !ok {
+		return "", "", false
+	}
+	server, tool, _ = strings.Cut(rest, "__")
+	return server, tool, server != ""
 }
 
 // patternCache holds MatchesRule's compiled patterns, keyed by the pattern
