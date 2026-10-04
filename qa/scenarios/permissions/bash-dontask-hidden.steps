@@ -1,7 +1,8 @@
 # Bash prompt for a command an ask rule matches: "don't ask again" would
 # not be honoured (the ask rule still asks), so the option is left out,
-# the rest move up a number (Yes / switch to auto mode / No) and its "a"
-# shortcut does nothing (permission.Request.Grantable).
+# and so is a mode switch (a prompt an ask rule forces offers none, as in
+# Claude Code). Only Yes / No remain, and the "a" shortcut does nothing
+# (permission.Request.Grantable).
 @faux testdata/faux/qa/permissions-bash-dontask-hidden.yaml
 @setup mkdir -p .claude && printf '{"permissions":{"ask":["Bash(npm test *)"]}}\n' > .claude/settings.json
 
@@ -12,9 +13,9 @@ WAITFOR /approval needed/ 20
 SHOT hidden-prompt
 EXPECT /npm test -- upload/
 EXPECT_NOT /ask again/
-EXPECT /2  Yes, and switch to auto mode/
-EXPECT /3  No/
-EXPECT /press 1, 2 or 3/
+EXPECT_NOT /switch to/
+EXPECT /2  No/
+EXPECT /press 1 or 2/
 KEY a
 SHOT after-a
 EXPECT /approval needed/
