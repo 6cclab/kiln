@@ -14,6 +14,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/sandbox"
 	"github.com/andrepato/harness/internal/tool"
 )
 
@@ -847,10 +848,18 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// allow rules and acceptEdits.
 	protPath, prot := g.protectedWrite(req, mode == settings.ModeAuto)
 
+	// An rm or rmdir of a critical path (the filesystem root, a top-level
+	// directory, home, the working directory or a parent) is approved by
+	// no allow rule, session grant or hook "allow", in every mode, the
+	// sandbox on or off: it asks, and dontAsk or a run with nobody to ask
+	// refuses it. A deny rule still denies. (Claude Code's
+	// permission-modes docs, "Critical paths".)
+	critical := g.criticalRemoval(req)
+
 	// A PreToolUse hook's "allow" skips the prompt (and, in auto mode, the
 	// classifier), unless a rule or a check no allow approves objects;
 	// then the call takes the regular flow below, as in Claude Code.
-	if req.HookDecision == HookAllow && g.hookAllows(req, permissions, mode, hits, prot, decideArg) {
+	if req.HookDecision == HookAllow && g.hookAllows(req, permissions, mode, hits, prot, critical, decideArg) {
 		return nil, OutcomeAuto, nil
 	}
 
@@ -873,7 +882,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// command goes through the regular flow there, grants included.
 	// Nor a protected-path write, which no allow approves.
 	// Nor a call a hook asks about every time.
-	grantable := !hits.Deny && !hits.Ask && !hits.Unsure && prot == unprotected && !hookAsk &&
+	grantable := !hits.Deny && !hits.Ask && !hits.Unsure && prot == unprotected && !hookAsk && !critical &&
 		!(mode == settings.ModePlan && settings.PlanOverridesAllow(req.ToolName, decideArg))
 	if grantable && g.sessionAllowed(k) {
 		return nil, OutcomeAuto, nil
@@ -884,6 +893,10 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	if hookAsk && verdict != settings.Deny {
 		verdict = settings.Ask
 		note = hookAskNote(req.HookReason)
+	}
+	if critical && verdict != settings.Deny {
+		verdict = settings.Ask
+		note = criticalNote
 	}
 
 	// HARNESS_EXP_LEDGER (internal/cli/experiments.go): the one narrow
@@ -986,7 +999,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 			return nil, OutcomeAuto, nil
 		}
 		promptReq := g.promptRequest(req, permissions, mode, grantable)
-		promptReq.ModeSwitchMoot = hits.Ask || hits.Unsure || prot != unprotected || hookAsk
+		promptReq.ModeSwitchMoot = hits.Ask || hits.Unsure || prot != unprotected || hookAsk || critical
 		promptReq.OutsideWorkspace = true
 		promptReq.AutoModeNote = outsideNote
 		choice, err := g.prompter(ctx, promptReq)
@@ -1085,13 +1098,13 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// this command. Not for a protected-path write, which no allow rule
 	// approves.
 	permissions, mode = g.rules()
-	if settings.IsBashTool(req.ToolName) && prot == unprotected && !hookAsk {
+	if settings.IsBashTool(req.ToolName) && prot == unprotected && !hookAsk && !critical {
 		if h := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg); h.Allow && !h.Deny && !h.Ask && !h.Unsure {
 			return nil, OutcomeAuto, nil
 		}
 	}
 	promptReq := g.promptRequest(req, permissions, mode, grantable)
-	promptReq.ModeSwitchMoot = hits.Ask || hits.Unsure || prot != unprotected || hookAsk
+	promptReq.ModeSwitchMoot = hits.Ask || hits.Unsure || prot != unprotected || hookAsk || critical
 	promptReq.AutoModeNote = note
 	choice, err := g.prompter(ctx, promptReq)
 	if err != nil {
@@ -1122,8 +1135,8 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 // covers, and, in auto mode, a bash write kiln routes to the classifier
 // even past an allow rule (bashTouchesProtected) all send the call to the
 // regular flow instead.
-func (g *Gate) hookAllows(req Request, permissions settings.Permissions, mode settings.PermissionMode, hits settings.Hits, prot protection, decideArg string) bool {
-	if hits.Deny || hits.Ask || hits.Unsure || prot != unprotected {
+func (g *Gate) hookAllows(req Request, permissions settings.Permissions, mode settings.PermissionMode, hits settings.Hits, prot protection, critical bool, decideArg string) bool {
+	if hits.Deny || hits.Ask || hits.Unsure || prot != unprotected || critical {
 		return false
 	}
 	if mode == settings.ModePlan && settings.PlanOverridesAllow(req.ToolName, decideArg) {
@@ -1131,9 +1144,6 @@ func (g *Gate) hookAllows(req Request, permissions settings.Permissions, mode se
 	}
 	if isBashCall(req) {
 		if p := g.sandboxPolicy(); p != nil {
-			if p.CriticalRemoval(req.PrimaryArg) {
-				return false
-			}
 			if p.Active() && disableRequested(req) && hasDisableSandboxAskRule(permissions) {
 				return false
 			}
@@ -1144,6 +1154,20 @@ func (g *Gate) hookAllows(req Request, permissions settings.Permissions, mode se
 	}
 	return true
 }
+
+// criticalRemoval reports a bash call that is an rm or rmdir of a critical
+// path (sandbox.CriticalRemoval), judged against the gate's working
+// directory, home and roots whether or not a sandbox is bound.
+func (g *Gate) criticalRemoval(req Request) bool {
+	if !isBashCall(req) {
+		return false
+	}
+	home, _ := os.UserHomeDir()
+	return sandbox.CriticalRemoval(req.PrimaryArg, g.cwd(), home, g.Roots())
+}
+
+// criticalNote is why a critical-path removal asks.
+const criticalNote = "This removes a critical path (the filesystem root, a top-level directory, the home directory, or the working directory or one of its parents), so it always needs the user's approval; no allow rule or hook approves it."
 
 // hookAskNote is what a prompt a PreToolUse hook forced says about why.
 func hookAskNote(reason string) string {
