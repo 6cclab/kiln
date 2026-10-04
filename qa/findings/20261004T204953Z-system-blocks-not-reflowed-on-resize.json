@@ -1,0 +1,28 @@
+{
+ "id": "20261004T204953Z-system-blocks-not-reflowed-on-resize",
+ "found_at": "2026-10-04T20:49:53Z",
+ "scenario": "manual-qa/input-ux",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "style",
+ "severity": "low",
+ "title": "'system' block header rules keep their old width after a resize (overflow the margin when narrower, stop short when wider)",
+ "observed": "kiln defect (render). In s1c at 120 cols, 'system ■ Interrupted…' blocks had a header rule ending 2 columns before the edge like every other block. After RESIZE 80 24 and 60 24, the system rules ran to the last column (no right margin) while you/kiln rules kept the margin; after RESIZE 160 40 the system rules stopped at ~col 118 while other rules reached col 158.",
+ "expected": "System blocks re-wrap on resize like every other block, with the same right margin.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1c (*size-80x24*, *size-60x24*, *size-160x40*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go",
+   "internal/tui/note.go",
+   "internal/tui/replay.go"
+  ],
+  "regression_test": "TestTUI_SystemNoteBlock_ReflowsOnResize",
+  "updated_at": "2026-10-04T21:03:04Z"
+ }
+}

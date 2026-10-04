@@ -85,6 +85,40 @@ func TestRenderTranscriptEntries_SyntheticBeforeFirstEntry(t *testing.T) {
 	}
 }
 
+// TestSyntheticCommit_RenderRebuildsAtNewWidth checks a "system" note's
+// synthetic commit redraws its label rule at a resize's new width instead
+// of replaying the literal text it was committed with — the label rule
+// (and the right margin every other block keeps) otherwise stayed at
+// whatever width was live when the note first committed, through every
+// later resize (qa/findings/20261004T204953Z-system-blocks-not-reflowed-
+// on-resize.json). Bridge.commitNote supplies Rebuild for exactly this.
+func TestSyntheticCommit_RenderRebuildsAtNewWidth(t *testing.T) {
+	committedAt80 := RenderNote("■ Interrupted. Tell kiln what to do instead.", 80)
+	sc := SyntheticCommit{
+		Lines: committedAt80,
+		Rebuild: func(w int) []string {
+			return RenderNote("■ Interrupted. Tell kiln what to do instead.", w)
+		},
+	}
+
+	at160 := sc.Render(160)
+	if strings.Join(at160, "\n") == strings.Join(committedAt80, "\n") {
+		t.Fatalf("Render(160) returned the width-80 text unchanged; the rule must redraw wider")
+	}
+	wantRule := labelRule("system", Muted, "", 160)
+	if at160[0] != wantRule {
+		t.Errorf("Render(160)[0] = %q, want the width-160 label rule %q", at160[0], wantRule)
+	}
+
+	// Without a Rebuild func, Render falls back to the stored Lines — the
+	// pre-fix behaviour, still correct for a caller with nothing cheap to
+	// recompute from.
+	plain := SyntheticCommit{Lines: committedAt80}
+	if got := plain.Render(160); strings.Join(got, "\n") != strings.Join(committedAt80, "\n") {
+		t.Errorf("Render with no Rebuild changed the lines: got %v, want the stored Lines unchanged", got)
+	}
+}
+
 // TestRenderTranscriptEntries_OneBlankRowBetweenBlocks: a replay (ctrl+o,
 // resume) separates blocks by one blank row, as the live view does; the
 // verbose view used to show two between every block.

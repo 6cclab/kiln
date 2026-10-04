@@ -53,11 +53,21 @@ func (b *Bridge) commitNote(text string, colour func(string) string) {
 	b.mu.Lock()
 	follows := b.lastWasNote
 	b.mu.Unlock()
-	lines := append([]string{"", labelRule("system", Muted, "", width)}, noteBody(text, width, colour)...)
-	if follows {
-		lines = noteBody(text, width, colour)
+	// follows is fixed at commit time (whether the note straight before
+	// this one in the transcript was itself a note, continuing one
+	// "system" block rather than opening a second) and captured into the
+	// rebuild closure so a later resize redraws the same shape — only the
+	// width changes, never whether the rule itself is present
+	// (qa/findings/…-system-blocks-not-reflowed-on-resize.json: the label
+	// rule, and the body it wraps, must redraw at the new width like every
+	// other block instead of keeping their old one indefinitely).
+	rebuild := func(w int) []string {
+		if follows {
+			return noteBody(text, w, colour)
+		}
+		return append([]string{"", labelRule("system", Muted, "", w)}, noteBody(text, w, colour)...)
 	}
-	b.CommitSynthetic(lines)
+	b.CommitSyntheticRebuild(rebuild(width), rebuild)
 	b.mu.Lock()
 	b.lastWasNote = true
 	b.mu.Unlock()

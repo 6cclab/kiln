@@ -280,9 +280,28 @@ func (b *Bridge) Commit(lines []string) {
 // RenderTranscriptEntries splices these back in after a Ctrl+O/Ctrl+F
 // replay, which otherwise only knows about entries actually written to the
 // session log.
+//
+// Lines is the block as committed, at that commit's width — the fallback
+// for a caller that has nothing cheaper to recompute from. Rebuild, when
+// set, re-renders the same block at a new width instead: without it, a
+// resize's replay (msgResizeRewrap -> replayTranscript) spliced back the
+// old width's literal text, so a "system" note's label rule kept its old
+// width indefinitely after a resize while every block drawn straight from
+// a session entry reflowed (qa/findings/…-system-blocks-not-reflowed-
+// on-resize.json).
 type SyntheticCommit struct {
 	AfterEntryID string
 	Lines        []string
+	Rebuild      func(width int) []string
+}
+
+// Render returns this synthetic commit's lines at width: Rebuild(width) if
+// set, else the literal Lines it was committed with.
+func (sc SyntheticCommit) Render(width int) []string {
+	if sc.Rebuild != nil {
+		return sc.Rebuild(width)
+	}
+	return sc.Lines
 }
 
 // MarkCoveredCall records a task call whose outcome the subagents panel
@@ -315,7 +334,20 @@ func (b *Bridge) CoveredCalls() map[string]bool {
 // CommitCommandResult, and the /context block — must go through this
 // instead of Commit, or Ctrl+O/Ctrl+F silently drops it (RenderTranscriptEntries
 // only ever sees session entries otherwise).
+//
+// Use CommitSyntheticRebuild instead when a width-independent rebuild is
+// cheap (see its own doc comment) — a plain CommitSynthetic block never
+// reflows on resize, only on the next full Ctrl+O-style content change.
 func (b *Bridge) CommitSynthetic(lines []string) {
+	b.CommitSyntheticRebuild(lines, nil)
+}
+
+// CommitSyntheticRebuild is CommitSynthetic with an explicit rebuild func:
+// SyntheticCommit.Render(width) calls it to redraw the block at a resize's
+// new width instead of replaying the literal commit-time Lines (see
+// SyntheticCommit's doc comment). rebuild may be nil, same as
+// CommitSynthetic.
+func (b *Bridge) CommitSyntheticRebuild(lines []string, rebuild func(width int) []string) {
 	if len(lines) == 0 {
 		return
 	}
@@ -323,6 +355,7 @@ func (b *Bridge) CommitSynthetic(lines []string) {
 	b.synthetics = append(b.synthetics, SyntheticCommit{
 		AfterEntryID: b.lastEntryID,
 		Lines:        append([]string(nil), lines...),
+		Rebuild:      rebuild,
 	})
 	b.synthMu.Unlock()
 	b.Commit(lines)
@@ -528,9 +561,10 @@ func (b *Bridge) CommitCommandResult(name string, lines []string) {
 	if len(lines) == 0 {
 		return
 	}
-	width := ruleWidth()
-	out := append([]string{""}, RenderCommandResult(name, lines, width)...)
-	b.CommitSynthetic(out)
+	rebuild := func(w int) []string {
+		return append([]string{""}, RenderCommandResult(name, lines, w)...)
+	}
+	b.CommitSyntheticRebuild(rebuild(ruleWidth()), rebuild)
 }
 
 // Send delivers msg to the program's Update loop. tea.Program.Send already
