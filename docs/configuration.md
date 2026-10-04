@@ -395,7 +395,30 @@ or widen it (catch-all `excludedCommands`, writes covering home, `*` domains, Un
 local binding, proxy ports); those entries are ignored with a startup warning. Sandboxed commands get `$TMPDIR` set to kiln's temp root (the scratchpad's parent, see
 "Session scratchpad"), `HTTP(S)_PROXY`/`ALL_PROXY` pointing at kiln's proxy (with the session's proxy credential in
 the URL), and
-`KILN_SANDBOX=1`. What is matched and what is not: `docs/claude-code-parity.md`, "Bash sandbox".
+`KILN_SANDBOX=1`.
+
+Tool caches (a kiln divergence: Claude Code leaves them unwritable, so `go build` or `npm install`
+fail in its sandbox): sandboxed commands get the well-known cache variables pointed at
+`<temp root>/cache/<tool>` (created `0700`, owner-checked): `GOCACHE`, `GOMODCACHE`,
+`npm_config_cache`, `npm_config_store_dir` (pnpm's store), `YARN_CACHE_FOLDER`,
+`BUN_INSTALL_CACHE_DIR`, `DENO_DIR`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `POETRY_CACHE_DIR`,
+`PRE_COMMIT_HOME`, `COMPOSER_CACHE_DIR`, `CCACHE_DIR` and `XDG_CACHE_HOME`, and `GOTMPDIR` set to the
+sandbox's `$TMPDIR`. A variable you set yourself (non-empty in kiln's environment, in the settings
+`env`, or for Go's in `go env -w`'s file) is left as it is, even when that path is out of the
+sandbox's reach. The real cache directories stay unwritable. Commands outside the sandbox are not
+affected. `CARGO_TARGET_DIR` is build output, not a cache, and is not set.
+
+`git init` works in a workspace root that has no `.git`. The new git directory is held to what git
+init writes (on macOS by the profile: no hook under a name git runs, no `commondir`, `gitdir`,
+`config.worktree` or `info/attributes`), and after the command kiln cleans it: hooks other than
+`*.sample` and those redirect files are removed, a `.git` that is a file or a link is removed, and
+`config` keeps only what git init writes, `user.name`/`user.email`, remotes' `url`/`fetch` and
+branches' `remote`/`merge` (a `core.hooksPath`, `core.fsmonitor` or `include.path` is dropped). From
+the next command on it is an existing repository, whose config and hooks are not writable. kiln
+cleans such a repository again after every later command and on exit, since a background process
+can outlive the command that created it.
+
+What is matched and what is not: `docs/claude-code-parity.md`, "Bash sandbox".
 
 ### Permission modes
 

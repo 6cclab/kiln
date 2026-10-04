@@ -354,6 +354,11 @@ func (m *Manager) plan(cwd string) (Plan, *Proxy, error) {
 		return Plan{}, nil, err
 	}
 	p := buildPlan(m.cfg, cwd, m.opts.Roots(), tmp, m.opts.Home, httpPort, socksPort)
+	if !m.cfg.FilesystemDisabled && ensureCacheRoot(tmp) {
+		for k, v := range cacheEnv(tmp, userSetEnv(m.cfg.SettingsEnv)) {
+			p.Env[k] = v
+		}
+	}
 	if proxy != nil {
 		withProxyCredential(&p, proxy.Userinfo())
 	}

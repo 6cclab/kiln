@@ -50,6 +50,11 @@ type Config struct {
 	// (sandbox.credentials.envVars).
 	DenyEnv []string
 
+	// SettingsEnv are the variables the settings "env" sets: kiln does not
+	// point a tool cache variable the user set there at its own cache
+	// (caches.go).
+	SettingsEnv map[string]bool
+
 	// Notes are configuration kiln accepted but does not enforce the way
 	// Claude Code does, for doctor.
 	Notes []string
@@ -70,6 +75,7 @@ type Config struct {
 func FromSettings(s settings.Settings, perms settings.Permissions, cwd string) Config {
 	sb := s.Sandbox
 	c := Config{
+		SettingsEnv:        envKeys(s.Env),
 		Enabled:            sb.IsEnabled(),
 		FailIfUnavailable:  sb.FailClosed(),
 		AutoAllow:          sb.AutoAllow(),
@@ -157,4 +163,12 @@ func pathRule(p string) Rule {
 		}
 	}
 	return Rule{Path: p}
+}
+
+func envKeys(env map[string]string) map[string]bool {
+	keys := make(map[string]bool, len(env))
+	for k := range env {
+		keys[k] = true
+	}
+	return keys
 }
