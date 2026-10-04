@@ -49,7 +49,11 @@ func TestSandbox_EscapeFailsAndTranscriptSaysSo(t *testing.T) {
 	permWriteJSON(t, proj, map[string]any{"sandbox": map[string]any{"enabled": true}})
 	addr, _ := startFaux(t, fmt.Sprintf(sandboxEscapeScript, home))
 
-	run := runHarness(t, proj, baseEnv(home, sessDir, addr),
+	env := baseEnv(home, sessDir, addr)
+	// A trusted folder: under -p an untrusted project cannot turn the
+	// sandbox on (TestRun_Sandbox_UntrustedProjectCannotAutoAllow).
+	env["HARNESS_TRUST_ALL"] = "1"
+	run := runHarness(t, proj, env,
 		"-p", "try things", "--output-format", "json", "--permission-mode", "manual")
 	if run.Code != 0 {
 		t.Fatalf("exit %d\nstdout=%s\nstderr=%s", run.Code, run.Stdout, run.Stderr)
