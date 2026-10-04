@@ -1062,6 +1062,21 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 	})
 
+	// A settings file changed mid-session reloads the permission rules, as
+	// in Claude Code (settings_reload.go). heldApplied: the trust dialog
+	// was accepted, so a repository-supplied .kiln/settings.local.json's
+	// allow rules apply on a reload too.
+	var heldApplied atomic.Bool
+	settingsWatchCtx, stopSettingsWatch := context.WithCancel(ctx)
+	defer stopSettingsWatch()
+	go settingsReloader{
+		cwd:     cwd,
+		opts:    claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings},
+		gate:    gate,
+		trusted: func() bool { return heldApplied.Load() || folderTrusted(cwd) },
+		notice:  notice,
+	}.watch(settingsWatchCtx, claudesettings.DefaultWatchInterval)
+
 	// ContextUsed (for /usage and /context) is the lane's one context
 	// estimate (harness.Lane.ContextTokens): the last request's measured
 	// size while the model that measured it is still the one in use, and
@@ -1478,6 +1493,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			// A repository-supplied .kiln/settings.local.json's allow rules,
 			// held until the folder is trusted.
 			ApplyHeldRules: func() {
+				heldApplied.Store(true)
 				gate.AddSourcedRules(permission.RuleAllow, settings.HeldAllow, settings.HeldFrom)
 			},
 			ConnectPendingMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {

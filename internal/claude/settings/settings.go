@@ -2,7 +2,9 @@ package settings
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -109,6 +111,10 @@ type Settings struct {
 	// SandboxWarnings the entries in it that were skipped.
 	Sandbox         Sandbox
 	SandboxWarnings []string
+	// Unreadable are settings files that exist but could not be read or
+	// parsed, so contributed nothing. A reload mid-session keeps the rules
+	// it had rather than lose a file's deny rules to a half-written save.
+	Unreadable []string
 }
 
 // LoadedSettingsFile is one settings file that actually contributed to a
@@ -175,6 +181,63 @@ type LoadOptions struct {
 	// <cwd>/.kiln/settings.local.json that came with the repository
 	// applies in full (see Settings.HeldAllow).
 	KilnLocalTrusted bool
+	// Quiet leaves the "Ignoring unreadable settings" warning off stderr
+	// (a reload mid-session, under the TUI); Settings.Unreadable still
+	// names the file.
+	Quiet bool
+}
+
+// settingsFile is one file LoadSettings reads, with how its rules apply.
+type settingsFile struct {
+	paths.SettingsFile
+	root string // RuleSource.Root for this file's rules
+	held bool   // only deny and ask rules apply; allow is held
+	cli  bool   // --settings
+	kiln bool   // kiln's own file, not Claude Code's (LoadedSettingsFile.Kiln)
+}
+
+// settingsFiles lists the files LoadSettings reads for opts, in order.
+func settingsFiles(cwd string, opts LoadOptions) []settingsFile {
+	files := []settingsFile{}
+	for _, f := range paths.AllSettingsFiles(cwd) {
+		if wants(opts.Sources, f.Scope) {
+			root := ""
+			if f.Scope == paths.ScopeUser {
+				// "/path" in user settings is under ~/.claude (~/.kiln for
+				// kiln's), the directory that holds the file (Claude Code's
+				// table).
+				root = filepath.Dir(f.Path)
+			}
+			held := false
+			if f.Kiln && f.Scope == paths.ScopeLocal && !opts.KilnLocalTrusted {
+				if _, err := os.Stat(f.Path); err == nil {
+					held = repoSupplied(cwd, f.Path)
+				}
+			}
+			files = append(files, settingsFile{f.SettingsFile, root, held, false, f.Kiln})
+		}
+	}
+	if opts.Extra != "" {
+		// Applied last so it overrides the hierarchy, mirroring the TS
+		// behaviour of pushing it onto the "local" scope. Its "/path"
+		// rules anchor at the file's own directory.
+		root := filepath.Dir(opts.Extra)
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+		files = append(files, settingsFile{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false, true, false})
+	}
+	return files
+}
+
+// SettingsFiles is every settings file LoadSettings reads for opts, read
+// or not, in order: what a watcher for changes to them watches.
+func SettingsFiles(cwd string, opts LoadOptions) []string {
+	var out []string
+	for _, f := range settingsFiles(cwd, opts) {
+		out = append(out, f.Path)
+	}
+	return out
 }
 
 // repoSupplied reports a kiln settings file that may have come with the
@@ -220,53 +283,22 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		Permissions: Permissions{Allow: []string{}, Deny: []string{}, Ask: []string{}},
 	}
 
-	type source struct {
-		paths.SettingsFile
-		root string // RuleSource.Root for this file's rules
-		held bool   // only deny and ask rules apply; allow is held
-		cli  bool   // --settings
-		kiln bool   // kiln's own file, not Claude Code's (LoadedSettingsFile.Kiln)
-	}
-	files := []source{}
-	for _, f := range paths.AllSettingsFiles(cwd) {
-		if wants(opts.Sources, f.Scope) {
-			root := ""
-			if f.Scope == paths.ScopeUser {
-				// "/path" in user settings is under ~/.claude (~/.kiln for
-				// kiln's), the directory that holds the file (Claude Code's
-				// table).
-				root = filepath.Dir(f.Path)
-			}
-			held := false
-			if f.Kiln && f.Scope == paths.ScopeLocal && !opts.KilnLocalTrusted {
-				if _, err := os.Stat(f.Path); err == nil {
-					held = repoSupplied(cwd, f.Path)
-				}
-			}
-			files = append(files, source{f.SettingsFile, root, held, false, f.Kiln})
-		}
-	}
-	if opts.Extra != "" {
-		// Applied last so it overrides the hierarchy, mirroring the TS
-		// behaviour of pushing it onto the "local" scope. Its "/path"
-		// rules anchor at the file's own directory.
-		root := filepath.Dir(opts.Extra)
-		if abs, err := filepath.Abs(root); err == nil {
-			root = abs
-		}
-		files = append(files, source{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false, true, false})
-	}
-
-	for _, f := range files {
+	for _, f := range settingsFiles(cwd, opts) {
 		data, err := os.ReadFile(f.Path)
 		if err != nil {
-			// Absent is normal. Malformed is reported below (ReadFile only
-			// errors on things like permission or absence, not parse).
+			// Absent is normal. Any other failure (permissions, a
+			// directory) is recorded; malformed JSON is reported below.
+			if !errors.Is(err, fs.ErrNotExist) {
+				merged.Unreadable = append(merged.Unreadable, f.Path)
+			}
 			continue
 		}
 		var raw rawSettings
 		if err := json.Unmarshal(data, &raw); err != nil {
-			fmt.Fprintf(os.Stderr, "Ignoring unreadable settings at %s: %v\n", f.Path, err)
+			merged.Unreadable = append(merged.Unreadable, f.Path)
+			if !opts.Quiet {
+				fmt.Fprintf(os.Stderr, "Ignoring unreadable settings at %s: %v\n", f.Path, err)
+			}
 			continue
 		}
 

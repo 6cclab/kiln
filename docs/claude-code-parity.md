@@ -458,8 +458,10 @@ Open, not matched yet:
   subdirectory of a workspace root is refused on macOS (only a root's own `.git`
   may be created); on Linux it succeeds and that repository is not cleaned, as
   Linux does not hold nested git directories.
-- **Live reload.** Sandbox settings and rules added mid-session (an `Edit`
-  allow from "don't ask again") apply from the next start.
+- **Live reload.** Permission rules reload when a settings file changes
+  (`TestSettingsReload_*`), but the sandbox's own settings, and the sandbox
+  rules derived from permission rules (an `Edit` allow from "don't ask
+  again"), apply from the next start.
 - **`/sandbox`** panel; `bash_background` has no `dangerouslyDisableSandbox`
   (an `excludedCommands` entry is how a background command leaves the sandbox).
 - **macOS limits of Seatbelt itself:** setuid binaries (`ps`, `sudo`) cannot run

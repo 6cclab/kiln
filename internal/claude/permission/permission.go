@@ -516,6 +516,55 @@ func (g *Gate) AddSourcedRules(list RuleList, rules []string, from []settings.Ru
 	}
 }
 
+// ReplaceSettingsRules swaps every rule that came from a settings file for
+// the rules in p, which a fresh settings.LoadSettings read, in one step
+// under the gate's lock: a call is judged by the old rules or the new ones,
+// never a mix. Rules with no file (command-line flags and this session's
+// own) stay. As in Claude Code's reload (syncPermissionRulesFromDisk), a
+// rule removed from its file goes, deny rules included; a "don't ask
+// again" rule kiln saved is in its file and comes back from it. Only the
+// rule lists change: the mode, session grants and everything else read at
+// startup stay as they are.
+func (g *Gate) ReplaceSettingsRules(p settings.Permissions) {
+	fresh := map[RuleList]struct {
+		rules []string
+		from  []settings.RuleSource
+	}{
+		RuleAllow: {p.Allow, p.AllowFrom},
+		RuleDeny:  {p.Deny, p.DenyFrom},
+		RuleAsk:   {p.Ask, p.AskFrom},
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, list := range []RuleList{RuleAllow, RuleDeny, RuleAsk} {
+		l, from := g.list(list)
+		// New slices, never an append into the old ones: a decision that
+		// already took the old lists (rules) keeps reading them unchanged.
+		var out []string
+		var outFrom []settings.RuleSource
+		for i, r := range *l {
+			if src := sourceAt(*from, i); src.File == "" {
+				out = append(out, r)
+				outFrom = append(outFrom, src)
+			}
+		}
+		for i, r := range fresh[list].rules {
+			src := sourceAt(fresh[list].from, i)
+			if src.File == "" {
+				// LoadSettings gives every rule its file; one without is
+				// not a settings-file rule and has no place here.
+				continue
+			}
+			out = append(out, r)
+			outFrom = append(outFrom, src)
+		}
+		if out == nil {
+			out = []string{}
+		}
+		*l, *from = out, outFrom
+	}
+}
+
 // removable reports whether a rule from src is one RemoveRule may drop:
 // one /permissions saved (the local settings file) or a CLI/session rule.
 // A rule from user or project settings stays, as it does in its file.
