@@ -24,6 +24,8 @@ var bashParameters = json.RawMessage(`{
 
 var bashDescription = fmt.Sprintf(
 	"Execute a bash command in the current working directory. Returns combined stdout and stderr. "+
+		"Every command starts in that directory, so do not begin one with a cd to it (cd \"$PWD\" && …): "+
+		"such a cd changes nothing, yet it makes even a read-only command need the user's approval. "+
 		"Output is truncated to last %d lines or %dKB (whichever is hit first). If truncated, full output is saved to a temp file. "+
 		"Commands time out after 120 seconds unless a timeout (in seconds, up to 600) is given; "+
 		"pass a longer one for slow builds or test suites. To leave a server running, background it "+

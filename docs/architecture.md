@@ -421,7 +421,8 @@ what the workspace boundary leaves past the auto mode classifier
 `docs/configuration.md` "Auto mode classifier").
 
 **Rule syntax** (`MatchesRule`): a bare rule is an exact tool-name match
-(`mcp__`-prefixed rules match by prefix); a parenthesized rule
+(`mcp__server` and `mcp__server__*` cover every tool of exactly that
+server, never a server whose name merely starts with it); a parenthesized rule
 `Tool(pattern)` matches the tool's primary argument against a glob (`*`),
 with a `cmd:*` colon suffix normalized to `cmd *`. `Read(path)` and
 `Edit(path)` are path rules (`internal/claude/settings/pathrules.go`), matched

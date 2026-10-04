@@ -23,7 +23,7 @@ func TestGuardToolCallVetsRewrittenInputBeforeTheGate(t *testing.T) {
 			s, ok := args["command"].(string)
 			return s, ok
 		},
-		Check: func(string, string, bool, map[string]any) (*Blocked, error) {
+		Check: func(string, string, bool, map[string]any, Decision, string) (*Blocked, error) {
 			gateRan = true
 			return nil, nil
 		},

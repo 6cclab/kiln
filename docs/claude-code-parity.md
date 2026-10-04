@@ -458,8 +458,10 @@ Open, not matched yet:
   subdirectory of a workspace root is refused on macOS (only a root's own `.git`
   may be created); on Linux it succeeds and that repository is not cleaned, as
   Linux does not hold nested git directories.
-- **Live reload.** Sandbox settings and rules added mid-session (an `Edit`
-  allow from "don't ask again") apply from the next start.
+- **Live reload.** Permission rules reload when a settings file changes
+  (`TestSettingsReload_*`), but the sandbox's own settings, and the sandbox
+  rules derived from permission rules (an `Edit` allow from "don't ask
+  again"), apply from the next start.
 - **`/sandbox`** panel; `bash_background` has no `dangerouslyDisableSandbox`
   (an `excludedCommands` entry is how a background command leaves the sandbox).
 - **macOS limits of Seatbelt itself:** setuid binaries (`ps`, `sudo`) cannot run
@@ -474,7 +476,7 @@ stdin. Implemented against this machine's real hooks (`rtk-rewrite.sh`,
 
 | Event | Status |
 |---|---|
-| `PreToolUse` | `[obs]` matcher, rewrite via `updatedInput`, deny via exit 2 or `permissionDecision` |
+| `PreToolUse` | `[obs]` matcher, rewrite via `updatedInput`, deny via exit 2 or `permissionDecision`; `permissionDecision` `allow` skips the prompt (deny and ask rules, protected paths and critical-path `rm`/`rmdir`, sandbox on or off, still apply) and `ask` forces it — `TestHookAllowSkipsThePrompt`, `TestHookAllowDoesNotBeatRules`, `TestHookAskForcesThePrompt`, `TestPreToolUseDecisions`. kiln keeps plan mode's refusal of edits past a hook `allow`; Claude Code's code path would let the edit run |
 | `PostToolUse` | `[obs]` fires with `tool_response` |
 | `UserPromptSubmit` | `[obs]` stdout becomes turn context |
 | `SessionStart` | `[obs]` stdout becomes first-turn context |

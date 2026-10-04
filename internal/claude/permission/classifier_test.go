@@ -409,7 +409,9 @@ func TestAutoMode_BroadAllowRulesSetAside(t *testing.T) {
 	perms := settings.Permissions{Allow: []string{"Bash(*)", "Bash(python3:*)", "Bash(npm run:*)", "Task", "Bash(npm test)"}}
 	ctx := context.Background()
 	classified := []Request{
-		bashReq("rm -rf ~"),
+		// Not rm -rf ~: a critical-path removal asks the user instead
+		// (TestCriticalRemovalNeverApprovedByAllow).
+		bashReq("rm -rf build"),
 		bashReq("python3 -c 'import os; os.system(\"x\")'"),
 		bashReq("npm run deploy"),
 		{ToolName: "task", Args: map[string]any{"prompt": "deploy"}},

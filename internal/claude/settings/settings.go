@@ -2,7 +2,9 @@ package settings
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -109,6 +111,10 @@ type Settings struct {
 	// SandboxWarnings the entries in it that were skipped.
 	Sandbox         Sandbox
 	SandboxWarnings []string
+	// Unreadable are settings files that exist but could not be read or
+	// parsed, so contributed nothing. A reload mid-session keeps the rules
+	// it had rather than lose a file's deny rules to a half-written save.
+	Unreadable []string
 }
 
 // LoadedSettingsFile is one settings file that actually contributed to a
@@ -175,6 +181,63 @@ type LoadOptions struct {
 	// <cwd>/.kiln/settings.local.json that came with the repository
 	// applies in full (see Settings.HeldAllow).
 	KilnLocalTrusted bool
+	// Quiet leaves the "Ignoring unreadable settings" warning off stderr
+	// (a reload mid-session, under the TUI); Settings.Unreadable still
+	// names the file.
+	Quiet bool
+}
+
+// settingsFile is one file LoadSettings reads, with how its rules apply.
+type settingsFile struct {
+	paths.SettingsFile
+	root string // RuleSource.Root for this file's rules
+	held bool   // only deny and ask rules apply; allow is held
+	cli  bool   // --settings
+	kiln bool   // kiln's own file, not Claude Code's (LoadedSettingsFile.Kiln)
+}
+
+// settingsFiles lists the files LoadSettings reads for opts, in order.
+func settingsFiles(cwd string, opts LoadOptions) []settingsFile {
+	files := []settingsFile{}
+	for _, f := range paths.AllSettingsFiles(cwd) {
+		if wants(opts.Sources, f.Scope) {
+			root := ""
+			if f.Scope == paths.ScopeUser {
+				// "/path" in user settings is under ~/.claude (~/.kiln for
+				// kiln's), the directory that holds the file (Claude Code's
+				// table).
+				root = filepath.Dir(f.Path)
+			}
+			held := false
+			if f.Kiln && f.Scope == paths.ScopeLocal && !opts.KilnLocalTrusted {
+				if _, err := os.Stat(f.Path); err == nil {
+					held = repoSupplied(cwd, f.Path)
+				}
+			}
+			files = append(files, settingsFile{f.SettingsFile, root, held, false, f.Kiln})
+		}
+	}
+	if opts.Extra != "" {
+		// Applied last so it overrides the hierarchy, mirroring the TS
+		// behaviour of pushing it onto the "local" scope. Its "/path"
+		// rules anchor at the file's own directory.
+		root := filepath.Dir(opts.Extra)
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+		files = append(files, settingsFile{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false, true, false})
+	}
+	return files
+}
+
+// SettingsFiles is every settings file LoadSettings reads for opts, read
+// or not, in order: what a watcher for changes to them watches.
+func SettingsFiles(cwd string, opts LoadOptions) []string {
+	var out []string
+	for _, f := range settingsFiles(cwd, opts) {
+		out = append(out, f.Path)
+	}
+	return out
 }
 
 // repoSupplied reports a kiln settings file that may have come with the
@@ -220,53 +283,22 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		Permissions: Permissions{Allow: []string{}, Deny: []string{}, Ask: []string{}},
 	}
 
-	type source struct {
-		paths.SettingsFile
-		root string // RuleSource.Root for this file's rules
-		held bool   // only deny and ask rules apply; allow is held
-		cli  bool   // --settings
-		kiln bool   // kiln's own file, not Claude Code's (LoadedSettingsFile.Kiln)
-	}
-	files := []source{}
-	for _, f := range paths.AllSettingsFiles(cwd) {
-		if wants(opts.Sources, f.Scope) {
-			root := ""
-			if f.Scope == paths.ScopeUser {
-				// "/path" in user settings is under ~/.claude (~/.kiln for
-				// kiln's), the directory that holds the file (Claude Code's
-				// table).
-				root = filepath.Dir(f.Path)
-			}
-			held := false
-			if f.Kiln && f.Scope == paths.ScopeLocal && !opts.KilnLocalTrusted {
-				if _, err := os.Stat(f.Path); err == nil {
-					held = repoSupplied(cwd, f.Path)
-				}
-			}
-			files = append(files, source{f.SettingsFile, root, held, false, f.Kiln})
-		}
-	}
-	if opts.Extra != "" {
-		// Applied last so it overrides the hierarchy, mirroring the TS
-		// behaviour of pushing it onto the "local" scope. Its "/path"
-		// rules anchor at the file's own directory.
-		root := filepath.Dir(opts.Extra)
-		if abs, err := filepath.Abs(root); err == nil {
-			root = abs
-		}
-		files = append(files, source{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false, true, false})
-	}
-
-	for _, f := range files {
+	for _, f := range settingsFiles(cwd, opts) {
 		data, err := os.ReadFile(f.Path)
 		if err != nil {
-			// Absent is normal. Malformed is reported below (ReadFile only
-			// errors on things like permission or absence, not parse).
+			// Absent is normal. Any other failure (permissions, a
+			// directory) is recorded; malformed JSON is reported below.
+			if !errors.Is(err, fs.ErrNotExist) {
+				merged.Unreadable = append(merged.Unreadable, f.Path)
+			}
 			continue
 		}
 		var raw rawSettings
 		if err := json.Unmarshal(data, &raw); err != nil {
-			fmt.Fprintf(os.Stderr, "Ignoring unreadable settings at %s: %v\n", f.Path, err)
+			merged.Unreadable = append(merged.Unreadable, f.Path)
+			if !opts.Quiet {
+				fmt.Fprintf(os.Stderr, "Ignoring unreadable settings at %s: %v\n", f.Path, err)
+			}
 			continue
 		}
 
@@ -355,7 +387,9 @@ var regexMeta = regexp.MustCompile(`[.*+?^${}()|[\]\\]`)
 // Shapes:
 //
 //	Read             whole tool, by name
-//	mcp__homelab     PREFIX - every tool from that MCP server
+//	mcp__homelab     every tool of server homelab, and no other server
+//	mcp__homelab__*  the same
+//	mcp__homelab__x  that one MCP tool (MCP names match case-sensitively)
 //	Bash(find:*)     colon form: commands beginning with `find`
 //	Bash(git *)      glob form, as documented by `claude --help`
 //	Read(src/**)     a Read/Edit path rule, gitignore-style (pathrules.go)
@@ -364,17 +398,26 @@ var regexMeta = regexp.MustCompile(`[.*+?^${}()|[\]\\]`)
 // rule every read tool, as in Claude Code. For the non-path shapes only `*`
 // is a wildcard; every other regex metacharacter is escaped.
 // Matching is case-insensitive because Claude Code writes Read/Bash/Edit
-// while pi's tools are read/bash/edit.
+// while pi's tools are read/bash/edit; MCP names, which both write the
+// same way, match case-sensitively, as in Claude Code.
 func MatchesRule(rule, toolName, primaryArg string) bool {
 	tool := strings.ToLower(toolName)
 
 	m := parenRule.FindStringSubmatch(rule)
 	if m == nil {
-		bare := strings.ToLower(rule)
-		if strings.HasPrefix(bare, "mcp__") {
-			return strings.HasPrefix(tool, bare)
+		if raw := strings.TrimSpace(rule); strings.HasPrefix(raw, "mcp__") || strings.HasPrefix(toolName, "mcp__") {
+			return mcpRuleMatches(raw, toolName)
 		}
+		bare := strings.ToLower(strings.TrimSpace(rule))
 		return sameTool(bare, tool) || bareFamilyMatches(bare, tool)
+	}
+	if name := strings.TrimSpace(m[1]); strings.HasPrefix(name, "mcp__") || strings.HasPrefix(toolName, "mcp__") {
+		// An MCP tool's name is compared as written, case included:
+		// sameTool's underscore and case folding would make mcp__a_b__c
+		// and mcp__ab__c, or mcp__Srv__x and mcp__srv__x, one tool.
+		if name != toolName {
+			return false
+		}
 	}
 	if f, ok := splitFileRule(rule); ok {
 		// A Read/Edit path rule (pathrules.go), judged here as a deny
@@ -426,11 +469,46 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 		pattern = pattern[:len(pattern)-len(" .*")] + "(\\s.*)?"
 	}
 
-	re := compiledPattern("^" + pattern + "$")
+	// (?s): "*" matches newlines too, as Claude Code compiles its patterns
+	// with the dotAll flag. Without it a quoted newline in an argument
+	// ended every match: an allow rule missed a multi-line commit message,
+	// and a deny rule such as Bash(rm *) missed rm -rf "a<newline>b".
+	re := compiledPattern("(?s)^" + pattern + "$")
 	if re == nil {
 		return false
 	}
 	return re.MatchString(strings.TrimSpace(primaryArg))
+}
+
+// mcpRuleMatches matches a bare rule against a tool when either is an MCP
+// name ("mcp__server" or "mcp__server__tool"), as Claude Code's
+// toolMatchesRule does: the same name, or a rule naming only the server
+// (or the server and "*") and the tool's server parsing as the same one,
+// case-sensitively. A rule is never a string prefix: "mcp__homelab" says
+// nothing about server "homelab-kb". The split is not exact for a server
+// name holding "__": as in Claude Code, a name splits at its first "__",
+// so "mcp__a" also covers the tools of a server named "a__b".
+func mcpRuleMatches(rule, tool string) bool {
+	if rule == tool {
+		return true
+	}
+	ruleServer, ruleTool, ok := mcpParts(rule)
+	if !ok || (ruleTool != "" && ruleTool != "*") {
+		return false
+	}
+	toolServer, _, ok := mcpParts(tool)
+	return ok && ruleServer == toolServer
+}
+
+// mcpParts splits "mcp__server__tool" into its server and tool; tool is ""
+// for "mcp__server". Not ok for a name that is not an MCP one.
+func mcpParts(name string) (server, tool string, ok bool) {
+	rest, ok := strings.CutPrefix(name, "mcp__")
+	if !ok {
+		return "", "", false
+	}
+	server, tool, _ = strings.Cut(rest, "__")
+	return server, tool, server != ""
 }
 
 // patternCache holds MatchesRule's compiled patterns, keyed by the pattern

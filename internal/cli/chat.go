@@ -718,6 +718,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Mode:           permissionMode,
 		PlanLedgerPath: experimentLedgerPath,
 	})
+	// Every settings file this session reads, --settings included, is
+	// reloaded when it changes (settings_reload.go), so a write to any of
+	// them, or to where it really lives, needs the user's approval and is
+	// held from sandboxed commands.
+	settingsFiles := claudesettings.SettingsFiles(cwd, claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings})
+	gate.ProtectSettingsFiles(settingsFiles)
 	// A "did you mean" hint (internal/execenv/didyoumean.go) scans a
 	// failed read/edit/write's parent directory before it can suggest a
 	// near-identical name; it must never reveal an entry from a directory
@@ -733,7 +739,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 
 	// The OS sandbox for the bash tools (sandbox.go), bound to the gate
 	// and to env before the tools are built.
-	sandboxMgr, err := startSandbox(cwd, settings, perms, gate, env, startupWarn)
+	sandboxMgr, err := startSandbox(cwd, settings, perms, settingsFiles, gate, env, startupWarn)
 	if err != nil {
 		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
@@ -1062,6 +1068,21 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 	})
 
+	// A settings file changed mid-session reloads the permission rules, as
+	// in Claude Code (settings_reload.go). heldApplied: the trust dialog
+	// was accepted, so a repository-supplied .kiln/settings.local.json's
+	// allow rules apply on a reload too.
+	var heldApplied atomic.Bool
+	settingsWatchCtx, stopSettingsWatch := context.WithCancel(ctx)
+	defer stopSettingsWatch()
+	go settingsReloader{
+		cwd:     cwd,
+		opts:    claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings},
+		gate:    gate,
+		trusted: func() bool { return heldApplied.Load() || folderTrusted(cwd) },
+		notice:  notice,
+	}.watch(settingsWatchCtx, claudesettings.DefaultWatchInterval)
+
 	// ContextUsed (for /usage and /context) is the lane's one context
 	// estimate (harness.Lane.ContextTokens): the last request's measured
 	// size while the model that measured it is still the one in use, and
@@ -1295,9 +1316,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			SessionID:      sessionID,
 			TranscriptPath: transcriptPath,
 			Cwd:            cwd,
-			Check: func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any) (*claudehooks.Blocked, error) {
+			Check: func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any, decision claudehooks.Decision, reason string) (*claudehooks.Blocked, error) {
 				blocked, out, err := gate.CheckWithOutcome(ctx, permission.Request{ToolName: toolName, PrimaryArg: primaryArg, Args: args,
-					CallID: call.ID, History: autoModeHistory(ctx, started.Lane)})
+					CallID: call.ID, History: autoModeHistory(ctx, started.Lane),
+					HookDecision: string(decision), HookReason: reason})
 				outcome = out
 				if err != nil {
 					return nil, err
@@ -1477,6 +1499,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			// A repository-supplied .kiln/settings.local.json's allow rules,
 			// held until the folder is trusted.
 			ApplyHeldRules: func() {
+				heldApplied.Store(true)
 				gate.AddSourcedRules(permission.RuleAllow, settings.HeldAllow, settings.HeldFrom)
 			},
 			ConnectPendingMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {

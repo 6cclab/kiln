@@ -17,6 +17,14 @@ import (
 // it goes through the regular permission flow. A line kiln cannot parse
 // counts as critical.
 func criticalRemoval(command, cwd, home string, roots []string) bool {
+	return CriticalRemoval(command, cwd, home, roots)
+}
+
+// CriticalRemoval is criticalRemoval for a caller with no sandbox: the
+// permission gate checks it whether or not the sandbox is on, since no
+// allow rule or hook "allow" approves such a removal (Claude Code's
+// permission-modes docs, "Critical paths").
+func CriticalRemoval(command, cwd, home string, roots []string) bool {
 	f, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 	if err != nil {
 		return strings.Contains(command, "rm")

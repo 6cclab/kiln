@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"time"
 
@@ -53,6 +54,39 @@ type Outcome struct {
 	Context []string
 	// Notices are messages for the user, never for the model.
 	Notices []string
+	// Decision is the PreToolUse hooks' permission decision short of a
+	// denial (a denial is Blocked): DecisionAllow, DecisionAsk or "" for
+	// none. Several hooks combine as in Claude Code: ask over allow.
+	Decision Decision
+	// DecisionReason is the reason given with Decision, shown with the
+	// prompt a hook's "ask" raises.
+	DecisionReason string
+}
+
+// Decision is a PreToolUse hook's permissionDecision short of "deny".
+type Decision string
+
+const (
+	// DecisionAllow skips the permission prompt; deny and ask rules, and
+	// the checks no allow approves, still apply (permission.Gate).
+	DecisionAllow Decision = "allow"
+	// DecisionAsk forces the permission prompt.
+	DecisionAsk Decision = "ask"
+)
+
+// merge applies one hook's decision with Claude Code's precedence: deny
+// (Blocked, handled by the caller) over ask over allow.
+func (o *Outcome) merge(d Decision, reason string) {
+	switch d {
+	case DecisionAsk:
+		if o.Decision != DecisionAsk {
+			o.Decision, o.DecisionReason = DecisionAsk, reason
+		}
+	case DecisionAllow:
+		if o.Decision == "" {
+			o.Decision, o.DecisionReason = DecisionAllow, reason
+		}
+	}
 }
 
 type hookSpecificOutput struct {
@@ -67,6 +101,12 @@ type jsonOutput struct {
 	HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput,omitempty"`
 	Continue           *bool               `json:"continue,omitempty"`
 	StopReason         string              `json:"stopReason,omitempty"`
+	// Decision and Reason are PreToolUse's deprecated top-level form:
+	// "approve" is "allow" and "block" is "deny" (Claude Code's hooks
+	// reference). Other events give "decision" other meanings, so it is
+	// read for PreToolUse only.
+	Decision string `json:"decision,omitempty"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 type runOutput struct {
@@ -140,9 +180,11 @@ func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv 
 // timedOut, then exit 2 (block), then other non-zero (notice), then
 // stderr-on-zero-exit (notice), then empty stdout (nothing), then
 // non-JSON stdout (context), then JSON continue:false (block), then
-// hookSpecificOutput.permissionDecision deny (block), updatedInput
-// (merge), additionalContext (append).
-func interpret(out runOutput, outcome *Outcome, label string) {
+// (PreToolUse) the deprecated top-level decision, then
+// hookSpecificOutput.permissionDecision: deny (block), ask or allow
+// (Outcome.Decision); then updatedInput (merge), additionalContext
+// (append).
+func interpret(out runOutput, outcome *Outcome, label string, event Event) {
 	text := strings.TrimSpace(out.stdout)
 
 	if out.timedOut {
@@ -204,17 +246,50 @@ func interpret(out runOutput, outcome *Outcome, label string) {
 		return
 	}
 
-	specific := parsed.HookSpecificOutput
-	if specific == nil {
-		return
+	// The decision this hook made, if any. A later hookSpecificOutput
+	// decision overrides the deprecated top-level one, as in Claude Code.
+	decision, reason := "", ""
+	if event == PreToolUse {
+		switch parsed.Decision {
+		case "approve":
+			decision, reason = "allow", parsed.Reason
+		case "block":
+			decision, reason = "deny", parsed.Reason
+		}
 	}
-
-	if specific.PermissionDecision == "deny" {
-		reason := specific.PermissionDecisionReason
+	specific := parsed.HookSpecificOutput
+	if specific != nil && specific.PermissionDecision != "" {
+		switch specific.PermissionDecision {
+		case "deny":
+			decision, reason = "deny", specific.PermissionDecisionReason
+			if reason == "" {
+				reason = parsed.Reason
+			}
+		case "allow", "ask":
+			// Claude Code honours these only from a PreToolUse hook that
+			// names its event; a deny is honoured whatever it names.
+			if event == PreToolUse && specific.HookEventName == string(PreToolUse) {
+				decision, reason = specific.PermissionDecision, specific.PermissionDecisionReason
+			}
+		case "defer":
+			// "Let the normal permission flow apply": no decision.
+		default:
+			outcome.Notices = append(outcome.Notices, fmt.Sprintf("hook returned an unknown permissionDecision %q, ignored: %s", specific.PermissionDecision, label))
+		}
+	}
+	switch decision {
+	case "deny":
 		if reason == "" {
 			reason = fmt.Sprintf("denied by hook: %s", label)
 		}
 		outcome.Blocked = &Blocked{Reason: reason}
+		return
+	case "allow":
+		outcome.merge(DecisionAllow, reason)
+	case "ask":
+		outcome.merge(DecisionAsk, reason)
+	}
+	if specific == nil {
 		return
 	}
 	if specific.UpdatedInput != nil {
@@ -288,15 +363,33 @@ func RunHooks(opts RunOptions) Outcome {
 		if len(label) > 60 {
 			label = label[:60]
 		}
-		interpret(out, &outcome, label)
+		// This hook's own decision, apart from the earlier hooks'.
+		prevDecision, prevReason := outcome.Decision, outcome.DecisionReason
+		outcome.Decision, outcome.DecisionReason = "", ""
+		interpret(out, &outcome, label, opts.Event)
+		decided, decidedReason := outcome.Decision, outcome.DecisionReason
+		outcome.Decision, outcome.DecisionReason = prevDecision, prevReason
+		// An earlier hook's "allow" judged the input it was shown. A hook
+		// that then changes the input without deciding anything itself
+		// leaves a call nobody allowed: the allow is dropped, and the
+		// regular permission flow judges the rewrite. (Claude Code runs
+		// hooks side by side on the same input and applies an allow to a
+		// passthrough hook's rewrite; kiln's hooks run in turn, so it can
+		// tell.) An "ask" stays.
+		if decided == "" && outcome.Decision == DecisionAllow && changedInput(current.ToolInput, outcome.UpdatedInput) {
+			outcome.Decision, outcome.DecisionReason = "", ""
+		}
+		outcome.merge(decided, decidedReason)
 		if opts.OnNotice != nil {
 			for _, n := range outcome.Notices[before:] {
 				opts.OnNotice(n)
 			}
 		}
 
-		// A block ends the chain: later hooks have nothing left to decide.
+		// A block ends the chain: later hooks have nothing left to decide,
+		// and it outranks an earlier hook's allow or ask.
 		if outcome.Blocked != nil {
+			outcome.Decision, outcome.DecisionReason = "", ""
 			break
 		}
 	}
@@ -304,8 +397,22 @@ func RunHooks(opts RunOptions) Outcome {
 	return outcome
 }
 
-// CheckFunc is the permission check, already bound to a gate.
-type CheckFunc func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any) (*Blocked, error)
+// changedInput reports whether updated (the rewrites so far, merged over
+// the original by key) gives a key a value other than the one seen.
+func changedInput(seen, updated map[string]any) bool {
+	for k, v := range updated {
+		if old, ok := seen[k]; !ok || !reflect.DeepEqual(old, v) {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckFunc is the permission check, already bound to a gate. decision and
+// reason are the PreToolUse hooks' permission decision short of a denial
+// ("" when they made none); the gate applies it (permission.Request's
+// HookDecision).
+type CheckFunc func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any, decision Decision, reason string) (*Blocked, error)
 
 // PrimaryArgOfFunc extracts the identifying argument from tool args.
 type PrimaryArgOfFunc func(args map[string]any) (string, bool)
@@ -388,8 +495,12 @@ func GuardToolCall(opts GuardOptions) (GuardResult, error) {
 		}
 	}
 
+	// The gate judges the input as rewritten, and gets the hooks'
+	// decision with it: an "allow" skips the prompt but not deny or ask
+	// rules, and an "ask" forces the prompt (Claude Code's
+	// resolveHookPermissionDecision).
 	primary, hasPrimary := opts.PrimaryArgOf(args)
-	blocked, err := opts.Check(opts.ToolName, primary, hasPrimary, args)
+	blocked, err := opts.Check(opts.ToolName, primary, hasPrimary, args, hookResult.Decision, hookResult.DecisionReason)
 	if err != nil {
 		return GuardResult{}, err
 	}

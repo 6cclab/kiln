@@ -190,8 +190,8 @@ actually correct.
 4. If the tool should be governable by a permission rule, make sure its
    `Name` matches how a rule will reference it: `internal/claude/settings`'s
    `MatchesRule` (`internal/claude/settings/settings.go`) lower-cases both
-   the tool name and the rule before comparing, and treats `mcp__`-prefixed
-   rules as a prefix match rather than an exact one — so a plain tool name
+   the tool name and the rule before comparing, and lets an `mcp__server`
+   rule cover every tool of exactly that server — so a plain tool name
    like `bash` or `todo_write` must match exactly (case-insensitively).
 
 ### Add a slash command
