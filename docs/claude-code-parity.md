@@ -352,8 +352,9 @@ Seven; the first six are additive:
    them. What kiln saves for itself goes to `<repo>/.kiln/settings.local.json`
    (approved rules, `/permissions` edits) and `~/.kiln/settings.json` (`/model`
    default). Each kiln file joins its Claude Code scope and wins for single
-   values; deny rules win everywhere. A git-tracked or symlinked
-   `.kiln/settings.local.json` is held until the folder is trusted.
+   values; deny rules win everywhere. Before the folder is trusted, the
+   allow rules a repository can supply and every hook wait for trust, as in
+   Claude Code (`docs/configuration.md`, Trust).
 
    MCP is the deliberate exception: kiln has no MCP config file of its own.
    `kiln mcp add`/`add-json`/`remove` write the same files `claude mcp add`
