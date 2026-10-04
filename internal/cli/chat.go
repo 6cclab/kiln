@@ -1084,6 +1084,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	settingsWatchCtx, stopSettingsWatch := context.WithCancel(ctx)
 	defer stopSettingsWatch()
 	reloader := settingsReloader{
+		mu:      &sync.Mutex{},
 		cwd:     cwd,
 		opts:    claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings, Headless: args.Print},
 		gate:    gate,

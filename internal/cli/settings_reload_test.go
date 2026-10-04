@@ -24,6 +24,7 @@ type reloadFixture struct {
 	mu        sync.Mutex
 	notices   []string
 	trusted   bool
+	reloadMu  sync.Mutex
 }
 
 func newReloadFixture(t *testing.T) *reloadFixture {
@@ -39,6 +40,7 @@ func newReloadFixture(t *testing.T) *reloadFixture {
 
 func (f *reloadFixture) reloader() settingsReloader {
 	return settingsReloader{
+		mu:      &f.reloadMu,
 		cwd:     f.cwd,
 		gate:    f.gate,
 		trusted: func() bool { return f.trusted },
@@ -221,5 +223,38 @@ func TestSettingsReload_TrustWithUnreadableFileKeepsRules(t *testing.T) {
 	defer f.mu.Unlock()
 	if last := f.notices[len(f.notices)-1]; !strings.HasPrefix(last, "Folder trusted, but") {
 		t.Errorf("notice = %q", last)
+	}
+}
+
+// A reload that read the files while the folder was untrusted, and is
+// about to swap in the rules it read, must not land after the trust
+// dialog applied the trusted ones: the allow rules trust released would
+// be dropped again. applyTrust waits for it, then applies.
+func TestSettingsReload_TrustDuringReloadKeepsAllowRules(t *testing.T) {
+	f := newReloadFixture(t)
+	p := f.write(t, ".claude/settings.json", `{"permissions":{"allow":["Bash(curl *)"]}}`)
+	var trustMu sync.Mutex
+	r := f.reloader()
+	trustDone := make(chan struct{})
+	r.loaded = func() {
+		// The poller has read the files as untrusted; the person accepts
+		// the dialog now.
+		r.loaded = nil
+		trustMu.Lock()
+		f.trusted = true
+		trustMu.Unlock()
+		go func() {
+			trusting := r
+			trusting.loaded = nil
+			trusting.applyTrust()
+			close(trustDone)
+		}()
+		time.Sleep(50 * time.Millisecond) // applyTrust runs now, if nothing stops it
+	}
+	r.trusted = func() bool { trustMu.Lock(); defer trustMu.Unlock(); return f.trusted }
+	r.reload([]string{p})
+	<-trustDone
+	if got := f.decide("curl https://example.com"); got != claudesettings.Allow {
+		t.Errorf("curl = %v after trust, want allow (a stale reload dropped the trusted rules)", got)
 	}
 }

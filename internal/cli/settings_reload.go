@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andrepato/harness/internal/claude/permission"
@@ -33,6 +34,13 @@ type settingsReloader struct {
 	// at startup, or the trust dialog was accepted since).
 	trusted func() bool
 	notice  func(string)
+	// mu makes each read-and-swap one step: a reload that read the files
+	// while the folder was untrusted must not replace the gate's rules
+	// after applyTrust put the trusted ones in. Shared by every copy.
+	mu *sync.Mutex
+	// loaded, when set (tests), runs between reading the files and
+	// swapping their rules in.
+	loaded func()
 }
 
 // reload applies the files' current rules. A file that exists but does
@@ -61,10 +69,15 @@ func (r settingsReloader) applyTrust() {
 // could not be read leaves the gate as it was, says so (after what, the
 // note's opening), and returns false.
 func (r settingsReloader) load(what string) (claudesettings.Settings, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	opts := r.opts
 	opts.Trusted = r.trusted()
 	opts.Quiet = true
 	s := claudesettings.LoadSettings(r.cwd, opts)
+	if r.loaded != nil {
+		r.loaded()
+	}
 	if len(s.Unreadable) > 0 {
 		msg := fmt.Sprintf("%s, but %s could not be read; permission rules are unchanged until it is fixed.", what, strings.Join(shortPaths(r.cwd, s.Unreadable), ", "))
 		diag.L().Warn("settings reload skipped", "unreadable", strings.Join(s.Unreadable, ", "))
