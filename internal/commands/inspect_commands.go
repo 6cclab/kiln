@@ -71,6 +71,15 @@ type InspectDeps struct {
 	// ActiveTools returns the resident tool names, for /doctor's summary.
 	ActiveTools        func() ([]string, error)
 	SettingsLoadedFrom []string
+	// SandboxLine is /doctor's one-line sandbox state ("off (…)", "on
+	// (seatbelt), …") — cli's sandboxReport, built once at startup and
+	// handed through since InspectDeps has no settings.Settings/cwd of its
+	// own to build it from directly.
+	SandboxLine string
+	// SandboxProblems are sandboxReport's own problems (a configured but
+	// unavailable sandbox, an unsandboxed Linux Unix-socket note, …),
+	// folded into /doctor's problem list alongside the MCP/tool ones.
+	SandboxProblems []string
 }
 
 func truncate(text string, max int) string {
@@ -261,6 +270,11 @@ func InspectCommands(deps InspectDeps) Source {
 				total, eventsUsed := hookCount(deps.Hooks)
 				lines = append(lines, "hooks      "+HooksSummary(total, eventsUsed))
 				lines = append(lines, fmt.Sprintf("agents     %d available", len(deps.Agents)))
+				sandboxLine := deps.SandboxLine
+				if sandboxLine == "" {
+					sandboxLine = "off (sandbox.enabled is not set)"
+				}
+				lines = append(lines, "sandbox    "+sandboxLine)
 				lines = append(lines, fmt.Sprintf("settings   %s", joinOrNone(deps.SettingsLoadedFrom)))
 
 				var problems []string
@@ -273,6 +287,14 @@ func InspectCommands(deps InspectDeps) Source {
 				if deps.Gate != nil && deps.Gate.Mode() == settings.ModeBypassPermissions {
 					problems = append(problems, "permission mode is bypassPermissions: every tool call runs unchecked")
 				}
+				if unsupported := hooks.UnsupportedEvents(deps.Hooks); len(unsupported) > 0 {
+					names := make([]string, len(unsupported))
+					for i, e := range unsupported {
+						names[i] = string(e)
+					}
+					problems = append(problems, fmt.Sprintf("hooks configured for %s kiln does not fire (yet): %s", plural.Count(len(unsupported), "event"), strings.Join(names, ", ")))
+				}
+				problems = append(problems, deps.SandboxProblems...)
 
 				lines = append(lines, "")
 				if len(problems) == 0 {

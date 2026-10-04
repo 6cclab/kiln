@@ -1167,8 +1167,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 
 	settingsLoadedFrom := make([]string, 0, len(settings.LoadedFrom))
 	for _, s := range settings.LoadedFrom {
-		settingsLoadedFrom = append(settingsLoadedFrom, string(s))
+		settingsLoadedFrom = append(settingsLoadedFrom, s.Label())
 	}
+
+	// /doctor's sandbox section: same sandboxReport `kiln doctor` uses
+	// (internal/cli/subcommands.go), computed once here from the same
+	// cwd/settings startSandbox above resolved its own manager from — a
+	// resolve independent of sandboxMgr's actual instance, since
+	// sandboxReport also reports the "off" and "enabled, unavailable"
+	// cases a nil sandboxMgr can't distinguish on its own.
+	sandboxLine, sandboxProblems := sandboxReport(cwd, settings)
 
 	// Hooks from .claude/settings.json, accumulated across scopes, plus
 	// every active plugin's own hooks (each already carrying
@@ -1253,6 +1261,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Todos:              todos,
 		Shells:             shells,
 		SettingsLoadedFrom: settingsLoadedFrom,
+		SandboxLine:        sandboxLine,
+		SandboxProblems:    sandboxProblems,
 		ModelRoles:         settings.ModelRoles,
 		ModelLabel:         providerID + "/" + modelID,
 		SessionRepo:        sessionRepo,

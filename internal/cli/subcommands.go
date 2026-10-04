@@ -396,7 +396,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 
 	loadedFrom := make([]string, 0, len(settings.LoadedFrom))
 	for _, s := range settings.LoadedFrom {
-		loadedFrom = append(loadedFrom, string(s))
+		loadedFrom = append(loadedFrom, s.Label())
 	}
 	settingsLine := "none"
 	if len(loadedFrom) > 0 {
@@ -416,6 +416,13 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		if !st.OK {
 			problems = append(problems, fmt.Sprintf("mcp %q is down: %s", st.Name, st.Error))
 		}
+	}
+	if unsupported := claudehooks.UnsupportedEvents(hookConfig); len(unsupported) > 0 {
+		names := make([]string, len(unsupported))
+		for i, e := range unsupported {
+			names[i] = string(e)
+		}
+		problems = append(problems, fmt.Sprintf("hooks configured for %s kiln does not fire (yet): %s", plural.Count(len(unsupported), "event"), strings.Join(names, ", ")))
 	}
 	lines = append(lines, "")
 	if len(problems) == 0 {
