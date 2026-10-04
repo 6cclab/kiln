@@ -122,8 +122,21 @@ func TestGlobRegex(t *testing.T) {
 // TestProtectedPaths lists the Claude Code protected paths for a root.
 func TestProtectedPaths(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "config"), 0o755); err != nil {
-		t.Fatal(err)
+	// A root without a .git: nothing under it is held, and the plan lists
+	// it as a git directory a command may create (git init).
+	bare, _ := protectedPaths([]string{root}, "", nil)
+	for _, r := range bare {
+		if g := filepath.Join(root, ".git"); r.Path == g || strings.HasPrefix(r.Path, g+string(filepath.Separator)) {
+			t.Errorf("a missing .git is held: %s", r.Path)
+		}
+	}
+	if p := buildPlan(Config{}, root, []string{root}, "", "", 0, 0); !contains(p.NewGitDirs, filepath.Join(root, ".git")) || len(p.GitDirs) != 0 {
+		t.Errorf("missing .git: NewGitDirs %v GitDirs %v", p.NewGitDirs, p.GitDirs)
+	}
+	for _, d := range []string{"config", ".git"} {
+		if err := os.Mkdir(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rules, literal := protectedPaths([]string{root}, "/h", nil)
 	have := map[string]bool{}

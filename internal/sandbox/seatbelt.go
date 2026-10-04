@@ -149,7 +149,12 @@ func seatbeltProfile(p Plan) (string, error) {
 			`(literal "/dev/stdout")`, `(literal "/dev/stderr")`, `(regex #"^/dev/fd/")`)
 		w("(allow file-write* %s)", strings.Join(allow, " "))
 		for _, g := range p.GitDirs {
-			for _, rule := range gitDirRules(g) {
+			for _, rule := range gitDirRules(g, false) {
+				w("%s", rule)
+			}
+		}
+		for _, g := range p.NewGitDirs {
+			for _, rule := range gitDirRules(g, true) {
 				w("%s", rule)
 			}
 		}

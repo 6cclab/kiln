@@ -35,6 +35,11 @@ type Plan struct {
 	// root's .git, a linked worktree's): only what git itself writes may
 	// be written there (seatbelt.go gitDirRules; Linux: sweepGitDirs).
 	GitDirs []string
+	// NewGitDirs are workspace roots' .git directories that do not exist
+	// yet: a command may create one (git init), writing only what git
+	// writes plus what git init adds (seatbelt.go gitDirRules), and kiln
+	// cleans it after the command (gitdir.go sanitizeNewGitDir).
+	NewGitDirs []string
 	// Placeholders are empty read-only files kiln created (Linux) where a
 	// protected path did not exist yet, so it cannot be created.
 	Placeholders []string
@@ -99,11 +104,16 @@ func buildPlan(cfg Config, cwd string, roots []string, tmpDir, home string, http
 	p.WriteRoots = dedupe(writable)
 	var gds []string
 	for _, r := range roots {
-		if g := filepath.Join(r, ".git"); isDir(g) {
+		g := filepath.Join(r, ".git")
+		switch {
+		case isDir(g):
 			gds = append(gds, g)
+		case !exists(g):
+			p.NewGitDirs = append(p.NewGitDirs, g)
 		}
 	}
 	p.GitDirs = dedupe(append(gds, gitDirs...))
+	p.NewGitDirs = dedupe(p.NewGitDirs)
 
 	p.DenyWrite = append([]Rule(nil), cfg.DenyWrite...)
 	prot, literal := protectedPaths(roots, home, gitDirs)
@@ -249,8 +259,10 @@ func protectedPaths(roots []string, home string, gitDirs []string) (rules []Rule
 		for _, e := range []string{".mcp.json", ".kiln"} {
 			rules = append(rules, Rule{Path: root, Segs: []string{"**", e}})
 		}
+		// Nested repositories' git directories (at least one level down;
+		// the root's own .git is handled below, existing or not).
 		for _, s := range gitSensitive {
-			rules = append(rules, Rule{Path: root, Segs: []string{"**", ".git", s}})
+			rules = append(rules, Rule{Path: root, Segs: []string{"*", "**", ".git", s}})
 		}
 		for _, f := range shellStartupFiles {
 			add(filepath.Join(root, f))
@@ -258,8 +270,12 @@ func protectedPaths(roots []string, home string, gitDirs []string) (rules []Rule
 		for _, d := range []string{".vscode", ".idea"} {
 			add(filepath.Join(root, d))
 		}
-		rules = append(rules, gitDirProtections(filepath.Join(root, ".git"))...)
-		literal = append(literal, filepath.Join(root, ".git"))
+		// An existing .git is held in place with its sensitive entries; a
+		// missing one may be created (git init), under NewGitDirs' rules.
+		if exists(filepath.Join(root, ".git")) {
+			rules = append(rules, gitDirProtections(filepath.Join(root, ".git"))...)
+			literal = append(literal, filepath.Join(root, ".git"))
+		}
 
 		// A bare repository at the root: git would read hooks and config
 		// from the top level.

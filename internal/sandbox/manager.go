@@ -63,6 +63,10 @@ type Manager struct {
 	onSave   func(host string)
 	closed   bool
 	held     map[string]int // Linux placeholders in use (placeholders.go)
+	// newGit are the git directories sandboxed commands created this
+	// session (git init); kiln cleans them after every command and on
+	// Close (gitdir.go sanitizeNewGitDir).
+	newGit map[string]bool
 }
 
 // New builds a Manager for cfg.
@@ -80,7 +84,7 @@ func New(cfg Config, opts Options) *Manager {
 		cwd := opts.Cwd
 		opts.Roots = func() []string { return []string{cwd} }
 	}
-	return &Manager{cfg: cfg, opts: opts, bridges: map[int]*bridge{}, held: map[string]int{}}
+	return &Manager{cfg: cfg, opts: opts, bridges: map[int]*bridge{}, held: map[string]int{}, newGit: map[string]bool{}}
 }
 
 // Config returns the configuration the manager enforces.
@@ -189,6 +193,7 @@ func (m *Manager) Close() {
 	if m == nil {
 		return
 	}
+	m.cleanNewGitDirs()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closed = true
@@ -197,6 +202,34 @@ func (m *Manager) Close() {
 	}
 	for _, b := range m.bridges {
 		_ = b.ln.Close()
+	}
+}
+
+// noteNewGitDirs records the git directories a command may create (its
+// plan's NewGitDirs), when it is wrapped.
+func (m *Manager) noteNewGitDirs(dirs []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range dirs {
+		m.newGit[g] = true
+	}
+}
+
+// cleanNewGitDirs cleans every git directory a sandboxed command may have
+// created this session that exists now. It runs after every command and
+// on Close: a command still running (a background one, or on macOS a
+// process a finished command left behind, which keeps that command's
+// profile) can write a new directory's config after its creator's
+// cleanup.
+func (m *Manager) cleanNewGitDirs() {
+	m.mu.Lock()
+	dirs := make([]string, 0, len(m.newGit))
+	for g := range m.newGit {
+		dirs = append(dirs, g)
+	}
+	m.mu.Unlock()
+	for _, g := range dirs {
+		sanitizeNewGitDir(g)
 	}
 }
 
@@ -356,6 +389,7 @@ func (c *commandSandbox) Wrap(shell, command, cwd string) (execenv.Wrapped, erro
 	if proxy != nil {
 		c.mark = proxy.Mark()
 	}
+	c.m.noteNewGitDirs(p.NewGitDirs)
 	switch c.m.opts.GOOS {
 	case "darwin":
 		profile, err := seatbeltProfile(p)
@@ -363,9 +397,10 @@ func (c *commandSandbox) Wrap(shell, command, cwd string) (execenv.Wrapped, erro
 			return execenv.Wrapped{}, err
 		}
 		return execenv.Wrapped{
-			Argv:  []string{seatbeltPath, "-p", profile, shell, "-c", command},
-			Env:   p.Env,
-			Unset: p.Unset,
+			Argv:    []string{seatbeltPath, "-p", profile, shell, "-c", command},
+			Env:     p.Env,
+			Unset:   p.Unset,
+			Cleanup: c.m.cleanNewGitDirs,
 		}, nil
 	case "linux":
 		var bridges []bwrapBridge
@@ -388,6 +423,7 @@ func (c *commandSandbox) Wrap(shell, command, cwd string) (execenv.Wrapped, erro
 		release := func() {
 			releaseHeld()
 			sweepGitDirs(p.GitDirs, before)
+			c.m.cleanNewGitDirs()
 		}
 		argv, err := bwrapArgs(p, c.m.bwrap, c.m.socat, shell, command, bridges)
 		if err != nil {
