@@ -1007,15 +1007,31 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // pasteAsImage checks whether a bracketed paste's entire content, once
-// shell-cleaned, is a single path (imgpath.HasUnescapedWhitespace false)
-// that resolves (imgpath.Resolve) to an attachable image. ok is false for
-// anything else — plain text, several words, a path to a non-image, or to
-// nothing on disk — in which case the paste is handled exactly as before.
-// startIndex continues "[Image #N]"'s numbering across more than one
-// pasted image in the same composed message.
+// shell-cleaned, is a single path that resolves (imgpath.Resolve) to an
+// attachable image. ok is false for anything else — plain text, several
+// words with no path shape, a path to a non-image, or to nothing on disk —
+// in which case the paste is handled exactly as before. startIndex
+// continues "[Image #N]"'s numbering across more than one pasted image in
+// the same composed message.
+//
+// A path with a raw, unescaped space is still accepted here as long as the
+// whole paste is anchored at "/" or "~" (CleanPathToken leaves a raw space
+// untouched, it only resolves backslash escapes, so the lookup below
+// already handles this once the content reaches it): Finder's "Copy as
+// Pathname" delivers a path exactly this way, with no backslash escaping
+// at all — unlike a terminal's own drag-and-drop, which does escape its
+// spaces — and it was rejected outright before this (qa/findings/20261004
+// T205021Z-image-path-paste-unescaped-not-attached.json). Unescaped
+// whitespace with no leading "/"/"~" is left as prose: a path embedded
+// in a sentence is ambiguous, and that case is ResolveEmbedded's (called
+// from handleSubmit on the typed/pasted line), which only matches a
+// backslash-escaped or single-word token.
 func pasteAsImage(content, cwd string, startIndex int) (string, msg.ImageContent, bool) {
 	trimmed := strings.TrimSpace(content)
-	if trimmed == "" || imgpath.HasUnescapedWhitespace(trimmed) {
+	if trimmed == "" {
+		return "", msg.ImageContent{}, false
+	}
+	if imgpath.HasUnescapedWhitespace(trimmed) && !strings.HasPrefix(trimmed, "/") && !strings.HasPrefix(trimmed, "~") {
 		return "", msg.ImageContent{}, false
 	}
 	v, ok := imgpath.Resolve(trimmed, cwd)

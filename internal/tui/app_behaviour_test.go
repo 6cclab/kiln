@@ -479,6 +479,69 @@ func TestPasteAsImage_WholePasteAttachesAndShowsPlaceholder(t *testing.T) {
 	}
 }
 
+// TestPasteAsImage_PlainSpacesAttaches is the companion regression test
+// for qa/findings/20261004T205021Z-image-path-paste-unescaped-not-
+// attached.json: a path pasted with plain, unescaped spaces — Finder's
+// "Copy as Pathname", which does no backslash escaping at all, unlike a
+// terminal's own drag-and-drop — must attach exactly like the
+// backslash-escaped form above, U+202F included.
+func TestPasteAsImage_PlainSpacesAttaches(t *testing.T) {
+	dir := t.TempDir()
+	narrow := " "
+	name := "Screenshot 2026-10-04 at 3.41.07" + narrow + "PM.png"
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("fake-png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ := newTestModelWithBridge(t)
+	m.cfg.Cwd = dir
+	m.editor.Focus()
+
+	next, _ := m.Update(tea.PasteMsg{Content: path})
+	nm := next.(Model)
+
+	if len(nm.pendingImages) != 1 {
+		t.Fatalf("pendingImages = %d, want 1 (plain-space path %q)", len(nm.pendingImages), path)
+	}
+	if nm.pendingImages[0].MimeType != "image/png" {
+		t.Errorf("MimeType = %q, want image/png", nm.pendingImages[0].MimeType)
+	}
+	if got := nm.editor.Value(); got != "[Image #1]" {
+		t.Errorf("editor.Value() = %q, want the placeholder, not the raw path", got)
+	}
+}
+
+// TestPasteAsImage_EmbeddedPlainSpacePathStaysAsText checks the path with
+// plain spaces is only attached when the *whole* paste is that one path:
+// the same path embedded in a sentence (ambiguous — where does the path
+// end and the prose resume?) is left exactly as typed, matching
+// ResolveEmbedded's own single-word/backslash-escaped-only rule for a
+// path found inside running text.
+func TestPasteAsImage_EmbeddedPlainSpacePathStaysAsText(t *testing.T) {
+	dir := t.TempDir()
+	name := "my photo.png"
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("fake-png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ := newTestModelWithBridge(t)
+	m.cfg.Cwd = dir
+	m.editor.Focus()
+
+	content := "look at " + path + " please"
+	next, _ := m.Update(tea.PasteMsg{Content: content})
+	nm := next.(Model)
+
+	if len(nm.pendingImages) != 0 {
+		t.Errorf("pendingImages = %d, want 0 (path embedded in a sentence is ambiguous)", len(nm.pendingImages))
+	}
+	if got := nm.editor.Value(); got != content {
+		t.Errorf("editor.Value() = %q, want the pasted text unchanged: %q", got, content)
+	}
+}
+
 // TestPasteAsImage_OrdinaryPasteUntouched checks the negative: ordinary
 // pasted text (or a path to something that is not an image, or does not
 // exist) is pasted exactly as before — the whole-paste image path is not

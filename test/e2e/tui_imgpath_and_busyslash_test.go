@@ -193,3 +193,47 @@ steps:
 		}
 	}
 }
+
+// TestTUI_PlainSpacePastedImagePathAttaches drives the bracketed-paste
+// path directly (tea.PasteMsg, not a typed/submitted line): a path with
+// plain, unescaped spaces — Finder's "Copy as Pathname", which does no
+// backslash escaping at all, unlike a terminal's own drag-and-drop —
+// pasted as the *whole* paste content must attach as an image, same as
+// the backslash-escaped form TestTUI_DraggedImagePath_FirstInPromptAttachesAsImage
+// covers. Before this fix the paste stayed as plain text
+// (qa/findings/20261004T205021Z-image-path-paste-unescaped-not-
+// attached.json).
+func TestTUI_PlainSpacePastedImagePathAttaches(t *testing.T) {
+	dir := t.TempDir()
+	narrow := " "
+	name := "Screenshot 2026-10-04 at 3.41.07" + narrow + "PM.png"
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, tinyPNG, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	proj, home, sessDir, addr, requests := tuiFixture(t, "model: faux-1\nsteps:\n  - text: \"got it\"\n")
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
+		"--permission-mode", "bypassPermissions",
+	)
+	defer s.Close()
+	waitReady(t, s)
+
+	s.Send("\x1b[200~" + path + "\x1b[201~")
+	if err := s.WaitFor("[Image #1]", 3*time.Second); err != nil {
+		t.Fatalf("plain-space path never attached as an image: %v\n%s", err, strings.Join(s.Rows(), "\n"))
+	}
+	s.SendKey("enter")
+	waitTurnSettled(t, s)
+
+	found := false
+	for _, msgs := range requests() {
+		if strings.Contains(string(msgs), `"type":"image"`) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("faux never received a request with an image content block")
+	}
+}

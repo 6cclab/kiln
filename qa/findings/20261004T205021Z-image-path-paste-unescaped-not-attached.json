@@ -1,0 +1,26 @@
+{
+ "id": "20261004T205021Z-image-path-paste-unescaped-not-attached",
+ "found_at": "2026-10-04T20:50:21Z",
+ "scenario": "manual-qa/input-ux",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Pasting an image path with plain (unescaped) spaces, e.g. Finder 'Copy as Pathname', does not attach the image; the model's own read then fails on U+202F in the directory name",
+ "observed": "kiln defect (parity). Fixture: a real PNG at …/shots/Screenshot 2026-10-04 at 3.41.07<U+202F>PM/Screenshot 2026-10-04 at 3.41.07<U+202F>PM.png. A bracketed paste of the path with plain spaces stayed as text (pasteAsImage in internal/tui/app.go rejects any paste with unescaped whitespace). On submit Opus called read with U+0020 in place of U+202F -> 'no such file or directory' (the read fallback internal/execenv/realpath.go amPmSpace '(?i) (AM|PM)\\.' only fixes the file name, not the directory, which matches Claude Code's FileReadTool limit). It recovered via ls/find and copying the file to the scratchpad (2 extra tool calls, one outside-workspace prompt). The same path pasted with backslash-escaped spaces (terminal drag-and-drop form) became '[Image #1]' and worked, U+202F included.",
+ "expected": "Claude Code's paste handler (src/utils/imagePaste.ts isImageFilePath/tryReadImageFromPath, src/hooks/usePasteHandler.ts) attaches a pasted image path read from the exact pasted bytes. kiln should also accept a single unescaped path (or a quoted one) that resolves to an existing image file.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1c (*paste-image*, *paste-submit*, *paste-read-history*, *paste-escaped2*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestPasteAsImage_PlainSpacesAttaches,TestTUI_PlainSpacePastedImagePathAttaches",
+  "updated_at": "2026-10-04T21:35:23Z"
+ }
+}
