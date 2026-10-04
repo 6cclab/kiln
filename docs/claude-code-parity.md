@@ -225,11 +225,23 @@ shows in the footer when it is not the default.
 | Mode | Behavior |
 |---|---|
 | `manual` | ask before every tool use |
-| `acceptEdits` | file edits auto-approved, other tools still prompt |
+| `acceptEdits` | file edits auto-approved, other tools still prompt; a write to a protected path (below) prompts |
 | `auto` | done: deny/ask rules and the workspace boundary first; reads, workspace edits and read-only bash run; everything else goes past a classifier model that sees user messages, earlier non-read-only tool calls and CLAUDE.md, never tool results. A block goes back to the model; 3 in a row or 20 in a session ask instead; a failed check asks. `autoMode` settings from user settings and `--settings` only (code.claude.com/docs/en/permission-modes, /auto-mode-config). Details: `configuration.md` "Auto mode classifier" |
 | `dontAsk` | never prompt: reads and allow-rule matches run, anything that would prompt is denied |
-| `bypassPermissions` | skip all checks |
+| `bypassPermissions` | skip all checks, protected paths included; deny rules and ask rules still apply |
 | `plan` | read-only; no edits or mutations, produce a plan |
+
+**Protected paths** (Claude Code's docs, permission-modes "Protected paths";
+kiln: `internal/claude/permission/protected.go`). A write to `.git/`,
+`.claude/` (not `.claude/worktrees`), `.vscode/`, `.idea/`, shell startup
+files, `.mcp.json`, `.claude.json` and the rest of Claude Code's list, plus
+kiln's `.kiln`, `.harness`, `.ssh` and login-autostart directories, is a
+safety check that runs after deny rules and before ask rules, allow rules
+and `acceptEdits`: `manual` and `acceptEdits` prompt, `dontAsk` and print
+mode refuse, `auto` classifies, `bypassPermissions` allows. It covers the
+file tools and every file a bash command is seen to write, compared without
+case, through symlinks and in the OS's own spelling. Done; details and the
+parts not mirrored are in `configuration.md` "Protected paths".
 
 Not every mode needs to ship in v1, but the **names must match** — muscle memory
 and `.claude/settings.json` files both depend on them. `plan` and `acceptEdits`
