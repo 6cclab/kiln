@@ -802,7 +802,21 @@ func (b *Bridge) Wire(started *agent.Started, toolOutputTokens int) func() {
 	// model resumes generating text) — kept separate from handleEvent so
 	// this label-only concern does not entangle with the tool-call/commit
 	// logic handleEvent owns.
-	unsubLabel := events.OnAll(func(ev harness.Event) {
+	unsubLabel := events.OnAll(b.labelHandler())
+	return func() {
+		unsub()
+		unsubLabel()
+	}
+}
+
+// labelHandler returns the busy-line label subscription Wire installs:
+// "Running <tool>" while a tool runs, and a compaction's progress,
+// including that it is retrying.
+func (b *Bridge) labelHandler() func(harness.Event) {
+	// retry is the note a compaction retry adds to every progress label
+	// until the compaction ends, so the row keeps saying it is a retry.
+	retry := ""
+	return func(ev harness.Event) {
 		switch ev.Type {
 		case harness.EventToolStart:
 			b.Send(MsgSpinnerLabel{Text: busyLabelForToolStart(b.ts, ev)})
@@ -813,16 +827,17 @@ func (b *Bridge) Wire(started *agent.Started, toolOutputTokens int) func() {
 		case harness.EventMessageEnd:
 			b.Send(MsgSpinnerReset{})
 		case harness.EventCompactionStart:
+			retry = ""
 			b.Send(MsgCompaction{Label: compactionLabel("", 0, 0, 0, 0)})
 		case harness.EventCompactionProgress:
-			b.Send(MsgCompaction{Label: compactionLabel(ev.CompactionModel, ev.CompactionPart, ev.CompactionParts, ev.CompactionPromptTokens, ev.CompactionOutputTokens)})
+			b.Send(MsgCompaction{Label: compactionLabel(ev.CompactionModel, ev.CompactionPart, ev.CompactionParts, ev.CompactionPromptTokens, ev.CompactionOutputTokens) + retry})
+		case harness.EventCompactionRetry:
+			retry = fmt.Sprintf(" · retry %d of %d", ev.Attempt, ev.MaxAttempts)
+			b.Send(MsgCompaction{Label: compactionRetryLabel(ev.CompactionPart, ev.RetryError)})
 		case harness.EventCompactionEnd:
+			retry = ""
 			b.Send(MsgCompaction{Done: true})
 		}
-	})
-	return func() {
-		unsub()
-		unsubLabel()
 	}
 }
 

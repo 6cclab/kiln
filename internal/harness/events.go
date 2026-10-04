@@ -36,6 +36,11 @@ const (
 	// EventCompactionProgress reports a running compaction's part and
 	// streamed output (kiln's own; pi has no equivalent).
 	EventCompactionProgress EventType = "compaction_progress"
+	// EventCompactionRetry reports that a compaction request failed for a
+	// transient reason and is being sent again (kiln's own): Attempt is
+	// the attempt starting, RetryError the reason in plain words, Err the
+	// error itself.
+	EventCompactionRetry EventType = "compaction_retry"
 
 	EventNavigationStart EventType = "navigation_start"
 	EventNavigationEnd   EventType = "navigation_end"

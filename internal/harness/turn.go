@@ -172,6 +172,9 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	// because a request did not fit; it does not loop on it (pi's
 	// overflowRecoveryUsed).
 	overflowRecoveryUsed := false
+	// compactErr is an automatic compaction's failure, held until the
+	// next request is built (see fitRequest below).
+	var compactErr error
 	for {
 		if err := ctx.Err(); err != nil {
 			return l.finishAborted(operationID, tip)
@@ -211,7 +214,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		// turns end in text never compacted however full it got.
 		if compactFirst {
 			compactFirst = false
-			tip = l.autoCompact(ctx, tip)
+			tip, compactErr = l.autoCompact(ctx, tip)
 		}
 
 		_, cfg, err := l.resolveModel()
@@ -224,12 +227,22 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		// fitRequest compacts once if it does not fit and refuses to send
 		// one that still does not.
 		var transcript []msg.Message
+		beforeFit := tip
 		tip, transcript, err = l.fitRequest(ctx, tip, &overflowRecoveryUsed)
 		if err != nil {
 			if ctx.Err() != nil {
 				return l.finishAborted(operationID, tip)
 			}
 			return l.finishFailed(operationID, tip, err)
+		}
+		// A failed automatic compaction is reported only if nothing made
+		// up for it: when fitRequest compacted the conversation to fit,
+		// the turn recovered and an error block would only mislead.
+		if compactErr != nil {
+			if tip == beforeFit {
+				l.h.events.Emit(Event{Type: EventFault, Lane: l.name, OperationID: operationID, Err: compactErr})
+			}
+			compactErr = nil
 		}
 
 		laneStateNow, _ := l.laneState()
@@ -375,7 +388,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 			i = j
 		}
 		l.h.events.Emit(Event{Type: EventTurnEnd, Lane: l.name, OperationID: operationID})
-		tip = l.autoCompact(ctx, tip)
+		tip, compactErr = l.autoCompact(ctx, tip)
 		// loop back for the next assistant turn.
 	}
 }

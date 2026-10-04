@@ -1820,6 +1820,9 @@ func logHarnessEvents(h *harness.Harness) {
 		return []any{"trigger", ev.CompactionTrigger, "model", ev.CompactionModel}
 	})
 	on(harness.EventCompactionEnd, func(ev harness.Event) []any { return []any{"err", ev.Err} })
+	on(harness.EventCompactionRetry, func(ev harness.Event) []any {
+		return []any{"trigger", ev.CompactionTrigger, "part", ev.CompactionPart, "attempt", ev.Attempt, "err", ev.Err}
+	})
 	// One line per summary request as it is sent, not per streamed token.
 	h.Events().On(harness.EventCompactionProgress, func(ev harness.Event) {
 		if ev.CompactionOutputTokens == 0 {
