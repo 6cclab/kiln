@@ -30,6 +30,16 @@ func TestMatchesRuleMCPServerExact(t *testing.T) {
 		{"Edit", "mcp__fs__edit", false},
 		{"mcp__", "mcp__x__y", false},
 		{"mcp__a_b__c(x)", "mcp__ab__c", false},
+		// Case-sensitive, as Claude Code compares MCP names.
+		{"mcp__Homelab", "mcp__homelab__list", false},
+		{"mcp__homelab", "mcp__Homelab__list", false},
+		{"MCP__homelab", "mcp__homelab__list", false},
+		{"mcp__homelab__List", "mcp__homelab__list", false},
+		{"mcp__Homelab__list", "mcp__Homelab__list", true},
+		{"mcp__homelab__List(x)", "mcp__homelab__list", false},
+		// Not exact for a server name holding "__", as in Claude Code: the
+		// name splits at its first "__".
+		{"mcp__a", "mcp__a__b__c", true},
 	}
 	for _, c := range cases {
 		if got := MatchesRule(c.rule, c.tool, ""); got != c.want {

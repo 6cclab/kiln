@@ -387,9 +387,9 @@ var regexMeta = regexp.MustCompile(`[.*+?^${}()|[\]\\]`)
 // Shapes:
 //
 //	Read             whole tool, by name
-//	mcp__homelab     every tool of that MCP server, and no other server
+//	mcp__homelab     every tool of server homelab, and no other server
 //	mcp__homelab__*  the same
-//	mcp__homelab__x  that one MCP tool
+//	mcp__homelab__x  that one MCP tool (MCP names match case-sensitively)
 //	Bash(find:*)     colon form: commands beginning with `find`
 //	Bash(git *)      glob form, as documented by `claude --help`
 //	Read(src/**)     a Read/Edit path rule, gitignore-style (pathrules.go)
@@ -398,22 +398,24 @@ var regexMeta = regexp.MustCompile(`[.*+?^${}()|[\]\\]`)
 // rule every read tool, as in Claude Code. For the non-path shapes only `*`
 // is a wildcard; every other regex metacharacter is escaped.
 // Matching is case-insensitive because Claude Code writes Read/Bash/Edit
-// while pi's tools are read/bash/edit.
+// while pi's tools are read/bash/edit; MCP names, which both write the
+// same way, match case-sensitively, as in Claude Code.
 func MatchesRule(rule, toolName, primaryArg string) bool {
 	tool := strings.ToLower(toolName)
 
 	m := parenRule.FindStringSubmatch(rule)
 	if m == nil {
-		bare := strings.ToLower(strings.TrimSpace(rule))
-		if strings.HasPrefix(bare, "mcp__") || strings.HasPrefix(tool, "mcp__") {
-			return mcpRuleMatches(bare, tool)
+		if raw := strings.TrimSpace(rule); strings.HasPrefix(raw, "mcp__") || strings.HasPrefix(toolName, "mcp__") {
+			return mcpRuleMatches(raw, toolName)
 		}
+		bare := strings.ToLower(strings.TrimSpace(rule))
 		return sameTool(bare, tool) || bareFamilyMatches(bare, tool)
 	}
-	if name := strings.ToLower(strings.TrimSpace(m[1])); strings.HasPrefix(name, "mcp__") || strings.HasPrefix(tool, "mcp__") {
-		// An MCP tool's name is compared whole: sameTool's underscore
-		// folding would make mcp__a_b__c and mcp__ab__c one tool.
-		if name != tool {
+	if name := strings.TrimSpace(m[1]); strings.HasPrefix(name, "mcp__") || strings.HasPrefix(toolName, "mcp__") {
+		// An MCP tool's name is compared as written, case included:
+		// sameTool's underscore and case folding would make mcp__a_b__c
+		// and mcp__ab__c, or mcp__Srv__x and mcp__srv__x, one tool.
+		if name != toolName {
 			return false
 		}
 	}
@@ -480,11 +482,12 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 
 // mcpRuleMatches matches a bare rule against a tool when either is an MCP
 // name ("mcp__server" or "mcp__server__tool"), as Claude Code's
-// toolMatchesRule does: the whole name, or a rule naming only the server
-// (or the server and "*") and the tool's server being exactly that one. A
-// rule is never a string prefix: "mcp__homelab" says nothing about server
-// "homelab-kb". Both arguments are lower-cased already. As in Claude Code,
-// a server name holding "__" splits at the first one.
+// toolMatchesRule does: the same name, or a rule naming only the server
+// (or the server and "*") and the tool's server parsing as the same one,
+// case-sensitively. A rule is never a string prefix: "mcp__homelab" says
+// nothing about server "homelab-kb". The split is not exact for a server
+// name holding "__": as in Claude Code, a name splits at its first "__",
+// so "mcp__a" also covers the tools of a server named "a__b".
 func mcpRuleMatches(rule, tool string) bool {
 	if rule == tool {
 		return true
