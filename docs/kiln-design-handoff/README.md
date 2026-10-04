@@ -40,6 +40,7 @@ The HTML version is rendered in a browser, so values are given in px. Convert th
 5. **Status line** (12px ≈ same row, dim `#a39781`), laid out left to right:
    - mode, e.g. `● auto-edit  ⇧⇥`
    - `~/src/relay-api · main*`
+   - the active model, e.g. `kiln-large`, in ink `#ece4d4`
    - flexible spacer
    - `ctx ` + 10-cell meter + ` 38%`
    - `$0.42`

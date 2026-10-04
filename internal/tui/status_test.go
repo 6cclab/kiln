@@ -273,3 +273,86 @@ func TestMeterFilled(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderStatusLine_ShowsModelAfterLocation: the design's status line
+// names the active model, in ink, right after cwd · branch and before the
+// spacer that pushes ctx and cost to the right edge.
+func TestRenderStatusLine_ShowsModelAfterLocation(t *testing.T) {
+	s := baseState()
+	s.Git = &GitStatus{Branch: "main", Dirty: true}
+	out := stripANSI(RenderStatusLine(s, 120))
+	loc := strings.Index(out, "~/src/relay-api · main*")
+	model := strings.Index(out, "ollama/qwen3.8")
+	ctx := strings.Index(out, "ctx ")
+	if loc < 0 || model < 0 || ctx < 0 {
+		t.Fatalf("missing segment in %q", out)
+	}
+	if !(loc < model && model < ctx) {
+		t.Errorf("want location, then model, then ctx; got %q", out)
+	}
+	if !strings.Contains(RenderStatusLine(s, 120), Ink("ollama/qwen3.8")) {
+		t.Error("model is not styled with the Ink token")
+	}
+}
+
+// TestRenderStatusLine_ModelFollowsSwitch: the label is the footer state's,
+// so a /model switch (MsgModelInfo → StatusPatch.ModelLabel) shows the new
+// model, not the one the session started on.
+func TestRenderStatusLine_ModelFollowsSwitch(t *testing.T) {
+	f := NewFooterState(baseState())
+	label := "anthropic/claude-opus-4-8"
+	f.Apply(StatusPatch{ModelLabel: &label})
+	out := stripANSI(RenderStatusLine(f.State(), 120))
+	if !strings.Contains(out, label) || strings.Contains(out, "qwen") {
+		t.Errorf("status line after switch = %q, want %s and no qwen", out, label)
+	}
+}
+
+// TestRenderStatusLine_ModelDropOrder: as the row narrows, cost goes
+// first (the model stays), then the model; cost may come back beside the
+// location once the model no longer fits, and the location goes last. The
+// row never overflows.
+func TestRenderStatusLine_ModelDropOrder(t *testing.T) {
+	s := baseState()
+	s.Cwd = "~/src/a-rather-long/project/path/relay-api"
+	s.Git = &GitStatus{Branch: "main"}
+	s.Cost = 1.23
+	s.ContextUsed = intPtr(1000)
+	modelGone, sawModelNoCost := false, false
+	for w := 140; w >= 20; w-- {
+		out := stripANSI(RenderStatusLine(s, w))
+		if VisibleWidth(out) > w {
+			t.Fatalf("width %d: overflowed: %q", w, out)
+		}
+		hasModel := strings.Contains(out, "ollama/qwen3.8")
+		hasCost := strings.Contains(out, "$1.23")
+		hasLoc := strings.Contains(out, "main")
+		if hasModel && modelGone {
+			t.Fatalf("width %d: the model came back after it dropped: %q", w, out)
+		}
+		if !hasModel {
+			modelGone = true
+		}
+		if hasCost && !hasModel && !sawModelNoCost {
+			t.Fatalf("width %d: the model dropped before cost did: %q", w, out)
+		}
+		if hasModel && !hasLoc {
+			t.Fatalf("width %d: location dropped while the model is still shown: %q", w, out)
+		}
+		sawModelNoCost = sawModelNoCost || (hasModel && !hasCost && hasLoc)
+	}
+	if !sawModelNoCost || !modelGone {
+		t.Errorf("drop stages not all reached: model-without-cost=%v model-dropped=%v", sawModelNoCost, modelGone)
+	}
+}
+
+// TestRenderStatusLine_NoModelLabel: an empty label adds nothing (no
+// stray separator).
+func TestRenderStatusLine_NoModelLabel(t *testing.T) {
+	s := baseState()
+	s.ModelLabel = ""
+	with := baseState()
+	if a, b := stripANSI(RenderStatusLine(s, 120)), stripANSI(RenderStatusLine(with, 120)); a == b || strings.Contains(a, "qwen") {
+		t.Errorf("empty label rendered %q", a)
+	}
+}
