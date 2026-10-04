@@ -357,6 +357,7 @@ func buildAnthropicRequest(model provider.Model, transcript []msg.Message, opts 
 		req.Temperature = opts.Temperature
 	}
 
+	applyRequestedCacheBreaks(&req, cc)
 	return req
 }
 
@@ -391,6 +392,59 @@ func markConversationCache(messages []anthropicWireMessage, cc *cacheControl) {
 	}
 }
 
+// requestedCacheBreak marks a block whose msg.TextContent asked for a
+// breakpoint (CacheBreak) until applyRequestedCacheBreaks resolves it.
+var requestedCacheBreak = &cacheControl{Type: "ephemeral"}
+
+// maxCacheBreakpoints is the API's limit on cache_control blocks.
+const maxCacheBreakpoints = 4
+
+// applyRequestedCacheBreaks turns the breakpoints blocks asked for into
+// real ones while the request stays within the API's four, newest first,
+// after the ones kiln always places (tools, system, the conversation's
+// tail). A breakpoint inside a request's stable prefix lets the next
+// request, whose prefix extends it, read it from the cache: the API looks
+// for earlier cache entries at block boundaries up to 20 blocks back.
+func applyRequestedCacheBreaks(req *anthropicRequest, cc *cacheControl) {
+	used := 0
+	for _, b := range req.System {
+		if b.CacheCtrl != nil {
+			used++
+		}
+	}
+	for _, t := range req.Tools {
+		if t.CacheCtrl != nil {
+			used++
+		}
+	}
+	for _, m := range req.Messages {
+		if blocks, ok := m.Content.([]anthropicContentBlock); ok {
+			for _, b := range blocks {
+				if b.CacheCtrl != nil && b.CacheCtrl != requestedCacheBreak {
+					used++
+				}
+			}
+		}
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		blocks, ok := req.Messages[i].Content.([]anthropicContentBlock)
+		if !ok {
+			continue
+		}
+		for j := len(blocks) - 1; j >= 0; j-- {
+			if blocks[j].CacheCtrl != requestedCacheBreak {
+				continue
+			}
+			if used < maxCacheBreakpoints {
+				blocks[j].CacheCtrl = cc
+				used++
+			} else {
+				blocks[j].CacheCtrl = nil
+			}
+		}
+	}
+}
+
 func boolDefault(b *bool, def bool) bool {
 	if b == nil {
 		return def
@@ -403,7 +457,11 @@ func convertBlocksToAnthropic(blocks msg.Blocks) []anthropicContentBlock {
 	for _, b := range blocks {
 		switch c := b.(type) {
 		case msg.TextContent:
-			out = append(out, anthropicContentBlock{Type: "text", Text: c.Text})
+			block := anthropicContentBlock{Type: "text", Text: c.Text}
+			if c.CacheBreak {
+				block.CacheCtrl = requestedCacheBreak
+			}
+			out = append(out, block)
 		case msg.ImageContent:
 			out = append(out, anthropicContentBlock{Type: "image", Source: &anthropicImage{Type: "base64", MediaType: c.MimeType, Data: c.Data}})
 		case msg.ThinkingContent:

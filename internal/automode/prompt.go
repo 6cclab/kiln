@@ -96,6 +96,19 @@ or
 // userPrompt is the request body: memory, transcript and action, each in
 // its own tag, every value JSON-encoded so none can close a tag.
 func userPrompt(memory string, workspace, transcript []string, action string) string {
+	parts, _ := userParts(memory, workspace, transcript, action)
+	return strings.Join(parts, "")
+}
+
+// userParts is userPrompt split into the blocks the request sends: the
+// opening (workspace, memory, the transcript tag), one block per transcript
+// line, and the closing (the action and the question). cacheAt is the
+// block that ends the transcript, where the request asks for a cache
+// breakpoint: everything up to it is the same in the next call, which only
+// appends lines, so that call reads it from the prompt cache and writes
+// only what is new. The action, which changes every call, comes after it.
+// One block per line, because the cache is matched at block boundaries.
+func userParts(memory string, workspace, transcript []string, action string) (parts []string, cacheAt int) {
 	var b strings.Builder
 	if len(workspace) > 0 {
 		enc, _ := json.Marshal(map[string][]string{"directories": workspace})
@@ -110,14 +123,13 @@ func userPrompt(memory string, workspace, transcript []string, action string) st
 		b.WriteString("\n</user_configuration>\n\n")
 	}
 	b.WriteString("<transcript>\n")
+	parts = append(parts, b.String())
 	for _, l := range transcript {
-		b.WriteString(l)
-		b.WriteByte('\n')
+		parts = append(parts, l+"\n")
 	}
-	b.WriteString("</transcript>\n\n<action>\n")
-	b.WriteString(action)
-	b.WriteString("\n</action>\n\nShould this action run? Answer with the JSON object only.")
-	return b.String()
+	cacheAt = len(parts) - 1
+	parts = append(parts, "</transcript>\n\n<action>\n"+action+"\n</action>\n\nShould this action run? Answer with the JSON object only.")
+	return parts, cacheAt
 }
 
 // actionLine is the action under review: a tool call, marked when its path

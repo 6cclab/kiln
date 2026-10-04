@@ -54,6 +54,11 @@ type TextContent struct {
 	Text          string `json:"text"`
 	TextSignature string `json:"textSignature,omitempty"`
 	Type          string `json:"type"`
+	// CacheBreak asks a provider with explicit prompt caching (Anthropic)
+	// for a cache breakpoint after this block, when one is left under the
+	// API's limit. kiln's own, for one-off requests built from a stable,
+	// growing prefix (auto mode's classifier transcript); never stored.
+	CacheBreak bool `json:"-"`
 }
 
 // ThinkingContent is a reasoning block.

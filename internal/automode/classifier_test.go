@@ -363,7 +363,13 @@ func TestClassify_SendsTheBuiltRequest(t *testing.T) {
 		t.Errorf("verdict = %+v", v)
 	}
 	system, userText, _ := c.Request(req)
-	if s.got.opts.SystemPrompt != system || len(s.got.transcript) != 1 || msg.TextOf(s.got.transcript[0].(msg.UserMessage).Content) != userText {
+	sent := ""
+	if len(s.got.transcript) == 1 {
+		for _, b := range s.got.transcript[0].(msg.UserMessage).Content {
+			sent += b.(msg.TextContent).Text
+		}
+	}
+	if s.got.opts.SystemPrompt != system || len(s.got.transcript) != 1 || sent != userText {
 		t.Error("the streamer was not sent the request Request builds")
 	}
 	if s.got.opts.MaxTokens != maxAnswerTokens || len(s.got.opts.Tools) != 0 {
