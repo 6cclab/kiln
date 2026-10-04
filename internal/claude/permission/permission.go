@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/settings"
@@ -236,6 +237,10 @@ type Gate struct {
 	// sandbox is the session's OS sandbox (SetSandbox, sandbox.go); nil
 	// when none is configured.
 	sandbox SandboxPolicy
+	// settingsFiles are the folded spellings of the settings files this
+	// session reads (ProtectSettingsFiles, protected.go); nil before it is
+	// called.
+	settingsFiles atomic.Pointer[map[string]bool]
 }
 
 // NewGate builds a Gate. Roots are resolved to absolute paths and

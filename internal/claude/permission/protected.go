@@ -62,6 +62,55 @@ var autoModeOnlyFiles = map[string]bool{
 	"claude.md": true, "claude.local.md": true,
 }
 
+// ProtectSettingsFiles adds the settings files this session reads (and
+// reloads when they change: settings.SettingsFiles, --settings included)
+// to the protected paths, each as named and as it resolves through
+// symlinks. A write to one would rewrite the permission rules mid-session,
+// so it needs the user's approval like any .claude settings file, wherever
+// the file lives: a --settings file inside the workspace, or the target of
+// a ~/.claude/settings.json symlink into a dotfiles repository. Claude
+// Code protects every settings source's path, the --settings file
+// included; kiln also protects where each one really is, which Claude
+// Code's check (it resolves the written path, not the settings file) does
+// not.
+func (g *Gate) ProtectSettingsFiles(files []string) {
+	set := map[string]bool{}
+	for _, f := range files {
+		if f == "" {
+			continue
+		}
+		abs, err := filepath.Abs(f)
+		if err != nil {
+			continue
+		}
+		set[foldPath(abs)] = true
+		if real, ok := execenv.RealPath(abs); ok {
+			set[foldPath(real)] = true
+		}
+		set[foldPath(execenv.CanonicalPath(abs))] = true
+	}
+	g.settingsFiles.Store(&set)
+}
+
+// settingsFile reports a spelling of one of ProtectSettingsFiles' files.
+func (g *Gate) settingsFile(spellings ...string) bool {
+	set := g.settingsFiles.Load()
+	if set == nil {
+		return false
+	}
+	for _, s := range spellings {
+		if (*set)[foldPath(s)] {
+			return true
+		}
+	}
+	return false
+}
+
+// foldPath is a whole path folded as fold folds one component.
+func foldPath(p string) string {
+	return fold(filepath.Clean(p))
+}
+
 // protection is how a write's path reaches a protected location.
 type protection int
 
@@ -92,14 +141,15 @@ func (g *Gate) pathProtection(path string, auto bool) protection {
 		base = g.roots[0]
 	}
 	full := execenv.ResolveToolPath(base, path)
-	if protectedSpelling(full, auto) {
+	if protectedSpelling(full, auto) || g.settingsFile(full) {
 		return protectedAsWritten
 	}
 	real, ok := execenv.RealPath(full)
 	if !ok {
 		return protectedResolved // unresolvable: do not wave it through
 	}
-	if protectedSpelling(real, auto) || protectedSpelling(execenv.CanonicalPath(full), auto) {
+	canonical := execenv.CanonicalPath(full)
+	if protectedSpelling(real, auto) || protectedSpelling(canonical, auto) || g.settingsFile(real, canonical) {
 		return protectedResolved
 	}
 	return unprotected

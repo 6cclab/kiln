@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -25,7 +26,11 @@ import (
 // return is that refusal.
 //
 // It returns nil when sandboxing is off. The caller closes the manager.
-func startSandbox(cwd string, s claudesettings.Settings, perms claudesettings.Permissions, gate *permission.Gate, env *execenv.Env, warn func(string)) (*sandbox.Manager, error) {
+//
+// settingsFiles are the settings files the session reads and reloads
+// (claudesettings.SettingsFiles): no sandboxed command may write one, as
+// named or where it resolves to (protectSettingsFiles).
+func startSandbox(cwd string, s claudesettings.Settings, perms claudesettings.Permissions, settingsFiles []string, gate *permission.Gate, env *execenv.Env, warn func(string)) (*sandbox.Manager, error) {
 	for _, w := range s.SandboxWarnings {
 		warn(w)
 	}
@@ -36,6 +41,7 @@ func startSandbox(cwd string, s claudesettings.Settings, perms claudesettings.Pe
 		warn(w)
 	}
 	cfg := sandbox.FromSettings(s, perms, cwd)
+	cfg.DenyWrite = append(cfg.DenyWrite, protectSettingsFiles(settingsFiles)...)
 	m := sandbox.New(cfg, sandboxOptions(sandbox.Options{Cwd: cwd, Roots: gate.Roots}))
 	if err := m.Unavailable(); err != nil {
 		if cfg.FailIfUnavailable {
@@ -49,6 +55,33 @@ func startSandbox(cwd string, s claudesettings.Settings, perms claudesettings.Pe
 	setGitSandbox(m.Always())
 	m.SetNetworkDecider(gate.ApproveNetwork, gate.SaveNetworkRule)
 	return m, nil
+}
+
+// protectSettingsFiles is the sandbox's write-deny entries for the
+// settings files: each as named and, when it resolves elsewhere through
+// symlinks (a ~/.claude/settings.json linked into a dotfiles repository),
+// where it really is. The sandbox's own list names only .claude settings
+// files, which misses a --settings file and a link target.
+func protectSettingsFiles(files []string) []sandbox.Rule {
+	var out []sandbox.Rule
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, sandbox.Rule{Path: p})
+		}
+	}
+	for _, f := range files {
+		abs, err := filepath.Abs(f)
+		if err != nil {
+			continue
+		}
+		add(abs)
+		if real, ok := execenv.RealPath(abs); ok {
+			add(real)
+		}
+	}
+	return out
 }
 
 // sandboxOptions lets a test stand in for the platform (an unsupported
