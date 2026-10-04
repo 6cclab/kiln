@@ -133,6 +133,25 @@ func transcriptLines(userHistory, history []msg.Message, delegated bool, skipCal
 	return lines
 }
 
+// typedLines are the lines the user typed, whole (unclipped): the root
+// session's (userHistory) and, outside a subagent, history's own. A
+// subagent's user messages are its delegated task, never counted.
+func typedLines(userHistory, history []msg.Message, delegated bool) []string {
+	var out []string
+	add := func(ms []msg.Message) {
+		for _, m := range ms {
+			if u, ok := asUser(m); ok && strings.TrimSpace(u.KilnTyped) != "" {
+				out = append(out, u.KilnTyped)
+			}
+		}
+	}
+	add(userHistory)
+	if !delegated {
+		add(history)
+	}
+	return out
+}
+
 func asUser(m msg.Message) (msg.UserMessage, bool) {
 	switch u := m.(type) {
 	case msg.UserMessage:

@@ -245,8 +245,19 @@ func (g *Gate) classifyAuto(ctx context.Context, req Request) (*BlockResult, Out
 }
 
 // AutoBlockMessage is the tool result the model gets for a classifier
-// block: the reason, and what to do instead of working around it.
+// block: the reason, and what to do instead of working around it. It says
+// how approval works, because a model told only "ask the user to approve
+// it" went on to tell the user that no approval could lift the block. The
+// user's approval counts when it is a message they type (the classifier
+// sees only typed lines, transcript.go), not an answer to a question tool;
+// three blocks in a row also hand the call to the user as a prompt.
 func AutoBlockMessage(reason string) string {
-	return "auto mode blocked this action: " + reason +
-		". Do not try to reach the same result another way. If it is needed, explain why and ask the user to approve it or run it themselves."
+	reason = strings.TrimRight(strings.TrimSpace(reason), ". ")
+	if reason == "" {
+		reason = "no reason given"
+	}
+	return "auto mode blocked this action: " + reason + ". " +
+		"Do not try to reach the same result another way, and do not tell the user it cannot be done: this is not a hard limit, the user can approve it. " +
+		"If it is needed, explain why and ask the user in your reply, not with a question tool. " +
+		"If they answer in a message of their own that names this exact action, run it again as it is; they can also run it themselves with a ! command."
 }
