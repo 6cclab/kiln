@@ -66,9 +66,11 @@ before, it asks:
 
 Choose "No, exit" or "Yes, I trust this folder" (Enter confirms, Esc declines).
 Trusting a directory also trusts everything under it, so trusting a repo root
-covers its worktrees. Until you answer, no hook runs and the project's allow
-rules wait; "Yes" applies them without a restart (`docs/configuration.md`,
-Trust). Recorded in `~/.harness/trusted.json`; set
+covers its worktrees. Until you answer, no hook, MCP server or git command
+that reads the repository's config runs, and the project's allow rules wait;
+"Yes" starts and applies them without a restart (`docs/configuration.md`,
+Trust). A `-p` run never asks: it runs the project's hooks, so in a repository
+you did not write pass `--setting-sources user`. Recorded in `~/.harness/trusted.json`; set
 `HARNESS_TRUST_ALL=1` to skip the prompt entirely. Source: `internal/tui/dialog_trust.go`, `internal/claude/trust/trust.go`.
 
 ## 2. The screen
