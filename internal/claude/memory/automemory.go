@@ -3,14 +3,13 @@ package memory
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
+
+	"github.com/andrepato/harness/internal/gitfiles"
 )
 
 // AutoMemoryMaxLines and AutoMemoryMaxBytes are Claude Code's own read
@@ -173,32 +172,20 @@ func unsafeAutoMemoryDirectory(dir string) bool {
 // projectRoot is the git repository's root, or cwd itself when cwd is not
 // inside a git repository.
 //
-// Resolved via `git rev-parse --git-common-dir`, not `--show-toplevel`:
-// show-toplevel returns a worktree's own directory, which differs per
-// worktree, while git-common-dir is the one shared `.git` directory every
-// worktree of a repository points at (the main checkout's `.git`, or a
-// linked worktree's `.git/worktrees/<name>`'s own `commondir` pointing back
-// to it — `git rev-parse` resolves that for us). Its parent is the main
-// working tree's root, which is what this function returns, so every
-// worktree and subdirectory of the same repository resolves to the same
-// auto-memory directory, matching Claude Code's documented behaviour.
+// It is the parent of the repository's common directory (what git
+// rev-parse --git-common-dir names), not the work tree's own top: the
+// common directory is the one .git every worktree of a repository shares,
+// so every worktree and subdirectory of the same repository resolves to
+// the same auto-memory directory, matching Claude Code's documented
+// behaviour. Read from .git's files (internal/gitfiles), never by running
+// git: this runs at startup, before the folder is trusted, and git would
+// read the repository's config, which can name programs it runs.
 func projectRoot(cwd string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-common-dir")
-	cmd.Dir = cwd
-	out, err := cmd.Output()
-	if err != nil {
+	repo, ok := gitfiles.Find(cwd)
+	if !ok {
 		return resolveSymlinks(cwd)
 	}
-	gitDir := strings.TrimSpace(string(out))
-	if gitDir == "" {
-		return resolveSymlinks(cwd)
-	}
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(cwd, gitDir)
-	}
-	return resolveSymlinks(filepath.Dir(gitDir))
+	return resolveSymlinks(filepath.Dir(repo.CommonDir))
 }
 
 // resolveSymlinks is EvalSymlinks with a best-effort fallback, matching

@@ -48,6 +48,7 @@ import (
 	"github.com/andrepato/harness/internal/compaction"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/gitfiles"
 	"github.com/andrepato/harness/internal/harness"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
@@ -1965,14 +1966,16 @@ func authKindLabel(ctx context.Context, reg *provider.Registry, providerID strin
 // project elsewhere, and hit the outside-workspace prompt). Built once per
 // session, so it never invalidates the prompt cache mid-session.
 func environmentPrompt(ctx context.Context, cwd string, now time.Time) string {
+	// Read from .git's files: this is built at startup, before the folder
+	// is trusted, and git would read the repository's config.
 	repo := "no"
-	if st, ok := readGitStatusAt(ctx, cwd); ok {
+	if r, ok := gitfiles.Find(cwd); ok {
 		repo = "yes"
-		if st.Branch != "" {
-			repo += " (branch " + st.Branch + ")"
+		if branch, born, ok := r.Branch(); ok && !born {
+			repo = "yes (no commits yet)"
+		} else if ok && branch != "" {
+			repo += " (branch " + branch + ")"
 		}
-	} else if out, err := runGit(ctx, cwd, "rev-parse", "--is-inside-work-tree"); err == nil && strings.TrimSpace(out) == "true" {
-		repo = "yes (no commits yet)"
 	}
 	return fmt.Sprintf("<env>\nWorking directory: %s\nIs a git repository: %s\nPlatform: %s/%s\nToday's date: %s\n</env>",
 		cwd, repo, runtime.GOOS, runtime.GOARCH, now.Format("2006-01-02"))

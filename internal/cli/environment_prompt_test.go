@@ -39,4 +39,10 @@ func TestEnvironmentPrompt(t *testing.T) {
 	if got := environmentPrompt(context.Background(), repo, now); !strings.Contains(got, "Is a git repository: yes (branch main)") {
 		t.Errorf("repo with a commit:\n%s", got)
 	}
+	// Built before the folder is trusted, it reads .git's files and runs no
+	// program: with nothing on PATH it still knows the repository.
+	t.Setenv("PATH", "")
+	if got := environmentPrompt(context.Background(), repo, now); !strings.Contains(got, "Is a git repository: yes (branch main)") {
+		t.Errorf("repo, no programs on PATH:\n%s", got)
+	}
 }

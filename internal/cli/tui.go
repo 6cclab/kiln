@@ -290,12 +290,30 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	// dialog-trust.txt): the harness reads the project's .claude settings
 	// and hooks, so an untrusted folder is asked about before the first
 	// prompt. HARNESS_TRUST_ALL=1 skips the dialog (tests, automation).
+	//
+	// afterTrust runs what must wait for the folder to be trusted: it runs
+	// the repository's git config or starts processes in the folder.
+	// Registered before program.Run(), run once on the TUI's goroutine
+	// when the dialog is accepted, or at once in a trusted folder.
+	var afterTrust []func()
+	whenTrusted := func(fn func()) {
+		if cfg.NeedsTrust {
+			afterTrust = append(afterTrust, fn)
+			return
+		}
+		fn()
+	}
 	if store, err := trust.NewStore(); err == nil && os.Getenv("HARNESS_TRUST_ALL") != "1" && !store.IsTrusted(deps.Cwd) {
 		cfg.NeedsTrust = true
 		cfg.OnTrust = func(trusted bool) {
 			if !trusted {
 				return
 			}
+			defer func() {
+				for _, fn := range afterTrust {
+					fn()
+				}
+			}()
 			if err := store.Trust(deps.Cwd); err != nil {
 				diag.L().Warn("trust store", "err", err)
 			}
@@ -308,9 +326,6 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 						bridge.Send(tui.MsgStartupContext{Lines: lines})
 					}
 				}()
-			}
-			if deps.ConnectPendingMCP != nil && deps.PendingMCPCount > 0 {
-				go connectInBackground(bridge, deps.PendingMCPCount, deps.ConnectPendingMCP)
 			}
 		}
 	}
@@ -354,8 +369,26 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	if deps.Debug && deps.LogPath != "" {
 		bridge.Commit([]string{tui.Muted("  debug log: " + deps.LogPath)})
 	}
-	if deps.ConnectMCP != nil && deps.MCPServerCount > 0 {
-		go connectInBackground(bridge, deps.MCPServerCount, deps.ConnectMCP)
+	// Every MCP server waits for trust, as in Claude Code, where none
+	// connects before its trust dialog is accepted: a stdio server starts
+	// in this folder (a user's `python3 -m tool` would import the
+	// folder's tool.py), and a plugin's server may be one the project
+	// enabled.
+	// The project's .mcp.json servers (pending) follow the others, one
+	// connect at a time: both share the hub's progress callback.
+	connectMain := deps.ConnectMCP != nil && deps.MCPServerCount > 0
+	connectPending := deps.ConnectPendingMCP != nil && deps.PendingMCPCount > 0
+	if connectMain || connectPending {
+		whenTrusted(func() {
+			go func() {
+				if connectMain {
+					connectInBackground(bridge, deps.MCPServerCount, deps.ConnectMCP)
+				}
+				if connectPending {
+					connectInBackground(bridge, deps.PendingMCPCount, deps.ConnectPendingMCP)
+				}
+			}()
+		})
 	}
 
 	deps.Started.OnModelChanged = func(ctx context.Context, resolved provider.Resolved) {
@@ -383,11 +416,22 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	// deadlocked startup in any repo whose `git rev-parse` succeeded (a
 	// repo with at least one commit), which the scratch repos in tests,
 	// initialised without a commit, never did.
+	//
+	// The branch is read from .git's files at once; `git status` (the
+	// dirty marker) runs git, which reads the repository's config and can
+	// run a filter it names, so it waits for trust.
 	go func() {
-		if status, ok := readGitStatus(ctx); ok {
-			bridge.Send(tui.MsgGitStatus{Status: status})
+		if branch, ok := gitBranchFromFiles(deps.Cwd); ok {
+			bridge.Send(tui.MsgGitStatus{Status: tui.GitStatus{Branch: branch}})
 		}
 	}()
+	whenTrusted(func() {
+		go func() {
+			if status, ok := readGitStatus(ctx); ok {
+				bridge.Send(tui.MsgGitStatus{Status: status})
+			}
+		}()
+	})
 
 	// A terminal that delivers SIGINT directly rather than as a Ctrl+C
 	// keypress bubbletea can see (e.g. a detached controlling terminal, or
@@ -615,8 +659,10 @@ func newBanner(deps InteractiveDeps, width int) func() []string {
 	// left-truncated so the branch/model suffix survives intact.
 	cwd := abbrevHome(deps.Cwd)
 	suffix := ""
-	if st, ok := readGitStatus(context.Background()); ok && st.Branch != "" {
-		suffix += " · branch " + st.Branch
+	if wd, err := os.Getwd(); err == nil {
+		if branch, ok := gitBranchFromFiles(wd); ok && branch != "" {
+			suffix += " · branch " + branch
+		}
 	}
 	suffix += " · model " + deps.ModelLabel
 
