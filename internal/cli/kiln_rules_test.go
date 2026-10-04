@@ -28,7 +28,7 @@ func TestRemoveKilnRule(t *testing.T) {
 	if err := writesettings.AddRule(cwd, writesettings.Allow, "Bash(npm test *)"); err != nil {
 		t.Fatal(err)
 	}
-	s := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{KilnLocalTrusted: true})
+	s := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{Trusted: true})
 	gate := permission.NewGate(permission.GateOptions{Permissions: s.Permissions, Roots: []string{cwd}})
 
 	err := removeKilnRule(gate, cwd, writesettings.Allow, "Bash(ls *)")

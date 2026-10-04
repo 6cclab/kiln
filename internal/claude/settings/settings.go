@@ -98,15 +98,21 @@ type Settings struct {
 	// (qa/findings/20261004T205021Z-doctor-misses-sandbox-and-hook-
 	// events.json: /doctor printed "user, user, project", indistinguishable).
 	LoadedFrom []LoadedSettingsFile
-	// HeldAllow are the allow rules of a <cwd>/.kiln/settings.local.json
-	// held back because the folder is not trusted and the file came with
-	// the repository (tracked in git, or reached through a symlink):
-	// HeldFrom is each one's source. A caller adds them once the folder is
-	// trusted. Only that file's deny and ask rules apply until then.
+	// HeldAllow are the allow rules of the settings files held back
+	// because the folder is not trusted (LoadOptions.Trusted): the
+	// project's .claude/settings.json, and a local file that may have come
+	// with the repository. HeldFrom is each one's source. A caller adds
+	// them once the folder is trusted. Until then only a held file's deny
+	// and ask rules apply, since they can only restrict.
 	HeldAllow []string
 	HeldFrom  []RuleSource
-	// HeldFile is that file, "" when nothing was held.
-	HeldFile string
+	// IgnoredModes are the files whose permissions.defaultMode was auto or
+	// bypassPermissions in project or local settings, which Claude Code
+	// never honours from those files, trusted or not: the session starts
+	// in the built-in default (manual) instead.
+	IgnoredModes []string
+	// HeldFiles are the held files that exist, in load order.
+	HeldFiles []string
 	// Sandbox is the merged "sandbox" object (sandbox.go), and
 	// SandboxWarnings the entries in it that were skipped.
 	Sandbox         Sandbox
@@ -177,10 +183,20 @@ type LoadOptions struct {
 	// Extra is an additional file read last, from --settings. Highest
 	// precedence: it is treated as an extra "local" scope entry.
 	Extra string
-	// KilnLocalTrusted is set when the folder is trusted: then a
-	// <cwd>/.kiln/settings.local.json that came with the repository
-	// applies in full (see Settings.HeldAllow).
-	KilnLocalTrusted bool
+	// Trusted is set when the folder is trusted (the trust dialog was
+	// accepted for it or an ancestor). Otherwise the settings files a
+	// repository can supply are held (Settings.HeldAllow): their allow
+	// rules wait for trust, as in Claude Code, which
+	// applies a project's permissions.allow only after its workspace
+	// trust dialog is accepted. Deny and ask rules apply regardless.
+	Trusted bool
+	// Headless is a -p run, which never shows the trust dialog. Claude
+	// Code then checks with git whether .claude/settings.local.json came
+	// with the repository (tracked, or .claude a symlink) and holds it
+	// only if so. Interactively, before trust, it does not run git in the
+	// folder at all and holds every local file like the project's; the
+	// dialog comes before any prompt, so nothing is lost by waiting.
+	Headless bool
 	// Quiet leaves the "Ignoring unreadable settings" warning off stderr
 	// (a reload mid-session, under the TUI); Settings.Unreadable still
 	// names the file.
@@ -192,8 +208,11 @@ type settingsFile struct {
 	paths.SettingsFile
 	root string // RuleSource.Root for this file's rules
 	held bool   // only deny and ask rules apply; allow is held
-	cli  bool   // --settings
-	kiln bool   // kiln's own file, not Claude Code's (LoadedSettingsFile.Kiln)
+	// heldAll holds every other key too: kiln's own .kiln file, which a
+	// repository should never supply at all.
+	heldAll bool
+	cli     bool // --settings
+	kiln    bool // kiln's own file, not Claude Code's (LoadedSettingsFile.Kiln)
 }
 
 // settingsFiles lists the files LoadSettings reads for opts, in order.
@@ -208,13 +227,11 @@ func settingsFiles(cwd string, opts LoadOptions) []settingsFile {
 				// table).
 				root = filepath.Dir(f.Path)
 			}
-			held := false
-			if f.Kiln && f.Scope == paths.ScopeLocal && !opts.KilnLocalTrusted {
-				if _, err := os.Stat(f.Path); err == nil {
-					held = repoSupplied(cwd, f.Path)
-				}
+			held, heldAll := false, false
+			if !opts.Trusted {
+				held, heldAll = holdUntrusted(cwd, f, opts.Headless)
 			}
-			files = append(files, settingsFile{f.SettingsFile, root, held, false, f.Kiln})
+			files = append(files, settingsFile{f.SettingsFile, root, held, heldAll, false, f.Kiln})
 		}
 	}
 	if opts.Extra != "" {
@@ -225,7 +242,7 @@ func settingsFiles(cwd string, opts LoadOptions) []settingsFile {
 		if abs, err := filepath.Abs(root); err == nil {
 			root = abs
 		}
-		files = append(files, settingsFile{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false, true, false})
+		files = append(files, settingsFile{paths.SettingsFile{Scope: paths.ScopeLocal, Path: opts.Extra}, root, false, false, true, false})
 	}
 	return files
 }
@@ -240,9 +257,52 @@ func SettingsFiles(cwd string, opts LoadOptions) []string {
 	return out
 }
 
-// repoSupplied reports a kiln settings file that may have come with the
-// repository rather than from kiln on this machine: tracked in git, or
-// itself or its .kiln directory a symlink.
+// repoScopedMode reports a defaultMode that a project or local settings
+// file may not set: auto and bypassPermissions take effect only from user
+// settings and --settings, as in Claude Code.
+func repoScopedMode(f settingsFile, m PermissionMode) bool {
+	if f.cli || (f.Scope != paths.ScopeProject && f.Scope != paths.ScopeLocal) {
+		return false
+	}
+	return m == ModeAuto || m == ModeBypassPermissions
+}
+
+// holdUntrusted decides whether f, read in a folder that is not trusted,
+// is held (its allow rules wait for trust) and whether
+// every other key of it waits too. User settings are the person's own;
+// the project's .claude/settings.json comes with the repository; a local
+// file is held when it may have: always before an interactive trust
+// dialog (no git is run in an untrusted folder), and under -p only when
+// git tracks it or it is reached through a symlink. kiln's own
+// .kiln/settings.local.json is held whole when the repository supplied
+// it, as before.
+func holdUntrusted(cwd string, f paths.SettingsSource, headless bool) (held, heldAll bool) {
+	switch f.Scope {
+	case paths.ScopeProject:
+		return true, false
+	case paths.ScopeLocal:
+		if _, err := os.Stat(f.Path); err != nil {
+			return false, false
+		}
+		if f.Kiln {
+			if repoSupplied(cwd, f.Path) {
+				return true, true
+			}
+			return false, false
+		}
+		if !headless {
+			return true, false
+		}
+		return repoSupplied(cwd, f.Path), false
+	}
+	return false, false
+}
+
+// repoSupplied reports a settings file that may have come with the
+// repository rather than from this machine: tracked in git, or itself or
+// its directory (.claude, .kiln) a symlink. git runs with the
+// repository's fsmonitor and hooks off, so asking cannot run a command
+// the repository names.
 func repoSupplied(cwd, path string) bool {
 	for _, p := range []string{path, filepath.Dir(path)} {
 		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
@@ -253,7 +313,8 @@ func repoSupplied(cwd, path string) bool {
 	if err != nil {
 		return true
 	}
-	return exec.Command("git", "-C", cwd, "ls-files", "--error-unmatch", "--", rel).Run() == nil
+	return exec.Command("git", "-C", cwd, "-c", "core.fsmonitor=false", "-c", "core.hooksPath="+os.DevNull,
+		"ls-files", "--error-unmatch", "--", rel).Run() == nil
 }
 
 func wants(sources []paths.Scope, scope paths.Scope) bool {
@@ -303,25 +364,28 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		}
 
 		merged.LoadedFrom = append(merged.LoadedFrom, LoadedSettingsFile{Scope: f.Scope, Path: f.Path, Kiln: f.kiln})
-		mergeSandbox(&merged, data, sandboxSourceFor(cwd, f.Path, f.Scope, f.cli, f.held))
+		// The sandbox has its own rules for what a repository's file may
+		// set (sandbox.go), which folder trust does not change.
+		mergeSandbox(&merged, data, sandboxSourceFor(cwd, f.Path, f.Scope, f.cli, f.heldAll))
 		if f.held {
-			merged.HeldFile = f.Path
+			merged.HeldFiles = append(merged.HeldFiles, f.Path)
 			if raw.Permissions != nil {
 				src := RuleSource{Scope: f.Scope, File: f.Path, Root: f.root}
-				merged.Permissions.Deny = append(merged.Permissions.Deny, raw.Permissions.Deny...)
-				merged.Permissions.Ask = append(merged.Permissions.Ask, raw.Permissions.Ask...)
-				for range raw.Permissions.Deny {
-					merged.Permissions.DenyFrom = append(merged.Permissions.DenyFrom, src)
-				}
-				for range raw.Permissions.Ask {
-					merged.Permissions.AskFrom = append(merged.Permissions.AskFrom, src)
-				}
 				merged.HeldAllow = append(merged.HeldAllow, raw.Permissions.Allow...)
 				for range raw.Permissions.Allow {
 					merged.HeldFrom = append(merged.HeldFrom, src)
 				}
+				raw.Permissions.Allow = nil
 			}
-			continue
+			if f.heldAll {
+				// Only the restrictions of kiln's own file, when it came
+				// with the repository.
+				if p := raw.Permissions; p != nil {
+					raw = rawSettings{Permissions: &rawPermissions{Deny: p.Deny, Ask: p.Ask}}
+				} else {
+					continue
+				}
+			}
 		}
 		if raw.Permissions != nil {
 			src := RuleSource{Scope: f.Scope, File: f.Path, Root: f.root}
@@ -334,8 +398,12 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 			add(&merged.Permissions.Allow, &merged.Permissions.AllowFrom, raw.Permissions.Allow)
 			add(&merged.Permissions.Deny, &merged.Permissions.DenyFrom, raw.Permissions.Deny)
 			add(&merged.Permissions.Ask, &merged.Permissions.AskFrom, raw.Permissions.Ask)
-			if raw.Permissions.DefaultMode != "" {
-				merged.Permissions.DefaultMode = raw.Permissions.DefaultMode
+			if m := raw.Permissions.DefaultMode; m != "" {
+				merged.Permissions.DefaultMode = m
+				if repoScopedMode(f, m) {
+					merged.Permissions.DefaultMode = ""
+					merged.IgnoredModes = append(merged.IgnoredModes, f.Path)
+				}
 			}
 		}
 		if raw.Model != "" {

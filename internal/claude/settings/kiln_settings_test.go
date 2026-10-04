@@ -155,8 +155,8 @@ func TestLoadSettingsKilnLocalHeldUntilTrusted(t *testing.T) {
 			t.Errorf("%s: allow held = %v, want %v", c.name, held, c.held)
 		}
 		if c.held {
-			if indexOf(s.HeldAllow, "Bash(curl *)") < 0 || s.HeldFile == "" || len(s.HeldFrom) != len(s.HeldAllow) {
-				t.Errorf("%s: HeldAllow=%q HeldFile=%q", c.name, s.HeldAllow, s.HeldFile)
+			if indexOf(s.HeldAllow, "Bash(curl *)") < 0 || len(s.HeldFiles) == 0 || len(s.HeldFrom) != len(s.HeldAllow) {
+				t.Errorf("%s: HeldAllow=%q HeldFiles=%q", c.name, s.HeldAllow, s.HeldFiles)
 			}
 			if s.Model == "evil/model" {
 				t.Errorf("%s: model applied from an untrusted file", c.name)
@@ -165,7 +165,7 @@ func TestLoadSettingsKilnLocalHeldUntilTrusted(t *testing.T) {
 		if indexOf(s.Permissions.Deny, "Bash(rm *)") < 0 {
 			t.Errorf("%s: deny rule not applied", c.name)
 		}
-		if s := LoadSettings(c.cwd, LoadOptions{KilnLocalTrusted: true}); indexOf(s.Permissions.Allow, "Bash(curl *)") < 0 || s.HeldFile != "" {
+		if s := LoadSettings(c.cwd, LoadOptions{Trusted: true}); indexOf(s.Permissions.Allow, "Bash(curl *)") < 0 || len(s.HeldFiles) != 0 {
 			t.Errorf("%s, trusted: allow rule not applied", c.name)
 		}
 	}

@@ -484,10 +484,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 
 	// Settings are read before the model is chosen, because `model` may
 	// come from them.
+	// In a folder not yet trusted, the allow rules a repository can supply
+	// wait for trust (claudesettings.LoadOptions.Trusted).
+	trustedAtStart := folderTrusted(cwd)
 	settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{
-		Sources:          settingsSources(args.SettingSources),
-		Extra:            args.Settings,
-		KilnLocalTrusted: folderTrusted(cwd),
+		Sources:  settingsSources(args.SettingSources),
+		Extra:    args.Settings,
+		Trusted:  trustedAtStart,
+		Headless: args.Print,
 	})
 
 	// startupWarn reports a problem found while starting: to stderr in
@@ -690,8 +694,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	for _, w := range claudesettings.FileRuleWarnings(perms, args.AllowedTools...) {
 		startupWarn(w)
 	}
-	if settings.HeldFile != "" {
-		startupWarn(fmt.Sprintf("%s came with the repository: until this folder is trusted, only its deny and ask rules apply.", settings.HeldFile))
+	if w := heldRulesWarning(cwd, settings, args.Print); w != "" {
+		startupWarn(w)
+	}
+	for _, f := range settings.IgnoredModes {
+		startupWarn(fmt.Sprintf("Ignoring permissions.defaultMode in %s: auto and bypassPermissions apply only from user settings or --settings.", shortPath(cwd, f)))
 	}
 
 	// HARNESS_EXP_LEDGER (switch 1, experiments.go): the one path plan
@@ -1075,13 +1082,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	var heldApplied atomic.Bool
 	settingsWatchCtx, stopSettingsWatch := context.WithCancel(ctx)
 	defer stopSettingsWatch()
-	go settingsReloader{
+	reloader := settingsReloader{
 		cwd:     cwd,
-		opts:    claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings},
+		opts:    claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings, Headless: args.Print},
 		gate:    gate,
 		trusted: func() bool { return heldApplied.Load() || folderTrusted(cwd) },
 		notice:  notice,
-	}.watch(settingsWatchCtx, claudesettings.DefaultWatchInterval)
+	}
+	go reloader.watch(settingsWatchCtx, claudesettings.DefaultWatchInterval)
 
 	// ContextUsed (for /usage and /context) is the lane's one context
 	// estimate (harness.Lane.ContextTokens): the last request's measured
@@ -1496,11 +1504,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				return hub.Statuses()
 			},
 			PendingMCPCount: len(pendingMCP),
-			// A repository-supplied .kiln/settings.local.json's allow rules,
-			// held until the folder is trusted.
+			// The allow rules held until the folder is trusted, re-read
+			// from the files as they are now.
 			ApplyHeldRules: func() {
 				heldApplied.Store(true)
-				gate.AddSourcedRules(permission.RuleAllow, settings.HeldAllow, settings.HeldFrom)
+				// On the TUI's goroutine: rules apply before the next
+				// prompt, and a note (an unreadable file) is sent from
+				// another goroutine so it cannot wait on this one.
+				onTrust := reloader
+				onTrust.notice = func(s string) { go notice(s) }
+				onTrust.applyTrust()
 			},
 			ConnectPendingMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
 				hub.OnServer = progress

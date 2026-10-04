@@ -71,6 +71,7 @@ func (f *reloadFixture) decide(cmd string) claudesettings.Decision {
 
 func TestSettingsReload_WatchAppliesANewProjectRule(t *testing.T) {
 	f := newReloadFixture(t)
+	f.trusted = true // an untrusted folder holds the new allow rule (TestSettingsReload_UntrustedProjectAllowHeld)
 	if got := f.decide("go test -count=1 ./..."); got != claudesettings.Ask {
 		t.Fatalf("before: %v, want ask", got)
 	}
@@ -159,6 +160,7 @@ func TestSettingsReload_RepoSuppliedKilnFileStaysHeld(t *testing.T) {
 // reload.
 func TestSettingsReload_KeepsCommandLineRules(t *testing.T) {
 	f := newReloadFixture(t)
+	f.trusted = true
 	f.gate = permission.NewGate(permission.GateOptions{
 		Permissions: claudesettings.Permissions{Allow: []string{"Bash(make *)"}, Deny: []string{"Bash(git push *)"}},
 		Mode:        claudesettings.ModeManual, Roots: []string{f.cwd},
@@ -167,5 +169,57 @@ func TestSettingsReload_KeepsCommandLineRules(t *testing.T) {
 	f.reloader().reload([]string{p})
 	if f.decide("make build") != claudesettings.Allow || f.decide("git push") != claudesettings.Deny || f.decide("go test ./...") != claudesettings.Allow {
 		t.Errorf("rules after reload: %+v", f.gate.Permissions())
+	}
+}
+
+// Before the folder is trusted, a reload holds a project's allow rules as
+// startup did (a hostile clone cannot add one mid-session and have it
+// apply), while its deny rules apply at once. Accepting the trust dialog
+// then applies the allow rules as the file says now.
+func TestSettingsReload_UntrustedProjectAllowHeld(t *testing.T) {
+	f := newReloadFixture(t)
+	r := f.reloader()
+	p := f.write(t, ".claude/settings.json", `{"permissions":{"allow":["Bash(curl *)"],"deny":["Bash(rm *)"]}}`)
+	r.reload([]string{p})
+	if got := f.decide("curl https://example.com"); got != claudesettings.Ask {
+		t.Errorf("untrusted reload: curl = %v, want ask (allow held)", got)
+	}
+	if got := f.decide("rm -rf build"); got != claudesettings.Deny {
+		t.Errorf("untrusted reload: rm = %v, want deny", got)
+	}
+
+	// Edited again before the dialog is answered: trust applies the file
+	// as it is now, not the rules seen at the last reload.
+	f.write(t, ".claude/settings.json", `{"permissions":{"allow":["Bash(wget *)"],"deny":["Bash(rm *)"]}}`)
+	f.trusted = true
+	r.applyTrust()
+	if got := f.decide("wget https://example.com"); got != claudesettings.Allow {
+		t.Errorf("after trust: wget = %v, want allow", got)
+	}
+	if got := f.decide("curl https://example.com"); got != claudesettings.Ask {
+		t.Errorf("after trust: curl = %v, want ask (the rule left the file)", got)
+	}
+	if got := f.decide("rm -rf build"); got != claudesettings.Deny {
+		t.Errorf("after trust: rm = %v, want deny", got)
+	}
+}
+
+// A project file that does not parse when trust is accepted keeps the
+// rules as they were and says why, as a reload does.
+func TestSettingsReload_TrustWithUnreadableFileKeepsRules(t *testing.T) {
+	f := newReloadFixture(t)
+	r := f.reloader()
+	p := f.write(t, ".claude/settings.json", `{"permissions":{"deny":["Bash(rm *)"]}}`)
+	r.reload([]string{p})
+	f.write(t, ".claude/settings.json", `{"permissions":{"deny":[`)
+	f.trusted = true
+	r.applyTrust()
+	if got := f.decide("rm -rf build"); got != claudesettings.Deny {
+		t.Errorf("deny lost on trust: %v", got)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if last := f.notices[len(f.notices)-1]; !strings.HasPrefix(last, "Folder trusted, but") {
+		t.Errorf("notice = %q", last)
 	}
 }

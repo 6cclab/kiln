@@ -150,7 +150,7 @@ func Models(ctx context.Context, stdout, stderr io.Writer, providerID string) in
 	// most sessions have none, and an empty table would just be noise
 	// after the model listing.
 	if cwd, err := os.Getwd(); err == nil {
-		settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{KilnLocalTrusted: folderTrusted(cwd)})
+		settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{Trusted: folderTrusted(cwd), Headless: true})
 		if len(settings.ModelRoles) > 0 {
 			refreshRoleProviders(ctx, reg, settings.ModelRoles, providerID, nil)
 			var all []provider.Model
@@ -266,9 +266,10 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	}
 
 	settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{
-		Sources:          settingsSources(args.SettingSources),
-		Extra:            args.Settings,
-		KilnLocalTrusted: folderTrusted(cwd),
+		Sources:  settingsSources(args.SettingSources),
+		Extra:    args.Settings,
+		Trusted:  folderTrusted(cwd),
+		Headless: true,
 	})
 	permissionMode := resolvePermissionMode(args, settings)
 
