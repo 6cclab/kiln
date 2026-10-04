@@ -21,9 +21,13 @@ import (
 	"time"
 )
 
+// sandboxEscapeScript's escape writes outside the workspace to a path that
+// is not protected (a protected one, such as ~/.bashrc, is stopped by the
+// permission gate before the sandbox sees it), so the gate auto-allows it
+// and the OS sandbox is what refuses it.
 const sandboxEscapeScript = `model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "echo pwned >> %s/.bashrc"}, id: b1}
+  - tool_call: {name: bash, args: {command: "echo pwned >> %s/escape.txt"}, id: b1}
   - on_tool_result: b1
     then:
       - tool_call: {name: bash, args: {command: "echo inside > inside.txt && cat inside.txt"}, id: b2}
@@ -54,8 +58,8 @@ func TestSandbox_EscapeFailsAndTranscriptSaysSo(t *testing.T) {
 		t.Errorf("sandboxed commands should be auto-allowed in manual mode: %s", run.Stdout)
 	}
 
-	if _, err := os.Stat(filepath.Join(home, ".bashrc")); err == nil {
-		t.Error("~/.bashrc was written: the sandbox did not hold")
+	if _, err := os.Stat(filepath.Join(home, "escape.txt")); err == nil {
+		t.Error("~/escape.txt was written: the sandbox did not hold")
 	}
 	if b, err := os.ReadFile(filepath.Join(proj, "inside.txt")); err != nil || strings.TrimSpace(string(b)) != "inside" {
 		t.Errorf("a write inside the workspace failed: %q %v", b, err)
