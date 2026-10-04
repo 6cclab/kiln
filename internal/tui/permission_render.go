@@ -89,14 +89,28 @@ func SummarizeArg(req PermissionRequest, cwd string) string {
 // shows is content from elsewhere — a bash command, a diff hunk, a line
 // the user is typing — so any of it can be wider than the terminal.
 func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, selected int, feedbackMode bool, feedback string) []string {
+	// A sandbox network approval (permission.NetworkToolName, checked by
+	// value rather than importing that package — see promptToolName's own
+	// plain-string convention) asks about a host, not a tool: "Allow kiln
+	// to use sandbox network?" read as a feature toggle, and the generic
+	// "$ httpbin.org:443" row below it borrowed bash's shell-prompt glyph
+	// for a bare hostname (qa/findings/20261004T205021Z-sandbox-network-
+	// prompt-wording.json). Ask about the host directly instead, and skip
+	// the raised "$ " row — the host is already in the question, so
+	// repeating it below added nothing.
+	isNetworkPrompt := req.ToolName == "sandbox_network"
+	question := fmt.Sprintf("Allow kiln to use %s?", promptToolName(req.ToolName))
+	if isNetworkPrompt {
+		question = fmt.Sprintf("Allow network access to %s?", req.PrimaryArg)
+	}
 	amberRule := KilnAmber(strings.Repeat(RuleFillChar(), maxInt(width, 1)))
 	lines := []string{
 		"",
 		labelRule("approval needed", KilnAmber, "", width),
 		amberRule,
-		" " + KilnAmber(Bold(fmt.Sprintf("Allow kiln to use %s?", promptToolName(req.ToolName)))),
+		" " + KilnAmber(Bold(question)),
 	}
-	if req.PrimaryArg != "" {
+	if req.PrimaryArg != "" && !isNetworkPrompt {
 		lines = append(lines, "")
 		for _, row := range raisedCommandRows(SummarizeArg(req, cwd), maxInt(width-2, 1)) {
 			lines = append(lines, " "+row)
@@ -133,8 +147,16 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 	options := []string{"Yes"}
 	if offersDontAsk(req) {
 		label := "Yes, and don't ask again for this"
-		if len(req.DontAskRules) > 0 {
+		switch {
+		case len(req.DontAskRules) > 0:
 			label = dontAskLabel(req.DontAskRules, width-4)
+		case isNetworkPrompt:
+			// Named explicitly: Gate.SaveNetworkRule persists a
+			// WebFetch(domain:<host>) allow rule for this exact host (not
+			// the whole session, and not every host), so the option says
+			// so instead of leaving "for this" to mean whatever the
+			// reader guesses.
+			label = "Yes, and don't ask again for " + req.PrimaryArg
 		}
 		options = append(options, label)
 	}
