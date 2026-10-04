@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/gitfiles"
 )
 
 // kiln runs git itself for the status line (branch, dirty), on a
@@ -78,4 +79,16 @@ func runKilnGit(ctx context.Context, cwd string, args ...string) (string, error)
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	return string(out), err
+}
+
+// gitBranchFromFiles is the branch cwd's repository is on, read from
+// .git's files without running git (internal/gitfiles): what kiln shows
+// before the folder is trusted. ok is false outside a repository.
+func gitBranchFromFiles(cwd string) (string, bool) {
+	r, ok := gitfiles.Find(cwd)
+	if !ok {
+		return "", false
+	}
+	branch, _, ok := r.Branch()
+	return branch, ok
 }

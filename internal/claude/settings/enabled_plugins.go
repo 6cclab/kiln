@@ -22,8 +22,19 @@ type rawEnabledPlugins struct {
 // else needs this map, and folding it into the general merge would mean
 // every LoadSettings call pays for parsing a key almost nothing reads.
 func LoadEnabledPlugins(cwd string) map[string]bool {
+	return LoadEnabledPluginsFrom(cwd, nil)
+}
+
+// LoadEnabledPluginsFrom is LoadEnabledPlugins restricted to the scopes in
+// sources (nil: every scope), as --setting-sources restricts which
+// settings files are read: with `--setting-sources user`, a plugin only
+// the project's settings enable stays off, as in Claude Code.
+func LoadEnabledPluginsFrom(cwd string, sources []paths.Scope) map[string]bool {
 	merged := map[string]bool{}
 	for _, f := range paths.SettingsFiles(cwd) {
+		if !wants(sources, f.Scope) {
+			continue
+		}
 		data, err := os.ReadFile(f.Path)
 		if err != nil {
 			continue

@@ -48,6 +48,7 @@ import (
 	"github.com/andrepato/harness/internal/compaction"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/gitfiles"
 	"github.com/andrepato/harness/internal/harness"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
@@ -484,10 +485,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 
 	// Settings are read before the model is chosen, because `model` may
 	// come from them.
+	// In a folder not yet trusted, the allow rules a repository can supply
+	// wait for trust (claudesettings.LoadOptions.Trusted); so do hooks in
+	// an interactive session (trustedHooks, below).
+	trustedAtStart := folderTrusted(cwd)
 	settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{
-		Sources:          settingsSources(args.SettingSources),
-		Extra:            args.Settings,
-		KilnLocalTrusted: folderTrusted(cwd),
+		Sources:  settingsSources(args.SettingSources),
+		Extra:    args.Settings,
+		Trusted:  trustedAtStart,
+		Headless: args.Print,
 	})
 
 	// startupWarn reports a problem found while starting: to stderr in
@@ -635,7 +641,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Active plugins (installed and enabled — internal/claude/plugins).
 	// Loaded once here so skills, commands, agents, hooks and MCP servers
 	// all see the same set for this run.
-	activePlugins := claudeplugins.LoadPlugins(cwd)
+	// --setting-sources decides whose enabledPlugins count, as in Claude
+	// Code. A plugin only the project enables still runs nothing before an
+	// interactive session's folder is trusted: hooks and MCP servers wait
+	// for the dialog.
+	activePlugins := claudeplugins.LoadPluginsFrom(cwd, settingsSources(args.SettingSources))
 	var pluginSkills []skills.Skill
 	var pluginCommands []claudecommands.CommandFile
 	var pluginAgents []claudeagents.Definition
@@ -690,8 +700,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	for _, w := range claudesettings.FileRuleWarnings(perms, args.AllowedTools...) {
 		startupWarn(w)
 	}
-	if settings.HeldFile != "" {
-		startupWarn(fmt.Sprintf("%s came with the repository: until this folder is trusted, only its deny and ask rules apply.", settings.HeldFile))
+	if w := heldRulesWarning(cwd, settings, args.Print); w != "" {
+		startupWarn(w)
+	}
+	for _, f := range settings.IgnoredModes {
+		startupWarn(fmt.Sprintf("Ignoring permissions.defaultMode in %s: auto and bypassPermissions apply only from user settings or --settings.", shortPath(cwd, f)))
 	}
 
 	// HARNESS_EXP_LEDGER (switch 1, experiments.go): the one path plan
@@ -1075,13 +1088,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	var heldApplied atomic.Bool
 	settingsWatchCtx, stopSettingsWatch := context.WithCancel(ctx)
 	defer stopSettingsWatch()
-	go settingsReloader{
+	reloader := settingsReloader{
+		mu:      &sync.Mutex{},
 		cwd:     cwd,
-		opts:    claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings},
+		opts:    claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings, Headless: args.Print},
 		gate:    gate,
 		trusted: func() bool { return heldApplied.Load() || folderTrusted(cwd) },
 		notice:  notice,
-	}.watch(settingsWatchCtx, claudesettings.DefaultWatchInterval)
+	}
+	go reloader.watch(settingsWatchCtx, claudesettings.DefaultWatchInterval)
 
 	// ContextUsed (for /usage and /context) is the lane's one context
 	// estimate (harness.Lane.ContextTokens): the last request's measured
@@ -1185,10 +1200,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Hooks from .claude/settings.json, accumulated across scopes, plus
 	// every active plugin's own hooks (each already carrying
 	// CLAUDE_PLUGIN_ROOT — see claudeplugins.Hooks).
-	hookConfig := claudehooks.LoadHooks(cwd)
+	hookConfig := claudehooks.LoadHooksFrom(cwd, settingsSources(args.SettingSources))
 	for event, groups := range pluginHooks {
 		hookConfig[event] = append(hookConfig[event], groups...)
 	}
+	// Interactively, no hook runs before the folder is trusted, as in
+	// Claude Code: they run commands a repository can ship. A -p run never
+	// shows the dialog and runs them, as Claude Code does there.
+	hooks := newTrustedHooks(hookConfig, args.Print || trustedAtStart)
 
 	// The four events the TS parsed but never fired. Stop runs when the
 	// parent's run ends; a blocking Stop hook is reported to the user, not
@@ -1201,7 +1220,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	stopHookActive := false
 	started.Harness.Events().On(harness.EventRunEnd, func(ev harness.Event) {
 		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
-			Config: hookConfig,
+			Config: hooks.get(),
 			Event:  claudehooks.Stop,
 			Payload: claudehooks.Payload{
 				SessionID:      sessionID,
@@ -1217,7 +1236,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	})
 	started.Harness.Events().On(harness.EventCompactionStart, func(ev harness.Event) {
 		claudehooks.RunHooks(claudehooks.RunOptions{
-			Config: hookConfig,
+			Config: hooks.get(),
 			Event:  claudehooks.PreCompact,
 			Payload: claudehooks.Payload{
 				SessionID:      sessionID,
@@ -1238,7 +1257,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			addUsage(sub.Model.Provider, sub.Model.ID, sub.Harness.Stats().Usage)
 		}
 		claudehooks.RunHooks(claudehooks.RunOptions{
-			Config: hookConfig,
+			Config: hooks.get(),
 			Event:  claudehooks.SubagentStop,
 			Payload: claudehooks.Payload{
 				SessionID:      subSession,
@@ -1310,7 +1329,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		// permission.Outcome's doc comment.
 		var outcome permission.Outcome
 		guard, err := claudehooks.GuardToolCall(claudehooks.GuardOptions{
-			Config:         hookConfig,
+			Config:         hooks.get(),
 			ToolName:       call.Name,
 			Args:           call.Arguments,
 			SessionID:      sessionID,
@@ -1414,7 +1433,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			toolResponse = result.Content
 		}
 		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
-			Config:      hookConfig,
+			Config:      hooks.get(),
 			Event:       claudehooks.PostToolUse,
 			ToolName:    call.Name,
 			HasToolName: true,
@@ -1448,18 +1467,23 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// SessionStart fires once, before the first turn. Its stdout becomes
 	// context for that first prompt only (see the <hook-context> wrapping
 	// below).
-	phase("hooks SessionStart start")
-	sessionStart := claudehooks.RunHooks(claudehooks.RunOptions{
-		Config: hookConfig,
-		Event:  claudehooks.SessionStart,
-		Payload: claudehooks.Payload{
-			SessionID:      sessionID,
-			TranscriptPath: transcriptPath,
-			Cwd:            cwd,
-		},
-		OnNotice: notice,
-	})
-	phase("hooks SessionStart end")
+	runSessionStart := func() claudehooks.Outcome {
+		phase("hooks SessionStart start")
+		defer phase("hooks SessionStart end")
+		return claudehooks.RunHooks(claudehooks.RunOptions{
+			Config: hooks.get(),
+			Event:  claudehooks.SessionStart,
+			Payload: claudehooks.Payload{
+				SessionID:      sessionID,
+				TranscriptPath: transcriptPath,
+				Cwd:            cwd,
+			},
+			OnNotice: notice,
+		})
+	}
+	// Before trust no hook is active, so this runs none; the session
+	// starts for hooks once the dialog is accepted (TrustAccepted).
+	sessionStart := runSessionStart()
 
 	if !args.Print {
 		// phase 7: the interactive TUI. Everything above (registry,
@@ -1496,11 +1520,24 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				return hub.Statuses()
 			},
 			PendingMCPCount: len(pendingMCP),
-			// A repository-supplied .kiln/settings.local.json's allow rules,
-			// held until the folder is trusted.
+			// The allow rules held until the folder is trusted, re-read
+			// from the files as they are now, and the hooks held with them.
 			ApplyHeldRules: func() {
 				heldApplied.Store(true)
-				gate.AddSourcedRules(permission.RuleAllow, settings.HeldAllow, settings.HeldFrom)
+				// On the TUI's goroutine: rules apply before the next
+				// prompt, and a note (an unreadable file) is sent from
+				// another goroutine so it cannot wait on this one.
+				onTrust := reloader
+				onTrust.notice = func(s string) { go notice(s) }
+				onTrust.applyTrust()
+				hooks.enable()
+			},
+			// SessionStart for a session whose hooks waited for trust.
+			TrustedSessionStart: func() []string {
+				if trustedAtStart {
+					return nil
+				}
+				return runSessionStart().Context
 			},
 			ConnectPendingMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
 				hub.OnServer = progress
@@ -1523,7 +1560,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			Registry:        registry,
 			Env:             env,
 			Dispatcher:      dispatcher,
-			HookConfig:      hookConfig,
+			Hooks:           hooks.get,
 			SessionStart:    sessionStart,
 			ScreenReader:    args.ScreenReader,
 			Fullscreen:      args.Fullscreen,
@@ -1541,7 +1578,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		shells.KillAll()
 		execenv.KillLeftoverJobs()
 		claudehooks.RunHooks(claudehooks.RunOptions{
-			Config: hookConfig,
+			Config: hooks.get(),
 			Event:  claudehooks.SessionEnd,
 			Payload: claudehooks.Payload{
 				SessionID:      sessionID,
@@ -1554,7 +1591,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return exitCode
 	}
 
-	exitCode := runPrintMode(ctx, args, started, gate, resolved, hookConfig, sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)
+	exitCode := runPrintMode(ctx, args, started, gate, resolved, hooks.get(), sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)
 
 	// Nothing outlives the session: a background shell started during this
 	// run must not hold a port open after the process exits. Killed BEFORE
@@ -1564,7 +1601,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	execenv.KillLeftoverJobs()
 
 	claudehooks.RunHooks(claudehooks.RunOptions{
-		Config: hookConfig,
+		Config: hooks.get(),
 		Event:  claudehooks.SessionEnd,
 		Payload: claudehooks.Payload{
 			SessionID:      sessionID,
@@ -1933,14 +1970,16 @@ func authKindLabel(ctx context.Context, reg *provider.Registry, providerID strin
 // project elsewhere, and hit the outside-workspace prompt). Built once per
 // session, so it never invalidates the prompt cache mid-session.
 func environmentPrompt(ctx context.Context, cwd string, now time.Time) string {
+	// Read from .git's files: this is built at startup, before the folder
+	// is trusted, and git would read the repository's config.
 	repo := "no"
-	if st, ok := readGitStatusAt(ctx, cwd); ok {
+	if r, ok := gitfiles.Find(cwd); ok {
 		repo = "yes"
-		if st.Branch != "" {
-			repo += " (branch " + st.Branch + ")"
+		if branch, born, ok := r.Branch(); ok && !born {
+			repo = "yes (no commits yet)"
+		} else if ok && branch != "" {
+			repo += " (branch " + branch + ")"
 		}
-	} else if out, err := runGit(ctx, cwd, "rev-parse", "--is-inside-work-tree"); err == nil && strings.TrimSpace(out) == "true" {
-		repo = "yes (no commits yet)"
 	}
 	return fmt.Sprintf("<env>\nWorking directory: %s\nIs a git repository: %s\nPlatform: %s/%s\nToday's date: %s\n</env>",
 		cwd, repo, runtime.GOOS, runtime.GOARCH, now.Format("2006-01-02"))

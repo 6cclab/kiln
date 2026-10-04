@@ -523,6 +523,11 @@ type msgCommitBanner struct{}
 // MsgTrustAnswered carries the trust dialog's answer; "No, exit" quits.
 type MsgTrustAnswered struct{ Trusted bool }
 
+// MsgStartupContext adds SessionStart hook output that arrived after the
+// TUI started (the hooks waited for the trust dialog): it goes to the next
+// prompt, as Config.StartupContext does to the first.
+type MsgStartupContext struct{ Lines []string }
+
 // msgTurnResult carries what a turn cost, once lane.Prompt returns, so
 // Update can commit the turn summary/error and clear busy state. Built by
 // the goroutine app.go's handleSubmit spawns, not by the bridge, since
@@ -882,6 +887,10 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.Trusted {
 			return m, tea.Quit
 		}
+		return m, nil
+
+	case MsgStartupContext:
+		m.startupContext = append(m.startupContext, msg.Lines...)
 		return m, nil
 
 	case MsgClearAndReplay:

@@ -56,6 +56,7 @@ func TestRun_Sandbox_AutoAllowsInManualMode(t *testing.T) {
 	}
 	startFaux(t, bashCallScript)
 	proj := scratchProject(t)
+	t.Setenv("HARNESS_TRUST_ALL", "1") // untrusted: TestRun_Sandbox_UntrustedProjectCannotAutoAllow
 	writeProjectSettings(t, proj, `{"sandbox":{"enabled":true}}`)
 
 	code, stdout, stderr := runPrint(t, "manual")
@@ -79,9 +80,31 @@ func TestRun_Sandbox_AutoAllowsInManualMode(t *testing.T) {
 // TestRun_Sandbox_Unavailable: enabled but impossible here, kiln warns
 // once and runs commands unsandboxed (Claude Code's fallback), so manual
 // mode asks again; with failIfUnavailable it refuses to start.
+// A -p run in a folder never trusted does not let the project's settings
+// turn the sandbox on: with autoAllowBashIfSandboxed's default, that
+// would run bash the held allow rules could not. Claude Code honours the
+// setting there; kiln is stricter. The same file from user settings does.
+func TestRun_Sandbox_UntrustedProjectCannotAutoAllow(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("needs sandbox-exec")
+	}
+	startFaux(t, bashCallScript)
+	proj := scratchProject(t)
+	t.Setenv("HARNESS_TRUST_ALL", "")
+	writeProjectSettings(t, proj, `{"sandbox":{"enabled":true}}`)
+	code, stdout, stderr := runPrint(t, "manual")
+	if code != 0 || !strings.Contains(stdout, "requires confirmation") {
+		t.Errorf("untrusted project sandbox: exit %d, stdout %s, stderr %s; want the command refused", code, stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(proj, "hi.txt")); err == nil {
+		t.Error("the command ran")
+	}
+}
+
 func TestRun_Sandbox_Unavailable(t *testing.T) {
 	startFaux(t, bashCallScript)
 	proj := scratchProject(t)
+	t.Setenv("HARNESS_TRUST_ALL", "1") // untrusted: TestRun_Sandbox_UntrustedProjectCannotAutoAllow
 	pretendPlatform(t, "plan9")
 
 	writeProjectSettings(t, proj, `{"sandbox":{"enabled":true}}`)
@@ -106,6 +129,7 @@ func TestRun_Sandbox_Unavailable(t *testing.T) {
 func TestDoctor_Sandbox(t *testing.T) {
 	startFaux(t, unreadScript)
 	proj := scratchProject(t)
+	t.Setenv("HARNESS_TRUST_ALL", "1") // untrusted: TestRun_Sandbox_UntrustedProjectCannotAutoAllow
 	doctor := func() string {
 		var stdout, stderr bytes.Buffer
 		if code := Doctor(context.Background(), baseArgs(), &stdout, &stderr); code != 0 {

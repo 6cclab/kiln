@@ -559,7 +559,11 @@ func TestPermission_PlanModeAllowsReadOnlyBash(t *testing.T) {
 			if allow != nil {
 				permWriteRules(t, proj, allow, nil, nil)
 			}
-			run := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "plan it", "--output-format", "json", "--permission-mode", "plan")
+			env := baseEnv(home, sessDir, addr)
+			// A trusted folder: an untrusted one holds the project's allow
+			// rule (TestRun_Print_UntrustedProjectAllowHeld).
+			env["HARNESS_TRUST_ALL"] = "1"
+			run := runHarness(t, proj, env, "-p", "plan it", "--output-format", "json", "--permission-mode", "plan")
 			var res struct {
 				Blocked []string `json:"blocked"`
 			}

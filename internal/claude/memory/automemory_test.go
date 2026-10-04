@@ -72,6 +72,24 @@ func TestProjectRoot_WorktreeSharesMainRoot(t *testing.T) {
 	}
 }
 
+// projectRoot runs at startup, before the folder is trusted, so it reads
+// .git's files and runs no git (which would read the repository's
+// config): with nothing on PATH a worktree still resolves to its main
+// checkout.
+func TestProjectRoot_RunsNoGit(t *testing.T) {
+	repo := initRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	runGitT(t, repo, "worktree", "add", "-q", wt, "-b", "nogit")
+	sub := filepath.Join(wt, "x")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "")
+	if got, want := projectRoot(sub), mustResolve(t, repo); got != want {
+		t.Errorf("projectRoot(worktree subdir) with no git = %q, want %q", got, want)
+	}
+}
+
 func TestProjectRoot_NonGitUsesCwd(t *testing.T) {
 	dir := t.TempDir()
 	if got, want := projectRoot(dir), mustResolve(t, dir); got != want {
