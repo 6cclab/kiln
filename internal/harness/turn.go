@@ -19,6 +19,13 @@ import (
 // replay it. This phase's Resume never actually replays frames (partial
 // streaming state is always re-requested from scratch, see Resume), but
 // the frames are still written so the on-disk write sequence matches pi's.
+//
+// Only block boundaries are recorded (start, end, a finished tool call,
+// done), never the per-token deltas: an end frame carries its block's
+// whole text (Content) or call (ToolCall), so the deltas repeated it a few
+// characters per line. They were 96% of a long session's lines and two
+// thirds of its bytes, kept for good once the reply committed, because the
+// file is append-only (recordedFrame).
 type Frame struct {
 	Type         msg.EventType  `json:"type"`
 	ContentIndex int            `json:"contentIndex"`
@@ -563,7 +570,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 			if ev.Type == msg.EventError && ev.Error != nil {
 				interrupted = ev.Error
 			}
-			if responseEntryID != "" && ev.Type != msg.EventStart {
+			if responseEntryID != "" && recordedFrame(ev.Type) {
 				frame := Frame{Type: ev.Type, ContentIndex: ev.ContentIndex, Delta: ev.Delta, Content: ev.Content, ToolCall: ev.ToolCall, Reason: ev.Reason}
 				w, _ := session.AppendListWrite(session.PendingAssistantFrames(operationID, responseEntryID), json.RawMessage(mustMarshal(frame)))
 				_, _ = l.h.opts.Storage.Commit([]session.Write{w})
@@ -596,6 +603,16 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 		l.h.events.Emit(Event{Type: EventRetryStart, Lane: l.name, OperationID: operationID, Attempt: attempt + 1})
 	}
 	return nil, lastErr
+}
+
+// recordedFrame reports whether a stream event is written as a pending
+// frame: every event but the start and the per-token deltas (see Frame).
+func recordedFrame(t msg.EventType) bool {
+	switch t {
+	case msg.EventStart, msg.EventTextDelta, msg.EventThinkingDelta, msg.EventToolCallDelta:
+		return false
+	}
+	return true
 }
 
 func mustMarshal(v any) []byte {
