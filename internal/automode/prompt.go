@@ -93,16 +93,11 @@ or
 {"decision": "block", "reason": "<one short sentence the agent will read: what is risky and why>"}`
 }
 
-// userPrompt is the request body: memory, transcript and action, each in
-// its own tag, every value JSON-encoded so none can close a tag.
-func userPrompt(memory string, workspace, transcript []string, action string) string {
-	parts, _ := userParts(memory, workspace, transcript, action)
-	return strings.Join(parts, "")
-}
-
-// userParts is userPrompt split into the blocks the request sends: the
-// opening (workspace, memory, the transcript tag), one block per transcript
-// line, and the closing (the action and the question). cacheAt is the
+// userParts is the request body, memory, transcript and action, each in
+// its own tag, every value JSON-encoded so none can close a tag, split
+// into the blocks the request sends: the opening (workspace, memory, the
+// transcript tag), one block per transcript line, and the closing (the
+// action and the question). cacheAt is the
 // block that ends the transcript, where the request asks for a cache
 // breakpoint: everything up to it is the same in the next call, which only
 // appends lines, so that call reads it from the prompt cache and writes
