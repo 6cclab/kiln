@@ -85,11 +85,15 @@ func withinProject(cwd, projectPath string) bool {
 	return strings.HasPrefix(cwd, projectPath+string(filepath.Separator))
 }
 
-func readManifest(root string) (manifestRaw, bool) {
+// readManifestFile reads just a plugin's own .claude-plugin/plugin.json,
+// with no marketplace fallback. A missing file is not logged here — it is
+// the expected, common case for a marketplace-manifest plugin (see
+// pluginManifest, which is what call sites actually use); a file that
+// exists but won't parse is.
+func readManifestFile(root string) (manifestRaw, bool) {
 	path := filepath.Join(root, ".claude-plugin", "plugin.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		diag.L().Warn("plugins: no manifest", "path", path, "error", err)
 		return manifestRaw{}, false
 	}
 	var mf manifestRaw
@@ -98,6 +102,96 @@ func readManifest(root string) (manifestRaw, bool) {
 		return manifestRaw{}, false
 	}
 	return mf, true
+}
+
+// marketplaceEntry is one plugin's entry in a marketplace's own
+// .claude-plugin/marketplace.json "plugins" array — only the fields kiln
+// can act on. Claude Code's schema has several more (skills, commands,
+// agents, lspServers, …): skills/commands/agents are read straight from
+// the plugin's own directory regardless of which manifest source is in
+// play, and kiln has no LSP runtime to read lspServers into at all.
+type marketplaceEntry struct {
+	Name       string          `json:"name"`
+	Version    string          `json:"version"`
+	MCPServers json.RawMessage `json:"mcpServers"`
+	Hooks      json.RawMessage `json:"hooks"`
+}
+
+type marketplaceFile struct {
+	Plugins []marketplaceEntry `json:"plugins"`
+}
+
+// marketplaceManifest reads name's entry from marketplace's own
+// .claude-plugin/marketplace.json: Claude Code's fallback for a plugin
+// with no .claude-plugin/plugin.json of its own (pluginLoader.ts's
+// finishLoadingPluginFromPath: "If there's no plugin.json, use
+// marketplace entry as manifest (regardless of strict mode)" — "strict"
+// instead governs a *conflict* between the two when both exist, not
+// whether this fallback applies at all, so kiln does not gate on it
+// either).
+func marketplaceManifest(name, marketplace string) (manifestRaw, bool) {
+	if name == "" || marketplace == "" {
+		return manifestRaw{}, false
+	}
+	data, err := os.ReadFile(filepath.Join(marketplaceInstallLocation(marketplace), ".claude-plugin", "marketplace.json"))
+	if err != nil {
+		return manifestRaw{}, false
+	}
+	var mf marketplaceFile
+	if err := json.Unmarshal(data, &mf); err != nil {
+		return manifestRaw{}, false
+	}
+	for _, e := range mf.Plugins {
+		if e.Name == name {
+			return manifestRaw{Name: e.Name, Version: e.Version, MCPServers: e.MCPServers, Hooks: e.Hooks}, true
+		}
+	}
+	return manifestRaw{}, false
+}
+
+// knownMarketplace is one entry of ~/.claude/plugins/known_marketplaces.json:
+// only InstallLocation matters here (where the marketplace's own files,
+// including marketplace.json, were cloned/cached to).
+type knownMarketplace struct {
+	InstallLocation string `json:"installLocation"`
+}
+
+// marketplaceInstallLocation resolves where marketplace's files live:
+// known_marketplaces.json's recorded installLocation when present (it can
+// differ from the default, e.g. a relocated or legacy cache), else the
+// default cache path every marketplace kiln has seen so far actually
+// uses, <plugins dir>/marketplaces/<name>.
+func marketplaceInstallLocation(marketplace string) string {
+	pluginsDir := filepath.Join(paths.ClaudeRoots("")[0].Dir, "plugins")
+	if data, err := os.ReadFile(filepath.Join(pluginsDir, "known_marketplaces.json")); err == nil {
+		var known map[string]knownMarketplace
+		if json.Unmarshal(data, &known) == nil {
+			if km, ok := known[marketplace]; ok && km.InstallLocation != "" {
+				return km.InstallLocation
+			}
+		}
+	}
+	return filepath.Join(pluginsDir, "marketplaces", marketplace)
+}
+
+// pluginManifest resolves name's manifest: its own .claude-plugin/
+// plugin.json if it has one, else name's entry in marketplace's own
+// .claude-plugin/marketplace.json (marketplaceManifest). Only warns when
+// neither source has it — a marketplace-manifest plugin (e.g.
+// gopls-lsp@claude-plugins-official, "strict": false, lspServers only,
+// nothing under its own install dir but LICENSE/README.md) is the
+// expected shape for "no plugin.json of its own", not a problem to warn
+// about (qa/findings/20261004T203042Z-marketplace-manifest-plugin-
+// warns.json: kiln logged "plugins: no manifest" and dropped it).
+func pluginManifest(root, name, marketplace string) (manifestRaw, bool) {
+	if mf, ok := readManifestFile(root); ok {
+		return mf, true
+	}
+	if mf, ok := marketplaceManifest(name, marketplace); ok {
+		return mf, true
+	}
+	diag.L().Warn("plugins: no manifest", "path", filepath.Join(root, ".claude-plugin", "plugin.json"), "marketplace", marketplace)
+	return manifestRaw{}, false
 }
 
 // LoadPlugins returns every plugin that is both installed and enabled for
@@ -119,7 +213,7 @@ func LoadPlugins(cwd string) []Plugin {
 		// something); a plugin that active session state is built from
 		// needs a manifest that actually parsed, since Skills/Commands/
 		// Agents/Hooks/MCPServers all read it again for mcpServers/hooks.
-		if _, ok := readManifest(ins.Root); !ok {
+		if _, ok := pluginManifest(ins.Root, ins.Name, ins.Marketplace); !ok {
 			continue
 		}
 		seen[ins.Key] = true
@@ -185,7 +279,7 @@ func ListInstalled(cwd string) []Installed {
 				applicable = false
 			}
 			pluginName, version := name, e.Version
-			if mf, ok := readManifest(e.InstallPath); ok {
+			if mf, ok := pluginManifest(e.InstallPath, name, marketplace); ok {
 				if mf.Name != "" {
 					pluginName = mf.Name
 				}
@@ -348,7 +442,7 @@ func Hooks(p Plugin) hooks.Config {
 		add(parseHooksBlob(data))
 	}
 
-	if mf, ok := readManifest(p.Root); ok && len(mf.Hooks) > 0 {
+	if mf, ok := pluginManifest(p.Root, p.Name, p.Marketplace); ok && len(mf.Hooks) > 0 {
 		var asString string
 		if err := json.Unmarshal(mf.Hooks, &asString); err == nil && asString != "" {
 			path := asString
@@ -410,7 +504,7 @@ func MCPServers(p Plugin) map[string]mcpcfg.ServerConfig {
 		}
 	}
 
-	if mf, ok := readManifest(p.Root); ok && len(mf.MCPServers) > 0 {
+	if mf, ok := pluginManifest(p.Root, p.Name, p.Marketplace); ok && len(mf.MCPServers) > 0 {
 		var asString string
 		if err := json.Unmarshal(mf.MCPServers, &asString); err == nil && asString != "" {
 			path := asString

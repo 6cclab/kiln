@@ -152,6 +152,72 @@ func TestLoadPlugins_BrokenManifestSkipped(t *testing.T) {
 	}
 }
 
+// writeMarketplaceFile writes a marketplace's own .claude-plugin/
+// marketplace.json under home/.claude/plugins/marketplaces/<marketplace>,
+// matching the real ~/.claude/plugins layout (verified against an actual
+// installed marketplace's cache directory).
+func writeMarketplaceFile(t *testing.T, home, marketplace string, plugins []map[string]any) {
+	t.Helper()
+	writeJSON(t, filepath.Join(home, ".claude", "plugins", "marketplaces", marketplace, ".claude-plugin", "marketplace.json"), map[string]any{
+		"name":    marketplace,
+		"plugins": plugins,
+	})
+}
+
+// TestLoadPlugins_MarketplaceManifestFallback_NoOwnPluginJSON checks a
+// plugin whose install directory has no .claude-plugin/plugin.json of its
+// own (only LICENSE/README.md, e.g. gopls-lsp@claude-plugins-official)
+// still loads and resolves its MCP servers from its marketplace's own
+// .claude-plugin/marketplace.json entry — Claude Code's own fallback for
+// such a plugin (pluginLoader.ts's finishLoadingPluginFromPath uses the
+// marketplace entry as the manifest whenever the plugin itself has none,
+// "strict" or not). Before this, readManifest only ever looked at the
+// plugin's own directory, so this shape warned "plugins: no manifest" and
+// was silently dropped (qa/findings/20261004T203042Z-marketplace-
+// manifest-plugin-warns.json).
+func TestLoadPlugins_MarketplaceManifestFallback_NoOwnPluginJSON(t *testing.T) {
+	home, cwd, root := setupPluginTree(t)
+	// No .claude-plugin/plugin.json under root at all — just LICENSE, as
+	// the real gopls-lsp install dir has.
+	writeFile(t, filepath.Join(root, "LICENSE"), "MIT")
+	writeMarketplaceFile(t, home, "market", []map[string]any{
+		{
+			"name":    "demo",
+			"version": "1.0.0",
+			"strict":  false,
+			"mcpServers": map[string]any{
+				"tools": map[string]any{"command": "${CLAUDE_PLUGIN_ROOT}/bin/server"},
+			},
+		},
+	})
+
+	plugins := LoadPlugins(cwd)
+	if len(plugins) != 1 {
+		t.Fatalf("LoadPlugins = %+v, want one plugin (marketplace manifest fallback)", plugins)
+	}
+	servers := MCPServers(plugins[0])
+	cfg, ok := servers["plugin_demo_tools"]
+	if !ok {
+		t.Fatalf("MCPServers = %+v, want key plugin_demo_tools from the marketplace entry", servers)
+	}
+	if cfg.Command != root+"/bin/server" {
+		t.Errorf("Command = %q, want %s/bin/server", cfg.Command, root)
+	}
+}
+
+// TestLoadPlugins_NoManifestAnywhereIsSkipped checks a plugin with
+// neither its own plugin.json nor a matching marketplace entry is still
+// skipped (not a crash, not silently "active" with nothing to act on).
+func TestLoadPlugins_NoManifestAnywhereIsSkipped(t *testing.T) {
+	_, cwd, root := setupPluginTree(t)
+	writeFile(t, filepath.Join(root, "LICENSE"), "MIT")
+	// No marketplace.json at all for "market".
+
+	if got := LoadPlugins(cwd); len(got) != 0 {
+		t.Fatalf("LoadPlugins = %+v, want none: no manifest anywhere", got)
+	}
+}
+
 func TestLoadPlugins_BrokenInstalledPluginsJSONIsNotFatal(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
