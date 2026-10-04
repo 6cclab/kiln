@@ -473,9 +473,49 @@ func RenderCommandResult(name string, lines []string, width int) []string {
 	// /context's legend under their label rules; the command's own
 	// columns (key/value pairs, nested lists) carry through unchanged.
 	for _, l := range lines {
-		out = append(out, FitStatus(l, width))
+		out = append(out, fitCommandResultRow(l, width))
 	}
 	return out
+}
+
+// fitCommandResultRow fits one command-result row to width. Most rows are
+// prose and truncate at the tail (FitStatus); a row shaped "label   value"
+// whose value is an absolute or home-relative path instead left-truncates
+// just the path, so the file/directory name at the end survives rather
+// than being hidden behind a trailing "…" — /status's "sessions  <path>"
+// and /memory's "user  <path>"/"project  <path>"/"auto  <path>" otherwise
+// all read identically once the path runs past the terminal width
+// (qa/findings/…-paths-truncated-at-tail.json).
+func fitCommandResultRow(line string, width int) string {
+	if VisibleWidth(line) <= width {
+		return line
+	}
+	if prefix, path, ok := splitTrailingPath(line); ok {
+		room := width - VisibleWidth(prefix)
+		if room > 0 {
+			return prefix + ShortenPathLeft(path, room)
+		}
+	}
+	return FitStatus(line, width)
+}
+
+// splitTrailingPath finds a path value at the end of a "label   value" row:
+// the first "/" or "~" that starts a token (preceded by whitespace, or at
+// the very start of the line) and runs to the end of the line. Command
+// rows here never append anything after a path value, so this is
+// unambiguous for the rows that matter (/status, /memory) and simply
+// doesn't match rows with no path (e.g. "auth      configured").
+func splitTrailingPath(line string) (prefix, path string, ok bool) {
+	for i, r := range line {
+		if r != '/' && r != '~' {
+			continue
+		}
+		if i > 0 && line[i-1] != ' ' {
+			continue
+		}
+		return line[:i], line[i:], true
+	}
+	return "", "", false
 }
 
 // CommitCommandResult commits a slash command's multi-line result as its

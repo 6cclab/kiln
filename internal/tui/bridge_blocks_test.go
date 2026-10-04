@@ -319,6 +319,28 @@ func TestRenderCommandResult_RowsAlignUniformly(t *testing.T) {
 	}
 }
 
+// TestRenderCommandResult_LongPathRowKeepsTailNotHead checks a row whose
+// value is a long path left-truncates the path (keeping the file/dir name
+// at the end) instead of right-truncating the whole row (which would hide
+// the name behind a trailing "…"), matching /status's "sessions  <path>"
+// and /memory's "user  <path>" rows.
+// *qa/findings/20261004T205021Z-paths-truncated-at-tail.json*.
+func TestRenderCommandResult_LongPathRowKeepsTailNotHead(t *testing.T) {
+	path := "/private/tmp/claude-501/-Users-andrepato-projects-harness/scratchpad/qa/work/linkshort/CLAUDE.md"
+	lines := []string{"user    " + path}
+	out := RenderCommandResult("memory", lines, 60)
+	row := stripANSI(out[1])
+	if !strings.HasSuffix(row, "CLAUDE.md") {
+		t.Fatalf("expected row to keep the trailing file name, got %q", row)
+	}
+	if !strings.Contains(row, "…") {
+		t.Fatalf("expected a cut marker, got %q", row)
+	}
+	if strings.Contains(row, path) {
+		t.Fatalf("row should have been shortened, got the full path: %q", row)
+	}
+}
+
 // TestRenderCommandResult_EmptyNameFallsBackToResult checks a command
 // result with no Name (should not happen once registry.go's Execute fills
 // it in, but a defensive default reads better than a blank label rule).
