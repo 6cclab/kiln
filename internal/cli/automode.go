@@ -27,7 +27,21 @@ func wireAutoMode(gate *permission.Gate, reg *provider.Registry, started *agent.
 		Resolve: automode.Resolver(reg, roles, func() provider.Model { return started.Model }),
 		Config:  cfg,
 		Memory:  memoryText,
+		// The classifier's calls are part of what the session costs: they
+		// go into its usage (footer, /cost, a resumed session's total),
+		// labelled as the classifier's in /cost.
+		OnUsage: func(model provider.Model, usage msg.Usage) {
+			if err := started.Harness.RecordSideUsage(ClassifierUsageSource(model), usage); err != nil {
+				diag.L().Warn("auto mode classifier usage", "err", err)
+			}
+		},
 	})
+}
+
+// ClassifierUsageSource is how /cost labels the auto mode classifier's
+// spend on model.
+func ClassifierUsageSource(model provider.Model) string {
+	return "auto-mode classifier · " + model.Provider + "/" + model.ID
 }
 
 // autoModeHistory is a permission.Request's History for a call on lane:

@@ -46,6 +46,9 @@ type Classifier struct {
 	Memory string
 	// Timeout bounds one call; zero means DefaultTimeout.
 	Timeout time.Duration
+	// OnUsage, if set, receives every call's usage, answered or not: the
+	// tokens are spent either way, and the session's cost must show them.
+	OnUsage func(model provider.Model, usage msg.Usage)
 }
 
 var _ permission.Classifier = (*Classifier)(nil)
@@ -142,6 +145,9 @@ func (c *Classifier) Classify(ctx context.Context, req permission.ClassifyReques
 	}
 	if am != nil {
 		usage = am.Usage
+		if c.OnUsage != nil && (usage.Input != 0 || usage.Output != 0 || usage.CacheRead != 0 || usage.CacheWrite != 0) {
+			c.OnUsage(model, usage)
+		}
 	}
 	if err != nil {
 		return verdict, err

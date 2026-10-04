@@ -1115,16 +1115,24 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Seeded from the session's own usage rows: a resumed session's /cost
 	// covers its earlier runs too, as the footer's cost already does.
 	usageByModel := started.Harness.UsageByModel(started.Model.Provider + "/" + started.Model.ID)
-	addUsage := func(providerID, modelID string, u msg.Usage) {
-		if u.TotalTokens == 0 && u.Input == 0 && u.Output == 0 {
+	addUsageAs := func(key string, u msg.Usage) {
+		if u.TotalTokens == 0 && u.Input == 0 && u.Output == 0 && u.CacheRead == 0 && u.CacheWrite == 0 {
 			return
 		}
-		key := providerID + "/" + modelID
 		usageByModelMu.Lock()
 		usageByModel[key] = usageByModel[key].Add(u)
 		usageByModelMu.Unlock()
 	}
+	addUsage := func(providerID, modelID string, u msg.Usage) {
+		addUsageAs(providerID+"/"+modelID, u)
+	}
 	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
+		if ev.SideUsage != nil {
+			// A call beside the conversation (auto mode's classifier),
+			// under its own label.
+			addUsageAs(ev.UsageSource, *ev.SideUsage)
+			return
+		}
 		if ev.UsageRow == nil {
 			return
 		}

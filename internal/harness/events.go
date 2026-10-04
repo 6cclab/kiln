@@ -150,6 +150,12 @@ type Event struct {
 	// usage
 	UsageRow    *msg.Usage
 	UsageTotals *msg.Usage
+	// SideUsage is a model call made beside the conversation (auto mode's
+	// classifier), recorded in the session's usage but not part of the
+	// context; UsageSource names it ("auto-mode classifier · provider/id").
+	// UsageRow is nil on such an event.
+	SideUsage   *msg.Usage
+	UsageSource string
 
 	// run_end / turn_end
 	Status string // "completed" | "aborted" | "failed"
