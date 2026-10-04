@@ -435,7 +435,11 @@ func MatchesRule(rule, toolName, primaryArg string) bool {
 		pattern = pattern[:len(pattern)-len(" .*")] + "(\\s.*)?"
 	}
 
-	re := compiledPattern("^" + pattern + "$")
+	// (?s): "*" matches newlines too, as Claude Code compiles its patterns
+	// with the dotAll flag. Without it a quoted newline in an argument
+	// ended every match: an allow rule missed a multi-line commit message,
+	// and a deny rule such as Bash(rm *) missed rm -rf "a<newline>b".
+	re := compiledPattern("(?s)^" + pattern + "$")
 	if re == nil {
 		return false
 	}
