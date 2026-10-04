@@ -10,12 +10,13 @@ import (
 // The status line — one row, ported from the kiln design handoff's "Status
 // line" section (docs/kiln-design-handoff/README.md "Screen anatomy"):
 //
-//	● auto-edit  ⇧⇥                      ~/src/relay-api · main*   ctx ━━━━──────  38%  $0.42
+//	● auto-edit  ⇧⇥  ~/src/relay-api · main*  kiln-large      ctx ━━━━──────  38%  $0.42
 //
 // mode segment (dot + label + the mode-cycle key) on the left, cwd/branch
-// next to it, a flexible spacer, then the context meter and cumulative
-// spend on the right — a dashboard read left-to-right: what mode am I in,
-// where am I, how much room and spend is left.
+// and the active model next to it, a flexible spacer, then the context
+// meter and cumulative spend on the right — a dashboard read left-to-right:
+// what mode am I in, where am I, which model, how much room and spend is
+// left.
 
 // GitStatus is the git segment of the status line.
 type GitStatus struct {
@@ -241,10 +242,10 @@ func AbbrevHome(path, home string) string {
 }
 
 // RenderStatusLine renders the one-row status line: mode segment, location
-// segment, a flexible spacer, then the context meter and cost — fitted so
-// the right side ends at width-1. When the row does not fit, segments drop
-// in order: location first, then cost, then the row is truncated outright
-// with FitStatus.
+// segment, model, a flexible spacer, then the context meter and cost —
+// fitted so the right side ends at width-1. When the row does not fit, the
+// cwd shortens first, then segments drop in order: cost, the model, the
+// location itself; past that the row is truncated outright with FitStatus.
 func RenderStatusLine(s StatusState, width int) string {
 	p := IsPlain()
 
@@ -327,19 +328,40 @@ func RenderStatusLine(s StatusState, width int) string {
 	// once even a minimal shortened form cannot fit (defect: a long cwd
 	// used to blank the whole segment, branch included, instead of
 	// shrinking the path first).
-	build := func(includeCost bool) string {
+	// --- model segment ---
+	// The active model, in ink after the location (design "Status line":
+	// `<span style="color:#ece4d4">kiln-large</span>`), the same label the
+	// banner's "· model <m>" shows. It outlives cost when the row is tight
+	// (after a /model switch, which model is answering matters more than the
+	// running spend) but gives way before cwd · branch.
+	modelSeg := ""
+	if s.ModelLabel != "" {
+		modelSeg = Ink(s.ModelLabel)
+	}
+
+	// needLoc: refuse a row that would only fit by dropping the location
+	// entirely, so a tight row gives up cost, then the model, before the
+	// cwd · branch (defect: a long cwd blanked the branch too).
+	build := func(includeCost, includeModel, needLoc bool) string {
 		r := ctxSeg
 		if includeCost {
 			r += "  " + costSeg
 		}
 		rw := VisibleWidth(r)
-		lwMode := VisibleWidth(modeSeg)
+		model := ""
+		if includeModel && modelSeg != "" {
+			model = "  " + modelSeg
+		}
+		lwMode := VisibleWidth(modeSeg) + VisibleWidth(model)
 
 		tryLoc := func(cwdWidth int) string {
 			left := modeSeg
 			if loc := locSegAt(cwdWidth); loc != "" {
 				left += "  " + loc
+			} else if needLoc && s.Cwd != "" {
+				return ""
 			}
+			left += model
 			lw := VisibleWidth(left)
 			spacer := width - 1 - lw - rw
 			if spacer < 1 {
@@ -360,11 +382,17 @@ func RenderStatusLine(s StatusState, width int) string {
 		return tryLoc(0)
 	}
 
-	if out := build(true); out != "" {
-		return out
-	}
-	if out := build(false); out != "" {
-		return out
+	// Drop order as the row narrows: shorten the cwd (inside build), then
+	// cost, then the model (cost comes back if it fits once the model is
+	// gone), and only then the location itself; past that, keep the model
+	// over cost.
+	for _, try := range []struct{ cost, model, needLoc bool }{
+		{true, true, true}, {false, true, true}, {true, false, true}, {false, false, true},
+		{false, true, false}, {false, false, false},
+	} {
+		if out := build(try.cost, try.model, try.needLoc); out != "" {
+			return out
+		}
 	}
 	return FitStatus(modeSeg, width)
 }
