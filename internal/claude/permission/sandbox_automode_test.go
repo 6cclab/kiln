@@ -38,7 +38,10 @@ func TestSandboxAutoAllowSkipsClassifierInAutoMode(t *testing.T) {
 	// (it must leave git and builds working), so .husky hooks or .envrc
 	// would otherwise be written unreviewed.
 	for _, req := range []Request{sandboxBashReq("docker ps", false), sandboxBashReq("make build", true),
-		sandboxBashReq("echo x > .husky/pre-commit", false), sandboxBashReq("echo x > .envrc", false)} {
+		sandboxBashReq("echo x > .husky/pre-commit", false), sandboxBashReq("echo x > .envrc", false),
+		// No protected path named, but git's configuration changes: auto
+		// mode classifies that whatever allows it (bashTouchesProtected).
+		sandboxBashReq("git config core.hooksPath hooks", false)} {
 		c := allowAll()
 		g := newGate(c, settings.Permissions{})
 		if _, _, err := g.CheckWithOutcome(context.Background(), req); err != nil {

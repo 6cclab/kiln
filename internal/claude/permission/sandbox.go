@@ -82,6 +82,11 @@ func (g *Gate) annotateSandbox(req Request) Request {
 //     a file it names) still asks; a bare Bash or Bash(*) ask rule is
 //     skipped for it, outside plan mode;
 //   - an rm/rmdir of a critical path goes through the regular flow;
+//   - a write to a protected path kiln can name (prot, from
+//     Gate.protectedWrite, which runs first) goes through the regular
+//     flow, where it asks, is refused where nobody can be asked, or in
+//     auto mode is classified: the sandbox's own protected list is
+//     narrower, since it must leave git and builds working;
 //   - in plan mode auto-allow does not widen approvals.
 //
 // In auto mode it is approved here too, before the classifier: Claude
@@ -97,7 +102,7 @@ func (g *Gate) annotateSandbox(req Request) Request {
 // Bash(dangerouslyDisableSandbox:true) makes it prompt in every mode and
 // over a matching allow rule, and dontAsk mode refuses it unless an allow
 // rule covers the command.
-func (g *Gate) checkSandboxed(ctx context.Context, req Request, permissions settings.Permissions, mode settings.PermissionMode, hits settings.Hits) (*BlockResult, Outcome, bool, error) {
+func (g *Gate) checkSandboxed(ctx context.Context, req Request, permissions settings.Permissions, mode settings.PermissionMode, hits settings.Hits, prot protection) (*BlockResult, Outcome, bool, error) {
 	p := g.sandboxPolicy()
 	if p == nil || !p.Active() || !isBashCall(req) {
 		return nil, OutcomeNone, false, nil
@@ -114,13 +119,13 @@ func (g *Gate) checkSandboxed(ctx context.Context, req Request, permissions sett
 		// Unsure: something runs that kiln cannot name (a command word
 		// from a substitution or a variable) while deny or ask rules
 		// exist; it might be what they name, so it is not auto-allowed.
-		if hits.Unsure || contentAskHit(permissions, g.cwd(), req) || p.CriticalRemoval(req.PrimaryArg) {
+		if hits.Unsure || contentAskHit(permissions, g.cwd(), req) || p.CriticalRemoval(req.PrimaryArg) || prot != unprotected {
 			return nil, OutcomeNone, false, nil
 		}
-		// In auto mode a write to a protected path (protected.go) goes to
-		// the classifier even past an allow, and so past the sandbox: its
-		// own protected list is narrower, since it must leave git and
-		// builds working.
+		// Auto mode also classifies, whatever allows it, a command whose
+		// writes kiln cannot name or that changes git's configuration
+		// (bashTouchesProtected, the same rule the classifier step uses for
+		// an allow rule); the sandbox does not exempt it from that review.
 		if mode == settings.ModeAuto && g.bashTouchesProtected(req.PrimaryArg) {
 			return nil, OutcomeNone, false, nil
 		}

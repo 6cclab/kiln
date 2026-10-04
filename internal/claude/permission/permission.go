@@ -767,7 +767,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// The OS sandbox's part of the flow (sandbox.go): auto-allowing a
 	// sandboxed command, and the unsandboxed retry's extra checks.
 	req = g.annotateSandbox(req)
-	if r, out, done, err := g.checkSandboxed(ctx, req, permissions, mode, hits); done || err != nil {
+	if r, out, done, err := g.checkSandboxed(ctx, req, permissions, mode, hits, prot); done || err != nil {
 		return r, out, err
 	}
 

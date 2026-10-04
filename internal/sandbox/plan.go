@@ -230,11 +230,12 @@ var claudeConfigEntries = []string{
 //
 // This is not the permission gate's protected-path list
 // (permission/protected.go), and is narrower on purpose: that list names
-// what auto mode reviews before a command runs (all of .git and .claude,
-// package-manager and hook-runner config), while this one is enforced by
-// the kernel on every sandboxed process and must leave git, builds and
-// installs working. In auto mode the gate still sends a sandboxed command
-// that writes a path on its list to the classifier.
+// what needs the user's approval before a command runs (all of .git and
+// .claude, package-manager and hook-runner config), while this one is
+// enforced by the kernel on every sandboxed process and must leave git,
+// builds and installs working. A sandboxed command that writes a path on
+// the gate's list, as far as kiln can name its writes, is not auto-allowed
+// by the sandbox: it asks, or in auto mode is classified.
 func protectedPaths(roots []string, home string, gitDirs []string) (rules []Rule, literal []string) {
 	add := func(p string) { rules = append(rules, Rule{Path: p}) }
 	seen := map[string]bool{}
