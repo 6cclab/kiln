@@ -5,7 +5,11 @@ approval needed ─────────────────────�
  $ npm ci && npm test && make build && go vet ./... && cargo fmt               
 
  1  Yes
- 2  Yes, and don’t ask again for: npm ci *, npm test *, make build *, +2 more   
+ 2  Yes, and don’t ask again for: npm ci *,                                     
+    npm test *,                                                                 
+    make build *,                                                               
+    go vet *,                                                                   
+    cargo fmt *                                                                 
  3  Yes, and switch to auto mode · auto mode handles these prompts for you
  4  No
 

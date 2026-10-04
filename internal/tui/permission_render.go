@@ -37,6 +37,13 @@ type PermissionRequest struct {
 	// InAutoMode leaves out the bash prompt's "switch to auto mode"
 	// option: that mode is already on.
 	InAutoMode bool
+	// InAcceptEdits leaves out the edit prompt's "switch to accept edits"
+	// option, for the same reason.
+	InAcceptEdits bool
+	// ModeSwitchMoot leaves out every "Yes, and switch to …" option: the
+	// prompt was forced by an ask rule, a hook or a protected path, which
+	// no mode switch would have avoided (permission.Request.ModeSwitchMoot).
+	ModeSwitchMoot bool
 }
 
 // declinedNoteText builds the "✕ Declined …" note's text for a denied
@@ -162,7 +169,7 @@ func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, select
 	}
 	options = append(options, "No, and tell kiln what to do instead")
 	for i, opt := range options {
-		lines = append(lines, " "+permissionOptionRow(fmt.Sprintf("%d", i+1), opt, i == selected, maxInt(width-1, 1)))
+		lines = append(lines, permissionOptionRows(fmt.Sprintf("%d", i+1), opt, i == selected, width)...)
 	}
 	lines = append(lines,
 		"",
@@ -244,31 +251,38 @@ type BashPermissionRequest struct {
 const unsandboxedNote = "runs outside the sandbox"
 
 // dontAskLabel is option 2's label: every rule the answer saves, in
-// order. When they do not all fit avail columns, it names as many as fit
-// and counts the rest ("+2 more"), so the row never claims less than is
-// saved; a single rule too long for the row is cut with "…".
+// order, whole. These are persistent allow rules (an in-place sed among
+// them, say), so none is hidden behind a count or cut short. When they do
+// not fit avail columns on one row, each rule takes a row of its own
+// ("\n"-separated, permissionOptionRows), so a wrap never splits a rule
+// from its own words; a rule wider than the row still wraps (FitLines).
 func dontAskLabel(rules []string, avail int) string {
 	const head = "Yes, and don’t ask again for: "
 	full := head + strings.Join(rules, ", ")
-	if VisibleWidth(full) <= avail {
+	if len(rules) < 2 || VisibleWidth(full) <= avail {
 		return full
 	}
-	for n := len(rules) - 1; n >= 1; n-- {
-		s := head + strings.Join(rules[:n], ", ") + fmt.Sprintf(", +%d more", len(rules)-n)
-		if VisibleWidth(s) <= avail {
-			return s
+	return head + strings.Join(rules, ",\n")
+}
+
+// permissionOptionRows renders one numbered option whose label may hold
+// "\n": its first row as permissionOptionRow does, each further row
+// indented under the label, raised across the row when selected. width
+// is the prompt's.
+func permissionOptionRows(key, label string, selected bool, width int) []string {
+	parts := strings.Split(label, "\n")
+	rows := []string{" " + permissionOptionRow(key, parts[0], selected, maxInt(width-1, 1))}
+	for _, part := range parts[1:] {
+		row := strings.Repeat(" ", 1+VisibleWidth(key)+2) + part
+		switch {
+		case !selected:
+			row = Muted(row)
+		case IsColorEnabled() && VisibleWidth(row) <= width:
+			row = onRaiseSpan(textHex.Ink, padTo(row, maxInt(width, 1)))
 		}
+		rows = append(rows, row)
 	}
-	more := ""
-	if len(rules) > 1 {
-		more = fmt.Sprintf(", +%d more", len(rules)-1)
-	}
-	room := avail - VisibleWidth(head) - VisibleWidth(more) - 1
-	if room < 8 {
-		// Too narrow to cut sensibly: show it whole and let the row wrap.
-		return head + rules[0] + more
-	}
-	return head + truncateToWidth(rules[0], room) + "…" + more
+	return rows
 }
 
 // RenderBashPermissionPrompt renders the Bash command permission prompt
@@ -323,8 +337,7 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 	}
 	options = append(options, "No")
 	for i, opt := range options {
-		key := fmt.Sprintf("%d", i+1)
-		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected, maxInt(width-1, 1)))
+		lines = append(lines, permissionOptionRows(fmt.Sprintf("%d", i+1), opt, i == selected, width)...)
 	}
 
 	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · esc decline · tab to amend"), amberRule)
@@ -381,6 +394,9 @@ type EditPermissionRequest struct {
 	Kind  EditKind
 	Path  string // relative path, already summarized by the caller
 	Hunks []DiffHunk
+	// NoModeSwitch leaves out "Yes, and switch to accept edits"
+	// (editOffersModeSwitch): Yes / No.
+	NoModeSwitch bool
 }
 
 // RenderEditPermissionPrompt renders the Edit/Write permission prompt
@@ -477,6 +493,9 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 		"Yes",
 		"Yes, and switch to accept edits (auto-approve file edits and common file commands) for this\n    session (shift+tab)",
 		"No",
+	}
+	if req.NoModeSwitch {
+		opts = []string{"Yes", "No"}
 	}
 	for i, opt := range opts {
 		parts := strings.SplitN(opt, "\n", 2)

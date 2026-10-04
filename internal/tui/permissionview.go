@@ -84,7 +84,12 @@ func promptOptionsFor(req PermissionRequest) []promptOptionKind {
 		// auto mode / No.
 		opts = []promptOptionKind{optAllow, optAllowAlways, optSwitchAutoAllow, optDenyOutright}
 	case "edit", "write":
-		// RenderEditPermissionPrompt: Yes / switch to accept edits / No.
+		// RenderEditPermissionPrompt: Yes / switch to accept edits / No,
+		// without the switch when that mode is already on or would not
+		// have avoided this prompt (editOffersModeSwitch).
+		if !editOffersModeSwitch(req) {
+			return []promptOptionKind{optAllow, optDenyOutright}
+		}
 		return []promptOptionKind{optAllow, optSwitchAcceptEditsAllow, optDenyOutright}
 	default:
 		// RenderPermissionPrompt: Yes / don't-ask-again / No-and-tell-kiln.
@@ -93,8 +98,9 @@ func promptOptionsFor(req PermissionRequest) []promptOptionKind {
 	if !offersDontAsk(req) {
 		opts = append(opts[:1:1], opts[2:]...)
 	}
-	if req.InAutoMode {
-		// Auto mode is already on: no "switch to auto mode".
+	if req.InAutoMode || req.ModeSwitchMoot {
+		// Auto mode is already on, or would still ask: no "switch to auto
+		// mode".
 		kept := opts[:0:0]
 		for _, o := range opts {
 			if o != optSwitchAutoAllow {
@@ -104,6 +110,14 @@ func promptOptionsFor(req PermissionRequest) []promptOptionKind {
 		opts = kept
 	}
 	return opts
+}
+
+// editOffersModeSwitch reports an edit or write prompt that offers "Yes,
+// and switch to accept edits": not when that mode is already on, and not
+// when the prompt was forced by something accept edits does not approve
+// (a protected path, an ask rule, a hook).
+func editOffersModeSwitch(req PermissionRequest) bool {
+	return !req.InAcceptEdits && !req.ModeSwitchMoot
 }
 
 // offersDontAsk reports a request whose prompt lists "don't ask again":
@@ -793,19 +807,21 @@ func (p *PromptState) Render(width int) []string {
 			fb = &feedback
 		}
 		return RenderBashPermissionPrompt(BashPermissionRequest{Command: cmd, Description: desc, Feedback: fb,
-			Grantable: req.Grantable, DontAskRules: req.DontAskRules, InAutoMode: req.InAutoMode,
+			Grantable: req.Grantable, DontAskRules: req.DontAskRules, InAutoMode: req.InAutoMode || req.ModeSwitchMoot,
 			Unsandboxed: req.Unsandboxed}, width, p.pending.selected)
 	case "edit":
 		return RenderEditPermissionPrompt(EditPermissionRequest{
-			Kind:  EditKindEdit,
-			Path:  SummarizeArg(req, p.cwd),
-			Hunks: diffHunksFromEditFile(p.cwd, req.Args),
+			Kind:         EditKindEdit,
+			Path:         SummarizeArg(req, p.cwd),
+			Hunks:        diffHunksFromEditFile(p.cwd, req.Args),
+			NoModeSwitch: !editOffersModeSwitch(req),
 		}, width, p.pending.selected, p.feedback != nil, feedback)
 	case "write":
 		return RenderEditPermissionPrompt(EditPermissionRequest{
-			Kind:  EditKindWrite,
-			Path:  SummarizeArg(req, p.cwd),
-			Hunks: diffHunksFromWriteArgs(req.Args),
+			Kind:         EditKindWrite,
+			Path:         SummarizeArg(req, p.cwd),
+			Hunks:        diffHunksFromWriteArgs(req.Args),
+			NoModeSwitch: !editOffersModeSwitch(req),
 		}, width, p.pending.selected, p.feedback != nil, feedback)
 	default:
 		return RenderPermissionPrompt(req, p.cwd, width, p.pending.selected, p.feedback != nil, feedback)

@@ -22,7 +22,7 @@ func TestRenderGolden_PermBashDontAsk2Rules(t *testing.T) {
 }
 
 // TestRenderGolden_PermBashDontAsk5Rules: five rules do not fit an
-// 80-column row; it names those that fit and counts the rest.
+// 80-column row; the option names every one, wrapping onto a second row.
 func TestRenderGolden_PermBashDontAsk5Rules(t *testing.T) {
 	withRenderEnv(t, 80)
 	req := BashPermissionRequest{Command: "npm ci && npm test && make build && go vet ./... && cargo fmt", Grantable: true,
@@ -44,28 +44,88 @@ func TestRenderGolden_PermGenericDontAskHidden(t *testing.T) {
 	assertRenderGolden(t, "perm-generic-dontask-hidden", RenderPermissionPrompt(req, "/", 80, 0, false, ""))
 }
 
+// TestDontAskLabel: the option names every rule it will save, whole,
+// however narrow the row. A "+2 more" hid two persistent sed -i rules from
+// the person agreeing to save them.
 func TestDontAskLabel(t *testing.T) {
-	rules := []string{"npm ci *", "npm test *", "make build *", "go vet *", "cargo fmt *"}
+	rules := []string{"git mv *", "sed -i '' 's/^package main$/package store/' internal/store/store.go", "sed -i '' 's/x/y/' internal/store/filestore.go"}
+	if got, want := dontAskLabel(rules, 300), "Yes, and don’t ask again for: "+strings.Join(rules, ", "); got != want {
+		t.Errorf("dontAskLabel(wide) = %q, want %q", got, want)
+	}
+	if got, want := dontAskLabel(rules, 76), "Yes, and don’t ask again for: "+strings.Join(rules, ",\n"); got != want {
+		t.Errorf("dontAskLabel(narrow) = %q, want one rule per row %q", got, want)
+	}
+	for _, width := range []int{120, 80, 50} {
+		req := BashPermissionRequest{Command: "git mv a b && sed -i '' x y && sed -i '' z w", Grantable: true, DontAskRules: rules}
+		joined := strings.Join(stripAll(RenderBashPermissionPrompt(req, width, 1)), "")
+		flat := strings.Join(strings.Fields(joined), "")
+		for _, r := range rules {
+			if !strings.Contains(flat, strings.Join(strings.Fields(r), "")) {
+				t.Errorf("width %d: rule %q not shown in full:\n%s", width, r, strings.Join(stripAll(RenderBashPermissionPrompt(req, width, 1)), "\n"))
+			}
+		}
+		if strings.Contains(joined, "more") {
+			t.Errorf("width %d: label counts hidden rules", width)
+		}
+		for _, line := range RenderBashPermissionPrompt(req, width, 1) {
+			if VisibleWidth(line) > width {
+				t.Errorf("width %d: row %d wide: %q", width, VisibleWidth(line), stripANSI(line))
+			}
+		}
+	}
+}
+
+func stripAll(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = stripANSI(l)
+	}
+	return out
+}
+
+// TestPromptOptions_NoSwitchToTheModeAlreadyOn: an edit prompt raised in
+// accept edits (a protected path) does not offer to switch to accept
+// edits, nor does one a mode switch would not have avoided (protected
+// path, ask rule, hook); a bash prompt forced that way does not offer
+// auto mode. Keys and rendering agree.
+func TestPromptOptions_NoSwitchToTheModeAlreadyOn(t *testing.T) {
+	withRenderEnv(t, 100)
 	cases := []struct {
-		rules []string
-		avail int
-		want  string
+		name string
+		req  PermissionRequest
+		want []promptOptionKind
 	}{
-		{rules[:1], 76, "Yes, and don’t ask again for: npm ci *"},
-		{rules, 200, "Yes, and don’t ask again for: npm ci *, npm test *, make build *, go vet *, cargo fmt *"},
-		{rules, 76, "Yes, and don’t ask again for: npm ci *, npm test *, make build *, +2 more"},
-		{rules, 56, "Yes, and don’t ask again for: npm ci *, +4 more"},
-		{[]string{"sh -c 'npm run build && npm run lint && npm run typecheck'"}, 56, "Yes, and don’t ask again for: sh -c 'npm run build && n…"},
-		{[]string{"sh -c 'npm run build && npm run lint'", "make build *"}, 56, "Yes, and don’t ask again for: sh -c 'npm run b…, +1 more"},
+		{"edit in manual", PermissionRequest{ToolName: "edit"}, []promptOptionKind{optAllow, optSwitchAcceptEditsAllow, optDenyOutright}},
+		{"edit in acceptEdits", PermissionRequest{ToolName: "edit", InAcceptEdits: true}, []promptOptionKind{optAllow, optDenyOutright}},
+		{"write, protected path in manual", PermissionRequest{ToolName: "write", ModeSwitchMoot: true}, []promptOptionKind{optAllow, optDenyOutright}},
+		{"bash forced by an ask rule", PermissionRequest{ToolName: "bash", ModeSwitchMoot: true}, []promptOptionKind{optAllow, optDenyOutright}},
+		{"bash in acceptEdits keeps auto mode", PermissionRequest{ToolName: "bash", InAcceptEdits: true}, []promptOptionKind{optAllow, optSwitchAutoAllow, optDenyOutright}},
 	}
 	for _, c := range cases {
-		got := dontAskLabel(c.rules, c.avail)
-		if got != c.want {
-			t.Errorf("dontAskLabel(%q, %d) = %q, want %q", c.rules, c.avail, got, c.want)
-		}
-		if VisibleWidth(got) > c.avail {
-			t.Errorf("dontAskLabel(%q, %d) is %d wide", c.rules, c.avail, VisibleWidth(got))
-		}
+		t.Run(c.name, func(t *testing.T) {
+			got := promptOptionsFor(c.req)
+			if len(got) != len(c.want) {
+				t.Fatalf("options = %v, want %v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("options = %v, want %v", got, c.want)
+				}
+			}
+			p := NewPromptState(t.TempDir())
+			reply := p.AskTool(c.req)
+			rendered := stripANSI(strings.Join(p.Render(100), "\n"))
+			hasSwitch := strings.Contains(rendered, "switch to")
+			wantSwitch := len(c.want) == 3
+			if hasSwitch != wantSwitch {
+				t.Errorf("rendered switch option = %v, want %v:\n%s", hasSwitch, wantSwitch, rendered)
+			}
+			p.HandleKey(key("2"))
+			choice := <-reply
+			if !wantSwitch && (choice.Kind != ChoiceDeny || p.switchMode != "") {
+				t.Errorf(`"2" = %+v switchMode=%q, want No`, choice, p.switchMode)
+			}
+		})
 	}
 }
 
