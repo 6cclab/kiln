@@ -445,6 +445,7 @@ Exit-code / stdout contract, checked in this order:
 5. Empty stdout → nothing further.
 6. Non-JSON stdout → appended as plain-text context.
 7. JSON stdout: `continue: false` blocks; `hookSpecificOutput.permissionDecision: "deny"` blocks; `hookSpecificOutput.updatedInput` is merged key-by-key into the rewritten tool args (composes across multiple hooks); `hookSpecificOutput.additionalContext` is appended as context.
+8. PreToolUse `permissionDecision` `"allow"` and `"ask"` (honoured only with `hookEventName: "PreToolUse"`, as in Claude Code), and the deprecated top-level `decision` `"approve"`/`"block"` (allow/deny). Several hooks combine deny > ask > allow; `"defer"` is no decision. The gate (`permission.Request.HookDecision`) applies them as Claude Code does: `"allow"` skips the prompt, and in auto mode the classifier, but a deny rule still denies, an ask rule still asks, and a protected-path write, a command naming a file kiln cannot see while path rules exist, an `rm` of a critical path (with the sandbox on) and plan mode's refusal of edits still apply. `"ask"` forces a prompt after deny rules, in every mode that can show one (dontAsk and a run with no prompt refuse it), with the hook's reason as a note, and no "don't ask again".
 
 `PreToolUse` hooks run **before** the permission gate (`GuardToolCall`), so a hook-rewritten command is what the gate judges, not what the model proposed.
 

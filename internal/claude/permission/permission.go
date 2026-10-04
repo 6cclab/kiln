@@ -73,7 +73,32 @@ type Request struct {
 	// Unsandboxed marks a bash call that runs outside an active OS
 	// sandbox (excludedCommands, or dangerouslyDisableSandbox): sandbox.go.
 	Unsandboxed bool
+	// HookDecision is what the PreToolUse hooks decided short of a denial
+	// (hooks.Outcome.Decision), and HookReason the reason they gave. As in
+	// Claude Code (resolveHookPermissionDecision, and the hooks and
+	// permissions docs): "allow" skips the prompt, but deny rules still
+	// deny, ask rules still ask, and the checks no allow approves (a
+	// protected path, plan mode's refusal of edits, a critical removal)
+	// still apply; "ask" forces the prompt, in every mode that can show
+	// one, after deny rules.
+	HookDecision string
+	HookReason   string
+	// ModeSwitchMoot is set by the gate on a prompt that switching modes
+	// would not have avoided: forced by an ask rule, a hook's "ask", a
+	// protected path, or a command kiln cannot see while path rules exist.
+	// A UI then leaves out its "Yes, and switch to …" option, as Claude
+	// Code leaves it out of prompts forced by ask rules or hooks.
+	ModeSwitchMoot bool
+	// InAcceptEdits is set by the gate on a prompt raised in acceptEdits,
+	// so a UI does not offer to switch to the mode already active.
+	InAcceptEdits bool
 }
+
+// Hook decisions, as permission.Request.HookDecision carries them.
+const (
+	HookAllow = "allow"
+	HookAsk   = "ask"
+)
 
 // Prompter asks the user. Implemented by the TUI; absent in headless runs.
 type Prompter func(ctx context.Context, req Request) (PromptChoice, error)
@@ -751,9 +776,13 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	hits := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg)
 
+	// A PreToolUse hook's "ask" forces the prompt (after deny rules):
+	// nothing below that would let the call through without one applies.
+	hookAsk := req.HookDecision == HookAsk && !hits.Deny
+
 	// The session scratchpad is the model's own: no prompt in any mode,
 	// plan mode included, once deny and ask rules have had their say.
-	if g.scratchpadCall(req, hits) {
+	if !hookAsk && g.scratchpadCall(req, hits) {
 		return nil, OutcomeAuto, nil
 	}
 
@@ -764,11 +793,20 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// allow rules and acceptEdits.
 	protPath, prot := g.protectedWrite(req, mode == settings.ModeAuto)
 
+	// A PreToolUse hook's "allow" skips the prompt (and, in auto mode, the
+	// classifier), unless a rule or a check no allow approves objects;
+	// then the call takes the regular flow below, as in Claude Code.
+	if req.HookDecision == HookAllow && g.hookAllows(req, permissions, mode, hits, prot, decideArg) {
+		return nil, OutcomeAuto, nil
+	}
+
 	// The OS sandbox's part of the flow (sandbox.go): auto-allowing a
 	// sandboxed command, and the unsandboxed retry's extra checks.
 	req = g.annotateSandbox(req)
-	if r, out, done, err := g.checkSandboxed(ctx, req, permissions, mode, hits, prot); done || err != nil {
-		return r, out, err
+	if !hookAsk {
+		if r, out, done, err := g.checkSandboxed(ctx, req, permissions, mode, hits, prot); done || err != nil {
+			return r, out, err
+		}
 	}
 
 	// A session "don't ask again" grant stands in for an allow rule, so
@@ -780,13 +818,19 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// whatever any allow says (settings.PlanOverridesAllow). A shell
 	// command goes through the regular flow there, grants included.
 	// Nor a protected-path write, which no allow approves.
-	grantable := !hits.Deny && !hits.Ask && !hits.Unsure && prot == unprotected &&
+	// Nor a call a hook asks about every time.
+	grantable := !hits.Deny && !hits.Ask && !hits.Unsure && prot == unprotected && !hookAsk &&
 		!(mode == settings.ModePlan && settings.PlanOverridesAllow(req.ToolName, decideArg))
 	if grantable && g.sessionAllowed(k) {
 		return nil, OutcomeAuto, nil
 	}
 
 	verdict := settings.DecideFromHits(hits, req.ToolName, decideArg, mode)
+	note := ""
+	if hookAsk && verdict != settings.Deny {
+		verdict = settings.Ask
+		note = hookAskNote(req.HookReason)
+	}
 
 	// HARNESS_EXP_LEDGER (internal/cli/experiments.go): the one narrow
 	// exception to plan mode's read-only enforcement — edit/write on
@@ -795,7 +839,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// neither a deny nor an ask rule matched: a deny rule on the ledger
 	// still refuses, and an ask rule still asks (rather than meeting plan
 	// mode's refusal of edits). Every other tool and path keeps verdict.
-	if mode == settings.ModePlan && g.planLedgerPath != "" && !hits.Deny &&
+	if !hookAsk && mode == settings.ModePlan && g.planLedgerPath != "" && !hits.Deny &&
 		(strings.EqualFold(req.ToolName, "edit") || strings.EqualFold(req.ToolName, "write")) {
 		if path, ok := PathArgOf(req.Args); ok && g.resolvePlanPath(path) == g.planLedgerPath {
 			if !hits.Ask {
@@ -811,7 +855,6 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// it does every ask). bypassPermissions allows it: Claude Code's docs
 	// list protected-path writes as "Allowed" there. Auto mode routes
 	// them to the classifier instead (classifier.go, and below).
-	note := ""
 	if prot != unprotected && verdict != settings.Deny &&
 		mode != settings.ModeAuto && mode != settings.ModeBypassPermissions {
 		verdict = settings.Ask
@@ -826,7 +869,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// names a file kiln cannot resolve while path rules exist.
 	if verdict == settings.Ask && strings.EqualFold(req.ToolName, "bash") &&
 		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits || mode == settings.ModeDontAsk) &&
-		!hits.Ask && !hits.Unsure && hits.ReadOnly && prot == unprotected &&
+		!hits.Ask && !hits.Unsure && hits.ReadOnly && prot == unprotected && !hookAsk &&
 		g.commandWithinRoots(req.PrimaryArg) {
 		return nil, OutcomeAuto, nil
 	}
@@ -889,6 +932,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 			return nil, OutcomeAuto, nil
 		}
 		promptReq := g.promptRequest(req, permissions, mode, grantable)
+		promptReq.ModeSwitchMoot = hits.Ask || hits.Unsure || prot != unprotected || hookAsk
 		promptReq.OutsideWorkspace = true
 		promptReq.AutoModeNote = outsideNote
 		choice, err := g.prompter(ctx, promptReq)
@@ -987,12 +1031,13 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// this command. Not for a protected-path write, which no allow rule
 	// approves.
 	permissions, mode = g.rules()
-	if settings.IsBashTool(req.ToolName) && prot == unprotected {
+	if settings.IsBashTool(req.ToolName) && prot == unprotected && !hookAsk {
 		if h := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg); h.Allow && !h.Deny && !h.Ask && !h.Unsure {
 			return nil, OutcomeAuto, nil
 		}
 	}
 	promptReq := g.promptRequest(req, permissions, mode, grantable)
+	promptReq.ModeSwitchMoot = hits.Ask || hits.Unsure || prot != unprotected || hookAsk
 	promptReq.AutoModeNote = note
 	choice, err := g.prompter(ctx, promptReq)
 	if err != nil {
@@ -1014,6 +1059,47 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	return &r, OutcomeDeclined, nil
 }
 
+// hookAllows reports a call a PreToolUse hook's "allow" approves without a
+// prompt: Claude Code's checkRuleBasedPermissions finds no objection. A
+// deny rule, an ask rule, a protected-path write (its safety check), a
+// command naming a file kiln cannot see while path rules exist, plan
+// mode's refusal of edits, an rm of a critical path (which Claude Code's
+// docs say no hook "allow" approves), an unsandboxed retry an ask rule
+// covers, and, in auto mode, a bash write kiln routes to the classifier
+// even past an allow rule (bashTouchesProtected) all send the call to the
+// regular flow instead.
+func (g *Gate) hookAllows(req Request, permissions settings.Permissions, mode settings.PermissionMode, hits settings.Hits, prot protection, decideArg string) bool {
+	if hits.Deny || hits.Ask || hits.Unsure || prot != unprotected {
+		return false
+	}
+	if mode == settings.ModePlan && settings.PlanOverridesAllow(req.ToolName, decideArg) {
+		return false
+	}
+	if isBashCall(req) {
+		if p := g.sandboxPolicy(); p != nil {
+			if p.CriticalRemoval(req.PrimaryArg) {
+				return false
+			}
+			if p.Active() && disableRequested(req) && hasDisableSandboxAskRule(permissions) {
+				return false
+			}
+		}
+		if mode == settings.ModeAuto && (g.bashTouchesProtected(req.PrimaryArg) || g.bashProtectedOutside(req.PrimaryArg) != "") {
+			return false
+		}
+	}
+	return true
+}
+
+// hookAskNote is what a prompt a PreToolUse hook forced says about why.
+func hookAskNote(reason string) string {
+	reason = strings.TrimRight(strings.TrimSpace(reason), ".")
+	if reason == "" {
+		return "A PreToolUse hook asked for your approval of this call."
+	}
+	return "A PreToolUse hook asked for your approval: " + reason + "."
+}
+
 // promptRequest is req as the prompt sees it: whether "don't ask again"
 // would be honoured (grantable: no deny, ask or unsure hit, not a
 // plan-mode edit), and for bash the rules it saves. A bash line is
@@ -1023,6 +1109,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 func (g *Gate) promptRequest(req Request, permissions settings.Permissions, mode settings.PermissionMode, grantable bool) Request {
 	req.Grantable, req.DontAskRules = grantable, nil
 	req.InAutoMode = mode == settings.ModeAuto
+	req.InAcceptEdits = mode == settings.ModeAcceptEdits
 	if !grantable || !settings.IsBashTool(req.ToolName) {
 		return req
 	}

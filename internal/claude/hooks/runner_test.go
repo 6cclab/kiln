@@ -284,7 +284,7 @@ func TestGuardToolCallHooksThenGate(t *testing.T) {
 				s, ok := args["command"].(string)
 				return s, ok
 			},
-			Check: func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any) (*Blocked, error) {
+			Check: func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any, _ Decision, _ string) (*Blocked, error) {
 				seen = append(seen, primaryArg)
 				if denyMatching != "" && hasPrimaryArg && len(primaryArg) >= len(denyMatching) && primaryArg[:len(denyMatching)] == denyMatching {
 					return &Blocked{Reason: "denied: " + primaryArg}, nil

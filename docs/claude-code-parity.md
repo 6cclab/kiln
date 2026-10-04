@@ -474,7 +474,7 @@ stdin. Implemented against this machine's real hooks (`rtk-rewrite.sh`,
 
 | Event | Status |
 |---|---|
-| `PreToolUse` | `[obs]` matcher, rewrite via `updatedInput`, deny via exit 2 or `permissionDecision` |
+| `PreToolUse` | `[obs]` matcher, rewrite via `updatedInput`, deny via exit 2 or `permissionDecision`; `permissionDecision` `allow` skips the prompt (deny and ask rules, protected paths and critical removals still apply) and `ask` forces it — `TestHookAllowSkipsThePrompt`, `TestHookAllowDoesNotBeatRules`, `TestHookAskForcesThePrompt`, `TestPreToolUseDecisions`. kiln keeps plan mode's refusal of edits past a hook `allow`; Claude Code's code path would let the edit run |
 | `PostToolUse` | `[obs]` fires with `tool_response` |
 | `UserPromptSubmit` | `[obs]` stdout becomes turn context |
 | `SessionStart` | `[obs]` stdout becomes first-turn context |
