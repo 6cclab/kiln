@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -245,81 +246,188 @@ func (d *dialogModel) FrameLabel() string { return "model" }
 // exactly at width 100. Not verified at any other width — no second
 // reference capture exists to disambiguate 61 from 66 further.
 func renderModelOptionRows(items []commands.Item, cursor, width int) []string {
-	if len(items) == 0 {
-		return nil
-	}
-	labels := make([]string, len(items))
-	labelWidth := 0
-	for i, it := range items {
-		l := it.Label
-		if it.Marker == "✔" {
-			l += " " + G().OK
-		}
-		labels[i] = l
-		if w := VisibleWidth(l); w > labelWidth {
-			labelWidth = w
-		}
-	}
-	descCol := len(dialogIndent) + markerWidth + labelWidth + 2
-	wrapWidth := width - descCol - 3
-	if wrapWidth < 10 {
-		wrapWidth = 10
-	}
-
+	descCol, wrapWidth := modelOptionLayout(items, width)
 	var out []string
 	for i, it := range items {
-		marker := selectionGutter(i == cursor)
-		label := Muted(labels[i])
-		if i == cursor {
-			label = KilnAmber(labels[i])
-		}
-		pad := descCol - len(dialogIndent) - markerWidth - VisibleWidth(labels[i])
-		if pad < 2 {
-			pad = 2
-		}
-		row := dialogIndent + marker + label
-		lines := wrapPlain(it.Description, wrapWidth)
-		if it.Description != "" {
-			row += strings.Repeat(" ", pad) + Muted(lines[0])
-		}
-		if i == cursor {
-			row = RaiseRow(row, width)
-		}
-		out = append(out, row)
-		for _, cont := range lines[1:] {
-			contRow := strings.Repeat(" ", descCol) + Muted(cont)
-			if i == cursor {
-				contRow = RaiseRow(contRow, width)
-			}
-			out = append(out, contRow)
-		}
+		out = append(out, renderModelOptionRow(it, i == cursor, descCol, wrapWidth, width)...)
 	}
 	return out
 }
 
+// modelOptionLayout computes the shared column layout (descCol, wrapWidth)
+// every item's row aligns to — derived from the widest label across the
+// *whole* list, so a windowed subset (renderModelOptionRowsWindowed) still
+// lines up with where the full list would have put it, not a column
+// recomputed from just the visible items.
+func modelOptionLayout(items []commands.Item, width int) (descCol, wrapWidth int) {
+	if len(items) == 0 {
+		return 0, 0
+	}
+	labelWidth := 0
+	for _, it := range items {
+		l := it.Label
+		if it.Marker == "✔" {
+			l += " " + G().OK
+		}
+		if w := VisibleWidth(l); w > labelWidth {
+			labelWidth = w
+		}
+	}
+	descCol = len(dialogIndent) + markerWidth + labelWidth + 2
+	wrapWidth = width - descCol - 3
+	if wrapWidth < 10 {
+		wrapWidth = 10
+	}
+	return descCol, wrapWidth
+}
+
+// renderModelOptionRow renders one item's row(s) (the numbered/marked
+// label row, plus any wrapped description continuation rows) at a shared
+// descCol/wrapWidth layout (modelOptionLayout).
+func renderModelOptionRow(it commands.Item, isCursor bool, descCol, wrapWidth, width int) []string {
+	label := it.Label
+	if it.Marker == "✔" {
+		label += " " + G().OK
+	}
+	marker := selectionGutter(isCursor)
+	labelOut := Muted(label)
+	if isCursor {
+		labelOut = KilnAmber(label)
+	}
+	pad := descCol - len(dialogIndent) - markerWidth - VisibleWidth(label)
+	if pad < 2 {
+		pad = 2
+	}
+	row := dialogIndent + marker + labelOut
+	lines := wrapPlain(it.Description, wrapWidth)
+	if it.Description != "" {
+		row += strings.Repeat(" ", pad) + Muted(lines[0])
+	}
+	if isCursor {
+		row = RaiseRow(row, width)
+	}
+	out := []string{row}
+	for _, cont := range lines[1:] {
+		contRow := strings.Repeat(" ", descCol) + Muted(cont)
+		if isCursor {
+			contRow = RaiseRow(contRow, width)
+		}
+		out = append(out, contRow)
+	}
+	return out
+}
+
+// renderModelOptionRowsWindowed renders a vertical window of items sized
+// to fit budget rows, keeping cursor visible: every item still gets its
+// full row(s) (a description never splits mid-item), expanding the window
+// outward from cursor until the next item on either side would overflow
+// budget. hiddenAbove/hiddenBelow report how many items were left out on
+// each side, for a "+N more above/below" row the caller may add.
+//
+// Without this, Render's old plan (append everything, then hard-cut
+// out[:height]) kept whichever items happened to come first and dropped
+// the hint/legend row and the effort scale along with any model past the
+// cut — the *whole* panel height budget belongs to the options list only
+// up to what's left after the fixed header/footer rows
+// (qa/findings/20261004T204953Z-narrow-footer-and-panel-clipping.json: at
+// 80x24 the panel "runs off the bottom" and "the hint row... are not
+// visible").
+func renderModelOptionRowsWindowed(items []commands.Item, cursor, width, budget int) (rows []string, hiddenAbove, hiddenBelow int) {
+	if len(items) == 0 {
+		return nil, 0, 0
+	}
+	descCol, wrapWidth := modelOptionLayout(items, width)
+	rowCounts := make([]int, len(items))
+	for i, it := range items {
+		rowCounts[i] = len(renderModelOptionRow(it, i == cursor, descCol, wrapWidth, width))
+	}
+	if cursor < 0 || cursor >= len(items) {
+		cursor = 0
+	}
+	if budget < rowCounts[cursor] {
+		budget = rowCounts[cursor]
+	}
+	start, end := cursor, cursor+1
+	used := rowCounts[cursor]
+	for {
+		grew := false
+		if end < len(items) && used+rowCounts[end] <= budget {
+			used += rowCounts[end]
+			end++
+			grew = true
+		}
+		if start > 0 && used+rowCounts[start-1] <= budget {
+			used += rowCounts[start-1]
+			start--
+			grew = true
+		}
+		if !grew {
+			break
+		}
+	}
+	for i := start; i < end; i++ {
+		rows = append(rows, renderModelOptionRow(items[i], i == cursor, descCol, wrapWidth, width)...)
+	}
+	return rows, start, len(items) - end
+}
+
 func (d *dialogModel) Render(width, height int) []string {
-	var out []string
-	out = append(out, renderTitleAndDescription(dialogModelTitle, dialogModelDescription, width)...)
-	out = append(out, "")
-	out = append(out, renderModelOptionRows(d.spec.Items, d.cursor, width)...)
-	out = append(out, "")
+	header := append([]string(nil), renderTitleAndDescription(dialogModelTitle, dialogModelDescription, width)...)
+	header = append(header, "")
+
+	footer := []string{""}
 	if d.spec.Effort != "" {
-		out = append(out, dialogIndent+renderEffortScale(d.spec.Effort, width-len(dialogIndent)))
-		out = append(out, "")
+		footer = append(footer, dialogIndent+renderEffortScale(d.spec.Effort, width-len(dialogIndent)), "")
 	}
 	if d.status != "" {
 		colour := KilnGreen
 		if !d.statusOK {
 			colour = KilnRed
 		}
-		out = append(out, dialogIndent+colour(d.status))
-		out = append(out, "")
+		footer = append(footer, dialogIndent+colour(d.status), "")
 	}
-	out = append(out, renderLegend([]string{
+	footer = append(footer, renderLegend([]string{
 		"Enter to set as default",
 		"s to use this session only",
 		"Esc to cancel",
 	}, width)...)
+
+	// The legend/hint row and the rest of the footer are fixed cost, not
+	// something that gets cut when the panel is too tall for the screen —
+	// only the options list gives up rows, and it does so by windowing
+	// around the cursor (renderModelOptionRowsWindowed) rather than
+	// losing whatever didn't fit above a hard cut.
+	options := renderModelOptionRows(d.spec.Items, d.cursor, width)
+	hiddenAbove, hiddenBelow := 0, 0
+	if height > 0 {
+		budget := height - len(header) - len(footer)
+		if budget < 1 {
+			budget = 1
+		}
+		if len(options) > budget {
+			// Reserve up to 2 rows out of budget for the "+N more"
+			// indicators windowing may add above/below the visible
+			// options, so the total (header + indicators + options +
+			// footer) never exceeds height and pushes the footer out
+			// again the same way the unreserved options list did.
+			innerBudget := budget - 2
+			if innerBudget < 1 {
+				innerBudget = 1
+			}
+			options, hiddenAbove, hiddenBelow = renderModelOptionRowsWindowed(d.spec.Items, d.cursor, width, innerBudget)
+		}
+	}
+
+	out := make([]string, 0, len(header)+len(options)+len(footer)+1)
+	out = append(out, header...)
+	if hiddenAbove > 0 {
+		out = append(out, dialogIndent+Muted(fmt.Sprintf("… +%d more above", hiddenAbove)))
+	}
+	out = append(out, options...)
+	if hiddenBelow > 0 {
+		out = append(out, dialogIndent+Muted(fmt.Sprintf("… +%d more below", hiddenBelow)))
+	}
+	out = append(out, footer...)
 
 	if height > 0 && len(out) > height {
 		out = out[:height]
