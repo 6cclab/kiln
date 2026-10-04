@@ -68,7 +68,7 @@ func startSwitchedSession(t *testing.T, script string) (*tkfaux.Server, *screen.
 	if err := sc.WaitFor("Now on faux/faux-2", 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if err := sc.WaitFor("is over faux-2's 32.8k window", 2*time.Second); err != nil {
+	if err := sc.WaitFor("takes in one request", 2*time.Second); err != nil {
 		t.Fatalf("switching to a window smaller than the conversation did not say so: %v\n%s", err, strings.Join(sc.Rows(), "\n"))
 	}
 	if err := sc.WaitFor("/compact now to summarise it with faux/faux-1", 2*time.Second); err != nil {
