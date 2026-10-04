@@ -63,7 +63,8 @@ type Request struct {
 	Delegated   bool
 	UserHistory func() []msg.Message
 	// AutoModeNote is set by the gate on a prompt auto mode raised instead
-	// of deciding itself (the classifier failed, or blocked too often): why
+	// of deciding itself (the classifier failed, or blocked too often), or
+	// on any mode's prompt for a protected-path write (protected.go): why
 	// the user is being asked. A UI shows it with the prompt.
 	AutoModeNote string
 	// InAutoMode is set by the gate on a prompt raised while auto mode is
@@ -750,6 +751,13 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		return nil, OutcomeAuto, nil
 	}
 
+	// A write to a protected path (protected.go) is never approved by an
+	// allow rule, a session grant or the mode's own default, except in
+	// bypassPermissions; Claude Code runs this safety check after deny
+	// rules and its internal paths (the scratchpad, above), before ask and
+	// allow rules and acceptEdits.
+	protPath, prot := g.protectedWrite(req, mode == settings.ModeAuto)
+
 	// A session "don't ask again" grant stands in for an allow rule, so
 	// like one it never beats a deny or ask rule — including one added
 	// after the grant (Claude Code: deny, then ask, then allow). Nor does
@@ -758,7 +766,8 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// Nor, while planning, does it cover an edit: plan mode refuses edits
 	// whatever any allow says (settings.PlanOverridesAllow). A shell
 	// command goes through the regular flow there, grants included.
-	grantable := !hits.Deny && !hits.Ask && !hits.Unsure &&
+	// Nor a protected-path write, which no allow approves.
+	grantable := !hits.Deny && !hits.Ask && !hits.Unsure && prot == unprotected &&
 		!(mode == settings.ModePlan && settings.PlanOverridesAllow(req.ToolName, decideArg))
 	if grantable && g.sessionAllowed(k) {
 		return nil, OutcomeAuto, nil
@@ -783,6 +792,19 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 	}
 
+	// Protected paths outside auto mode: what a deny rule, or plan mode's
+	// refusal of edits, did not already refuse asks, whatever an allow
+	// rule or the mode says (dontAsk turns that into a refusal below, as
+	// it does every ask). bypassPermissions allows it: Claude Code's docs
+	// list protected-path writes as "Allowed" there. Auto mode routes
+	// them to the classifier instead (classifier.go, and below).
+	note := ""
+	if prot != unprotected && verdict != settings.Deny &&
+		mode != settings.ModeAuto && mode != settings.ModeBypassPermissions {
+		verdict = settings.Ask
+		note = protectedNote(protPath)
+	}
+
 	// A bash command that provably only reads, and only inside the
 	// workspace, runs without asking in the modes that otherwise ask about
 	// bash — the way the read tool never asks. Asking before "cat app.py"
@@ -791,7 +813,7 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// names a file kiln cannot resolve while path rules exist.
 	if verdict == settings.Ask && strings.EqualFold(req.ToolName, "bash") &&
 		(mode == settings.ModeManual || mode == settings.ModeAcceptEdits || mode == settings.ModeDontAsk) &&
-		!hits.Ask && !hits.Unsure && hits.ReadOnly &&
+		!hits.Ask && !hits.Unsure && hits.ReadOnly && prot == unprotected &&
 		g.commandWithinRoots(req.PrimaryArg) {
 		return nil, OutcomeAuto, nil
 	}
@@ -874,22 +896,29 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// classifier, unless it is a call auto mode never classifies
 	// (classifier.go). When the classifier cannot decide, or has blocked
 	// too often, the call takes the ask path below, with a note saying why.
-	autoNote := ""
 	if verdict == settings.Allow && mode == settings.ModeAuto && settings.IsBashTool(req.ToolName) {
 		if p := g.bashProtectedOutside(req.PrimaryArg); p != "" {
 			verdict = settings.Ask
-			autoNote = fmt.Sprintf("Auto mode asks before writing %s: it is a protected path outside the workspace.", p)
+			note = fmt.Sprintf("Auto mode asks before writing %s: it is a protected path outside the workspace.", p)
 		}
 	}
+	// A write that only resolves to a protected path (a link to .git/config)
+	// asks rather than going to the classifier, which would judge the
+	// harmless-looking name it was given (Claude Code's docs: "prompts you
+	// when the path Claude requested isn't itself protected").
+	if verdict == settings.Allow && mode == settings.ModeAuto && prot == protectedResolved {
+		verdict = settings.Ask
+		note = fmt.Sprintf("Auto mode asks before writing %s: it resolves to a protected path.", protPath)
+	}
 	if verdict == settings.Allow && mode == settings.ModeAuto && !g.autoSkipsClassifier(req, hits) {
-		r, out, note, err := g.classifyAuto(ctx, req)
+		r, out, why, err := g.classifyAuto(ctx, req)
 		if err != nil {
 			return nil, OutcomeNone, err
 		}
 		if r != nil || out != OutcomeNone {
 			return r, out, nil
 		}
-		verdict, autoNote = settings.Ask, note
+		verdict, note = settings.Ask, why
 	}
 
 	if verdict == settings.Allow {
@@ -913,7 +942,11 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 
 	// verdict == ask
 	if mode == settings.ModeDontAsk {
-		r := g.record(req, "don't-ask mode refuses anything that would need approval. Add an allow rule for it, or switch modes.")
+		reason := "don't-ask mode refuses anything that would need approval. Add an allow rule for it, or switch modes."
+		if prot != unprotected {
+			reason = protectedRefusal(protPath, "Don't-ask mode refuses anything that needs approval.")
+		}
+		r := g.record(req, reason)
 		return &r, OutcomeNone, nil
 	}
 	if g.prompter == nil {
@@ -921,8 +954,11 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		// unattended run must not silently take an action the policy said
 		// required confirmation.
 		reason := "requires confirmation and no prompt is available."
-		if autoNote != "" {
-			reason = autoNote + " " + reason
+		switch {
+		case prot != unprotected && mode != settings.ModeAuto:
+			reason = protectedRefusal(protPath, "Nobody can approve it in this run (no permission prompt is available).")
+		case note != "":
+			reason = note + " " + reason
 		}
 		r := g.record(req, reason)
 		return &r, OutcomeNone, nil
@@ -935,15 +971,16 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	// The rules may have changed while this call waited for another
 	// prompt: a "don't ask again" there can have saved a rule covering
-	// this command.
+	// this command. Not for a protected-path write, which no allow rule
+	// approves.
 	permissions, mode = g.rules()
-	if settings.IsBashTool(req.ToolName) {
+	if settings.IsBashTool(req.ToolName) && prot == unprotected {
 		if h := settings.RuleHits(permissions, g.cwd(), req.ToolName, decideArg); h.Allow && !h.Deny && !h.Ask && !h.Unsure {
 			return nil, OutcomeAuto, nil
 		}
 	}
 	promptReq := g.promptRequest(req, permissions, mode, grantable)
-	promptReq.AutoModeNote = autoNote
+	promptReq.AutoModeNote = note
 	choice, err := g.prompter(ctx, promptReq)
 	if err != nil {
 		return nil, OutcomeNone, err
