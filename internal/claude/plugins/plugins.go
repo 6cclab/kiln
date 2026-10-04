@@ -143,7 +143,7 @@ func marketplaceManifest(name, marketplace string) (manifestRaw, bool) {
 	}
 	for _, e := range mf.Plugins {
 		if e.Name == name {
-			return manifestRaw{Name: e.Name, Version: e.Version, MCPServers: e.MCPServers, Hooks: e.Hooks}, true
+			return manifestRaw(e), true
 		}
 	}
 	return manifestRaw{}, false
