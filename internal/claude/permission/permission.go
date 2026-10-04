@@ -1105,6 +1105,9 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	}
 	promptReq := g.promptRequest(req, permissions, mode, grantable)
 	promptReq.ModeSwitchMoot = hits.Ask || hits.Unsure || prot != unprotected || hookAsk || critical
+	// A call that asks for another reason (an ask rule, a hook's "ask")
+	// can still name a path outside the workspace; say so.
+	promptReq.OutsideWorkspace = escaped
 	promptReq.AutoModeNote = note
 	choice, err := g.prompter(ctx, promptReq)
 	if err != nil {

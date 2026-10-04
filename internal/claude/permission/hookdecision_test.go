@@ -191,6 +191,17 @@ func TestHookAskForcesThePrompt(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a path outside the workspace is still marked", func(t *testing.T) {
+		g, p, _ := hookGate(t, settings.ModeManual, settings.Permissions{}, nil)
+		outside := filepath.Join(t.TempDir(), "notes.txt")
+		req := Request{ToolName: "write", PrimaryArg: outside, Args: map[string]any{"path": outside, "content": "x"}}
+		if _, _, err := g.CheckWithOutcome(context.Background(), hookReq(req, HookAsk, "")); err != nil {
+			t.Fatal(err)
+		}
+		if len(p.reqs) != 1 || !p.reqs[0].OutsideWorkspace {
+			t.Errorf("prompts=%+v, want one marked outside the workspace", p.reqs)
+		}
+	})
 	t.Run("a deny rule still denies", func(t *testing.T) {
 		g, p, _ := hookGate(t, settings.ModeManual, settings.Permissions{Deny: []string{"Bash(make *)"}}, nil)
 		if blocked, _, _ := g.CheckWithOutcome(context.Background(), hookReq(bashReq("make build"), HookAsk, "")); blocked == nil || len(p.reqs) != 0 {
