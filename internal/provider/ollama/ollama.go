@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andrepato/harness/internal/msg"
@@ -329,9 +330,15 @@ func DiscoverModels(ctx context.Context, opts Options) ([]provider.Model, error)
 
 // Provider is the Ollama provider.Provider implementation.
 type Provider struct {
-	opts   Options
-	models []provider.Model
-	client *api.OpenAICompletionsClient
+	opts Options
+	// modelsMu guards models: RefreshModels replaces it from the UI
+	// goroutine (a /model switch) while a turn reads it through
+	// Registry.GetModel on the lane's goroutine. The slice is never
+	// mutated after it is published, only replaced, so readers may keep
+	// what Models returned.
+	modelsMu sync.RWMutex
+	models   []provider.Model
+	client   *api.OpenAICompletionsClient
 }
 
 // New builds an Ollama provider. Models are empty until RefreshModels is
@@ -347,15 +354,22 @@ func (p *Provider) Auth() provider.AuthSpec {
 	return provider.AuthSpec{Kind: provider.AuthKindAPIKey, EnvVars: []string{"OLLAMA_HOST"}}
 }
 
-func (p *Provider) Models() []provider.Model { return p.models }
+func (p *Provider) Models() []provider.Model {
+	p.modelsMu.RLock()
+	defer p.modelsMu.RUnlock()
+	return p.models
+}
 
 // RefreshModels re-discovers models via /api/tags, /api/ps and /api/show.
+// Discovery runs outside the lock; only the swap is guarded.
 func (p *Provider) RefreshModels(ctx context.Context) error {
 	models, err := DiscoverModels(ctx, p.opts)
 	if err != nil {
 		return err
 	}
+	p.modelsMu.Lock()
 	p.models = models
+	p.modelsMu.Unlock()
 	return nil
 }
 
