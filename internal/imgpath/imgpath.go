@@ -20,15 +20,12 @@ import (
 	"github.com/andrepato/harness/internal/msg"
 )
 
-// MaxImageBytes bounds a dragged/pasted image path Resolve will actually
-// read and base64-encode: above this it is refused the same way a
-// RefusedExtensions entry is, rather than read into memory regardless of
-// size and handed to a provider that will reject it anyway. 3.75 MiB
-// keeps the base64-encoded attachment (which is ~4/3 the raw size) under
-// the Anthropic API's 5 MiB base64 image limit — the same derivation
-// Claude Code's own image-paste path uses (apiLimits.ts's
-// IMAGE_TARGET_RAW_SIZE = API_IMAGE_MAX_BASE64_SIZE * 3/4), checked here
-// from the same os.Stat Resolve already does, before any read.
+// MaxImageBytes is the raw file size above which Resolve must shrink an
+// image before attaching it: kiln's own cap, chosen so the base64-encoded
+// attachment (roughly 4/3 the raw size) stays under the Anthropic API's
+// 5 MiB base64 image limit, matching Claude Code's own observed
+// behaviour of downsizing (never dropping) an oversized pasted or
+// dragged image rather than refusing it outright.
 const MaxImageBytes = 5 * 1024 * 1024 * 3 / 4
 
 // pathTokenRe matches a candidate path token starting at "/" or "~": a run
@@ -45,20 +42,29 @@ var pathTokenRe = regexp.MustCompile(`(?:~|/)(?:\\.|[^\s])*`)
 // placeholder for an attached image. Returns the line unchanged (with no
 // images) when nothing in it resolves — a line with an ordinary path that
 // happens to start with "/" but isn't an image, or isn't on disk, is left
-// exactly as typed.
-func ResolveEmbedded(line, cwd string, startIndex int) (string, []msg.ImageContent) {
+// exactly as typed. refusals carries one message per token that was
+// image-shaped and on disk but could not be attached (an unsupported
+// extension, or an image that could not be shrunk to fit), so the caller
+// can show the user why, rather than the path just silently staying as
+// typed the same way a non-match does.
+func ResolveEmbedded(line, cwd string, startIndex int) (text string, images []msg.ImageContent, refusals []string) {
 	matches := pathTokenRe.FindAllStringIndex(line, -1)
 	if len(matches) == 0 {
-		return line, nil
+		return line, nil, nil
 	}
-	var images []msg.ImageContent
 	var b strings.Builder
 	last := 0
 	n := startIndex
 	for _, loc := range matches {
 		raw := line[loc[0]:loc[1]]
 		v, ok := Resolve(raw, cwd)
-		if !ok || v.Image == nil {
+		if !ok {
+			continue
+		}
+		if v.Image == nil {
+			if v.Refused != "" {
+				refusals = append(refusals, v.Refused)
+			}
 			continue
 		}
 		b.WriteString(line[last:loc[0]])
@@ -68,10 +74,10 @@ func ResolveEmbedded(line, cwd string, startIndex int) (string, []msg.ImageConte
 		last = loc[1]
 	}
 	if len(images) == 0 {
-		return line, nil
+		return line, nil, refusals
 	}
 	b.WriteString(line[last:])
-	return b.String(), images
+	return b.String(), images, refusals
 }
 
 // LeadingTokenIsPath reports whether line's first whitespace-separated
@@ -222,20 +228,56 @@ func Resolve(raw, cwd string) (Verdict, bool) {
 	if err != nil || info.IsDir() {
 		return Verdict{}, false
 	}
+	name := filepath.Base(path)
 	if refused != "" {
-		return Verdict{CleanPath: path, Refused: refused}, true
+		return Verdict{CleanPath: path, Refused: name + ": " + refused}, true
 	}
 	if info.Size() > MaxImageBytes {
-		return Verdict{
-			CleanPath: path,
-			Refused:   fmt.Sprintf("image is %.1fMB, more than the %.1fMB limit - attach a smaller image", float64(info.Size())/(1<<20), float64(MaxImageBytes)/(1<<20)),
-		}, true
+		return resolveOversized(path, name, info.Size())
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Verdict{CleanPath: path, Refused: err.Error()}, true
+		return Verdict{CleanPath: path, Refused: name + ": " + err.Error()}, true
 	}
 	img := msg.Image(mime, base64.StdEncoding.EncodeToString(data))
+	return Verdict{CleanPath: path, Image: &img, Bytes: len(data)}, true
+}
+
+// resolveOversized handles a candidate image file already known to be
+// over MaxImageBytes: it downscales and re-encodes rather than simply
+// refusing (matching Claude Code's own observed behaviour for an
+// oversized pasted or dragged image), checking the file's declared
+// dimensions first — before any full decode — so a file merely claiming
+// an enormous resolution is refused by that claim alone, never decoded.
+func resolveOversized(path, name string, size int64) (Verdict, bool) {
+	w, h, format, ok := decodeImageConfig(path)
+	if !ok {
+		return Verdict{
+			CleanPath: path,
+			Refused:   fmt.Sprintf("%s: image is %.1fMB, more than the %.1fMB limit, and its format could not be read to shrink it", name, float64(size)/(1<<20), float64(MaxImageBytes)/(1<<20)),
+		}, true
+	}
+	if int64(w)*int64(h) > MaxImagePixels {
+		return Verdict{
+			CleanPath: path,
+			Refused: fmt.Sprintf("%s: image is %dx%d (%s megapixels), more than the %.0f-megapixel limit kiln will downscale",
+				name, w, h, formatMegapixels(w, h), float64(MaxImagePixels)/1_000_000),
+		}, true
+	}
+	if format != "png" && format != "jpeg" {
+		return Verdict{
+			CleanPath: path,
+			Refused:   fmt.Sprintf("%s: image is %.1fMB, more than the %.1fMB limit, and kiln can only shrink png or jpeg (not %s)", name, float64(size)/(1<<20), float64(MaxImageBytes)/(1<<20), format),
+		}, true
+	}
+	data, outMime, ok := downscaleAndFit(path, MaxImageBytes)
+	if !ok {
+		return Verdict{
+			CleanPath: path,
+			Refused:   fmt.Sprintf("%s: image is %.1fMB, more than the %.1fMB limit, and could not be shrunk small enough - attach a smaller image", name, float64(size)/(1<<20), float64(MaxImageBytes)/(1<<20)),
+		}, true
+	}
+	img := msg.Image(outMime, base64.StdEncoding.EncodeToString(data))
 	return Verdict{CleanPath: path, Image: &img, Bytes: len(data)}, true
 }
 

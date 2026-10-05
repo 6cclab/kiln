@@ -695,12 +695,14 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		// become an attachment; anything else (prose, multiple words,
 		// a path to a non-image or to nothing on disk) is pasted exactly
 		// as before.
-		if placeholder, img, ok := pasteAsImage(msg.Content, m.cfg.Cwd, len(m.pendingImages)); ok {
+		if placeholder, img, ok, refused := pasteAsImage(msg.Content, m.cfg.Cwd, len(m.pendingImages)); ok {
 			m.pendingImages = append(m.pendingImages, img)
 			ed, cmd, _ := m.editor.Update(tea.PasteMsg{Content: placeholder})
 			m.editor = ed
 			m = m.refreshPopup()
 			return m, cmd
+		} else if refused != "" {
+			m.commitNote(imageRefusalNoteText(refused))
 		}
 		ed, cmd, _ := m.editor.Update(msg)
 		m.editor = ed
@@ -1025,7 +1027,10 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 // words with no path shape, a path to a non-image, or to nothing on disk —
 // in which case the paste is handled exactly as before. startIndex
 // continues "[Image #N]"'s numbering across more than one pasted image in
-// the same composed message.
+// the same composed message. refused is set when the path was image-shaped
+// and on disk but could not be attached (an unsupported extension, or an
+// image too large to shrink to fit), so the caller can tell the user why
+// instead of the path just silently being pasted as plain text.
 //
 // A path with a raw, unescaped space is still accepted here as long as the
 // whole paste is anchored at "/" or "~" (CleanPathToken leaves a raw space
@@ -1039,19 +1044,33 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 // in a sentence is ambiguous, and that case is ResolveEmbedded's (called
 // from handleSubmit on the typed/pasted line), which only matches a
 // backslash-escaped or single-word token.
-func pasteAsImage(content, cwd string, startIndex int) (string, msg.ImageContent, bool) {
+func pasteAsImage(content, cwd string, startIndex int) (placeholder string, img msg.ImageContent, ok bool, refused string) {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
-		return "", msg.ImageContent{}, false
+		return "", msg.ImageContent{}, false, ""
 	}
 	if imgpath.HasUnescapedWhitespace(trimmed) && !strings.HasPrefix(trimmed, "/") && !strings.HasPrefix(trimmed, "~") {
-		return "", msg.ImageContent{}, false
+		return "", msg.ImageContent{}, false, ""
 	}
-	v, ok := imgpath.Resolve(trimmed, cwd)
-	if !ok || v.Image == nil {
-		return "", msg.ImageContent{}, false
+	v, resolved := imgpath.Resolve(trimmed, cwd)
+	if !resolved {
+		return "", msg.ImageContent{}, false, ""
 	}
-	return fmt.Sprintf("[Image #%d]", startIndex+1), *v.Image, true
+	if v.Image == nil {
+		return "", msg.ImageContent{}, false, v.Refused
+	}
+	return fmt.Sprintf("[Image #%d]", startIndex+1), *v.Image, true, ""
+}
+
+// imageRefusalNoteText builds the system note shown when a dragged/pasted
+// or embedded image path could not be attached (an unsupported extension
+// such as .bmp, or an image too large to shrink to fit): reason already
+// names the file (imgpath.Resolve prefixes every Refused message with the
+// file's base name), so this only adds the note's own "not attached"
+// framing — the text would otherwise read as unattributed prose with no
+// clue it is about an image at all.
+func imageRefusalNoteText(reason string) string {
+	return "⚠ Image not attached — " + reason
 }
 
 // immediateCommandNames is kiln's allowlist of slash commands safe to run
@@ -2059,9 +2078,12 @@ func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 	m.pendingImages = nil
 	var embeddedImages []msg.ImageContent
 	if handled == nil {
-		newLine, found := imgpath.ResolveEmbedded(line, m.cfg.Cwd, len(pendingImages))
+		newLine, found, refusals := imgpath.ResolveEmbedded(line, m.cfg.Cwd, len(pendingImages))
 		line = newLine
 		embeddedImages = append(append([]msg.ImageContent{}, pendingImages...), found...)
+		for _, refused := range refusals {
+			m.commitNote(imageRefusalNoteText(refused))
+		}
 	}
 
 	if handled != nil {

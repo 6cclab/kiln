@@ -587,3 +587,61 @@ func TestHandleSubmit_EmbeddedImagePathBecomesPlaceholder(t *testing.T) {
 		}
 	}
 }
+
+// TestPasteAsImage_RefusedShowsNote: a whole-paste path that resolves to
+// a recognised-but-refused image (.bmp — imgpath.RefusedExtensions) must
+// not disappear silently; it shows a system note naming the file and the
+// reason, and the path is still pasted as plain text (nothing else to do
+// with it).
+func TestPasteAsImage_RefusedShowsNote(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.bmp")
+	if err := os.WriteFile(path, []byte("bmp-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, f := newTestModelWithBridge(t)
+	m.cfg.Cwd = dir
+	m.editor.Focus()
+
+	next, _ := m.Update(tea.PasteMsg{Content: path})
+	nm := next.(Model)
+
+	if len(nm.pendingImages) != 0 {
+		t.Errorf("pendingImages = %d, want 0 for a refused image", len(nm.pendingImages))
+	}
+	if got := nm.editor.Value(); got != path {
+		t.Errorf("editor.Value() = %q, want the raw path pasted as text", got)
+	}
+	note := waitForPrinted(t, f, "not attached")
+	if !strings.Contains(note, "old.bmp") {
+		t.Errorf("note = %q, want it to name old.bmp", note)
+	}
+	if !strings.Contains(note, "bmp") {
+		t.Errorf("note = %q, want it to say why (bmp unsupported)", note)
+	}
+}
+
+// TestHandleSubmit_EmbeddedRefusedImageShowsNote is
+// TestHandleSubmit_EmbeddedImagePathBecomesPlaceholder's refused-image
+// twin: an embedded .bmp path among other words must not just vanish
+// into the normal "no match" case — it shows the same kind of note as
+// the whole-paste case.
+func TestHandleSubmit_EmbeddedRefusedImageShowsNote(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.bmp")
+	if err := os.WriteFile(path, []byte("bmp-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, f := newTestModelWithBridge(t)
+	m.cfg.Cwd = dir
+
+	line := "see " + path + " for the mock"
+	m.handleSubmit(line)
+
+	note := waitForPrinted(t, f, "not attached")
+	if !strings.Contains(note, "old.bmp") {
+		t.Errorf("note = %q, want it to name old.bmp", note)
+	}
+}

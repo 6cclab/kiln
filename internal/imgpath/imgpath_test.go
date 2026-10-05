@@ -193,9 +193,12 @@ func TestResolveEmbedded(t *testing.T) {
 	}
 
 	line := "Add the kiln " + png + " header to the readme"
-	got, images := ResolveEmbedded(line, dir, 0)
+	got, images, refusals := ResolveEmbedded(line, dir, 0)
 	if len(images) != 1 {
 		t.Fatalf("got %d images, want 1", len(images))
+	}
+	if refusals != nil {
+		t.Errorf("refusals = %v, want none for an ordinary small image", refusals)
 	}
 	want := "Add the kiln [Image #1] header to the readme"
 	if got != want {
@@ -204,12 +207,33 @@ func TestResolveEmbedded(t *testing.T) {
 
 	t.Run("no match leaves line untouched", func(t *testing.T) {
 		line := "just some /tmp/nonexistent.png text"
-		got, images := ResolveEmbedded(line, dir, 0)
+		got, images, refusals := ResolveEmbedded(line, dir, 0)
 		if images != nil {
 			t.Errorf("got %d images, want 0", len(images))
 		}
+		if refusals != nil {
+			t.Errorf("refusals = %v, want none for a path that is not on disk", refusals)
+		}
 		if got != line {
 			t.Errorf("got %q, want unchanged %q", got, line)
+		}
+	})
+
+	t.Run("a refused embedded image is reported, not silently skipped", func(t *testing.T) {
+		bmp := filepath.Join(dir, "old.bmp")
+		if err := os.WriteFile(bmp, []byte("bmp-bytes"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		line := "see " + bmp + " for the mock"
+		got, images, refusals := ResolveEmbedded(line, dir, 0)
+		if images != nil {
+			t.Errorf("got %d images, want 0 (bmp is refused)", len(images))
+		}
+		if got != line {
+			t.Errorf("got %q, want the line left as typed", got)
+		}
+		if len(refusals) != 1 || !strings.Contains(refusals[0], "bmp") {
+			t.Errorf("refusals = %v, want one reason naming bmp", refusals)
 		}
 	})
 }

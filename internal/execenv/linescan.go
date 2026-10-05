@@ -9,11 +9,10 @@ import (
 // limit argument): above this, the model is told to page with
 // offset/limit, or use bash, instead of kiln reading — and then
 // truncating the output of — a file that might be arbitrarily large.
-// Matches Claude Code's own Read tool cap (FileReadTool/limits.ts's
-// MAX_OUTPUT_SIZE, 0.25 MB), which stats first and refuses pre-read
-// rather than truncating post-read for the same reason: an A/B test
-// there found the throw-and-retry path cost fewer total tokens than
-// truncating a huge file's output every time (limits.ts's own comment).
+// 256 KiB matches Claude Code's own observed behaviour for its Read
+// tool: a whole-file read above that size is refused outright rather
+// than read and truncated, so the model pages explicitly instead of
+// kiln repeating a large read-and-truncate on every call.
 const ReadWholeFileCap int64 = 256 * 1024
 
 // OpenLineScanner opens path for streaming, line-at-a-time reading: a
