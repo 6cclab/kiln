@@ -1,0 +1,22 @@
+# Two Stop hooks run at once, as in Claude Code: the busy row counts them
+# ("running stop hooks… 0/2"), both block once with their own reason, and
+# both reasons reach the user (and the model) as "[command]: stderr".
+# Each sleeps 2s, so run in turn they would take 4s.
+@faux testdata/faux/qa/stop-hooks-parallel.yaml
+@setup printf 'sleep 2\n[ -e a-done ] && exit 0\ntouch a-done\necho add tests >&2\nexit 2\n' > a.sh
+@setup printf 'sleep 2\n[ -e b-done ] && exit 0\ntouch b-done\necho run lint >&2\nexit 2\n' > b.sh
+@setup mkdir -p .claude && printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sh a.sh"},{"type":"command","command":"sh b.sh"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+SEND finish the feature
+WAITFOR /First pass done\./ 20
+WAITFOR /running stop hooks… 0\/2/ 5
+SHOT both-hooks-running
+WAITFOR /Second pass, after both Stop hooks asked for more\./ 20
+WAIT 3
+SHOT continued
+EXPECT /Stop hook asked to continue: \[sh a\.sh\]: add tests/
+EXPECT /Stop hook asked to continue: \[sh b\.sh\]: run lint/
+EXPECT_NOT /esc to stop/
+RUN test -e a-done && test -e b-done
+EXPECT_NOT /panic|goroutine/
