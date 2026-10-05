@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -232,17 +233,51 @@ func (h *Hub) Pending() []ServerStatus {
 	return out
 }
 
+// Connect concurrency caps, as Claude Code sets them. Servers that spawn a
+// child process (stdio) connect at most localConnectConcurrency at a time:
+// a stampede of `npx`/`uvx` cold starts contends for CPU and muddies both
+// timing and failure messages. Network servers (http, sse) cost only a
+// connection, so they get a wider cap. The two groups run side by side,
+// each under its own cap. Claude Code reads the same two environment
+// variables to override them.
+const (
+	localConnectConcurrency     = 3
+	remoteConnectConcurrency    = 20
+	localConnectConcurrencyEnv  = "MCP_SERVER_CONNECTION_BATCH_SIZE"
+	remoteConnectConcurrencyEnv = "MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE"
+)
+
+// connectConcurrency is env's positive integer value, or def when it is
+// unset or not a positive integer.
+func connectConcurrency(env string, def int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(env))); err == nil && n > 0 {
+		return n
+	}
+	return def
+}
+
+// spawnsProcess reports whether connecting cfg starts a child process,
+// which is every transport buildTransport does not dial over the network.
+func spawnsProcess(cfg ServerConfig) bool {
+	switch TransportType(cfg) {
+	case "http", "sse":
+		return false
+	}
+	return true
+}
+
 // ConnectAll connects to every configured server and collects their
-// catalogs.
+// catalogs. A server that fails is recorded and skipped: one broken entry
+// must not deny every other server.
 //
-// Sequential rather than parallel: several of these spawn `uvx`/`npx` child
-// processes, and a stampede of cold starts muddies both timing and failure
-// messages (see client.ts's connectAll comment). A server that fails is
-// recorded and skipped — one broken entry must not deny every other server.
+// Servers connect concurrently, so one slow or dead server costs its own
+// timeout, not everyone's behind it, under the caps above: stdio servers
+// share localConnectConcurrency slots and network servers share
+// remoteConnectConcurrency, and a slot frees as soon as its server
+// finishes rather than at a batch boundary.
 //
-// Go map iteration order is not deterministic, unlike the TS
-// Object.entries used by client.ts, so servers are attempted in name-sorted
-// order for reproducible test output; this has no effect on the outcome,
+// Go map iteration order is not deterministic, so servers are started in
+// name-sorted order within each group; this has no effect on the outcome,
 // since each server is independent.
 func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 	names := make([]string, 0, len(configs))
@@ -255,14 +290,20 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 	h.mu.Unlock()
 	sort.Strings(names)
 
-	// Servers connect concurrently: one slow or dead server costs its own
-	// timeout, not everyone's behind it.
 	timeout := connectTimeout()
+	local := make(chan struct{}, connectConcurrency(localConnectConcurrencyEnv, localConnectConcurrency))
+	remote := make(chan struct{}, connectConcurrency(remoteConnectConcurrencyEnv, remoteConnectConcurrency))
 	var wg sync.WaitGroup
 	for _, name := range names {
+		slots := remote
+		if spawnsProcess(configs[name]) {
+			slots = local
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
 			h.connectOne(ctx, name, configs[name], timeout)
 		}()
 	}
