@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "echo after the hook"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "The hook let it through."
+        usage: {input: 40, output: 8}
