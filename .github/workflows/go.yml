@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.6"
 
       - name: make check
         run: make check
@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.6"
 
       - name: make e2e
         run: make e2e
@@ -41,7 +41,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.6"
 
       - name: make race
         run: make race
@@ -53,7 +53,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.6"
 
       - name: make covercheck
         run: make covercheck
@@ -72,7 +72,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.6"
 
       - name: make eval
         run: make eval
@@ -113,7 +113,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.6"
 
       - name: go build
         env:

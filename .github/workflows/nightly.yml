@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.6"
 
       - name: TUI e2e tests x3 (flake detection)
         run: go test -tags e2e ./test/e2e/... -run TestTUI_ -count=3 -timeout 30m
@@ -29,7 +29,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.6"
 
       - name: make race-full
         run: make race-full
@@ -41,7 +41,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.6"
 
       - name: make eval (EVAL_REPEAT=3)
         run: make eval EVAL_REPEAT=3

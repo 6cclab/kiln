@@ -6,8 +6,8 @@ first.
 
 ## 1. Prerequisites and first build
 
-kiln requires **Go 1.26** (`go.mod` pins `go 1.26.3`; CI's
-`.github/workflows/go.yml` installs `go-version: "1.26"`).
+kiln requires **Go 1.26** (`go.mod` pins `go 1.26.6`; CI's
+`.github/workflows/go.yml` installs `go-version: "1.26.6"`).
 
 Build the binary:
 
