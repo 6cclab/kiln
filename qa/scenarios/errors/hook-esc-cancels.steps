@@ -17,6 +17,6 @@ EXPECT /Interrupted/
 EXPECT /interrupted before the call ran/
 EXPECT_NOT /permission check failed|context canceled/
 EXPECT_NOT /The hook let it through/
-RUN sleep 2; ! pgrep -f 'sleep 50; touch hook-finished' >/dev/null
+RUN sleep 2; ! pgrep -f 'sleep 5[0]; touch hook-finished' >/dev/null
 RUN ! test -e hook-finished
 EXPECT_NOT /panic|goroutine/
