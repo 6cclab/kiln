@@ -15,6 +15,7 @@ KEY esc
 WAIT 2
 SHOT after-esc
 EXPECT_NOT /esc to stop/
+EXPECT /Interrupted\. Tell kiln what to do instead\./
 EXPECT_NOT /Stop hook asked to continue/
 RUN ! pgrep -f 'sleep 5[0]; touch stop-finished' >/dev/null
 RUN ! test -e stop-finished
