@@ -158,10 +158,9 @@ func TestHooks_StopBlock_TwoHooksBothContributeTheirReason(t *testing.T) {
 // TestHooks_StopBlock_AdditionalContextNeverReachesTheModel: a Stop hook
 // can combine a block with hookSpecificOutput.additionalContext in the
 // same JSON reply. The public hooks docs describe additionalContext as
-// continuing the conversation with extra context; Claude Code's shipped
-// hook runner has no case for "Stop" in the switch that would extract
-// it, so it never reaches the model there, docs notwithstanding - kiln
-// follows what ships. Only the block's own reason must reach the model.
+// continuing the conversation with extra context; in the shipped Claude
+// Code it never reaches the model, docs notwithstanding - kiln follows
+// what ships. Only the block's own reason must reach the model.
 func TestHooks_StopBlock_AdditionalContextNeverReachesTheModel(t *testing.T) {
 	addr, srv := startFaux(t, "model: faux-1\nsteps:\n  - text: \"first reply\"\n    end_turn: true\n  - text: \"second reply after the feedback\"\n    end_turn: true\n")
 	home, sessDir := scratchHome(t)

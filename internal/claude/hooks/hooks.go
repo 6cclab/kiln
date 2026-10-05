@@ -72,9 +72,8 @@ type Command struct {
 	Command string `json:"command"`
 	// Timeout is in seconds. Claude Code's default is 60. Zero means unset.
 	//
-	// Deliberately not clamped to any ceiling: checked against Claude
-	// Code's own hook runner, a configured timeout is used exactly as
-	// given, with no maximum - only the unset (zero) case falls back to
+	// Deliberately not clamped to any ceiling: in Claude Code a
+	// configured timeout is used exactly as given, with no maximum - only the unset (zero) case falls back to
 	// an internal default. kiln matches that rather than inventing a cap
 	// of its own: a hook that sets an hour is trusted to mean it, the same
 	// way a long-running PreToolUse hook is trusted there.

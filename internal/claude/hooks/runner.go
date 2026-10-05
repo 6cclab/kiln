@@ -423,13 +423,12 @@ func interpret(out runOutput, outcome *Outcome, label, command string, event Eve
 	}
 	// Stop and SubagentStop accept hookSpecificOutput.additionalContext on
 	// the wire but it has no effect: nothing downstream (stopVerdict,
-	// internal/cli/stophooks.go) reads Outcome.Context for either event,
-	// matching Claude Code's own hook runner, whose equivalent switch has
-	// no case for "Stop" or "SubagentStop" either - so a hook naming one
-	// of those as its hookEventName contributes nothing, there or here.
-	// The public hooks docs describe this field as continuing the
-	// conversation with the extra context for Stop/SubagentStop too; the
-	// shipped behaviour does not do that, and kiln follows what ships.
+	// internal/cli/stophooks.go) reads Outcome.Context for either event.
+	// That matches Claude Code's observed behaviour: a Stop or
+	// SubagentStop hook's additionalContext never reaches the model there
+	// either. Its public hooks docs describe the field as continuing the
+	// conversation for these events too; the shipped behaviour does not,
+	// and kiln follows what ships.
 	if specific.AdditionalContext != "" && event != Stop && event != SubagentStop {
 		outcome.Context = append(outcome.Context, specific.AdditionalContext)
 	}

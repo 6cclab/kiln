@@ -473,7 +473,7 @@ func runStop(t *testing.T, event Event, body string) (Outcome, string) {
 
 // Stop and SubagentStop give "decision": "block" its Claude Code meaning
 // (keep working, reason to the model); exit 2 means the same, with the
-// reason prefixed by the command, as Claude Code's own hook runner does.
+// reason prefixed by the command, as Claude Code shows it.
 // {"continue": false} is distinct: stop everything.
 func TestRunHooksStopDecisions(t *testing.T) {
 	for _, event := range []Event{Stop, SubagentStop} {
@@ -509,8 +509,7 @@ func TestRunHooksStopDecisions(t *testing.T) {
 
 // Claude Code's docs describe a Stop/SubagentStop hook's
 // hookSpecificOutput.additionalContext as adding context and continuing
-// the conversation; the shipped hook runner has no case for either event
-// name in the switch that would extract it, so it never reaches the
+// the conversation, but in the shipped Claude Code it never reaches the
 // model. kiln follows the shipped behaviour: Outcome.Context stays empty
 // for these two events even when a hook sets additionalContext (it is
 // still populated for every other event interpret handles - see
@@ -520,7 +519,7 @@ func TestRunHooksStopAdditionalContextHasNoEffect(t *testing.T) {
 		t.Run(string(event), func(t *testing.T) {
 			out, _ := runStop(t, event, `echo '{"hookSpecificOutput":{"hookEventName":"`+string(event)+`","additionalContext":"build failed, retry"}}'`)
 			if len(out.Context) != 0 {
-				t.Errorf("Context = %v, want none: Claude Code's shipped hook runner ignores additionalContext for %s", out.Context, event)
+				t.Errorf("Context = %v, want none: shipped Claude Code ignores additionalContext for %s", out.Context, event)
 			}
 			if out.Blocked != nil || out.Stopped {
 				t.Errorf("got %+v, want no block and no stop from additionalContext alone", out)
