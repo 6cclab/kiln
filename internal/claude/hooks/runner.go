@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -61,6 +62,14 @@ type Outcome struct {
 	// DecisionReason is the reason given with Decision, shown with the
 	// prompt a hook's "ask" raises.
 	DecisionReason string
+	// Cancelled is set when the chain's ctx was cancelled (Esc / Lane.Abort)
+	// while a hook was running: that hook was killed mid-run, and the chain
+	// stopped there, so nothing after it ran. Distinct from Blocked - a
+	// cancelled hook made no decision at all, it just did not get to
+	// finish; the caller decides what that means for the call it was
+	// guarding (GuardToolCall turns it into an error, so the tool does not
+	// run - see its doc comment).
+	Cancelled bool
 }
 
 // Decision is a PreToolUse hook's permissionDecision short of "deny".
@@ -110,18 +119,66 @@ type jsonOutput struct {
 }
 
 type runOutput struct {
-	code     int
-	stdout   string
-	stderr   string
-	timedOut bool
+	code      int
+	stdout    string
+	stderr    string
+	timedOut  bool
+	cancelled bool
 }
+
+// MaxOutputBytes caps how many bytes of a hook's stdout, and separately its
+// stderr, runCommand retains. Matches Claude Code's own bound on a hook's
+// captured output: its hook runner buffers stdout and stderr together in
+// memory up to 8MB before diverting the rest to a spill file. kiln has no
+// spill path for hook output - a hook's stdout/stderr is read once, to
+// decide the Outcome, not tailed live the way a backgrounded shell command
+// is - so bytes past the cap are simply dropped rather than diverted.
+const MaxOutputBytes = 8 * 1024 * 1024
+
+// boundedWriter retains at most max bytes written to it and silently drops
+// the rest, mirroring execenv's bounded capture (internal/execenv/capture.go)
+// for the same reason: a hook that produces continuous output for its whole
+// run must not grow kiln's memory without bound, timeout or no timeout.
+//
+// Write always reports the full count written and never returns an error,
+// so a chatty hook never sees a short write or a broken pipe because kiln
+// stopped remembering its output - it just stops being remembered.
+type boundedWriter struct {
+	max int
+	buf bytes.Buffer
+}
+
+func (w *boundedWriter) Write(p []byte) (int, error) {
+	if remaining := w.max - w.buf.Len(); remaining > 0 {
+		if len(p) > remaining {
+			w.buf.Write(p[:remaining])
+		} else {
+			w.buf.Write(p)
+		}
+	}
+	return len(p), nil
+}
+
+func (w *boundedWriter) String() string { return w.buf.String() }
 
 // runCommand runs command through /bin/sh -c, feeding input on stdin and
 // enforcing timeoutSeconds. It is spawned in its own process group so a
 // timeout can kill the whole tree: a plain child.Kill only kills the shell
 // itself, leaving grandchildren alive holding the stdout pipe open, which
 // means Wait never returns and the timeout never actually times out.
-func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv map[string]string) runOutput {
+//
+// ctx is raced against the timeout and the command's own completion: Esc
+// (Lane.Abort) cancels the ctx a running PreToolUse/PostToolUse hook was
+// started with, and that must kill the hook the same way a timeout does -
+// process group and all - rather than leaving the user watching a hook run
+// out its full timeout after they already asked to stop. ctx must not be
+// nil; RunHooks defaults it to context.Background() so a caller that has no
+// live per-operation ctx to offer (Stop, SessionStart, ...) still runs
+// hooks to completion/timeout exactly as before this existed.
+func runCommand(ctx context.Context, command, input string, timeoutSeconds int, cwd string, extraEnv map[string]string, maxOutputBytes int) runOutput {
+	if maxOutputBytes <= 0 {
+		maxOutputBytes = MaxOutputBytes
+	}
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "CLAUDE_HOOK=1", "HARNESS_HOOK=1")
@@ -137,9 +194,10 @@ func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv 
 	}
 	execenv.SetProcGroup(cmd)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &boundedWriter{max: maxOutputBytes}
+	stderr := &boundedWriter{max: maxOutputBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	cmd.Stdin = strings.NewReader(input)
 
 	if err := cmd.Start(); err != nil {
@@ -151,7 +209,9 @@ func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv 
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
-	timedOut := false
+	timer := time.NewTimer(time.Duration(timeoutSeconds) * time.Second)
+	defer timer.Stop()
+
 	select {
 	case err := <-done:
 		code := 0
@@ -162,16 +222,23 @@ func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv 
 				code = 1
 			}
 		}
-		return runOutput{code: code, stdout: stdout.String(), stderr: stderr.String(), timedOut: false}
-	case <-time.After(time.Duration(timeoutSeconds) * time.Second):
-		timedOut = true
+		return runOutput{code: code, stdout: stdout.String(), stderr: stderr.String()}
+	case <-timer.C:
 		if cmd.Process != nil {
 			if err := execenv.KillProcessGroup(cmd.Process.Pid, execenv.SignalKill); err != nil {
 				_ = cmd.Process.Kill()
 			}
 		}
 		<-done // reap
-		return runOutput{code: -1, stdout: stdout.String(), stderr: stderr.String(), timedOut: timedOut}
+		return runOutput{code: -1, stdout: stdout.String(), stderr: stderr.String(), timedOut: true}
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			if err := execenv.KillProcessGroup(cmd.Process.Pid, execenv.SignalKill); err != nil {
+				_ = cmd.Process.Kill()
+			}
+		}
+		<-done // reap
+		return runOutput{code: -1, stdout: stdout.String(), stderr: stderr.String(), cancelled: true}
 	}
 }
 
@@ -186,6 +253,14 @@ func runCommand(command, input string, timeoutSeconds int, cwd string, extraEnv 
 // (append).
 func interpret(out runOutput, outcome *Outcome, label string, event Event) {
 	text := strings.TrimSpace(out.stdout)
+
+	if out.cancelled {
+		// No stdout/stderr parsing: a killed hook made no decision, and
+		// whatever partial output it produced before dying is not a
+		// decision document. RunHooks stops the chain here (Outcome.Cancelled).
+		outcome.Cancelled = true
+		return
+	}
 
 	if out.timedOut {
 		outcome.Notices = append(outcome.Notices, fmt.Sprintf("hook timed out: %s", label))
@@ -317,6 +392,21 @@ type RunOptions struct {
 	// HasToolName distinguishes "no tool" from an empty tool name.
 	HasToolName bool
 	OnNotice    func(message string)
+	// Ctx bounds how long a hook in this chain gets to run: cancelling it
+	// kills whatever hook is currently executing, process group and all,
+	// the same way its own per-hook timeout does, and stops the chain
+	// there (Outcome.Cancelled). Nil behaves as context.Background() - no
+	// cancellation - which is what a caller with no live per-operation ctx
+	// to offer (Stop, SessionStart, PreCompact, ...) gets by leaving this
+	// unset; only the two hooks that run inside an active, abortable tool
+	// call (PreToolUse via GuardToolCall, PostToolUse) are wired to a real
+	// one today.
+	Ctx context.Context
+	// MaxOutputBytes overrides MaxOutputBytes (the default stdout/stderr
+	// cap per hook) for this call. Zero uses the default; only tests
+	// should need to set this, to exercise the cap without producing
+	// megabytes of real output.
+	MaxOutputBytes int
 }
 
 // RunHooks runs every hook registered for an event, in configured order.
@@ -328,6 +418,15 @@ func RunHooks(opts RunOptions) Outcome {
 	commands := HooksFor(opts.Config, opts.Event, opts.ToolName, opts.HasToolName)
 	if len(commands) == 0 {
 		return outcome
+	}
+
+	ctx := opts.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	maxOutputBytes := opts.MaxOutputBytes
+	if maxOutputBytes <= 0 {
+		maxOutputBytes = MaxOutputBytes
 	}
 
 	payload := opts.Payload
@@ -356,7 +455,7 @@ func RunHooks(opts RunOptions) Outcome {
 			timeout = DefaultTimeoutSeconds
 		}
 
-		out := runCommand(h.Command, string(data), timeout, opts.Payload.Cwd, h.Env)
+		out := runCommand(ctx, h.Command, string(data), timeout, opts.Payload.Cwd, h.Env, maxOutputBytes)
 
 		before := len(outcome.Notices)
 		label := h.Command
@@ -389,6 +488,13 @@ func RunHooks(opts RunOptions) Outcome {
 		// A block ends the chain: later hooks have nothing left to decide,
 		// and it outranks an earlier hook's allow or ask.
 		if outcome.Blocked != nil {
+			outcome.Decision, outcome.DecisionReason = "", ""
+			break
+		}
+		// A cancelled hook decided nothing, and ctx is now done for the
+		// rest of this chain too - no point starting another hook just to
+		// kill it immediately.
+		if outcome.Cancelled {
 			outcome.Decision, outcome.DecisionReason = "", ""
 			break
 		}
@@ -434,6 +540,11 @@ type GuardOptions struct {
 	// without asking the gate. The turn loop already checked the model's
 	// own input before any hook ran.
 	CheckArgs func(args map[string]any) error
+	// Ctx is the tool call's own ctx (Lane.beginTool's), forwarded to the
+	// PreToolUse hooks so Esc (Lane.Abort) kills one that is still running
+	// instead of waiting out its timeout. Nil behaves as
+	// context.Background() (see RunOptions.Ctx).
+	Ctx context.Context
 }
 
 // GuardResult is the outcome of GuardToolCall.
@@ -453,6 +564,12 @@ type GuardResult struct {
 // what will actually execute, not what the model proposed. Gate-then-hooks
 // would let any rewrite escape every rule, because the gate would only
 // ever have seen the original.
+//
+// A PreToolUse hook killed mid-run by opts.Ctx being cancelled (Esc) is
+// reported as an error, not a Blocked: the caller (Lane.invokeBeforeTool)
+// already treats a before_tool error as "the call did not run", which is
+// exactly what a cancelled hook means here - it is the same path an
+// erroring hook or a failed permission check already takes, not a new one.
 func GuardToolCall(opts GuardOptions) (GuardResult, error) {
 	args := opts.Args
 
@@ -469,7 +586,19 @@ func GuardToolCall(opts GuardOptions) (GuardResult, error) {
 			ToolInput:      args,
 		},
 		OnNotice: opts.OnNotice,
+		Ctx:      opts.Ctx,
 	})
+
+	if hookResult.Cancelled {
+		ctx := opts.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := ctx.Err(); err != nil {
+			return GuardResult{}, err
+		}
+		return GuardResult{}, context.Canceled
+	}
 
 	if hookResult.Blocked != nil {
 		return GuardResult{Blocked: hookResult.Blocked, ByHook: true}, nil
