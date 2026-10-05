@@ -978,31 +978,31 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		// "Interactions"). The tool's own block commits after the decision,
 		// on EventToolEnd, exactly like any other call — with the outcome
 		// (approved/auto-approved) in its meta.
-		m = m.saveLabelBeforePrompt()
-		p := m.prompt
-		p.pending = newPendingPermission(msg.Request, msg.Reply, p.cwd)
-		p.feedback = nil
-		p.plan = nil
-		m.spinner.SetLabel("Waiting for approval")
-		return m.syncPromptPlaceholder(), nil
+		//
+		// A prompt that arrives while another is up queues behind it
+		// (PromptState.enqueue): its caller is blocked on Reply, so
+		// replacing the one on screen would leave that one's caller
+		// blocked for good.
+		return m.openPrompt(queuedPrompt{perm: newPendingPermission(msg.Request, msg.Reply, m.prompt.cwd)}), nil
 
 	case MsgPlanPrompt:
-		m = m.saveLabelBeforePrompt()
-		p := m.prompt
-		p.plan = &pendingPlan{plan: msg.Plan, reply: msg.Reply}
-		p.feedback = nil
-		p.pending = nil
-		m.spinner.SetLabel("Waiting for approval")
-		return m.syncPromptPlaceholder(), nil
+		return m.openPrompt(queuedPrompt{plan: &pendingPlan{plan: msg.Plan, reply: msg.Reply}}), nil
 
 	case MsgAskUserPrompt:
-		m = m.saveLabelBeforePrompt()
-		p := m.prompt
-		p.question = &pendingQuestion{questions: msg.Questions, checked: map[int]bool{}, reply: msg.Reply}
-		p.feedback = nil
-		p.pending = nil
-		p.plan = nil
-		m.spinner.SetLabel("Waiting for an answer")
+		return m.openPrompt(queuedPrompt{question: &pendingQuestion{questions: msg.Questions, checked: map[int]bool{}, reply: msg.Reply}}), nil
+
+	case MsgPromptWithdrawn:
+		wasActive := m.prompt.Active()
+		shown := m.prompt.shown
+		m.prompt.withdraw(msg.Reply)
+		switch {
+		case wasActive && !m.prompt.Active():
+			// Its caller gave up (the turn was stopped): the call did not
+			// go ahead, as with a declined one.
+			m = m.restoreLabelAfterPrompt(true)
+		case m.prompt.shown != shown:
+			m.spinner.SetLabel(m.prompt.waitingLabel())
+		}
 		return m.syncPromptPlaceholder(), nil
 
 	case MsgSpinnerLabel:
@@ -1784,11 +1784,22 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	router.lastCtrlC = m.lastCtrlC
 	router.lastEsc = m.lastEsc
 	promptWasActive := m.prompt.Active()
+	promptShown := m.prompt.shown
 	consumed := router.Route(msg)
 	m.lastCtrlC = router.lastCtrlC
 	m.lastEsc = router.lastEsc
-	if promptWasActive && !m.prompt.Active() {
+	if promptEscInterrupt {
+		// The turn is stopping: answer every prompt still waiting behind
+		// the declined one too, so none of their callers stays blocked.
+		m.prompt.cancelAll()
+	}
+	switch {
+	case promptWasActive && !m.prompt.Active():
 		m = m.restoreLabelAfterPrompt(m.prompt.lastDenied != nil)
+	case m.prompt.shown != promptShown:
+		// A queued prompt took the answered one's place: the row still
+		// waits, now on it.
+		m.spinner.SetLabel(m.prompt.waitingLabel())
 	}
 	// A tool-permission prompt answered "no" (Esc, or feedback then Enter)
 	// leaves its denied request on m.prompt.lastDenied (permissionview.go's
@@ -1914,6 +1925,15 @@ func (m Model) syncPromptPlaceholder() Model {
 		m.editor.SetPlaceholder(editor.DefaultPlaceholder)
 	}
 	return m
+}
+
+// openPrompt shows q, or queues it behind the prompt already on screen,
+// and sets the busy row to what the prompt on screen waits for.
+func (m Model) openPrompt(q queuedPrompt) Model {
+	m = m.saveLabelBeforePrompt()
+	m.prompt.enqueue(q)
+	m.spinner.SetLabel(m.prompt.waitingLabel())
+	return m.syncPromptPlaceholder()
 }
 
 // saveLabelBeforePrompt remembers the busy label a prompt is about to
