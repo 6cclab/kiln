@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,11 +95,28 @@ func startTUI(t *testing.T, cols, rows int, proj, home, sessDir, fauxAddr string
 		)
 	}
 
+	// Every TUI run records its PTY output with GOTRACEBACK=all, so a turn
+	// that never settles can be answered with the stuck process's
+	// goroutine dump (waitTurnSettled) instead of a screen alone. A test
+	// that records for itself (recordTUI) passes its own path.
+	record := tuiRecordPath
+	if record == "" {
+		record = filepath.Join(t.TempDir(), "pty.rec")
+		opts = append(opts, screen.WithRecord(record), screen.WithEnv("GOTRACEBACK", "all"))
+	}
 	opts = append(opts, tuiExtraOpts...)
 	s := screen.Start(t, harnessBin, args, cols, rows, opts...)
+	tuiRecords.Store(s, record)
 
 	return s
 }
+
+// tuiRecordPath, when set (recordTUI), is the PTY record file the next
+// startTUI uses instead of its own.
+var tuiRecordPath string
+
+// tuiRecords maps each started *screen.Screen to its PTY record file.
+var tuiRecords sync.Map
 
 // tuiExtraOpts lets one test add driver options (extra env, mostly) to
 // startTUI's fixed set. Tests that set it must clear it in a Cleanup; this
@@ -193,7 +211,11 @@ func waitTurnSettled(t *testing.T, s *screen.Screen) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("waitTurnSettled: still busy after 10s:\n%s", strings.Join(rows, "\n"))
+			t.Errorf("waitTurnSettled: still busy after 10s:\n%s", strings.Join(rows, "\n"))
+			if record, ok := tuiRecords.Load(s); ok {
+				dumpGoroutines(t, s, record.(string))
+			}
+			t.FailNow()
 		}
 		time.Sleep(15 * time.Millisecond)
 	}

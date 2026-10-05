@@ -62,7 +62,8 @@ func recordTUI(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "pty.rec")
 	tuiExtraOpts = []screen.Option{screen.WithRecord(path), screen.WithEnv("GOTRACEBACK", "all")}
-	t.Cleanup(func() { tuiExtraOpts = nil })
+	tuiRecordPath = path
+	t.Cleanup(func() { tuiExtraOpts = nil; tuiRecordPath = "" })
 	return path
 }
 
