@@ -484,17 +484,27 @@ func (l *Lane) commitOpStateWith(operationID string, st OpState, extra ...sessio
 }
 
 func (l *Lane) finishCompleted(operationID, tip string) RunResult {
-	l.finishOperation(operationID, tip, StatusCompleted, "")
-	return RunResult{Status: StatusCompleted, TipID: tip}
+	result := RunResult{Status: StatusCompleted, TipID: tip}
+	if err := l.finishOperation(operationID, tip, StatusCompleted, ""); err != nil {
+		result.Error = err
+		l.h.events.Emit(Event{Type: EventFault, Lane: l.name, OperationID: operationID, Err: err})
+	}
+	return result
 }
 
 func (l *Lane) finishAborted(operationID, tip string) RunResult {
-	l.finishOperation(operationID, tip, StatusAborted, "")
-	return RunResult{Status: StatusAborted, TipID: tip}
+	result := RunResult{Status: StatusAborted, TipID: tip}
+	if err := l.finishOperation(operationID, tip, StatusAborted, ""); err != nil {
+		result.Error = err
+		l.h.events.Emit(Event{Type: EventFault, Lane: l.name, OperationID: operationID, Err: err})
+	}
+	return result
 }
 
 func (l *Lane) finishFailed(operationID, tip string, err error) RunResult {
-	l.finishOperation(operationID, tip, StatusFailed, err.Error())
+	if commitErr := l.finishOperation(operationID, tip, StatusFailed, err.Error()); commitErr != nil {
+		l.h.events.Emit(Event{Type: EventFault, Lane: l.name, OperationID: operationID, Err: commitErr})
+	}
 	l.h.events.Emit(Event{Type: EventFault, Lane: l.name, OperationID: operationID, Err: err})
 	return RunResult{Status: StatusFailed, TipID: tip, Error: err}
 }
@@ -502,7 +512,18 @@ func (l *Lane) finishFailed(operationID, tip string, err error) RunResult {
 // finishOperation writes the terminal transaction: delete pi.op.meta,
 // delete pi.op.state, set pi.result, and idle pi.lane.state — matching the
 // four-item final transaction in the reference session.
-func (l *Lane) finishOperation(operationID, tip, status, errMsg string) {
+//
+// A non-nil return means that one Commit failed, so none of the four
+// writes landed (Storage.Commit only applies in memory after a successful
+// append — see jsonl.Storage.Commit): pi.lane.state.currentOperationId is
+// still set, exactly as resume.go's PendingOperation doc comment already
+// assumes can only mean "this operation never got there". The caller
+// (finishCompleted/finishAborted/finishFailed) still reports the turn's
+// own outcome — the turn itself genuinely finished or failed regardless of
+// whether this bookkeeping commit landed — but surfaces the error so it is
+// not silently lost: logged here, and turned into a visible EventFault by
+// every caller above.
+func (l *Lane) finishOperation(operationID, tip, status, errMsg string) error {
 	var tipPtr *string
 	if tip != "" {
 		tipPtr = &tip
@@ -522,7 +543,12 @@ func (l *Lane) finishOperation(operationID, tip, status, errMsg string) {
 	laneState.CurrentOperationID = nil
 	laneState.LastOperationID = &operationID
 	laneStateW, _ := session.SetValue(session.LaneStateValue(l.name), laneState)
-	_, _ = l.h.opts.Storage.Commit([]session.Write{metaDel, stateDel, resultW, laneStateW})
+	if _, err := l.h.opts.Storage.Commit([]session.Write{metaDel, stateDel, resultW, laneStateW}); err != nil {
+		err = fmt.Errorf("harness: lane %q: failed to record operation %s outcome (status=%s): %w", l.name, operationID, status, err)
+		diag.L().Error("finish operation commit failed", "lane", l.name, "operation", operationID, "status", status, "err", err)
+		return err
+	}
+	return nil
 }
 
 // requestWithRetry streams one assistant response, retrying on retriable

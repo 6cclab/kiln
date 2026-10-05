@@ -33,6 +33,16 @@ import (
 // the case Resume (above) knows how to continue. ok is false for a lane
 // with no recorded state yet, or one whose last operation finished
 // cleanly — both are "nothing to resume", not an error.
+//
+// Defensive check: finishOperation's clear and its pi.result write are one
+// Commit call, so they can only ever land or fail together — a Commit
+// failure leaves both unset, which is exactly the "never got there" case
+// above, not a divergence. But if that ever changed (a future refactor
+// splitting the write, or the clear being lost some other way), replaying
+// an operation that already has a recorded result would redo a turn the
+// user already saw finish. So PendingOperation double-checks: a result
+// already on disk for this operation means it truly finished, regardless
+// of what pi.lane.state still says.
 func (l *Lane) PendingOperation() (operationID string, ok bool) {
 	st, err := l.laneState()
 	if err != nil {
@@ -41,7 +51,11 @@ func (l *Lane) PendingOperation() (operationID string, ok bool) {
 	if st.CurrentOperationID == nil {
 		return "", false
 	}
-	return *st.CurrentOperationID, true
+	id := *st.CurrentOperationID
+	if _, _, found := l.h.opts.Storage.GetValue(session.NamespaceResult, id); found {
+		return "", false
+	}
+	return id, true
 }
 
 func (l *Lane) Resume(ctx context.Context) (RunResult, error) {

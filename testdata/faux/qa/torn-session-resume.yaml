@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "Resumed after the tear."
+    usage: {input: 60, output: 8}
