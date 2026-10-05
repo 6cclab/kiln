@@ -12,6 +12,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/permission"
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/session/jsonl"
@@ -731,4 +732,79 @@ func kindsOf(events []SubagentEvent) []SubagentEventKind {
 		out = append(out, ev.Kind)
 	}
 	return out
+}
+
+// OnSubagentStop reports how the subagent's run ended and passes the
+// dispatching call's context, so the caller can run SubagentStop only for
+// a completed run (as Claude Code does) and let Esc cancel it.
+func TestDispatchOnSubagentStopReportsStatusAndContext(t *testing.T) {
+	type stop struct {
+		status string
+		ctx    context.Context
+	}
+	t.Run("completed", func(t *testing.T) {
+		d, _, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - text: \"the answer\"\n", nil)
+		var got []stop
+		d.OnSubagentStop = func(ctx context.Context, _ string, _ *Started, status string) {
+			got = append(got, stop{status, ctx})
+		}
+		ctx := context.WithValue(context.Background(), struct{ k string }{"k"}, "dispatching call")
+		if _, err := d.Dispatch(ctx, DispatchRequest{Agent: "general-purpose", Description: "d", Prompt: "p"}); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		if len(got) != 1 || got[0].status != "completed" {
+			t.Fatalf("OnSubagentStop calls = %+v, want one with status completed", got)
+		}
+		if got[0].ctx.Value(struct{ k string }{"k"}) != "dispatching call" {
+			t.Error("OnSubagentStop did not get the dispatching call's context")
+		}
+	})
+	t.Run("interrupted", func(t *testing.T) {
+		d, _, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - text: \"the answer\"\n", nil)
+		var got []string
+		d.OnSubagentStop = func(_ context.Context, _ string, _ *Started, status string) { got = append(got, status) }
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, _ = d.Dispatch(ctx, DispatchRequest{Agent: "general-purpose", Description: "d", Prompt: "p"})
+		if len(got) != 1 {
+			t.Fatalf("OnSubagentStop called %d times, want once (usage is still added)", len(got))
+		}
+		if got[0] == "completed" {
+			t.Fatal("an interrupted subagent run was reported as completed")
+		}
+	})
+}
+
+// BeforeSubagentStop runs as the subagent's own stop hook: a Continue
+// verdict keeps the subagent working (Claude Code's SubagentStop exit 2),
+// so the parent gets the reply written after the feedback, and the hook
+// sees stop_hook_active on the call that follows.
+func TestDispatchBeforeSubagentStopContinuesTheSubagent(t *testing.T) {
+	d, _, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - text: \"draft answer\"\n    end_turn: true\n  - text: \"checked answer\"\n    end_turn: true\n", nil)
+	var calls []harness.StopInfo
+	var names []string
+	d.BeforeSubagentStop = func(_ context.Context, agentName string, sub *Started, info harness.StopInfo) harness.StopVerdict {
+		calls = append(calls, info)
+		names = append(names, agentName)
+		if sub == nil {
+			t.Error("BeforeSubagentStop got no subagent session")
+		}
+		if info.StopHookActive {
+			return harness.StopVerdict{}
+		}
+		return harness.StopVerdict{Continue: true, Message: "SubagentStop hook asked to continue:\ncheck it", Source: "SubagentStop"}
+	}
+	result, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "general-purpose", Description: "d", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Text != "checked answer" {
+		t.Fatalf("result = %q, want the reply after the hook's feedback", result.Text)
+	}
+	if len(calls) != 2 || calls[0].StopHookActive || !calls[1].StopHookActive {
+		t.Fatalf("calls = %+v, want two, stop_hook_active false then true", calls)
+	}
+	if names[0] != "general-purpose" {
+		t.Errorf("agent name = %q", names[0])
+	}
 }

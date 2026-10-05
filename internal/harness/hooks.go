@@ -41,6 +41,7 @@ type Hooks struct {
 	beforeRun        []func(ctx context.Context) error
 	beforeDrive      []func(ctx context.Context) error
 	beforeRunEnd     []func(ctx context.Context, status string) error
+	beforeStop       []func(ctx context.Context, info StopInfo) (StopVerdict, error)
 	transformContext []func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error)
 	beforeRequest    []func(ctx context.Context) error
 	beforePayload    []func(ctx context.Context, payload map[string]any) (map[string]any, error)
@@ -70,6 +71,42 @@ func (h *Hooks) OnBeforeRunEnd(fn func(ctx context.Context, status string) error
 	h.beforeRunEnd = append(h.beforeRunEnd, fn)
 	i := len(h.beforeRunEnd) - 1
 	return func() { h.beforeRunEnd[i] = nil }
+}
+
+// StopInfo describes the turn an OnBeforeStop handler may keep going.
+type StopInfo struct {
+	// StopHookActive is true once a handler has continued this operation:
+	// the turn it is looking at is already a continuation. It stays true
+	// for the rest of the operation and starts false on the next prompt.
+	StopHookActive bool
+	// Last is the reply that ended the turn.
+	Last *msg.AssistantMessage
+}
+
+// StopVerdict is an OnBeforeStop handler's answer.
+type StopVerdict struct {
+	// Continue keeps the operation running: Message is committed to the
+	// branch as a user message, and the model is asked again.
+	Continue bool
+	Message  string
+	// Source names what continued the turn (a hook event such as "Stop"),
+	// recorded on the message as msg.UserMessage.KilnHook.
+	Source string
+	// Interrupted reports that the handler was stopped by the operation's
+	// context being cancelled: the operation ends as aborted, not
+	// completed.
+	Interrupted bool
+}
+
+// OnBeforeStop registers a handler consulted when a turn is about to end
+// the operation (the model replied with no tool calls and nothing is
+// queued). It runs on the operation's context, so Lane.Abort cancels it.
+// The first handler that returns Continue wins; later handlers are not
+// consulted for that turn.
+func (h *Hooks) OnBeforeStop(fn func(ctx context.Context, info StopInfo) (StopVerdict, error)) func() {
+	h.beforeStop = append(h.beforeStop, fn)
+	i := len(h.beforeStop) - 1
+	return func() { h.beforeStop[i] = nil }
 }
 
 func (h *Hooks) OnTransformContext(fn func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error)) func() {
@@ -180,6 +217,31 @@ func (l *Lane) invokeBeforeRunEnd(ctx context.Context, status string) {
 			l.h.events.Emit(Event{Type: EventHandlerError, Lane: l.name, HookName: "before_run_end", Err: err})
 		}
 	}
+}
+
+func (l *Lane) invokeBeforeStop(ctx context.Context, info StopInfo) StopVerdict {
+	for _, fn := range l.h.hooks.beforeStop {
+		if fn == nil {
+			continue
+		}
+		var v StopVerdict
+		err := runGuarded(func() error {
+			var innerErr error
+			v, innerErr = fn(ctx, info)
+			return innerErr
+		})
+		if err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return StopVerdict{Interrupted: true}
+			}
+			l.h.events.Emit(Event{Type: EventHandlerError, Lane: l.name, HookName: "before_stop", Err: err})
+			continue
+		}
+		if v.Interrupted || v.Continue {
+			return v
+		}
+	}
+	return StopVerdict{}
 }
 
 func (l *Lane) invokeTransformContext(ctx context.Context, transcript []msg.Message) []msg.Message {

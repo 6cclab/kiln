@@ -1209,30 +1209,36 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// shows the dialog and runs them, as Claude Code does there.
 	hooks := newTrustedHooks(hookConfig, args.Print || trustedAtStart)
 
-	// The four events the TS parsed but never fired. Stop runs when the
-	// parent's run ends; a blocking Stop hook is reported to the user, not
-	// fed back into the model (this port does not re-prompt on Stop).
-	// PreCompact runs when the harness starts compacting; the harness does
-	// not tell us whether /compact or the threshold triggered it, so the
-	// trigger is always "auto". SubagentStop runs from the dispatcher when
-	// a subagent's run ends. Notification is wired where the permission
-	// prompt is shown (internal/cli/tui.go).
-	stopHookActive := false
-	started.Harness.Events().On(harness.EventRunEnd, func(ev harness.Event) {
+	// The four events the TS parsed but never fired. PreCompact runs when
+	// the harness starts compacting; the harness does not tell us whether
+	// /compact or the threshold triggered it, so the trigger is always
+	// "auto". Notification is wired where the permission prompt is shown
+	// (internal/cli/tui.go).
+	//
+	// Stop and SubagentStop work as in Claude Code. They run when a turn is
+	// about to end its run (harness OnBeforeStop: the model replied with no
+	// tool calls), never for one the user interrupted or that failed, and
+	// on the run's context, so Esc kills a slow one and its verdict is
+	// discarded. A hook that blocks (exit 2, or "decision": "block") keeps
+	// the run going: its reason goes to the model as a user message and the
+	// model is asked again, with stop_hook_active true on the hook calls
+	// that follow, for the rest of that run. {"continue": false} ends it.
+	started.Harness.Hooks().OnBeforeStop(func(ctx context.Context, info harness.StopInfo) (harness.StopVerdict, error) {
+		active := info.StopHookActive
 		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
+			Ctx:    ctx,
 			Config: hooks.get(),
 			Event:  claudehooks.Stop,
 			Payload: claudehooks.Payload{
-				SessionID:      sessionID,
-				TranscriptPath: transcriptPath,
-				Cwd:            cwd,
-				StopHookActive: &stopHookActive,
+				SessionID:            sessionID,
+				TranscriptPath:       transcriptPath,
+				Cwd:                  cwd,
+				StopHookActive:       &active,
+				LastAssistantMessage: lastReplyText(info.Last),
 			},
 			OnNotice: notice,
 		})
-		if outcome.Blocked != nil {
-			notice("Stop hook asked to continue: " + outcome.Blocked.Reason)
-		}
+		return stopVerdict(claudehooks.Stop, outcome, notice), nil
 	})
 	started.Harness.Events().On(harness.EventCompactionStart, func(ev harness.Event) {
 		claudehooks.RunHooks(claudehooks.RunOptions{
@@ -1250,23 +1256,31 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			OnNotice: notice,
 		})
 	})
-	dispatcher.OnSubagentStop = func(agentName string, sub *agent.Started) {
+	dispatcher.OnSubagentStop = func(_ context.Context, _ string, sub *agent.Started, _ string) {
+		if sub != nil {
+			addUsage(sub.Model.Provider, sub.Model.ID, sub.Harness.Stats().Usage)
+		}
+	}
+	dispatcher.BeforeSubagentStop = func(ctx context.Context, _ string, sub *agent.Started, info harness.StopInfo) harness.StopVerdict {
 		subSession, subTranscript := sessionID, transcriptPath
 		if sub != nil {
 			subSession, subTranscript = sub.SessionID, sub.TranscriptPath
-			addUsage(sub.Model.Provider, sub.Model.ID, sub.Harness.Stats().Usage)
 		}
-		claudehooks.RunHooks(claudehooks.RunOptions{
+		active := info.StopHookActive
+		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
+			Ctx:    ctx,
 			Config: hooks.get(),
 			Event:  claudehooks.SubagentStop,
 			Payload: claudehooks.Payload{
-				SessionID:      subSession,
-				TranscriptPath: subTranscript,
-				Cwd:            cwd,
-				StopHookActive: &stopHookActive,
+				SessionID:            subSession,
+				TranscriptPath:       subTranscript,
+				Cwd:                  cwd,
+				StopHookActive:       &active,
+				LastAssistantMessage: lastReplyText(info.Last),
 			},
 			OnNotice: notice,
 		})
+		return stopVerdict(claudehooks.SubagentStop, outcome, notice)
 	}
 
 	registry := buildCommandRegistry(registryDeps{

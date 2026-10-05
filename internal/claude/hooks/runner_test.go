@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -457,5 +458,62 @@ func TestRunHooksSetsClaudeProjectDir(t *testing.T) {
 	out := run(cfg(path, 0), nil, dir)
 	if len(out.Context) != 1 || out.Context[0] != dir {
 		t.Errorf("CLAUDE_PROJECT_DIR = %v, want %q", out.Context, dir)
+	}
+}
+
+func runStop(t *testing.T, event Event, body string) Outcome {
+	t.Helper()
+	dir := t.TempDir()
+	path := writeScript(t, dir, "stop.sh", body)
+	c := Config{event: []Matcher{{Hooks: []Command{{Type: "command", Command: path}}}}}
+	active := false
+	return RunHooks(RunOptions{Config: c, Event: event, Payload: Payload{SessionID: "t", Cwd: dir, StopHookActive: &active}})
+}
+
+// Stop and SubagentStop give "decision": "block" its Claude Code meaning
+// (keep working, reason to the model); exit 2 means the same, with the
+// reason on stderr. {"continue": false} is distinct: stop everything.
+func TestRunHooksStopDecisions(t *testing.T) {
+	for _, event := range []Event{Stop, SubagentStop} {
+		t.Run(string(event), func(t *testing.T) {
+			out := runStop(t, event, `echo '{"decision":"block","reason":"tests are failing"}'`)
+			if out.Blocked == nil || out.Blocked.Reason != "tests are failing" || out.Stopped {
+				t.Errorf("decision block: %+v, want Blocked with the reason", out)
+			}
+			out = runStop(t, event, `echo "lint first" >&2; exit 2`)
+			if out.Blocked == nil || out.Blocked.Reason != "lint first" || out.Stopped {
+				t.Errorf("exit 2: %+v, want Blocked with stderr", out)
+			}
+			out = runStop(t, event, `echo '{"continue":false,"stopReason":"build is green"}'`)
+			if !out.Stopped || out.StopReason != "build is green" {
+				t.Errorf("continue false: %+v, want Stopped with stopReason", out)
+			}
+			out = runStop(t, event, `echo '{"decision":"approve"}'`)
+			if out.Blocked != nil || out.Stopped {
+				t.Errorf("decision approve: %+v, want nothing", out)
+			}
+		})
+	}
+}
+
+// A Stop hook receives stop_hook_active and the last reply's text.
+func TestRunHooksStopPayload(t *testing.T) {
+	dir := t.TempDir()
+	rec := filepath.Join(dir, "payload.json")
+	path := writeScript(t, dir, "rec.sh", "cat > "+rec)
+	active := true
+	RunHooks(RunOptions{
+		Config:  Config{Stop: []Matcher{{Hooks: []Command{{Type: "command", Command: path}}}}},
+		Event:   Stop,
+		Payload: Payload{SessionID: "t", Cwd: dir, StopHookActive: &active, LastAssistantMessage: "all done"},
+	})
+	raw, err := os.ReadFile(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"stop_hook_active":true`, `"last_assistant_message":"all done"`, `"hook_event_name":"Stop"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("payload %s lacks %s", raw, want)
+		}
 	}
 }

@@ -1,0 +1,17 @@
+# A Stop hook that exits 2 continues the turn, as in Claude Code: its
+# stderr goes back to the model as hidden feedback, the model answers again
+# in the same turn, and the hook (now seeing stop_hook_active) lets it stop.
+# The user sees a note with the hook's reason.
+@faux testdata/faux/qa/stop-hook-continue.yaml
+@setup mkdir -p .claude && printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"if [ -e blocked-once ]; then exit 0; fi; touch blocked-once; echo add tests first >&2; exit 2"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+SEND finish the feature
+WAITFOR /Second pass, after the Stop hook asked for tests\./ 20
+WAIT 1
+SHOT continued
+EXPECT /First pass done\./
+EXPECT /Stop hook asked to continue: add tests first/
+EXPECT_NOT /esc to stop/
+RUN test -e blocked-once
+EXPECT_NOT /panic|goroutine/

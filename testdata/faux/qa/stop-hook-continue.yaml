@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - text: "First pass done."
+    usage: {input: 40, output: 6}
+    end_turn: true
+  - text: "Second pass, after the Stop hook asked for tests."
+    usage: {input: 60, output: 10}

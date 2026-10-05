@@ -48,7 +48,9 @@ func RewindEntriesFromSession(entries []session.Entry) []RewindEntry {
 		switch m := e.Message.(type) {
 		case msg.UserMessage:
 			text := firstLineOf(m)
-			if text == "" {
+			if text == "" || m.KilnHook != "" {
+				// A hook's feedback is part of the turn it continued, not
+				// a turn of its own to rewind to.
 				continue
 			}
 			closeTurn()

@@ -182,6 +182,9 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	// compactErr is an automatic compaction's failure, held until the
 	// next request is built (see fitRequest below).
 	var compactErr error
+	// stopHookActive: an OnBeforeStop handler has already continued this
+	// operation (StopInfo.StopHookActive).
+	stopHookActive := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return l.finishAborted(operationID, tip)
@@ -363,6 +366,22 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 			if drained {
 				continue
 			}
+			// A Stop hook may keep the turn going instead: its message
+			// goes onto the branch like any other input and the model is
+			// asked again, within this same operation, so the lane stays
+			// busy and Esc still interrupts it.
+			verdict := l.invokeBeforeStop(ctx, StopInfo{StopHookActive: stopHookActive, Last: final})
+			if verdict.Interrupted {
+				return l.finishAborted(operationID, tip)
+			}
+			if verdict.Continue {
+				stopHookActive = true
+				var contErr error
+				if tip, contErr = l.commitStopContinuation(tip, verdict); contErr != nil {
+					return l.finishFailed(operationID, tip, contErr)
+				}
+				continue
+			}
 			return l.finishCompleted(operationID, tip)
 		}
 
@@ -400,6 +419,30 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		tip, compactErr = l.autoCompact(ctx, tip)
 		// loop back for the next assistant turn.
 	}
+}
+
+// commitStopContinuation commits an OnBeforeStop handler's message as a
+// user message on tip and advances the branch to it, in one transaction.
+func (l *Lane) commitStopContinuation(tip string, v StopVerdict) (string, error) {
+	id := l.newID()
+	var parent *string
+	if tip != "" {
+		p := tip
+		parent = &p
+	}
+	entryWrite := session.EntryWrite{Entry: session.Entry{
+		ID: id, ParentID: parent, Type: session.EntryMessage,
+		Message: msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(v.Message)}, KilnHook: v.Source, Timestamp: l.now()},
+	}}
+	tipWrite, err := session.SetValue(session.BranchTip(l.name), &id)
+	if err != nil {
+		return tip, err
+	}
+	if _, err := l.h.opts.Storage.Commit([]session.Write{entryWrite, tipWrite}); err != nil {
+		return tip, err
+	}
+	l.h.events.Emit(Event{Type: EventEntryAdded, Lane: l.name, EntryID: id, ParentID: tip})
+	return id, nil
 }
 
 // drainInbox re-parents every entry queued via Lane.Steer since the last

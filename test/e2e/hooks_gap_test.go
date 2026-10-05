@@ -168,42 +168,6 @@ func TestHooks_Notification_Payload(t *testing.T) {
 	waitTurnSettled(t, s)
 }
 
-// TestHooks_StopBlock_ReportedOnceNotReprompted wires block-exit2.sh on
-// Stop. Read directly: chat.go's EventRunEnd handler (~chat.go:679-695)
-// runs the Stop hook once, and if it blocks, only calls
-// notice("Stop hook asked to continue: " + reason) - the comment right
-// above it says explicitly "a blocking Stop hook is reported to the
-// user, not fed back into the model (this port does not re-prompt on
-// Stop)". So this test asserts today's documented behavior: the hook
-// runs exactly once (one payload write), no second model request is
-// ever made because of the block, and the block reason reaches the
-// user via stderr (print mode's notice sink - chat.go's
-// hookNoticeSink(stderr)).
-//
-// Proved able to fail: asserting the reason must NOT appear on stderr
-// (inverting the expectation) turned this red because it does appear;
-// reverted.
-func TestHooks_StopBlock_ReportedOnceNotReprompted(t *testing.T) {
-	addr, srv := startFaux(t, unreadScript)
-	home, sessDir := scratchHome(t)
-	proj := scratchProject(t)
-
-	writeHookSettings(t, proj, "Stop", "", hookScript(t, "block-exit2.sh"))
-
-	res := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "hello", "--output-format", "text")
-	if res.Code != 0 {
-		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
-	}
-
-	if !strings.Contains(res.Stderr, "not allowed here") {
-		t.Errorf("stderr = %q, want the Stop hook's block reason reported to the user", res.Stderr)
-	}
-
-	if got := len(srv.Requests()); got != 1 {
-		t.Errorf("faux recorded %d requests, want exactly 1 - a Stop block must not trigger a second model request", got)
-	}
-}
-
 // gapNestedTaskScript is a three-model, two-hop dispatch: faux-1 (the
 // parent) dispatches a task routed to the "fast" role (settings.json ->
 // faux-2), and that depth-1 subagent itself dispatches a second task

@@ -212,7 +212,9 @@ func (l *Lane) Abort() error {
 		return fmt.Errorf("harness: lane %q has no running operation to abort", l.name)
 	}
 	cancel()
-	l.h.events.Emit(Event{Type: EventOperationAbort, Lane: l.name})
+	// Posted, not emitted: Abort is called from a UI's event loop, which
+	// must not wait on the bus (see Events.Post).
+	l.h.events.Post(func() Event { return Event{Type: EventOperationAbort, Lane: l.name} })
 	return nil
 }
 
@@ -258,7 +260,7 @@ func (l *Lane) SteerAs(text, typed string) error {
 	if _, err := l.h.opts.Storage.Commit([]session.Write{entryWrite, w}); err != nil {
 		return err
 	}
-	l.h.events.Emit(Event{Type: EventQueueUpdate, Lane: l.name, QueueLen: len(st.Inbox)})
+	l.postQueueUpdate()
 	return nil
 }
 
@@ -296,7 +298,7 @@ func (l *Lane) ClearInbox() ([]string, error) {
 	if _, err := l.h.opts.Storage.Commit([]session.Write{w}); err != nil {
 		return nil, err
 	}
-	l.h.events.Emit(Event{Type: EventQueueUpdate, Lane: l.name, QueueLen: 0})
+	l.postQueueUpdate()
 	return texts, nil
 }
 
@@ -550,4 +552,19 @@ func (l *Lane) ToolSchemaTokens() (int, error) {
 		return 0, err
 	}
 	return (len(encoded) + 3) / 4, nil
+}
+
+// postQueueUpdate reports the inbox's length without waiting for the
+// event's handlers. Steer and ClearInbox are called from a UI's event
+// loop mid-turn, which must not wait on the bus (see Events.Post). The
+// length is read at delivery, so a report that lands after the turn
+// loop's own drain (which emits 0) does not bring back a stale count.
+func (l *Lane) postQueueUpdate() {
+	l.h.events.Post(func() Event {
+		n := 0
+		if st, err := l.laneState(); err == nil {
+			n = len(st.Inbox)
+		}
+		return Event{Type: EventQueueUpdate, Lane: l.name, QueueLen: n}
+	})
 }

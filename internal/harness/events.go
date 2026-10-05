@@ -187,6 +187,9 @@ type Event struct {
 // invokeMu; grep of internal/harness, internal/tui and internal/cli at the
 // time this was written found no such handler, so the simpler
 // non-reentrant design was chosen over a per-goroutine reentrancy token.
+//
+// Post is the one asynchronous way in, for callers that must not wait on
+// another goroutine's handlers (see its doc comment).
 type Events struct {
 	subMu     sync.Mutex
 	byType    map[EventType][]subscription
@@ -194,6 +197,12 @@ type Events struct {
 	nextToken int64
 
 	invokeMu sync.Mutex
+
+	// postMu guards posted and posting, Post's FIFO and whether its
+	// delivery goroutine is running.
+	postMu  sync.Mutex
+	posted  []func() Event
+	posting bool
 }
 
 type subscription struct {
@@ -268,5 +277,44 @@ func (e *Events) Emit(ev Event) {
 	}
 	for _, s := range all {
 		s.fn(ev)
+	}
+}
+
+// Post delivers an event without waiting for its handlers: they run on a
+// separate goroutine, through Emit, in the order Post was called. build
+// runs on that goroutine just before the emit, so an event that reports
+// state (a queue length) reports it as of delivery, not as of the call.
+//
+// It exists for the lane methods a UI calls from its own event loop while
+// a turn runs (Lane.Abort, Lane.Steer, Lane.ClearInbox). Emit there would
+// wait on invokeMu, which the lane's goroutine holds while a handler runs,
+// and a UI's handler can be waiting on that same event loop to take a
+// message (Bubble Tea's Program.Send): the loop waits on the bus, the bus
+// waits on the loop, and the program freezes.
+func (e *Events) Post(build func() Event) {
+	e.postMu.Lock()
+	e.posted = append(e.posted, build)
+	if e.posting {
+		e.postMu.Unlock()
+		return
+	}
+	e.posting = true
+	e.postMu.Unlock()
+	go e.deliverPosted()
+}
+
+// deliverPosted emits Post's events in order until none are left.
+func (e *Events) deliverPosted() {
+	for {
+		e.postMu.Lock()
+		if len(e.posted) == 0 {
+			e.posting = false
+			e.postMu.Unlock()
+			return
+		}
+		build := e.posted[0]
+		e.posted = e.posted[1:]
+		e.postMu.Unlock()
+		e.Emit(build())
 	}
 }
