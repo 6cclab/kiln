@@ -228,8 +228,7 @@ func (b *Bridge) deliver(items []bridgeItem) bool {
 // enqueue appends item to the commit queue and wakes run. It never blocks,
 // and that is load-bearing. Producers include Update itself (app.go's
 // commit helpers) and goroutines holding locks Update can wait on: the
-// harness event bus runs every handler under its invokeMu, and Lane.Steer,
-// called from Update, emits on that same bus. Meanwhile run sits in
+// harness event bus runs every handler under its invokeMu. Meanwhile run sits in
 // Program.Println, an unbuffered send that only the event loop drains,
 // between Update calls. A producer that waited for queue space, as one did
 // when the queue was a fixed 1024-slot channel, closed that cycle and hung
@@ -647,14 +646,14 @@ func (b *Bridge) CommitCommandResult(name string, lines []string) {
 // result of a keypress) — tea.Program.Send blocks until the event loop's
 // own goroutine drains its message channel, and if that goroutine is the
 // very one calling Send, it can never get back around to do so: a
-// self-deadlock. Every regular harness.Event handler in Wire is safe
-// because it always runs on the lane's own background goroutine, never
-// the TUI's — except Lane.Steer, the one harness method app.go calls
-// synchronously from handleSubmit, which is why EventQueueUpdate's own
-// handler below uses SendAsync instead of this method (a real deadlock
-// this exact call once produced end to end, driving a real keypress
-// through the real TUI — see test/e2e/tui_queue_test.go). A caller unsure
-// which goroutine it is on should use SendAsync.
+// self-deadlock. Every harness.Event handler in Wire runs off the TUI's
+// goroutine, but it runs under the bus's lock while it waits here, so
+// Update must never wait on the bus: the lane methods it calls mid-turn
+// (Abort, Steer, ClearInbox) post their events instead of emitting them
+// (harness.Events.Post). EventQueueUpdate's handler below still uses
+// SendAsync, from when Lane.Steer emitted it on Update's own goroutine (a
+// deadlock test/e2e/tui_queue_test.go reproduced end to end). A caller
+// unsure which goroutine it is on should use SendAsync.
 func (b *Bridge) Send(m tea.Msg) {
 	if p := b.prog(); p != nil {
 		p.Send(m)
@@ -1193,10 +1192,10 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		}
 
 	case harness.EventQueueUpdate:
-		// SendAsync, not Send: Lane.Steer emits this event synchronously
-		// from app.go's handleSubmit, on the Program's own Update
-		// goroutine — a direct Send there deadlocks (see Send's doc
-		// comment).
+		// SendAsync, not Send: this event once came synchronously from
+		// Lane.Steer on the Program's own Update goroutine, where a direct
+		// Send deadlocks (see Send's doc comment). Steer now posts it
+		// (harness.Events.Post); SendAsync stays harmless either way.
 		b.SendAsync(MsgQueue{Len: ev.QueueLen})
 
 	case harness.EventRetryScheduled:

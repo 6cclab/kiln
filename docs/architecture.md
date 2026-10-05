@@ -136,7 +136,9 @@ prompt's size (two minutes plus 20 tokens a second), or no further token
 for five minutes.
 
 Interruption: `Lane.Abort` cancels the lane's `context.CancelFunc` and
-emits `EventOperationAbort`; the turn loop itself notices `ctx.Err() != nil`
+posts `EventOperationAbort` (`Events.Post`: delivered on another
+goroutine, so a UI's event loop calling Abort, Steer or ClearInbox never
+waits on the bus while one of its own handlers waits on that loop); the turn loop itself notices `ctx.Err() != nil`
 at the top of its next iteration or mid-request and calls `finishAborted`,
 which still writes the terminal `pi.result` transaction with
 `StatusAborted`. A reply interrupted mid-stream keeps its text
