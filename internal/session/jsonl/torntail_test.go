@@ -32,40 +32,36 @@ func appendRaw(t *testing.T, path string, raw string) {
 	}
 }
 
-// TestOpenRecoversTornTail simulates a kill mid-AppendTransaction: a
-// well-formed file whose last append was cut off partway through, leaving
-// an unterminated, unparsable final line. Open must drop exactly that line
-// (truncating the file to the last complete newline) and return the
-// storage as of the last complete commit, matching the fix for finding 2 of
-// the go-audit ("A torn last line makes a session permanently
-// unopenable").
-func TestOpenRecoversTornTail(t *testing.T) {
+// buildTornFixture creates a session with one commit (entry-1), then
+// simulates a kill mid-AppendTransaction by appending a byte stream cut
+// off partway through the next commit: valid JSON prefix, no closing
+// braces, no trailing newline. It returns the path and the exact bytes of
+// the well-formed prefix (before the tear), for comparison.
+func buildTornFixture(t *testing.T, id string) (path string, beforeTear []byte, nextSeqBeforeTear int64) {
+	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "session.jsonl")
+	path = filepath.Join(dir, "session.jsonl")
 
-	st, err := Create(path, newTornTailHeader("torn-id"), threeSeedWrites("main"), nil)
+	st, err := Create(path, newTornTailHeader(id), threeSeedWrites("main"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entryID := "entry-1"
-	if _, err := st.Commit([]session.Write{session.EntryWrite{Entry: session.Entry{ID: entryID, Type: session.EntryMessage}}}); err != nil {
+	if _, err := st.Commit([]session.Write{session.EntryWrite{Entry: session.Entry{ID: "entry-1", Type: session.EntryMessage}}}); err != nil {
 		t.Fatal(err)
 	}
-	nextSeqBeforeTear := st.NextSeq()
+	nextSeqBeforeTear = st.NextSeq()
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	before, err := os.ReadFile(path)
+	beforeTear, err = os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasSuffix(before, []byte("\n")) {
+	if !bytes.HasSuffix(beforeTear, []byte("\n")) {
 		t.Fatal("test fixture itself is not newline-terminated before the tear")
 	}
 
-	// A write() cut off mid-buffer: valid JSON prefix, no closing braces,
-	// no trailing newline.
 	appendRaw(t, path, `{"kind":"entry","lane":"main","entry":{"id":"entry-2"`)
 
 	torn, err := os.ReadFile(path)
@@ -74,6 +70,24 @@ func TestOpenRecoversTornTail(t *testing.T) {
 	}
 	if bytes.HasSuffix(torn, []byte("\n")) {
 		t.Fatal("test fixture's torn tail is unexpectedly newline-terminated")
+	}
+	return path, beforeTear, nextSeqBeforeTear
+}
+
+// TestOpenLeavesTornFileUnchanged is go-audit finding 2's concurrency
+// follow-up: Open must never write to the file, even to repair a torn
+// tail, because another kiln process (`kiln session inspect`,
+// forkSession's header read, the eval runner reading stats — none of
+// which ever call Commit) can hold the same file open for append while
+// this one calls Open. A premature truncate/append here could race that
+// other process's own in-flight write. Open still recovers the torn
+// commit in memory (nextSeq, GetEntry) — it just defers the on-disk fix to
+// Commit (see TestFirstCommitRepairsTornTail).
+func TestOpenLeavesTornFileUnchanged(t *testing.T) {
+	path, _, nextSeqBeforeTear := buildTornFixture(t, "torn-id")
+	torn, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	reopened, err := Open(path, nil)
@@ -85,7 +99,7 @@ func TestOpenRecoversTornTail(t *testing.T) {
 	if reopened.NextSeq() != nextSeqBeforeTear {
 		t.Fatalf("nextSeq after recovery = %d, want %d", reopened.NextSeq(), nextSeqBeforeTear)
 	}
-	if _, ok := reopened.GetEntry(entryID); !ok {
+	if _, ok := reopened.GetEntry("entry-1"); !ok {
 		t.Fatal("entry-1 (the last complete commit) is missing after recovery")
 	}
 	if _, ok := reopened.GetEntry("entry-2"); ok {
@@ -96,8 +110,83 @@ func TestOpenRecoversTornTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(after, before) {
-		t.Fatalf("file was not truncated back to its pre-tear content:\nbefore=%q\nafter=%q", before, after)
+	if !bytes.Equal(after, torn) {
+		t.Fatalf("Open modified the file:\nbefore=%q\nafter=%q", torn, after)
+	}
+}
+
+// TestFirstCommitRepairsTornTail: the Storage from an Open that found a
+// torn tail truncates the file (dropping the torn line) the first time it
+// actually commits, and the new commit's own line is appended after that
+// clean truncation — not after the leftover torn bytes.
+func TestFirstCommitRepairsTornTail(t *testing.T) {
+	path, beforeTear, _ := buildTornFixture(t, "torn-id-repair")
+
+	st, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	res, err := st.Commit([]session.Write{session.EntryWrite{Entry: session.Entry{ID: "entry-3", ParentID: strPtr("entry-1"), Type: session.EntryMessage}}})
+	if err != nil {
+		t.Fatalf("first Commit after a torn-tail Open failed: %v", err)
+	}
+	if res.FirstSeq == 0 {
+		t.Fatal("commit produced no seq")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(after, beforeTear) {
+		t.Fatalf("file after first commit does not start with the pre-tear content:\nwant prefix=%q\ngot=%q", beforeTear, after)
+	}
+	if bytes.Contains(after, []byte("entry-2")) {
+		t.Fatalf("the torn entry-2 bytes are still in the file: %q", after)
+	}
+	if !bytes.Contains(after, []byte("entry-3")) {
+		t.Fatalf("the new commit's entry-3 was not appended: %q", after)
+	}
+}
+
+// TestCommitErrorsIfFileSizeChangedSinceOpen: if the file's size changes
+// between Open (which found a torn tail but deferred the fix) and this
+// Storage's first Commit — e.g. another process appended to it in the
+// meantime — Commit must refuse to write anything at all, rather than
+// truncate or append based on a now-stale view of the file.
+func TestCommitErrorsIfFileSizeChangedSinceOpen(t *testing.T) {
+	path, _, _ := buildTornFixture(t, "torn-id-race")
+
+	st, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	// Simulate another process finishing its own append after this
+	// Storage's Open already read the file.
+	appendRaw(t, path, "\n")
+	racedSize, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = st.Commit([]session.Write{session.EntryWrite{Entry: session.Entry{ID: "entry-3", ParentID: strPtr("entry-1"), Type: session.EntryMessage}}})
+	if err == nil {
+		t.Fatal("Commit should have refused to write after the file changed size since Open")
+	}
+	if !strings.Contains(err.Error(), "changed since it was opened") {
+		t.Fatalf("error = %v, want it to mention the file changing since it was opened", err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, racedSize) {
+		t.Fatalf("Commit wrote something despite refusing:\nbefore=%q\nafter=%q", racedSize, after)
 	}
 }
 
@@ -242,17 +331,16 @@ func TestOpenTerminatedInvalidTailStillErrors(t *testing.T) {
 	})
 }
 
-// TestOpenCompletesUnterminatedButValidTail covers the non-destructive
-// repair side of the same fix: a final line that is missing only its
-// trailing newline (the write() that appended it landed in full; the
-// process was killed before the next AppendTransaction, or between writing
-// the content and nothing else was pending) still parses and validates, so
-// Open keeps it and completes the file by appending the missing "\n"
-// rather than dropping real, successfully-written data.
-func TestOpenCompletesUnterminatedButValidTail(t *testing.T) {
+// buildUnterminatedValidFixture creates a session, then appends one more,
+// well-formed transaction line with no trailing "\n" — as if the write()
+// that appended it landed in full and the process was killed only before
+// the next AppendTransaction (or between writing the content and nothing
+// else being pending).
+func buildUnterminatedValidFixture(t *testing.T, id string) (path, line string) {
+	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "session.jsonl")
-	st, err := Create(path, newTornTailHeader("complete-id"), threeSeedWrites("main"), nil)
+	path = filepath.Join(dir, "session.jsonl")
+	st, err := Create(path, newTornTailHeader(id), threeSeedWrites("main"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,8 +348,22 @@ func TestOpenCompletesUnterminatedButValidTail(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	line := fmt.Sprintf(`{"id":"entry-ok","kind":"entry","parentId":null,"seq":%d,"timestamp":1,"type":"message"}`, seq)
+	line = fmt.Sprintf(`{"id":"entry-ok","kind":"entry","parentId":null,"seq":%d,"timestamp":1,"type":"message"}`, seq)
 	appendRaw(t, path, line) // no trailing "\n"
+	return path, line
+}
+
+// TestOpenLeavesUnterminatedValidTailUnchanged covers the non-destructive
+// repair side of the torn-tail fix: a final line missing only its trailing
+// newline still parses and validates, so Open keeps it in memory — but,
+// per the same concurrency rule as TestOpenLeavesTornFileUnchanged, Open
+// does not touch the file itself to add the missing "\n".
+func TestOpenLeavesUnterminatedValidTailUnchanged(t *testing.T) {
+	path, _ := buildUnterminatedValidFixture(t, "complete-id")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	reopened, err := Open(path, nil)
 	if err != nil {
@@ -276,10 +378,38 @@ func TestOpenCompletesUnterminatedButValidTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasSuffix(after, []byte("\n")) {
-		t.Fatal("Open should have completed the file by appending the missing trailing newline")
+	if !bytes.Equal(after, before) {
+		t.Fatalf("Open modified the file:\nbefore=%q\nafter=%q", before, after)
 	}
-	if !bytes.HasSuffix(after, []byte(line+"\n")) {
-		t.Fatalf("file content after completion = %q, want it to end with %q", after, line+"\n")
+	if bytes.HasSuffix(after, []byte("\n")) {
+		t.Fatalf("test fixture is unexpectedly newline-terminated: %q", after)
+	}
+}
+
+// TestFirstCommitCompletesUnterminatedValidTail: the Storage from an Open
+// that found an unterminated-but-valid tail appends the missing "\n" the
+// first time it actually commits, before appending its own new line.
+func TestFirstCommitCompletesUnterminatedValidTail(t *testing.T) {
+	path, line := buildUnterminatedValidFixture(t, "complete-id-commit")
+
+	st, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if _, err := st.Commit([]session.Write{session.EntryWrite{Entry: session.Entry{ID: "entry-next", ParentID: strPtr("entry-ok"), Type: session.EntryMessage}}}); err != nil {
+		t.Fatalf("first Commit after an unterminated-valid-tail Open failed: %v", err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(after, []byte(line+"\n")) {
+		t.Fatalf("file after first commit does not contain the completed line %q:\ngot=%q", line+"\n", after)
+	}
+	if !bytes.Contains(after, []byte("entry-next")) {
+		t.Fatalf("the new commit's entry-next was not appended: %q", after)
 	}
 }
