@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -318,4 +319,34 @@ func findToolResult(t *testing.T, lane *Lane, toolCallID string) msg.ToolResultM
 	}
 	t.Fatalf("no toolResult entry found for tool call %q", toolCallID)
 	return msg.ToolResultMessage{}
+}
+
+// An interrupt while a before_tool handler is pending (Esc during a slow
+// PreToolUse hook) blocks the call as interrupted, not as a failed
+// permission check carrying "context canceled", and is not reported as a
+// handler error.
+func TestBeforeToolInterruptIsNotAPermissionFailure(t *testing.T) {
+	rig := newTestRig(t, "", []string{"bash"})
+	lane := rig.mustLane("main")
+	var handlerErrors int
+	rig.H.Events().On(EventHandlerError, func(Event) { handlerErrors++ })
+	rig.H.Hooks().OnBeforeTool(func(ctx context.Context, _ msg.ToolCall) (BeforeToolResult, error) {
+		<-ctx.Done()
+		return BeforeToolResult{}, fmt.Errorf("hook: %w", ctx.Err())
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got := lane.invokeBeforeTool(ctx, msg.ToolCall{ID: "tc1", Name: "bash"})
+	if got.Block == nil {
+		t.Fatal("an interrupted before_tool handler must still block the call")
+	}
+	if strings.Contains(got.Block.Reason, "permission check failed") || strings.Contains(got.Block.Reason, "context canceled") {
+		t.Errorf("Block.Reason = %q, want it to say the call was interrupted", got.Block.Reason)
+	}
+	if !strings.Contains(got.Block.Reason, "interrupted") {
+		t.Errorf("Block.Reason = %q, want it to say the call was interrupted", got.Block.Reason)
+	}
+	if handlerErrors != 0 {
+		t.Errorf("an interrupt emitted %d handler errors, want 0", handlerErrors)
+	}
 }

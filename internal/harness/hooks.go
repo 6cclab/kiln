@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/andrepato/harness/internal/msg"
@@ -214,9 +215,19 @@ func (l *Lane) invokeBeforeTool(ctx context.Context, call msg.ToolCall) BeforeTo
 			return innerErr
 		})
 		if err != nil {
-			l.h.events.Emit(Event{Type: EventHandlerError, Lane: l.name, HookName: "before_tool", Err: err})
 			// before_tool is where the permission gate runs: a handler
 			// that failed did not approve the call, so it does not run.
+			// A handler that stopped because the turn was interrupted
+			// (Esc while a PreToolUse hook or a prompt was pending) did not
+			// fail: say so, rather than show "context canceled" as a
+			// permission error.
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				if result.Block == nil {
+					result.Block = &ToolBlock{Reason: "interrupted before the call ran, so it did not run."}
+				}
+				continue
+			}
+			l.h.events.Emit(Event{Type: EventHandlerError, Lane: l.name, HookName: "before_tool", Err: err})
 			if result.Block == nil {
 				result.Block = &ToolBlock{Reason: "the permission check failed (" + err.Error() + "), so the call did not run."}
 			}

@@ -14,7 +14,8 @@ KEY esc
 WAITFOR /Interrupted/ 8
 SHOT interrupted
 EXPECT /Interrupted/
-EXPECT /did not run/
+EXPECT /interrupted before the call ran/
+EXPECT_NOT /permission check failed|context canceled/
 EXPECT_NOT /The hook let it through/
 RUN sleep 2; ! pgrep -f 'sleep 50; touch hook-finished' >/dev/null
 RUN ! test -e hook-finished
