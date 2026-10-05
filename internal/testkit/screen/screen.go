@@ -482,6 +482,43 @@ func (s *Screen) WaitFor(pattern any, timeout time.Duration) error {
 	}
 }
 
+// WaitQuiet blocks until the viewport has not changed for quiet, or returns
+// an error once timeout elapses. Use it after an action whose effect lands
+// in more than one paint separated by a delay, such as a resize: kiln
+// reflows at once, then re-wraps the transcript after a debounce, and
+// WaitFor's own short settle can return in the gap between the two.
+//
+// ignore, when given, maps the rows before they are compared, so a row
+// that animates on its own (a busy spinner and its elapsed time) does not
+// keep the screen from ever counting as quiet.
+func (s *Screen) WaitQuiet(quiet, timeout time.Duration, ignore ...func([]string) []string) error {
+	view := func() string {
+		rows := s.Viewport()
+		for _, f := range ignore {
+			rows = f(rows)
+		}
+		return strings.Join(rows, "\n")
+	}
+	deadline := time.Now().Add(timeout)
+	last := view()
+	quietSince := time.Now()
+	var changed string
+	for {
+		time.Sleep(15 * time.Millisecond)
+		now := view()
+		if now != last {
+			changed = diffRows(last, now)
+			last = now
+			quietSince = time.Now()
+		} else if time.Since(quietSince) >= quiet {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("screen.WaitQuiet: the screen kept changing for %s (wanted %s unchanged); last change:\n%s\nscreen:\n%s", timeout, quiet, changed, dumpRows(s.Viewport(), s.cols))
+		}
+	}
+}
+
 // settle waits until the screen has stopped changing for settleQuiet, or
 // the deadline passes. Bubbletea inserts committed lines immediately but
 // repaints the live region on its own frame tick, so the instant a WAIT
@@ -511,6 +548,25 @@ func (s *Screen) settle(deadline time.Time) {
 // hostage: while the spinner animates the frame changes every 80ms, so the
 // 60ms window still closes between ticks.
 const settleQuiet = 60 * time.Millisecond
+
+// diffRows lists the rows that differ between two joined viewports.
+func diffRows(before, after string) string {
+	a, b := strings.Split(before, "\n"), strings.Split(after, "\n")
+	var out strings.Builder
+	for i := 0; i < len(a) || i < len(b); i++ {
+		var x, y string
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		if x != y {
+			fmt.Fprintf(&out, "%2d: - %s\n%2d: + %s\n", i, x, i, y)
+		}
+	}
+	return out.String()
+}
 
 func dumpRows(rows []string, cols int) string {
 	var b strings.Builder

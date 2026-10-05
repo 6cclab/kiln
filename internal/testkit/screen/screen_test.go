@@ -252,3 +252,57 @@ func TestStartupLatency(t *testing.T) {
 		t.Errorf("startup took %s, expected well under 1s if capability queries are answered promptly", elapsed)
 	}
 }
+
+// WaitQuiet must not return in the gap between two paints that are
+// separated by a delay (kiln's resize: an immediate reflow, then a
+// debounced re-wrap), only once the screen has stayed unchanged for the
+// whole quiet window.
+func TestWaitQuietWaitsOutADelayedSecondPaint(t *testing.T) {
+	s := screen.Start(t, "/bin/sh", []string{"-c", "echo first; sleep 0.3; echo second; sleep 10"}, 40, 8)
+	if err := s.WaitFor("first", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WaitQuiet(600*time.Millisecond, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(s.Viewport(), "\n"); !strings.Contains(got, "second") {
+		t.Fatalf("WaitQuiet returned before the delayed second paint:\n%s", got)
+	}
+}
+
+func TestWaitQuietTimesOutOnAScreenThatKeepsChanging(t *testing.T) {
+	s := screen.Start(t, "/bin/sh", []string{"-c", "i=0; while [ $i -lt 60 ]; do i=$((i+1)); echo tick $i; sleep 0.05; done"}, 40, 8)
+	// Not WaitFor: its own settle would sit out the whole loop.
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(strings.Join(s.Viewport(), "\n"), "tick"); {
+		if time.Now().After(deadline) {
+			t.Fatal("the ticking shell never painted")
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if err := s.WaitQuiet(300*time.Millisecond, time.Second); err == nil {
+		t.Fatal("WaitQuiet returned nil on a screen that never stopped changing")
+	}
+}
+
+// A row the caller ignores may keep changing without holding WaitQuiet up.
+func TestWaitQuietIgnoresMaskedRows(t *testing.T) {
+	s := screen.Start(t, "/bin/sh", []string{"-c", "echo steady; i=0; while [ $i -lt 60 ]; do i=$((i+1)); printf '\\rtick %d' $i; sleep 0.05; done"}, 40, 8)
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(strings.Join(s.Viewport(), "\n"), "tick"); {
+		if time.Now().After(deadline) {
+			t.Fatal("the ticking shell never painted")
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	dropTicks := func(rows []string) []string {
+		out := make([]string, len(rows))
+		for i, r := range rows {
+			if !strings.Contains(r, "tick") {
+				out[i] = r
+			}
+		}
+		return out
+	}
+	if err := s.WaitQuiet(300*time.Millisecond, 2*time.Second, dropTicks); err != nil {
+		t.Fatalf("WaitQuiet with the ticking row ignored: %v", err)
+	}
+}
