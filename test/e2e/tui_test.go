@@ -341,18 +341,46 @@ func normalizeStatusRowCwd(rows []string) []string {
 	return out
 }
 
-func assertGoldenTail(t *testing.T, s *screen.Screen, name, anchor string) {
+func assertGoldenTail(t *testing.T, s *screen.Screen, name, anchor string, normalize ...func([]string) []string) {
 	t.Helper()
 	rows := s.Rows()
+	for _, f := range normalize {
+		rows = f(rows)
+	}
+	// An empty anchor keeps the whole screen.
 	start := 0
-	for i, r := range rows {
-		if strings.Contains(r, anchor) {
-			start = i
-			break
+	if anchor != "" {
+		start = -1
+		for i, r := range rows {
+			if strings.Contains(r, anchor) {
+				start = i
+				break
+			}
 		}
+	}
+	if start < 0 {
+		t.Fatalf("golden %s: anchor %q is not on screen, so the snapshot would start at the wrong row:\n%s", name, anchor, strings.Join(rows, "\n"))
 	}
 	got := strings.Join(normalizeSpinnerGlyph(normalizeStatusRowCwd(rows[start:])), "\n")
 	assertGolden(t, goldenPath(name+".txt"), got+"\n")
+}
+
+// busyElapsedPattern finds the elapsed seconds on the busy row
+// ("◐ Waiting for approval…  2s · 150 tokens").
+var busyElapsedPattern = regexp.MustCompile(`^(\s*[◐◓◑◒] [^…]*…\s+)(\d+)(s · )`)
+
+// normalizeBusyElapsed replaces each digit of the busy row's elapsed
+// seconds with "N", so the row keeps its width and its cells keep their
+// styles (the styled encoding is per cell).
+func normalizeBusyElapsed(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = busyElapsedPattern.ReplaceAllStringFunc(r, func(m string) string {
+			sub := busyElapsedPattern.FindStringSubmatch(m)
+			return sub[1] + strings.Repeat("N", len(sub[2])) + sub[3]
+		})
+	}
+	return out
 }
 
 // spinnerRowPattern matches the live spinner/status row rendered above a
@@ -564,6 +592,10 @@ type stylesOpts struct {
 	anchor           string
 	normalizeBanner  bool
 	normalizeSpinner bool
+	// normalizeElapsed masks the busy row's elapsed seconds ("2s") in
+	// place, keeping the row's styling, for a golden taken after a wait
+	// long enough that the seconds can tick over.
+	normalizeElapsed bool
 	// normalizeCwdTokens masks the /context rows whose token counts depend
 	// on the length of the (random) project path, which the system prompt's
 	// environment block includes.
@@ -656,11 +688,15 @@ func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts styles
 
 	start := 0
 	if opts.anchor != "" {
+		start = -1
 		for i, r := range rows {
 			if strings.Contains(r, opts.anchor) {
 				start = i
 				break
 			}
+		}
+		if start < 0 {
+			t.Fatalf("golden %s styles: anchor %q is not on screen, so the snapshot would start at the wrong row:\n%s", name, opts.anchor, strings.Join(rows, "\n"))
 		}
 	}
 	rows = rows[start:]
@@ -674,6 +710,9 @@ func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts styles
 	}
 	if opts.normalizeSpinner {
 		rows, styles = maskStyledRows(rows, styles, maskSpinnerRowStyled)
+	}
+	if opts.normalizeElapsed {
+		rows = normalizeBusyElapsed(rows)
 	}
 	rows, styles = maskStyledRows(rows, styles, maskStatusRowCwd)
 	rows = normalizeSpinnerGlyph(rows)
@@ -1336,7 +1375,9 @@ func TestTUI_AxScreenReader_FixBug(t *testing.T) {
 	s.Send("fix the bug in math.js")
 	s.SendKey("enter")
 	waitTurnSettled(t, s)
-	assertGoldenTail(t, s, "tui-ax-fix-bug", "/ commands")
+	// Screen-reader mode has no "/ commands" shortcut row to anchor on; the
+	// golden is the whole screen.
+	assertGoldenTail(t, s, "tui-ax-fix-bug", "")
 
 	joined := strings.Join(s.Rows(), "\n")
 	// Plain mode: ASCII glyphs only (internal/tui/theme.go's ASCIIGlyphs —

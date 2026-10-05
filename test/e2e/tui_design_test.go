@@ -664,6 +664,29 @@ func TestTUI_Design_Permission(t *testing.T) {
 	assertGoldenStyles(t, s, "design-permission", stylesOpts{anchor: designPermAnchor})
 }
 
+// resizeRewrapQuiet is how long the screen must stay unchanged after a
+// resize before a golden is taken: comfortably longer than kiln's 150ms
+// resize re-wrap debounce.
+const resizeRewrapQuiet = 400 * time.Millisecond
+
+// busyRowPattern matches any row that starts with a spinner glyph,
+// whatever the status text ("Waiting for approval…" has spaces, which
+// spinnerRowPattern's single \S+ word does not allow).
+var busyRowPattern = regexp.MustCompile(`^\s*[◐◓◑◒] `)
+
+// dropSpinnerRows blanks the busy row ("◐ Waiting for approval…  2s · …"),
+// which repaints every spinner tick on its own, so WaitQuiet can tell when
+// the rest of the screen has settled.
+func dropSpinnerRows(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		if !busyRowPattern.MatchString(r) {
+			out[i] = r
+		}
+	}
+	return out
+}
+
 func TestTUI_Design_Permission_60cols(t *testing.T) {
 	proj, home, sessDir, addr := designFixture(t)
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "manual")
@@ -671,12 +694,21 @@ func TestTUI_Design_Permission_60cols(t *testing.T) {
 	driveDesignTo(t, s, "permission")
 	s.Resize(60, 30)
 	mustSee(t, s, designPermAnchor, 3*time.Second)
+	// kiln reflows at once, then re-wraps the transcript after a debounce
+	// (the 150ms tea.Tick in internal/tui/app.go's WindowSizeMsg handling), clearing the screen and
+	// reprinting from the banner down. Wait for the screen to stay unchanged
+	// for longer than that debounce, or a snapshot can land mid-reprint
+	// (banner on screen, prompt not yet drawn).
+	if err := s.WaitQuiet(resizeRewrapQuiet, 5*time.Second, dropSpinnerRows); err != nil {
+		t.Fatal(err)
+	}
 	// A frame painted at 100 columns just before kiln hears of the resize
 	// wraps at 60 and leaves the old prompt's top rows above the new frame;
 	// the rewrap after the resize settles must clear them.
 	waitSingle(t, s, designPermAnchor, 3*time.Second)
-	assertGoldenTail(t, s, "design-permission-60", designPermAnchor)
-	assertGoldenStyles(t, s, "design-permission-60", stylesOpts{anchor: designPermAnchor})
+	// The wait above can let the busy row's elapsed seconds tick over.
+	assertGoldenTail(t, s, "design-permission-60", designPermAnchor, normalizeBusyElapsed)
+	assertGoldenStyles(t, s, "design-permission-60", stylesOpts{anchor: designPermAnchor, normalizeElapsed: true})
 }
 
 // --- error / retry -------------------------------------------------------
