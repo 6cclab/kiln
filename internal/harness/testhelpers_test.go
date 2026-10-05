@@ -30,6 +30,15 @@ type testRig struct {
 // over it with the real built-in tools rooted at a temp cwd.
 func newTestRig(t *testing.T, scriptYAML string, activeTools []string) *testRig {
 	t.Helper()
+	return newTestRigWithStorage(t, scriptYAML, activeTools, nil)
+}
+
+// newTestRigWithStorage is newTestRig, but the Harness is built over
+// wrap(storage) instead of storage directly when wrap is non-nil — e.g. to
+// inject a Commit failure at a chosen point. rig.Storage is always the
+// real, unwrapped *jsonl.Storage, for assertions against the file on disk.
+func newTestRigWithStorage(t *testing.T, scriptYAML string, activeTools []string, wrap func(session.Storage) session.Storage) *testRig {
+	t.Helper()
 
 	fauxSrv, err := tkfaux.New(tkfaux.Options{ScriptYAML: scriptYAML})
 	if err != nil {
@@ -69,8 +78,13 @@ func newTestRig(t *testing.T, scriptYAML string, activeTools []string) *testRig 
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
+	var wrapped session.Storage = storage
+	if wrap != nil {
+		wrapped = wrap(storage)
+	}
+
 	h, err := New(Options{
-		Storage:         storage,
+		Storage:         wrapped,
 		Registry:        registry,
 		Model:           session.ModelRef{Provider: fauxprovider.ProviderID, ModelID: fauxprovider.ModelID},
 		ThinkingLevel:   "off",
