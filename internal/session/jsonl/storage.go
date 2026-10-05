@@ -1,7 +1,7 @@
 package jsonl
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -75,32 +75,51 @@ func Create(path string, header session.Header, initialWrites []session.Write, n
 
 // Open replays an existing v4 session file into memory. Legacy v3 files are
 // detected and rejected (see legacy_v3.go); Open never modifies the file
-// except to complete a torn (unterminated) final line by rewriting it away.
-// It mirrors JsonlStorage.open/openV4 in storage.js.
+// except to repair the very last line when it was torn by a kill/crash mid
+// AppendTransaction (commits are a plain append with no fsync: doc.go):
+//
+//   - final line unterminated (no trailing "\n") and unparsable: the write
+//     never completed. The file is truncated to drop exactly that line,
+//     leaving every earlier, complete transaction intact.
+//   - final line unterminated but parses and validates fine (the write
+//     landed, only the trailing newline did not): the line is kept and the
+//     missing "\n" is appended.
+//   - final line terminated (a complete "\n"-ended line) but unparsable or
+//     failing validation: not repaired. A line the writer finished is
+//     corruption, not a torn write, so Open still errors.
+//   - any non-final line that is unparsable or fails validation: always an
+//     error, regardless of termination.
+//
+// It mirrors JsonlStorage.open/openV4 in storage.js, which drops an
+// unparsable final line and completes an unterminated-but-valid one the
+// same way; this port additionally refuses to auto-repair a *terminated*
+// final line that is invalid, treating that as real corruption rather than
+// a crash artifact.
 func Open(path string, now func() time.Time) (*Storage, error) {
 	if now == nil {
 		now = time.Now
 	}
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("jsonl: failed to read %s: %w", path, err)
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("jsonl: failed to read %s: %w", path, err)
-		}
+	if len(data) == 0 {
 		return nil, fmt.Errorf("jsonl: invalid storage %s: missing header", path)
 	}
-	parsed, err := ParseHeader(scanner.Text())
+
+	var headerText []byte
+	var rest []byte
+	if idx := bytes.IndexByte(data, '\n'); idx == -1 {
+		headerText = data
+	} else {
+		headerText = data[:idx]
+		rest = data[idx+1:]
+	}
+	parsed, err := ParseHeader(string(headerText))
 	if err != nil {
 		return nil, fmt.Errorf("jsonl: invalid storage %s: invalid header: %w", path, err)
 	}
 	if parsed.Format == FormatV3Legacy {
-		f.Close()
 		// See legacy_v3.go's file-level comment for how this eager upgrade
 		// (on Open, rather than lazily on the first commit) deviates from
 		// pi. UpgradeLegacyV3 leaves path untouched on any error.
@@ -115,21 +134,39 @@ func Open(path string, now func() time.Time) (*Storage, error) {
 	}
 
 	state := session.NewState()
+	lines, restTerminated := splitBodyLines(rest)
 	lineNumber := 1
-	for scanner.Scan() {
+	appendMissingNewline := false
+	for i, lineBytes := range lines {
 		lineNumber++
-		line := scanner.Bytes()
-		writes, err := ParseTransaction(line)
-		if err != nil {
-			return nil, fmt.Errorf("jsonl: invalid storage %s: line %d: %w", path, lineNumber, err)
+		isLast := i == len(lines)-1
+		lineTerminated := restTerminated || !isLast
+		writes, perr := ParseTransaction(lineBytes)
+		if perr != nil {
+			if isLast && !lineTerminated {
+				// Torn tail: drop it by truncating the file to just before
+				// it. The preceding line's own trailing "\n" is already
+				// the new EOF, so the truncate offset is simply the file
+				// length minus this line's byte length.
+				if err := os.Truncate(path, int64(len(data)-len(lineBytes))); err != nil {
+					return nil, fmt.Errorf("jsonl: failed to repair torn tail %s: %w", path, err)
+				}
+				break
+			}
+			return nil, fmt.Errorf("jsonl: invalid storage %s: line %d: %w", path, lineNumber, perr)
 		}
-		if err := state.ValidateCommitted(writes); err != nil {
-			return nil, fmt.Errorf("jsonl: invalid storage %s: line %d: %w", path, lineNumber, err)
+		if verr := state.ValidateCommitted(writes); verr != nil {
+			return nil, fmt.Errorf("jsonl: invalid storage %s: line %d: %w", path, lineNumber, verr)
 		}
 		state.ApplyValidated(writes)
+		if isLast && !lineTerminated {
+			appendMissingNewline = true
+		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("jsonl: failed to read %s: %w", path, err)
+	if appendMissingNewline {
+		if err := appendNewline(path); err != nil {
+			return nil, fmt.Errorf("jsonl: failed to repair unterminated tail %s: %w", path, err)
+		}
 	}
 	if header.NextSeq != 0 {
 		if err := state.AdvanceNextSeq(header.NextSeq); err != nil {
@@ -137,6 +174,36 @@ func Open(path string, now func() time.Time) (*Storage, error) {
 		}
 	}
 	return &Storage{path: path, header: header, state: state, now: now}, nil
+}
+
+// splitBodyLines splits the bytes after the header line into individual
+// transaction lines, reporting whether the body (and so its final line) was
+// newline-terminated. A nil/empty rest yields no lines.
+func splitBodyLines(rest []byte) (lines [][]byte, terminated bool) {
+	if len(rest) == 0 {
+		return nil, true
+	}
+	terminated = rest[len(rest)-1] == '\n'
+	trimmed := rest
+	if terminated {
+		trimmed = rest[:len(rest)-1]
+	}
+	if len(trimmed) == 0 {
+		return nil, terminated
+	}
+	return bytes.Split(trimmed, []byte("\n")), terminated
+}
+
+// appendNewline appends a single "\n" to path, completing a final line that
+// parsed and validated fine but was missing its trailing newline.
+func appendNewline(path string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write([]byte("\n"))
+	return err
 }
 
 // Commit appends one transaction line for writes and applies it in memory.
