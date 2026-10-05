@@ -237,3 +237,22 @@ func TestResolveEmbedded(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "shot.png"), noisyPNG(t, 8, 8), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, ok := Resolve("~/shot.png", t.TempDir())
+	if !ok || v.Image == nil {
+		t.Fatalf("Resolve(~/shot.png) = ok %v, image %v, refused %q; want the home-relative file attached", ok, v.Image != nil, v.Refused)
+	}
+	if want := filepath.Join(home, "shot.png"); v.CleanPath != want {
+		t.Errorf("CleanPath = %q, want %q", v.CleanPath, want)
+	}
+	text, imgs, _ := ResolveEmbedded("see ~/shot.png please", t.TempDir(), 0)
+	if len(imgs) != 1 || text != "see [Image #1] please" {
+		t.Errorf("ResolveEmbedded = %q with %d images, want one [Image #1]", text, len(imgs))
+	}
+}

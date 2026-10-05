@@ -202,6 +202,21 @@ func imageExt(path string) (mime string, refused string) {
 	return "", ""
 }
 
+// expandHome turns a leading "~" or "~/" into the user's home directory,
+// so a typed "~/Desktop/shot.png" resolves the way the shell would.
+// pathTokenRe already admits "~" tokens; without this they were joined
+// onto cwd as a literal "~" directory and never found.
+func expandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	return filepath.Join(home, strings.TrimPrefix(p, "~"))
+}
+
 // Resolve cleans raw as a path token (CleanPathToken), resolves it against
 // cwd if relative, and reports whether it names an image file that
 // exists. ok is false whenever raw is not worth treating specially: not an
@@ -214,7 +229,7 @@ func Resolve(raw, cwd string) (Verdict, bool) {
 	if cleaned == "" {
 		return Verdict{}, false
 	}
-	path := cleaned
+	path := expandHome(cleaned)
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(cwd, path)
 	} else {
