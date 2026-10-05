@@ -108,6 +108,9 @@ type InteractiveDeps struct {
 	// onPlanApprover/onHookNotices callbacks do. Either may be nil.
 	SetPlanApprover func(tools.PlanApprover)
 	SetHookNotice   func(func(string))
+	// SetHookActivity rebinds what a running Stop hook chain reports for
+	// the busy row (Bridge.HookActivity).
+	SetHookActivity func(func(string))
 	// StartupNotes are warnings found while starting (a model role that
 	// does not resolve, memory over budget). Printed to stderr they sat
 	// behind the fullscreen TUI until exit; they show as system notes
@@ -169,6 +172,9 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			d, err := approve(ctx, plan)
 			return tools.PlanDecision{Kind: tools.PlanDecisionKind(d.Kind), Mode: d.Mode, Feedback: d.Feedback}, err
 		})
+	}
+	if deps.SetHookActivity != nil {
+		deps.SetHookActivity(bridge.HookActivity)
 	}
 	if deps.SetHookNotice != nil {
 		deps.SetHookNotice(bridge.HookNotice)

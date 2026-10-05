@@ -663,6 +663,10 @@ type SpinnerArgs struct {
 	// turn runs; 0 shows no suffix (docs/kiln-design-handoff/README.md's
 	// "Queued follow-up": the busy line's status suffix " · 1 queued").
 	QueueLen int
+	// Activity is what a running hook chain is doing ("running stop hook",
+	// or a hook's own statusMessage), shown first in the muted suffix, as
+	// Claude Code puts it first after the verb; "" shows nothing.
+	Activity string
 }
 
 // RenderSpinner renders the busy line (docs/kiln-design-handoff/README.md
@@ -702,6 +706,14 @@ func RenderSpinnerLeft(args SpinnerArgs) string {
 		suffix = fmt.Sprintf("%ds · thinking with %s effort", args.ElapsedSeconds, effort)
 	case args.ElapsedSeconds > 0:
 		suffix = fmt.Sprintf("%ds", args.ElapsedSeconds)
+	}
+
+	if args.Activity != "" {
+		if suffix == "" {
+			suffix = args.Activity
+		} else {
+			suffix = args.Activity + " · " + suffix
+		}
 	}
 
 	if args.QueueLen > 0 {

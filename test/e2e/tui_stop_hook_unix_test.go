@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -149,5 +150,65 @@ func TestTUI_Esc_InterruptsAContinuedTurn(t *testing.T) {
 	time.Sleep(time.Second)
 	if n := len(requests()); n != 2 {
 		t.Fatalf("%d model requests, want 2: an interrupted turn must not be continued", n)
+	}
+}
+
+// While a Stop hook runs, the busy row says so ("running stop hook"), as
+// Claude Code's spinner does, rather than looking like the model is still
+// working; a hook's own statusMessage replaces that text.
+func TestTUI_StopHook_BusyRowNamesTheHook(t *testing.T) {
+	for _, tc := range []struct {
+		name, statusMessage, want string
+	}{
+		{"default", "", "running stop hook"},
+		{"statusMessage", "Checking the test suite", "Checking the test suite…"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := "model: faux-1\nsteps:\n  - text: \"All done here.\"\n    end_turn: true\n"
+			proj, home, sessDir, addr, _ := tuiFixture(t, script)
+			hook := map[string]any{"type": "command", "command": "sleep 30"}
+			if tc.statusMessage != "" {
+				hook["statusMessage"] = tc.statusMessage
+			}
+			data, err := json.Marshal(map[string]any{"hooks": map[string]any{
+				"Stop": []map[string]any{{"hooks": []map[string]any{hook}}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(proj, ".claude"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(proj, ".claude", "settings.json"), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			s := startTUI(t, 100, 30, proj, home, sessDir, addr)
+			waitReady(t, s)
+			s.Send("finish up")
+			s.SendKey("enter")
+			if err := s.WaitFor("All done here.", 5*time.Second); err != nil {
+				t.Fatalf("the reply never arrived: %v", err)
+			}
+			if err := s.WaitFor(tc.want, 5*time.Second); err != nil {
+				t.Fatalf("the busy row never named the Stop hook: %v", err)
+			}
+			row := ""
+			for _, r := range s.Rows() {
+				if strings.Contains(r, tc.want) {
+					row = r
+				}
+			}
+			if !strings.Contains(row, "esc to stop") {
+				t.Errorf("%q is not on the busy row: %q", tc.want, row)
+			}
+			s.SendKey("esc")
+			if err := s.WaitFor("Interrupted. Tell kiln what to do instead.", 5*time.Second); err != nil {
+				t.Fatalf("Esc did not end the Stop hook: %v", err)
+			}
+			if strings.Contains(strings.Join(s.Rows(), "\n"), tc.want) {
+				t.Errorf("%q is still on screen after the hook ended", tc.want)
+			}
+		})
 	}
 }

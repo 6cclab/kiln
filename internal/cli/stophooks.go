@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
@@ -39,6 +40,31 @@ func stopVerdict(event claudehooks.Event, outcome claudehooks.Outcome, notice fu
 
 // lastReplyText is the text of the reply that ended the turn, for a Stop
 // hook's last_assistant_message.
+// stopHookActivity is the busy row's text while a Stop or SubagentStop
+// hook chain runs, as Claude Code words it: "running stop hook" (or
+// "running subagent stop hook") for one hook, "running stop hooks… 1/2"
+// for several, where the count is how many have finished. A hook's own
+// statusMessage, if any hook in the chain sets one, replaces the default:
+// "<message>…", with the same count when there are several.
+func stopHookActivity(event claudehooks.Event, commands []claudehooks.Command, done int) string {
+	total := len(commands)
+	for _, c := range commands {
+		if c.StatusMessage != "" {
+			if total == 1 {
+				return c.StatusMessage + "…"
+			}
+			return fmt.Sprintf("%s… %d/%d", c.StatusMessage, done, total)
+		}
+	}
+	if total == 1 {
+		if event == claudehooks.SubagentStop {
+			return "running subagent stop hook"
+		}
+		return "running stop hook"
+	}
+	return fmt.Sprintf("running stop hooks… %d/%d", done, total)
+}
+
 func lastReplyText(m *msg.AssistantMessage) string {
 	if m == nil {
 		return ""

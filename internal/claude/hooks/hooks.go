@@ -79,6 +79,10 @@ type Command struct {
 	// of its own: a hook that sets an hour is trusted to mean it, the same
 	// way a long-running PreToolUse hook is trusted there.
 	Timeout int `json:"timeout,omitempty"`
+	// StatusMessage, when set, is what the busy row shows while this hook
+	// runs in place of the default "running stop hook" (Claude Code's
+	// statusMessage hook field). Only Stop and SubagentStop show it today.
+	StatusMessage string `json:"statusMessage,omitempty"`
 	// Env is extra environment variables set for this hook's process, on
 	// top of the ambient environment and CLAUDE_HOOK/HARNESS_HOOK.
 	// Unmarshaled from settings.json's own hooks (always nil there) and

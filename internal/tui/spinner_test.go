@@ -96,3 +96,31 @@ func TestSpinnerStateLabelAndThinking(t *testing.T) {
 		t.Errorf("busy line missing right-aligned hint: %q", out)
 	}
 }
+
+// A running Stop hook chain names itself first in the busy line's muted
+// suffix, as Claude Code puts it first after the verb.
+func TestRenderSpinnerActivityComesFirst(t *testing.T) {
+	tokens := 74
+	line := stripANSI(RenderSpinner(SpinnerArgs{Frame: 0, Label: "Brewing", ElapsedSeconds: 2, Tokens: &tokens, Activity: "running stop hook"}))
+	if want := "◐ Brewing…  running stop hook · 2s · 74 tokens"; line != want {
+		t.Errorf("got %q, want %q", line, want)
+	}
+	line = stripANSI(RenderSpinner(SpinnerArgs{Frame: 0, Label: "Brewing", Activity: "running stop hooks… 1/2"}))
+	if want := "◐ Brewing…  running stop hooks… 1/2"; line != want {
+		t.Errorf("got %q, want %q", line, want)
+	}
+}
+
+func TestSpinnerStateActivityClearsAtStopAndStart(t *testing.T) {
+	var s SpinnerState
+	s.Start(0)
+	s.SetActivity("running stop hook")
+	if got := stripANSI(strings.Join(s.Render(120, time.Time{}), "")); !strings.Contains(got, "running stop hook") {
+		t.Fatalf("busy line %q does not show the activity", got)
+	}
+	s.Stop()
+	s.Start(0)
+	if got := stripANSI(strings.Join(s.Render(120, time.Time{}), "")); strings.Contains(got, "running stop hook") {
+		t.Fatalf("a new turn's busy line %q still shows the last turn's hook activity", got)
+	}
+}

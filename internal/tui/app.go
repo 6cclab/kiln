@@ -757,6 +757,10 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.retry = &RetryView{Message: msg.Message, Attempt: msg.Attempt, Max: msg.MaxAttempts, Until: until}
 		return m, nil
 
+	case MsgHookActivity:
+		m.spinner.SetActivity(msg.Text)
+		return m, nil
+
 	case MsgQueue:
 		m.spinner.SetQueueLen(msg.Len)
 		// Len 0 is only ever sent by the lane's own drain (drainInbox's

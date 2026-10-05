@@ -1072,6 +1072,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// onHookNotices callback, src/cli.ts:681-683); stderr until then.
 	hookNotice := &rebindable[func(string)]{fn: hookNoticeSink(stderr)}
 	notice := func(message string) { hookNotice.get()(message) }
+	// hookActivity shows what a running Stop/SubagentStop hook chain is
+	// doing on the TUI's busy row; "" clears it. Nothing outside the TUI.
+	hookActivity := &rebindable[func(string)]{fn: func(string) {}}
+	activity := func(text string) { hookActivity.get()(text) }
 	// "Yes, and don't ask again" on a bash prompt saves its rules, as
 	// Claude Code does, but to kiln's own .kiln/settings.local.json (the
 	// file /permissions writes): kiln reads .claude, never writes it.
@@ -1237,7 +1241,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				LastAssistantMessage: lastReplyText(info.Last),
 			},
 			OnNotice: notice,
+			OnHookStart: func(i int, cmds []claudehooks.Command) {
+				activity(stopHookActivity(claudehooks.Stop, cmds, i))
+			},
 		})
+		activity("")
 		return stopVerdict(claudehooks.Stop, outcome, notice), nil
 	})
 	started.Harness.Events().On(harness.EventCompactionStart, func(ev harness.Event) {
@@ -1279,7 +1287,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				LastAssistantMessage: lastReplyText(info.Last),
 			},
 			OnNotice: notice,
+			OnHookStart: func(i int, cmds []claudehooks.Command) {
+				activity(stopHookActivity(claudehooks.SubagentStop, cmds, i))
+			},
 		})
+		activity("")
 		return stopVerdict(claudehooks.SubagentStop, outcome, notice)
 	}
 
@@ -1568,6 +1580,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			StatusLine:      settings.StatusLine,
 			SetPlanApprover: func(fn tools.PlanApprover) { planApprover.set(fn) },
 			SetHookNotice:   func(fn func(string)) { hookNotice.set(fn) },
+			SetHookActivity: func(fn func(string)) { hookActivity.set(fn) },
 			ModelLabel:      providerID + "/" + modelID,
 			Resolved:        resolved,
 			Started:         started,
