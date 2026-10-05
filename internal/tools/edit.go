@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -103,6 +104,13 @@ func EditTool(env *execenv.Env) *tool.Tool {
 				}
 				raw, err := env.ReadFile(absolutePath)
 				if err != nil {
+					var tooLarge *execenv.ErrFileTooLarge
+					if errors.As(err, &tooLarge) {
+						return tool.Errorf(
+							"Could not edit file: %s. %s. Use bash (e.g. sed -i) to edit a file this large instead.",
+							in.Path, tooLarge.Error(),
+						), nil
+					}
 					return tool.Errorf("Could not edit file: %s. Error code: %s.", in.Path, errCode(err)), nil
 				}
 				if ctx.Err() != nil {

@@ -111,10 +111,8 @@ func parseFileURL(raw string) (string, error) {
 	return rest, nil
 }
 
-// ReadFile reads a whole file as bytes. path may be relative to Cwd.
-func (e *Env) ReadFile(path string) ([]byte, error) {
-	return os.ReadFile(e.AbsolutePath(path))
-}
+// ReadFile is defined in readlimit.go (it needs the same size cap and
+// regular-file guard regardless of which Env method calls it).
 
 // WriteFile creates or overwrites a file, creating parent directories.
 func (e *Env) WriteFile(path string, content []byte) error {

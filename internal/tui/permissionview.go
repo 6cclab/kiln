@@ -134,6 +134,14 @@ type pendingPermission struct {
 	request  PermissionRequest
 	reply    chan PromptChoice
 	selected int // 0..len(promptOptionsFor(request))-1
+	// hunks is the Edit/Write diff rows, computed once when the prompt is
+	// armed (AskTool) rather than recomputed on every Render call: the
+	// spinner keeps ticking (and so View/Render keeps being called, ~7
+	// times a second) for as long as the prompt is up, and
+	// diffHunksFromEditFile used to re-read the whole target file from
+	// disk on every one of those calls (finding #2, tui audit). nil for
+	// any tool call other than edit/write.
+	hunks []DiffHunk
 }
 
 type pendingPlan struct {
@@ -224,9 +232,26 @@ func (p *PromptState) Active() bool {
 // have already given up.
 func (p *PromptState) AskTool(req PermissionRequest) chan PromptChoice {
 	reply := make(chan PromptChoice, 1)
-	p.pending = &pendingPermission{request: req, reply: reply}
+	p.pending = newPendingPermission(req, reply, p.cwd)
 	p.feedback = nil
 	return reply
+}
+
+// newPendingPermission arms a tool-permission prompt, computing its
+// Edit/Write diff hunks once (rather than leaving them to be recomputed
+// on every Render call — finding #2, tui audit): both AskTool and
+// app.go's MsgPermissionPrompt handler (the actual production path;
+// AskTool itself is only exercised by this package's own tests) build a
+// pendingPermission through here so the caching applies either way.
+func newPendingPermission(req PermissionRequest, reply chan PromptChoice, cwd string) *pendingPermission {
+	pending := &pendingPermission{request: req, reply: reply}
+	switch strings.ToLower(req.ToolName) {
+	case "edit":
+		pending.hunks = diffHunksFromEditFile(cwd, req.Args)
+	case "write":
+		pending.hunks = diffHunksFromWriteArgs(req.Args)
+	}
+	return pending
 }
 
 // AskPlan arms a plan-approval prompt. path is the plan file's location
@@ -813,14 +838,14 @@ func (p *PromptState) Render(width int) []string {
 		return RenderEditPermissionPrompt(EditPermissionRequest{
 			Kind:         EditKindEdit,
 			Path:         SummarizeArg(req, p.cwd),
-			Hunks:        diffHunksFromEditFile(p.cwd, req.Args),
+			Hunks:        p.pending.hunks,
 			NoModeSwitch: !editOffersModeSwitch(req),
 		}, width, p.pending.selected, p.feedback != nil, feedback)
 	case "write":
 		return RenderEditPermissionPrompt(EditPermissionRequest{
 			Kind:         EditKindWrite,
 			Path:         SummarizeArg(req, p.cwd),
-			Hunks:        diffHunksFromWriteArgs(req.Args),
+			Hunks:        p.pending.hunks,
 			NoModeSwitch: !editOffersModeSwitch(req),
 		}, width, p.pending.selected, p.feedback != nil, feedback)
 	default:

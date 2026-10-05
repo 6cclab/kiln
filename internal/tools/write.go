@@ -68,7 +68,9 @@ func WriteTool(env *execenv.Env) *tool.Tool {
 				// RenderToolCall). A read error other than "does not
 				// exist" is swallowed here rather than failing the write:
 				// the write itself is still attempted, same as before this
-				// field existed.
+				// field existed. This includes execenv.ErrFileTooLarge: an
+				// existing file bigger than execenv.MaxReadFileBytes is
+				// overwritten same as any other, just without a diff.
 				existing, readErr := env.ReadFile(absolutePath)
 				newFile := readErr != nil
 				if err := env.WriteFile(absolutePath, []byte(in.Content)); err != nil {

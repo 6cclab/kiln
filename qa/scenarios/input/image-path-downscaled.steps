@@ -1,0 +1,18 @@
+# A typed (dragged) absolute path to an image over the 3.75 MiB raw limit is
+# downscaled and attached as [Image #1] instead of being dropped; a .bmp in
+# the same message is refused with a visible note naming the file
+# (internal/imgpath, internal/tui/app.go).
+@faux testdata/faux/qa/image-attach.yaml
+@setup python3 {ROOT}/scripts/qa/fixtures/mkpng.py {HOME}/big.png 1500 1100 && printf 'BM' > {HOME}/small.bmp
+
+WAITFOR /describe a task/ 20
+RUN test "$(wc -c < {HOME}/big.png)" -gt 3932160
+TYPE look at ~/big.png and ~/small.bmp
+SHOT typed
+KEY enter
+WAITFOR /Got the images\./ 30
+SHOT sent
+EXPECT /\[Image #1\]/
+EXPECT /Image not attached — small\.bmp/
+EXPECT_NOT /Image not attached — big\.png/
+EXPECT_NOT /panic|goroutine/
