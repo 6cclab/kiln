@@ -514,14 +514,24 @@ func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, 
 	return lines
 }
 
+// diffHunksFromEditFileCap bounds diffHunksFromEditFile's file read: a
+// file bigger than this falls back to diffHunksFromEditArgs (the
+// arguments-only renderer, no real line numbers) without ever reading it,
+// the same way a missing or non-matching file already does. 8 MiB is
+// comfortably above any file a human reviews a diff of in a terminal, and
+// this is called once per prompt (callers cache the result — see
+// PromptState.AskTool), not on every render, so the cap only protects a
+// single read, not seven a second.
+const diffHunksFromEditFileCap = 8 << 20
+
 // diffHunksFromEditFile builds DiffHunk rows for an Edit call from the
 // file itself: each edit's oldText is located in the file and the whole
 // lines it spans become the "-" rows, numbered by their real line, with
 // the replacement's lines as the "+" rows (permission-edit.txt rows 20-21:
 // "1 -function add(a,b){ return a - b }" / "1 +function add(a,b){ return
 // a + b }" for an edit that only touched "a - b"). Falls back to
-// diffHunksFromEditArgs when the file cannot be read or an edit does not
-// match.
+// diffHunksFromEditArgs when the file cannot be read, is above
+// diffHunksFromEditFileCap, or an edit does not match.
 func diffHunksFromEditFile(cwd string, args map[string]any) []DiffHunk {
 	path, _ := args["path"].(string)
 	if path == "" {
@@ -532,6 +542,9 @@ func diffHunksFromEditFile(cwd string, args map[string]any) []DiffHunk {
 	}
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(cwd, path)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Size() > diffHunksFromEditFileCap {
+		return diffHunksFromEditArgs(args)
 	}
 	data, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {

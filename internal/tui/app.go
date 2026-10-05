@@ -969,7 +969,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		// on EventToolEnd, exactly like any other call — with the outcome
 		// (approved/auto-approved) in its meta.
 		p := m.prompt
-		p.pending = &pendingPermission{request: msg.Request, reply: msg.Reply}
+		p.pending = newPendingPermission(msg.Request, msg.Reply, p.cwd)
 		p.feedback = nil
 		p.plan = nil
 		m.spinner.SetLabel("Waiting for approval")

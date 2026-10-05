@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -613,4 +615,80 @@ func TestRenderPermissionPromptNamesMCPToolAndServer(t *testing.T) {
 	if strings.Contains(full, "mcp__") {
 		t.Errorf("prompt shows the raw qualified id:\n%s", full)
 	}
+}
+
+// A file over diffHunksFromEditFileCap falls back to the arguments-only
+// renderer (sequential 1.. numbering, no real file line numbers) instead
+// of ever reading the file — proven by making diffHunksFromEditFile's own
+// real-line-number behavior absent: a file-based hunk for an edit after
+// line 1 would carry a LineNum greater than 1, which the fallback never
+// produces for a single edit.
+func TestDiffHunksFromEditFileRefusesAboveCap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.go")
+	var b strings.Builder
+	for i := 0; i < 500_000; i++ {
+		b.WriteString("package main // padding line to push the file past the cap\n")
+	}
+	b.WriteString("needle\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Size() <= diffHunksFromEditFileCap {
+		t.Fatalf("test file is not actually over the cap: %v, err=%v", fi, err)
+	}
+
+	args := map[string]any{
+		"path":  "big.go",
+		"edits": []any{map[string]any{"oldText": "needle", "newText": "found"}},
+	}
+	hunks := diffHunksFromEditFile(dir, args)
+	want := diffHunksFromEditArgs(args)
+	if fmt.Sprint(hunks) != fmt.Sprint(want) {
+		t.Errorf("hunks = %+v, want the args-only fallback %+v (file should never have been read)", hunks, want)
+	}
+}
+
+// AskTool computes Edit/Write hunks once, when the prompt is armed: a
+// file edited on disk afterward must not change what the (already up)
+// prompt renders, proving Render reads the cache rather than re-reading
+// the file on every call — the mechanism finding #2 (tui audit) flagged
+// as a ~7-times-a-second disk read for as long as the prompt is open.
+func TestPromptStateCachesEditHunksAtArmTime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "math.js")
+	original := "function add(a,b){ return a - b }\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := NewPromptState(dir)
+	_ = p.AskTool(PermissionRequest{
+		ToolName: "edit",
+		Args: map[string]any{
+			"path":  "math.js",
+			"edits": []any{map[string]any{"oldText": "a - b", "newText": "a + b"}},
+		},
+	})
+
+	first := strings.Join(p.Render(80), "\n")
+	if !strings.Contains(first, "a + b") {
+		t.Fatalf("first render = %q, want it to show the pending edit", first)
+	}
+
+	// Change the file after the prompt is armed but before it is
+	// answered: a second render must show exactly the same content,
+	// never the new on-disk state.
+	if err := os.WriteFile(path, []byte("totally different content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := strings.Join(p.Render(80), "\n")
+	if first != second {
+		t.Errorf("render changed after an on-disk edit while the prompt was still up:\nfirst:  %q\nsecond: %q", first, second)
+	}
+	if strings.Contains(second, "totally different") {
+		t.Error("render picked up the file's post-arm on-disk content")
+	}
+
+	p.finishTool(PromptChoice{Kind: ChoiceDeny})
 }
