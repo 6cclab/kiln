@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "Seeded before the tear."
+    usage: {input: 40, output: 8}

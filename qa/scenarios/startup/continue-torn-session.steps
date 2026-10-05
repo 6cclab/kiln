@@ -1,0 +1,19 @@
+# kiln -c resumes a session whose last line was cut off mid-append (a kill
+# before the newline). Open drops the torn line in memory and leaves the
+# file alone; the first new turn repairs the file (truncates the torn
+# bytes) and appends after it (internal/session/jsonl/storage.go).
+@faux testdata/faux/qa/torn-session-resume.yaml
+@setup {ROOT}/scripts/qa/fixtures/torn-session.sh {ROOT} testdata/faux/qa/torn-session-seed.yaml
+@args --continue
+
+WAITFOR /describe a task/ 20
+SHOT resumed
+EXPECT /seed the torn session/
+EXPECT /Seeded before the tear\./
+EXPECT_NOT /invalid storage|unexpected end of JSON/
+RUN tail -c 40 "$(cat {HOME}/torn-session-path)" | grep -q 'pi.entry/$'
+SEND carry on
+WAITFOR /Resumed after the tear\./ 20
+SHOT after-turn
+RUN f="$(cat {HOME}/torn-session-path)"; ! grep -q '"seq":9999' "$f" && [ "$(tail -c 1 "$f" | od -An -c | tr -d ' ')" = '\n' ]
+EXPECT_NOT /panic|goroutine/
