@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "Got the images."
+    usage: {input: 80, output: 6}
