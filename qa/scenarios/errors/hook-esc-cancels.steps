@@ -1,0 +1,22 @@
+# Esc during a slow PreToolUse hook interrupts the turn at once: the hook's
+# process group is killed through the tool call's context
+# (internal/claude/hooks/runner.go), and the tool never runs. Before, the
+# turn sat until the hook's own 60s timeout.
+@faux testdata/faux/qa/hook-esc-cancels.yaml
+@setup mkdir -p .claude && printf '{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"sleep 50; touch hook-finished","timeout":60}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+SEND run the command
+WAITFOR /esc to stop/ 20
+WAIT 3
+SHOT hook-running
+KEY esc
+WAITFOR /Interrupted/ 8
+SHOT interrupted
+EXPECT /Interrupted/
+EXPECT /interrupted before the call ran/
+EXPECT_NOT /permission check failed|context canceled/
+EXPECT_NOT /The hook let it through/
+RUN sleep 2; ! pgrep -f 'sleep 5[0]; touch hook-finished' >/dev/null
+RUN ! test -e hook-finished
+EXPECT_NOT /panic|goroutine/

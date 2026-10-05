@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -171,6 +172,110 @@ func TestRunHooksKillsHookExceedingTimeout(t *testing.T) {
 	cmd := exec.Command("pgrep", "-f", "sleep-forever.sh")
 	if err := cmd.Run(); err == nil {
 		t.Error("sleep-forever.sh child process is still running after timeout")
+	}
+}
+
+// TestRunHooksCtxCancelKillsHookPromptly asserts that cancelling the ctx
+// passed in RunOptions kills a running hook immediately, process group and
+// all, rather than waiting out its (here, deliberately long) timeout. Fails
+// without the ctx/select wiring in runCommand: before that, cancelling ctx
+// does nothing and the test times out waiting on the hook's own timeout.
+func TestRunHooksCtxCancelKillsHookPromptly(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	started := time.Now()
+	out := RunHooks(RunOptions{
+		// A timeout far longer than the cancel delay above: if this is what
+		// actually stops the hook, the test takes ~30s and fails the
+		// promptness check below, rather than passing for the wrong reason.
+		Config:      cfg(fixture("sleep-forever.sh"), 30),
+		Event:       PreToolUse,
+		ToolName:    "bash",
+		HasToolName: true,
+		Payload:     Payload{SessionID: "t", Cwd: dir, ToolName: "bash", ToolInput: map[string]any{"command": "x"}},
+		Ctx:         ctx,
+	})
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Errorf("ctx cancellation did not kill the hook promptly: took %v", elapsed)
+	}
+	if !out.Cancelled {
+		t.Errorf("expected Outcome.Cancelled, got %+v", out)
+	}
+	if out.Blocked != nil {
+		t.Errorf("a cancelled hook must not be reported as Blocked: %v", out.Blocked)
+	}
+
+	// The child `sleep` must actually be gone, not just detached from us.
+	time.Sleep(300 * time.Millisecond)
+	cmd := exec.Command("pgrep", "-f", "sleep-forever.sh")
+	if err := cmd.Run(); err == nil {
+		t.Error("sleep-forever.sh child process is still running after ctx cancellation")
+	}
+}
+
+// TestGuardToolCallCtxCancelDoesNotRunTheTool asserts GuardToolCall's
+// contract for a PreToolUse hook killed by ctx cancellation: it returns an
+// error (so Lane.invokeBeforeTool treats the call as refused, the same path
+// an erroring hook already takes) and never reaches the permission gate.
+func TestGuardToolCallCtxCancelDoesNotRunTheTool(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	gateChecked := false
+	_, err := GuardToolCall(GuardOptions{
+		Config:    cfg(fixture("sleep-forever.sh"), 30),
+		ToolName:  "bash",
+		Args:      map[string]any{"command": "git status"},
+		SessionID: "t",
+		Cwd:       dir,
+		Ctx:       ctx,
+		PrimaryArgOf: func(args map[string]any) (string, bool) {
+			s, ok := args["command"].(string)
+			return s, ok
+		},
+		Check: func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any, _ Decision, _ string) (*Blocked, error) {
+			gateChecked = true
+			return nil, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("expected an error from a PreToolUse hook killed by ctx cancellation")
+	}
+	if gateChecked {
+		t.Error("the permission gate ran after the hook was cancelled - the tool call must not reach it")
+	}
+}
+
+// TestRunHooksCapsHookOutput asserts a hook's stdout is capped rather than
+// retained in full. The hook itself is bounded with `head -c` to 2MB, not
+// gigabytes, so a regression here (the cap not applying) fails the length
+// assertion instead of making this test itself a memory bomb.
+func TestRunHooksCapsHookOutput(t *testing.T) {
+	dir := t.TempDir()
+	path := writeScript(t, dir, "big-output.sh", `cat >/dev/null; yes y | head -c 2000000`)
+	const cap = 64
+	out := RunHooks(RunOptions{
+		Config:         cfg(path, 0),
+		Event:          PreToolUse,
+		ToolName:       "bash",
+		HasToolName:    true,
+		Payload:        Payload{SessionID: "t", Cwd: dir, ToolName: "bash", ToolInput: map[string]any{"command": "x"}},
+		MaxOutputBytes: cap,
+	})
+	if len(out.Context) != 1 {
+		t.Fatalf("expected the (non-JSON) output as context, got %v", out)
+	}
+	if len(out.Context[0]) > cap {
+		t.Errorf("hook output was not capped: got %d bytes, want <= %d", len(out.Context[0]), cap)
 	}
 }
 
