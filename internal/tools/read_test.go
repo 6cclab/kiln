@@ -2,14 +2,35 @@ package tools
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
 )
+
+// withinReadTest fails the test unless fn returns within the deadline: a
+// refusal built from Stat alone must not actually read the file it is
+// refusing, so it must be fast regardless of the file's declared size.
+// Mirrors internal/gitfiles/hostile_test.go's own within.
+func withinReadTest(t *testing.T, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		fmt.Fprintf(os.Stderr, "--- FAIL: %s: %s did not return within half a second\n", t.Name(), what)
+		os.Exit(1)
+	}
+}
 
 func TestReadToolBasic(t *testing.T) {
 	dir := t.TempDir()
@@ -129,5 +150,119 @@ func TestReadToolMissingFileDidYouMeanHint(t *testing.T) {
 	}
 	if !strings.Contains(resultText(result), "U+00A0 NO-BREAK SPACE") {
 		t.Fatalf("text = %q, want it to call out U+00A0", resultText(result))
+	}
+}
+
+// An untargeted read (no offset/limit) on a file over execenv.ReadWholeFileCap
+// is refused without ever reading its content — proven with a sparse file
+// (Truncate sets the reported size without writing any of those bytes),
+// so this test does not itself allocate anything close to the cap.
+func TestReadToolRefusesOversizedUntargetedRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "huge.bin")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(execenv.ReadWholeFileCap + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	env := execenv.New(dir)
+	rt := ReadTool(env)
+	withinReadTest(t, "read on an oversized untargeted file", func() {
+		result := execTool(t, rt, map[string]any{"path": "huge.bin"})
+		if !result.IsError {
+			t.Error("expected IsError for a file over ReadWholeFileCap with no offset/limit")
+			return
+		}
+		if !strings.Contains(resultText(result), "offset/limit") {
+			t.Errorf("text = %q, want it to point at offset/limit", resultText(result))
+		}
+	})
+}
+
+// An offset read on a file over execenv.ReadWholeFileCap must still
+// succeed (and return the right window): offset/limit bypasses the
+// untargeted-read cap by design, matching Claude Code's own Read tool.
+func TestReadToolOffsetBypassesWholeFileCap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.txt")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Comfortably over ReadWholeFileCap (256 KiB), built from short lines
+	// so the line count (and so the offset exercised) is meaningful.
+	line := "the quick brown fox jumps over the lazy dog\n" // 45 bytes
+	lines := int(execenv.ReadWholeFileCap/int64(len(line))) + 1000
+	for i := 0; i < lines; i++ {
+		if _, err := f.WriteString(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Size() <= execenv.ReadWholeFileCap {
+		t.Fatalf("test file is not actually over the cap: size=%v err=%v", fi, err)
+	}
+
+	env := execenv.New(dir)
+	rt := ReadTool(env)
+	result := execTool(t, rt, map[string]any{"path": "big.txt", "offset": lines, "limit": 1})
+	if result.IsError {
+		t.Fatalf("unexpected error: %q", resultText(result))
+	}
+	if strings.TrimSpace(resultText(result)) != strings.TrimSpace(line) {
+		t.Fatalf("text = %q, want the single requested line", resultText(result))
+	}
+}
+
+// Reading near the start of a file bigger than ReadWholeFileCap must
+// still report the file's own total line count accurately, proving the
+// streaming path counts every line, not just the ones it keeps.
+func TestReadToolOffsetReportsAccurateTotalOnLargeFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.txt")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const totalLines = 10_000
+	for i := 1; i <= totalLines; i++ {
+		if _, err := fmt.Fprintf(f, "line %d\n", i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	env := execenv.New(dir)
+	rt := ReadTool(env)
+	result := execTool(t, rt, map[string]any{"path": "big.txt", "offset": 1, "limit": 3})
+	text := resultText(result)
+	if !strings.Contains(text, fmt.Sprintf("%d more lines in file. Use offset=4 to continue.", totalLines-3)) {
+		t.Fatalf("text = %q, want the accurate remaining-lines count", text)
+	}
+}
+
+// Offset beyond the end of a file is still reported (with an accurate
+// total) when the file is read through the streaming window path.
+func TestReadToolOffsetWindowBeyondEnd(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("l1\nl2"), 0o644)
+	env := execenv.New(dir)
+	rt := ReadTool(env)
+	result := execTool(t, rt, map[string]any{"path": "a.txt", "offset": 10, "limit": 5})
+	if !result.IsError {
+		t.Fatal("expected IsError for offset beyond end of file")
+	}
+	if !strings.Contains(resultText(result), "beyond end of file (2 lines total)") {
+		t.Fatalf("text = %q", resultText(result))
 	}
 }
