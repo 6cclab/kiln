@@ -1210,16 +1210,27 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	hooks := newTrustedHooks(hookConfig, args.Print || trustedAtStart)
 
 	// The four events the TS parsed but never fired. Stop runs when the
-	// parent's run ends; a blocking Stop hook is reported to the user, not
-	// fed back into the model (this port does not re-prompt on Stop).
+	// parent's run completes; a blocking Stop hook is reported to the user,
+	// not fed back into the model (this port does not re-prompt on Stop).
 	// PreCompact runs when the harness starts compacting; the harness does
 	// not tell us whether /compact or the threshold triggered it, so the
 	// trigger is always "auto". SubagentStop runs from the dispatcher when
-	// a subagent's run ends. Notification is wired where the permission
-	// prompt is shown (internal/cli/tui.go).
+	// a subagent's run completes. Notification is wired where the
+	// permission prompt is shown (internal/cli/tui.go).
+	//
+	// Stop and SubagentStop match Claude Code: they run only for a run that
+	// completed, never for one the user interrupted (or that failed), and
+	// they run while the turn is still live, on its context, so Esc kills
+	// a slow Stop hook the way it kills a PreToolUse hook. Stop therefore
+	// hangs off OnBeforeRunEnd (the lane can still be aborted there), not
+	// EventRunEnd (after the run, when Esc no longer reaches it).
 	stopHookActive := false
-	started.Harness.Events().On(harness.EventRunEnd, func(ev harness.Event) {
+	started.Harness.Hooks().OnBeforeRunEnd(func(ctx context.Context, status string) error {
+		if status != harness.StatusCompleted {
+			return nil
+		}
 		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
+			Ctx:    ctx,
 			Config: hooks.get(),
 			Event:  claudehooks.Stop,
 			Payload: claudehooks.Payload{
@@ -1230,9 +1241,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			},
 			OnNotice: notice,
 		})
-		if outcome.Blocked != nil {
+		// An interrupted Stop hook's verdict is discarded, as Claude Code
+		// does: the user stopped the turn, so nothing continues it.
+		if outcome.Blocked != nil && !outcome.Cancelled {
 			notice("Stop hook asked to continue: " + outcome.Blocked.Reason)
 		}
+		return nil
 	})
 	started.Harness.Events().On(harness.EventCompactionStart, func(ev harness.Event) {
 		claudehooks.RunHooks(claudehooks.RunOptions{
@@ -1250,13 +1264,17 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			OnNotice: notice,
 		})
 	})
-	dispatcher.OnSubagentStop = func(agentName string, sub *agent.Started) {
+	dispatcher.OnSubagentStop = func(ctx context.Context, agentName string, sub *agent.Started, status string) {
 		subSession, subTranscript := sessionID, transcriptPath
 		if sub != nil {
 			subSession, subTranscript = sub.SessionID, sub.TranscriptPath
 			addUsage(sub.Model.Provider, sub.Model.ID, sub.Harness.Stats().Usage)
 		}
+		if status != harness.StatusCompleted {
+			return
+		}
 		claudehooks.RunHooks(claudehooks.RunOptions{
+			Ctx:    ctx,
 			Config: hooks.get(),
 			Event:  claudehooks.SubagentStop,
 			Payload: claudehooks.Payload{

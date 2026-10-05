@@ -1,0 +1,21 @@
+# Esc during a slow Stop hook kills it: Stop runs while the turn is still
+# live, on its context (internal/cli/chat.go, OnBeforeRunEnd), so the busy
+# row stays up and Esc reaches it, as in Claude Code. Before, the hook ran
+# after the run had ended and Esc did nothing.
+@faux testdata/faux/qa/stop-hook-esc.yaml
+@setup mkdir -p .claude && printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sleep 50; touch stop-finished","timeout":60}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+SEND finish up
+WAITFOR /All done here\./ 20
+WAIT 2
+SHOT stop-hook-running
+EXPECT /esc to stop/
+KEY esc
+WAIT 2
+SHOT after-esc
+EXPECT_NOT /esc to stop/
+EXPECT_NOT /Stop hook asked to continue/
+RUN ! pgrep -f 'sleep 5[0]; touch stop-finished' >/dev/null
+RUN ! test -e stop-finished
+EXPECT_NOT /panic|goroutine/

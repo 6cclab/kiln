@@ -92,8 +92,11 @@ type Dispatcher struct {
 	SessionsRoot string
 	// OnSubagentStop, if set, runs once when a dispatched subagent's run
 	// has ended, however it ended. It carries the subagent's own session so
-	// the SubagentStop hook can name its transcript.
-	OnSubagentStop func(agentName string, sub *Started)
+	// the SubagentStop hook can name its transcript, the dispatching tool
+	// call's context (cancelled when the user interrupts the parent turn)
+	// and the run's status (harness.StatusCompleted, StatusAborted, ...),
+	// so a caller can run the hook only for a run that completed.
+	OnSubagentStop func(ctx context.Context, agentName string, sub *Started, status string)
 	// Env is the filesystem/shell context the subagent's built-in tools
 	// run against; its Cwd anchors the subagent's session too.
 	Env *execenv.Env
@@ -399,7 +402,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 
 	result, err := started.Lane.Prompt(ctx, req.Prompt, nil)
 	if d.OnSubagentStop != nil {
-		d.OnSubagentStop(def.Name, started)
+		status := result.Status
+		if err != nil && status == "" {
+			status = harness.StatusFailed
+		}
+		d.OnSubagentStop(ctx, def.Name, started, status)
 	}
 	if err != nil {
 		if d.OnEvent != nil {

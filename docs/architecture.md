@@ -456,8 +456,8 @@ reading is fine here, not read anything on this machine."
 **Hook events** (`internal/claude/hooks`): `PreToolUse`, `PostToolUse`,
 `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `SubagentStop`,
 `Notification`, `PreCompact`. All nine fire: `SessionStart`, `SessionEnd`,
-`UserPromptSubmit`, `Stop` (run end), `PreCompact` (compaction start) and
-`SubagentStop` (once per dispatched subagent) are wired in
+`UserPromptSubmit`, `Stop` (a completed run; Esc cancels it), `PreCompact` (compaction start) and
+`SubagentStop` (once per completed subagent run) are wired in
 `internal/cli/chat.go`; `Notification` fires on the TUI's permission prompt
 (`internal/cli/tui.go`). `hooks.GuardToolCall` composes `PreToolUse`
 with the permission gate by running hooks *before* `Check`: a hook may

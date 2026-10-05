@@ -732,3 +732,44 @@ func kindsOf(events []SubagentEvent) []SubagentEventKind {
 	}
 	return out
 }
+
+// OnSubagentStop reports how the subagent's run ended and passes the
+// dispatching call's context, so the caller can run SubagentStop only for
+// a completed run (as Claude Code does) and let Esc cancel it.
+func TestDispatchOnSubagentStopReportsStatusAndContext(t *testing.T) {
+	type stop struct {
+		status string
+		ctx    context.Context
+	}
+	t.Run("completed", func(t *testing.T) {
+		d, _, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - text: \"the answer\"\n", nil)
+		var got []stop
+		d.OnSubagentStop = func(ctx context.Context, _ string, _ *Started, status string) {
+			got = append(got, stop{status, ctx})
+		}
+		ctx := context.WithValue(context.Background(), struct{ k string }{"k"}, "dispatching call")
+		if _, err := d.Dispatch(ctx, DispatchRequest{Agent: "general-purpose", Description: "d", Prompt: "p"}); err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		if len(got) != 1 || got[0].status != "completed" {
+			t.Fatalf("OnSubagentStop calls = %+v, want one with status completed", got)
+		}
+		if got[0].ctx.Value(struct{ k string }{"k"}) != "dispatching call" {
+			t.Error("OnSubagentStop did not get the dispatching call's context")
+		}
+	})
+	t.Run("interrupted", func(t *testing.T) {
+		d, _, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - text: \"the answer\"\n", nil)
+		var got []string
+		d.OnSubagentStop = func(_ context.Context, _ string, _ *Started, status string) { got = append(got, status) }
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, _ = d.Dispatch(ctx, DispatchRequest{Agent: "general-purpose", Description: "d", Prompt: "p"})
+		if len(got) != 1 {
+			t.Fatalf("OnSubagentStop called %d times, want once (usage is still added)", len(got))
+		}
+		if got[0] == "completed" {
+			t.Fatal("an interrupted subagent run was reported as completed")
+		}
+	})
+}

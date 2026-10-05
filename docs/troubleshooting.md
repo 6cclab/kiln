@@ -293,7 +293,7 @@ overridable per-hook via `timeout` in settings.json.
   hook returned `updatedInput`; the gate then checks the merged args.
 
 - **`Stop hook asked to continue: <reason>`** (`internal/cli/chat.go`) — a
-  `Stop` hook blocked at run end. Reported to you; kiln does **not** re-prompt
+  `Stop` hook blocked when a run completed. Reported to you; kiln does **not** re-prompt
   the model on it (confirmed: `internal/cli/chat.go` only calls
   `notice(...)`, never re-drives the turn).
 

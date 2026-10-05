@@ -482,8 +482,8 @@ stdin. Implemented against this machine's real hooks (`rtk-rewrite.sh`,
 | `UserPromptSubmit` | `[obs]` stdout becomes turn context |
 | `SessionStart` | `[obs]` stdout becomes first-turn context |
 | `SessionEnd` | `[obs]` fires on exit with `transcript_path` |
-| `Stop` | `[obs]` fires at run end (`internal/cli/chat.go:684`) — `TestHooks_Stop_FiresOnRunEnd`, `TestHooks_StopBlock_ReportedOnceNotReprompted` |
-| `SubagentStop` | `[obs]` fires once per dispatched subagent (`internal/cli/chat.go:718`) — `TestHooks_SubagentStop_FiresPerSubagent`, `TestHooks_SubagentStop_PerDepth` |
+| `Stop` | `[obs]` fires when a run completes, never for an interrupted or failed one, while the turn is still live: Esc kills a running Stop hook and its verdict is discarded, as in Claude Code (`internal/cli/chat.go`, `OnBeforeRunEnd`) — `TestHooks_Stop_FiresOnRunEnd`, `TestHooks_StopBlock_ReportedOnceNotReprompted`, `TestTUI_Esc_KillsASlowStopHook`, `TestTUI_StopHook_SkippedWhenTheTurnIsInterrupted`. Divergence: a blocking Stop hook is reported, not fed back to continue the turn |
+| `SubagentStop` | `[obs]` fires once per dispatched subagent whose run completed, on the dispatching call's context, so Esc cancels it (`internal/cli/chat.go`) — `TestHooks_SubagentStop_FiresPerSubagent`, `TestHooks_SubagentStop_PerDepth`, `TestDispatchOnSubagentStopReportsStatusAndContext` |
 | `Notification` | `[obs]` fires on the TUI's permission prompt (`internal/cli/tui.go:110`) — `TestHooks_Notification_Payload` |
 | `PreCompact` | `[obs]` fires when compaction starts (`internal/cli/chat.go:700`); covered by `TestCompaction_PreCompactHookFires` in `test/e2e/compaction_behaviour_test.go` |
 
