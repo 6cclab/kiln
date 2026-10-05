@@ -71,9 +71,15 @@ type Bridge struct {
 	// covered holds the task calls the subagents panel showed (MarkCoveredCall); guarded by mu.
 	covered map[string]bool
 
-	queue chan bridgeItem
-	quit  chan struct{}
-	once  sync.Once
+	// queueMu guards pending, the commit queue: an unbounded FIFO that
+	// enqueue appends to and run drains. wake (capacity 1) tells run
+	// there is something to drain. See enqueue for why the queue never
+	// blocks a producer.
+	queueMu sync.Mutex
+	pending []bridgeItem
+	wake    chan struct{}
+	quit    chan struct{}
+	once    sync.Once
 
 	cwd string
 	// ts is the live turn state Wire's handler mutates. See
@@ -129,19 +135,27 @@ type bridgeItem struct {
 	msg  tea.Msg
 }
 
-// commitQueueSize is generous relative to actual traffic (keystrokes and
-// harness events, not a hot loop); it exists so Commit's enqueue never has
-// a reason to block under normal operation, only under runaway output.
-const commitQueueSize = 1024
+// coalesceAbove is the backlog, in queued items, past which run joins
+// consecutive text commits into one Println (or one MsgTranscriptAppend)
+// instead of handing the event loop one block per message. Both sinks
+// split a block on newlines (the renderer prints every line; app.go's
+// appendTranscript and its tea.PrintedLines row count split on "\n"), so
+// joining changes nothing on screen: a backlog just drains in a handful of
+// event-loop round trips instead of one per block. At or below it,
+// delivery is one block per message, exactly as when the queue was a
+// 1024-slot channel. This is what bounds the queue's memory without ever
+// blocking a producer: the backlog only holds what producers enqueue while
+// one batch is being delivered.
+const coalesceAbove = 1024
 
 // NewBridge builds a Bridge with no program yet and starts its committer
 // goroutine. Call SetProgram once a program exists, before it starts
 // running (RunInteractive does this).
 func NewBridge(cwd string) *Bridge {
 	b := &Bridge{
-		queue: make(chan bridgeItem, commitQueueSize),
-		quit:  make(chan struct{}),
-		cwd:   cwd,
+		wake: make(chan struct{}, 1),
+		quit: make(chan struct{}),
+		cwd:  cwd,
 	}
 	go b.run()
 	return b
@@ -152,23 +166,86 @@ func NewBridge(cwd string) *Bridge {
 func (b *Bridge) run() {
 	for {
 		select {
-		case item := <-b.queue:
-			if item.mode != nil {
-				b.fsMu.Lock()
-				b.fullscreen = *item.mode
-				b.fsMu.Unlock()
-				continue
-			}
-			if item.msg != nil {
-				if p := b.prog(); p != nil {
-					p.Send(item.msg)
-				}
-				continue
-			}
-			b.printNow(item.text)
+		case <-b.wake:
 		case <-b.quit:
 			return
 		}
+		for {
+			b.queueMu.Lock()
+			items := b.pending
+			b.pending = nil
+			b.queueMu.Unlock()
+			if len(items) == 0 {
+				break
+			}
+			if !b.deliver(items) {
+				return
+			}
+		}
+	}
+}
+
+// deliver hands items to the program in order, on run's goroutine. In a
+// backlog longer than coalesceAbove, each run of consecutive text items is
+// joined into one block. It reports false once Stop has fired, dropping
+// whatever is left, as Stop documents.
+func (b *Bridge) deliver(items []bridgeItem) bool {
+	coalesce := len(items) > coalesceAbove
+	var text []string
+	flush := func() {
+		if len(text) > 0 {
+			b.printNow(strings.Join(text, "\n"))
+			text = text[:0]
+		}
+	}
+	for _, item := range items {
+		select {
+		case <-b.quit:
+			return false
+		default:
+		}
+		switch {
+		case item.mode != nil:
+			flush()
+			b.fsMu.Lock()
+			b.fullscreen = *item.mode
+			b.fsMu.Unlock()
+		case item.msg != nil:
+			flush()
+			if p := b.prog(); p != nil {
+				p.Send(item.msg)
+			}
+		case coalesce:
+			text = append(text, item.text)
+		default:
+			b.printNow(item.text)
+		}
+	}
+	flush()
+	return true
+}
+
+// enqueue appends item to the commit queue and wakes run. It never blocks,
+// and that is load-bearing. Producers include Update itself (app.go's
+// commit helpers) and goroutines holding locks Update can wait on: the
+// harness event bus runs every handler under its invokeMu, and Lane.Steer,
+// called from Update, emits on that same bus. Meanwhile run sits in
+// Program.Println, an unbuffered send that only the event loop drains,
+// between Update calls. A producer that waited for queue space, as one did
+// when the queue was a fixed 1024-slot channel, closed that cycle and hung
+// the program for good. deliver's coalescing bounds the memory instead.
+func (b *Bridge) enqueue(item bridgeItem) {
+	select {
+	case <-b.quit:
+		return
+	default:
+	}
+	b.queueMu.Lock()
+	b.pending = append(b.pending, item)
+	b.queueMu.Unlock()
+	select {
+	case b.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -215,10 +292,7 @@ func (b *Bridge) setSink(s sink) {
 // startup) is fine: the flip item just sets the flag once drained, with no
 // program to print through yet.
 func (b *Bridge) SetFullscreen(v bool) {
-	select {
-	case b.queue <- bridgeItem{mode: &v}:
-	case <-b.quit:
-	}
+	b.enqueue(bridgeItem{mode: &v})
 }
 
 // Fullscreen reports the bridge's current commit-sink mode.
@@ -267,10 +341,7 @@ func (b *Bridge) Commit(lines []string) {
 	b.mu.Lock()
 	b.lastWasNote = false
 	b.mu.Unlock()
-	select {
-	case b.queue <- bridgeItem{text: strings.Join(lines, "\n")}:
-	case <-b.quit:
-	}
+	b.enqueue(bridgeItem{text: strings.Join(lines, "\n")})
 }
 
 // SyntheticCommit is one non-session-entry block committed via
@@ -596,10 +667,7 @@ func (b *Bridge) Send(m tea.Msg) {
 // goroutine itself, unlike Send. See Send's doc comment for why that
 // distinction is load-bearing.
 func (b *Bridge) SendAsync(m tea.Msg) {
-	select {
-	case b.queue <- bridgeItem{msg: m}:
-	case <-b.quit:
-	}
+	b.enqueue(bridgeItem{msg: m})
 }
 
 // --- tea.Msg types the bridge sends -------------------------------------

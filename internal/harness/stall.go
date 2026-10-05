@@ -3,7 +3,6 @@ package harness
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/andrepato/harness/internal/compaction"
@@ -56,20 +55,26 @@ func (o Options) stallLimits(promptTokens int) (first, idle time.Duration) {
 // progress: it follows the response headers, which some servers send
 // before they have read the prompt, so only content moves the request
 // from the first-token allowance to the idle limit.
+//
+// The timing is compaction.Watchdog's, shared with summarization requests,
+// so a limit that expires just as a token arrives cannot cancel the
+// request that token resumed.
 type stallWatch struct {
-	mu     sync.Mutex
-	timer  *time.Timer
-	cancel context.CancelCauseFunc
+	dog    *compaction.Watchdog
 	idle   time.Duration
-	prompt int
+	onIdle func()
 }
 
 func watchStall(cancel context.CancelCauseFunc, first, idle time.Duration, promptTokens int) *stallWatch {
-	w := &stallWatch{cancel: cancel, idle: idle, prompt: promptTokens}
-	w.timer = time.AfterFunc(first, func() {
-		cancel(&StallError{Waited: first, FirstToken: true, PromptTokens: promptTokens})
-	})
-	return w
+	return &stallWatch{
+		dog: compaction.NewWatchdog(first, func() {
+			cancel(&StallError{Waited: first, FirstToken: true, PromptTokens: promptTokens})
+		}),
+		idle: idle,
+		onIdle: func() {
+			cancel(&StallError{Waited: idle, PromptTokens: promptTokens})
+		},
+	}
 }
 
 // saw records a stream event, restarting the idle limit.
@@ -77,20 +82,10 @@ func (w *stallWatch) saw(ev msg.StreamEvent) {
 	if ev.Type == msg.EventStart {
 		return
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.timer.Stop()
-	idle, prompt, cancel := w.idle, w.prompt, w.cancel
-	w.timer = time.AfterFunc(idle, func() {
-		cancel(&StallError{Waited: idle, PromptTokens: prompt})
-	})
+	w.dog.Reset(w.idle, w.onIdle)
 }
 
-func (w *stallWatch) stop() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.timer.Stop()
-}
+func (w *stallWatch) stop() { w.dog.Stop() }
 
 func roundWait(d time.Duration) time.Duration {
 	if d < time.Second {

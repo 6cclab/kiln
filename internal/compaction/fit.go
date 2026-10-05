@@ -314,18 +314,18 @@ func runSimpleWatched(ctx context.Context, streamer Streamer, model provider.Mod
 
 	watched, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	timer := time.AfterFunc(firstWait, func() {
+	watch := NewWatchdog(firstWait, func() {
 		cancel(errStalled{waited: firstWait, before: "the first token", promptToken: promptTokens})
 	})
-	defer func() { timer.Stop() }()
+	defer watch.Stop()
+	stalledIdle := func() {
+		cancel(errStalled{waited: idle, before: "the next token", promptToken: promptTokens})
+	}
 
 	report(0)
 	outChars := 0
 	text, usage, err := runSimpleEach(watched, streamer, model, systemPrompt, userText, maxTokens, thinkingLevel, func(ev msg.StreamEvent) {
-		timer.Stop()
-		timer = time.AfterFunc(idle, func() {
-			cancel(errStalled{waited: idle, before: "the next token", promptToken: promptTokens})
-		})
+		watch.Reset(idle, stalledIdle)
 		if ev.Delta != "" {
 			outChars += len(ev.Delta)
 			report(ceilDiv4(outChars))
