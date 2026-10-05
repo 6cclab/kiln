@@ -1335,6 +1335,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			SessionID:      sessionID,
 			TranscriptPath: transcriptPath,
 			Cwd:            cwd,
+			Ctx:            ctx,
 			Check: func(toolName, primaryArg string, hasPrimaryArg bool, args map[string]any, decision claudehooks.Decision, reason string) (*claudehooks.Blocked, error) {
 				blocked, out, err := gate.CheckWithOutcome(ctx, permission.Request{ToolName: toolName, PrimaryArg: primaryArg, Args: args,
 					CallID: call.ID, History: autoModeHistory(ctx, started.Lane),
@@ -1446,6 +1447,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				ToolResponse:   toolResponse,
 			},
 			OnNotice: notice,
+			Ctx:      ctx,
 		})
 		if len(outcome.Context) > 0 {
 			postToolCtxMu.Lock()
