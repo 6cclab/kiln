@@ -1222,14 +1222,17 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Stop and SubagentStop work as in Claude Code. They run when a turn is
 	// about to end its run (harness OnBeforeStop: the model replied with no
 	// tool calls), never for one the user interrupted or that failed, and
-	// on the run's context, so Esc kills a slow one and its verdict is
-	// discarded. A hook that blocks (exit 2, or "decision": "block") keeps
-	// the run going: its reason goes to the model as a user message and the
-	// model is asked again, with stop_hook_active true on the hook calls
-	// that follow, for the rest of that run. {"continue": false} ends it.
+	// on the run's context, so Esc kills every hook still running and their
+	// verdicts are discarded. Every matching hook runs at once
+	// (RunHooksConcurrently), as in Claude Code: a hook that blocks (exit
+	// 2, or "decision": "block") keeps the run going, with every blocking
+	// hook's reason going to the model, not just the first, and
+	// stop_hook_active true on the hook calls that follow, for the rest of
+	// that run. {"continue": false} from any hook ends it, whatever any
+	// other hook in the same chain decided.
 	started.Harness.Hooks().OnBeforeStop(func(ctx context.Context, info harness.StopInfo) (harness.StopVerdict, error) {
 		active := info.StopHookActive
-		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
+		outcome := claudehooks.RunHooksConcurrently(claudehooks.RunOptions{
 			Ctx:    ctx,
 			Config: hooks.get(),
 			Event:  claudehooks.Stop,
@@ -1241,8 +1244,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				LastAssistantMessage: lastReplyText(info.Last),
 			},
 			OnNotice: notice,
-			OnHookStart: func(i int, cmds []claudehooks.Command) {
-				activity(stopHookActivity(claudehooks.Stop, cmds, i))
+			OnHookDone: func(done int, cmds []claudehooks.Command) {
+				activity(stopHookActivity(claudehooks.Stop, cmds, done))
 			},
 		})
 		activity("")
@@ -1275,7 +1278,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			subSession, subTranscript = sub.SessionID, sub.TranscriptPath
 		}
 		active := info.StopHookActive
-		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
+		outcome := claudehooks.RunHooksConcurrently(claudehooks.RunOptions{
 			Ctx:    ctx,
 			Config: hooks.get(),
 			Event:  claudehooks.SubagentStop,
@@ -1287,8 +1290,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				LastAssistantMessage: lastReplyText(info.Last),
 			},
 			OnNotice: notice,
-			OnHookStart: func(i int, cmds []claudehooks.Command) {
-				activity(stopHookActivity(claudehooks.SubagentStop, cmds, i))
+			OnHookDone: func(done int, cmds []claudehooks.Command) {
+				activity(stopHookActivity(claudehooks.SubagentStop, cmds, done))
 			},
 		})
 		activity("")

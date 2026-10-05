@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -461,36 +462,67 @@ func TestRunHooksSetsClaudeProjectDir(t *testing.T) {
 	}
 }
 
-func runStop(t *testing.T, event Event, body string) Outcome {
+func runStop(t *testing.T, event Event, body string) (Outcome, string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := writeScript(t, dir, "stop.sh", body)
 	c := Config{event: []Matcher{{Hooks: []Command{{Type: "command", Command: path}}}}}
 	active := false
-	return RunHooks(RunOptions{Config: c, Event: event, Payload: Payload{SessionID: "t", Cwd: dir, StopHookActive: &active}})
+	return RunHooks(RunOptions{Config: c, Event: event, Payload: Payload{SessionID: "t", Cwd: dir, StopHookActive: &active}}), path
 }
 
 // Stop and SubagentStop give "decision": "block" its Claude Code meaning
 // (keep working, reason to the model); exit 2 means the same, with the
-// reason on stderr. {"continue": false} is distinct: stop everything.
+// reason prefixed by the command, as Claude Code shows it.
+// {"continue": false} is distinct: stop everything.
 func TestRunHooksStopDecisions(t *testing.T) {
 	for _, event := range []Event{Stop, SubagentStop} {
 		t.Run(string(event), func(t *testing.T) {
-			out := runStop(t, event, `echo '{"decision":"block","reason":"tests are failing"}'`)
+			out, _ := runStop(t, event, `echo '{"decision":"block","reason":"tests are failing"}'`)
 			if out.Blocked == nil || out.Blocked.Reason != "tests are failing" || out.Stopped {
 				t.Errorf("decision block: %+v, want Blocked with the reason", out)
 			}
-			out = runStop(t, event, `echo "lint first" >&2; exit 2`)
-			if out.Blocked == nil || out.Blocked.Reason != "lint first" || out.Stopped {
-				t.Errorf("exit 2: %+v, want Blocked with stderr", out)
+			if got := out.BlockReasons; len(got) != 1 || got[0] != "tests are failing" {
+				t.Errorf("decision block: BlockReasons = %v, want [tests are failing]", got)
 			}
-			out = runStop(t, event, `echo '{"continue":false,"stopReason":"build is green"}'`)
+			out, path := runStop(t, event, `echo "lint first" >&2; exit 2`)
+			want := fmt.Sprintf("[%s]: lint first", path)
+			if out.Blocked == nil || out.Blocked.Reason != want || out.Stopped {
+				t.Errorf("exit 2: %+v, want Blocked with %q", out, want)
+			}
+			out, path = runStop(t, event, `exit 2`)
+			want = fmt.Sprintf("[%s]: No stderr output", path)
+			if out.Blocked == nil || out.Blocked.Reason != want {
+				t.Errorf("exit 2 with no stderr: %+v, want Blocked with %q", out, want)
+			}
+			out, _ = runStop(t, event, `echo '{"continue":false,"stopReason":"build is green"}'`)
 			if !out.Stopped || out.StopReason != "build is green" {
 				t.Errorf("continue false: %+v, want Stopped with stopReason", out)
 			}
-			out = runStop(t, event, `echo '{"decision":"approve"}'`)
+			out, _ = runStop(t, event, `echo '{"decision":"approve"}'`)
 			if out.Blocked != nil || out.Stopped {
 				t.Errorf("decision approve: %+v, want nothing", out)
+			}
+		})
+	}
+}
+
+// Claude Code's docs describe a Stop/SubagentStop hook's
+// hookSpecificOutput.additionalContext as adding context and continuing
+// the conversation, but in the shipped Claude Code it never reaches the
+// model. kiln follows the shipped behaviour: Outcome.Context stays empty
+// for these two events even when a hook sets additionalContext (it is
+// still populated for every other event interpret handles - see
+// TestRunHooksAdditionalContextFromJSON for PreToolUse).
+func TestRunHooksStopAdditionalContextHasNoEffect(t *testing.T) {
+	for _, event := range []Event{Stop, SubagentStop} {
+		t.Run(string(event), func(t *testing.T) {
+			out, _ := runStop(t, event, `echo '{"hookSpecificOutput":{"hookEventName":"`+string(event)+`","additionalContext":"build failed, retry"}}'`)
+			if len(out.Context) != 0 {
+				t.Errorf("Context = %v, want none: shipped Claude Code ignores additionalContext for %s", out.Context, event)
+			}
+			if out.Blocked != nil || out.Stopped {
+				t.Errorf("got %+v, want no block and no stop from additionalContext alone", out)
 			}
 		})
 	}
@@ -536,5 +568,147 @@ func TestRunHooksReportsEachHookStart(t *testing.T) {
 	})
 	if got := strings.Join(starts, ","); got != "0/2,1/2" {
 		t.Fatalf("OnHookStart calls = %q, want 0/2,1/2", got)
+	}
+}
+
+// TestRunHooksConcurrentlyRunsAtOnce: two ~1s hooks finish in well under
+// the 2s a sequential RunHooks chain would take, since they start
+// together rather than one after the other.
+func TestRunHooksConcurrentlyRunsAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	a := writeScript(t, dir, "a.sh", "cat >/dev/null; sleep 1")
+	b := writeScript(t, dir, "b.sh", "cat >/dev/null; sleep 1")
+	c := Config{Stop: []Matcher{{Hooks: []Command{
+		{Type: "command", Command: a},
+		{Type: "command", Command: b},
+	}}}}
+	started := time.Now()
+	RunHooksConcurrently(RunOptions{Config: c, Event: Stop, Payload: Payload{Cwd: dir}})
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Errorf("took %v, want well under 2s if the hooks ran together", elapsed)
+	}
+}
+
+// TestRunHooksConcurrentlyCollectsEveryBlockReason: two Stop hooks that
+// each block, one by exit 2, one by {"decision":"block"}, both
+// contribute their reason - unlike RunHooks, where the first block ends
+// the chain and the second hook never runs at all.
+func TestRunHooksConcurrentlyCollectsEveryBlockReason(t *testing.T) {
+	dir := t.TempDir()
+	first := writeScript(t, dir, "first.sh", `echo "run the linter" >&2; exit 2`)
+	second := writeScript(t, dir, "second.sh", `cat >/dev/null; echo '{"decision":"block","reason":"tests are red"}'`)
+	c := Config{Stop: []Matcher{{Hooks: []Command{
+		{Type: "command", Command: first},
+		{Type: "command", Command: second},
+	}}}}
+	out := RunHooksConcurrently(RunOptions{Config: c, Event: Stop, Payload: Payload{Cwd: dir}})
+	if out.Blocked == nil {
+		t.Fatal("expected a block")
+	}
+	if len(out.BlockReasons) != 2 {
+		t.Fatalf("BlockReasons = %v, want 2 entries (one per blocking hook)", out.BlockReasons)
+	}
+	wantFirst := fmt.Sprintf("[%s]: run the linter", first)
+	sawFirst, sawSecond := false, false
+	for _, r := range out.BlockReasons {
+		if r == wantFirst {
+			sawFirst = true
+		}
+		if r == "tests are red" {
+			sawSecond = true
+		}
+	}
+	if !sawFirst || !sawSecond {
+		t.Errorf("BlockReasons = %v, want %q and %q", out.BlockReasons, wantFirst, "tests are red")
+	}
+}
+
+// TestRunHooksConcurrentlyContinueFalseWinsOverABlock: one hook blocks,
+// another answers {"continue": false} - the stop wins, as in Claude
+// Code, regardless of which hook the caller happens to read first.
+func TestRunHooksConcurrentlyContinueFalseWinsOverABlock(t *testing.T) {
+	dir := t.TempDir()
+	blocker := writeScript(t, dir, "blocker.sh", `echo "no" >&2; exit 2`)
+	stopper := writeScript(t, dir, "stopper.sh", `cat >/dev/null; echo '{"continue":false,"stopReason":"build is green"}'`)
+	c := Config{Stop: []Matcher{{Hooks: []Command{
+		{Type: "command", Command: blocker},
+		{Type: "command", Command: stopper},
+	}}}}
+	out := RunHooksConcurrently(RunOptions{Config: c, Event: Stop, Payload: Payload{Cwd: dir}})
+	if !out.Stopped || out.StopReason != "build is green" {
+		t.Errorf("got %+v, want Stopped with stopReason \"build is green\"", out)
+	}
+}
+
+// TestRunHooksConcurrentlyCtxCancelKillsEveryHookPromptly asserts that
+// cancelling ctx kills every running hook at once, not just the one a
+// sequential chain happens to be on, and that none of them survive as
+// orphaned processes.
+func TestRunHooksConcurrentlyCtxCancelKillsEveryHookPromptly(t *testing.T) {
+	dir := t.TempDir()
+	c := Config{Stop: []Matcher{{Hooks: []Command{
+		{Type: "command", Command: fixture("sleep-forever.sh"), Timeout: 30},
+		{Type: "command", Command: fixture("sleep-forever.sh"), Timeout: 30},
+	}}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	started := time.Now()
+	out := RunHooksConcurrently(RunOptions{Config: c, Event: Stop, Payload: Payload{Cwd: dir}, Ctx: ctx})
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Errorf("ctx cancellation did not kill the hooks promptly: took %v", elapsed)
+	}
+	if !out.Cancelled {
+		t.Errorf("expected Outcome.Cancelled, got %+v", out)
+	}
+	if out.Blocked != nil || len(out.BlockReasons) != 0 {
+		t.Errorf("a cancelled chain must not be reported as Blocked: %+v", out)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	cmd := exec.Command("pgrep", "-f", "sleep-forever.sh")
+	if err := cmd.Run(); err == nil {
+		t.Error("a sleep-forever.sh child process is still running after ctx cancellation")
+	}
+}
+
+// TestRunHooksConcurrentlyReportsProgress: OnHookDone is called once up
+// front with 0 (so a caller can show the total before anything
+// finishes), then once per hook as it finishes, counting up to the
+// total - the parallel counterpart of OnHookStart's per-hook index.
+func TestRunHooksConcurrentlyReportsProgress(t *testing.T) {
+	dir := t.TempDir()
+	a := writeScript(t, dir, "a.sh", "cat >/dev/null; true")
+	b := writeScript(t, dir, "b.sh", "cat >/dev/null; true")
+	c := Config{Stop: []Matcher{{Hooks: []Command{
+		{Type: "command", Command: a},
+		{Type: "command", Command: b},
+	}}}}
+	var mu sync.Mutex
+	var done []int
+	RunHooksConcurrently(RunOptions{
+		Config:  c,
+		Event:   Stop,
+		Payload: Payload{Cwd: dir},
+		OnHookDone: func(n int, cmds []Command) {
+			if len(cmds) != 2 {
+				t.Errorf("OnHookDone commands = %d, want 2", len(cmds))
+			}
+			mu.Lock()
+			done = append(done, n)
+			mu.Unlock()
+		},
+	})
+	if len(done) != 3 {
+		t.Fatalf("OnHookDone called %d times, want 3 (0, then once per hook)", len(done))
+	}
+	if done[0] != 0 {
+		t.Errorf("first OnHookDone call = %d, want 0", done[0])
+	}
+	if done[len(done)-1] != 2 {
+		t.Errorf("last OnHookDone call = %d, want 2 (both hooks done)", done[len(done)-1])
 	}
 }

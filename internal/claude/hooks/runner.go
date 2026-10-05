@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andrepato/harness/internal/execenv"
@@ -79,6 +80,14 @@ type Outcome struct {
 	// means the opposite (keep going).
 	Stopped    bool
 	StopReason string
+	// BlockReasons holds every hook's block reason, in the order the
+	// hooks finished. RunHooks (sequential) sets at most one - a block
+	// ends the chain, so nothing after it ever gets to contribute a
+	// second reason. RunHooksConcurrently can set several: its hooks run
+	// side by side, so one hook blocking does not stop another from
+	// finishing and reporting its own. Blocked still carries the first
+	// one, for callers that only check whether anything blocked at all.
+	BlockReasons []string
 }
 
 // Decision is a PreToolUse hook's permissionDecision short of "deny".
@@ -261,7 +270,14 @@ func runCommand(ctx context.Context, command, input string, timeoutSeconds int, 
 // hookSpecificOutput.permissionDecision: deny (block), ask or allow
 // (Outcome.Decision); then updatedInput (merge), additionalContext
 // (append).
-func interpret(out runOutput, outcome *Outcome, label string, event Event) {
+//
+// command is the hook's full, untruncated configured command, used only
+// for Stop and SubagentStop's exit-2 block reason, which names the
+// command the way Claude Code does ("[command]: stderr", with "No
+// stderr output" standing in for empty stderr) - the other events keep
+// kiln's own shorter fallback ("blocked by hook: <label>", label already
+// truncated by the caller) since nothing asked for parity there.
+func interpret(out runOutput, outcome *Outcome, label, command string, event Event) {
 	text := strings.TrimSpace(out.stdout)
 
 	if out.cancelled {
@@ -282,7 +298,12 @@ func interpret(out runOutput, outcome *Outcome, label string, event Event) {
 	// document.
 	if out.code == 2 {
 		reason := strings.TrimSpace(out.stderr)
-		if reason == "" {
+		if event == Stop || event == SubagentStop {
+			if reason == "" {
+				reason = "No stderr output"
+			}
+			reason = fmt.Sprintf("[%s]: %s", command, reason)
+		} else if reason == "" {
 			reason = fmt.Sprintf("blocked by hook: %s", label)
 		}
 		outcome.Blocked = &Blocked{Reason: reason}
@@ -400,7 +421,15 @@ func interpret(out runOutput, outcome *Outcome, label string, event Event) {
 			outcome.UpdatedInput[k] = v
 		}
 	}
-	if specific.AdditionalContext != "" {
+	// Stop and SubagentStop accept hookSpecificOutput.additionalContext on
+	// the wire but it has no effect: nothing downstream (stopVerdict,
+	// internal/cli/stophooks.go) reads Outcome.Context for either event.
+	// That matches Claude Code's observed behaviour: a Stop or
+	// SubagentStop hook's additionalContext never reaches the model there
+	// either. Its public hooks docs describe the field as continuing the
+	// conversation for these events too; the shipped behaviour does not,
+	// and kiln follows what ships.
+	if specific.AdditionalContext != "" && event != Stop && event != SubagentStop {
 		outcome.Context = append(outcome.Context, specific.AdditionalContext)
 	}
 }
@@ -432,7 +461,16 @@ type RunOptions struct {
 	// OnHookStart, if set, is called before each hook in the chain runs,
 	// with the hook's index and the whole matching chain, so a caller can
 	// show which hook is running (the busy row's "running stop hooks… 1/2").
+	// RunHooks only - RunHooksConcurrently has no "about to run" moment
+	// since every hook starts together, so it calls OnHookDone instead.
 	OnHookStart func(index int, commands []Command)
+	// OnHookDone, if set, is called by RunHooksConcurrently once before
+	// any hook starts (done=0, so a caller can show the total right
+	// away) and again each time a hook finishes, with how many have
+	// finished so far and the whole matching chain. RunHooks never calls
+	// it - its hooks finish one at a time in configuration order, which
+	// OnHookStart's index already reports.
+	OnHookDone func(done int, commands []Command)
 }
 
 // RunHooks runs every hook registered for an event, in configured order.
@@ -494,7 +532,7 @@ func RunHooks(opts RunOptions) Outcome {
 		// This hook's own decision, apart from the earlier hooks'.
 		prevDecision, prevReason := outcome.Decision, outcome.DecisionReason
 		outcome.Decision, outcome.DecisionReason = "", ""
-		interpret(out, &outcome, label, opts.Event)
+		interpret(out, &outcome, label, h.Command, opts.Event)
 		decided, decidedReason := outcome.Decision, outcome.DecisionReason
 		outcome.Decision, outcome.DecisionReason = prevDecision, prevReason
 		// An earlier hook's "allow" judged the input it was shown. A hook
@@ -518,6 +556,9 @@ func RunHooks(opts RunOptions) Outcome {
 		// and it outranks an earlier hook's allow or ask.
 		if outcome.Blocked != nil {
 			outcome.Decision, outcome.DecisionReason = "", ""
+			if len(outcome.BlockReasons) == 0 {
+				outcome.BlockReasons = []string{outcome.Blocked.Reason}
+			}
 			break
 		}
 		// A cancelled hook decided nothing, and ctx is now done for the
@@ -530,6 +571,126 @@ func RunHooks(opts RunOptions) Outcome {
 	}
 
 	return outcome
+}
+
+// RunHooksConcurrently runs every hook registered for an event at once,
+// each racing its own timeout, instead of RunHooks' one-after-another
+// chain. Wired for Stop and SubagentStop only (internal/cli/chat.go, via
+// stopVerdict): those are the only events where nothing rewrites what
+// another hook sees, so starting them together changes what a chain of
+// blocks does without changing what any one hook is handed.
+//
+// Combining, matching Claude Code: every hook that blocks contributes
+// its own reason (Outcome.BlockReasons, Blocked holding the first one);
+// a hook answering {"continue": false} always wins over every block,
+// because Stopped and StopReason are set independently of BlockReasons
+// and a Stop/SubagentStop caller checks Stopped first (see Outcome's
+// doc comment) - when more than one hook stops it, the last one to
+// finish names StopReason, there being no configuration order left to
+// prefer once hooks run side by side. Notices and the block/stop
+// results are combined in the order hooks finish, not configuration
+// order.
+//
+// Cancellation: ctx being cancelled kills every hook still running,
+// process group and all (each one's own runCommand call already reacts
+// to ctx.Done the same way a timeout does), and the combined Outcome is
+// simply Cancelled - whatever any hook decided before being killed is
+// discarded, since the caller asked to stop, not to hear verdicts from
+// whichever hooks happened to finish first.
+//
+// Every goroutine this starts has sent its result and returned before
+// RunHooksConcurrently does: none outlives the call.
+func RunHooksConcurrently(opts RunOptions) Outcome {
+	commands := HooksFor(opts.Config, opts.Event, opts.ToolName, opts.HasToolName)
+	if len(commands) == 0 {
+		return Outcome{}
+	}
+
+	ctx := opts.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	maxOutputBytes := opts.MaxOutputBytes
+	if maxOutputBytes <= 0 {
+		maxOutputBytes = MaxOutputBytes
+	}
+
+	payload := opts.Payload
+	payload.HookEventName = opts.Event
+	data, _ := json.Marshal(payload)
+	input := string(data)
+
+	if opts.OnHookDone != nil {
+		opts.OnHookDone(0, commands)
+	}
+
+	results := make(chan Outcome, len(commands))
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		finished int
+	)
+	wg.Add(len(commands))
+	for _, h := range commands {
+		h := h
+		go func() {
+			defer wg.Done()
+			timeout := h.Timeout
+			if timeout == 0 {
+				timeout = DefaultTimeoutSeconds
+			}
+			out := runCommand(ctx, h.Command, input, timeout, opts.Payload.Cwd, h.Env, maxOutputBytes)
+
+			label := h.Command
+			if len(label) > 60 {
+				label = label[:60]
+			}
+			var single Outcome
+			interpret(out, &single, label, h.Command, opts.Event)
+
+			mu.Lock()
+			finished++
+			n := finished
+			mu.Unlock()
+			if opts.OnHookDone != nil {
+				opts.OnHookDone(n, commands)
+			}
+			results <- single
+		}()
+	}
+
+	combined := Outcome{}
+	for range commands {
+		r := <-results
+		if opts.OnNotice != nil {
+			for _, n := range r.Notices {
+				opts.OnNotice(n)
+			}
+		}
+		combined.Notices = append(combined.Notices, r.Notices...)
+		combined.Context = append(combined.Context, r.Context...)
+		if r.Cancelled {
+			combined.Cancelled = true
+		}
+		if r.Stopped {
+			combined.Stopped, combined.StopReason = true, r.StopReason
+		}
+		if r.Blocked != nil {
+			combined.BlockReasons = append(combined.BlockReasons, r.Blocked.Reason)
+			if combined.Blocked == nil {
+				combined.Blocked = r.Blocked
+			}
+		}
+	}
+	wg.Wait()
+
+	if ctx.Err() != nil {
+		// The caller asked every hook to stop: whatever any of them
+		// decided before being killed does not matter any more, only
+		// that the chain is done.
+		return Outcome{Cancelled: true}
+	}
+	return combined
 }
 
 // changedInput reports whether updated (the rewrites so far, merged over

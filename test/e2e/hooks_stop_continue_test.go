@@ -30,7 +30,8 @@ func TestHooks_StopBlock_ContinuesTheTurn(t *testing.T) {
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
 	payloads := filepath.Join(t.TempDir(), "stop.jsonl")
-	writeHookSettings(t, proj, "Stop", "", fmt.Sprintf("HARNESS_TEST_PAYLOAD_FILE=%s %s", payloads, hookScript(t, "stop-block-once.sh")))
+	command := fmt.Sprintf("HARNESS_TEST_PAYLOAD_FILE=%s %s", payloads, hookScript(t, "stop-block-once.sh"))
+	writeHookSettings(t, proj, "Stop", "", command)
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "hello", "--output-format", "text")
 	if res.Code != 0 {
@@ -43,8 +44,11 @@ func TestHooks_StopBlock_ContinuesTheTurn(t *testing.T) {
 	if !strings.Contains(string(reqs[1].Messages), "run the tests first") {
 		t.Errorf("second request = %s, want the hook's reason in it", reqs[1].Messages)
 	}
-	if !strings.Contains(res.Stderr, "Stop hook asked to continue: run the tests first") {
-		t.Errorf("stderr = %q, want the hook's reason shown to the user", res.Stderr)
+	// The exit-2 reason is prefixed with the command, as Claude Code's own
+	// hook runner does - kiln used to send the hook's stderr alone.
+	want := fmt.Sprintf("Stop hook asked to continue: [%s]: run the tests first", command)
+	if !strings.Contains(res.Stderr, want) {
+		t.Errorf("stderr = %q, want %q", res.Stderr, want)
 	}
 	if !strings.Contains(res.Stdout, "second reply after the feedback") {
 		t.Errorf("stdout = %q, want the reply written after the feedback", res.Stdout)
@@ -101,6 +105,92 @@ func TestHooks_StopBlock_JSONDecisionContinues(t *testing.T) {
 			t.Errorf("stderr = %q, want the stopReason shown", res.Stderr)
 		}
 	})
+}
+
+// TestHooks_StopBlock_TwoHooksBothContributeTheirReason: two Stop hooks
+// that each block with a different reason run together
+// (RunHooksConcurrently), and both reasons reach the model and the user -
+// not just the first one's, the way a sequential chain would only ever
+// report.
+func TestHooks_StopBlock_TwoHooksBothContributeTheirReason(t *testing.T) {
+	addr, srv := startFaux(t, "model: faux-1\nsteps:\n  - text: \"first reply\"\n    end_turn: true\n  - text: \"second reply after the feedback\"\n    end_turn: true\n")
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	dir := t.TempDir()
+	// Each hook blocks only once - checking stop_hook_active, exactly as
+	// stop-block-once.sh does - so the continued turn's own Stop call lets
+	// both hooks pass and the run ends, instead of looping forever.
+	first := filepath.Join(dir, "first.sh")
+	firstBody := "#!/bin/bash\ninput=$(cat)\ncase \"$input\" in *'\"stop_hook_active\":true'*) exit 0;; esac\necho \"lint failed\" >&2\nexit 2\n"
+	if err := os.WriteFile(first, []byte(firstBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	second := filepath.Join(dir, "second.sh")
+	secondBody := "#!/bin/bash\ninput=$(cat)\ncase \"$input\" in *'\"stop_hook_active\":true'*) exit 0;; esac\necho '{\"decision\":\"block\",\"reason\":\"coverage dropped\"}'\n"
+	if err := os.WriteFile(second, []byte(secondBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gapWriteHooks(t, proj, "Stop", "", first, second)
+
+	res := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "hello", "--output-format", "text")
+	if res.Code != 0 {
+		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
+	}
+	reqs := srv.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("faux recorded %d requests, want 2: both blocks must give the model one more turn, not one each", len(reqs))
+	}
+	secondRequest := string(reqs[1].Messages)
+	if !strings.Contains(secondRequest, fmt.Sprintf("[%s]: lint failed", first)) {
+		t.Errorf("second request = %s, want the first hook's reason in it", secondRequest)
+	}
+	if !strings.Contains(secondRequest, "coverage dropped") {
+		t.Errorf("second request = %s, want the second hook's reason in it", secondRequest)
+	}
+	if !strings.Contains(res.Stderr, fmt.Sprintf("Stop hook asked to continue: [%s]: lint failed", first)) {
+		t.Errorf("stderr = %q, want the first hook's reason shown to the user", res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "Stop hook asked to continue: coverage dropped") {
+		t.Errorf("stderr = %q, want the second hook's reason shown to the user", res.Stderr)
+	}
+}
+
+// TestHooks_StopBlock_AdditionalContextNeverReachesTheModel: a Stop hook
+// can combine a block with hookSpecificOutput.additionalContext in the
+// same JSON reply. The public hooks docs describe additionalContext as
+// continuing the conversation with extra context; in the shipped Claude
+// Code it never reaches the model, docs notwithstanding - kiln follows
+// what ships. Only the block's own reason must reach the model.
+func TestHooks_StopBlock_AdditionalContextNeverReachesTheModel(t *testing.T) {
+	addr, srv := startFaux(t, "model: faux-1\nsteps:\n  - text: \"first reply\"\n    end_turn: true\n  - text: \"second reply after the feedback\"\n    end_turn: true\n")
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	hook := filepath.Join(t.TempDir(), "block-with-context.sh")
+	body := "#!/bin/bash\ninput=$(cat)\ncase \"$input\" in *'\"stop_hook_active\":true'*) exit 0;; esac\n" +
+		`echo '{"decision":"block","reason":"coverage dropped","hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"internal build id 7f3a9c"}}'` + "\n"
+	if err := os.WriteFile(hook, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeHookSettings(t, proj, "Stop", "", hook)
+
+	res := runHarness(t, proj, baseEnv(home, sessDir, addr), "-p", "hello", "--output-format", "text")
+	if res.Code != 0 {
+		t.Fatalf("exit code %d, stderr=%s", res.Code, res.Stderr)
+	}
+	reqs := srv.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("faux recorded %d requests, want 2", len(reqs))
+	}
+	secondRequest := string(reqs[1].Messages)
+	if !strings.Contains(secondRequest, "coverage dropped") {
+		t.Errorf("second request = %s, want the block's own reason in it", secondRequest)
+	}
+	if strings.Contains(secondRequest, "internal build id 7f3a9c") {
+		t.Errorf("second request = %s, must not carry the hook's additionalContext", secondRequest)
+	}
+	if strings.Contains(res.Stderr, "internal build id 7f3a9c") {
+		t.Errorf("stderr = %q, must not show the hook's additionalContext", res.Stderr)
+	}
 }
 
 // TestHooks_StopBlock_AlwaysBlockingIsBoundedByMaxTurns: a Stop hook that
