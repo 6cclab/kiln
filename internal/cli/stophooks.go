@@ -14,9 +14,19 @@ import (
 //
 //   - a hook killed by Esc decided nothing, and the run ends as
 //     interrupted;
-//   - {"continue": false} ends the run, with its stopReason shown;
-//   - a block (exit 2, or "decision": "block") keeps the run going: the
-//     reason is shown, and sent to the model as a user message.
+//   - {"continue": false} from any hook ends the run, with its
+//     stopReason shown, regardless of what any other hook in the same
+//     chain decided;
+//   - a block (exit 2, or "decision": "block") keeps the run going: its
+//     reason is shown, and sent to the model as a user message. The
+//     hooks run together (RunHooksConcurrently), so there can be
+//     several - every one of them is shown and sent, not just the
+//     first, as a single continuation carrying every reason in turn
+//     (kiln commits one user message per continuation; Claude Code
+//     gives the model a separate message per blocking hook, which this
+//     reaches the same place by concatenating instead, since splitting
+//     one continuation into several commits is not a shape turn.go's
+//     commitStopContinuation supports).
 func stopVerdict(event claudehooks.Event, outcome claudehooks.Outcome, notice func(string)) harness.StopVerdict {
 	switch {
 	case outcome.Cancelled:
@@ -26,12 +36,14 @@ func stopVerdict(event claudehooks.Event, outcome claudehooks.Outcome, notice fu
 			notice(string(event) + " hook stopped the turn: " + outcome.StopReason)
 		}
 		return harness.StopVerdict{}
-	case outcome.Blocked != nil:
-		reason := outcome.Blocked.Reason
-		notice(string(event) + " hook asked to continue: " + reason)
+	case len(outcome.BlockReasons) > 0:
+		reasons := outcome.BlockReasons
+		for _, reason := range reasons {
+			notice(string(event) + " hook asked to continue: " + reason)
+		}
 		return harness.StopVerdict{
 			Continue: true,
-			Message:  string(event) + " hook asked to continue:\n" + reason,
+			Message:  string(event) + " hook asked to continue:\n" + strings.Join(reasons, "\n\n"),
 			Source:   string(event),
 		}
 	}
