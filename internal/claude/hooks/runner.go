@@ -29,6 +29,8 @@ type Payload struct {
 	// of a Stop hook. Always sent for those events, so a pointer, not a
 	// bool with omitempty.
 	StopHookActive *bool `json:"stop_hook_active,omitempty"`
+	// Stop / SubagentStop: the text of the reply that ended the turn.
+	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
 	// Notification: the text shown to the user and its kind
 	// ("permission_prompt").
 	Message          string `json:"message,omitempty"`
@@ -70,6 +72,13 @@ type Outcome struct {
 	// guarding (GuardToolCall turns it into an error, so the tool does not
 	// run - see its doc comment).
 	Cancelled bool
+	// Stopped is set when a hook answered {"continue": false}: stop
+	// everything, with StopReason (its stopReason) for the user. Blocked
+	// is set too, so an event that reads only Blocked still refuses; a
+	// Stop hook's caller reads Stopped first, because for Stop a block
+	// means the opposite (keep going).
+	Stopped    bool
+	StopReason string
 }
 
 // Decision is a PreToolUse hook's permissionDecision short of "deny".
@@ -113,7 +122,8 @@ type jsonOutput struct {
 	// Decision and Reason are PreToolUse's deprecated top-level form:
 	// "approve" is "allow" and "block" is "deny" (Claude Code's hooks
 	// reference). Other events give "decision" other meanings, so it is
-	// read for PreToolUse only.
+	// read for PreToolUse, and for Stop and SubagentStop, where "block"
+	// keeps the turn going.
 	Decision string `json:"decision,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 }
@@ -316,6 +326,18 @@ func interpret(out runOutput, outcome *Outcome, label string, event Event) {
 		reason := parsed.StopReason
 		if reason == "" {
 			reason = fmt.Sprintf("stopped by hook: %s", label)
+		}
+		outcome.Blocked = &Blocked{Reason: reason}
+		outcome.Stopped, outcome.StopReason = true, parsed.StopReason
+		return
+	}
+
+	// Stop and SubagentStop give "decision": "block" its own meaning: do
+	// not stop, keep working, with reason telling the model why.
+	if (event == Stop || event == SubagentStop) && parsed.Decision == "block" {
+		reason := strings.TrimSpace(parsed.Reason)
+		if reason == "" {
+			reason = fmt.Sprintf("blocked by hook: %s", label)
 		}
 		outcome.Blocked = &Blocked{Reason: reason}
 		return
