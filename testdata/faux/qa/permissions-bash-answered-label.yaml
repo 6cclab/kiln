@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "sh -c 'sleep 4; echo slow done'"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "The slow command finished."
+        usage: {input: 150, output: 15}

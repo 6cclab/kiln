@@ -1,0 +1,17 @@
+# Once a permission prompt is answered, the busy row stops saying "Waiting
+# for approval": the approved command runs for 4s and the row names it.
+@faux testdata/faux/qa/permissions-bash-answered-label.yaml
+
+WAITFOR /describe a task/ 20
+TYPE run the slow thing
+KEY enter
+WAITFOR /Allow kiln to run this command\?/ 20
+EXPECT /Waiting for approval/
+KEY 1
+WAITFOR /Running/ 3
+SHOT running-after-approval
+EXPECT_NOT /Waiting for approval/
+EXPECT_NOT /Allow kiln to run this command\?/
+WAITFOR /The slow command finished\./ 20
+SHOT finished
+EXPECT_NOT /panic|goroutine/
