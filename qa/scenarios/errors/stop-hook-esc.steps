@@ -1,5 +1,5 @@
 # Esc during a slow Stop hook kills it: Stop runs while the turn is still
-# live, on its context (internal/cli/chat.go, OnBeforeRunEnd), so the busy
+# live, on its context (harness OnBeforeStop, wired in internal/cli/chat.go), so the busy
 # row stays up and Esc reaches it, as in Claude Code. Before, the hook ran
 # after the run had ended and Esc did nothing.
 @faux testdata/faux/qa/stop-hook-esc.yaml

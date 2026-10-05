@@ -79,7 +79,10 @@ Starting from a user prompt in the TUI or `-p` mode:
 7. **Assistant entry committed.** `drive` writes the assistant
    `session.Entry` and a `UsageWrite`, advances the branch tip, and emits
    `EventEntryAdded`/`EventUsage`. No tool calls ends the operation here
-   (`finishCompleted`).
+   (`finishCompleted`), unless something is queued (`drainInbox`) or a
+   `Hooks.OnBeforeStop` handler (the Stop hook) answers Continue: its
+   message is committed as a user entry (`msg.UserMessage.KilnHook` names
+   the hook) and the loop asks the model again, in the same operation.
 8. **Tool call → `before_tool` hook → permission gate → execution → `after_tool`.**
    `Lane.beginTool` first runs `Hooks.OnBeforeTool` (the CLI wires this to
    `hooks.GuardToolCall`, running `.claude/settings.json` `PreToolUse` hooks
@@ -458,9 +461,11 @@ reading is fine here, not read anything on this machine."
 **Hook events** (`internal/claude/hooks`): `PreToolUse`, `PostToolUse`,
 `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `SubagentStop`,
 `Notification`, `PreCompact`. All nine fire: `SessionStart`, `SessionEnd`,
-`UserPromptSubmit`, `Stop` (a completed run; Esc cancels it), `PreCompact` (compaction start) and
-`SubagentStop` (once per completed subagent run) are wired in
-`internal/cli/chat.go`; `Notification` fires on the TUI's permission prompt
+`UserPromptSubmit`, `Stop` (a turn about to end its run; Esc cancels it, a
+block continues the run), `PreCompact` (compaction start) and
+`SubagentStop` (the same, for each dispatched subagent's run) are wired in
+`internal/cli/chat.go`, Stop and SubagentStop through the harness's
+`Hooks.OnBeforeStop`; `Notification` fires on the TUI's permission prompt
 (`internal/cli/tui.go`). `hooks.GuardToolCall` composes `PreToolUse`
 with the permission gate by running hooks *before* `Check`: a hook may
 rewrite the command's arguments, and the gate then judges what will

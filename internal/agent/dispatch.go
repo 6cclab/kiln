@@ -91,12 +91,17 @@ type Dispatcher struct {
 	// created, alongside the parent's.
 	SessionsRoot string
 	// OnSubagentStop, if set, runs once when a dispatched subagent's run
-	// has ended, however it ended. It carries the subagent's own session so
-	// the SubagentStop hook can name its transcript, the dispatching tool
-	// call's context (cancelled when the user interrupts the parent turn)
-	// and the run's status (harness.StatusCompleted, StatusAborted, ...),
-	// so a caller can run the hook only for a run that completed.
+	// has ended, however it ended (the caller adds its usage). It carries
+	// the subagent's own session, the dispatching tool call's context and
+	// the run's status (harness.StatusCompleted, StatusAborted, ...). The
+	// SubagentStop hook itself runs earlier, from BeforeSubagentStop, while
+	// it can still keep the subagent working.
 	OnSubagentStop func(ctx context.Context, agentName string, sub *Started, status string)
+	// BeforeSubagentStop, if set, is installed as the subagent's own
+	// harness OnBeforeStop handler: it runs when the subagent's turn is
+	// about to end its run, and may keep the subagent working (the
+	// SubagentStop hook). It runs on the subagent run's context.
+	BeforeSubagentStop func(ctx context.Context, agentName string, sub *Started, info harness.StopInfo) harness.StopVerdict
 	// Env is the filesystem/shell context the subagent's built-in tools
 	// run against; its Cwd anchors the subagent's session too.
 	Env *execenv.Env
@@ -258,16 +263,17 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	var extraTools []*tool.Tool
 	if allowTask {
 		child = &Dispatcher{
-			Registry:       d.Registry,
-			Gate:           d.Gate,
-			Agents:         d.Agents,
-			Roles:          d.Roles,
-			SessionsRoot:   d.SessionsRoot,
-			Env:            d.Env,
-			OnEvent:        d.OnEvent,
-			OnSubagentStop: d.OnSubagentStop,
-			UserHistory:    d.UserHistory,
-			Depth:          depth,
+			Registry:           d.Registry,
+			Gate:               d.Gate,
+			Agents:             d.Agents,
+			Roles:              d.Roles,
+			SessionsRoot:       d.SessionsRoot,
+			Env:                d.Env,
+			OnEvent:            d.OnEvent,
+			OnSubagentStop:     d.OnSubagentStop,
+			BeforeSubagentStop: d.BeforeSubagentStop,
+			UserHistory:        d.UserHistory,
+			Depth:              depth,
 		}
 		extraTools = append(extraTools, tools.TaskTool(adaptDispatch(child.Dispatch), d.Agents, d.Roles, resolved.Tier))
 	}
@@ -334,6 +340,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 				return harness.BeforeToolResult{Block: &harness.ToolBlock{Reason: blocked.Reason}}, nil
 			}
 			return harness.BeforeToolResult{}, nil
+		})
+	}
+
+	if d.BeforeSubagentStop != nil {
+		before := d.BeforeSubagentStop
+		started.Harness.Hooks().OnBeforeStop(func(ctx context.Context, info harness.StopInfo) (harness.StopVerdict, error) {
+			return before(ctx, def.Name, started, info), nil
 		})
 	}
 

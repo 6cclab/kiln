@@ -292,10 +292,16 @@ overridable per-hook via `timeout` in settings.json.
 - **`rewrote <tool>: <primary arg>`** notice (file:325-331) — a `PreToolUse`
   hook returned `updatedInput`; the gate then checks the merged args.
 
-- **`Stop hook asked to continue: <reason>`** (`internal/cli/chat.go`) — a
-  `Stop` hook blocked when a run completed. Reported to you; kiln does **not** re-prompt
-  the model on it (confirmed: `internal/cli/chat.go` only calls
-  `notice(...)`, never re-drives the turn).
+- **`Stop hook asked to continue: <reason>`** (`internal/cli/stophooks.go`)
+  — a `Stop` hook blocked (exit 2, or `"decision": "block"`) when the turn
+  was about to end. As in Claude Code, the turn goes on: the reason is sent
+  to the model and it replies again (`SubagentStop hook asked to continue`
+  is the same for a subagent). The hook's next call has
+  `"stop_hook_active": true`; a hook that blocks whatever that says keeps
+  the turn going until you press Esc (or, in `-p`, until `--max-turns`).
+
+- **`Stop hook stopped the turn: <stopReason>`** — a `Stop` hook answered
+  `{"continue": false}`: the turn ends there.
 
 ## Context and compaction
 

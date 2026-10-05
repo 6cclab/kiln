@@ -328,6 +328,12 @@ type UserMessage struct {
 	// for a message no user typed (a subagent's delegated task, kiln's own
 	// follow-ups) and in sessions written before it existed.
 	KilnTyped string `json:"kilnTyped,omitempty"`
+	// KilnHook names the hook event (Stop, SubagentStop) whose feedback
+	// this message carries, when a hook kept the turn going: the model
+	// reads it as a user message, but no user wrote it, so a replay shows
+	// it as a hook note rather than as something the user said. kiln's own
+	// field, like KilnTyped; never sent to a provider.
+	KilnHook  string `json:"kilnHook,omitempty"`
 	Role      Role   `json:"role"`
 	Timestamp int64  `json:"timestamp"`
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/permission"
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/session/jsonl"
@@ -772,4 +773,38 @@ func TestDispatchOnSubagentStopReportsStatusAndContext(t *testing.T) {
 			t.Fatal("an interrupted subagent run was reported as completed")
 		}
 	})
+}
+
+// BeforeSubagentStop runs as the subagent's own stop hook: a Continue
+// verdict keeps the subagent working (Claude Code's SubagentStop exit 2),
+// so the parent gets the reply written after the feedback, and the hook
+// sees stop_hook_active on the call that follows.
+func TestDispatchBeforeSubagentStopContinuesTheSubagent(t *testing.T) {
+	d, _, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - text: \"draft answer\"\n    end_turn: true\n  - text: \"checked answer\"\n    end_turn: true\n", nil)
+	var calls []harness.StopInfo
+	var names []string
+	d.BeforeSubagentStop = func(_ context.Context, agentName string, sub *Started, info harness.StopInfo) harness.StopVerdict {
+		calls = append(calls, info)
+		names = append(names, agentName)
+		if sub == nil {
+			t.Error("BeforeSubagentStop got no subagent session")
+		}
+		if info.StopHookActive {
+			return harness.StopVerdict{}
+		}
+		return harness.StopVerdict{Continue: true, Message: "SubagentStop hook asked to continue:\ncheck it", Source: "SubagentStop"}
+	}
+	result, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "general-purpose", Description: "d", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Text != "checked answer" {
+		t.Fatalf("result = %q, want the reply after the hook's feedback", result.Text)
+	}
+	if len(calls) != 2 || calls[0].StopHookActive || !calls[1].StopHookActive {
+		t.Fatalf("calls = %+v, want two, stop_hook_active false then true", calls)
+	}
+	if names[0] != "general-purpose" {
+		t.Errorf("agent name = %q", names[0])
+	}
 }

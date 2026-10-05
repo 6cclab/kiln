@@ -86,6 +86,13 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 		}
 		switch m := e.Message.(type) {
 		case msg.UserMessage:
+			if m.KilnHook != "" {
+				// A hook's feedback that kept the turn going: no user
+				// wrote it, so it is not a "you" block. The live turn
+				// showed it as a hook note, which replays from the
+				// synthetics like any other note.
+				continue
+			}
 			if text := textOf(m.Content); strings.TrimSpace(text) != "" {
 				flush()
 				out = append(out, RenderUserMessage(text, width)...)

@@ -1209,44 +1209,36 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// shows the dialog and runs them, as Claude Code does there.
 	hooks := newTrustedHooks(hookConfig, args.Print || trustedAtStart)
 
-	// The four events the TS parsed but never fired. Stop runs when the
-	// parent's run completes; a blocking Stop hook is reported to the user,
-	// not fed back into the model (this port does not re-prompt on Stop).
-	// PreCompact runs when the harness starts compacting; the harness does
-	// not tell us whether /compact or the threshold triggered it, so the
-	// trigger is always "auto". SubagentStop runs from the dispatcher when
-	// a subagent's run completes. Notification is wired where the
-	// permission prompt is shown (internal/cli/tui.go).
+	// The four events the TS parsed but never fired. PreCompact runs when
+	// the harness starts compacting; the harness does not tell us whether
+	// /compact or the threshold triggered it, so the trigger is always
+	// "auto". Notification is wired where the permission prompt is shown
+	// (internal/cli/tui.go).
 	//
-	// Stop and SubagentStop match Claude Code: they run only for a run that
-	// completed, never for one the user interrupted (or that failed), and
-	// they run while the turn is still live, on its context, so Esc kills
-	// a slow Stop hook the way it kills a PreToolUse hook. Stop therefore
-	// hangs off OnBeforeRunEnd (the lane can still be aborted there), not
-	// EventRunEnd (after the run, when Esc no longer reaches it).
-	stopHookActive := false
-	started.Harness.Hooks().OnBeforeRunEnd(func(ctx context.Context, status string) error {
-		if status != harness.StatusCompleted {
-			return nil
-		}
+	// Stop and SubagentStop work as in Claude Code. They run when a turn is
+	// about to end its run (harness OnBeforeStop: the model replied with no
+	// tool calls), never for one the user interrupted or that failed, and
+	// on the run's context, so Esc kills a slow one and its verdict is
+	// discarded. A hook that blocks (exit 2, or "decision": "block") keeps
+	// the run going: its reason goes to the model as a user message and the
+	// model is asked again, with stop_hook_active true on the hook calls
+	// that follow, for the rest of that run. {"continue": false} ends it.
+	started.Harness.Hooks().OnBeforeStop(func(ctx context.Context, info harness.StopInfo) (harness.StopVerdict, error) {
+		active := info.StopHookActive
 		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
 			Ctx:    ctx,
 			Config: hooks.get(),
 			Event:  claudehooks.Stop,
 			Payload: claudehooks.Payload{
-				SessionID:      sessionID,
-				TranscriptPath: transcriptPath,
-				Cwd:            cwd,
-				StopHookActive: &stopHookActive,
+				SessionID:            sessionID,
+				TranscriptPath:       transcriptPath,
+				Cwd:                  cwd,
+				StopHookActive:       &active,
+				LastAssistantMessage: lastReplyText(info.Last),
 			},
 			OnNotice: notice,
 		})
-		// An interrupted Stop hook's verdict is discarded, as Claude Code
-		// does: the user stopped the turn, so nothing continues it.
-		if outcome.Blocked != nil && !outcome.Cancelled {
-			notice("Stop hook asked to continue: " + outcome.Blocked.Reason)
-		}
-		return nil
+		return stopVerdict(claudehooks.Stop, outcome, notice), nil
 	})
 	started.Harness.Events().On(harness.EventCompactionStart, func(ev harness.Event) {
 		claudehooks.RunHooks(claudehooks.RunOptions{
@@ -1264,27 +1256,31 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			OnNotice: notice,
 		})
 	})
-	dispatcher.OnSubagentStop = func(ctx context.Context, agentName string, sub *agent.Started, status string) {
+	dispatcher.OnSubagentStop = func(_ context.Context, _ string, sub *agent.Started, _ string) {
+		if sub != nil {
+			addUsage(sub.Model.Provider, sub.Model.ID, sub.Harness.Stats().Usage)
+		}
+	}
+	dispatcher.BeforeSubagentStop = func(ctx context.Context, _ string, sub *agent.Started, info harness.StopInfo) harness.StopVerdict {
 		subSession, subTranscript := sessionID, transcriptPath
 		if sub != nil {
 			subSession, subTranscript = sub.SessionID, sub.TranscriptPath
-			addUsage(sub.Model.Provider, sub.Model.ID, sub.Harness.Stats().Usage)
 		}
-		if status != harness.StatusCompleted {
-			return
-		}
-		claudehooks.RunHooks(claudehooks.RunOptions{
+		active := info.StopHookActive
+		outcome := claudehooks.RunHooks(claudehooks.RunOptions{
 			Ctx:    ctx,
 			Config: hooks.get(),
 			Event:  claudehooks.SubagentStop,
 			Payload: claudehooks.Payload{
-				SessionID:      subSession,
-				TranscriptPath: subTranscript,
-				Cwd:            cwd,
-				StopHookActive: &stopHookActive,
+				SessionID:            subSession,
+				TranscriptPath:       subTranscript,
+				Cwd:                  cwd,
+				StopHookActive:       &active,
+				LastAssistantMessage: lastReplyText(info.Last),
 			},
 			OnNotice: notice,
 		})
+		return stopVerdict(claudehooks.SubagentStop, outcome, notice)
 	}
 
 	registry := buildCommandRegistry(registryDeps{

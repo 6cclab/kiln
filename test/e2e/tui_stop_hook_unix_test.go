@@ -50,6 +50,10 @@ func TestTUI_Esc_KillsASlowStopHook(t *testing.T) {
 	if strings.Contains(strings.Join(s.Rows(), "\n"), "Stop hook asked to continue") {
 		t.Fatal("an interrupted Stop hook's verdict was reported")
 	}
+	// As in Claude Code, Esc during the Stop hook interrupts the turn.
+	if err := s.WaitFor("Interrupted. Tell kiln what to do instead.", 5*time.Second); err != nil {
+		t.Fatalf("the turn did not end as interrupted: %v", err)
+	}
 }
 
 // TestTUI_StopHook_SkippedWhenTheTurnIsInterrupted: as in Claude Code, a
@@ -92,5 +96,58 @@ func waitPidFile(t *testing.T, path string, timeout time.Duration) int {
 			t.Fatalf("the Stop hook never started (no pid in %s)", path)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// TestTUI_StopHook_BlockContinuesTheTurn: in the TUI too, a Stop hook that
+// exits 2 keeps the turn going, as in Claude Code: the reason is shown,
+// the model replies again, and the turn then ends normally.
+func TestTUI_StopHook_BlockContinuesTheTurn(t *testing.T) {
+	script := "model: faux-1\nsteps:\n  - text: \"First reply here.\"\n    end_turn: true\n  - text: \"Second reply after the feedback.\"\n    end_turn: true\n"
+	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	writeHookSettings(t, proj, "Stop", "", hookScript(t, "stop-block-once.sh"))
+
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr)
+	waitReady(t, s)
+	s.Send("finish up")
+	s.SendKey("enter")
+	if err := s.WaitFor("Second reply after the feedback.", 10*time.Second); err != nil {
+		t.Fatalf("the model never replied after the Stop hook's feedback: %v", err)
+	}
+	if err := s.WaitFor("Stop hook asked to continue: run the tests first", 5*time.Second); err != nil {
+		t.Fatalf("the hook's reason was not shown: %v", err)
+	}
+	waitTurnSettled(t, s)
+	if n := len(requests()); n != 2 {
+		t.Fatalf("%d model requests, want 2", n)
+	}
+	if screen := strings.Join(s.Rows(), "\n"); strings.Contains(screen, "Interrupted") {
+		t.Fatalf("the continued turn ended as interrupted:\n%s", screen)
+	}
+}
+
+// TestTUI_Esc_InterruptsAContinuedTurn: the lane stays busy through a Stop
+// hook's continuation, so Esc interrupts the continued reply like any
+// other, and nothing continues it again.
+func TestTUI_Esc_InterruptsAContinuedTurn(t *testing.T) {
+	script := "model: faux-1\nsteps:\n  - text: \"First reply here.\"\n    end_turn: true\n  - chunk_delay: 60ms\n    text: \"" +
+		strings.Repeat("Slow words keep streaming in. ", 30) + "\"\n    end_turn: true\n"
+	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	writeHookSettings(t, proj, "Stop", "", hookScript(t, "block-exit2.sh"))
+
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr)
+	waitReady(t, s)
+	s.Send("finish up")
+	s.SendKey("enter")
+	if err := s.WaitFor("Slow words keep streaming", 10*time.Second); err != nil {
+		t.Fatalf("the continued reply never started: %v", err)
+	}
+	s.SendKey("esc")
+	if err := s.WaitFor("Interrupted. Tell kiln what to do instead.", 5*time.Second); err != nil {
+		t.Fatalf("never saw the interrupted note: %v", err)
+	}
+	time.Sleep(time.Second)
+	if n := len(requests()); n != 2 {
+		t.Fatalf("%d model requests, want 2: an interrupted turn must not be continued", n)
 	}
 }
