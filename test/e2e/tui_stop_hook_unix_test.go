@@ -173,10 +173,18 @@ func TestTUI_StopHook_BlockContinuesTheTurn(t *testing.T) {
 		t.Fatalf("the bracketed command form was not shown: %v", err)
 	}
 	screen := strings.Join(s.Rows(), "\n")
-	if !strings.Contains(screen, "stop-block-once.sh") {
+	// Rows trimmed and joined with nothing between them: a wrap can split
+	// the command anywhere, including at a hyphen inside its file name.
+	// The reason is prose, so a wrap there drops a space: join with one.
+	var unwrapped, spaced strings.Builder
+	for _, row := range s.Rows() {
+		unwrapped.WriteString(strings.TrimSpace(row))
+		spaced.WriteString(strings.TrimSpace(row) + " ")
+	}
+	if !strings.Contains(unwrapped.String(), "stop-block-once.sh]:") {
 		t.Errorf("screen = %q, want the hook's command named in the reason", screen)
 	}
-	if !strings.Contains(screen, "run the tests first") {
+	if !strings.Contains(spaced.String(), "run the tests first") {
 		t.Errorf("screen = %q, want the hook's reason shown to the user", screen)
 	}
 	waitTurnSettled(t, s)
