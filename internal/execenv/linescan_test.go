@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -91,30 +92,44 @@ func (r infiniteReader) Read(p []byte) (int, error) {
 // never more than maxBytes, proving the cap holds regardless of how long
 // the real line actually is.
 func TestLineScannerHugeSingleLineStaysCapped(t *testing.T) {
+	// The property under test is memory, not speed: one 50MB line must be
+	// drained for its length but never held past the cap. The input is
+	// itself bounded (LimitReader), so a regression costs at most 50MB and
+	// is caught by the allocation check below, not by a wall-clock deadline
+	// that the race detector can blow on a slow CI runner.
 	const lineLen = 50 << 20
-	within(t, "scanning one 50MB line", func() {
-		r := io.LimitReader(infiniteReader{b: 'a'}, lineLen)
-		s := NewLineScanner(r, DefaultMaxBytes)
-		l, ok, err := s.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !ok {
-			t.Fatal("Next returned no line")
-		}
-		if !l.Oversize {
-			t.Error("want Oversize for a line far longer than maxBytes")
-		}
-		if l.ByteLen != lineLen {
-			t.Errorf("ByteLen = %d, want %d", l.ByteLen, lineLen)
-		}
-		if len(l.Content) != DefaultMaxBytes {
-			t.Errorf("len(Content) = %d, want the %d-byte cap", len(l.Content), DefaultMaxBytes)
-		}
-		if _, ok, err := s.Next(); ok || err != nil {
-			t.Errorf("second Next: ok=%v err=%v, want ok=false err=nil (reader exhausted)", ok, err)
-		}
-	})
+	r := io.LimitReader(infiniteReader{b: 'a'}, lineLen)
+	s := NewLineScanner(r, DefaultMaxBytes)
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	l, ok, err := s.Next()
+	runtime.ReadMemStats(&after)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("Next returned no line")
+	}
+	if !l.Oversize {
+		t.Error("want Oversize for a line far longer than maxBytes")
+	}
+	if l.ByteLen != lineLen {
+		t.Errorf("ByteLen = %d, want %d", l.ByteLen, lineLen)
+	}
+	if len(l.Content) != DefaultMaxBytes {
+		t.Errorf("len(Content) = %d, want the %d-byte cap", len(l.Content), DefaultMaxBytes)
+	}
+	// Holding the whole line would allocate at least lineLen bytes; a capped
+	// scan allocates a small multiple of the cap plus read buffers.
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > lineLen/8 {
+		t.Errorf("scanning one %dMB line allocated %d bytes; want well under %d (the line must not be held whole)", lineLen>>20, alloc, lineLen/8)
+	}
+	if _, ok, err := s.Next(); ok || err != nil {
+		t.Errorf("second Next: ok=%v err=%v, want ok=false err=nil (reader exhausted)", ok, err)
+	}
 }
 
 // within fails the test unless fn returns within the deadline — mirrors
@@ -129,8 +144,8 @@ func within(t *testing.T, what string, fn func()) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		fmt.Fprintf(os.Stderr, "--- FAIL: %s: %s did not return within half a second; exiting so the read cannot keep allocating\n", t.Name(), what)
+	case <-time.After(10 * time.Second):
+		fmt.Fprintf(os.Stderr, "--- FAIL: %s: %s did not return within ten seconds; exiting so the read cannot keep allocating\n", t.Name(), what)
 		os.Exit(1)
 	}
 }
