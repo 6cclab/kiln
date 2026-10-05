@@ -870,6 +870,10 @@ type MsgRetryStart struct{ Attempt int }
 // so the busy line can show " · N queued" (spinner.go's SetQueueLen).
 type MsgQueue struct{ Len int }
 
+// MsgHookActivity carries what a running Stop/SubagentStop hook chain is
+// doing, for the busy line's first muted segment; "" clears it.
+type MsgHookActivity struct{ Text string }
+
 // --- wiring the harness's event bus -------------------------------------
 
 // turnState is the live state app.ts kept as closures over runApp's local
@@ -1709,6 +1713,13 @@ func (b *Bridge) HookNotice(message string) {
 		return
 	}
 	b.CommitNote("hook: " + message)
+}
+
+// HookActivity sets what the busy row says a running hook chain is doing
+// ("running stop hook"); "" clears it. It goes through the commit queue
+// (SendAsync), so a hook's goroutine never waits on Update.
+func (b *Bridge) HookActivity(text string) {
+	b.SendAsync(MsgHookActivity{Text: text})
 }
 
 // ModelSwitch renders the model-switch transcript line, matching app.ts's

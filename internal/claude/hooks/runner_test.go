@@ -517,3 +517,24 @@ func TestRunHooksStopPayload(t *testing.T) {
 		}
 	}
 }
+
+// OnHookStart is told about each hook before it runs, with the whole chain,
+// so the busy row can say which of several Stop hooks is running.
+func TestRunHooksReportsEachHookStart(t *testing.T) {
+	c := Config{Stop: []Matcher{{Hooks: []Command{
+		{Type: "command", Command: "true"},
+		{Type: "command", Command: "true", StatusMessage: "checking tests"},
+	}}}}
+	var starts []string
+	RunHooks(RunOptions{
+		Config:  c,
+		Event:   Stop,
+		Payload: Payload{Cwd: t.TempDir()},
+		OnHookStart: func(i int, cmds []Command) {
+			starts = append(starts, fmt.Sprintf("%d/%d", i, len(cmds)))
+		},
+	})
+	if got := strings.Join(starts, ","); got != "0/2,1/2" {
+		t.Fatalf("OnHookStart calls = %q, want 0/2,1/2", got)
+	}
+}

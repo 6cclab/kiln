@@ -429,6 +429,10 @@ type RunOptions struct {
 	// should need to set this, to exercise the cap without producing
 	// megabytes of real output.
 	MaxOutputBytes int
+	// OnHookStart, if set, is called before each hook in the chain runs,
+	// with the hook's index and the whole matching chain, so a caller can
+	// show which hook is running (the busy row's "running stop hooks… 1/2").
+	OnHookStart func(index int, commands []Command)
 }
 
 // RunHooks runs every hook registered for an event, in configured order.
@@ -454,7 +458,10 @@ func RunHooks(opts RunOptions) Outcome {
 	payload := opts.Payload
 	payload.HookEventName = opts.Event
 
-	for _, h := range commands {
+	for i, h := range commands {
+		if opts.OnHookStart != nil {
+			opts.OnHookStart(i, commands)
+		}
 		// Each hook sees the input as rewritten by the ones before it,
 		// which is what makes a chain of rewrites compose rather than
 		// conflict.

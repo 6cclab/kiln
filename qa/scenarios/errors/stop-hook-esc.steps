@@ -10,7 +10,7 @@ SEND finish up
 WAITFOR /All done here\./ 20
 WAIT 2
 SHOT stop-hook-running
-EXPECT /esc to stop/
+EXPECT /running stop hook .*esc to stop/
 KEY esc
 WAIT 2
 SHOT after-esc

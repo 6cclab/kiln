@@ -438,7 +438,7 @@ What is matched and what is not: `docs/claude-code-parity.md`, "Bash sandbox".
 
 Events, exactly nine, keyed under the top-level `"hooks"` JSON key by event name: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `SubagentStop`, `Notification`, `PreCompact`.
 
-Shape: `{"hooks": {"<Event>": [{"matcher": "<regex or \"*\">", "hooks": [{"type": "command", "command": "...", "timeout": <seconds>}]}]}}`. `matcher` empty or `"*"` matches every tool; otherwise it's a case-insensitive anchored regex against the tool name (so `Bash` doesn't accidentally match `BashOutput`). `timeout` defaults to 60s if unset.
+Shape: `{"hooks": {"<Event>": [{"matcher": "<regex or \"*\">", "hooks": [{"type": "command", "command": "...", "timeout": <seconds>}]}]}}`. `matcher` empty or `"*"` matches every tool; otherwise it's a case-insensitive anchored regex against the tool name (so `Bash` doesn't accidentally match `BashOutput`). `timeout` defaults to 60s if unset. `statusMessage` (optional) is what the busy row shows while a `Stop` or `SubagentStop` hook runs, in place of the default "running stop hook" ("running stop hooks… 1/2" for several).
 
 Unlike settings scalars, **hooks accumulate across scopes** — a project hook does not replace a user hook of the same event; both run.
 

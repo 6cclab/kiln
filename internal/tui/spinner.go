@@ -26,6 +26,9 @@ type SpinnerState struct {
 	// queueLen is Lane.Steer's queue length (EventQueueUpdate via
 	// MsgQueue), shown as the busy line's " · N queued" suffix.
 	queueLen int
+	// activity is what a running hook chain is doing ("running stop
+	// hook"), shown first in the busy line's muted suffix; "" hides it.
+	activity string
 }
 
 // Start begins the spinner for a new turn, picking a gerund from seed.
@@ -39,6 +42,7 @@ func (s *SpinnerState) Start(seed int) {
 	s.thinking = false
 	s.effort = ""
 	s.queueLen = 0
+	s.activity = ""
 }
 
 // StartLabel begins the spinner for work that is not a model turn (a
@@ -54,9 +58,16 @@ func (s *SpinnerState) SetQueueLen(n int) {
 	s.queueLen = n
 }
 
+// SetActivity sets the busy line's leading activity ("running stop hook");
+// "" clears it.
+func (s *SpinnerState) SetActivity(text string) {
+	s.activity = text
+}
+
 // Stop ends the spinner.
 func (s *SpinnerState) Stop() {
 	s.busy = false
+	s.activity = ""
 }
 
 // Tick advances the animation frame.
@@ -130,6 +141,7 @@ func (s *SpinnerState) Render(width int, now time.Time) []string {
 		Effort:         s.effort,
 		Tokens:         tokens,
 		QueueLen:       s.queueLen,
+		Activity:       s.activity,
 	})
 	right := Muted("esc to stop")
 	pad := width - 1 - VisibleWidth(left) - VisibleWidth(right)
