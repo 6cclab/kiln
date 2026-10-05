@@ -67,6 +67,9 @@ type Manager struct {
 	// session (git init); kiln cleans them after every command and on
 	// Close (gitdir.go sanitizeNewGitDir).
 	newGit map[string]bool
+	// relays holds the bridges' listeners and every relay through them,
+	// so Close ends connections already accepted, not only new ones.
+	relays tunnels
 }
 
 // New builds a Manager for cfg.
@@ -200,9 +203,9 @@ func (m *Manager) Close() {
 	if m.proxy != nil {
 		_ = m.proxy.Close()
 	}
-	for _, b := range m.bridges {
-		_ = b.ln.Close()
-	}
+	// Closes each bridge's listener and every relay it accepted, and
+	// waits for their goroutines.
+	m.relays.closeAll()
 }
 
 // noteNewGitDirs records the git directories a command may create (its
@@ -514,26 +517,39 @@ func (m *Manager) bridge(port int, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if !m.relays.begin(ln) {
+		return "", errors.New("sandbox: session closed")
+	}
+	target := "127.0.0.1:" + strconv.Itoa(port)
 	go func() {
+		defer m.relays.end(ln)
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go relay(c, "127.0.0.1:"+strconv.Itoa(port))
+			if m.relays.begin(c) {
+				go relay(&m.relays, c, target)
+			}
 		}
 	}()
 	m.bridges[port] = &bridge{ln: ln, path: path}
 	return path, nil
 }
 
-func relay(c net.Conn, target string) {
-	defer c.Close()
+// relay copies between c and a new connection to target until both
+// directions finish or ts closes them. c is already begun in ts.
+func relay(ts *tunnels, c net.Conn, target string) {
 	u, err := net.Dial("tcp", target)
 	if err != nil {
+		ts.end(c)
 		return
 	}
-	defer u.Close()
+	if !ts.track(u) {
+		ts.end(c)
+		return
+	}
+	defer ts.end(c, u)
 	done := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(u, c)

@@ -57,6 +57,9 @@ type Proxy struct {
 
 	ln  net.Listener
 	srv *http.Server
+	// tunnels holds the hijacked CONNECT tunnels, which srv.Close does
+	// not reach.
+	tunnels tunnels
 }
 
 // BlockEvent is one connection the proxy refused.
@@ -115,12 +118,16 @@ func (p *Proxy) Port() int {
 	return p.ln.Addr().(*net.TCPAddr).Port
 }
 
-// Close stops the proxy and every tunnel through it.
+// Close stops the proxy and every tunnel through it. http.Server.Close
+// leaves hijacked connections alone, so the CONNECT tunnels are closed
+// here, and Close returns only once their goroutines have finished.
 func (p *Proxy) Close() error {
 	if p.srv == nil {
 		return nil
 	}
-	return p.srv.Close()
+	err := p.srv.Close()
+	p.tunnels.closeAll()
+	return err
 }
 
 // Allow adds a host to the session allowlist.
@@ -417,8 +424,14 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
+	if !p.tunnels.begin(client, upstream) {
+		return
+	}
+	defer p.tunnels.end(client, upstream)
 	_, _ = client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	sent := make(chan struct{})
 	go func() {
+		defer close(sent)
 		// Bytes the client sent after the CONNECT header, already
 		// buffered, go first.
 		if n := buf.Reader.Buffered(); n > 0 {
@@ -433,4 +446,5 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(client, upstream)
 	client.Close()
 	upstream.Close()
+	<-sent
 }
