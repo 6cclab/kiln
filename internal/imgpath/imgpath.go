@@ -20,6 +20,17 @@ import (
 	"github.com/andrepato/harness/internal/msg"
 )
 
+// MaxImageBytes bounds a dragged/pasted image path Resolve will actually
+// read and base64-encode: above this it is refused the same way a
+// RefusedExtensions entry is, rather than read into memory regardless of
+// size and handed to a provider that will reject it anyway. 3.75 MiB
+// keeps the base64-encoded attachment (which is ~4/3 the raw size) under
+// the Anthropic API's 5 MiB base64 image limit — the same derivation
+// Claude Code's own image-paste path uses (apiLimits.ts's
+// IMAGE_TARGET_RAW_SIZE = API_IMAGE_MAX_BASE64_SIZE * 3/4), checked here
+// from the same os.Stat Resolve already does, before any read.
+const MaxImageBytes = 5 * 1024 * 1024 * 3 / 4
+
 // pathTokenRe matches a candidate path token starting at "/" or "~": a run
 // of characters that are each either a backslash escape (`\X`, consuming
 // both characters so an escaped space never ends the token) or anything
@@ -213,6 +224,12 @@ func Resolve(raw, cwd string) (Verdict, bool) {
 	}
 	if refused != "" {
 		return Verdict{CleanPath: path, Refused: refused}, true
+	}
+	if info.Size() > MaxImageBytes {
+		return Verdict{
+			CleanPath: path,
+			Refused:   fmt.Sprintf("image is %.1fMB, more than the %.1fMB limit - attach a smaller image", float64(info.Size())/(1<<20), float64(MaxImageBytes)/(1<<20)),
+		}, true
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

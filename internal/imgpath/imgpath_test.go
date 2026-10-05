@@ -1,11 +1,32 @@
 package imgpath
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// withinImgpathTest fails the test unless fn returns within the deadline:
+// a size refusal built from os.Stat alone must not actually read the
+// file, so it must be fast regardless of its declared size. Mirrors
+// internal/gitfiles/hostile_test.go's own within.
+func withinImgpathTest(t *testing.T, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		fmt.Fprintf(os.Stderr, "--- FAIL: %s: %s did not return within half a second\n", t.Name(), what)
+		os.Exit(1)
+	}
+}
 
 func TestCleanPathToken(t *testing.T) {
 	narrow := " " // NARROW NO-BREAK SPACE, as in a macOS screenshot name
@@ -108,6 +129,34 @@ func TestResolve(t *testing.T) {
 		if v.Refused == "" {
 			t.Error("want a Refused reason")
 		}
+	})
+
+	t.Run("oversized png is refused without being read", func(t *testing.T) {
+		path := filepath.Join(dir, "huge.png")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Truncate(MaxImageBytes + 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		withinImgpathTest(t, "Resolve on an oversized sparse image", func() {
+			v, ok := Resolve(path, dir)
+			if !ok {
+				t.Error("want ok (recognised extension)")
+				return
+			}
+			if v.Image != nil {
+				t.Error("an oversized image must not attach")
+			}
+			if v.Refused == "" {
+				t.Error("want a Refused reason")
+			}
+		})
 	})
 }
 
