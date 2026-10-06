@@ -1,20 +1,29 @@
 {
-  "id": "20261006T111858Z-stream-render-cost-grows-with-reply",
-  "found_at": "2026-10-06T11:18:58Z",
-  "scenario": "qa/scenarios/errors/context-overflow.steps",
-  "step": null,
-  "terminals": [
-    "xterm-dark"
+ "id": "20261006T111858Z-stream-render-cost-grows-with-reply",
+ "found_at": "2026-10-06T11:18:58Z",
+ "scenario": "qa/scenarios/errors/context-overflow.steps",
+ "step": null,
+ "terminals": [
+  "xterm-dark"
+ ],
+ "category": "bug",
+ "severity": "low",
+ "title": "Per-chunk render cost of a streaming reply grows with the reply's length",
+ "observed": "Faux 8-char chunks, headless, main 7aa37ba: 37k-char reply streams in ~6s, 149k-char reply in ~64s (4x text, ~11x time; ~1.3ms vs ~3.4ms per chunk). On a CI runner the 149k reply took >90s. In hooks/auto-compact-threshold on CI, three ~35k-char turns took 16s, 20s and >21s: the per-chunk cost may also grow with the whole transcript, not only the current reply (not measured separately).",
+ "expected": "Roughly constant per-chunk cost, so streaming time scales linearly with reply length. Not user-visible at real model rates (tens of tokens/s), but it slows long faux scenarios.",
+ "design_ref": null,
+ "evidence": [
+  "CI run 37441947945 qa-headless context-overflow timeout screen (27.8k tokens at 91s); local timings from drive.py run logs"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/streamwrap.go",
+   "internal/tui/stream.go",
+   "internal/tui/app.go"
   ],
-  "category": "bug",
-  "severity": "low",
-  "title": "Per-chunk render cost of a streaming reply grows with the reply's length",
-  "observed": "Faux 8-char chunks, headless, main 7aa37ba: 37k-char reply streams in ~6s, 149k-char reply in ~64s (4x text, ~11x time; ~1.3ms vs ~3.4ms per chunk). On a CI runner the 149k reply took >90s. In hooks/auto-compact-threshold on CI, three ~35k-char turns took 16s, 20s and >21s: the per-chunk cost may also grow with the whole transcript, not only the current reply (not measured separately).",
-  "expected": "Roughly constant per-chunk cost, so streaming time scales linearly with reply length. Not user-visible at real model rates (tens of tokens/s), but it slows long faux scenarios.",
-  "design_ref": null,
-  "evidence": [
-    "CI run 37441947945 qa-headless context-overflow timeout screen (27.8k tokens at 91s); local timings from drive.py run logs"
-  ],
-  "status": "open",
-  "fix": null
+  "regression_test": "TestStreamCost_FlatInReplyLength,TestStreamCost_FlatInTranscriptLength,TestStreamWrapCache_MatchesFullWrapAtEverySplit,TestFullscreenViewport_MatchesFullContent",
+  "note": "Each frame re-wrapped the whole streamed reply (wrapMultiline, twice per message in fullscreen: layoutViewport and View) and, in fullscreen, re-set the viewport with the whole transcript (measuring every committed row). Now the live block wraps only the bytes a delta added (streamWrapCache, a resumable ansi.Wrap held to the full re-wrap at every split point) and the fullscreen viewport is handed only the rows on screen. Headless xterm-dark, context-overflow: 150k-char reply streamed in 12s (was 63s). Benchmark per delta, fullscreen: 0.51ms at 10k/40k/150k chars and with 20k committed rows (was 0.85/1.8/5.5ms; 19.5-24ms with 20k rows).",
+  "updated_at": "2026-10-06T13:26:24Z"
+ }
 }
