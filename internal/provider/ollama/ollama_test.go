@@ -46,6 +46,21 @@ func TestResolveContextWindowPriority(t *testing.T) {
 		t.Fatalf("training-context under cap: got %d, want 8000", got)
 	}
 
+	// 4b. A Modelfile pin or OLLAMA_CONTEXT_LENGTH above the training
+	// context is capped at it: Ollama serves no more than that.
+	got = ResolveContextWindow(ResolveContextWindowArgs{ServerDefault: 49152, TrainingContext: 40960})
+	if got != 40960 {
+		t.Fatalf("env above training context: got %d, want 40960", got)
+	}
+	got = ResolveContextWindow(ResolveContextWindowArgs{ShowParameters: "num_ctx 65536", TrainingContext: 40960})
+	if got != 40960 {
+		t.Fatalf("pinned num_ctx above training context: got %d, want 40960", got)
+	}
+	got = ResolveContextWindow(ResolveContextWindowArgs{ServerDefault: 49152})
+	if got != 49152 {
+		t.Fatalf("env with unknown training context: got %d, want 49152", got)
+	}
+
 	// 5. Fallback when nothing is known at all.
 	got = ResolveContextWindow(ResolveContextWindowArgs{})
 	if got != 8192 {

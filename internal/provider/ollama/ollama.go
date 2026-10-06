@@ -200,18 +200,26 @@ const maxAutoContext = 32_768
 // earlier caller happened to load the model with.
 func ResolveContextWindow(args ResolveContextWindowArgs) int {
 	if n, ok := numCtxFromParameters(args.ShowParameters); ok {
-		return n
+		return capAtTraining(n, args.TrainingContext)
 	}
 	if args.ServerDefault > 0 {
-		return args.ServerDefault
+		return capAtTraining(args.ServerDefault, args.TrainingContext)
 	}
 	if args.TrainingContext > 0 {
-		if args.TrainingContext > maxAutoContext {
-			return maxAutoContext
-		}
-		return args.TrainingContext
+		return min(args.TrainingContext, maxAutoContext)
 	}
 	return fallbackContext
+}
+
+// capAtTraining caps an asked-for window at the model's training context
+// when that is known: Ollama silently serves a num_ctx above it at the
+// training context, so asking for more would budget a window that is not
+// served (OLLAMA_CONTEXT_LENGTH=49152 on qwen3:8b serves 40960).
+func capAtTraining(n, training int) int {
+	if training > 0 && n > training {
+		return training
+	}
+	return n
 }
 
 // thinkingLevelMapOff maps ThinkingOff -> "off" and every other level to

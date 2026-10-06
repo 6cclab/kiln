@@ -136,7 +136,9 @@ at the server's default) → the model's *training* context
 (`model_info.*.context_length` from `/api/show`), capped at 32,768 so an
 unconfigured large-context model doesn't get asked to serve a window no
 consumer box can hold → a conservative 8,192-token fallback if nothing is
-known at all. `/api/ps`'s `context_length` (a resident model's *current*
+known at all. A Modelfile pin or `OLLAMA_CONTEXT_LENGTH` above the model's
+training context is capped at it, since Ollama silently serves no more than
+that. `/api/ps`'s `context_length` (a resident model's *current*
 serving window) is no longer consulted: every `/api/chat` request now
 carries its own `options.num_ctx` equal to the resolved window, so the next
 request is what sets the served window, not whatever an earlier caller
