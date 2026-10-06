@@ -185,6 +185,11 @@ type Model struct {
 	// (stream.go's RenderStreamLive), cleared once the full markdown block
 	// commits (msgCommitMarkdown) or the turn ends.
 	streamText string
+	// streamWrap holds streamText's wrapped rows between frames, so a
+	// frame wraps only what the last delta added (streamwrap.go). Shared
+	// by every copy of the Model; nil in a Model not built by NewModel,
+	// which then re-wraps on every frame.
+	streamWrap *streamWrapCache
 	// labelBeforePrompt is the busy label a permission, plan or question
 	// prompt replaced ("Running bash"), restored once the prompt is
 	// answered (restoreLabelAfterPrompt).
@@ -326,6 +331,12 @@ type Model struct {
 	// on ClearScreen/toggle/resize-rewrap — see appendTranscript and
 	// replayTranscript.
 	transcript []string
+	// transcriptWidest is the widest row in transcript, and
+	// transcriptMultiline whether any row holds a "\n", both kept by
+	// appendTranscript so a frame need not measure every committed row
+	// (fullscreenViewport).
+	transcriptWidest    int
+	transcriptMultiline bool
 	// sel is the fullscreen transcript selection being dragged or last
 	// copied (selection.go); nil when there is none.
 	sel *selection
@@ -402,6 +413,7 @@ func NewModel(cfg Config) Model {
 		prompt:         NewPromptState(cfg.Cwd),
 		subagents:      NewSubagentPanelState(),
 		plan:           &planLiveState{},
+		streamWrap:     &streamWrapCache{},
 		liveWidth:      &atomic.Int32{},
 		startupContext: append([]string(nil), cfg.StartupContext...),
 		fullscreen:     cfg.Fullscreen && !cfg.Plain,
@@ -575,7 +587,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.committedRows = 0
 		if m.fullscreen {
-			m.transcript = nil
+			m = m.clearTranscript()
 			m.viewport.SetContent("")
 			m.viewport.GotoTop()
 		}
@@ -723,6 +735,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case msgCommitMarkdown:
 		m = m.flushGroup()
 		m.streamText = ""
+		m.streamWrap.release()
 		if m.cfg.Bridge != nil {
 			m = m.commitReconnectNote()
 			renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
@@ -1191,6 +1204,7 @@ func (m Model) finishTurn(msg msgTurnResult) (Model, tea.Cmd) {
 	// role for either live block.
 	m.retry = nil
 	m.streamText = ""
+	m.streamWrap.release()
 	m.reconnectedAttempt = 0
 
 	if msg.result.Status == harness.StatusAborted {
@@ -1426,10 +1440,24 @@ func (m Model) flushGroup() Model {
 func (m Model) appendTranscript(newLines []string) Model {
 	wasBottom := m.viewport.AtBottom()
 	m.transcript = append(m.transcript, newLines...)
+	for _, line := range newLines {
+		if strings.Contains(line, "\n") {
+			m.transcriptMultiline = true
+		}
+		m.transcriptWidest = max(m.transcriptWidest, ansi.StringWidth(line))
+	}
 	m.viewport.SetContent(strings.Join(m.transcript, "\n"))
 	if wasBottom {
 		m.viewport.GotoBottom()
 	}
+	return m
+}
+
+// clearTranscript empties the fullscreen transcript buffer.
+func (m Model) clearTranscript() Model {
+	m.transcript = nil
+	m.transcriptWidest = 0
+	m.transcriptMultiline = false
 	return m
 }
 
@@ -1488,7 +1516,7 @@ func (m Model) toggleFullscreen() (tea.Model, tea.Cmd) {
 	if m.cfg.Bridge != nil {
 		m.cfg.Bridge.SetFullscreen(m.fullscreen)
 	}
-	m.transcript = nil
+	m = m.clearTranscript()
 	replay := msgReplayTranscript{}
 	if m.fullscreen && m.cfg.Bridge != nil {
 		// Workaround: entering fullscreen mid-turn (a live subagents
@@ -1510,6 +1538,97 @@ func (m Model) toggleFullscreen() (tea.Model, tea.Cmd) {
 // msgFullRepaint asks for one clear-and-repaint of the whole screen; see
 // toggleFullscreen.
 type msgFullRepaint struct{}
+
+// fullscreenViewport renders the transcript viewport's rows with the live
+// tail folded in after the committed transcript, and the content row at
+// its top. The rows are those of a copy of m.viewport given the whole
+// transcript plus tail as content (fullscreenViewportFull, which it falls
+// back to when a committed row holds a "\n" or the viewport soft-wraps or
+// styles its rows, cases kiln does not use), but only the rows on screen
+// are handed to the viewport: setting the whole transcript measured every
+// committed row on every frame, so each streamed delta cost time in
+// proportion to the session's length (finding
+// 20261006T111858Z-stream-render-cost-grows-with-reply).
+//
+// Same scroll-to-pause rule as appendTranscript: a user scrolled up is not
+// yanked back down by a growing live tail.
+func (m Model) fullscreenViewport(tail []string) (rows []string, top int) {
+	if m.transcriptMultiline || m.viewport.SoftWrap || m.viewport.StyleLineFunc != nil {
+		return m.fullscreenViewportFull(tail)
+	}
+	// The content SetContent would see: the transcript, then the tail
+	// split on "\n" as SetContent splits the joined string.
+	var tailLines []string
+	for _, row := range tail {
+		tailLines = append(tailLines, strings.Split(row, "\n")...)
+	}
+	total := len(m.transcript) + len(tailLines)
+	line := func(i int) string {
+		if i < len(m.transcript) {
+			return m.transcript[i]
+		}
+		return tailLines[i-len(m.transcript)]
+	}
+	widest := m.transcriptWidest
+	for _, l := range tailLines {
+		widest = max(widest, ansi.StringWidth(l))
+	}
+	if total == 1 && ansi.StringWidth(line(0)) == 0 {
+		// SetContentLines holds a lone empty row as no content at all.
+		total, widest = 0, 0
+	}
+
+	// The viewport's scroll position over that content: SetContentLines
+	// clamps a stale offset to the bottom, and a viewport at the bottom
+	// stays there.
+	vp := m.viewport
+	frameH := vp.Style.GetVerticalFrameSize()
+	maxY := max(0, total-vp.Height()+frameH)
+	top = vp.YOffset()
+	if top > maxY || vp.AtBottom() {
+		top = maxY
+	}
+
+	// The rows on screen, cut to the viewport's width when any content row
+	// is wider — the viewport's own rule, which looks at every row.
+	maxH := max(0, vp.Height()-frameH)
+	maxW := max(0, vp.Width()-vp.Style.GetHorizontalFrameSize()-ansi.StringWidth(vp.LeftGutterFunc(viewport.GutterContext{})))
+	var window []string
+	if maxH > 0 && maxW > 0 {
+		first := min(top, total)
+		last := min(first+maxH, total)
+		window = make([]string, 0, last-first)
+		for i := first; i < last; i++ {
+			l := line(i)
+			if vp.XOffset() != 0 || widest > maxW {
+				l = ansi.Cut(l, vp.XOffset(), vp.XOffset()+maxW)
+			}
+			window = append(window, l)
+		}
+	}
+	// The window rows all fit, so a viewport holding only them renders
+	// them as they are, padded to its size like the full one.
+	vp.SetContentLines(window)
+	vp.SetXOffset(0)
+	vp.SetYOffset(0)
+	return strings.Split(vp.View(), "\n"), top
+}
+
+// fullscreenViewportFull is fullscreenViewport the direct way: a copy of
+// the viewport holding the whole transcript plus tail. The persistent
+// m.viewport only ever holds the committed transcript
+// (appendTranscript/layoutViewport keep it that way), so folding the live
+// tail in here, for display only, cannot leak into state other code
+// depends on.
+func (m Model) fullscreenViewportFull(tail []string) (rows []string, top int) {
+	vp := m.viewport
+	wasBottom := m.viewport.AtBottom()
+	vp.SetContent(strings.Join(append(append([]string{}, m.transcript...), tail...), "\n"))
+	if wasBottom {
+		vp.GotoBottom()
+	}
+	return strings.Split(vp.View(), "\n"), vp.YOffset()
+}
 
 // fullscreenView composes the alt-screen frame: the transcript viewport —
 // committed transcript followed by the live tail (tool-group/stream/retry/
@@ -1553,28 +1672,14 @@ func (m Model) fullscreenView() tea.View {
 		}
 	}
 
-	// A local copy: the persistent m.viewport only ever holds the
-	// committed transcript (appendTranscript/layoutViewport keep it that
-	// way), so folding the live tail in here — for display only — cannot
-	// leak into state other code depends on. Same scroll-to-pause rule as
-	// appendTranscript: a user scrolled up is not yanked back down by a
-	// growing live tail.
-	vp := m.viewport
-	wasBottom := m.viewport.AtBottom()
-	vp.SetContent(strings.Join(append(append([]string{}, m.transcript...), tail...), "\n"))
-	if wasBottom {
-		vp.GotoBottom()
-	}
-
-	vpRows := strings.Split(vp.View(), "\n")
+	vpRows, top := m.fullscreenViewport(tail)
 	// viewport.View pads to its own Height; guard the invariant explicitly
 	// rather than trust it silently, since a short content string is the
 	// one case that could violate it.
-	for len(vpRows) < vp.Height() {
+	for len(vpRows) < m.viewport.Height() {
 		vpRows = append(vpRows, "")
 	}
 	if m.sel != nil {
-		top := vp.YOffset()
 		for i := range vpRows {
 			if from, to, ok := m.sel.span(top+i, m.width); ok {
 				vpRows[i] = highlightRow(vpRows[i], from, to)
@@ -2499,7 +2604,7 @@ func (m Model) renderStreamLive(width, maxRows int) []string {
 	if m.streamText == "" || IsPlain() {
 		return nil
 	}
-	return append([]string{""}, RenderStreamLive(m.streamText, width, maxRows)...)
+	return append([]string{""}, renderStreamLiveRows(m.streamText, width, maxRows, m.streamWrap)...)
 }
 
 // streamRows is how many rows of streaming text fit: the frame, less the

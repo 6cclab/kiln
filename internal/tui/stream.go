@@ -17,6 +17,13 @@ const maxStreamRows = 8
 // once streaming ends, in msgCommitMarkdown), with the streaming caret
 // (G().StreamCaret, kiln amber) appended to the last row.
 func RenderStreamLive(text string, width, maxRows int) []string {
+	return renderStreamLiveRows(text, width, maxRows, nil)
+}
+
+// renderStreamLiveRows is RenderStreamLive, taking its wrapped rows from
+// cache when it is not nil: the same rows, without re-wrapping the whole
+// reply on every frame (streamwrap.go).
+func renderStreamLiveRows(text string, width, maxRows int, cache *streamWrapCache) []string {
 	rule := labelRule("kiln", Muted, "", width)
 	if text == "" {
 		return []string{rule, KilnAmber(G().StreamCaret)}
@@ -25,9 +32,14 @@ func RenderStreamLive(text string, width, maxRows int) []string {
 	// here may already contain embedded newlines (paragraph breaks in the
 	// streamed markdown source), so wrap each source line independently
 	// and flatten, same as ansiWrap's own per-line contract.
-	rows := wrapMultiline(text, width)
-	if len(rows) > maxRows {
-		rows = rows[len(rows)-maxRows:]
+	var rows []string
+	if cache != nil {
+		rows, _ = cache.tailRows(text, width, maxRows)
+	} else {
+		rows = wrapMultiline(text, width)
+		if len(rows) > maxRows {
+			rows = rows[len(rows)-maxRows:]
+		}
 	}
 	if len(rows) == 0 {
 		rows = []string{""}
