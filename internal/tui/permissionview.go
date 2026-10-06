@@ -25,6 +25,16 @@ type PromptState struct {
 	// question is set while an ask_user_question exchange is up. Only one
 	// of pending, plan and question is ever set.
 	question *pendingQuestion
+	// queued holds prompts that arrived while another was on screen,
+	// oldest first. Prompts come from more than one goroutine (the gate,
+	// the plan and question approvers, a sandboxed background shell's
+	// network request), and each caller blocks on its reply, so one that
+	// arrives while another is up waits here and is shown once the one on
+	// screen is answered (next), never dropped.
+	queued []queuedPrompt
+	// shown counts prompts put on screen, so the caller can tell that a
+	// queued prompt replaced an answered one (its busy label changes).
+	shown int
 	// feedback is non-nil while the user is typing a reason after
 	// choosing "no" (permission) or "3" (plan). "" is a valid, empty
 	// in-progress feedback string; nil means not in feedback mode.
@@ -130,6 +140,110 @@ func offersDontAsk(req PermissionRequest) bool {
 	return req.Grantable
 }
 
+// queuedPrompt is one prompt waiting its turn: exactly one field is set.
+type queuedPrompt struct {
+	perm     *pendingPermission
+	plan     *pendingPlan
+	question *pendingQuestion
+}
+
+// replyChan is the prompt's reply channel, as an interface value so a
+// withdrawal (MsgPromptWithdrawn) can name it whatever its element type.
+func (q queuedPrompt) replyChan() any {
+	switch {
+	case q.perm != nil:
+		return q.perm.reply
+	case q.plan != nil:
+		return q.plan.reply
+	case q.question != nil:
+		return q.question.reply
+	}
+	return nil
+}
+
+// cancel answers a prompt that never got its answer: a permission is
+// denied, a plan is sent back unapproved, a question is declined.
+func (q queuedPrompt) cancel() {
+	switch {
+	case q.perm != nil:
+		q.perm.reply <- PromptChoice{Kind: ChoiceDeny}
+	case q.plan != nil:
+		q.plan.reply <- PlanReply{Kind: PlanRevise, Feedback: "cancelled"}
+	case q.question != nil:
+		q.question.reply <- AskUserReply{Cancelled: true}
+	}
+}
+
+// current is the prompt on screen as a queuedPrompt; zero when none is.
+func (p *PromptState) current() queuedPrompt {
+	return queuedPrompt{perm: p.pending, plan: p.plan, question: p.question}
+}
+
+// enqueue shows q, or queues it behind the prompt already on screen.
+func (p *PromptState) enqueue(q queuedPrompt) {
+	if p.Active() {
+		p.queued = append(p.queued, q)
+		return
+	}
+	p.show(q)
+}
+
+func (p *PromptState) show(q queuedPrompt) {
+	p.pending, p.plan, p.question = q.perm, q.plan, q.question
+	p.feedback = nil
+	p.shown++
+}
+
+// next shows the oldest queued prompt once the one on screen is answered.
+func (p *PromptState) next() {
+	if p.Active() || len(p.queued) == 0 {
+		return
+	}
+	q := p.queued[0]
+	p.queued = p.queued[1:]
+	p.show(q)
+}
+
+// cancelAll answers the prompt on screen and every queued one as
+// declined, for a turn being stopped, so no caller is left blocked on a
+// reply. None gets a "Declined" note: the caller has already noted the
+// prompt the user actually declined.
+func (p *PromptState) cancelAll() {
+	all := append([]queuedPrompt{p.current()}, p.queued...)
+	p.pending, p.plan, p.question, p.feedback, p.queued = nil, nil, nil, nil, nil
+	for _, q := range all {
+		q.cancel()
+	}
+}
+
+// withdraw drops the prompt whose reply channel is reply, without
+// answering it: its caller has stopped waiting (its context ended). A
+// queued one never shows; one on screen goes away and the next shows.
+func (p *PromptState) withdraw(reply any) {
+	if reply == nil {
+		return
+	}
+	if p.Active() && p.current().replyChan() == reply {
+		p.pending, p.plan, p.question, p.feedback = nil, nil, nil, nil
+		p.next()
+		return
+	}
+	for i, q := range p.queued {
+		if q.replyChan() == reply {
+			p.queued = append(p.queued[:i:i], p.queued[i+1:]...)
+			return
+		}
+	}
+}
+
+// waitingLabel is the busy row's text while the prompt on screen waits.
+func (p *PromptState) waitingLabel() string {
+	if p.question != nil {
+		return "Waiting for an answer"
+	}
+	return "Waiting for approval"
+}
+
 type pendingPermission struct {
 	request  PermissionRequest
 	reply    chan PromptChoice
@@ -232,8 +346,7 @@ func (p *PromptState) Active() bool {
 // have already given up.
 func (p *PromptState) AskTool(req PermissionRequest) chan PromptChoice {
 	reply := make(chan PromptChoice, 1)
-	p.pending = newPendingPermission(req, reply, p.cwd)
-	p.feedback = nil
+	p.enqueue(queuedPrompt{perm: newPendingPermission(req, reply, p.cwd)})
 	return reply
 }
 
@@ -259,8 +372,7 @@ func newPendingPermission(req PermissionRequest, reply chan PromptChoice, cwd st
 // shown on the prompt's last row.
 func (p *PromptState) AskPlan(plan, path string) chan PlanReply {
 	reply := make(chan PlanReply, 1)
-	p.plan = &pendingPlan{plan: plan, path: path, reply: reply}
-	p.feedback = nil
+	p.enqueue(queuedPrompt{plan: &pendingPlan{plan: plan, path: path, reply: reply}})
 	return reply
 }
 
@@ -268,12 +380,12 @@ func (p *PromptState) AskPlan(plan, path string) chan PlanReply {
 // contract as AskTool/AskPlan.
 func (p *PromptState) AskAskUser(questions []tools.AskUserQuestion) chan AskUserReply {
 	reply := make(chan AskUserReply, 1)
-	p.question = &pendingQuestion{questions: questions, checked: map[int]bool{}, reply: reply}
-	p.feedback = nil
+	p.enqueue(queuedPrompt{question: &pendingQuestion{questions: questions, checked: map[int]bool{}, reply: reply}})
 	return reply
 }
 
 func (p *PromptState) finishTool(choice PromptChoice) {
+	defer p.next()
 	pending := p.pending
 	p.pending = nil
 	p.feedback = nil
@@ -288,6 +400,7 @@ func (p *PromptState) finishTool(choice PromptChoice) {
 }
 
 func (p *PromptState) finishPlan(reply PlanReply) {
+	defer p.next()
 	pending := p.plan
 	p.plan = nil
 	p.feedback = nil
@@ -299,6 +412,7 @@ func (p *PromptState) finishPlan(reply PlanReply) {
 // cancelQuestion ends the whole ask_user_question exchange as declined —
 // Esc from any question, or "Cancel" on the review screen.
 func (p *PromptState) cancelQuestion() {
+	defer p.next()
 	pending := p.question
 	p.question = nil
 	p.feedback = nil
@@ -311,6 +425,7 @@ func (p *PromptState) cancelQuestion() {
 // question's recorded answer into the tools.AskUserAnswer shape the
 // approver returns.
 func (p *PromptState) submitQuestion() {
+	defer p.next()
 	pending := p.question
 	p.question = nil
 	p.feedback = nil

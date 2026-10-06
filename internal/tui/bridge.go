@@ -734,6 +734,11 @@ type MsgAskUserPrompt struct {
 	Reply     chan AskUserReply
 }
 
+// MsgPromptWithdrawn takes back a prompt whose caller stopped waiting
+// (its context ended) before it was answered: queued, it never shows; on
+// screen, it goes away. Reply is that prompt's reply channel.
+type MsgPromptWithdrawn struct{ Reply any }
+
 // MsgSpinnerLabel sets a temporary busy-line label — a verb per tool
 // (busyLabelForToolStart) while a tool call is in flight — app.go's
 // Update applies it to the spinner (SpinnerState.SetLabel).
@@ -1608,6 +1613,7 @@ func (b *Bridge) Prompter(cwd string) permission.Prompter {
 				Feedback: choice.Feedback,
 			}, nil
 		case <-ctx.Done():
+			b.Send(MsgPromptWithdrawn{Reply: reply})
 			return permission.PromptChoice{}, ctx.Err()
 		case <-b.quit:
 			return permission.PromptChoice{Kind: permission.PromptKind(ChoiceDeny)}, nil
@@ -1629,6 +1635,7 @@ func (b *Bridge) PlanApprover() agent.PlanApprover {
 			}
 			return agent.PlanDecision{Kind: kind, Mode: decision.Mode, Feedback: decision.Feedback}, nil
 		case <-ctx.Done():
+			b.Send(MsgPromptWithdrawn{Reply: reply})
 			return agent.PlanDecision{}, ctx.Err()
 		case <-b.quit:
 			return agent.PlanDecision{Kind: agent.PlanDecisionRevise, Feedback: "cancelled"}, nil
@@ -1649,6 +1656,7 @@ func (b *Bridge) AskUserApprover() tools.AskUserApprover {
 			}
 			return r.Answers, nil
 		case <-ctx.Done():
+			b.Send(MsgPromptWithdrawn{Reply: reply})
 			return nil, ctx.Err()
 		case <-b.quit:
 			return nil, tools.ErrAskUserCancelled
