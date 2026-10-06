@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/andrepato/harness/internal/crash"
 )
 
 // Radius gateway OAuth flow, ported from
@@ -178,7 +180,7 @@ func startRadiusCallbackServer(expectedState string) (*radiusCallbackServer, err
 		cs.once.Do(func() { cs.resultCh <- &code })
 	})
 	cs.srv = &http.Server{Handler: mux}
-	go func() { _ = cs.srv.Serve(ln) }()
+	crash.Go(func() { _ = cs.srv.Serve(ln) })
 	return cs, nil
 }
 

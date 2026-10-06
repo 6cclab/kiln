@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/plural"
 	"github.com/mattn/go-isatty"
 
@@ -1100,7 +1101,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		trusted: func() bool { return heldApplied.Load() || folderTrusted(cwd) },
 		notice:  notice,
 	}
-	go reloader.watch(settingsWatchCtx, claudesettings.DefaultWatchInterval)
+	crash.Go(func() { reloader.watch(settingsWatchCtx, claudesettings.DefaultWatchInterval) })
 
 	// ContextUsed (for /usage and /context) is the lane's one context
 	// estimate (harness.Lane.ContextTokens): the last request's measured
@@ -1559,7 +1560,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				// prompt, and a note (an unreadable file) is sent from
 				// another goroutine so it cannot wait on this one.
 				onTrust := reloader
-				onTrust.notice = func(s string) { go notice(s) }
+				onTrust.notice = func(s string) { crash.Go(func() { notice(s) }) }
 				onTrust.applyTrust()
 				hooks.enable()
 			},

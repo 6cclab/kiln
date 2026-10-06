@@ -44,3 +44,24 @@ func TestStartWritesAndPrunes(t *testing.T) {
 	// After close, logging is discarded rather than failing.
 	L().Info("after close")
 }
+
+// TestPathFollowsTheRunLog: Path names the open run log, and is empty
+// before Start and after its close, so a crash report never points at a
+// log that is not being written.
+func TestPathFollowsTheRunLog(t *testing.T) {
+	t.Setenv("HARNESS_LOG_DIR", t.TempDir())
+	if got := Path(); got != "" {
+		t.Fatalf("Path() before Start = %q, want empty", got)
+	}
+	path, closeFn, err := Start("pathtest", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Path(); got != path {
+		t.Errorf("Path() = %q, want the run log %q", got, path)
+	}
+	closeFn()
+	if got := Path(); got != "" {
+		t.Errorf("Path() after close = %q, want empty", got)
+	}
+}

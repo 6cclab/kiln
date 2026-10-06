@@ -79,6 +79,16 @@ func WithoutCatchPanics() ProgramOption {
 	}
 }
 
+// WithPanicHook sets a function Bubble Tea calls with every panic it
+// catches (the recovered value and the panicking goroutine's stack), before
+// it restores the terminal and prints the panic. The hook must return. (kiln
+// patch: see HARNESS-PATCH.md.)
+func WithPanicHook(fn func(r any, stack []byte)) ProgramOption {
+	return func(p *Program) {
+		p.panicHook = fn
+	}
+}
+
 // WithoutSignals will ignore OS signals.
 // This is mainly useful for testing.
 func WithoutSignals() ProgramOption {

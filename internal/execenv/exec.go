@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/andrepato/harness/internal/crash"
 )
 
 // ExecOptions controls Exec, mirroring pi's ShellExecOptions.
@@ -203,6 +205,7 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	if opts.Timeout > 0 {
 		pid := cmd.Process.Pid
 		timer = time.AfterFunc(opts.Timeout, func() {
+			defer crash.Guard()
 			timedOut.Store(true)
 			_ = KillProcessGroup(pid, SignalKill)
 		})

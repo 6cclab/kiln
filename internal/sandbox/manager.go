@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/execenv"
 )
 
@@ -521,7 +522,7 @@ func (m *Manager) bridge(port int, dir string) (string, error) {
 		return "", errors.New("sandbox: session closed")
 	}
 	target := "127.0.0.1:" + strconv.Itoa(port)
-	go func() {
+	crash.Go(func() {
 		defer m.relays.end(ln)
 		for {
 			c, err := ln.Accept()
@@ -529,10 +530,10 @@ func (m *Manager) bridge(port int, dir string) (string, error) {
 				return
 			}
 			if m.relays.begin(c) {
-				go relay(&m.relays, c, target)
+				crash.Go(func() { relay(&m.relays, c, target) })
 			}
 		}
-	}()
+	})
 	m.bridges[port] = &bridge{ln: ln, path: path}
 	return path, nil
 }
@@ -551,10 +552,10 @@ func relay(ts *tunnels, c net.Conn, target string) {
 	}
 	defer ts.end(c, u)
 	done := make(chan struct{})
-	go func() {
+	crash.Go(func() {
 		_, _ = io.Copy(u, c)
 		close(done)
-	}()
+	})
 	_, _ = io.Copy(c, u)
 	<-done
 }

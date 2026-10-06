@@ -417,6 +417,11 @@ and `.styles.txt`.
   run in 3; it drives the full "done" scene, then asserts `Exit()` returns
   well under the screen's timeout instead of hanging.
 
+`test/e2e/crash_unix_test.go` builds its own kiln with `-tags kiln_crashtest`,
+the only build in which `crash.TestPoint` panics (where `KILN_CRASHTEST_PANIC`
+names it), and checks that a panic on kiln's own goroutine leaves the terminal
+restored, a crash report in the scratch HOME and its path on stderr.
+
 ## 6. Behaviour suite — `test/e2e/*_behaviour_test.go`
 
 `test/e2e/budget_behaviour_test.go`, `compaction_behaviour_test.go`,
@@ -572,6 +577,7 @@ Targets in the tree as of this writing:
 | `FuzzParseSkill` | `internal/claude/skills` |
 | `FuzzParseScriptYAML` | `internal/testkit/faux` |
 | `FuzzOpen` | `internal/session/jsonl` |
+| `FuzzNativeStream` | `internal/provider/ollama` |
 | `FuzzParseSequence` | `third_party/ultraviolet` (vendored, not this project's own code) |
 
 This list is a snapshot — check `grep -rl 'func Fuzz' --include=*_test.go .`

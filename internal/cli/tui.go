@@ -11,6 +11,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,6 +31,7 @@ import (
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/claude/trust"
 	slashcommands "github.com/andrepato/harness/internal/commands"
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/execenv"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
@@ -327,11 +329,11 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 				deps.ApplyHeldRules()
 			}
 			if deps.TrustedSessionStart != nil {
-				go func() {
+				crash.Go(func() {
 					if lines := deps.TrustedSessionStart(); len(lines) > 0 {
 						bridge.Send(tui.MsgStartupContext{Lines: lines})
 					}
-				}()
+				})
 			}
 		}
 	}
@@ -347,7 +349,10 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 
 	model := tui.NewModel(cfg)
 
-	var opts []tea.ProgramOption
+	// A panic Bubble Tea catches (in Update, View or a Cmd, which is where
+	// a turn runs) restores the terminal, but the panic it prints lands on
+	// the alternate screen and is wiped with it: keep a crash report.
+	opts := []tea.ProgramOption{tea.WithPanicHook(func(r any, stack []byte) { crash.Record(r, stack) })}
 	if deps.ScreenReader {
 		opts = append(opts, tea.WithColorProfile(0))
 	}
@@ -386,14 +391,14 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	connectPending := deps.ConnectPendingMCP != nil && deps.PendingMCPCount > 0
 	if connectMain || connectPending {
 		whenTrusted(func() {
-			go func() {
+			crash.Go(func() {
 				if connectMain {
 					connectInBackground(bridge, deps.MCPServerCount, deps.ConnectMCP)
 				}
 				if connectPending {
 					connectInBackground(bridge, deps.PendingMCPCount, deps.ConnectPendingMCP)
 				}
-			}()
+			})
 		})
 	}
 
@@ -426,17 +431,17 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	// The branch is read from .git's files at once; `git status` (the
 	// dirty marker) runs git, which reads the repository's config and can
 	// run a filter it names, so it waits for trust.
-	go func() {
+	crash.Go(func() {
 		if branch, ok := gitBranchFromFiles(deps.Cwd); ok {
 			bridge.Send(tui.MsgGitStatus{Status: tui.GitStatus{Branch: branch}})
 		}
-	}()
+	})
 	whenTrusted(func() {
-		go func() {
+		crash.Go(func() {
 			if status, ok := readGitStatus(ctx); ok {
 				bridge.Send(tui.MsgGitStatus{Status: status})
 			}
-		}()
+		})
 	})
 
 	// A terminal that delivers SIGINT directly rather than as a Ctrl+C
@@ -488,11 +493,45 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	if fd := os.Stdin.Fd(); term.IsTerminal(fd) {
 		savedTTY, _ = term.GetState(fd)
 	}
+	// A panic on a goroutine kiln started (crash.Go) ends the process from
+	// that goroutine; this is how it gives the terminal back first: stop
+	// the program, which restores what it set up, and write the reset
+	// sequences by hand in case it cannot stop (its event loop stuck, or
+	// the panic on the goroutine it waits for).
+	unsetRestore := crash.SetRestore(func() {
+		killed := make(chan struct{})
+		crash.Go(func() {
+			program.Kill()
+			close(killed)
+		})
+		select {
+		case <-killed:
+		case <-time.After(crashKillGrace):
+		}
+		restoreTerminal(savedTTY, bridge.Fullscreen())
+	})
+	defer unsetRestore()
+
+	// SIGQUIT's default action dumps every goroutine onto the terminal,
+	// raw mode and alternate screen still up, and exits: the dump is lost
+	// with the alternate screen and the terminal is left unusable. Write
+	// the dump to a crash report and restore the terminal instead. Its own
+	// channel, so it still works after SIGTERM or SIGHUP (a stuck
+	// shutdown is exactly when a dump is wanted).
+	quits := make(chan os.Signal, 1)
+	signal.Notify(quits, syscall.SIGQUIT)
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGTERM)
 	runDone := make(chan struct{})
 	var hungUp atomic.Bool
-	go func() {
+	crash.Go(func() {
+		select {
+		case sig := <-quits:
+			crash.Default.Signal(sig, 131) // 128 + SIGQUIT
+		case <-runDone:
+		}
+	})
+	crash.Go(func() {
 		select {
 		case sig := <-sigs:
 			diag.L().Info("signal: stopping", "signal", sig.String())
@@ -500,7 +539,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			if sig == syscall.SIGHUP {
 				code = 129
 				hungUp.Store(true)
-				go program.Kill()
+				crash.Go(program.Kill)
 			}
 			// With SIGHUP caught, nothing else ends the process: if
 			// shutdown ever blocked on the dead terminal it would linger
@@ -515,16 +554,26 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			}
 		case <-runDone:
 		}
-	}()
+	})
 
 	diag.L().Info("phase tui run", "elapsed", diag.Since())
 	_, err := program.Run()
 	signal.Stop(sigs)
+	signal.Stop(quits)
 	close(runDone)
 	diag.L().Info("phase tui exit", "elapsed", diag.Since(), "err", err)
 	bridge.Stop()
 	if hungUp.Load() {
 		return 129 // 128 + SIGHUP: the terminal went away
+	}
+	if errors.Is(err, tea.ErrProgramPanic) {
+		// Bubble Tea restored the terminal; say where the panic went.
+		if path := crash.Recorded(); path != "" {
+			fmt.Fprintf(stderr, "kiln crashed: %v\ncrash report: %s\n", err, path)
+		} else {
+			fmt.Fprintln(stderr, "kiln crashed:", err)
+		}
+		return crash.ExitCode
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "harness:", err)
@@ -816,10 +865,10 @@ func recentSessionRows(cwd, excludeID string) []recentSession {
 		rows []recentSession
 	}
 	done := make(chan result, 1)
-	go func() {
+	crash.Go(func() {
 		rows := buildRecentSessionRows(cwd, excludeID)
 		done <- result{rows: rows}
-	}()
+	})
 	select {
 	case r := <-done:
 		return r.rows
@@ -984,6 +1033,10 @@ func abbrevHome(path string) string {
 // on its own before the terminal is restored by hand and the process
 // exits.
 const signalExitGrace = 1500 * time.Millisecond
+
+// crashKillGrace is how long a crash waits for the program to stop and
+// restore the terminal itself before writing the reset sequences by hand.
+const crashKillGrace = 500 * time.Millisecond
 
 // restoreTerminal undoes what a bubbletea program sets up, for when the
 // program cannot do it itself: the saved tty mode (raw mode off), the

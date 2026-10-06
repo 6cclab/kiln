@@ -11,6 +11,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/andrepato/harness/internal/crash"
 )
 
 // OpenRouter OAuth flow, ported from pi-ai/dist/auth/oauth/openrouter.js.
@@ -121,7 +123,7 @@ func startOpenRouterCallbackServer(callbackPath, verifier string) (*openrouterCa
 		cs.once.Do(func() { cs.resultCh <- &code })
 	})
 	cs.srv = &http.Server{Handler: mux}
-	go func() { _ = cs.srv.Serve(ln) }()
+	crash.Go(func() { _ = cs.srv.Serve(ln) })
 	return cs, nil
 }
 
@@ -194,12 +196,12 @@ func LoginOpenRouter(ctx context.Context, ia FlowInteraction) (string, error) {
 		err   error
 	}
 	manualCh := make(chan manualResult, 1)
-	go func() {
+	crash.Go(func() {
 		input, err := ia.PromptManualCode(manualCtx,
 			"Complete sign-in in your browser, or paste the authorization code / redirect URL here:", cs.callbackURL)
 		manualCh <- manualResult{input, err}
 		cs.cancel()
-	}()
+	})
 
 	code := cs.waitForCode(loginCtx)
 	var manualErr error

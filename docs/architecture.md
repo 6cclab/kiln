@@ -585,6 +585,23 @@ The last 30 run logs are kept (`keepFiles`); before `Start` is called the
 logger discards everything, so tests and subcommands that never start a
 full run pay nothing.
 
+`internal/crash` ends the process cleanly when a goroutine panics. Every
+goroutine kiln starts goes through `crash.Go` (or defers `crash.Guard()`
+first; `internal/crash`'s `TestEveryGoroutineIsGuarded` fails on a bare
+`go` statement). A panic there writes a crash report
+(`crash-<time>-<pid>.txt` beside the run log: the panic, its goroutine's
+stack and every goroutine's stack) and an ERROR line to the run log,
+restores the terminal (`crash.SetRestore`, registered by `RunInteractive`:
+stop the Bubble Tea program, then write the mode resets by hand), names the
+report on stderr and exits 2. It never recovers and carries on: the
+panicking work may have left a session transaction half-written. Panics
+Bubble Tea catches itself (Update, View, Cmds, which is where a turn runs,
+and the renderer goroutine, patched in `third_party/bubbletea`) restore the
+terminal through Bubble Tea and get the same report through its panic hook;
+in the interactive session, SIGQUIT writes every goroutine's stack to a report instead of onto the
+alternate screen. A process with no run log (tests, subcommands) prints the
+stack to stderr and writes no file.
+
 `kiln doctor` (`internal/cli/subcommands.go`'s `Doctor`, also `/doctor`
 inside a session) prints model, tier, tool strategy, MCP status, hooks and
 agents on one screen, problems last.

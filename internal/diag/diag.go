@@ -28,6 +28,7 @@ const keepFiles = 30
 
 var (
 	current atomic.Pointer[slog.Logger]
+	curPath atomic.Pointer[string]
 	startMu sync.Mutex
 	started = time.Now()
 )
@@ -38,6 +39,14 @@ func init() {
 
 // L returns the process logger.
 func L() *slog.Logger { return current.Load() }
+
+// Path is the current run log's file, "" before Start or after its close.
+func Path() string {
+	if p := curPath.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
 
 // Since is the elapsed time since the process started, for phase timing.
 func Since() time.Duration { return time.Since(started).Round(time.Millisecond) }
@@ -85,6 +94,7 @@ func Start(label string, debug bool) (path string, closeFn func(), err error) {
 	}
 	logger := slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: level}))
 	current.Store(logger)
+	curPath.Store(&path)
 	logger.Info("start", "pid", os.Getpid(), "args", strings.Join(os.Args[1:], " "), "level", level.String())
 
 	prune(dir, path)
@@ -92,6 +102,7 @@ func Start(label string, debug bool) (path string, closeFn func(), err error) {
 	return path, func() {
 		logger.Info("exit", "elapsed", Since())
 		current.Store(slog.New(slog.NewTextHandler(io.Discard, nil)))
+		curPath.Store(nil)
 		_ = f.Close()
 	}, nil
 }

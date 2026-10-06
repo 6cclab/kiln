@@ -84,7 +84,14 @@ func dumpGoroutines(t *testing.T, s *screen.Screen, recordPath string) {
 		return
 	}
 	text := ansiPattern.ReplaceAllString(string(raw), "")
-	if i := strings.Index(text, "SIGQUIT"); i >= 0 {
+	// kiln writes the dump to a crash report and names it on stderr
+	// (internal/crash); a process past the TUI dumps onto the PTY as Go
+	// does.
+	if m := regexp.MustCompile(`crash report: (\S+)`).FindStringSubmatch(text); m != nil {
+		if b, err := os.ReadFile(m[1]); err == nil {
+			text = string(b)
+		}
+	} else if i := strings.Index(text, "SIGQUIT"); i >= 0 {
 		text = text[i:]
 	}
 	if out := os.Getenv("KILN_GOROUTINE_DUMP"); out != "" {

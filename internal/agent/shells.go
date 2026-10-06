@@ -39,6 +39,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/tools"
@@ -155,7 +156,7 @@ func (b *BackgroundShells) Start(ctx context.Context, command string, env *exece
 	if env.Sandbox != nil {
 		sandbox = env.Sandbox.ForCommand(command, false)
 	}
-	go func() {
+	crash.Go(func() {
 		result, err := env.Exec(runCtx, command, execenv.ExecOptions{
 			InheritEnv: true,
 			Sandbox:    sandbox,
@@ -181,7 +182,7 @@ func (b *BackgroundShells) Start(ctx context.Context, command string, env *exece
 		} else {
 			entry.status = ShellFailed
 		}
-	}()
+	})
 
 	snap := entry.snapshot()
 	return &snap, nil

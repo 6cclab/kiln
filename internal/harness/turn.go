@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
@@ -765,10 +766,12 @@ func (l *Lane) executeConcurrentRun(ctx context.Context, operationID, tip, assis
 	var wg sync.WaitGroup
 	wg.Add(n)
 	for k := 0; k < n; k++ {
-		go func(k int) {
-			defer wg.Done()
+		crash.Go(func() {
 			results[k], permOutcomes[k], beginErrs[k] = l.beginTool(ctx, operationID, toolCalls[start+k])
-		}(k)
+			// Not deferred: after a panic in beginTool the batch must not
+			// go on to commit this call's zero result.
+			wg.Done()
+		})
 	}
 	wg.Wait()
 

@@ -1,0 +1,28 @@
+{
+ "id": "20261006T182016Z-panic-leaves-terminal-raw",
+ "found_at": "2026-10-06T18:20:16Z",
+ "scenario": "real/ollama-skill-turn",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "A panic on a kiln goroutine kills the process with the terminal in raw mode and the panic lost",
+ "observed": "kiln (0d3e79e, ollama/qwen3.8, remote Ollama) vanished right after the second turn_start of a run (after a skill tool call). No ERROR in the run log, no crash report; the terminal pane was left in raw/mouse-tracking mode. Every goroutine kiln starts itself (provider stream readers, concurrent tools, bridge committer, event poster, MCP, hooks, shells, watchdogs) had no recover, so a panic there ended the process without restoring the terminal, and Go printed the panic onto the alternate screen, where it was lost. Bubble Tea's renderer goroutine had the same gap. Reproduced: test/e2e TestTUI_PanicOnKilnGoroutineRestoresTerminal with the stream goroutine unguarded leaves the alternate screen, raw mode, mouse 1002/1006, bracketed paste and kitty flags on, and writes no report.",
+ "expected": "A panic writes a crash report (panic, stack, all goroutines) next to the run log and an ERROR line to the run log, restores the terminal, names the report on stderr and exits non-zero.",
+ "design_ref": null,
+ "evidence": [
+  "test/e2e/crash_unix_test.go"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/crash/crash.go",
+   "internal/cli/tui.go",
+   "cmd/kiln/main.go",
+   "third_party/bubbletea/tea.go"
+  ],
+  "regression_test": "TestTUI_PanicOnKilnGoroutineRestoresTerminal,TestEveryGoroutineIsGuarded,TestGuardReportsRestoresAndExits,TestHarnessRendererPanicIsRecovered",
+  "note": "Every kiln goroutine runs under crash.Go/Guard: report beside the run log, ERROR log line, terminal restored, path on stderr, exit 2. Bubble Tea's renderer goroutine now recovers; its panic hook records a report too. SIGQUIT in the TUI writes a report instead of dumping onto the alternate screen.",
+  "updated_at": "2026-10-06T18:23:46Z"
+ }
+}

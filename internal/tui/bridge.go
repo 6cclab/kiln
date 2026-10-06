@@ -18,6 +18,7 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/claude/permission"
 	"github.com/andrepato/harness/internal/compaction"
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
@@ -157,7 +158,7 @@ func NewBridge(cwd string) *Bridge {
 		quit: make(chan struct{}),
 		cwd:  cwd,
 	}
-	go b.run()
+	crash.Go(b.run)
 	return b
 }
 
