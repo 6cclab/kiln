@@ -185,8 +185,12 @@ type Model struct {
 	// (stream.go's RenderStreamLive), cleared once the full markdown block
 	// commits (msgCommitMarkdown) or the turn ends.
 	streamText string
-	dialog     Dialog
-	thinking   *ThinkingView
+	// labelBeforePrompt is the busy label a permission, plan or question
+	// prompt replaced ("Running bash"), restored once the prompt is
+	// answered (restoreLabelAfterPrompt).
+	labelBeforePrompt string
+	dialog            Dialog
+	thinking          *ThinkingView
 	// queued holds the raw text of every follow-up submitted via Lane.Steer
 	// while a turn is busy, in submission order, that the lane has not yet
 	// drained onto the branch (harness/turn.go's drainInbox). Rendered in
@@ -974,6 +978,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		// "Interactions"). The tool's own block commits after the decision,
 		// on EventToolEnd, exactly like any other call — with the outcome
 		// (approved/auto-approved) in its meta.
+		m = m.saveLabelBeforePrompt()
 		p := m.prompt
 		p.pending = newPendingPermission(msg.Request, msg.Reply, p.cwd)
 		p.feedback = nil
@@ -982,6 +987,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m.syncPromptPlaceholder(), nil
 
 	case MsgPlanPrompt:
+		m = m.saveLabelBeforePrompt()
 		p := m.prompt
 		p.plan = &pendingPlan{plan: msg.Plan, reply: msg.Reply}
 		p.feedback = nil
@@ -990,6 +996,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m.syncPromptPlaceholder(), nil
 
 	case MsgAskUserPrompt:
+		m = m.saveLabelBeforePrompt()
 		p := m.prompt
 		p.question = &pendingQuestion{questions: msg.Questions, checked: map[int]bool{}, reply: msg.Reply}
 		p.feedback = nil
@@ -1776,9 +1783,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	router.lastCtrlC = m.lastCtrlC
 	router.lastEsc = m.lastEsc
+	promptWasActive := m.prompt.Active()
 	consumed := router.Route(msg)
 	m.lastCtrlC = router.lastCtrlC
 	m.lastEsc = router.lastEsc
+	if promptWasActive && !m.prompt.Active() {
+		m = m.restoreLabelAfterPrompt(m.prompt.lastDenied != nil)
+	}
 	// A tool-permission prompt answered "no" (Esc, or feedback then Enter)
 	// leaves its denied request on m.prompt.lastDenied (permissionview.go's
 	// finishTool) — commit the "✕ Declined …" note now, before whatever
@@ -1902,6 +1913,32 @@ func (m Model) syncPromptPlaceholder() Model {
 	default:
 		m.editor.SetPlaceholder(editor.DefaultPlaceholder)
 	}
+	return m
+}
+
+// saveLabelBeforePrompt remembers the busy label a prompt is about to
+// replace with "Waiting for approval". A prompt arriving while another is
+// already up keeps the first one's saved label, not "Waiting for approval".
+func (m Model) saveLabelBeforePrompt() Model {
+	if !m.prompt.Active() {
+		m.labelBeforePrompt = m.spinner.Label()
+	}
+	return m
+}
+
+// restoreLabelAfterPrompt hands the busy row back once a prompt is
+// answered. "Waiting for approval" stayed up through the approved tool's
+// whole run and the model's next request otherwise, so an answered prompt
+// read as one still waiting. An approved call is still running, so it gets
+// its "Running <tool>" label back; a declined one never ran, so the row
+// returns to the turn's gerund.
+func (m Model) restoreLabelAfterPrompt(declined bool) Model {
+	if declined || m.labelBeforePrompt == "" {
+		m.spinner.ResetLabel()
+	} else {
+		m.spinner.SetLabel(m.labelBeforePrompt)
+	}
+	m.labelBeforePrompt = ""
 	return m
 }
 
