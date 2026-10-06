@@ -2,9 +2,7 @@ package compaction
 
 import (
 	"context"
-	"fmt"
 	"math"
-	"time"
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
@@ -163,52 +161,31 @@ func maxTokensFor(fraction float64, reserveTokens int, modelMaxTokens int) int {
 	return m
 }
 
+// summaryOutputCap bounds the cache-friendly summary request (fastpath.go).
+// The structured format (seven short headed sections) measures a few
+// hundred tokens in ordinary use; 4096 leaves room for a long session's
+// summary while bounding how long a local model can generate. A summary
+// that reaches the cap stops with StopLength, and the cache path then falls
+// back to the serialized path, whose budget is the original
+// maxTokensFor(0.8, reserve, ...) -- so a long summary is never cut off.
+const summaryOutputCap = 4096
+
+// cappedMaxTokensFor is maxTokensFor with an additional ceiling, applied
+// whenever it is smaller than what maxTokensFor alone would allow.
+func cappedMaxTokensFor(fraction float64, reserveTokens, modelMaxTokens, cap int) int {
+	m := maxTokensFor(fraction, reserveTokens, modelMaxTokens)
+	if cap > 0 && cap < m {
+		return cap
+	}
+	return m
+}
+
 // runSimple sends one non-tool user-role request through streamer and
 // returns the assistant's text and usage. It is this port's stand-in for
 // pi's completeSimpleWithRetries + retryAssistantCall: no retry policy, no
 // telemetry context, since neither exists on this side of the port yet.
 func runSimple(ctx context.Context, streamer Streamer, model provider.Model, systemPrompt, userText string, maxTokens int, thinkingLevel provider.ThinkingLevel) (string, msg.Usage, error) {
 	return runSimpleWatched(ctx, streamer, model, systemPrompt, userText, maxTokens, thinkingLevel, Options{}, 1, 1)
-}
-
-// runSimpleEach is runSimple's body, calling onEvent for every streamed
-// event.
-func runSimpleEach(ctx context.Context, streamer Streamer, model provider.Model, systemPrompt, userText string, maxTokens int, thinkingLevel provider.ThinkingLevel, onEvent func(msg.StreamEvent)) (string, msg.Usage, error) {
-	opts := provider.StreamOptions{SystemPrompt: systemPrompt, MaxTokens: maxTokens}
-	if model.Reasoning && thinkingLevel != "" && thinkingLevel != provider.ThinkingOff {
-		opts.ThinkingLevel = thinkingLevel
-	}
-	transcript := []msg.Message{
-		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(userText)}, Timestamp: time.Now().UnixMilli()},
-	}
-	ch, wait := streamer.Stream(ctx, model, transcript, opts)
-	for ev := range ch {
-		// Compact only needs the final assistant message; the events
-		// only feed the watchdog and progress.
-		onEvent(ev)
-	}
-	am, err := wait()
-	if err != nil {
-		return "", msg.Usage{}, err
-	}
-	if am == nil {
-		return "", msg.Usage{}, &Error{Code: "summarization_failed", Message: "summarization failed: no response"}
-	}
-	switch am.StopReason {
-	case msg.StopAborted:
-		message := am.ErrorMessage
-		if message == "" {
-			message = "Summarization aborted"
-		}
-		return "", msg.Usage{}, &Error{Code: "aborted", Message: message}
-	case msg.StopError:
-		message := am.ErrorMessage
-		if message == "" {
-			message = "Unknown error"
-		}
-		return "", msg.Usage{}, &Error{Code: "summarization_failed", Message: fmt.Sprintf("Summarization failed: %s", message)}
-	}
-	return msg.TextOf(am.Content), am.Usage, nil
 }
 
 // turnPrefixUpdatePrompt continues a split turn's prefix summary when the
@@ -241,6 +218,12 @@ func Compact(ctx context.Context, prep *Preparation, streamer Streamer, model pr
 // pi, it never sends a request larger than model's window: history that
 // does not fit one request is summarised in parts (fit.go).
 func CompactWith(ctx context.Context, prep *Preparation, streamer Streamer, model provider.Model, customInstructions *string, thinkingLevel provider.ThinkingLevel, opts Options) (Result, error) {
+	if opts.FastPath != nil {
+		if result, ok := tryFastPath(ctx, prep, *opts.FastPath, streamer, model, customInstructions, opts); ok {
+			return result, nil
+		}
+	}
+
 	reserve := prep.Settings.ReserveTokens
 	history := summaryRequest{
 		first:     summarizationPrompt,
