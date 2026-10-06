@@ -1,0 +1,20 @@
+{
+ "id": "20261006T111858Z-stream-render-cost-grows-with-reply",
+ "found_at": "2026-10-06T11:18:58Z",
+ "scenario": "qa/scenarios/errors/context-overflow.steps",
+ "step": null,
+ "terminals": [
+  "xterm-dark"
+ ],
+ "category": "bug",
+ "severity": "low",
+ "title": "Per-chunk render cost of a streaming reply grows with the reply's length",
+ "observed": "Faux 8-char chunks, headless, main 7aa37ba: 37k-char reply streams in ~6s, 149k-char reply in ~64s (4x text, ~11x time; ~1.3ms vs ~3.4ms per chunk). On a CI runner the 149k reply took >90s.",
+ "expected": "Roughly constant per-chunk cost, so streaming time scales linearly with reply length. Not user-visible at real model rates (tens of tokens/s), but it slows long faux scenarios.",
+ "design_ref": null,
+ "evidence": [
+  "CI run 37441947945 qa-headless context-overflow timeout screen (27.8k tokens at 91s); local timings from drive.py run logs"
+ ],
+ "status": "open",
+ "fix": null
+}

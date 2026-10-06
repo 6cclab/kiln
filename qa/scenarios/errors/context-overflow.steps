@@ -15,7 +15,9 @@ KEY enter
 WAITFOR /Now on faux\/faux-2 · small tier/ 20
 TYPE give me all the detail at once
 KEY enter
-WAITFOR /›\s+describe a task/ 90
+# The ~150k-char reply streams as ~19k faux chunks; a CI runner needs
+# well over 90s for it (finding stream-render-cost-grows-with-reply).
+WAITFOR /›\s+describe a task/ 300
 SHOT huge-reply-landed
 TYPE anything else
 KEY enter
