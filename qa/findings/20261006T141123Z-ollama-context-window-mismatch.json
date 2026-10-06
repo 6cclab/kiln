@@ -1,0 +1,26 @@
+{
+ "id": "20261006T141123Z-ollama-context-window-mismatch",
+ "found_at": "2026-10-06T14:11:23Z",
+ "scenario": "manual: kiln models against a local Ollama 0.34.0",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "kiln budgets a context window the Ollama server is not serving",
+ "observed": "kiln sends Ollama requests to /v1/chat/completions, which cannot carry num_ctx. With qwen3:8b not resident at startup, kiln budgets 49152 tokens (from kiln's own OLLAMA_CONTEXT_LENGTH) while the server serves 8192; Ollama silently truncates prompts past 8192, dropping the system prompt and tools. With the model resident kiln reads 8192 from /api/ps (4756 tokens left for the conversation).",
+ "expected": "The window kiln budgets for is the window Ollama serves: kiln sends num_ctx on every request (native /api/chat), choosing Modelfile num_ctx > OLLAMA_CONTEXT_LENGTH > min(training context, 32768).",
+ "design_ref": null,
+ "evidence": [
+  "/api/ps context_length after: /v1 with options.num_ctx -> 8192; preload num_ctx 32768 then /v1 -> back to 8192; /api/chat options.num_ctx 32768 -> 32768. kiln models: 49152 unloaded vs 8192 loaded."
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/provider/ollama/ollama.go",
+   "internal/provider/ollama/client.go"
+  ],
+  "regression_test": "TestNativeRequestSendsNumCtxEqualToContextWindow",
+  "note": "Native /api/chat client sends options.num_ctx = model.ContextWindow on every request; verified live against Ollama 0.34.0/qwen3:8b: kiln models reported ctx=32768 and /api/ps context_length=32768 after an unloaded-model one-shot run (matching, where origin/main reported 49152 budgeted vs 8192 served).",
+  "updated_at": "2026-10-06T14:31:04Z"
+ }
+}

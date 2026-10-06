@@ -110,7 +110,7 @@ Source: `grep -rn 'os.Getenv\|os.LookupEnv' --include="*.go" cmd internal | grep
 | `KILN_EVAL_LIVE` | `internal/eval/runner.go` | `"1"` lets `kiln eval run` use non-faux models (`eval: live model(s) refused (set KILN_EVAL_LIVE=1 to allow)` otherwise) | refused |
 | `OLLAMA_HOST` | `internal/cli/chat.go` | Ollama base URL | checked first |
 | `OLLAMA_BASE_URL` | `internal/cli/chat.go` | Ollama base URL fallback | used only if `OLLAMA_HOST` unset |
-| `OLLAMA_CONTEXT_LENGTH` | `internal/cli/chat.go` | server-side default `num_ctx` for models that pin none | 0 (unset) |
+| `OLLAMA_CONTEXT_LENGTH` | `internal/cli/chat.go` | the `num_ctx` kiln asks Ollama to serve for a model that pins none in its Modelfile (sent on every native `/api/chat` request, `internal/provider/ollama/client.go`) | 0 (unset; falls back to the model's training context, capped at 32,768, then 8,192). Capped at the model's training context when set higher. |
 | `NO_COLOR` | `internal/tui/theme.go` | disables ANSI styling (any value) | checked first |
 | `FORCE_COLOR` | `internal/tui/theme.go` | forces color on (any value) | checked after `NO_COLOR` |
 | `SSH_TTY`, `SSH_CONNECTION` | `internal/auth/interaction.go` | treat the session as headless for OAuth login (prints URL instead of opening a browser) | falls back to stdout TTY check |

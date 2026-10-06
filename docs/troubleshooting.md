@@ -115,22 +115,35 @@ kiln providers            # kind + configured/- per provider
 - Ollama auths via the `OLLAMA_HOST` env var, not a stored credential — there is
   no `kiln login ollama` flow (`internal/provider/ollama/ollama.go`). A
   gateway in front of Ollama takes its bearer token from `Options.APIKey`, not
-  the credential store.
+  the credential store; `client.go`'s native `/api/chat` client sends it the
+  same way the discovery calls already do (`Authorization: Bearer`).
 
 ## Ollama
 
 No login needed for a bare local install (`internal/provider/ollama/ollama.go:
-271-273`). **Context window resolution**, most authoritative first
-(`internal/provider/ollama/ollama.go`, `ResolveContextWindow`):
-`/api/ps`'s `context_length` for the *currently loaded* instance (the only
-source of the real serving window, and only while resident) → `num_ctx`
+271-273`). kiln streams Ollama completions through its native `/api/chat`
+protocol (`internal/provider/ollama/client.go`), not the OpenAI-compatible
+`/v1` endpoint — `/v1` cannot carry `num_ctx`, so a model's actually served
+window used to depend on whichever caller last loaded it, independent of
+what kiln asked for (this was a real bug: see
+`qa/findings/20261006T141123Z-ollama-context-window-mismatch.json`).
+
+**Context window resolution**, most authoritative first
+(`internal/provider/ollama/ollama.go`, `ResolveContextWindow`): `num_ctx`
 pinned in the Modelfile, from `/api/show`'s `parameters` → the server-wide
-`OLLAMA_CONTEXT_LENGTH` → a conservative 8,192-token fallback. The model's
-*training* context (`model_info.*.context_length`) is deliberately never
-used — "wildly larger than what gets served" (same file, comment above
-`ResolveContextWindow`). Consequence: **a model's reported window can shrink
-the moment it's unloaded**, since only `/api/ps` reports the true served
-window.
+`OLLAMA_CONTEXT_LENGTH` (now also read as kiln's own ask, not just a guess
+at the server's default) → the model's *training* context
+(`model_info.*.context_length` from `/api/show`), capped at 32,768 so an
+unconfigured large-context model doesn't get asked to serve a window no
+consumer box can hold → a conservative 8,192-token fallback if nothing is
+known at all. A Modelfile pin or `OLLAMA_CONTEXT_LENGTH` above the model's
+training context is capped at it, since Ollama silently serves no more than
+that. `/api/ps`'s `context_length` (a resident model's *current*
+serving window) is no longer consulted: every `/api/chat` request now
+carries its own `options.num_ctx` equal to the resolved window, so the next
+request is what sets the served window, not whatever an earlier caller
+loaded it with. Consequence: **the served window is always what `kiln
+models` reports**, not a function of load order.
 
 - Ollama unreachable: `DiscoverModels` calls `/api/tags` first and fails whole
   on error (`internal/provider/ollama/ollama.go`) — surfaces as
@@ -144,8 +157,9 @@ window.
   bug.
 
 - Window smaller than expected / early compaction: pin `num_ctx` in the
-  Modelfile or set `OLLAMA_CONTEXT_LENGTH`, then reload the model so `/api/ps`
-  reports the new window.
+  Modelfile, or set `OLLAMA_CONTEXT_LENGTH` and restart kiln — no reload or
+  `/api/ps` check needed; the next request kiln sends carries the new window
+  itself.
 
 ## MCP servers
 

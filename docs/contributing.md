@@ -229,8 +229,10 @@ actually correct.
    e.g. `anthropic_messages.go`, `openai_responses.go`.
 3. A **non-catalog** provider (one with its own model discovery, not sourced
    from the vendored catalog) is the pattern in `internal/provider/ollama`:
-   its own `Models`/`RefreshModels` implementation (`/api/tags`, `/api/ps`,
-   `/api/show`) instead of reading `internal/provider/catalog`.
+   its own `Models`/`RefreshModels` implementation (`/api/tags`, `/api/show`)
+   instead of reading `internal/provider/catalog`, and its own `Stream`
+   implementation (`client.go`'s native `/api/chat` client) instead of one of
+   `internal/provider/api`'s shared shapes.
 4. New API-shape clients need golden request/response fixtures under
    `internal/provider/api/testdata/<shape>/*.sse`: recorded once from a live
    `internal/testkit/faux` server (`go test ./internal/provider/api/... -run

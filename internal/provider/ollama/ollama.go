@@ -1,6 +1,17 @@
-// Package ollama is the Ollama provider: discovery over /api/tags, /api/ps
-// and /api/show, and resolution of the context window a model is actually
-// being served with (which is often far smaller than its training context).
+// Package ollama is the Ollama provider: discovery over /api/tags and
+// /api/show, resolution of the context window kiln will ask Ollama to
+// serve, and a native-protocol streaming client (/api/chat) that sends that
+// window on every request.
+//
+// Ollama's OpenAI-compatible endpoint (/v1/chat/completions) cannot carry
+// num_ctx: the server just serves its own default (or whatever a previous
+// caller happened to load the model with), regardless of what this harness
+// budgets for. Measured against a live Ollama 0.34.0: /v1 with
+// options.num_ctx is silently ignored; a native /api/chat request with
+// options.num_ctx is honored and reloads the model at that window. So the
+// only reliable way to make the served window match the budgeted one is for
+// kiln to speak the native protocol and set num_ctx itself -- see
+// client.go.
 //
 // This is a Go port of harness/src/provider/ollama.ts.
 package ollama
@@ -27,14 +38,25 @@ const ProviderID = "ollama"
 // DefaultURL is the bare-Ollama default host.
 const DefaultURL = "http://127.0.0.1:11434"
 
+// ApiOllamaNative is this provider's Api tag. provider.Api is deliberately
+// not a closed enum (pi's Api type is KnownApi | string) for exactly this
+// case: Ollama speaks its own native protocol (client.go), not one of
+// pi-ai's ten catalog shapes, and nothing downstream switches on Model.Api
+// for an Ollama model -- Provider.Stream below is this provider's own
+// method, never routed through internal/provider/builtin's
+// implementedAPIs/switch.
+const ApiOllamaNative provider.Api = "ollama-native"
+
 // fallbackContext is used when a model's serving context cannot be
 // determined.
 //
 // Ollama's own default is 4096, which every tier rejects as unrunnable.
-// Guessing high would be worse: an over-large window silently selects a
-// bigger tier and the model truncates mid-turn with no error. 8192 is the
-// smallest window that runs, so an unknown model starts conservative and is
-// corrected the moment /api/ps reports the truth.
+// Guessing high would be worse: an over-large window asks Ollama to serve
+// more than the box may have VRAM for, which fails the request outright
+// rather than truncating anything. 8192 is the smallest window that runs,
+// so an unknown model starts conservative; a Modelfile num_ctx,
+// OLLAMA_CONTEXT_LENGTH or a known training context (ResolveContextWindow)
+// all take priority over this guess.
 const fallbackContext = 8_192
 
 type tag struct {
@@ -46,20 +68,39 @@ type tagsResponse struct {
 	Models []tag `json:"models"`
 }
 
-type psEntry struct {
-	Model string `json:"model"`
-	// ContextLength is the effective serving context of the loaded
-	// instance. Authoritative when present.
-	ContextLength int `json:"context_length"`
-}
-
-type psResponse struct {
-	Models []psEntry `json:"models"`
-}
-
 type showResponse struct {
 	Parameters   string   `json:"parameters"`
 	Capabilities []string `json:"capabilities"`
+	// ModelInfo is Ollama's per-architecture metadata blob, keyed like
+	// "qwen3.context_length", "llama.context_length": the model's TRAINING
+	// context, not what it will be served at. Read only by
+	// trainingContextFromModelInfo, and only as the last resort below
+	// fallbackContext.
+	ModelInfo map[string]any `json:"model_info"`
+}
+
+// trainingContextFromModelInfo finds the training-context entry in a
+// /api/show response's model_info blob. The key is architecture-prefixed
+// (e.g. "qwen3.context_length") so it is matched by suffix rather than a
+// fixed name. Returns 0, false if no such key is present or it does not
+// decode as a positive number.
+func trainingContextFromModelInfo(modelInfo map[string]any) (int, bool) {
+	for k, v := range modelInfo {
+		if !strings.HasSuffix(k, ".context_length") {
+			continue
+		}
+		switch n := v.(type) {
+		case float64:
+			if n > 0 {
+				return int(n), true
+			}
+		case json.Number:
+			if f, err := n.Float64(); err == nil && f > 0 {
+				return int(f), true
+			}
+		}
+	}
+	return 0, false
 }
 
 // controlCharPattern scrubs raw control characters Ollama occasionally
@@ -118,33 +159,67 @@ func numCtxFromParameters(parameters string) (int, bool) {
 
 // ResolveContextWindowArgs are the inputs to ResolveContextWindow.
 type ResolveContextWindowArgs struct {
-	PSContextLength int
-	ShowParameters  string
-	// ServerDefault is the server-wide OLLAMA_CONTEXT_LENGTH, if known.
+	ShowParameters string
+	// ServerDefault is the server-wide OLLAMA_CONTEXT_LENGTH, if known. As
+	// of the native /api/chat client, this is kiln's own ask (what it will
+	// send as options.num_ctx when nothing more specific pins a window),
+	// not just a guess at the server's behavior.
 	ServerDefault int
+	// TrainingContext is model_info.*.context_length from /api/show: the
+	// context length the model was TRAINED with, which can be far larger
+	// than anything worth asking Ollama to serve (loading a model at its
+	// full training window can take far more VRAM than the box has, and is
+	// usually unnecessary). Used only as a last resort, capped at
+	// maxAutoContext.
+	TrainingContext int
 }
 
-// ResolveContextWindow resolves the window a model will actually be served
-// with.
+// maxAutoContext caps how much of a model's training context
+// ResolveContextWindow will ask Ollama to serve when nothing else (a
+// Modelfile pin or OLLAMA_CONTEXT_LENGTH) says what to ask for. Chosen as a
+// window every machine that can load the model at all can plausibly also
+// serve at, without either the operator or kiln ever naming a number.
+const maxAutoContext = 32_768
+
+// ResolveContextWindow resolves the window kiln will ask Ollama to serve
+// via options.num_ctx on every /api/chat request (client.go) -- by
+// construction, the window kiln budgets for (internal/budget.TierForWindow)
+// is the window Ollama actually serves, since kiln is the one asking for
+// it.
 //
-// Ordering matters, and getting it wrong is not a small error: a model can
-// report a training context far larger than what it is actually served at
-// (a Modelfile-pinned num_ctx). Priority: /api/ps context_length (only
-// Ollama knows this, and only while the model is resident) > num_ctx pinned
-// in the Modelfile (via /api/show parameters) > server-wide default >
-// fallbackContext. Deliberately NOT model_info.*.context_length -- that is
-// the training context and is wildly larger than what gets served.
+// Ordering, most authoritative first: num_ctx pinned in the Modelfile (via
+// /api/show parameters -- an operator's explicit choice for this model) >
+// OLLAMA_CONTEXT_LENGTH (kiln's own env-configured ask, same variable
+// Ollama's server reads for its own default) > the model's training
+// context (model_info.*.context_length), capped at maxAutoContext so an
+// unconfigured 1M-context model doesn't get asked to serve a window no
+// consumer box can hold > fallbackContext when nothing is known at all.
+// /api/ps's context_length (a resident model's CURRENT serving window) is
+// deliberately not consulted: now that every request carries its own
+// num_ctx, the next request is what sets the window, not whatever an
+// earlier caller happened to load the model with.
 func ResolveContextWindow(args ResolveContextWindowArgs) int {
-	if args.PSContextLength > 0 {
-		return args.PSContextLength
-	}
 	if n, ok := numCtxFromParameters(args.ShowParameters); ok {
-		return n
+		return capAtTraining(n, args.TrainingContext)
 	}
 	if args.ServerDefault > 0 {
-		return args.ServerDefault
+		return capAtTraining(args.ServerDefault, args.TrainingContext)
+	}
+	if args.TrainingContext > 0 {
+		return min(args.TrainingContext, maxAutoContext)
 	}
 	return fallbackContext
+}
+
+// capAtTraining caps an asked-for window at the model's training context
+// when that is known: Ollama silently serves a num_ctx above it at the
+// training context, so asking for more would budget a window that is not
+// served (OLLAMA_CONTEXT_LENGTH=49152 on qwen3:8b serves 40960).
+func capAtTraining(n, training int) int {
+	if training > 0 && n > training {
+		return training
+	}
+	return n
 }
 
 // thinkingLevelMapOff maps ThinkingOff -> "off" and every other level to
@@ -178,13 +253,19 @@ func toModel(id, baseURL string, contextWindow int, capabilities []string) provi
 	m := provider.Model{
 		ID:            id,
 		Name:          id,
-		Api:           provider.ApiOpenAICompletions,
+		Api:           ApiOllamaNative,
 		Provider:      ProviderID,
 		BaseURL:       baseURL,
 		Reasoning:     reasoning,
 		Input:         input,
 		ContextWindow: contextWindow,
-		MaxTokens:     contextWindow,
+		// MaxTokens caps the model's own output (options.num_predict),
+		// not a request-dependent value: unchanged from the /v1 path,
+		// which also set it to the full window. budget/tier.go never
+		// reads Model.MaxTokens -- only ContextWindow -- so this does not
+		// affect compaction/tiering; it only means an unbounded turn's
+		// output is capped by the window, same as before this fix.
+		MaxTokens: contextWindow,
 		// Self-hosted: no per-token cost. Keeps cost reporting honest rather
 		// than inventing a number.
 		Cost: provider.ModelCost{},
@@ -202,7 +283,11 @@ func toModel(id, baseURL string, contextWindow int, capabilities []string) provi
 		// thinkingFormat is deliberately NOT set: Ollama 0.32.15 silently
 		// drops chat_template_kwargs / enable_thinking / thinking_budget_tokens
 		// (measured byte-identical output on qwen3-cc). Suppression is
-		// handled by internal/provider's reasoning.go instead.
+		// handled by internal/provider's reasoning.go instead. Kept even
+		// though the native client (client.go) no longer reads this
+		// compat struct: Model.MaxTokensField()/SupportsStrictMode() etc
+		// still decode it, and other code may still call those accessors
+		// on an Ollama model.
 	}
 	raw, _ := json.Marshal(compat)
 	m.Compat = raw
@@ -240,8 +325,8 @@ type Options struct {
 	HTTPClient *http.Client
 }
 
-// discoveryTimeout bounds each model-listing call (/api/tags, /api/ps,
-// /api/show): they answer from metadata, without loading a model.
+// discoveryTimeout bounds each model-listing call (/api/tags, /api/show):
+// they answer from metadata, without loading a model.
 const discoveryTimeout = 15 * time.Second
 
 func (o Options) requireTools() bool {
@@ -279,7 +364,8 @@ func (o Options) streamClient() *http.Client {
 	return api.NewStreamingClient()
 }
 
-// DiscoverModels discovers models and their true serving windows.
+// DiscoverModels discovers models and the context window kiln will ask
+// each one to be served at (ResolveContextWindow).
 func DiscoverModels(ctx context.Context, opts Options) ([]provider.Model, error) {
 	base := opts.baseURL()
 	client := opts.client()
@@ -287,16 +373,6 @@ func DiscoverModels(ctx context.Context, opts Options) ([]provider.Model, error)
 	var tags tagsResponse
 	if err := getJSON(ctx, client, base, "/api/tags", opts.APIKey, "", nil, &tags); err != nil {
 		return nil, err
-	}
-
-	// Loaded models report their real context window; unloaded ones cannot
-	// without being loaded, which would be a rude side effect of listing.
-	loaded := map[string]psEntry{}
-	var ps psResponse
-	if err := getJSON(ctx, client, base, "/api/ps", opts.APIKey, "", nil, &ps); err == nil {
-		for _, e := range ps.Models {
-			loaded[e.Model] = e
-		}
 	}
 
 	var out []provider.Model
@@ -318,12 +394,13 @@ func DiscoverModels(ctx context.Context, opts Options) ([]provider.Model, error)
 			continue
 		}
 
+		trainingContext, _ := trainingContextFromModelInfo(show.ModelInfo)
 		window := ResolveContextWindow(ResolveContextWindowArgs{
-			PSContextLength: loaded[t.Model].ContextLength,
 			ShowParameters:  show.Parameters,
 			ServerDefault:   opts.ServerDefaultContext,
+			TrainingContext: trainingContext,
 		})
-		out = append(out, toModel(t.Model, base+"/v1", window, show.Capabilities))
+		out = append(out, toModel(t.Model, base, window, show.Capabilities))
 	}
 	return out, nil
 }
@@ -338,13 +415,13 @@ type Provider struct {
 	// what Models returned.
 	modelsMu sync.RWMutex
 	models   []provider.Model
-	client   *api.OpenAICompletionsClient
+	client   *nativeClient
 }
 
 // New builds an Ollama provider. Models are empty until RefreshModels is
 // called (matching pi's getModels() returning [] before the first refresh).
 func New(opts Options) *Provider {
-	return &Provider{opts: opts, client: &api.OpenAICompletionsClient{HTTPClient: opts.streamClient()}}
+	return &Provider{opts: opts, client: &nativeClient{HTTPClient: opts.streamClient()}}
 }
 
 func (p *Provider) ID() string   { return ProviderID }
@@ -360,7 +437,7 @@ func (p *Provider) Models() []provider.Model {
 	return p.models
 }
 
-// RefreshModels re-discovers models via /api/tags, /api/ps and /api/show.
+// RefreshModels re-discovers models via /api/tags and /api/show.
 // Discovery runs outside the lock; only the swap is guarded.
 func (p *Provider) RefreshModels(ctx context.Context) error {
 	models, err := DiscoverModels(ctx, p.opts)
@@ -382,17 +459,21 @@ func Login(ctx context.Context, url, apiKey string) error {
 	return getJSON(ctx, client, base, "/api/tags", apiKey, "", nil, &tags)
 }
 
-// Stream drives a completion through the openai-completions client at
-// {base}/v1, using the placeholder key "local" (Ollama ignores it; the
-// gateway requires a real bearer token supplied via Options.APIKey).
+// Stream drives a completion through the native /api/chat client
+// (client.go), using the placeholder key "local" (a bare Ollama host
+// ignores the Authorization header entirely; a gateway in front of Ollama
+// needs a real bearer token, supplied via Options.APIKey -- see client.go's
+// nativeHeaders, which sends it exactly as the discovery calls above
+// already do).
 func (p *Provider) Stream(ctx context.Context, model provider.Model, transcript []msg.Message, opts provider.StreamOptions) (<-chan msg.StreamEvent, func() (*msg.AssistantMessage, error)) {
 	key := p.opts.APIKey
 	if key == "" {
 		key = "local"
 	}
-	// Reasoning suppression: some Qwen models on Ollama ignore every
-	// transport-level "stop reasoning" field, so the /no_think suffix goes
-	// on the last user message instead (internal/provider/reasoning.go).
+	// Reasoning suppression: some Qwen models ignore think:false over
+	// every transport this harness has tried, native /api/chat included
+	// -- see internal/provider/reasoning.go. The /no_think suffix on the
+	// last user message is the one channel that reaches them.
 	suppression := provider.SuppressionFor(model)
 	if suppression.Suffix != "" {
 		transcript = provider.ApplySuppression(transcript, provider.SuppressionNoThinkSuffix)
