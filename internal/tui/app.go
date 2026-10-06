@@ -1752,11 +1752,34 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// (m.prompt.pending, not m.prompt.plan) — a plan prompt's own
 		// Esc means "tell kiln what to change", not "decline and stop".
 		promptEscInterrupt bool
+		// promptCtrlCInterrupt is set when Ctrl+C is pressed while any
+		// prompt (permission, plan or question) is up. Unlike Esc, Ctrl+C
+		// means the same thing for every prompt kind: cancel it and stop
+		// the turn — it never opens a feedback field, so PromptState never
+		// sees it (PermissionKey handles it directly below, before
+		// m.prompt.HandleKey, which would otherwise swallow it as an
+		// unmatched key, leaving the gate's caller blocked forever and
+		// giving the user no way to interrupt a busy turn with a prompt
+		// on screen). The router's own ctrl+c case (double-press-to-exit)
+		// deliberately does not run for this key: PermissionKey reports it
+		// consumed. As in Claude Code, a Ctrl+C that answers a prompt does
+		// not count toward a double Ctrl+C exit.
+		promptCtrlCInterrupt bool
 	)
 	router := NewRouter(KeyActions{
 		PermissionKey: func(msg tea.KeyPressMsg) bool {
 			if !m.prompt.Active() {
 				return false
+			}
+			if strings.EqualFold(msg.String(), "ctrl+c") {
+				promptCtrlCInterrupt = true
+				// cancelAll answers the prompt on screen and every queued
+				// one as declined, so no caller (the gate, the plan or
+				// question approver) is left blocked — whatever mode the
+				// prompt is in, including feedback entry, where typed text
+				// is discarded rather than submitted, as in Claude Code.
+				m.prompt.cancelAll()
+				return true
 			}
 			if m.busy && m.prompt.pending != nil && strings.EqualFold(msg.String(), "esc") {
 				promptEscInterrupt = true
@@ -1844,7 +1867,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// Esc or Ctrl+C during a background command (/compact):
 			// cancel its context; finishBackground reports it.
 			m.background.cancel()
-		} else if (didAbort || promptEscInterrupt) && m.cfg.Lane != nil {
+		} else if (didAbort || promptEscInterrupt || promptCtrlCInterrupt) && m.cfg.Lane != nil {
 			_ = m.cfg.Lane.Abort()
 		}
 		if didClear {

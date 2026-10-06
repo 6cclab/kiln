@@ -1,0 +1,21 @@
+# Ctrl+C at the bash prompt declines it and interrupts the turn in one
+# key press, as in Claude Code. Unlike Esc on this same prompt
+# (bash-esc-decline.steps), there is no "✕ Declined …" note: the decline
+# goes through PromptState.cancelAll, not finishTool, so only the turn's
+# own "■ Interrupted" line shows.
+@faux testdata/faux/qa/permissions-esc-decline.yaml
+
+WAITFOR /describe a task/ 20
+TYPE deploy to production
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT bash-prompt
+EXPECT /curl https:\/\/example\.invalid\/deploy/
+KEY ctrl+c
+WAIT 1
+SHOT after-ctrlc
+EXPECT_NOT /approval needed/
+EXPECT /■ Interrupted\. Tell kiln what to do instead\./
+EXPECT_NOT /✕ Declined/
+EXPECT_NOT /Okay, I won.t run it/
+EXPECT_NOT /panic|goroutine/
