@@ -314,10 +314,16 @@ whose `api` is catalog-known but not yet streamable reports
 `*msg.AssistantMessage` in place across stream events
 (`internal/provider/api/sse.go`).
 
-`internal/provider/ollama` discovers local models over `/api/tags`,
-`/api/ps` and `/api/show`, resolving the context window a model is
-*actually being served with* — often smaller than its training context —
-which is what `TierForWindow` is fed for Ollama models.
+`internal/provider/ollama` discovers local models over `/api/tags` and
+`/api/show`, resolving the context window kiln will ask Ollama to serve
+(`ResolveContextWindow`), and streams completions through Ollama's native
+`/api/chat` protocol (`client.go`) rather than its OpenAI-compatible `/v1`
+endpoint, sending that window as `options.num_ctx` on every request — `/v1`
+cannot carry `num_ctx` at all, so a model's *actually served* window used to
+depend on whichever caller last loaded it. `TierForWindow` is fed the
+resolved window for Ollama models, and because kiln itself asked Ollama to
+serve exactly that window, the budgeted and served windows now agree by
+construction.
 
 Authentication (`internal/auth`, `internal/auth/oauth`) stores credentials
 in `~/.harness/credentials.json` (a stored credential wins over an

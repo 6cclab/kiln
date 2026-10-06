@@ -19,8 +19,6 @@ func TestModelsRefreshConcurrentWithReads(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/tags":
 			_ = json.NewEncoder(w).Encode(tagsResponse{Models: []tag{{Name: "m1", Model: "m1"}}})
-		case "/api/ps":
-			_ = json.NewEncoder(w).Encode(psResponse{})
 		case "/api/show":
 			_ = json.NewEncoder(w).Encode(showResponse{Capabilities: []string{"completion", "tools"}})
 		default:
