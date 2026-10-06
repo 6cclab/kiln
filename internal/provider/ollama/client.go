@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/andrepato/harness/internal/crash"
@@ -463,7 +464,17 @@ func (c *nativeClient) run(ctx context.Context, model provider.Model, transcript
 		return errorOut(partial, events, false, provider.StreamInterrupted{Cause: readErr})
 	}
 
-	for pos := range toolPosOf {
+	// toolPosOf maps Ollama's tool-call index to a content position: range
+	// its values. Its keys are content positions only when no text or
+	// thinking came first, so using them panicked (a thinking block where
+	// a tool call was expected, or an index past the content) on the
+	// stream goroutine. In content order, as the calls appeared.
+	positions := make([]int, 0, len(toolPosOf))
+	for _, pos := range toolPosOf {
+		positions = append(positions, pos)
+	}
+	sort.Ints(positions)
+	for _, pos := range positions {
 		call := partial.Content[pos].(msg.ToolCall)
 		events <- msg.StreamEvent{Type: msg.EventToolCallEnd, ContentIndex: pos, ToolCall: &call, Partial: partial}
 	}

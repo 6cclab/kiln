@@ -1,0 +1,25 @@
+{
+ "id": "20261006T182022Z-ollama-toolcall-after-thinking-panics",
+ "found_at": "2026-10-06T18:20:22Z",
+ "scenario": "real/ollama-skill-turn",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Ollama native client panics when thinking or text precedes a tool call",
+ "observed": "internal/provider/ollama/client.go (from #48) ended tool calls with 'for pos := range toolPosOf', ranging over the map's keys (Ollama's tool-call index) as if they were content positions. A reply with thinking or text before a tool call has the call at position >= 1 with index 0, so Content[0].(msg.ToolCall) panics on the unrecovered stream goroutine: 'interface conversion: msg.Content is msg.ThinkingContent, not msg.ToolCall'. An index that is not a content position panics with index out of range (fuzzing found index -3). Most likely cause of the reported crash: the second request of the turn (after the skill result) is where qwen3 thinks before calling a tool; the first reply, a bare tool call, survived only because its index happened to equal its position.",
+ "expected": "Tool calls are ended by their content position, in content order, whatever precedes them.",
+ "design_ref": null,
+ "evidence": [
+  "internal/provider/ollama/client_toolcall_mixed_test.go"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/provider/ollama/client.go"
+  ],
+  "regression_test": "TestNativeToolCallAfterThinkingAndText,TestNativeToolCallOddIndexes,FuzzNativeStream",
+  "note": "Range toolPosOf's values, sorted. Reproduced live on origin/main against local Ollama 0.34.0 qwen3:8b with --effort high (panic at client.go:463 on the first request); the fixed build completes the same run. With thinking off qwen3:8b never put text before a tool call in 2 runs, so the user's exact second reply is not reproduced.",
+  "updated_at": "2026-10-06T18:23:46Z"
+ }
+}
