@@ -124,15 +124,15 @@
 // to keep each of two separate requests (history, then turn prefix) inside
 // the window; path 1 sends one request for the whole live transcript
 // regardless, so it never needs the distinction -- one request where path 2
-// would have sent two, whenever path 1's input fits at all (CompactWith's
-// doc comment on requirement 3 in the task this change shipped under).
+// would have sent two, whenever path 1's input fits at all.
 //
-// Output is capped (compact.go's summaryOutputCap/turnPrefixOutputCap)
-// tighter than maxTokensFor(0.8, ReserveTokens, model.MaxTokens) alone
-// would allow (13107 tokens at the default 16384-token reserve): the
-// structured summary format (summarizationPrompt/fastPathPrompt) is seven
-// short headed sections, which fill in at a few hundred tokens in ordinary
-// use. Thinking is always off for a summarization request (both paths):
+// Path 1's output is capped at compact.go's summaryOutputCap (4096): the
+// structured summary format (fastPathPrompt) is seven short headed
+// sections, a few hundred tokens in ordinary use. A summary that reaches
+// the cap (StopLength) is not used; path 2 then writes it with its own
+// budget, maxTokensFor(0.8, ReserveTokens, model.MaxTokens), so a long
+// summary is never cut off. Thinking is always off for a summarization
+// request (both paths):
 // internal/harness's caller passes provider.ThinkingOff regardless of the
 // lane's own configured thinking level, since a structured-summary request
 // should never spend output tokens reasoning about how to write one.

@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -171,4 +172,85 @@ steps:
 		}
 	}
 	t.Fatal("/compact wrote no compaction entry for a conversation of recent turns")
+}
+
+// TestCompactReusesTheLiveRequestPrefix asserts /compact sends the summary
+// request with the live turn's own system prompt and messages, so a
+// provider's prefix cache (Ollama's KV cache, Anthropic's prompt cache)
+// is reused instead of the whole conversation being read again.
+func TestCompactReusesTheLiveRequestPrefix(t *testing.T) {
+	rig := newTestRig(t, `
+model: faux-1
+steps:
+  - text: "first reply"
+    end_turn: true
+  - text: "second reply"
+    end_turn: true
+  - text: "the summary"
+    end_turn: true
+`, []string{"bash"})
+	rig.H.SetCompactionSettings(compaction.Settings{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 100000})
+	lane := rig.mustLane("main")
+	for _, p := range []string{"one", "two"} {
+		if _, err := lane.Prompt(context.Background(), p, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := lane.Compact(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	reqs := rig.Faux.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("%d requests, want 3 (two turns, one summary)", len(reqs))
+	}
+	live, summary := reqs[1], reqs[2]
+	if summary.System != live.System {
+		t.Errorf("summary request system prompt differs from the live turn's:\n got %.120q\nwant %.120q", summary.System, live.System)
+	}
+	var liveMsgs, sumMsgs []json.RawMessage
+	if err := json.Unmarshal(live.Messages, &liveMsgs); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(summary.Messages, &sumMsgs); err != nil {
+		t.Fatal(err)
+	}
+	if len(sumMsgs) <= len(liveMsgs) {
+		t.Fatalf("summary request has %d messages, want the live turn's %d plus the reply and the summary request", len(sumMsgs), len(liveMsgs))
+	}
+	// cache_control marks where a breakpoint goes, which moves from turn to
+	// turn; it is not part of the cached content, so it is compared without.
+	for i := range liveMsgs {
+		if withoutCacheControl(t, sumMsgs[i]) != withoutCacheControl(t, liveMsgs[i]) {
+			t.Fatalf("summary request message %d differs from the live turn's:\n got %s\nwant %s", i, sumMsgs[i], liveMsgs[i])
+		}
+	}
+}
+
+// withoutCacheControl returns raw with every "cache_control" key removed.
+func withoutCacheControl(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	var strip func(any)
+	strip = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			delete(x, "cache_control")
+			for _, e := range x {
+				strip(e)
+			}
+		case []any:
+			for _, e := range x {
+				strip(e)
+			}
+		}
+	}
+	strip(v)
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }

@@ -161,24 +161,14 @@ func maxTokensFor(fraction float64, reserveTokens int, modelMaxTokens int) int {
 	return m
 }
 
-// summaryOutputCap is the most output tokens a structured summary
-// (summarizationPrompt/updateSummarizationPrompt's/fastPathPrompt's seven
-// headed sections) is ever given room for. maxTokensFor(0.8, reserve, ...)
-// alone would allow 13107 output tokens at the default 16384-token
-// reserve -- far more than the format needs: a filled-in template of seven
-// short sections (a goal, a handful of bullets each under Constraints/
-// Progress/Decisions/Next Steps, a short Critical Context) measures a few
-// hundred tokens in ordinary use. 1536 leaves several times that much
-// headroom for a verbose model while bounding how long generation can run;
-// a summary hitting this cap is cut off mid-section rather than run for
-// minutes on an open-ended output budget (the behaviour the evidence in
-// the task that asked for this cap was measuring).
-const summaryOutputCap = 1536
-
-// turnPrefixOutputCap is summaryOutputCap for the turn-prefix summary
-// (fit.go's "prefix" summaryRequest): a shorter three-section format
-// (Original Request, Early Progress, Context for Suffix), capped tighter.
-const turnPrefixOutputCap = 768
+// summaryOutputCap bounds the cache-friendly summary request (fastpath.go).
+// The structured format (seven short headed sections) measures a few
+// hundred tokens in ordinary use; 4096 leaves room for a long session's
+// summary while bounding how long a local model can generate. A summary
+// that reaches the cap stops with StopLength, and the cache path then falls
+// back to the serialized path, whose budget is the original
+// maxTokensFor(0.8, reserve, ...) -- so a long summary is never cut off.
+const summaryOutputCap = 4096
 
 // cappedMaxTokensFor is maxTokensFor with an additional ceiling, applied
 // whenever it is smaller than what maxTokensFor alone would allow.
@@ -238,14 +228,14 @@ func CompactWith(ctx context.Context, prep *Preparation, streamer Streamer, mode
 	history := summaryRequest{
 		first:     summarizationPrompt,
 		update:    updateSummarizationPrompt,
-		maxOutput: cappedMaxTokensFor(0.8, reserve, model.MaxTokens, summaryOutputCap),
+		maxOutput: maxTokensFor(0.8, reserve, model.MaxTokens),
 		previous:  prep.PreviousSummary,
 		messages:  prep.MessagesToSummarize,
 	}
 	prefix := summaryRequest{
 		first:     turnPrefixSummarizationPrompt,
 		update:    turnPrefixUpdatePrompt,
-		maxOutput: cappedMaxTokensFor(0.5, reserve, model.MaxTokens, turnPrefixOutputCap),
+		maxOutput: maxTokensFor(0.5, reserve, model.MaxTokens),
 		messages:  prep.TurnPrefixMessages,
 	}
 	splitTurn := prep.IsSplitTurn && len(prep.TurnPrefixMessages) > 0

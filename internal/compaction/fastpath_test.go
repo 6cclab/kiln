@@ -256,3 +256,35 @@ func TestCompactFastPathStalled(t *testing.T) {
 		t.Errorf("streamer called %d times, want at least 2: the cache attempt, then the serialized fallback it fell back to", len(blocked.calls))
 	}
 }
+
+// TestCompactFastPathFallsBackOnLengthStop asserts a cache-path summary cut
+// off at summaryOutputCap (StopLength) is not used: the serialized path,
+// with its larger budget, writes the summary instead.
+func TestCompactFastPathFallsBackOnLengthStop(t *testing.T) {
+	transcript, sysPrompt, tools := liveTranscriptFixture()
+	prep := &Preparation{
+		MessagesToSummarize: transcript,
+		TokensBefore:        1,
+		FileOps:             CreateFileOps(),
+		Settings:            Settings{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 2000},
+	}
+	cut := scriptedAssistant("## Goal\nhalf a summ", msg.Usage{TotalTokens: 10})
+	cut.StopReason = msg.StopLength
+	whole := scriptedAssistant("## Goal\nwhole summary\n", msg.Usage{TotalTokens: 10})
+	streamer := &scriptedStreamer{responses: []*msg.AssistantMessage{cut, whole}}
+
+	in := FastPathInput{SystemPrompt: sysPrompt, Tools: tools, Transcript: transcript}
+	result, err := CompactWith(context.Background(), prep, streamer, fastModel(), nil, provider.ThinkingOff, Options{FastPath: &in})
+	if err != nil {
+		t.Fatalf("CompactWith: %v", err)
+	}
+	if len(streamer.calls) != 2 {
+		t.Fatalf("streamer called %d times, want 2 (the cut-off cache attempt, then the serialized path)", len(streamer.calls))
+	}
+	if got, cache := streamer.calls[1].opts.MaxTokens, streamer.calls[0].opts.MaxTokens; got <= cache {
+		t.Errorf("serialized MaxTokens = %d, want more than the cache path's %d", got, cache)
+	}
+	if strings.Contains(result.Summary, "half a summ") || !strings.HasPrefix(result.Summary, "## Goal\nwhole summary\n") {
+		t.Errorf("Summary = %q, want the serialized path's whole summary", result.Summary)
+	}
+}

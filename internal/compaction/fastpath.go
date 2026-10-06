@@ -150,7 +150,9 @@ func tryFastPath(ctx context.Context, prep *Preparation, in FastPathInput, strea
 		return Result{}, false
 	}
 	switch am.StopReason {
-	case msg.StopAborted, msg.StopError:
+	case msg.StopAborted, msg.StopError, msg.StopLength:
+		// StopLength: the summary reached summaryOutputCap and was cut
+		// off; the serialized path's larger budget writes it whole.
 		return Result{}, false
 	}
 
