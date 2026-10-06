@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/msg"
 )
 
@@ -317,7 +318,7 @@ func (e *Events) Post(build func() Event) {
 	}
 	e.posting = true
 	e.postMu.Unlock()
-	go e.deliverPosted()
+	crash.Go(e.deliverPosted)
 }
 
 // deliverPosted emits Post's events in order until none are left.

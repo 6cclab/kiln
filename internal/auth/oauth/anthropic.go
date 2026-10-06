@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/andrepato/harness/internal/crash"
 )
 
 // Anthropic OAuth flow (Claude Pro/Max), ported from
@@ -149,7 +151,7 @@ func startAnthropicCallbackServer(expectedState string, port int) (*callbackServ
 		}
 	})
 	cs.srv = &http.Server{Handler: mux}
-	go func() { _ = cs.srv.Serve(ln) }()
+	crash.Go(func() { _ = cs.srv.Serve(ln) })
 	return cs, nil
 }
 
@@ -260,13 +262,13 @@ func LoginAnthropic(ctx context.Context, interaction Interaction, opts ...Anthro
 		err   error
 	}
 	manualCh := make(chan manualResult, 1)
-	go func() {
+	crash.Go(func() {
 		input, err := interaction.PromptManualCode(manualCtx,
 			"Complete login in your browser, or paste the authorization code / redirect URL here:",
 			cs.redirectURI)
 		manualCh <- manualResult{input, err}
 		cs.cancel()
-	}()
+	})
 
 	result := cs.waitForCode(ctx)
 

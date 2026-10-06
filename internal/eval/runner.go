@@ -18,6 +18,7 @@ import (
 
 	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/budget"
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/provider/builtin"
 	"github.com/andrepato/harness/internal/provider/ollama"
@@ -166,21 +167,22 @@ func Run(ctx context.Context, opts RunOptions) (RunSummary, error) {
 	var wg sync.WaitGroup
 	for w := 0; w < parallel; w++ {
 		wg.Add(1)
-		go func(idx int) {
+		idx := w
+		crash.Go(func() {
 			defer wg.Done()
 			rt.worker(ctx, idx, jobCh, recCh)
-		}(w)
+		})
 	}
-	go func() {
+	crash.Go(func() {
 		for _, j := range jobs {
 			jobCh <- j
 		}
 		close(jobCh)
-	}()
-	go func() {
+	})
+	crash.Go(func() {
 		wg.Wait()
 		close(recCh)
-	}()
+	})
 
 	var records []Record
 	failed := 0

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/andrepato/harness/internal/crash"
 )
 
 // Proxy is the local HTTP proxy sandboxed commands reach the network
@@ -106,7 +108,7 @@ func (p *Proxy) Start() error {
 	}
 	p.ln = ln
 	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 30 * time.Second}
-	go func() { _ = p.srv.Serve(ln) }()
+	crash.Go(func() { _ = p.srv.Serve(ln) })
 	return nil
 }
 
@@ -430,7 +432,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	defer p.tunnels.end(client, upstream)
 	_, _ = client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 	sent := make(chan struct{})
-	go func() {
+	crash.Go(func() {
 		defer close(sent)
 		// Bytes the client sent after the CONNECT header, already
 		// buffered, go first.
@@ -442,7 +444,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		if c, ok := upstream.(*net.TCPConn); ok {
 			_ = c.CloseWrite()
 		}
-	}()
+	})
 	_, _ = io.Copy(client, upstream)
 	client.Close()
 	upstream.Close()

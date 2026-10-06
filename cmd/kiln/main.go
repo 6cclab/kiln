@@ -19,18 +19,25 @@ import (
 	"syscall"
 
 	"github.com/andrepato/harness/internal/cli"
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/session/jsonl"
 )
 
 func main() {
+	// A panic on the main goroutine (startup, -p mode, the exit path) is
+	// reported and the terminal restored like one on any other goroutine.
+	defer crash.Guard()
 	code := run(os.Args[1:])
 	if id := cli.PendingRelaunch(); id != "" {
 		// /resume <id>: every exit path above (shells, hooks, MCP) has run;
 		// replace this process with one resuming the chosen session.
 		code = relaunch(id)
 	}
-	os.Exit(code)
+	// crash.Exit, not os.Exit: when a crash on another goroutine stopped
+	// the program, this path must not exit before that crash's report is
+	// written and its status is the process's.
+	crash.Exit(code)
 }
 
 // relaunch execs kiln again with the same flags, resuming sessionID. It

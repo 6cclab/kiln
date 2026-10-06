@@ -1,4 +1,4 @@
-# Vendored charm.land/bubbletea/v2 with one patch
+# Vendored charm.land/bubbletea/v2 with patches
 
 Source: charm.land/bubbletea/v2 v2.0.9 (the module cache copy, minus examples and
 tutorials). Wired in by a `replace` directive in the root go.mod, alongside the
@@ -127,3 +127,19 @@ keeps `Redraw` for inline mode and uses the incremental `Render` when `view.AltS
 Verified in a real iTerm2 window (scripts/qa/drive.py, 120x40): scrollback stays at 0 rows
 across two shift+tab mode changes, and the status row repaints with no residue from the
 longer previous label. Test: TestCursedRenderer_altScreenFramesDoNotClear.
+
+## Patch: recover a panic on the renderer goroutine, and a panic hook (tea.go, options.go)
+
+The goroutine `startRenderer` starts flushes a frame on every tick and had no `recover`, unlike
+the event loop and the Cmd goroutines. A panic while painting a frame ended the process with
+the terminal still in raw mode, mouse reporting on and the alternate screen up. It now
+recovers like a Cmd's panic (`recoverFromGoPanic`: `Run` returns `ErrProgramPanic` and the
+terminal is restored) and then still receives `stopRenderer`'s stop signal, which shutdown
+sends on an unbuffered channel and would otherwise wait for forever.
+
+`WithPanicHook(fn)` is called with every panic Bubble Tea catches (value and stack) before it
+prints it. kiln writes a crash report from it (`internal/crash`): Bubble Tea prints the panic
+onto the alternate screen before leaving it, so the printed copy is wiped.
+
+Tests: TestHarnessRendererPanicIsRecovered (fails without the recover: the test binary dies
+with "panic: renderer broke"), TestHarnessPanicHookSeesUpdatePanic.

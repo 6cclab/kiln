@@ -20,6 +20,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/commands"
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/imgpath"
@@ -447,7 +448,7 @@ func NewModel(cfg Config) Model {
 			}
 			// Off the Update goroutine: Send blocks on the event loop.
 			if bridge != nil {
-				go bridge.Send(MsgTrustAnswered{Trusted: trusted})
+				crash.Go(func() { bridge.Send(MsgTrustAnswered{Trusted: trusted}) })
 			}
 		})
 	}

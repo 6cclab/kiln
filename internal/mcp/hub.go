@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/diag"
 	"io/fs"
 	"net/http"
@@ -300,12 +301,12 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 			slots = local
 		}
 		wg.Add(1)
-		go func() {
+		crash.Go(func() {
 			defer wg.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
 			h.connectOne(ctx, name, configs[name], timeout)
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -414,13 +415,13 @@ func (h *Hub) Close(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, c := range conns {
 		wg.Add(1)
-		go func(c *serverConn) {
+		crash.Go(func() {
 			defer wg.Done()
 			if c.session != nil {
 				_ = c.session.Close()
 			}
 			killGroup(c.cmd)
-		}(c)
+		})
 	}
 	wg.Wait()
 }

@@ -3,6 +3,8 @@ package compaction
 import (
 	"sync"
 	"time"
+
+	"github.com/andrepato/harness/internal/crash"
 )
 
 // Watchdog runs a callback once a stream has gone quiet for too long. Each
@@ -31,7 +33,13 @@ type Watchdog struct {
 type stopper interface{ Stop() bool }
 
 // afterFunc arms a timer; a test replaces it to fire callbacks by hand.
-var afterFunc = func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }
+// The callback runs on a goroutine of its own, guarded like any other.
+var afterFunc = func(d time.Duration, f func()) stopper {
+	return time.AfterFunc(d, func() {
+		defer crash.Guard()
+		f()
+	})
+}
 
 // NewWatchdog returns a Watchdog that calls fire unless Reset or Stop
 // comes within d.

@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/andrepato/harness/internal/crash"
 )
 
 // OpenAI Codex (ChatGPT Plus/Pro subscription) OAuth flow, ported from
@@ -300,7 +302,7 @@ func startOpenAICodexCallbackServer(state string, port int) (*callbackServer, er
 		cs.once.Do(func() { cs.resultCh <- &authCode{code: code, state: state} })
 	})
 	cs.srv = &http.Server{Handler: mux}
-	go func() { _ = cs.srv.Serve(ln) }()
+	crash.Go(func() { _ = cs.srv.Serve(ln) })
 	return cs, nil
 }
 
@@ -339,12 +341,12 @@ func loginOpenAICodexBrowser(ctx context.Context, ia FlowInteraction, cfg openai
 		err   error
 	}
 	manualCh := make(chan manualResult, 1)
-	go func() {
+	crash.Go(func() {
 		input, err := ia.PromptManualCode(manualCtx,
 			"Complete login in your browser, or paste the authorization code / redirect URL here:", redirectURI)
 		manualCh <- manualResult{input, err}
 		cs.cancel()
-	}()
+	})
 
 	result := cs.waitForCode(ctx)
 	var code, gotState string

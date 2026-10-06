@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/execenv"
 )
 
@@ -226,7 +227,7 @@ func runCommand(ctx context.Context, command, input string, timeoutSeconds int, 
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	crash.Go(func() { done <- cmd.Wait() })
 
 	timer := time.NewTimer(time.Duration(timeoutSeconds) * time.Second)
 	defer timer.Stop()
@@ -633,7 +634,7 @@ func RunHooksConcurrently(opts RunOptions) Outcome {
 	wg.Add(len(commands))
 	for _, h := range commands {
 		h := h
-		go func() {
+		crash.Go(func() {
 			defer wg.Done()
 			timeout := h.Timeout
 			if timeout == 0 {
@@ -656,7 +657,7 @@ func RunHooksConcurrently(opts RunOptions) Outcome {
 				opts.OnHookDone(n, commands)
 			}
 			results <- single
-		}()
+		})
 	}
 
 	combined := Outcome{}

@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/andrepato/harness/internal/crash"
 )
 
 // Terminal implementation of the login prompt/notify surface.
@@ -137,10 +139,10 @@ func (t *terminalInteraction) readLine(ctx context.Context) (string, error) {
 		err  error
 	}
 	ch := make(chan result, 1)
-	go func() {
+	crash.Go(func() {
 		line, err := t.in.ReadString('\n')
 		ch <- result{line, err}
-	}()
+	})
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -250,7 +252,7 @@ func openBrowser(url string) {
 	c.Stdin, c.Stdout, c.Stderr = nil, nil, nil
 	_ = c.Start()
 	if c.Process != nil {
-		go func() { _, _ = c.Process.Wait() }()
+		crash.Go(func() { _, _ = c.Process.Wait() })
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/provider/api"
@@ -306,11 +307,14 @@ func (c *nativeClient) Stream(ctx context.Context, model provider.Model, transcr
 	var final *msg.AssistantMessage
 	var finalErr error
 
-	go func() {
-		defer close(events)
-		defer close(done)
+	crash.Go(func() {
+		crash.TestPoint("provider-stream")
 		final, finalErr = c.run(ctx, model, transcript, opts, auth, events)
-	}()
+		// Not deferred: a panic in run must reach the guard before
+		// wait() returns a nil message to the lane.
+		close(done)
+		close(events)
+	})
 
 	wait := func() (*msg.AssistantMessage, error) {
 		<-done

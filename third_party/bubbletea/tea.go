@@ -446,6 +446,9 @@ type Program struct {
 	// cleanup on exit.
 	disableCatchPanics bool
 
+	// panicHook, when set, is called with every panic caught (kiln patch).
+	panicHook func(r any, stack []byte)
+
 	// filter supplies an event filter that will be invoked before Bubble Tea
 	// processes a tea.Msg. The event filter can return any tea.Msg which will
 	// then get handled by Bubble Tea instead of the original event. If the
@@ -1276,6 +1279,9 @@ func (p *Program) shutdown(kill bool) {
 // recoverFromPanic recovers from a panic, prints the stack trace, and restores
 // the terminal to a usable state.
 func (p *Program) recoverFromPanic(r interface{}) {
+	if p.panicHook != nil {
+		p.panicHook(r, debug.Stack())
+	}
 	select {
 	case p.errs <- ErrProgramPanic:
 	default:
@@ -1301,6 +1307,9 @@ func (p *Program) recoverFromPanic(r interface{}) {
 // recoverFromGoPanic recovers from a goroutine panic, prints a stack trace and
 // signals for the program to be killed and terminal restored to a usable state.
 func (p *Program) recoverFromGoPanic(r interface{}) {
+	if p.panicHook != nil {
+		p.panicHook(r, debug.Stack())
+	}
 	select {
 	case p.errs <- ErrProgramPanic:
 	default:
@@ -1416,6 +1425,20 @@ func (p *Program) startRenderer() {
 	// Start the renderer.
 	p.renderer.start()
 	go func() {
+		// kiln patch: a panic while painting a frame used to end the
+		// process with the terminal still in raw mode, since nothing on
+		// this goroutine recovered it. Recover it like a Cmd's panic, and
+		// keep taking stopRenderer's stop signal, which the shutdown that
+		// follows sends on an unbuffered channel.
+		if !p.disableCatchPanics {
+			defer func() {
+				if r := recover(); r != nil {
+					p.ticker.Stop()
+					p.recoverFromGoPanic(r)
+					<-p.rendererDone
+				}
+			}()
+		}
 		for {
 			select {
 			case <-p.rendererDone:

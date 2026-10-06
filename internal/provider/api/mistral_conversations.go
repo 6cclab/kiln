@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 )
@@ -716,11 +717,13 @@ func (c *MistralConversationsClient) Stream(ctx context.Context, model provider.
 	var final *msg.AssistantMessage
 	var finalErr error
 
-	go func() {
-		defer close(events)
-		defer close(done)
+	crash.Go(func() {
 		final, finalErr = c.run(ctx, model, transcript, opts, auth, events)
-	}()
+		// Not deferred: a panic in run must reach the guard before
+		// wait() returns a nil message to the lane.
+		close(done)
+		close(events)
+	})
 
 	wait := func() (*msg.AssistantMessage, error) {
 		<-done
