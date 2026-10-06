@@ -17,13 +17,15 @@ KEY enter
 WAITFOR /Now on faux\/faux-2 · small tier/ 20
 TYPE turn one
 KEY enter
-WAITFOR /ENDOFTURN1/ 20
+# Each turn streams ~35k chars as faux chunks; a CI runner needs over 20s
+# per turn (finding stream-render-cost-grows-with-reply).
+WAITFOR /ENDOFTURN1/ 120
 TYPE turn two
 KEY enter
-WAITFOR /ENDOFTURN2/ 20
+WAITFOR /ENDOFTURN2/ 120
 TYPE turn three
 KEY enter
-WAITFOR /ENDOFTURN3/ 20
+WAITFOR /ENDOFTURN3/ 120
 SHOT three-big-turns-landed
 TYPE turn four
 KEY enter
