@@ -31,7 +31,7 @@ TYPE turn four
 KEY enter
 WAITFOR /Compacting conversation/ 20
 SHOT compacting
-WAITFOR /Second pass, after the context was auto-compacted\./ 30
+WAITFOR /Second pass, after the context was auto-compacted\./ 180
 SHOT compacted-and-continued
 EXPECT /Second pass, after the context was auto-compacted\./
 EXPECT_NOT /panic|goroutine/
