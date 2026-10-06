@@ -1,0 +1,23 @@
+# SessionStart fires once before the first turn (internal/cli/chat.go's
+# runSessionStart): its stdout becomes hidden context for that first
+# prompt only, so the model's first reply can react to something only the
+# hook said. SessionEnd fires once the interactive session actually exits
+# (internal/cli/tui.go's RunInteractive returning, chat.go's Run), on a
+# clean /exit the same as on Ctrl+C/Ctrl+D - checked here with a marker
+# file a real SessionEnd hook process writes.
+@faux testdata/faux/qa/hooks-session-start-end.yaml
+@setup printf 'echo "the codeword is PINEAPPLE42"\n' > start.sh
+@setup printf 'touch session-ended\n' > end.sh
+@setup mkdir -p .claude && printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"sh start.sh"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"sh end.sh"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+RUN ! test -e session-ended
+TYPE what is the codeword
+KEY enter
+WAITFOR /The codeword is PINEAPPLE42\./ 20
+SHOT session-start-context-reached-model
+EXPECT /The codeword is PINEAPPLE42\./
+TYPE /exit
+KEY enter
+WAIT 2
+RUN test -e session-ended

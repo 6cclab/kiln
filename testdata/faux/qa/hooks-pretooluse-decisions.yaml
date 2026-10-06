@@ -1,0 +1,22 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "echo normal-cmd-ok"}, id: t1}
+  - on_tool_result: t1
+    then:
+      - text: "Ran the normal command without asking."
+        usage: {input: 40, output: 8}
+  - tool_call: {name: bash, args: {command: "danger-cmd rm -rf /tmp/whatever"}, id: t2}
+  - on_tool_result: t2
+    then:
+      - text: "Noted: that one was blocked by policy."
+        usage: {input: 40, output: 8}
+  - tool_call: {name: bash, args: {command: "ask-me-cmd deploy"}, id: t3}
+  - on_tool_result: t3
+    then:
+      - text: "Deployed after you approved it."
+        usage: {input: 40, output: 8}
+  - tool_call: {name: bash, args: {command: "rewrite-cmd touch should-not-exist"}, id: t4}
+  - on_tool_result: t4
+    then:
+      - text: "Done; see the rewritten output."
+        usage: {input: 40, output: 8}

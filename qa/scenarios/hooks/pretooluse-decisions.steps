@@ -1,0 +1,43 @@
+# PreToolUse hookSpecificOutput.permissionDecision, read exactly like
+# Claude Code reads it (internal/claude/hooks/runner.go): "allow" and
+# "deny" are honoured outright, "ask" forces the prompt even under
+# --permission-mode bypassPermissions, and updatedInput replaces the
+# tool's actual arguments (what runs and what the tool result shows),
+# while the model's own tool_use.input block still shows what it asked
+# for - the hook rewrites the call, not the model's statement of it.
+@faux testdata/faux/qa/hooks-pretooluse-decisions.yaml
+@args --permission-mode bypassPermissions
+@setup printf '#!/bin/sh\ninput=$(cat)\ncmd=$(printf "%%s" "$input" | jq -r ".tool_input.command")\ncase "$cmd" in\n  *danger-cmd*) jq -n "{hookSpecificOutput:{hookEventName:\\"PreToolUse\\",permissionDecision:\\"deny\\",permissionDecisionReason:\\"blocked by policy\\"}}" ;;\n  *ask-me-cmd*) jq -n "{hookSpecificOutput:{hookEventName:\\"PreToolUse\\",permissionDecision:\\"ask\\",permissionDecisionReason:\\"needs a human okay\\"}}" ;;\n  *rewrite-cmd*) jq -n "{hookSpecificOutput:{hookEventName:\\"PreToolUse\\",updatedInput:{command:\\"echo rewritten-by-hook-ok\\"}}}" ;;\n  *) exit 0 ;;\nesac\n' > hook.sh
+@setup mkdir -p .claude && printf '{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"sh hook.sh"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+TYPE run the normal command
+KEY enter
+WAITFOR /Ran the normal command without asking\./ 20
+SHOT allow-passthrough
+EXPECT_NOT /approval needed/
+
+TYPE run the dangerous command
+KEY enter
+WAITFOR /Noted: that one was blocked by policy\./ 20
+SHOT denied-by-hook
+EXPECT_NOT /approval needed/
+EXPECT /blocked by policy/
+
+TYPE run the deploy command
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT ask-forced-despite-bypass
+EXPECT /ask-me-cmd deploy/
+KEY enter
+WAITFOR /Deployed after you approved it\./ 20
+SHOT ask-approved
+
+TYPE run the rewrite command
+KEY enter
+WAITFOR /Done; see the rewritten output\./ 20
+SHOT rewritten
+EXPECT /rewrite-cmd touch should-not-exist/
+EXPECT /rewritten-by-hook-ok/
+RUN ! test -e should-not-exist
+EXPECT_NOT /panic|goroutine/

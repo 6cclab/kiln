@@ -1,0 +1,25 @@
+# Ctrl+F fullscreen toggle while a permission prompt is open: the prompt
+# survives both toggles (into fullscreen and back to inline) and still
+# answers normally afterward - toggleFullscreen's repaint is not gated on
+# m.dialog/prompt state (internal/tui/app.go).
+@faux testdata/faux/bash-approve.yaml
+
+WAITFOR /describe a task/ 20
+TYPE run the upload tests
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT prompt-inline
+EXPECT /Allow kiln to run this command\?/
+KEY ctrl+f
+WAIT 1
+SHOT prompt-fullscreen
+EXPECT /Allow kiln to run this command\?/
+EXPECT /npm test -- upload/
+KEY ctrl+f
+WAIT 1
+SHOT prompt-inline-again
+EXPECT /Allow kiln to run this command\?/
+KEY enter
+WAITFOR /Tests passed/ 20
+EXPECT_NOT /approval needed/
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,20 @@
+# PostToolUse and UserPromptSubmit hookSpecificOutput.additionalContext
+# both reach the model as a hidden <hook-context> user message
+# (internal/cli/chat.go), never shown to the user directly in the
+# transcript - the only visible sign is the model's own next reply
+# reacting to it, which these faux steps are scripted to do.
+@faux testdata/faux/qa/hooks-posttooluse-ups-context.yaml
+@args --permission-mode bypassPermissions
+@setup printf '#!/bin/sh\ncat >/dev/null\njq -n "{hookSpecificOutput:{hookEventName:\\"UserPromptSubmit\\",additionalContext:\\"secret-code: WALRUS99\\"}}"\n' > ups.sh
+@setup printf '#!/bin/sh\ncat >/dev/null\njq -n "{hookSpecificOutput:{hookEventName:\\"PostToolUse\\",additionalContext:\\"bash-side-note: NARWHAL7\\"}}"\n' > posttool.sh
+@setup mkdir -p .claude && printf '{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"sh ups.sh"}]}],"PostToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"sh posttool.sh"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+TYPE run the command and report both codes
+KEY enter
+WAITFOR /The codes are WALRUS99 and NARWHAL7\./ 20
+SHOT both-hook-contexts-reached-model
+EXPECT_NOT /secret-code: WALRUS99/
+EXPECT_NOT /bash-side-note: NARWHAL7/
+EXPECT /The codes are WALRUS99 and NARWHAL7\./
+EXPECT_NOT /panic|goroutine/

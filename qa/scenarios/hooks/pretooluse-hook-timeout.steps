@@ -1,0 +1,19 @@
+# A PreToolUse hook that outlasts its own configured timeout (not an Esc
+# from the user - errors/hook-esc-cancels.steps covers that): runner.go's
+# runCommand kills it at the timeout and interpret() records a plain
+# notice ("hook timed out: <command>"), with no decision from it, so the
+# call falls through to the normal permission flow and still runs.
+@faux testdata/faux/qa/hooks-pretooluse-timeout.yaml
+@args --permission-mode bypassPermissions
+@setup mkdir -p .claude && printf '{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"sleep 5","timeout":1}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+TYPE run the command
+KEY enter
+WAITFOR /hook timed out: sleep 5/ 15
+SHOT hook-timeout-notice
+EXPECT /hook timed out: sleep 5/
+WAITFOR /Ran it anyway\./ 20
+SHOT call-still-ran
+EXPECT /Ran it anyway\./
+EXPECT_NOT /panic|goroutine/

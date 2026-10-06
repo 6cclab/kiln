@@ -1,0 +1,19 @@
+# Esc during ask_user_question cancels the whole exchange
+# (PromptState.cancelQuestion -> AskUserReply{Cancelled:true}): the tool
+# call ends as a declined-style error ("The user declined to answer.
+# Proceed with your best judgement, or ask a different way."), not a
+# hang and not a panic, and the model's next reply (scripted here) shows
+# the turn kept going.
+@faux testdata/faux/qa/tools-askuser-esc.yaml
+
+WAITFOR /describe a task/ 20
+TYPE decide how to fix the bug
+KEY enter
+WAITFOR /Which approach should I use\?/ 20
+SHOT question-open
+KEY esc
+WAITFOR /The user declined to answer/ 20
+SHOT cancelled
+EXPECT /The user declined to answer\. Proceed with your best judgement, or ask a different way\./
+WAITFOR /Alright, I.ll just pick one\./ 20
+EXPECT_NOT /panic|goroutine/

@@ -1,0 +1,26 @@
+# A request that does not fit the model's context window, even after
+# kiln tries to compact once (internal/harness/compaction.go's fitRequest
+# -> ContextOverflowError): the model's own first reply is big enough on
+# its own that the very next turn's request cannot be made to fit, so the
+# turn ends with ContextOverflowError's plain-words message instead of a
+# panic or a provider-shaped error.
+@faux testdata/faux/qa/errors-context-overflow.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /model
+KEY enter
+WAITFOR /Select model/ 20
+KEY down
+KEY enter
+WAITFOR /Now on faux\/faux-2 · small tier/ 20
+TYPE give me all the detail at once
+KEY enter
+WAITFOR /›\s+describe a task/ 90
+SHOT huge-reply-landed
+TYPE anything else
+KEY enter
+WAITFOR /does not fit faux\/faux-2's 32\.8k-token window,\s+even after compacting it/ 20
+SHOT overflow-error
+EXPECT /does not fit faux\/faux-2's 32\.8k-token window,\s+even after compacting it/
+EXPECT /\/clear to start over, or \/model to a model with a larger window/
+EXPECT_NOT /panic|goroutine/

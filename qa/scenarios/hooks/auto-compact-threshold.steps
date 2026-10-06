@@ -1,0 +1,35 @@
+# Auto-compaction mid-session: once the branch's measured context tokens
+# cross the compaction threshold (internal/harness/compaction.go's
+# autoCompact, checked before the next turn's request - the threshold
+# itself comes from the current model's budget tier, internal/budget/
+# tier.go, not a fixed constant), kiln compacts on its own before sending
+# that request - no /compact needed - showing a "Compacting conversation"
+# busy label while it runs, and the turn that follows it completes
+# normally with the older turns summarized away.
+@faux testdata/faux/qa/hooks-auto-compact.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /model
+KEY enter
+WAITFOR /Select model/ 20
+KEY down
+KEY enter
+WAITFOR /Now on faux\/faux-2 · small tier/ 20
+TYPE turn one
+KEY enter
+WAITFOR /ENDOFTURN1/ 20
+TYPE turn two
+KEY enter
+WAITFOR /ENDOFTURN2/ 20
+TYPE turn three
+KEY enter
+WAITFOR /ENDOFTURN3/ 20
+SHOT three-big-turns-landed
+TYPE turn four
+KEY enter
+WAITFOR /Compacting conversation/ 20
+SHOT compacting
+WAITFOR /Second pass, after the context was auto-compacted\./ 30
+SHOT compacted-and-continued
+EXPECT /Second pass, after the context was auto-compacted\./
+EXPECT_NOT /panic|goroutine/

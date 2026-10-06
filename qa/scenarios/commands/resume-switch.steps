@@ -1,0 +1,25 @@
+# /resume <id> (picked from the argument-completion popup, not typed by
+# hand - ids are random per run) actually switches: kiln re-execs itself
+# in place (cmd/kiln/main.go's syscall.Exec after PendingRelaunch is set)
+# with --resume <id>, so the same window replays the OTHER session's own
+# transcript ("Seed session turn.") instead of the session that was
+# current a moment ago ("Main session turn.").
+@faux testdata/faux/qa/commands-resume.yaml
+@pre -p "seed a prior session"
+
+WAITFOR /describe a task/ 20
+TYPE current turn
+KEY enter
+WAITFOR /Main session turn\./ 20
+SHOT before-resume
+TYPE /resume
+KEY space
+WAITFOR /seed a prior session/ 10
+SHOT resume-popup
+KEY enter
+KEY enter
+WAITFOR /Seed session turn\./ 20
+SHOT after-resume-switch
+EXPECT /Seed session turn\./
+EXPECT_NOT /Main session turn\./
+EXPECT_NOT /panic|goroutine/

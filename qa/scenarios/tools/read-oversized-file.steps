@@ -1,0 +1,28 @@
+# An untargeted read of a file over the tool's 2000-line default cap
+# (internal/tools/read.go, execenv.DefaultMaxLines): the model-facing
+# result is truncated to the first 2000 lines plus a trailing note naming
+# the real total and the offset to continue from (not a silent cut, and
+# not the separate bigger-than-256KB refusal path) - the model's own
+# reply here only makes sense if it actually saw that note. The
+# transcript never shows that trailing note itself, collapsed or
+# expanded: RenderToolCall always previews a tool's own result (3 lines
+# normally, 50 once ctrl+o's verbose mode is on - internal/tui/
+# transcript.go), far short of the 2000+ lines a result this size has, so
+# ctrl+o raises the hidden-line count shown, not the content revealed.
+@faux testdata/faux/qa/tools-read-oversized.yaml
+@setup seq 1 3000 | sed 's/^/line /' > big.txt
+
+WAITFOR /describe a task/ 20
+TYPE read the big log file
+KEY enter
+WAITFOR /\+1999 lines \(ctrl\+o to expand\)/ 20
+SHOT truncated-read-collapsed
+EXPECT /line 1\b/
+EXPECT_NOT /line 2001\b/
+WAITFOR /That log runs to 3000 lines; I only looked at the first 2000\./ 20
+KEY ctrl+o
+WAITFOR /\+19\d\d lines \(ctrl\+o to expand\)/ 10
+SHOT truncated-read-expanded-more-but-still-not-all
+EXPECT /line 50\b/
+EXPECT_NOT /line 2001\b/
+EXPECT_NOT /panic|goroutine/

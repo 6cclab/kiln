@@ -1,0 +1,20 @@
+# Notification fires right before a permission prompt paints
+# (internal/cli/tui.go's RunInteractive: the gate's prompter is wrapped so
+# the hook runs first), matching Claude Code's own "permission_prompt"
+# notification. Checked with a marker file the hook process writes - it
+# must exist before the prompt is even answered, not just by the end of
+# the run.
+@faux testdata/faux/bash-approve.yaml
+@setup printf 'touch notified\n' > notify.sh
+@setup mkdir -p .claude && printf '{"hooks":{"Notification":[{"hooks":[{"type":"command","command":"sh notify.sh"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+RUN ! test -e notified
+TYPE run the upload tests
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT prompt-with-notification-fired
+RUN test -e notified
+KEY enter
+WAITFOR /Tests passed/ 20
+EXPECT_NOT /panic|goroutine/

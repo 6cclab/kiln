@@ -1,0 +1,24 @@
+# Esc during a running /compact cancels it (internal/tui/app.go: Esc with
+# m.background set cancels its context) instead of waiting for it to
+# finish or hanging: the note names the command's own CancelNote
+# ("Compaction cancelled. The conversation is as it was."), and the
+# conversation is left exactly as it was, not half-compacted.
+@faux testdata/faux/qa/hooks-esc-during-compaction.yaml
+
+WAITFOR /describe a task/ 20
+TYPE turn one
+KEY enter
+WAITFOR /Sure, working on it\./ 20
+TYPE turn two
+KEY enter
+WAITFOR /Second turn done\./ 20
+TYPE /compact
+KEY enter
+WAITFOR /Compacting conversation/ 10
+SHOT compacting
+KEY esc
+WAITFOR /Compaction cancelled\. The conversation is as it was\./ 10
+SHOT cancelled
+EXPECT /Compaction cancelled\. The conversation is as it was\./
+EXPECT_NOT /Context compacted/
+EXPECT_NOT /panic|goroutine/

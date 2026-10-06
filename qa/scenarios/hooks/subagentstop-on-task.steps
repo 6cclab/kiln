@@ -1,0 +1,18 @@
+# SubagentStop fires once a dispatched subagent's own turn ends
+# (internal/cli/chat.go/stophooks.go), separately from the parent lane's
+# own Stop hook. Checked with a marker file the hook process writes.
+@faux testdata/faux/qa/tools-task-single.yaml
+@fixture testdata/behaviour/design
+@args --permission-mode acceptEdits
+@setup printf 'touch subagent-stopped\n' > substop.sh
+@setup mkdir -p .claude && printf '{"hooks":{"SubagentStop":[{"hooks":[{"type":"command","command":"sh substop.sh"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+RUN ! test -e subagent-stopped
+TYPE survey the redis mock with a subagent
+KEY enter
+WAITFOR /subagents? running|subagents? finished/ 20
+WAITFOR /Confirmed: the mock is missing/ 20
+SHOT subagent-done
+RUN test -e subagent-stopped
+EXPECT_NOT /panic|goroutine/
