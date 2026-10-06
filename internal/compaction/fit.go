@@ -121,6 +121,10 @@ type Progress struct {
 	Part, Parts int
 	// Model is "provider/id" of the summarising model.
 	Model string
+	// Path is "cache" when this part is compaction's cache-friendly path
+	// (fastpath.go: the live transcript plus one appended summarization
+	// turn), or "serialized" for the serialize-and-split path (this file).
+	Path string
 	// PromptTokens is the estimated size of this part's request.
 	PromptTokens int
 	// OutputTokens is the estimated size of what this part has streamed
@@ -128,17 +132,52 @@ type Progress struct {
 	OutputTokens int
 }
 
+// PartDone reports one finished summary request's measured cost: what
+// compaction_part_done logs (internal/cli/chat.go), so a slow compaction
+// can be read from the log alone -- which path it took, how much of the
+// prompt the provider served from cache, how long the first token took,
+// and how long the whole request ran.
+type PartDone struct {
+	// Part/Parts/Model/Path mirror Progress's fields for the same request.
+	Part, Parts int
+	Model, Path string
+	// PromptTokens is this part's estimated request size (system prompt,
+	// tools when the cache path sent them, and the conversation/instructions).
+	PromptTokens int
+	// OutputTokens is the estimated size of the text the model returned.
+	OutputTokens int
+	// CacheRead is the provider-reported cache-read token count on this
+	// request's usage (msg.Usage.CacheRead), 0 when the provider did not
+	// report one (no cache hit, or a provider/API that does not report it).
+	CacheRead int
+	// TTFTMs is the time from sending the request to its first streamed
+	// event, in milliseconds.
+	TTFTMs int64
+	// TotalMs is the time from sending the request to the final assistant
+	// message, in milliseconds.
+	TotalMs int64
+}
+
 // Options tune a compaction run. The zero value is the default.
 type Options struct {
 	// OnProgress, when set, is called as each part starts and as its
 	// response streams in. It runs on the compaction's goroutine.
 	OnProgress func(Progress)
+	// OnPartDone, when set, is called once a part's request finishes
+	// successfully (never on a stalled/aborted/errored part -- there is no
+	// usage or timing worth logging for one), with its measured cost.
+	OnPartDone func(PartDone)
 	// FirstEventTimeout bounds the wait for a part's first streamed event,
 	// given the part's estimated prompt size. Nil uses DefaultFirstEventTimeout.
 	FirstEventTimeout func(promptTokens int) time.Duration
 	// IdleTimeout bounds the gap between streamed events once a response
 	// has started. Zero uses DefaultIdleTimeout.
 	IdleTimeout time.Duration
+	// FastPath, when set, carries the live request the agent loop would
+	// send next for this lane (fastpath.go's FastPathInput). CompactWith
+	// tries it first; nil (the zero value) skips straight to the
+	// serialize-and-split path below, as every compaction did before it.
+	FastPath *FastPathInput
 }
 
 // Stall limits. A model reads the whole prompt before it streams anything,
@@ -293,11 +332,21 @@ func (s *summarizer) run(ctx context.Context, req summaryRequest, ends []int, fi
 	return *previous, total, nil
 }
 
-// runSimpleWatched is runSimple with a stall watchdog and progress
-// reports. It cancels the request when the model sends nothing for too
-// long and returns an Error with Code "stalled" naming how long it waited.
-func runSimpleWatched(ctx context.Context, streamer Streamer, model provider.Model, systemPrompt, userText string, maxTokens int, thinkingLevel provider.ThinkingLevel, opts Options, part, parts int) (string, msg.Usage, error) {
-	promptTokens := estimateText(systemPrompt) + estimateText(userText)
+// watchedRequest sends one request through streamer with a stall watchdog,
+// Progress reporting while it streams, and a PartDone report (prompt/output/
+// cache-read tokens, time to first token, total time) once it finishes
+// without error. It returns the raw assistant message: runSimpleWatched
+// (the serialized path, below) and tryFastPath (fastpath.go) each apply
+// their own StopReason-to-Error mapping and text/tool-call handling, since
+// a tool call in the reply means something different to each (an error to
+// runSimpleWatched's callers, since the serialized path never offers
+// tools; a fallback-to-serialized signal to tryFastPath, since the
+// cache-friendly path does offer them).
+//
+// path is "cache" or "serialized", carried on both reports so
+// compaction_part/compaction_part_done can say which request they
+// describe.
+func watchedRequest(ctx context.Context, streamer Streamer, model provider.Model, transcript []msg.Message, sOpts provider.StreamOptions, promptTokens int, opts Options, part, parts int, path string) (*msg.AssistantMessage, error) {
 	firstWait := DefaultFirstEventTimeout(promptTokens)
 	if opts.FirstEventTimeout != nil {
 		firstWait = opts.FirstEventTimeout(promptTokens)
@@ -308,7 +357,7 @@ func runSimpleWatched(ctx context.Context, streamer Streamer, model provider.Mod
 	}
 	report := func(out int) {
 		if opts.OnProgress != nil {
-			opts.OnProgress(Progress{Part: part, Parts: parts, Model: modelLabel(model), PromptTokens: promptTokens, OutputTokens: out})
+			opts.OnProgress(Progress{Part: part, Parts: parts, Model: modelLabel(model), Path: path, PromptTokens: promptTokens, OutputTokens: out})
 		}
 	}
 
@@ -323,17 +372,81 @@ func runSimpleWatched(ctx context.Context, streamer Streamer, model provider.Mod
 	}
 
 	report(0)
+	start := time.Now()
+	var ttft time.Duration
+	haveFirst := false
 	outChars := 0
-	text, usage, err := runSimpleEach(watched, streamer, model, systemPrompt, userText, maxTokens, thinkingLevel, func(ev msg.StreamEvent) {
+	ch, wait := streamer.Stream(watched, model, transcript, sOpts)
+	for ev := range ch {
 		watch.Reset(idle, stalledIdle)
+		if !haveFirst {
+			ttft = time.Since(start)
+			haveFirst = true
+		}
 		if ev.Delta != "" {
 			outChars += len(ev.Delta)
 			report(ceilDiv4(outChars))
 		}
-	})
-	var stalled errStalled
-	if cause := context.Cause(watched); err != nil && ctx.Err() == nil && errors.As(cause, &stalled) {
-		return "", msg.Usage{}, &Error{Code: "stalled", Message: "Summarization stopped: " + stalled.Error(), Cause: stalled}
 	}
-	return text, usage, err
+	am, err := wait()
+	total := time.Since(start)
+
+	// A watchdog firing cancels watched with an errStalled cause; checked
+	// independently of err and am, since a provider that answers a
+	// cancelled stream with a clean result (seqStreamer's "block" case:
+	// StopAborted, err nil) still means the watchdog -- not the caller --
+	// ended the request, and that is what "stalled" should report.
+	var stalled errStalled
+	if cause := context.Cause(watched); ctx.Err() == nil && errors.As(cause, &stalled) {
+		return nil, &Error{Code: "stalled", Message: "Summarization stopped: " + stalled.Error(), Cause: stalled}
+	}
+	if err == nil && opts.OnPartDone != nil {
+		cacheRead := 0
+		if am != nil {
+			cacheRead = am.Usage.CacheRead
+		}
+		opts.OnPartDone(PartDone{
+			Part: part, Parts: parts, Model: modelLabel(model), Path: path,
+			PromptTokens: promptTokens, OutputTokens: ceilDiv4(outChars), CacheRead: cacheRead,
+			TTFTMs: ttft.Milliseconds(), TotalMs: total.Milliseconds(),
+		})
+	}
+	return am, err
+}
+
+// runSimpleWatched is runSimple with a stall watchdog and progress
+// reports, for the serialized path's one-user-message requests. It cancels
+// the request when the model sends nothing for too long and returns an
+// Error with Code "stalled" naming how long it waited.
+func runSimpleWatched(ctx context.Context, streamer Streamer, model provider.Model, systemPrompt, userText string, maxTokens int, thinkingLevel provider.ThinkingLevel, opts Options, part, parts int) (string, msg.Usage, error) {
+	sOpts := provider.StreamOptions{SystemPrompt: systemPrompt, MaxTokens: maxTokens}
+	if model.Reasoning && thinkingLevel != "" && thinkingLevel != provider.ThinkingOff {
+		sOpts.ThinkingLevel = thinkingLevel
+	}
+	transcript := []msg.Message{
+		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(userText)}, Timestamp: time.Now().UnixMilli()},
+	}
+	promptTokens := estimateText(systemPrompt) + estimateText(userText)
+	am, err := watchedRequest(ctx, streamer, model, transcript, sOpts, promptTokens, opts, part, parts, "serialized")
+	if err != nil {
+		return "", msg.Usage{}, err
+	}
+	if am == nil {
+		return "", msg.Usage{}, &Error{Code: "summarization_failed", Message: "summarization failed: no response"}
+	}
+	switch am.StopReason {
+	case msg.StopAborted:
+		message := am.ErrorMessage
+		if message == "" {
+			message = "Summarization aborted"
+		}
+		return "", msg.Usage{}, &Error{Code: "aborted", Message: message}
+	case msg.StopError:
+		message := am.ErrorMessage
+		if message == "" {
+			message = "Unknown error"
+		}
+		return "", msg.Usage{}, &Error{Code: "summarization_failed", Message: fmt.Sprintf("Summarization failed: %s", message)}
+	}
+	return msg.TextOf(am.Content), am.Usage, nil
 }

@@ -36,6 +36,10 @@ const (
 	// EventCompactionProgress reports a running compaction's part and
 	// streamed output (kiln's own; pi has no equivalent).
 	EventCompactionProgress EventType = "compaction_progress"
+	// EventCompactionPartDone reports one finished summary request's
+	// measured cost (kiln's own): path, prompt/output/cache-read tokens,
+	// time to first token and total time, logged as compaction_part_done.
+	EventCompactionPartDone EventType = "compaction_part_done"
 	// EventCompactionRetry reports that a compaction request failed for a
 	// transient reason and is being sent again (kiln's own): Attempt is
 	// the attempt starting, RetryError the reason in plain words, Err the
@@ -130,8 +134,21 @@ type Event struct {
 	// how many the compaction plans (compaction_progress).
 	CompactionPart, CompactionParts int
 	// CompactionPromptTokens/CompactionOutputTokens: the part's estimated
-	// prompt size and what it has streamed back so far (compaction_progress).
+	// prompt size and what it has streamed back so far (compaction_progress),
+	// or its final size (compaction_part_done).
 	CompactionPromptTokens, CompactionOutputTokens int
+	// CompactionPath is "cache" (compaction.Options.FastPath was tried and
+	// fit) or "serialized" (the serialize-and-split path), on
+	// compaction_part_done.
+	CompactionPath string
+	// CompactionCacheRead is the provider-reported cache-read token count
+	// on this part's usage, 0 when the provider did not report one
+	// (compaction_part_done).
+	CompactionCacheRead int
+	// CompactionTTFTMs/CompactionTotalMs: time to the part's first streamed
+	// event and to its final assistant message, in milliseconds
+	// (compaction_part_done).
+	CompactionTTFTMs, CompactionTotalMs int64
 
 	// navigation_*
 	TargetEntryID string

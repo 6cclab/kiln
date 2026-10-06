@@ -1915,6 +1915,14 @@ func logHarnessEvents(h *harness.Harness) {
 				"model", ev.CompactionModel, "prompt_tokens", ev.CompactionPromptTokens)
 		}
 	})
+	// One line per summary request as it finishes, with its measured cost:
+	// which path it took, cache reuse, time to first token and total time.
+	h.Events().On(harness.EventCompactionPartDone, func(ev harness.Event) {
+		diag.L().Info("compaction_part_done", "lane", ev.Lane, "part", ev.CompactionPart, "parts", ev.CompactionParts,
+			"model", ev.CompactionModel, "path", ev.CompactionPath, "prompt_tokens", ev.CompactionPromptTokens,
+			"output_tokens", ev.CompactionOutputTokens, "cache_read", ev.CompactionCacheRead,
+			"ttft_ms", ev.CompactionTTFTMs, "total_ms", ev.CompactionTotalMs)
+	})
 	on(harness.EventFault, func(ev harness.Event) []any { return []any{"err", ev.Err} })
 	on(harness.EventHandlerError, func(ev harness.Event) []any { return []any{"hook", ev.HookName, "err", ev.Err} })
 	logRequestTiming(h)

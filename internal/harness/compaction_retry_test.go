@@ -44,7 +44,10 @@ steps:
   - text: "first reply"
     end_turn: true
   - delay: 3s
-    text: "a summary too late"
+    text: "too late (cache attempt)"
+    end_turn: true
+  - delay: 3s
+    text: "too late (serialized attempt)"
     end_turn: true
   - text: "a summary"
     end_turn: true
@@ -64,6 +67,13 @@ steps:
 	if err != nil || res.Status != StatusCompleted {
 		t.Fatalf("status %q err %v", res.Status, err)
 	}
+	// Compaction's first retry-loop attempt tries the cache-friendly path
+	// (fastpath.go), then falls back to the serialized path when it too
+	// stalls; both count as one "the model stopped responding" retry.
+	// The retry-loop's second attempt succeeds on its own cache-path try
+	// ("a summary" carries no tool call, so it is not a fallback), which
+	// is why the script needs only one quick reply after the two slow
+	// ones, not two.
 	if len(seen.retry) != 1 || seen.retry[0].Attempt != 2 || seen.retry[0].RetryError != "the model stopped responding" {
 		t.Fatalf("retry events = %+v, want one announcing attempt 2 because the model stopped responding", seen.retry)
 	}
@@ -91,10 +101,16 @@ steps:
   - text: "first reply"
     end_turn: true
   - delay: 3s
-    text: "late"
+    text: "late (attempt 1, cache)"
     end_turn: true
   - delay: 3s
-    text: "late again"
+    text: "late (attempt 1, serialized)"
+    end_turn: true
+  - delay: 3s
+    text: "late again (attempt 2, cache)"
+    end_turn: true
+  - delay: 3s
+    text: "late again (attempt 2, serialized)"
     end_turn: true
   - text: "second reply"
     end_turn: true

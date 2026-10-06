@@ -160,18 +160,43 @@ func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, s
 	label := summariser.Provider + "/" + summariser.ID
 	l.h.events.Emit(Event{Type: EventCompactionStart, Lane: l.name, CompactionTrigger: trigger, CompactionModel: label})
 
+	// Compaction's cache-friendly path (internal/compaction/fastpath.go)
+	// needs the exact request the agent loop would send next for this
+	// lane: the same system prompt, the same tool definitions and the
+	// same message prefix a provider's cache (Ollama's prefix cache,
+	// Anthropic's cache_read) last processed, built the same way drive()
+	// builds it -- entriesToTranscript plus the lane's own
+	// transform_context hooks -- rather than reimplemented here. A
+	// best-effort step: a transform_context hook is expected to be a pure
+	// projection (it also runs on every real request), so running it again
+	// here has no side effect worth guarding against.
+	liveTranscript := l.invokeTransformContext(ctx, entriesToTranscript(pathEntries))
+	liveStreamOpts := buildStreamOptions(l.h.opts, cfg)
+	fastPath := &compaction.FastPathInput{
+		SystemPrompt: liveStreamOpts.SystemPrompt,
+		Tools:        liveStreamOpts.Tools,
+		Transcript:   liveTranscript,
+	}
+
 	// One retry for a transient failure (a stall, a dropped connection),
 	// said on the progress row, so a compaction that recovers leaves no
 	// error behind.
 	var result compaction.Result
 	lastPart := 0
 	for attempt := 1; ; attempt++ {
-		result, err = compaction.CompactWith(ctx, prep, p, summariser, customInstructions, provider.ThinkingLevel(cfg.ThinkingLevel), compaction.Options{
+		result, err = compaction.CompactWith(ctx, prep, p, summariser, customInstructions, provider.ThinkingOff, compaction.Options{
+			FastPath: fastPath,
 			OnProgress: func(pr compaction.Progress) {
 				lastPart = pr.Part
 				l.h.events.Emit(Event{Type: EventCompactionProgress, Lane: l.name, CompactionModel: pr.Model,
 					CompactionPart: pr.Part, CompactionParts: pr.Parts,
 					CompactionPromptTokens: pr.PromptTokens, CompactionOutputTokens: pr.OutputTokens})
+			},
+			OnPartDone: func(pd compaction.PartDone) {
+				l.h.events.Emit(Event{Type: EventCompactionPartDone, Lane: l.name, CompactionModel: pd.Model,
+					CompactionPart: pd.Part, CompactionParts: pd.Parts, CompactionPath: pd.Path,
+					CompactionPromptTokens: pd.PromptTokens, CompactionOutputTokens: pd.OutputTokens,
+					CompactionCacheRead: pd.CacheRead, CompactionTTFTMs: pd.TTFTMs, CompactionTotalMs: pd.TotalMs})
 			},
 			FirstEventTimeout: l.h.opts.StallFirstEvent,
 			IdleTimeout:       l.h.opts.StallIdle,
