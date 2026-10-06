@@ -1,0 +1,13 @@
+model: faux-1
+steps:
+  - text: "Sure, working on it."
+    usage: {input: 120, output: 20}
+    end_turn: true
+  - text: "Second turn done."
+    usage: {input: 140, output: 18}
+    end_turn: true
+  # The /compact summarisation request itself: delayed so there is time
+  # to send Esc while "Compacting conversation" is still on the busy line.
+  - text: "Summary of the above."
+    delay: 5s
+    usage: {input: 200, output: 30}

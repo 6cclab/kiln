@@ -1,0 +1,18 @@
+# A bash_background job does not survive /exit: internal/cli/chat.go
+# kills every background shell (shells.KillAll) and leftover job
+# (execenv.KillLeftoverJobs) before SessionEnd fires, on a clean /exit
+# the same as on Ctrl+C/Ctrl+D, so nothing kiln started outlives the
+# process. Checked by actually looking for the process after exit.
+@faux testdata/faux/qa/tools-background-shell-exit.yaml
+@args --permission-mode bypassPermissions
+
+WAITFOR /describe a task/ 20
+TYPE start a background sleep
+KEY enter
+WAITFOR /running in the background as bash_1/ 20
+SHOT dispatched
+RUN pgrep -f 'sleep 7[7]' >/dev/null
+TYPE /exit
+KEY enter
+WAIT 2
+RUN ! pgrep -f 'sleep 7[7]' >/dev/null

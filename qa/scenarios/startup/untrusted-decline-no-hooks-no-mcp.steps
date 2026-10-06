@@ -1,0 +1,24 @@
+# Declining the trust dialog on an untrusted folder means project-level
+# hooks and project-level MCP servers never run: both wait for trust
+# (claudesettings.LoadOptions.Trusted / internal/cli/chat.go's
+# folderTrusted gate), and declining quits the process outright before
+# kiln reaches the point either would have started. Checked with a
+# marker file a real SessionStart hook process would write, and a
+# marker an .mcp.json stdio server would write on launch - neither
+# exists afterward.
+@faux testdata/faux/hello.yaml
+@untrusted
+@setup printf 'touch hook-ran\n' > start.sh
+@setup mkdir -p .claude && printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"sh start.sh"}]}]}}\n' > .claude/settings.json
+@setup printf '#!/bin/sh\ntouch mcp-ran\nexec cat\n' > mcpserver.sh && chmod +x mcpserver.sh
+@setup printf '{"mcpServers":{"fixture":{"command":"sh","args":["mcpserver.sh"]}}}\n' > .mcp.json
+
+WAITFOR /Accessing workspace/ 20
+SHOT trust-dialog
+EXPECT /No, exit/
+KEY enter
+WAIT 2
+SHOT declined-and-exited
+RUN ! test -e hook-ran
+RUN ! test -e mcp-ran
+EXPECT_NOT /panic|goroutine/

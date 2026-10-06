@@ -1,0 +1,28 @@
+# /model while a turn is still streaming: it is a UI-only command (like
+# /mcp), so it opens its dialog right away instead of waiting for the
+# busy turn to end. The in-flight reply keeps streaming from the model
+# that was current when it started; the switch only takes effect for the
+# NEXT turn.
+@faux testdata/faux/qa/dialogs-model-switch-mid-stream.yaml
+
+WAITFOR /describe a task/ 20
+TYPE start the slow turn
+KEY enter
+WAITFOR /working on it/ 10
+SHOT turn-streaming
+TYPE /model
+KEY enter
+WAITFOR /Select model/ 10
+SHOT dialog-open-while-busy
+EXPECT /Select model/
+KEY down
+KEY enter
+WAITFOR /Now on faux\/faux-2 · small tier/ 10
+SHOT switched-while-still-streaming
+WAITFOR /Finished the slow turn\./ 20
+SHOT first-turn-completed-on-old-model
+EXPECT /Finished the slow turn\./
+TYPE second turn on the new model
+KEY enter
+WAITFOR /Second turn on faux-2\./ 20
+EXPECT_NOT /panic|goroutine/

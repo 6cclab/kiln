@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "echo hi"}, id: t1}
+  - on_tool_result: t1
+    then:
+      - text: "The codes are WALRUS99 and NARWHAL7."
+        usage: {input: 60, output: 12}

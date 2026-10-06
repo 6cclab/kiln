@@ -1,0 +1,7 @@
+model: faux-1
+steps:
+  - tool_call: {name: read, args: {path: big.txt}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "That log runs to 3000 lines; I only looked at the first 2000."
+        usage: {input: 500, output: 20}

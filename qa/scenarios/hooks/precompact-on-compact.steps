@@ -1,0 +1,22 @@
+# PreCompact fires before a manual /compact runs (internal/cli/chat.go),
+# carrying trigger "manual" and any /compact instructions on the payload.
+# Checked with a marker file the hook process writes - it must exist by
+# the time /compact reports its own result.
+@faux testdata/faux/qa/commands-baseline.yaml
+@setup printf 'touch precompacted\n' > precompact.sh
+@setup mkdir -p .claude && printf '{"hooks":{"PreCompact":[{"hooks":[{"type":"command","command":"sh precompact.sh"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /describe a task/ 20
+TYPE turn one
+KEY enter
+WAITFOR /Sure, working on it\./ 20
+TYPE turn two
+KEY enter
+WAITFOR /Second turn done\./ 20
+RUN ! test -e precompacted
+TYPE /compact
+KEY enter
+WAITFOR /Context compacted|Nothing to compact yet/ 20
+SHOT compacted
+RUN test -e precompacted
+EXPECT_NOT /panic|goroutine/

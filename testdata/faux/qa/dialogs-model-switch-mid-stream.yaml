@@ -1,0 +1,7 @@
+models:
+  faux-1:
+    - text: "working on it, this will take a moment... Finished the slow turn."
+      chunk_delay: 150ms
+  faux-2:
+    - text: "Second turn on faux-2."
+      usage: {input: 30, output: 8}

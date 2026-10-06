@@ -1,0 +1,4 @@
+model: faux-1
+steps:
+  - text: "The codeword is PINEAPPLE42."
+    usage: {input: 30, output: 8}
