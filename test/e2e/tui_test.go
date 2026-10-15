@@ -1196,9 +1196,8 @@ func TestTUI_ShiftTab_CyclesMode(t *testing.T) {
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr)
 	waitReady(t, s)
 
-	// permissionModeRing in app.go: auto -> manual -> acceptEdits -> plan ->
-	// auto; the default start mode is manual, so cycling from there goes
-	// manual -> acceptEdits -> plan -> auto -> manual. Status-line mode
+	// settings.NextPermissionMode: the default start mode is manual, so
+	// cycling goes manual -> acceptEdits -> plan -> auto -> manual. Status-line mode
 	// labels are status.go's modeLabel: "ask before edits" (manual),
 	// "auto-edit" (acceptEdits), "plan only" (plan), "auto mode" (auto) —
 	// acceptEdits and auto are distinct ring stops with distinct labels

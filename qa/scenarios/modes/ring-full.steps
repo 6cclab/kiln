@@ -1,7 +1,6 @@
 # Shift+Tab cycles the whole permission-mode ring from the default launch
-# mode (manual): internal/tui/app.go's permissionModeRing is
-# [auto, manual, acceptEdits, plan], so starting at manual (index 1) the
-# ring visits acceptEdits -> plan -> auto -> back to manual. Labels come
+# mode (manual), Claude Code's cycle (settings.NextPermissionMode):
+# manual -> acceptEdits -> plan -> auto -> back to manual. Labels come
 # from internal/tui/status.go's modeLabel; every ring stop has its own
 # label, so this checks each press shows the next stop's label.
 @faux testdata/faux/hello.yaml

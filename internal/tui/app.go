@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
@@ -33,14 +32,6 @@ import (
 // ◐◓◑◒ animates at 140ms/frame (design_handoff_kiln_tui/README.md), not
 // the Claude Code original's 80ms.
 const spinnerInterval = 140 * time.Millisecond
-
-// permissionModeRing is the Shift+Tab cycle order (parity spec:
-// docs/claude-code-reference.md §2, verified row-by-row against
-// testdata/reference/claude-code/mode-cycle.txt): auto -> manual ->
-// acceptEdits -> plan -> auto. bypassPermissions and dontAsk are not in the
-// ring — cycleMode sends either of them straight to auto, matching the
-// task's explicit instruction, since neither is ever entered by cycling.
-var permissionModeRing = []string{"auto", "manual", "acceptEdits", "plan"}
 
 // ResolveMentions is the app's mention-resolution hook. tui cannot import
 // internal/cli (cli is going to import tui, and Go forbids the cycle), so
@@ -85,12 +76,14 @@ type Config struct {
 	InitialContextUsed *int
 	InitialCost        *float64
 
-	Env            *execenv.Env
-	Gate           *permission.Gate
-	PlanController *agent.PlanController
-	Lane           *harness.Lane
-	Registry       *commands.Registry
-	Bridge         *Bridge
+	Env  *execenv.Env
+	Gate *permission.Gate
+	// TakeModeReminder returns the plan-mode reminder to put ahead of the
+	// next prompt, "" for none; nil in tests that need none.
+	TakeModeReminder func() string
+	Lane             *harness.Lane
+	Registry         *commands.Registry
+	Bridge           *Bridge
 
 	ResolveMentions ResolveMentionsFunc
 	RunPromptHooks  RunPromptHooksFunc
@@ -2118,25 +2111,16 @@ func (m Model) refreshPopup() Model {
 	return m
 }
 
-// cycleMode advances the permission mode one step around
-// permissionModeRing. A mode not in the ring (bypassPermissions, dontAsk)
-// goes straight to auto, the ring's first entry, rather than panicking on a
-// not-found index or silently no-op'ing.
+// cycleMode advances the permission mode one step around Claude Code's
+// cycle (claudesettings.NextPermissionMode, shared with /permissions).
 func (m Model) cycleMode() Model {
 	if m.cfg.Gate == nil {
 		return m
 	}
-	cur := string(m.cfg.Gate.Mode())
-	next := permissionModeRing[0]
-	for i, mode := range permissionModeRing {
-		if mode == cur {
-			next = permissionModeRing[(i+1)%len(permissionModeRing)]
-			break
-		}
-	}
-	m.cfg.Gate.SetMode(claudesettings.PermissionMode(next))
+	next := claudesettings.NextPermissionMode(m.cfg.Gate.Mode())
+	m.cfg.Gate.SetMode(next)
 	m.footer.SetNote("")
-	nextStr := next
+	nextStr := string(next)
 	m.footer.Apply(StatusPatch{Mode: &nextStr})
 	return m
 }
@@ -2355,6 +2339,11 @@ func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 	}
 	if len(hookContext) > 0 {
 		prompt = "<hook-context>\n" + strings.Join(hookContext, "\n\n") + "\n</hook-context>\n\n" + prompt
+	}
+	if m.cfg.TakeModeReminder != nil {
+		if pre := m.cfg.TakeModeReminder(); pre != "" {
+			prompt = pre + "\n\n" + prompt
+		}
 	}
 	return m.beginTurn(prompt, line, images)
 }

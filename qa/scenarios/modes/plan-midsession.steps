@@ -1,0 +1,30 @@
+# Plan mode entered mid-session (Andre's report, 2026-10-15): start in
+# manual, /plan, ask for a change. The plan must come up for approval,
+# and approving must move the footer out of plan mode. Before the fix the
+# model was told "Not in plan mode; no approval needed. Proceed directly."
+# and went ahead while the footer still said "plan only".
+@faux testdata/faux/qa/plan-midsession.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+EXPECT /ask before edits/
+TYPE /plan
+KEY enter
+WAITFOR /Enabled plan mode/ 20
+EXPECT /plan only/
+SEND make done.txt
+WAITFOR /Ready to code\?/ 20
+SHOT plan-approval
+EXPECT /Yes, manually approve edits/
+EXPECT /plan only/
+KEY 2
+WAITFOR /Allow kiln to write to done.txt\?/ 20
+SHOT after-approval
+# approved into manual: the footer left plan mode, and manual asks first
+EXPECT /ask before edits/
+EXPECT_NOT /plan only/
+KEY 1
+WAITFOR /Wrote it\./ 20
+SHOT done
+EXPECT_NOT /Not in plan mode/
+EXPECT_NOT /panic|goroutine/

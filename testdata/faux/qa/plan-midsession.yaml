@@ -1,0 +1,9 @@
+model: faux-1
+steps:
+  - tool_call: {name: exit_plan_mode, args: {plan: "Write done.txt."}, id: p1}
+  - on_tool_result: p1
+    then:
+      - tool_call: {name: write, args: {path: done.txt, content: "ok"}, id: w1}
+      - on_tool_result: w1
+        then:
+          - text: "Wrote it."

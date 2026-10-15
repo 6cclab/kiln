@@ -282,3 +282,26 @@ func TestPlanCommandEntersPlanMode(t *testing.T) {
 		t.Errorf("bare /plan in plan mode = %+v", res)
 	}
 }
+
+// TestPermissionsModalCycleMatchesShiftTab: /permissions' "m" walks the
+// same cycle as Shift+Tab from every mode. It used to step through all six
+// modes in its own order, so the two disagreed (after acceptEdits, "m"
+// went to auto and Shift+Tab to plan).
+func TestPermissionsModalCycleMatchesShiftTab(t *testing.T) {
+	for _, start := range []settings.PermissionMode{
+		settings.ModeManual, settings.ModeAcceptEdits, settings.ModePlan,
+		settings.ModeAuto, settings.ModeDontAsk, settings.ModeBypassPermissions,
+	} {
+		gate := &fakeManageGate{fakeInspectGate{mode: start}}
+		res, err := findCmd(t, ManageCommands(ManageDeps{Gate: gate}), "permissions").Run(context.Background(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := res.Modal.Act("m", ""); err != nil {
+			t.Fatal(err)
+		}
+		if want := settings.NextPermissionMode(start); gate.mode != want {
+			t.Errorf("\"m\" from %s went to %s, Shift+Tab goes to %s", start, gate.mode, want)
+		}
+	}
+}

@@ -28,20 +28,21 @@ func TestPrompt_DefaultCarriesBasePrompt(t *testing.T) {
 	}
 }
 
-// TestPrompt_PlanModeAddsPlanningSteps: in plan mode the structured
-// planning steps follow the base prompt.
-// Break: drop agent.PlanModePrompt from buildSystemPrompt -> fails.
+// TestPrompt_PlanModeAddsPlanningSteps: a session started in plan mode
+// sends the plan-mode steps as a reminder ahead of the first prompt, not in
+// the system prompt (which must not change when the mode does).
+// Break: drop reminders.Prefix from runPrintMode -> fails.
 func TestPrompt_PlanModeAddsPlanningSteps(t *testing.T) {
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
-	sys := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "", nil, "--permission-mode", "plan")
-	base := strings.Index(sys, "You are kiln")
-	plan := strings.Index(sys, "You are in PLAN MODE.")
-	if base < 0 || plan < 0 || plan < base {
-		t.Fatalf("want base prompt then plan-mode prompt; base at %d, plan at %d:\n%s", base, plan, sys)
+	first := budgetRunAndFirstMessages(t, home, sessDir, proj, "faux/faux-1", "", nil, "--permission-mode", "plan")
+	reminder := strings.Index(first, "You are in PLAN MODE.")
+	prompt := strings.Index(first, "hello")
+	if reminder < 0 || prompt < reminder || !strings.Contains(first, `system-reminder\u003e`) {
+		t.Fatalf("want the plan-mode reminder ahead of the prompt; reminder at %d, prompt at %d:\n%s", reminder, prompt, first)
 	}
-	if !strings.Contains(sys, "rule by rule") {
-		t.Errorf("plan-mode prompt is missing its check step:\n%s", sys)
+	if !strings.Contains(first, "rule by rule") {
+		t.Errorf("plan-mode reminder is missing its check step:\n%s", first)
 	}
 }
 

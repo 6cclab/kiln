@@ -65,7 +65,21 @@ func budgetRunAndFirstSystem(t *testing.T, home, sessDir, proj, model, scriptYAM
 	if len(reqs) == 0 {
 		t.Fatalf("run (%s): faux recorded no requests", model)
 	}
+	lastFirstMessages = string(reqs[0].Messages)
 	return reqs[0].System
+}
+
+// lastFirstMessages is the first request's messages (JSON) from the most
+// recent budgetRunAndFirstSystem call, for the reminders kiln sends with a
+// prompt rather than in the system prompt (plan mode).
+var lastFirstMessages string
+
+// budgetRunAndFirstMessages is budgetRunAndFirstSystem returning the first
+// request's messages instead of its system prompt.
+func budgetRunAndFirstMessages(t *testing.T, home, sessDir, proj, model, scriptYAML string, extraEnv map[string]string, extraArgs ...string) string {
+	t.Helper()
+	budgetRunAndFirstSystem(t, home, sessDir, proj, model, scriptYAML, extraEnv, extraArgs...)
+	return lastFirstMessages
 }
 
 // roughTokens is the same len/4 estimate internal/claude/memory uses to

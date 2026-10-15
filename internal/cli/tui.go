@@ -48,15 +48,17 @@ import (
 // branch uses just above it — see the seam comment there for the pieces
 // that could not be wired straight through (plan approval; hook notices).
 type InteractiveDeps struct {
-	Cwd            string
-	ModelLabel     string
-	Resolved       provider.Resolved
-	Started        *agent.Started
-	Gate           *permission.Gate
-	PlanController *agent.PlanController
-	Registry       *slashcommands.Registry
-	Env            *execenv.Env
-	Dispatcher     *agent.Dispatcher
+	Cwd        string
+	ModelLabel string
+	Resolved   provider.Resolved
+	Started    *agent.Started
+	Gate       *permission.Gate
+	// TakeModeReminder is the plan-mode reminder to send ahead of the
+	// next prompt (modereminders.go's TakeForPrompt).
+	TakeModeReminder func() string
+	Registry         *slashcommands.Registry
+	Env              *execenv.Env
+	Dispatcher       *agent.Dispatcher
 	// Hooks is the hooks to run now: none until the folder is trusted
 	// in an interactive session (trustedHooks).
 	Hooks        func() claudehooks.Config
@@ -240,12 +242,12 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		Fullscreen:         deps.Fullscreen,
 		StartupContext:     append([]string(nil), deps.SessionStart.Context...),
 
-		Env:            deps.Env,
-		Gate:           deps.Gate,
-		PlanController: deps.PlanController,
-		Lane:           deps.Started.Lane,
-		Registry:       deps.Registry,
-		Bridge:         bridge,
+		Env:              deps.Env,
+		Gate:             deps.Gate,
+		TakeModeReminder: deps.TakeModeReminder,
+		Lane:             deps.Started.Lane,
+		Registry:         deps.Registry,
+		Bridge:           bridge,
 
 		ResolveMentions: func(ctx context.Context, line string) (string, []msg.ImageContent, []string) {
 			resolved, err := ResolveMentions(line, Options{Cwd: deps.Cwd, Tier: &deps.Resolved.Tier, Roots: deps.Gate.Roots()})
@@ -287,6 +289,11 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		Keymap:         bindings.Keymap(),
 		IsResume:       deps.IsResume,
 	}
+	// The footer follows the gate whoever moves it: a plan approval, a
+	// prompt's mode switch, /permissions inside its panel, /plan.
+	deps.Gate.OnModeChange(func(_, _ claudesettings.PermissionMode) {
+		bridge.SendAsync(tui.MsgRefreshMode{})
+	})
 	// deps.StatusLine (settings.json's "statusLine" command) is
 	// intentionally not wired into cfg any more: kiln's own status line is
 	// the design (docs/kiln-design-handoff/README.md "Screen anatomy"), and

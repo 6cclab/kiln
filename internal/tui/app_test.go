@@ -268,33 +268,33 @@ func TestStatusRow_CtrlYAfterKillUntilNextKeystroke(t *testing.T) {
 	}
 }
 
-// TestShiftTab_CycleOrder checks the ring app.go's cycleMode walks: auto ->
-// manual -> acceptEdits -> plan -> auto, verified against
-// testdata/reference/claude-code/mode-cycle.txt (SCREEN after each of 4
-// shift+tab presses starting from plan mode, since plan -> auto is the
-// wrap this fixture exercises).
+// TestShiftTab_CycleOrder: Shift+Tab walks Claude Code's cycle, manual ->
+// acceptEdits -> plan -> auto -> manual (claudesettings.NextPermissionMode),
+// and the footer follows each step.
 func TestShiftTab_CycleOrder(t *testing.T) {
-	m := newTestModelWithGate("plan")
-	order := []string{"auto", "manual", "acceptEdits", "plan"}
-	for _, want := range order {
+	m := newTestModelWithGate("manual")
+	for _, want := range []string{"acceptEdits", "plan", "auto", "manual"} {
 		mi, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 		m = mi.(Model)
 		if got := m.footer.State().Mode; got != want {
 			t.Fatalf("after shift+tab, mode = %q, want %q", got, want)
 		}
+		if got := string(m.cfg.Gate.Mode()); got != want {
+			t.Fatalf("after shift+tab, gate mode = %q, want %q", got, want)
+		}
 	}
 }
 
-// TestShiftTab_BypassAndDontAskCycleIntoAuto checks the task's explicit
-// instruction that bypassPermissions/dontAsk are not in the ring — Shift+Tab
-// from either sends the mode straight to auto.
-func TestShiftTab_BypassAndDontAskCycleIntoAuto(t *testing.T) {
-	for _, start := range []string{"bypassPermissions", "dontAsk"} {
+// TestShiftTab_BypassToAuto_DontAskToManual: neither mode is entered by
+// cycling. Leaving bypassPermissions goes on to auto; leaving dontAsk goes
+// back to manual, as Claude Code returns to "default".
+func TestShiftTab_BypassToAuto_DontAskToManual(t *testing.T) {
+	for start, want := range map[string]string{"bypassPermissions": "auto", "dontAsk": "manual"} {
 		m := newTestModelWithGate(start)
 		mi, _ := m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 		m = mi.(Model)
-		if got := m.footer.State().Mode; got != "auto" {
-			t.Errorf("shift+tab from %q = %q, want auto", start, got)
+		if got := m.footer.State().Mode; got != want {
+			t.Errorf("shift+tab from %q = %q, want %q", start, got, want)
 		}
 	}
 }

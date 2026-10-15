@@ -183,6 +183,9 @@ type Gate struct {
 	permissions settings.Permissions
 	prompter    Prompter
 	mode        settings.PermissionMode
+	// modeObservers run after SetMode changes mode (OnModeChange); guarded
+	// by mu.
+	modeObservers []func(from, to settings.PermissionMode)
 
 	// mu guards sessionAllows and blockLog, which concurrent tool calls
 	// (from a Concurrent-tool run in the harness turn loop) can now touch
@@ -427,10 +430,29 @@ func (g *Gate) resolvePlanPath(path string) string {
 	return filepath.Clean(execenv.ResolveToolPath(base, path))
 }
 
-// SetMode sets the active permission mode.
+// SetMode sets the active permission mode and, when it changed, tells
+// every OnModeChange observer, outside the lock.
 func (g *Gate) SetMode(mode settings.PermissionMode) {
 	g.mu.Lock()
+	from := g.mode
 	g.mode = mode
+	observers := append([]func(from, to settings.PermissionMode){}, g.modeObservers...)
+	g.mu.Unlock()
+	if from == mode {
+		return
+	}
+	for _, fn := range observers {
+		fn(from, mode)
+	}
+}
+
+// OnModeChange registers fn to run after every SetMode that changes the
+// mode, whoever calls it (Shift+Tab, /plan, /permissions, a prompt's
+// mode-switch option, a plan approval), so everything that depends on the
+// mode follows the gate instead of keeping its own copy.
+func (g *Gate) OnModeChange(fn func(from, to settings.PermissionMode)) {
+	g.mu.Lock()
+	g.modeObservers = append(g.modeObservers, fn)
 	g.mu.Unlock()
 }
 

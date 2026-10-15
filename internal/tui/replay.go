@@ -93,7 +93,7 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 				// synthetics like any other note.
 				continue
 			}
-			if text := textOf(m.Content); strings.TrimSpace(text) != "" {
+			if text := stripPromptPreamble(textOf(m.Content)); strings.TrimSpace(text) != "" {
 				flush()
 				out = append(out, RenderUserMessage(text, width)...)
 			}

@@ -85,6 +85,7 @@ func firstLineOf(um msg.UserMessage) string {
 			text += tc.Text
 		}
 	}
+	text = stripPromptPreamble(text)
 	for i, r := range text {
 		if r == '\n' {
 			return text[:i]
