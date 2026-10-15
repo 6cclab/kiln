@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sync"
 
 	"github.com/andrepato/harness/internal/agent"
@@ -168,8 +169,21 @@ type laneSetter interface {
 func (m *mcpSession) activeToolNames() []string {
 	m.mu.Lock()
 	tools, strategy := m.tools, m.tier.ToolStrategy
+	resident := append([]string(nil), m.resident...)
 	m.mu.Unlock()
-	return mcpgate.ActiveToolNames(tools, m.indexScope(), strategy, m.state, m.resident)
+	return mcpgate.ActiveToolNames(tools, m.indexScope(), strategy, m.state, resident)
+}
+
+// addResident keeps names active whatever the MCP posture: tools that
+// arrive after startup but are not MCP tools (a mod's own tools).
+func (m *mcpSession) addResident(names ...string) {
+	m.mu.Lock()
+	for _, n := range names {
+		if !slices.Contains(m.resident, n) {
+			m.resident = append(m.resident, n)
+		}
+	}
+	m.mu.Unlock()
 }
 
 // indexScope is the posture that scopes the index, tool_search and

@@ -436,6 +436,59 @@ func parseHooksBlob(data []byte) map[string][]hooks.Matcher {
 	return nil
 }
 
+// modulesShape is the mods part of hooks/hooks.json: {"modules": [...]},
+// the plugin's hooks modules (Claude Code mods), beside or instead of the
+// command hooks under "hooks".
+type modulesShape struct {
+	Modules []string `json:"modules"`
+}
+
+// Modules returns the absolute paths of a plugin's hooks modules (Claude
+// Code mods: JS/TS files listed under "modules" in hooks/hooks.json, or in
+// plugin.json's inline "hooks" object), in the order listed. A path that
+// leaves the plugin root is dropped: a module may only be loaded from the
+// plugin's own directory.
+func Modules(p Plugin) []string {
+	// A path in hooks/hooks.json is relative to that file's directory
+	// (squad's "./register.tsx" is hooks/register.tsx); one in plugin.json's
+	// inline "hooks" is relative to the plugin root.
+	type listedModule struct{ base, rel string }
+	var listed []listedModule
+	hooksDir := filepath.Join(p.Root, "hooks")
+	if data, err := os.ReadFile(filepath.Join(hooksDir, "hooks.json")); err == nil {
+		var m modulesShape
+		if json.Unmarshal(data, &m) == nil {
+			for _, rel := range m.Modules {
+				listed = append(listed, listedModule{hooksDir, rel})
+			}
+		}
+	}
+	if mf, ok := pluginManifest(p.Root, p.Name, p.Marketplace); ok && len(mf.Hooks) > 0 {
+		var m modulesShape
+		if json.Unmarshal(mf.Hooks, &m) == nil {
+			for _, rel := range m.Modules {
+				listed = append(listed, listedModule{p.Root, rel})
+			}
+		}
+	}
+	root := filepath.Clean(p.Root)
+	var out []string
+	seen := map[string]bool{}
+	for _, lm := range listed {
+		rel := lm.rel
+		abs := filepath.Clean(filepath.Join(lm.base, rel))
+		if within, err := filepath.Rel(root, abs); err != nil || within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
+			diag.L().Warn("plugins: hooks module outside the plugin root", "plugin", p.Key, "module", rel)
+			continue
+		}
+		if !seen[abs] {
+			seen[abs] = true
+			out = append(out, abs)
+		}
+	}
+	return out
+}
+
 // Hooks returns a plugin's hook commands: hooks/hooks.json plus
 // plugin.json's own "hooks" field (inline object or a string path,
 // relative to the plugin root, to a file in the same shape). Every

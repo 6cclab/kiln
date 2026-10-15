@@ -81,9 +81,12 @@ type Config struct {
 	// TakeModeReminder returns the plan-mode reminder to put ahead of the
 	// next prompt, "" for none; nil in tests that need none.
 	TakeModeReminder func() string
-	Lane             *harness.Lane
-	Registry         *commands.Registry
-	Bridge           *Bridge
+	// Mods draws the mods' panes and band and takes their keys; nil when
+	// no mod is loaded.
+	Mods     *ModsDriver
+	Lane     *harness.Lane
+	Registry *commands.Registry
+	Bridge   *Bridge
 
 	ResolveMentions ResolveMentionsFunc
 	RunPromptHooks  RunPromptHooksFunc
@@ -276,6 +279,9 @@ type Model struct {
 	// indicator above the input box (docs/claude-code-reference.md §2,
 	// mode-manual.txt row 8: "until the next keystroke").
 	justKilled bool
+	// modsChord: Ctrl+X was pressed while a mod pane is open; Tab next
+	// focuses a pane, as in Claude Code.
+	modsChord bool
 
 	// modeHintText/modeHintGen replace the mode line for one second after a
 	// Ctrl+C ("Press Ctrl-C again to exit", ctrl-c-hint.txt). modeHintGen
@@ -623,6 +629,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		prevWidth := m.width
 		m.width, m.height = msg.Width, msg.Height
+		if m.cfg.Mods != nil {
+			m.cfg.Mods.SetWidth(m.contentWidth())
+		}
 		if m.liveWidth != nil {
 			m.liveWidth.Store(int32(m.contentWidth()))
 		}
@@ -832,6 +841,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		view := msg.View
 		lines := append([]string{""}, FitLines(RenderToolCall(view), m.contentWidth(), "     ")...)
 		m.commit(lines)
+		return m, nil
+
+	case MsgModsRedraw:
 		return m, nil
 
 	case MsgRefreshMode:
@@ -1724,6 +1736,23 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if consumed {
 			return m, cmd
+		}
+	}
+
+	// Mod panes: Ctrl+X then Tab focuses one; while one has focus its
+	// buttons, scrolling and Esc take the keys (Claude Code's pane keys).
+	if m.cfg.Mods != nil {
+		if m.modsChord {
+			m.modsChord = false
+			if msg.String() == "tab" && m.cfg.Mods.FocusNext() {
+				return m, nil
+			}
+		} else if msg.String() == "ctrl+x" && len(m.cfg.Mods.Panes()) > 0 {
+			m.modsChord = true
+			return m, nil
+		}
+		if m.cfg.Mods.Focused() && m.cfg.Mods.HandleKey(msg) {
+			return m, nil
 		}
 	}
 
@@ -2685,6 +2714,9 @@ func (m Model) liveTail(width int) []string {
 	if rows := m.subagents.Render(width); len(rows) > 0 {
 		below = append(below, "")
 		below = append(below, rows...)
+	}
+	if m.cfg.Mods != nil {
+		below = append(below, m.cfg.Mods.Lines(width)...)
 	}
 	if !m.prompt.Active() {
 		lines = append(lines, m.renderStreamLive(width, m.streamRows(width, len(lines)+len(below)))...)

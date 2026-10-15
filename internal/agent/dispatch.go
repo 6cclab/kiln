@@ -122,6 +122,30 @@ type Dispatcher struct {
 	// registered at all — see Dispatch's doc comment for why two levels
 	// rather than zero.
 	Depth int
+	// Hooks lets the caller see and steer subagents (kiln's mod engine:
+	// agent.spawn, and tool.call and turn events inside a subagent). Child
+	// dispatchers inherit it. Nil for none.
+	Hooks SubagentHooks
+}
+
+// SubagentHooks is what a caller can do around a dispatch. AgentID is the
+// dispatching tool call's id (DispatchRequest.ToolCallID), the same id
+// SubagentEvent.ID carries.
+type SubagentHooks interface {
+	// BeforeSpawn runs before the subagent starts. It may rewrite req's
+	// Prompt or Model; a non-empty deny refuses the dispatch, and the
+	// reason is the task tool's result.
+	BeforeSpawn(ctx context.Context, agentID, agentType string, req *DispatchRequest) (deny string)
+	// Attach runs once the subagent's harness exists, before its first
+	// request, to register hooks on it.
+	Attach(agentID, model string, h *harness.Harness)
+	// Tools are extra tools every subagent gets beside the built-in ones
+	// (kiln's mod engine: a mod's own tools, which a subagent reports
+	// through). An agent definition's tools: allowlist still applies.
+	Tools(agentID string) []*tool.Tool
+	// Done runs when the subagent's run ends, with its status
+	// (harness.StatusCompleted, StatusFailed, ...) and session usage.
+	Done(agentID, status string, usage msg.Usage)
 }
 
 // DispatchRequest is what the task tool hands Dispatch. Model is the
@@ -162,6 +186,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	def, ok := findAgentDefinition(d.Agents, req.Agent)
 	if !ok {
 		return DispatchResult{}, fmt.Errorf("agent: no agent named %q", req.Agent)
+	}
+	if d.Hooks != nil {
+		if deny := d.Hooks.BeforeSpawn(ctx, req.ToolCallID, def.Name, &req); deny != "" {
+			return DispatchResult{Text: deny, Chars: len(deny)}, nil
+		}
 	}
 
 	parentModel := agents.ModelChoice{ProviderID: d.Parent.Model.Provider, ModelID: d.Parent.Model.ID}
@@ -224,9 +253,16 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	// at Depth 2 nothing is registered at all, so the model never sees the
 	// tool and cannot even attempt it — see Dispatcher.Depth's doc comment.
 	allowTask := d.Depth < 2
-	available := residentToolNames
+	available := append([]string(nil), residentToolNames...)
 	if allowTask {
-		available = append(append([]string(nil), residentToolNames...), TaskToolName)
+		available = append(available, TaskToolName)
+	}
+	var hookTools []*tool.Tool
+	if d.Hooks != nil {
+		hookTools = d.Hooks.Tools(req.ToolCallID)
+		for _, t := range hookTools {
+			available = append(available, t.Name)
+		}
 	}
 	// The allowlist is applied to what this harness actually has, not to
 	// what the definition imagined.
@@ -274,9 +310,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			BeforeSubagentStop: d.BeforeSubagentStop,
 			UserHistory:        d.UserHistory,
 			Depth:              depth,
+			Hooks:              d.Hooks,
 		}
 		extraTools = append(extraTools, tools.TaskTool(adaptDispatch(child.Dispatch), d.Agents, d.Roles, resolved.Tier))
 	}
+
+	extraTools = append(extraTools, hookTools...)
 
 	started, err := Start(ctx, Options{
 		Registry:     d.Registry,
@@ -350,6 +389,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		})
 	}
 
+	if d.Hooks != nil {
+		d.Hooks.Attach(req.ToolCallID, choice.ModelID, started.Harness)
+	}
+
 	var toolCalls int
 	var text string
 
@@ -414,6 +457,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	defer unsubMsg()
 
 	result, err := started.Lane.Prompt(ctx, req.Prompt, nil)
+	if d.Hooks != nil {
+		status := result.Status
+		if err != nil && status == "" {
+			status = harness.StatusFailed
+		}
+		d.Hooks.Done(req.ToolCallID, status, started.Harness.Stats().Usage)
+	}
 	if d.OnSubagentStop != nil {
 		status := result.Status
 		if err != nil && status == "" {

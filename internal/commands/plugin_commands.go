@@ -65,6 +65,9 @@ func renderPluginReport(cwd string, active []claudeplugins.Plugin) []string {
 			if n := len(claudeplugins.MCPServers(p)); n > 0 {
 				contributions = append(contributions, plural.Count(n, "MCP server"))
 			}
+			if n := len(claudeplugins.Modules(p)); n > 0 {
+				contributions = append(contributions, plural.Count(n, "mod module"))
+			}
 			if len(contributions) == 0 {
 				lines = append(lines, "    (contributes nothing kiln loads)")
 			} else {

@@ -245,6 +245,25 @@ type Gate struct {
 	// session reads (ProtectSettingsFiles, protected.go); nil before it is
 	// called.
 	settingsFiles atomic.Pointer[map[string]bool]
+	// modTools are the tools loaded mods registered and answer themselves
+	// (SetModTools); nil before any mod loads.
+	modTools atomic.Pointer[map[string]bool]
+}
+
+// SetModTools records the tools loaded mods registered: calls to them are
+// answered by the mod, so they need no prompt (deny and ask rules still
+// apply).
+func (g *Gate) SetModTools(names []string) {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	g.modTools.Store(&set)
+}
+
+func (g *Gate) isModTool(name string) bool {
+	set := g.modTools.Load()
+	return set != nil && (*set)[name]
 }
 
 // NewGate builds a Gate. Roots are resolved to absolute paths and
@@ -860,6 +879,13 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 	// The session scratchpad is the model's own: no prompt in any mode,
 	// plan mode included, once deny and ask rules have had their say.
 	if !hookAsk && g.scratchpadCall(req, hits) {
+		return nil, OutcomeAuto, nil
+	}
+
+	// A mod's own tool (mcp__<plugin>__<name>) is answered by the mod's
+	// tool.call hook and never runs anything itself; Claude Code does not
+	// prompt for it. Deny and ask rules still have their say.
+	if !hookAsk && !hits.Deny && !hits.Ask && g.isModTool(req.ToolName) {
 		return nil, OutcomeAuto, nil
 	}
 

@@ -1,0 +1,27 @@
+# Claude Code mods: the probe fixture mod (testdata/mods/probe) installed as
+# a user plugin. Its band shows above the prompt from the start; /probe (the
+# mod's own command) opens its pane in the live region; Ctrl+X Tab focuses
+# the pane and Esc gives the keyboard back. Read the screenshots: the pane's
+# label rule and the band must sit above the input with kiln's spacing.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@setup mkdir -p {HOME}/plugins/repos {HOME}/.claude/plugins && cp -R {ROOT}/testdata/mods/probe {HOME}/plugins/repos/probe
+@setup printf '{"version":2,"plugins":{"probe@market":[{"scope":"user","installPath":"%s/plugins/repos/probe","version":"1.0.0"}]}}' {HOME} > {HOME}/.claude/plugins/installed_plugins.json
+@setup printf '{"enabledPlugins":{"probe@market":true}}' > {HOME}/.claude/settings.json
+
+WAITFOR /describe a task/ 20
+WAITFOR /probe band · 0 notes/ 20
+SHOT band
+TYPE /probe
+KEY enter
+WAITFOR /Probe pane opened\./ 20
+WAITFOR /probe notes: none/ 20
+SHOT pane-open
+KEY ctrl+x tab
+WAIT 1
+SHOT pane-focused
+KEY esc
+WAIT 1
+SHOT pane-blurred
+EXPECT /probe notes: none/
+EXPECT_NOT /panic|goroutine/

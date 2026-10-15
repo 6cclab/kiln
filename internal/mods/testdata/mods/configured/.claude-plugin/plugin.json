@@ -1,0 +1,1 @@
+{"name":"configured","version":"0.0.1","userConfig":{"greeting":{"type":"string","default":"hi"},"loud":{"type":"boolean","default":false},"bare":{"type":"string"}}}

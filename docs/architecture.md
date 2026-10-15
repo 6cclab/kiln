@@ -431,6 +431,15 @@ what the workspace boundary leaves past the auto mode classifier
 (`permission/classifier.go`, the model call in `internal/automode`;
 `docs/configuration.md` "Auto mode classifier").
 
+**Mods.** `internal/mods` runs Claude Code hooks modules (esbuild bundle,
+goja runtime, one engine goroutine, the middleware chain behind `on(...)`).
+`internal/cli/mods.go` connects it to a session: harness hooks on the main
+conversation and, through `agent.SubagentHooks`, on every subagent
+(`tool.call`, `turn.*`, `agent.spawn`, the mods' tools); the mods' commands
+as a registry source; the permission gate's `SetModTools`.
+`internal/tui/modsdriver.go` renders their panes and band off the Bubble Tea
+goroutine (`ModPanes`, `RenderModTree`).
+
 **Mode changes.** The gate's mode is the only copy of it. `Gate.SetMode`
 notifies `OnModeChange` observers (the TUI footer re-reads it); plan mode's
 controller (`agent.PlanController`) reads it rather than keeping a flag.

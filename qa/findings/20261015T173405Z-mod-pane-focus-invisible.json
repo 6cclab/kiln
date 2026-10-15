@@ -1,0 +1,29 @@
+{
+ "id": "20261015T173405Z-mod-pane-focus-invisible",
+ "found_at": "2026-10-15T17:34:05Z",
+ "scenario": "qa/scenarios/plugins/mods-probe.steps",
+ "step": "KEY ctrl+x tab",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "focused mod pane looks the same as an unfocused one",
+ "observed": "pane-open and pane-focused screens had identical text; nothing marked the focused pane, so keys went to it unannounced",
+ "expected": "After Ctrl+X Tab the pane shows it has the keyboard, and how to give it back",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/drive-20261015T173056Z/iterm-dark/plugins-mods-probe-120x40/03-pane-focused.txt"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/modpanes.go"
+  ],
+  "regression_test": "TestModPanes_FocusIsVisible",
+  "after_evidence": [
+   "qa/runs/drive-20261015T173331Z/iterm-dark/plugins-mods-probe-120x40/03-pane-focused.png"
+  ],
+  "updated_at": "2026-10-15T17:34:05Z"
+ }
+}
