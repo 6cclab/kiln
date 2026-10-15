@@ -139,6 +139,10 @@ type SubagentHooks interface {
 	// Attach runs once the subagent's harness exists, before its first
 	// request, to register hooks on it.
 	Attach(agentID string, h *harness.Harness)
+	// Tools are extra tools every subagent gets beside the built-in ones
+	// (kiln's mod engine: a mod's own tools, which a subagent reports
+	// through). An agent definition's tools: allowlist still applies.
+	Tools() []*tool.Tool
 	// Done runs when the subagent's run ends, with its status
 	// (harness.StatusCompleted, StatusFailed, ...) and session usage.
 	Done(agentID, status string, usage msg.Usage)
@@ -249,9 +253,16 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	// at Depth 2 nothing is registered at all, so the model never sees the
 	// tool and cannot even attempt it — see Dispatcher.Depth's doc comment.
 	allowTask := d.Depth < 2
-	available := residentToolNames
+	available := append([]string(nil), residentToolNames...)
 	if allowTask {
-		available = append(append([]string(nil), residentToolNames...), TaskToolName)
+		available = append(available, TaskToolName)
+	}
+	var hookTools []*tool.Tool
+	if d.Hooks != nil {
+		hookTools = d.Hooks.Tools()
+		for _, t := range hookTools {
+			available = append(available, t.Name)
+		}
 	}
 	// The allowlist is applied to what this harness actually has, not to
 	// what the definition imagined.
@@ -303,6 +314,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		}
 		extraTools = append(extraTools, tools.TaskTool(adaptDispatch(child.Dispatch), d.Agents, d.Roles, resolved.Tier))
 	}
+
+	extraTools = append(extraTools, hookTools...)
 
 	started, err := Start(ctx, Options{
 		Registry:     d.Registry,

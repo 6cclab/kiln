@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/tool"
 )
 
 type recordingHooks struct {
@@ -15,6 +17,7 @@ type recordingHooks struct {
 	calls    []string
 	attached *harness.Harness
 	status   string
+	tools    []*tool.Tool
 }
 
 func (r *recordingHooks) BeforeSpawn(ctx context.Context, agentID, agentType string, req *DispatchRequest) string {
@@ -28,6 +31,7 @@ func (r *recordingHooks) Attach(agentID string, h *harness.Harness) {
 	r.calls = append(r.calls, "attach:"+agentID)
 	r.attached = h
 }
+func (r *recordingHooks) Tools() []*tool.Tool { return r.tools }
 func (r *recordingHooks) Done(agentID, status string, _ msg.Usage) {
 	r.calls = append(r.calls, "done:"+agentID)
 	r.status = status
@@ -92,5 +96,36 @@ func TestDispatchHookDenyRefusesTheSpawn(t *testing.T) {
 	}
 	if strings.Join(h.calls, ",") != "spawn:tc1:general-purpose" {
 		t.Fatalf("hooks after a deny: %v", h.calls)
+	}
+}
+
+// TestDispatchHookToolsReachTheSubagent: a hook's tools are callable inside
+// the subagent (squad's subagents report progress through
+// mcp__squad__step). Subagents used to get only the built-in tools.
+func TestDispatchHookToolsReachTheSubagent(t *testing.T) {
+	script := `
+model: faux-1
+steps:
+  - tool_call: {name: mcp__squad__step, args: {done: 1}, id: s1}
+  - on_tool_result: s1
+    then:
+      - text: "reported"
+`
+	d, _, _ := newParentAndDispatcher(t, script, nil)
+	var got string
+	h := &recordingHooks{tools: []*tool.Tool{{
+		Name: "mcp__squad__step", Description: "report a step",
+		Parameters: []byte(`{"type":"object","properties":{"done":{"type":"integer"}}}`),
+		Execute: func(_ context.Context, raw json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
+			got = string(raw)
+			return tool.Text("ok"), nil
+		},
+	}}}
+	d.Hooks = h
+	if _, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "general-purpose", Prompt: "go", ToolCallID: "tc2"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !strings.Contains(got, `"done":1`) {
+		t.Fatalf("the subagent never ran the hook's tool (args %q)", got)
 	}
 }
