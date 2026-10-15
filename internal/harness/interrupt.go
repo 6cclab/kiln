@@ -20,8 +20,9 @@ import (
 // work. The provider reports output tokens only at the end of a stream, so
 // an interrupted request's output is estimated from what streamed (chars/4)
 // when the provider's own count is lower, and its cost recomputed from the
-// model's rates: an estimate, but a closer one than nothing.
-func (l *Lane) commitInterrupted(operationID, tip, responseEntryID string, partial *msg.AssistantMessage, cfg session.LaneConfiguration) string {
+// model's rates: an estimate, but a closer one than nothing. model is the
+// model the request went to (on a virtual lane, the routed one).
+func (l *Lane) commitInterrupted(operationID, tip, responseEntryID string, partial *msg.AssistantMessage, model provider.Model) string {
 	if partial == nil || responseEntryID == "" {
 		return tip
 	}
@@ -50,9 +51,7 @@ func (l *Lane) commitInterrupted(operationID, tip, responseEntryID string, parti
 	if usage.TotalTokens != 0 {
 		usage.TotalTokens = usage.Input + usage.Output + usage.CacheRead + usage.CacheWrite
 	}
-	if m, ok := l.h.opts.Registry.GetModel(cfg.Model.Provider, cfg.Model.ModelID); ok {
-		provider.ApplyCost(m, &usage)
-	}
+	provider.ApplyCost(model, &usage)
 	if usage.Input == 0 && usage.Output == 0 && usage.CacheRead == 0 && usage.CacheWrite == 0 {
 		return tip
 	}
@@ -89,6 +88,7 @@ func (l *Lane) commitInterrupted(operationID, tip, responseEntryID string, parti
 		tip = responseEntryID
 	}
 	totals := l.h.opts.Storage.GetStats().Usage
-	l.h.events.Emit(Event{Type: EventUsage, Lane: l.name, OperationID: operationID, UsageRow: &usage, UsageTotals: &totals})
+	l.h.events.Emit(Event{Type: EventUsage, Lane: l.name, OperationID: operationID, UsageRow: &usage, UsageTotals: &totals,
+		UsageModel: &session.ModelRef{Provider: model.Provider, ModelID: model.ID}})
 	return tip
 }

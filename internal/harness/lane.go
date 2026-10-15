@@ -12,6 +12,7 @@ import (
 	"github.com/andrepato/harness/internal/compaction"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/session"
 )
 
@@ -45,6 +46,11 @@ type Lane struct {
 	// before the first is drained does not block RetryNow's caller either
 	// — sleepCtx only ever needs to observe one pending signal.
 	retryNow chan struct{}
+
+	// lastRouted is the physical model a virtual lane's last turn-loop
+	// request was routed to (route.go), nil before the first; guarded by
+	// mu. ContextTokens counts that model's measured usage as current.
+	lastRouted *session.ModelRef
 }
 
 func (l *Lane) newID() string { return uuid.NewString() }
@@ -348,26 +354,38 @@ func (l *Lane) Compact(ctx context.Context, custom *string) error {
 // smaller model, the outgoing one can still read the whole conversation
 // in one request. What is kept and how long the summary may be still
 // follow the lane's current model, which has to hold the result.
+//
+// With no summariser, a virtual lane's summary is written by the model its
+// router picks for a direct request.
 func (l *Lane) CompactWith(ctx context.Context, custom *string, summariser *session.ModelRef) error {
-	_, cfg, err := l.resolveModel()
-	if err != nil {
-		return err
-	}
-	ref := cfg.Model
-	if summariser != nil {
-		ref = *summariser
-	}
-	model, ok := l.h.opts.Registry.GetModel(ref.Provider, ref.ModelID)
-	if !ok {
-		return fmt.Errorf("harness: unknown model %s/%s", ref.Provider, ref.ModelID)
-	}
 	tip, _ := l.GetTipID()
 	if tip == "" {
+		if _, _, err := l.resolveModel(); err != nil {
+			return err
+		}
 		return fmt.Errorf("harness: lane %q: nothing to compact", l.name)
 	}
 	pathEntries, err := l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "oldestFirst"})
 	if err != nil {
 		return err
+	}
+	var model provider.Model
+	var cfg session.LaneConfiguration
+	if summariser != nil {
+		if _, cfg, err = l.resolveModel(); err != nil {
+			return err
+		}
+		m, ok := l.h.opts.Registry.GetModel(summariser.Provider, summariser.ModelID)
+		if !ok {
+			return fmt.Errorf("harness: unknown model %s/%s", summariser.Provider, summariser.ModelID)
+		}
+		model = m
+	} else {
+		direct, c, err := l.route(ctx, router.ReasonDirect, tip, entriesToTranscript(pathEntries), nil, nil)
+		if err != nil {
+			return err
+		}
+		model, cfg = direct.Model, direct.streamConfig(c)
 	}
 	return l.runCompaction(ctx, pathEntries, model, cfg, custom, TriggerManual)
 }
@@ -409,10 +427,21 @@ func (l *Lane) Model() (session.ModelRef, error) {
 // count the same text very differently; a compaction since; no request
 // yet) it is the chars/4 estimate of the whole request, the same figure
 // the turn loop checks a request against the window with (fitRequest).
+//
+// On a virtual lane the lane's model never answers: the model its last
+// request was routed to counts as current instead.
 func (l *Lane) ContextTokens() (int, error) {
 	cfg, err := l.config()
 	if err != nil {
 		return 0, err
+	}
+	current := cfg.Model
+	if m, ok := l.h.opts.Registry.GetModel(cfg.Model.Provider, cfg.Model.ModelID); ok && provider.IsVirtual(m) {
+		l.mu.Lock()
+		if l.lastRouted != nil {
+			current = *l.lastRouted
+		}
+		l.mu.Unlock()
 	}
 	tip, _ := l.GetTipID()
 	var entries []session.Entry
@@ -433,7 +462,7 @@ func (l *Lane) ContextTokens() (int, error) {
 			continue
 		}
 		if compaction.TokensFromUsage(am.Usage) > 0 {
-			if am.Provider == cfg.Model.Provider && am.Model == cfg.Model.ModelID {
+			if am.Provider == current.Provider && am.Model == current.ModelID {
 				measured = i
 			}
 			break

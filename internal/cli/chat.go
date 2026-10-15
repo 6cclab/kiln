@@ -1186,9 +1186,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// usageByModel accumulates this session's usage per "provider/model",
 	// for /cost's by-model breakdown (internal/commands/builtins.go). The
 	// parent's own turns are added here from EventUsage's per-turn delta
-	// (UsageRow), keyed by started.Model at the time of the event — read
-	// live rather than captured once, so a /model switch mid-session
-	// attributes turns to whichever model actually ran them. A dispatched
+	// (UsageRow), keyed by the model that answered (creditUsage). A dispatched
 	// subagent's usage is added separately, from OnSubagentStop below,
 	// since that is the one dispatcher hook this file sets that neither
 	// print mode's subagentEventSink nor the TUI's bridge.SubagentSink
@@ -1209,16 +1207,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		addUsageAs(providerID+"/"+modelID, u)
 	}
 	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
-		if ev.SideUsage != nil {
-			// A call beside the conversation (auto mode's classifier),
-			// under its own label.
-			addUsageAs(ev.UsageSource, *ev.SideUsage)
-			return
-		}
-		if ev.UsageRow == nil {
-			return
-		}
-		addUsage(started.Model.Provider, started.Model.ID, *ev.UsageRow)
+		creditUsage(ev, started.Model.Provider, started.Model.ID, addUsageAs)
 	})
 	getUsageByModel := func() map[string]msg.Usage {
 		usageByModelMu.Lock()
@@ -2102,4 +2091,27 @@ func effortOrSetting(flag, setting string, claudeModel bool) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(setting))
+}
+
+// creditUsage files one EventUsage under the model it belongs to, through
+// add: a side call under its own label, a turn under the model that
+// answered it (UsageModel). An event that names no model falls back to the
+// session's model, providerID/modelID, read when the event arrives so a
+// /model switch mid-session still counts. Crediting every turn to the
+// session's model filed a request a router sent elsewhere under the wrong
+// model.
+func creditUsage(ev harness.Event, providerID, modelID string, add func(key string, u msg.Usage)) {
+	if ev.SideUsage != nil {
+		// A call beside the conversation (auto mode's classifier),
+		// under its own label.
+		add(ev.UsageSource, *ev.SideUsage)
+		return
+	}
+	if ev.UsageRow == nil {
+		return
+	}
+	if ev.UsageModel != nil {
+		providerID, modelID = ev.UsageModel.Provider, ev.UsageModel.ModelID
+	}
+	add(providerID+"/"+modelID, *ev.UsageRow)
 }

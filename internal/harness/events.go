@@ -6,6 +6,7 @@ import (
 
 	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/session"
 )
 
 // EventType is the discriminator on Event, covering all 34 pi harness
@@ -61,6 +62,11 @@ const (
 	EventFault        EventType = "fault"
 	EventHandlerError EventType = "handler_error"
 	EventUsage        EventType = "usage"
+
+	// EventRoute reports which physical model a virtual model's router
+	// picked for one request (kiln's own; pi shows it in its footer):
+	// RouteReason, RouteVirtual, RouteModel and RouteThinkingLevel.
+	EventRoute EventType = "route"
 )
 
 // ConfigProperty names the field config_update reports as having changed.
@@ -168,12 +174,22 @@ type Event struct {
 	// usage
 	UsageRow    *msg.Usage
 	UsageTotals *msg.Usage
+	// UsageModel is the model that answered the request UsageRow counts,
+	// which on a virtual lane is not the lane's model. Nil on a side call.
+	UsageModel *session.ModelRef
 	// SideUsage is a model call made beside the conversation (auto mode's
 	// classifier), recorded in the session's usage but not part of the
 	// context; UsageSource names it ("auto-mode classifier · provider/id").
 	// UsageRow is nil on such an event.
 	SideUsage   *msg.Usage
 	UsageSource string
+
+	// route: why the request was routed (router.Reason), the lane's
+	// virtual model, and the physical model and thinking level it got.
+	RouteReason        string
+	RouteVirtual       session.ModelRef
+	RouteModel         session.ModelRef
+	RouteThinkingLevel string
 
 	// run_end / turn_end
 	Status string // "completed" | "aborted" | "failed"

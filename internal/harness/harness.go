@@ -10,6 +10,7 @@ import (
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/tool"
 )
@@ -21,6 +22,12 @@ type Options struct {
 
 	Model         session.ModelRef
 	ThinkingLevel string
+
+	// Routers are the routers of the virtual models (provider.ApiVirtual)
+	// a lane may name: each request on such a lane goes to the physical
+	// model its router picks (route.go). A physical lane never consults
+	// them.
+	Routers router.Set
 
 	Tools           *tool.Set
 	ActiveToolNames []string

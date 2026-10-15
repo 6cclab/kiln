@@ -11,6 +11,7 @@ import (
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/tool"
 )
@@ -175,7 +176,9 @@ func (l *Lane) opSettings() OpSettings {
 func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	l.invokeBeforeDrive(ctx)
 	firstIteration := true
-	compactFirst := true
+	// compactNext: check the compaction threshold before the next request,
+	// which is an operation's first and every one after a tool step.
+	compactNext := true
 	// overflowRecoveryUsed: this operation has already compacted once
 	// because a request did not fit; it does not loop on it (pi's
 	// overflowRecoveryUsed).
@@ -220,17 +223,20 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 			return l.finishFailed(operationID, tip, drainErr)
 		}
 
-		// Before an operation's first request, too: the end-of-turn check
-		// below only runs between tool steps, so a conversation whose
-		// turns end in text never compacted however full it got.
-		if compactFirst {
-			compactFirst = false
-			tip, compactErr = l.autoCompact(ctx, tip)
-		}
-
-		_, cfg, err := l.resolveModel()
+		// Route first: on a virtual lane the compaction threshold and the
+		// fit below are the routed model's, as in pi. A physical lane's
+		// route is its own model.
+		target, cfg, err := l.route(ctx, "", tip, nil, nil, nil)
 		if err != nil {
 			return l.finishFailed(operationID, tip, err)
+		}
+
+		// Before an operation's first request, and after each tool step.
+		// Checking only between tool steps would never compact a
+		// conversation whose turns end in text, however full it got.
+		if compactNext {
+			compactNext = false
+			tip, compactErr = l.autoCompact(ctx, tip, target)
 		}
 
 		// The request must fit the model's window: a provider like Ollama
@@ -239,7 +245,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		// one that still does not.
 		var transcript []msg.Message
 		beforeFit := tip
-		tip, transcript, err = l.fitRequest(ctx, tip, &overflowRecoveryUsed)
+		tip, transcript, err = l.fitRequest(ctx, tip, &overflowRecoveryUsed, target)
 		if err != nil {
 			if ctx.Err() != nil {
 				return l.finishAborted(operationID, tip)
@@ -258,10 +264,16 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 
 		laneStateNow, _ := l.laneState()
 		laneStateWrite, _ := session.SetValue(session.LaneStateValue(l.name), laneStateNow)
+		// A router's new state lands with the request it decided.
+		stateTip, stateWrites, err := l.stateWrites(tip, &target, true)
+		if err != nil {
+			return l.finishFailed(operationID, tip, err)
+		}
 		if err := l.commitOpStateWith(operationID, OpState{At: AtAssistantReady, Control: OpControl{Status: "running"},
-			Settings: l.opSettings(), Continuation: &Continuation{Kind: "need_assistant"}}, laneStateWrite); err != nil {
+			Settings: l.opSettings(), Continuation: &Continuation{Kind: "need_assistant"}}, append([]session.Write{laneStateWrite}, stateWrites...)...); err != nil {
 			return RunResult{Status: StatusFailed, TipID: tip, Error: err}
 		}
+		tip = stateTip
 
 		responseEntryID := l.newID()
 		if err := l.commitOpState(operationID, OpState{At: AtAssistantEffectPending, Control: OpControl{Status: "running"},
@@ -271,26 +283,34 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 
 		l.h.events.Emit(Event{Type: EventMessageStart, Lane: l.name, OperationID: operationID, EntryID: responseEntryID})
 
-		final, err := l.requestWithRetry(ctx, operationID, transcript, cfg)
+		final, target, err := l.requestWithRetry(ctx, operationID, tip, transcript, cfg, target)
 		if err != nil && ctx.Err() == nil && !overflowRecoveryUsed && isContextOverflow(err) {
 			// The provider refused a request the estimate said would fit
 			// (chars/4 undercounts dense text). Compact once and resend,
 			// as pi and Claude Code do on an overflow error.
 			overflowRecoveryUsed = true
-			if newTip, compacted := l.compactForOverflow(ctx, tip); compacted {
+			if newTip, compacted := l.compactForOverflow(ctx, tip, target); compacted {
 				tip = newTip
-				var fitErr error
-				if tip, transcript, fitErr = l.fitRequest(ctx, tip, &overflowRecoveryUsed); fitErr != nil {
+				// The resend is a retry, routed again on the compacted
+				// conversation (pi's reason "retry").
+				resend, fitErr := target, error(nil)
+				if target.virtual != nil {
+					resend, _, fitErr = l.route(ctx, router.ReasonRetry, tip, nil, target.failure(err), &target)
+				}
+				if fitErr == nil {
+					tip, transcript, fitErr = l.fitRequest(ctx, tip, &overflowRecoveryUsed, resend)
+				}
+				if fitErr != nil {
 					err = fitErr
 				} else {
-					final, err = l.requestWithRetry(ctx, operationID, transcript, cfg)
+					final, target, err = l.requestWithRetry(ctx, operationID, tip, transcript, cfg, resend)
 				}
 			}
 		}
 		if err != nil {
 			if ctx.Err() != nil {
 				// final is what had streamed when the user interrupted.
-				tip = l.commitInterrupted(operationID, tip, responseEntryID, final, cfg)
+				tip = l.commitInterrupted(operationID, tip, responseEntryID, final, target.Model)
 				return l.finishAborted(operationID, tip)
 			}
 			return l.finishFailed(operationID, tip, err)
@@ -304,15 +324,20 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		if len(toolCalls) > 0 {
 			nextAt = AtTools
 		}
+		// State a retry's route returned is stored just before the reply.
+		parentTip, commitWrites, err := l.stateWrites(tip, &target, false)
+		if err != nil {
+			return l.finishFailed(operationID, tip, err)
+		}
 		assistantEntry := session.Entry{ID: responseEntryID, Type: session.EntryMessage, Message: *final}
-		if tip != "" {
-			p := tip
+		if parentTip != "" {
+			p := parentTip
 			assistantEntry.ParentID = &p
 		}
-		commitWrites := []session.Write{
+		commitWrites = append(commitWrites,
 			session.EntryWrite{Entry: assistantEntry},
 			session.UsageWrite{Row: session.UsageRow{ID: l.newID(), Usage: final.Usage, EntryID: responseEntryID}},
-		}
+		)
 		tipW, err := session.SetValue(session.BranchTip(l.name), &responseEntryID)
 		if err != nil {
 			return l.finishFailed(operationID, tip, err)
@@ -335,9 +360,10 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		if _, err := l.h.opts.Storage.Commit(commitWrites); err != nil {
 			return l.finishFailed(operationID, tip, err)
 		}
-		l.h.events.Emit(Event{Type: EventEntryAdded, Lane: l.name, EntryID: responseEntryID, ParentID: tip})
+		l.h.events.Emit(Event{Type: EventEntryAdded, Lane: l.name, EntryID: responseEntryID, ParentID: parentTip})
 		totals := l.h.opts.Storage.GetStats().Usage
-		l.h.events.Emit(Event{Type: EventUsage, Lane: l.name, OperationID: operationID, UsageRow: &final.Usage, UsageTotals: &totals})
+		l.h.events.Emit(Event{Type: EventUsage, Lane: l.name, OperationID: operationID, UsageRow: &final.Usage, UsageTotals: &totals,
+			UsageModel: &session.ModelRef{Provider: target.Model.Provider, ModelID: target.Model.ID}})
 		tip = responseEntryID
 
 		if len(toolCalls) == 0 {
@@ -417,7 +443,9 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 			i = j
 		}
 		l.h.events.Emit(Event{Type: EventTurnEnd, Lane: l.name, OperationID: operationID})
-		tip, compactErr = l.autoCompact(ctx, tip)
+		// The next iteration routes, then checks the compaction threshold
+		// against the routed model.
+		compactNext = true
 		// loop back for the next assistant turn.
 	}
 }
@@ -595,20 +623,19 @@ func (l *Lane) finishOperation(operationID, tip, status, errMsg string) error {
 	return nil
 }
 
-// requestWithRetry streams one assistant response, retrying on retriable
-// provider errors per l.h.opts.Retry, and records every stream event as a
-// pi.pending.assistant_frame append.
-func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcript []msg.Message, cfg session.LaneConfiguration) (*msg.AssistantMessage, error) {
+// requestWithRetry streams one assistant response to target, retrying on
+// retriable provider errors per l.h.opts.Retry, and records every stream
+// event as a pi.pending.assistant_frame append. On a virtual lane each
+// retry is routed again (reason retry, with the failed request), so it may
+// go to another model. It returns the route the last attempt took.
+func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, transcript []msg.Message, cfg session.LaneConfiguration, target routed) (*msg.AssistantMessage, routed, error) {
 	l.invokeBeforeRequest(ctx)
-	p, ok := l.h.opts.Registry.Provider(cfg.Model.Provider)
+	p, ok := l.h.opts.Registry.Provider(target.Model.Provider)
 	if !ok {
-		return nil, fmt.Errorf("harness: unknown provider %q", cfg.Model.Provider)
+		return nil, target, fmt.Errorf("harness: unknown provider %q", target.Model.Provider)
 	}
-	m, ok := l.h.opts.Registry.GetModel(cfg.Model.Provider, cfg.Model.ModelID)
-	if !ok {
-		return nil, fmt.Errorf("harness: unknown model %s/%s", cfg.Model.Provider, cfg.Model.ModelID)
-	}
-	opts := buildStreamOptions(l.h.opts, cfg)
+	m := target.Model
+	opts := buildStreamOptions(l.h.opts, target.streamConfig(cfg))
 
 	responseEntryID := ""
 	if raw, _, ok := l.h.opts.Storage.GetValue(session.NamespaceOpState, operationID); ok {
@@ -630,6 +657,16 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 			// replaying the pending list would otherwise stitch two partial
 			// answers together.
 			_, _ = l.h.opts.Storage.Commit([]session.Write{session.DeleteListWrite(session.PendingAssistantFrames(operationID, responseEntryID))})
+		}
+		if attempt > 1 && target.virtual != nil {
+			next, _, err := l.route(ctx, router.ReasonRetry, tip, transcript, target.failure(lastErr), &target)
+			if err != nil {
+				return nil, target, err
+			}
+			if p, ok = l.h.opts.Registry.Provider(next.Model.Provider); !ok {
+				return nil, next, fmt.Errorf("harness: unknown provider %q", next.Model.Provider)
+			}
+			target, m, opts = next, next.Model, buildStreamOptions(l.h.opts, next.streamConfig(cfg))
 		}
 		reqCtx, cancelReq := context.WithCancelCause(ctx)
 		first, idle := l.h.opts.stallLimits(promptTokens)
@@ -655,24 +692,24 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID string, transcr
 		}
 		cancelReq(nil)
 		if err == nil {
-			return final, nil
+			return final, target, nil
 		}
 		lastErr = err
 		if ctx.Err() != nil {
 			// Interrupted: hand back what had streamed (drive keeps it).
-			return interrupted, err
+			return interrupted, target, err
 		}
 		if !isRetriable(err) || attempt == retry.MaxAttempts {
-			return nil, err
+			return nil, target, err
 		}
 		delay := retry.delay(attempt)
 		l.h.events.Emit(Event{Type: EventRetryScheduled, Lane: l.name, OperationID: operationID, Attempt: attempt, MaxAttempts: retry.MaxAttempts, DelayMs: delay.Milliseconds(), RetryError: err.Error()})
 		if sleepErr := sleepCtx(ctx, delay, l.retryNow); sleepErr != nil {
-			return nil, sleepErr
+			return nil, target, sleepErr
 		}
 		l.h.events.Emit(Event{Type: EventRetryStart, Lane: l.name, OperationID: operationID, Attempt: attempt + 1})
 	}
-	return nil, lastErr
+	return nil, target, lastErr
 }
 
 // recordedFrame reports whether a stream event is written as a pending
