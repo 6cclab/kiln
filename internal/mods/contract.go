@@ -52,6 +52,11 @@ type Site struct {
 	// ViewAgentID is the agent whose transcript is in view; kiln has no
 	// per-agent view, so it is always "".
 	ViewAgentID string
+	// Title and IsFocused are a Pane's e.props.title and e.props.isFocused;
+	// IsWorking is AbovePrompt's e.props.isWorking (a turn is running).
+	Title     string
+	IsFocused bool
+	IsWorking bool
 }
 
 // Drawing is what one mod drew for one site: nil Tree means the mod did not
@@ -163,6 +168,14 @@ type Spawn struct {
 	Description string
 	Prompt      string
 	Model       string
+	// ToolUseID is the Agent tool call's id (e.tool_use_id); ParentModel the
+	// parent's model (e.parentModel, what core reports when Model is "");
+	// ParentAgentID the loop it is spawned from ("" for main); Background
+	// whether it runs in the background.
+	ToolUseID     string
+	ParentModel   string
+	ParentAgentID string
+	Background    bool
 }
 
 // SpawnOutcome is what the agent.spawn chain decided: Deny refuses the
@@ -181,6 +194,19 @@ type TurnStep struct {
 	Model   string
 	Effort  string
 	Usage   Usage
+	// Answer is the response's visible text, ToolUses its tool calls in
+	// order, StopReason why the model stopped ("" for no response). Model is
+	// the model that answered (result.usage.model); a zero Usage with no
+	// Model reports usage as null.
+	Answer     string
+	ToolUses   []ToolUse
+	StopReason string
+}
+
+// ToolUse is one tool call of a model response (TurnStepToolUse).
+type ToolUse struct {
+	Name  string
+	Input json.RawMessage
 }
 
 // TurnEnd is a turn.complete event.
@@ -191,4 +217,8 @@ type TurnEnd struct {
 	IsFailed   bool
 	DurationMs int64
 	Usage      Usage
+	// Answer is the turn's final visible text; Model the model of its last
+	// response (e.usage.model). A zero Usage with no Model leaves e.usage out.
+	Answer string
+	Model  string
 }
