@@ -317,3 +317,21 @@ func TestModPanes_OpenCloseFocusKeys(t *testing.T) {
 		t.Fatalf("expected Close on an already-closed pane to report false")
 	}
 }
+
+// TestModPanes_FocusIsVisible: a pane with the keyboard says so. Without
+// it, after Ctrl+X Tab nothing on screen changed (QA drive, mods-probe
+// pane-focused vs pane-open: identical text).
+func TestModPanes_FocusIsVisible(t *testing.T) {
+	p := NewModPanes()
+	p.Open("probe", mods.PaneRequest{ID: "probe", Title: "probe"})
+	before := strings.Join(p.Render(60), "\n")
+	p.Focus("probe")
+	after := strings.Join(p.Render(60), "\n")
+	if before == after || !strings.Contains(ansiStrip(after), "esc to return") {
+		t.Fatalf("focusing the pane changed nothing visible:\n%s", ansiStrip(after))
+	}
+	p.Blur()
+	if got := strings.Join(p.Render(60), "\n"); got != before {
+		t.Fatalf("blurring did not restore the pane's chrome")
+	}
+}

@@ -244,7 +244,13 @@ func (p *ModPanes) Render(width int) []string {
 	var out []string
 	for _, id := range p.order {
 		pane := p.panes[id]
-		out = append(out, labelRule(paneTitle(pane), Muted, "", width))
+		// The focused pane takes the keys: its rule turns amber, kiln's
+		// accent for what has the input, and says how to give them back.
+		if id == p.focused {
+			out = append(out, labelRule(paneTitle(pane), KilnAmber, "esc to return", width))
+		} else {
+			out = append(out, labelRule(paneTitle(pane), Muted, "", width))
+		}
 		if pane.drawing.Tree == nil {
 			pane.lastButtons = nil
 			continue

@@ -195,10 +195,13 @@ class Iterm:
         self.wid = None
 
     def launch(self, command, cols, rows):
-        before = set(orca_windows(self.bundle))
+        # Start iTerm2 first and let it restore its saved windows, so the
+        # snapshot below already holds them.
+        osa('tell application id "com.googlecode.iterm2" to launch')
+        before = _settled_windows(self.bundle)
         make = ('create window with profile "%s"' % self.profile) if self.profile else "create window with default profile"
         self.tty = osa(
-            'on run argv\n tell application "iTerm2"\n  set w to (%s)\n'
+            'on run argv\n tell application id "com.googlecode.iterm2"\n  set w to (%s)\n'
             '  tell current session of w\n   set columns to (item 2 of argv as integer)\n'
             '   set rows to (item 3 of argv as integer)\n   write text (item 1 of argv)\n'
             '   return tty\n  end tell\n end tell\nend run' % make,
@@ -207,20 +210,20 @@ class Iterm:
 
     def _session(self, body):
         return osa(
-            'on run argv\n tell application "iTerm2"\n  repeat with w in windows\n'
+            'on run argv\n tell application id "com.googlecode.iterm2"\n  repeat with w in windows\n'
             '   repeat with t in tabs of w\n    repeat with s in sessions of t\n'
             '     if tty of s is (item 1 of argv) then\n%s\n     end if\n'
             '    end repeat\n   end repeat\n  end repeat\n end tell\n return "missing"\nend run' % body,
             self.tty)
 
     def activate(self):
-        r = self._session('      tell application "iTerm2" to activate\n      select w\n'
+        r = self._session('      tell application id "com.googlecode.iterm2" to activate\n      select w\n'
                           '      tell t to select\n      tell s to select\n      return "ok"')
         if r != "ok":
             raise DriveError("iTerm2 session %s not found for activation" % self.tty)
 
     def resize(self, cols, rows):
-        osa('on run argv\n tell application "iTerm2"\n  repeat with w in windows\n'
+        osa('on run argv\n tell application id "com.googlecode.iterm2"\n  repeat with w in windows\n'
             '   repeat with t in tabs of w\n    repeat with s in sessions of t\n'
             '     if tty of s is (item 1 of argv) then\n'
             '      set columns of s to (item 2 of argv as integer)\n'
@@ -405,12 +408,40 @@ class Warp:
             pass
 
 
+def _settled_windows(bundle, timeout=15):
+    """The app's windows once the list stops changing. An app that was not
+    running restores its saved windows as it starts (iTerm2 reopens the
+    user's sessions); snapshotting before that finishes made one of the
+    user's own windows look like the driver's new one, and screenshots and
+    keys went to it."""
+    deadline = time.time() + timeout
+    last, stable = None, 0
+    while time.time() < deadline:
+        now = set(orca_windows(bundle))
+        if now == last:
+            stable += 1
+            if stable >= 3:
+                return now
+        else:
+            last, stable = now, 0
+        time.sleep(0.5)
+    return last or set()
+
+
 def _new_window(bundle, before, timeout=10):
+    """The one window that appeared since before. More than one is refused:
+    guessing could drive a window that is not the scenario's."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         new = [w for w in orca_windows(bundle) if w not in before]
-        if new:
-            return new[0]
+        if len(new) == 1:
+            time.sleep(0.5)
+            again = [w for w in orca_windows(bundle) if w not in before]
+            if again == new:
+                return new[0]
+            new = again
+        if len(new) > 1:
+            raise DriveError("%d new %s windows appeared, not one; refusing to guess which is the scenario's" % (len(new), bundle))
         time.sleep(0.3)
     raise DriveError("no new %s window appeared" % bundle)
 
