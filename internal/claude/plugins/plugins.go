@@ -449,24 +449,34 @@ type modulesShape struct {
 // leaves the plugin root is dropped: a module may only be loaded from the
 // plugin's own directory.
 func Modules(p Plugin) []string {
-	var listed []string
-	if data, err := os.ReadFile(filepath.Join(p.Root, "hooks", "hooks.json")); err == nil {
+	// A path in hooks/hooks.json is relative to that file's directory
+	// (squad's "./register.tsx" is hooks/register.tsx); one in plugin.json's
+	// inline "hooks" is relative to the plugin root.
+	type listedModule struct{ base, rel string }
+	var listed []listedModule
+	hooksDir := filepath.Join(p.Root, "hooks")
+	if data, err := os.ReadFile(filepath.Join(hooksDir, "hooks.json")); err == nil {
 		var m modulesShape
 		if json.Unmarshal(data, &m) == nil {
-			listed = append(listed, m.Modules...)
+			for _, rel := range m.Modules {
+				listed = append(listed, listedModule{hooksDir, rel})
+			}
 		}
 	}
 	if mf, ok := pluginManifest(p.Root, p.Name, p.Marketplace); ok && len(mf.Hooks) > 0 {
 		var m modulesShape
 		if json.Unmarshal(mf.Hooks, &m) == nil {
-			listed = append(listed, m.Modules...)
+			for _, rel := range m.Modules {
+				listed = append(listed, listedModule{p.Root, rel})
+			}
 		}
 	}
 	root := filepath.Clean(p.Root)
 	var out []string
 	seen := map[string]bool{}
-	for _, rel := range listed {
-		abs := filepath.Clean(filepath.Join(root, rel))
+	for _, lm := range listed {
+		rel := lm.rel
+		abs := filepath.Clean(filepath.Join(lm.base, rel))
 		if within, err := filepath.Rel(root, abs); err != nil || within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
 			diag.L().Warn("plugins: hooks module outside the plugin root", "plugin", p.Key, "module", rel)
 			continue

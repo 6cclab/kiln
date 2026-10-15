@@ -9,15 +9,17 @@ import (
 // TestModulesParsedFromHooksJSON: a mod's hooks/hooks.json lists its hooks
 // modules under "modules" (squad's is {"modules": ["./register.tsx"]}).
 // kiln read only command hooks from it, so it loaded nothing from a mod.
-// A module path that leaves the plugin root is not loaded.
+// Paths are relative to hooks/; one that leaves the plugin root is not
+// loaded.
 func TestModulesParsedFromHooksJSON(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, "squad", "1.0.0", nil)
 	writeFile(t, filepath.Join(root, "hooks", "hooks.json"),
-		`{"modules": ["./register.tsx", "../escape.ts", "./register.tsx"], "hooks": {}}`)
+		`{"modules": ["./register.tsx", "../../escape.ts", "./register.tsx"], "hooks": {}}`)
 	p := Plugin{Key: "squad@apato-plugins", Name: "squad", Marketplace: "apato-plugins", Root: root}
 
-	want := []string{filepath.Join(root, "register.tsx")}
+	// Relative to hooks/hooks.json's own directory, as Claude Code reads it.
+	want := []string{filepath.Join(root, "hooks", "register.tsx")}
 	if got := Modules(p); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Modules = %v, want %v", got, want)
 	}

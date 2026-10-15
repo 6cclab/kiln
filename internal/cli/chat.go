@@ -52,6 +52,7 @@ import (
 	"github.com/andrepato/harness/internal/gitfiles"
 	"github.com/andrepato/harness/internal/harness"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
+	"github.com/andrepato/harness/internal/mods"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/provider/builtin"
@@ -877,6 +878,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Env:          env,
 		OnEvent:      subagentEventSink(stderr),
 	}
+	// Claude Code mods among the active plugins (hooks modules, run by
+	// internal/mods). Nil when none has one.
+	modsRT := newModsRuntime(activePlugins, modelID, resolved.Model.ContextWindow)
+	if modsRT != nil {
+		dispatcher.Hooks = modsRT
+		defer modsRT.close()
+	}
 	dispatchFn := func(ctx context.Context, req tools.TaskRequest) (tools.TaskDispatchResult, error) {
 		r, err := dispatcher.Dispatch(ctx, agent.DispatchRequest{
 			Agent:       req.Agent,
@@ -1021,6 +1029,41 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	phase("session started", "session", started.SessionID, "transcript", started.TranscriptPath)
 	diag.L().Info("run log", "session", started.SessionID, "path", logPath)
 	logHarnessEvents(started.Harness)
+
+	// Mods see the main conversation's turns and tool calls ahead of the
+	// permission gate and PreToolUse hooks (registered below), as in
+	// Claude Code. They start now in a trusted folder or print mode, and
+	// otherwise once the trust dialog is accepted, like plugin hooks.
+	modsRT.attach("", modelID, started.Harness)
+	var registryRef *slashcommands.Registry
+	startMods := func() {
+		if modsRT == nil {
+			return
+		}
+		for _, err := range modsRT.start(ctx, cwd) {
+			startupWarn(fmt.Sprintf("mod not loaded: %v", err))
+		}
+		modsRT.host.usage = func() mods.Usage {
+			u := mods.Usage{ContextWindow: resolved.Model.ContextWindow}
+			if last := started.Harness.LastUsage(); last != nil {
+				u = modsUsage(*last, resolved.Model.ContextWindow)
+			}
+			return u
+		}
+		names := modsRT.toolNames()
+		gate.SetModTools(names)
+		started.Harness.AddTools(modsRT.tools("")...)
+		mcpSess.addResident(names...)
+		if err := mcpSess.regate(); err != nil {
+			diag.L().Warn("mods: regate failed", "err", err)
+		}
+		if registryRef != nil {
+			registryRef.Invalidate()
+		}
+	}
+	if args.Print || trustedAtStart {
+		startMods()
+	}
 
 	autoModeConfig := claudesettings.LoadAutoMode(cwd, claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings})
 	if w := claudesettings.AutoModeIgnoredWarning(cwd, autoModeConfig.Ignored); w != "" {
@@ -1404,6 +1447,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return harness.BeforeToolResult{PermissionOutcome: string(outcome)}, nil
 	})
 
+	// The mods' slash commands (/squad, ...), read from the engine each
+	// time the registry refreshes, so commands of mods that start late
+	// (on trust) appear too.
+	if modsRT != nil {
+		registry.Add(slashcommands.Source{Origin: slashcommands.OriginPlugin, Load: func() ([]slashcommands.Command, error) {
+			return modsRT.commands(), nil
+		}})
+		registryRef = registry
+	}
+
 	// postToolCtxQueue carries PostToolUse additionalContext into the
 	// model's NEXT request via the transform_context hook.
 	//
@@ -1567,6 +1620,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				onTrust.notice = func(s string) { crash.Go(func() { notice(s) }) }
 				onTrust.applyTrust()
 				hooks.enable()
+				if !trustedAtStart {
+					crash.Go(startMods)
+				}
 			},
 			// SessionStart for a session whose hooks waited for trust.
 			TrustedSessionStart: func() []string {
@@ -1594,6 +1650,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			Started:          started,
 			Gate:             gate,
 			TakeModeReminder: reminders.TakeForPrompt,
+			Mods:             modsRT,
 			Registry:         registry,
 			Env:              env,
 			Dispatcher:       dispatcher,

@@ -479,6 +479,22 @@ kiln's only settings writer, and it never writes a `.claude` file. `AddRule`/`Re
 
 A `task` call that crosses to a different, metered provider than the parent is separately gated by the permission system as `task(role:<name>)` — see §5.
 
+### Mods (`internal/mods`, `internal/cli/mods.go`, `internal/tui/mod*.go`)
+
+A Claude Code **mod** is a plugin whose `hooks/hooks.json` lists hooks modules: `{"modules": ["./register.tsx"]}`, paths relative to `hooks/` (code.claude.com/docs/en/plugins/mods). kiln runs the modules of every active plugin itself: each is bundled with esbuild (its own files only, plus the `claude-code` import; cached under `~/.harness/cache/mods`) and run in goja on one goroutine shared by all mods, as Claude Code runs them on one worker. A hook that throws or overruns its 10 s budget is skipped (or answered by its `.catch`); the session goes on. Mods are code that runs with your permissions, as in Claude Code. They start with the session in a trusted folder or print mode, and otherwise when the folder trust dialog is accepted, like plugin hooks. `register`'s options are the plugin's `userConfig` defaults overlaid with `pluginConfigs.<id>.options` from `~/.claude/settings.json`.
+
+Supported in this version (what squad and savvy-progress use):
+
+| Part | Supported |
+|---|---|
+| Events | `session.start`, `command.run`, `tool.call` (deny, rewrite args, answer a mod's own tool; kiln's tools appear under Claude Code's names: `bash` → `Bash`, `task` → `Agent`, …), `agent.spawn` (rewrite prompt/model, deny), `turn.start`, `turn.step`, `turn.complete` (main conversation and subagents, with `agentId`), `ui.render` for `Pane` and `AbovePrompt` |
+| `$` | `command.register`, `tool.register`, `ui.open/close/panes/toast/invalidate/resolve`, `ui.view` (always refused: kiln has no per-agent transcript view), `state.get/set` with `atom/read/update`, `clock.now/every/after/sleep`, `env.get`, `settings.read`, `session.usage`, `agent.list` |
+| Elements | `Box`, `Text`, `Button`, `Raster`, `Link` (not clickable), `Markdown`; `Image` shows its alt text |
+
+Not supported: `$.fs`, `$.process`, `$.http`, `$.model`, `$.store`, `$.mcp`, the other events, plugin tiers, a `{result}` answer for one of kiln's own tools (the tool runs), streaming `turn.step` chunks, `Svg`, terminal images. An unsupported `$` call rejects with "… is not available in kiln (mods v1)"; an unknown event is logged.
+
+A mod's own tool (`mcp__<plugin>__<name>`) is answered by the mod and needs no permission prompt; deny and ask rules still apply. Subagents get the mods' tools too. Panes open in the live region above the input; **Ctrl+X then Tab** focuses one, and while focused its button hotkeys, Tab/Shift+Tab, Enter, Up/Down and Esc go to it.
+
 ## 7. `.claude/` assets
 
 `internal/claude/skills`, `internal/claude/commands`, `internal/claude/agents`, `internal/claude/memory`, `internal/claude/keybindings`, `internal/tui/keybindings.go`, `internal/claude/statusline`, `internal/claude/trust`

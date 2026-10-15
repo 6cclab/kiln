@@ -56,9 +56,11 @@ type InteractiveDeps struct {
 	// TakeModeReminder is the plan-mode reminder to send ahead of the
 	// next prompt (modereminders.go's TakeForPrompt).
 	TakeModeReminder func() string
-	Registry         *slashcommands.Registry
-	Env              *execenv.Env
-	Dispatcher       *agent.Dispatcher
+	// Mods is the session's mod runtime; nil without mods.
+	Mods       *modsRuntime
+	Registry   *slashcommands.Registry
+	Env        *execenv.Env
+	Dispatcher *agent.Dispatcher
 	// Hooks is the hooks to run now: none until the folder is trusted
 	// in an interactive session (trustedHooks).
 	Hooks        func() claudehooks.Config
@@ -230,6 +232,12 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			initialCost = &c
 		}
 	}
+	modsDriver := deps.Mods.newDriver()
+	if modsDriver != nil {
+		modsDriver.SetSend(bridge.SendAsync, func(_, text string) {
+			bridge.SendAsync(tui.MsgFooterNote{Text: text})
+		})
+	}
 	cfg := tui.Config{
 		InitialContextUsed: initialUsed,
 		InitialCost:        initialCost,
@@ -245,6 +253,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		Env:              deps.Env,
 		Gate:             deps.Gate,
 		TakeModeReminder: deps.TakeModeReminder,
+		Mods:             modsDriver,
 		Lane:             deps.Started.Lane,
 		Registry:         deps.Registry,
 		Bridge:           bridge,

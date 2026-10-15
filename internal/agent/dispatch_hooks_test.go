@@ -27,11 +27,11 @@ func (r *recordingHooks) BeforeSpawn(ctx context.Context, agentID, agentType str
 	}
 	return r.deny
 }
-func (r *recordingHooks) Attach(agentID string, h *harness.Harness) {
+func (r *recordingHooks) Attach(agentID, _ string, h *harness.Harness) {
 	r.calls = append(r.calls, "attach:"+agentID)
 	r.attached = h
 }
-func (r *recordingHooks) Tools() []*tool.Tool { return r.tools }
+func (r *recordingHooks) Tools(string) []*tool.Tool { return r.tools }
 func (r *recordingHooks) Done(agentID, status string, _ msg.Usage) {
 	r.calls = append(r.calls, "done:"+agentID)
 	r.status = status
@@ -79,8 +79,8 @@ type attachProbe struct {
 	onAttach func(*harness.Harness)
 }
 
-func (a *attachProbe) Attach(agentID string, h *harness.Harness) {
-	a.recordingHooks.Attach(agentID, h)
+func (a *attachProbe) Attach(agentID, model string, h *harness.Harness) {
+	a.recordingHooks.Attach(agentID, model, h)
 	a.onAttach(h)
 }
 

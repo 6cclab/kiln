@@ -1,0 +1,5 @@
+{
+  "name": "probe",
+  "version": "1.0.0",
+  "description": "kiln e2e fixture: a Claude Code mod that uses what squad and savvy-progress use"
+}

@@ -110,7 +110,12 @@ it must not start mid-turn. `/usage` reports the context budget, since no plan
 limit applies to a self-hosted model.
 
 `/plugin` reports that marketplaces are not supported and names what this
-kiln extends with instead (skills, agents, commands, MCP, hooks).
+kiln extends with instead (skills, agents, commands, MCP, hooks, mod modules).
+
+**Mods** (Claude Code hooks modules) run in kiln: the subset squad and
+savvy-progress use, listed in `configuration.md` "Mods". Divergences: no
+per-agent transcript view (`$.ui.view` refuses), no terminal images (`Image`
+shows its alt text), no `$.fs`/`$.process`/`$.http`/`$.model`/`$.store`.
 
 **Adapt:** `/login` `/logout` already exist in kiln's CLI and should also
 be slash commands. `/usage` becomes budget/tier reporting rather than plan

@@ -223,6 +223,8 @@ func (p *ModPanes) Site(id string, width int) mods.Site {
 		BodyColumns: max(0, width),
 		BodyRows:    rows,
 		Surface:     "terminal",
+		Title:       pane.req.Title,
+		IsFocused:   p.focused == id,
 	}
 }
 
