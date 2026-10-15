@@ -14,16 +14,6 @@ import (
 	"github.com/andrepato/harness/internal/plural"
 )
 
-// modes is the cycle order /permissions' "m" action steps through.
-var modes = []settings.PermissionMode{
-	settings.ModeManual,
-	settings.ModeAcceptEdits,
-	settings.ModeAuto,
-	settings.ModePlan,
-	settings.ModeDontAsk,
-	settings.ModeBypassPermissions,
-}
-
 // ManageGate is the subset of permission.Gate that the manage panels act
 // on. It extends InspectGate with the mutation SetMode needs; rule
 // mutation itself goes through ManageDeps.SaveRule/RemoveRule so both the
@@ -134,7 +124,8 @@ func permissionsModal(deps ManageDeps) *ModalSpec {
 		Act: func(key, value string) (string, error) {
 			switch key {
 			case "m":
-				next := modes[(indexOfMode(deps.Gate.Mode())+1)%len(modes)]
+				// The same cycle as Shift+Tab.
+				next := settings.NextPermissionMode(deps.Gate.Mode())
 				deps.Gate.SetMode(next)
 				return fmt.Sprintf("mode is now %s", next), nil
 			case "d":
@@ -166,15 +157,6 @@ func permissionsModal(deps ManageDeps) *ModalSpec {
 			return "", nil
 		},
 	}
-}
-
-func indexOfMode(m settings.PermissionMode) int {
-	for i, x := range modes {
-		if x == m {
-			return i
-		}
-	}
-	return -1
 }
 
 func splitRule(value string) (list, rule string, ok bool) {

@@ -219,8 +219,14 @@ should diverge — an addition, not a change to existing elements.
 ## 7a. Permission modes
 
 Confirmed from `claude --help` (`--permission-mode`), so these strings are exact
-rather than remembered. `Shift+Tab` cycles between them, and the active mode
-shows in the footer when it is not the default.
+rather than remembered. `Shift+Tab` and `/permissions`' `m` share one cycle,
+Claude Code's (`settings.NextPermissionMode`): `manual` → `acceptEdits` →
+`plan` → `auto` → `manual`. `bypassPermissions` and `dontAsk` are never
+entered by cycling; from `bypassPermissions` the next mode is `auto`, from
+`dontAsk` it is `manual` (Claude Code returns to `default`). Bypass gating
+(`--dangerously-skip-permissions`, `disableBypassPermissionsMode`) is not
+mirrored. The footer follows the gate's mode whoever changes it
+(`Gate.OnModeChange`).
 
 | Mode | Behavior |
 |---|---|
@@ -229,7 +235,7 @@ shows in the footer when it is not the default.
 | `auto` | done: deny/ask rules and the workspace boundary first; reads, workspace edits and read-only bash run; everything else goes past a classifier model that sees user messages, earlier non-read-only tool calls and CLAUDE.md, never tool results. A block goes back to the model; 3 in a row or 20 in a session ask instead; a failed check asks. `autoMode` settings from user settings and `--settings` only (code.claude.com/docs/en/permission-modes, /auto-mode-config). Details: `configuration.md` "Auto mode classifier" |
 | `dontAsk` | never prompt: reads and allow-rule matches run, anything that would prompt is denied |
 | `bypassPermissions` | skip all checks, protected paths included; deny rules and ask rules still apply |
-| `plan` | read-only; no edits or mutations, produce a plan |
+| `plan` | read-only; no edits or mutations, produce a plan. Entered at start, by `/plan`, `Shift+Tab` or `/permissions`, all the same: plan state is the gate's mode. As in Claude Code the model is told with a reminder ahead of the next prompt (full steps on entry, one line while it lasts, an exit note when the user leaves without approving), never in the system prompt; `internal/cli/modereminders.go`, e2e `TestTUI_PlanMode_EnteredMidSession_DialogAndFooter` |
 
 **Protected paths** (Claude Code's docs, permission-modes "Protected paths";
 kiln: `internal/claude/permission/protected.go`). A write to `.git/`,

@@ -51,37 +51,32 @@ func TestDefaultSystemPromptIsBasePrompt(t *testing.T) {
 	}
 }
 
-func TestPlanControllerStartsActiveAndApproveLeavesIt(t *testing.T) {
+// TestPlanControllerFollowsGateMode: the controller has no plan state of
+// its own; it reports whatever its source says, however that changed, and
+// Approve only hands the chosen mode to OnApprove.
+func TestPlanControllerFollowsGateMode(t *testing.T) {
+	inPlan := false
+	c := NewPlanController(func() bool { return inPlan })
 	var gotMode string
 	var calls int
-	c := NewPlanController()
-	c.OnApprove = func(mode string) { calls++; gotMode = mode }
+	c.OnApprove = func(mode string) { calls++; gotMode = mode; inPlan = false }
 
-	if !c.IsActive() {
-		t.Fatal("a fresh controller must start in plan mode")
+	if c.IsActive() {
+		t.Fatal("controller reports plan mode while its source does not")
 	}
-
+	inPlan = true // e.g. /plan or Shift+Tab moved the gate
+	if !c.IsActive() {
+		t.Fatal("controller missed plan mode entered after it was built")
+	}
 	c.Approve("acceptEdits")
-
+	if calls != 1 || gotMode != "acceptEdits" {
+		t.Fatalf("OnApprove calls=%d mode=%q, want 1 and acceptEdits", calls, gotMode)
+	}
 	if c.IsActive() {
-		t.Fatal("Approve did not leave plan mode")
+		t.Fatal("still in plan mode after OnApprove left it")
 	}
-	if calls != 1 {
-		t.Fatalf("OnApprove called %d times, want 1", calls)
-	}
-	if gotMode != "acceptEdits" {
-		t.Fatalf("OnApprove mode = %q, want %q", gotMode, "acceptEdits")
-	}
-}
-
-func TestPlanControllerSetActive(t *testing.T) {
-	c := NewPlanController()
-	c.SetActive(false)
-	if c.IsActive() {
-		t.Fatal("SetActive(false) did not take effect")
-	}
-	c.SetActive(true)
+	inPlan = true // a second plan in the same session
 	if !c.IsActive() {
-		t.Fatal("SetActive(true) did not take effect")
+		t.Fatal("controller missed a second entry into plan mode")
 	}
 }

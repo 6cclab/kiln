@@ -889,11 +889,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 	taskTool := tools.TaskTool(dispatchFn, agentsList, settings.ModelRoles, resolved.Tier)
 
-	// Plan mode: active iff the resolved permission mode is "plan" (either
-	// --permission-mode plan or the settings/env-var equivalents
-	// resolvePermissionMode already folded in above).
-	planController := agent.NewPlanController()
-	planController.SetActive(permissionMode == claudesettings.ModePlan)
+	// Plan mode is the gate's mode, however it got there (--permission-mode
+	// plan, /plan, Shift+Tab, /permissions); the controller only reads it.
+	planController := agent.NewPlanController(func() bool { return gate.Mode() == claudesettings.ModePlan })
+	// The model hears about plan mode through reminders with its prompts,
+	// not the system prompt (modereminders.go).
+	var planLedgerText string
+	if experimentLedgerPath != "" {
+		planLedgerText = ledgerPrompt(experimentLedgerPath)
+	}
+	reminders := newModeReminders(gate.Mode, planLedgerText)
 
 	// baseEffort is what --effort/the settings file asked for; startEffort
 	// is what the session actually starts at, which HARNESS_EXP_PLAN_EFFORT
@@ -919,6 +924,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Without this the gate stayed read-only after approval while the tool
 	// result claimed otherwise.
 	planController.OnApprove = func(mode string) {
+		reminders.LeftPlanByApproval()
 		gate.SetMode(claudesettings.PermissionMode(mode))
 		if planEffort != "" && laneRef != nil {
 			_ = laneRef.SetThinkingLevel(baseEffort)
@@ -975,14 +981,6 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			systemPromptBase = defaultSystemPrompt
 		}
 		promptParts := []string{systemPromptBase, envBlock, args.AppendSystemPrompt}
-		if permissionMode == claudesettings.ModePlan {
-			promptParts = append(promptParts, agent.PlanModePrompt)
-			// HARNESS_EXP_LEDGER (switch 1, experiments.go): tell the model
-			// about the one path plan mode now lets it write.
-			if path := experimentLedgerPath; path != "" {
-				promptParts = append(promptParts, ledgerPrompt(path))
-			}
-		}
 		// HARNESS_EXP_REVIEW (switch 3, experiments.go): a reviewer subagent
 		// before finishing, regardless of plan mode.
 		if reviewEnabled() {
@@ -1440,6 +1438,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return started.Lane.Steer(auditFollowUp)
 	})
 
+	started.Harness.Hooks().OnTransformContext(reminders.TransformContext)
+	started.Harness.Hooks().OnBeforeCompaction(func(context.Context) error {
+		reminders.Forget()
+		return nil
+	})
+
 	var postToolCtxMu sync.Mutex
 	var postToolCtxQueue []string
 	started.Harness.Hooks().OnTransformContext(func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error) {
@@ -1579,24 +1583,24 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				applyMCP()
 				return hub.Statuses()[before:]
 			},
-			LogPath:         logPath,
-			Debug:           args.Debug,
-			StatusLine:      settings.StatusLine,
-			SetPlanApprover: func(fn tools.PlanApprover) { planApprover.set(fn) },
-			SetHookNotice:   func(fn func(string)) { hookNotice.set(fn) },
-			SetHookActivity: func(fn func(string)) { hookActivity.set(fn) },
-			ModelLabel:      providerID + "/" + modelID,
-			Resolved:        resolved,
-			Started:         started,
-			Gate:            gate,
-			PlanController:  planController,
-			Registry:        registry,
-			Env:             env,
-			Dispatcher:      dispatcher,
-			Hooks:           hooks.get,
-			SessionStart:    sessionStart,
-			ScreenReader:    args.ScreenReader,
-			Fullscreen:      args.Fullscreen,
+			LogPath:          logPath,
+			Debug:            args.Debug,
+			StatusLine:       settings.StatusLine,
+			SetPlanApprover:  func(fn tools.PlanApprover) { planApprover.set(fn) },
+			SetHookNotice:    func(fn func(string)) { hookNotice.set(fn) },
+			SetHookActivity:  func(fn func(string)) { hookActivity.set(fn) },
+			ModelLabel:       providerID + "/" + modelID,
+			Resolved:         resolved,
+			Started:          started,
+			Gate:             gate,
+			TakeModeReminder: reminders.TakeForPrompt,
+			Registry:         registry,
+			Env:              env,
+			Dispatcher:       dispatcher,
+			Hooks:            hooks.get,
+			SessionStart:     sessionStart,
+			ScreenReader:     args.ScreenReader,
+			Fullscreen:       args.Fullscreen,
 			// Both --resume/-r (args.ResumeSet) and --continue/-c
 			// (args.ContinueLatest) resume an existing session — IsResume's
 			// own doc comment on InteractiveDeps already says so — but this
@@ -1624,7 +1628,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return exitCode
 	}
 
-	exitCode := runPrintMode(ctx, args, started, gate, resolved, hooks.get(), sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry)
+	exitCode := runPrintMode(ctx, args, started, gate, resolved, hooks.get(), sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry, reminders)
 
 	// Nothing outlives the session: a background shell started during this
 	// run must not hold a port open after the process exits. Killed BEFORE
@@ -1668,7 +1672,7 @@ func readStdin(r io.Reader) string {
 // wrapping here, in print mode, rather than leaving it absent until phase 7.
 // That is the one place this implementation intentionally diverges from
 // cli.ts's control flow instead of following it.
-func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry) int {
+func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry, reminders *modeReminders) int {
 	if args.MaxTurnsErr != "" {
 		fmt.Fprintln(stderr, args.MaxTurnsErr)
 		return 1
@@ -1756,6 +1760,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 	if len(hookContext) > 0 {
 		prompt = fmt.Sprintf("<hook-context>\n%s\n</hook-context>\n\n%s", strings.Join(hookContext, "\n\n"), prompt)
 	}
+	prompt = reminders.Prefix(prompt)
 
 	format := args.OutputFormat
 	if format == "" {

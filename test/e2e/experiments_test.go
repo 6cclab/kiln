@@ -18,10 +18,11 @@ import (
 
 // --- switch 1: HARNESS_EXP_LEDGER -----------------------------------------
 
-// TestExpLedger_PromptNamesThePathOnlyWhenSet: the plan-mode prompt gets an
-// extra paragraph naming the ledger path when HARNESS_EXP_LEDGER=1, and
-// stays exactly agent.PlanModePrompt (no ledger paragraph) when unset.
-// Break: drop the ledgerPrompt append in buildSystemPrompt -> the "set"
+// TestExpLedger_PromptNamesThePathOnlyWhenSet: the plan-mode reminder sent
+// with the first prompt gets an extra paragraph naming the ledger path when
+// HARNESS_EXP_LEDGER=1, and is exactly agent.PlanModePrompt (no ledger
+// paragraph) when unset.
+// Break: drop planExtra from modeReminders' full plan text -> the "set"
 // case's assertion on "Findings ledger" fails.
 func TestExpLedger_PromptNamesThePathOnlyWhenSet(t *testing.T) {
 	for _, tc := range []struct {
@@ -35,15 +36,15 @@ func TestExpLedger_PromptNamesThePathOnlyWhenSet(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home, sessDir := scratchHome(t)
 			proj := scratchProject(t)
-			sys := budgetRunAndFirstSystem(t, home, sessDir, proj, "faux/faux-1", "", tc.env, "--permission-mode", "plan")
-			gotLedger := strings.Contains(sys, "Findings ledger")
+			first := budgetRunAndFirstMessages(t, home, sessDir, proj, "faux/faux-1", "", tc.env, "--permission-mode", "plan")
+			gotLedger := strings.Contains(first, "Findings ledger")
 			if gotLedger != tc.wantIn {
-				t.Errorf("system prompt contains ledger paragraph = %v, want %v:\n%s", gotLedger, tc.wantIn, sys)
+				t.Errorf("plan reminder contains ledger paragraph = %v, want %v:\n%s", gotLedger, tc.wantIn, first)
 			}
 			wantPath := filepath.Join(home, ".harness", "plans", "ledger-")
-			gotPath := strings.Contains(sys, wantPath)
+			gotPath := strings.Contains(first, wantPath)
 			if gotPath != tc.wantIn {
-				t.Errorf("system prompt contains ledger path = %v, want %v", gotPath, tc.wantIn)
+				t.Errorf("plan reminder contains ledger path = %v, want %v", gotPath, tc.wantIn)
 			}
 		})
 	}

@@ -431,6 +431,16 @@ what the workspace boundary leaves past the auto mode classifier
 (`permission/classifier.go`, the model call in `internal/automode`;
 `docs/configuration.md` "Auto mode classifier").
 
+**Mode changes.** The gate's mode is the only copy of it. `Gate.SetMode`
+notifies `OnModeChange` observers (the TUI footer re-reads it); plan mode's
+controller (`agent.PlanController`) reads it rather than keeping a flag.
+The model learns about plan mode from `internal/cli/modereminders.go`: a
+`<system-reminder>` stored ahead of the next prompt, plus the same text
+added unstored to each request (`Hooks.OnTransformContext`) when the mode
+moved mid-turn. The system prompt never depends on the mode, so switching
+costs no prompt cache. Replay and rewind strip these preambles
+(`internal/tui/preamble.go`) and show what the user typed.
+
 **Rule syntax** (`MatchesRule`): a bare rule is an exact tool-name match
 (`mcp__server` and `mcp__server__*` cover every tool of exactly that
 server, never a server whose name merely starts with it); a parenthesized rule

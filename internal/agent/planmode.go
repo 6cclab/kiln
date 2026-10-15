@@ -15,17 +15,12 @@ import (
 	"strings"
 )
 
-// PlanModePrompt is a verbatim port of plan-mode.ts's PLAN_MODE_PROMPT,
-// appended to the system prompt while a session is in plan mode. Without
-// it the model discovers it is read-only by hitting refusals one tool at a
+// PlanModePrompt is what the model is told on entering plan mode, sent as
+// a reminder with the next prompt (internal/cli/modereminders.go), never in
+// the system prompt: the mode changes mid-session and the system prompt
+// must not, or every switch would cost the whole prompt cache. Without it
+// the model discovers it is read-only by hitting refusals one tool at a
 // time, which reads as a broken session rather than a deliberate mode.
-//
-// internal/cli/chat.go currently carries its own unexported copy
-// (planModePrompt) with a comment saying it should move here once this
-// package existed. chat.go is being edited by another agent in this phase
-// and is intentionally left untouched; see the phase report for the
-// follow-up (chat.go should import agent.PlanModePrompt and delete its own
-// copy).
 //
 // It no longer matches plan-mode.ts: the four-line original told the model
 // only to research "thoroughly", and in the head-to-head against Claude Code
@@ -80,32 +75,44 @@ type PlanDecision struct {
 // PlanApprover asks the user to approve a plan. Implemented by the TUI.
 type PlanApprover func(ctx context.Context, plan string) (PlanDecision, error)
 
-// PlanController tracks whether a session is in plan mode and notifies
+// PlanController answers whether a session is in plan mode and notifies
 // OnApprove when a plan is approved, so the caller can leave read-only
-// enforcement. Mirrors plan-mode.ts's PlanModeController.
+// enforcement. Mirrors plan-mode.ts's PlanModeController, except that it
+// keeps no state of its own: plan mode is the permission gate's mode, and
+// the gate changes from many places (Shift+Tab, /plan, /permissions, a
+// prompt's mode switch). A copy of it went stale the first time any of
+// them moved the gate, and exit_plan_mode then told a planning model to
+// "proceed directly".
 type PlanController struct {
-	active bool
+	isActive func() bool
 	// OnApprove is called by Approve when a plan is approved, with the
-	// mode to switch to.
+	// mode to switch to. It is what leaves plan mode.
 	OnApprove func(mode string)
 }
 
-// NewPlanController returns a controller with plan mode active, matching
-// how a session enters plan mode (--permission-mode plan, or Shift+Tab
-// cycling into "plan").
-func NewPlanController() *PlanController { return &PlanController{active: true} }
+// NewPlanController returns a controller whose plan state is isActive,
+// normally "the gate's mode is plan".
+func NewPlanController(isActive func() bool) *PlanController {
+	return &PlanController{isActive: isActive}
+}
 
-// IsActive reports whether the controller is currently in plan mode.
-func (c *PlanController) IsActive() bool { return c.active }
+// IsActive reports whether the session is currently in plan mode.
+func (c *PlanController) IsActive() bool { return c.isActive() }
 
-// SetActive is exposed for callers that toggle plan mode outside of an
-// approval, e.g. Shift+Tab cycling back into "plan".
-func (c *PlanController) SetActive(active bool) { c.active = active }
-
-// Approve leaves plan mode and calls OnApprove, if set, with mode.
+// Approve calls OnApprove, if set, with mode; OnApprove moves the gate
+// out of plan mode.
 func (c *PlanController) Approve(mode string) {
-	c.active = false
 	if c.OnApprove != nil {
 		c.OnApprove(mode)
 	}
+}
+
+// PlanModeSparseReminder goes with each later prompt while plan mode is
+// still on, once the model has had PlanModePrompt in full.
+const PlanModeSparseReminder = "Plan mode is still on: research and read only, then present the plan with exit_plan_mode. Changes are refused until the plan is approved."
+
+// PlanModeExitReminder tells the model the user left plan mode without
+// approving a plan (Shift+Tab, /permissions), and which mode is now on.
+func PlanModeExitReminder(mode string) string {
+	return "The user has left plan mode; the permission mode is now \"" + mode + "\". You may make changes again. Do not call exit_plan_mode."
 }
