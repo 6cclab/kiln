@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -10,13 +9,17 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// funcPointer returns f's entry point, for comparing that two
-// func(string) string values are literally the same package-level style
-// (lipgloss disables color in a non-tty test process, so comparing
-// RENDERED strings would pass for any two styles — this compares
-// identity instead).
-func funcPointer(f func(string) string) uintptr {
-	return reflect.ValueOf(f).Pointer()
+// styled renders a sample through f with colour forced on, so two styles
+// can be compared by what they draw. lipgloss v2's Style.Render always emits
+// the style's SGR sequence (downsampling happens at the terminal writer), so
+// a non-tty test process still sees the colour. Comparing the functions
+// themselves does not work: reflect.Value.Pointer on a func is only a code
+// pointer, and every style() closure shares one body — go1.27 compiles them
+// all to the single tui.style.func1, so any two styles compare equal.
+func styled(t *testing.T, f func(string) string) string {
+	t.Helper()
+	withRenderEnv(t, 80)
+	return f("sample")
 }
 
 // TestRenderContextBar_GapsBetweenSegments covers finding 4's bar half:
@@ -68,15 +71,15 @@ func TestRenderContextBar_SkipsZeroSegments(t *testing.T) {
 // TestContextSegmentColor_FilesReadIsAmber covers defect 2's colour half:
 // docs/kiln-design-handoff/Terminal.dc.html line 227 specifies "Files
 // read" as amber (C.amber); before this fix, contextSegmentColor had no
-// case for that label, so it fell through to the "Free" default (Rule).
+// case for that label, so it fell through to the "Free" default.
 func TestContextSegmentColor_FilesReadIsAmber(t *testing.T) {
-	got := funcPointer(contextSegmentColor("Files read"))
-	if want := funcPointer(KilnAmber); got != want {
-		t.Errorf("contextSegmentColor(%q) is not KilnAmber", "Files read")
+	got := styled(t, contextSegmentColor("Files read"))
+	if want := styled(t, KilnAmber); got != want {
+		t.Errorf("contextSegmentColor(%q) draws %q, want KilnAmber's %q", "Files read", got, want)
 	}
 	// Sanity: it must not be the "Free"-segment fallback colour.
-	if free := funcPointer(Rule); got == free {
-		t.Errorf("contextSegmentColor(%q) resolves to the Free/default colour (Rule), want it distinct", "Files read")
+	if free := styled(t, contextSegmentColor("Free")); got == free {
+		t.Errorf("contextSegmentColor(%q) draws the Free/default colour %q, want it distinct", "Files read", got)
 	}
 }
 
