@@ -322,6 +322,9 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 			if len(modelRouter.FallbackReasons) > 0 {
 				lines = append(lines, "modelRouter fallback "+strings.Join(modelRouter.FallbackReasons, "; "))
 			}
+			if len(modelRouter.LocalCollapseNotes) > 0 {
+				lines = append(lines, "modelRouter local "+strings.Join(modelRouter.LocalCollapseNotes, "; "))
+			}
 		} else {
 			lines = append(lines, "modelRouter not available: "+modelRouter.Reason)
 		}

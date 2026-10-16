@@ -219,6 +219,41 @@ func TestDoctor_ModelRouterFallbackLine(t *testing.T) {
 	}
 }
 
+// TestDoctor_ModelRouterLocalCollapseLine checks `kiln doctor` reports a
+// "modelRouter local …" line when a mixed-stack modelRoles collapses
+// kiln/auto onto one Ollama model (Design 1): buildRegistry's own Ollama
+// provider is pointed at a fake /api/tags+/api/show+/api/ps server via
+// OLLAMA_HOST (never the real one), matching chat_test.go's own
+// precedent for isolating it.
+func TestDoctor_ModelRouterLocalCollapseLine(t *testing.T) {
+	scratchProject(t)
+	srv, _ := newFakeOllama(t, []fakeOllamaModel{
+		chatModel("qwen3.8"), chatModel("qwen3:30b-a3b"), chatModel("gpt-oss:20b"),
+	}, []string{"qwen3.8"})
+	t.Setenv("OLLAMA_HOST", srv.URL)
+
+	home := os.Getenv("HOME")
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"modelRoles": {"fast": "ollama/qwen3.8", "structured": "ollama/qwen3:30b-a3b", "heavy": "ollama/gpt-oss:20b"}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	args := baseArgs()
+	var stdout, stderr bytes.Buffer
+	code := Doctor(context.Background(), args, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "modelRouter local") || !strings.Contains(out, "one model loaded") || !strings.Contains(out, "qwen3.8") {
+		t.Errorf("doctor output missing the local-collapse line:\n%s", out)
+	}
+}
+
 // TestKilnAutoUnavailable_DefinedFastWithNoCredentials: modelRoles.fast is
 // defined (the implement/direct slots' default role) but its provider has
 // no credentials, so kiln/auto never registers — and, since the role is

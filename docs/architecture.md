@@ -592,8 +592,15 @@ since the classifier is built before the harness is). `Auto.rate` falls
 back to `router.Heuristic` (`heuristics.go`) when `modelRouter.fallback` is
 `"heuristic"`, else to `Standard` (`plan`, jev's own fallback) — except
 when ctx itself was cancelled mid-classification (Esc), which `Auto.Route`
-propagates as an error instead of falling back. See `docs/configuration.md`
-§6a.
+propagates as an error instead of falling back. After `setupModelRouter`
+resolves the slots and before it builds `kiln`'s virtual model,
+`collapseLocalServers` groups them (plus `fast`) by host through the
+optional `provider.SelfHosted` interface (`Host`, `Resident`) and, for a
+host with two or more distinct models, calls `router.CollapseLocal`
+(`internal/router/local.go`) to move them all onto one — the model
+`Resident` (`/api/ps` for Ollama) says is already loaded, so a self-hosted
+server that can only hold one model at a time never has to swap mid-session.
+See `docs/configuration.md` §6a.
 
 ## TUI
 

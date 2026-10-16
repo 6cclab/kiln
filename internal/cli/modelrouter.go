@@ -68,6 +68,12 @@ type modelRouterSetup struct {
 	// "· fallback: <shortest reason>" suffix are built from this rather
 	// than re-parsing the note text.
 	FallbackReasons []string
+	// LocalCollapseNotes is the full one-model-per-local-server note
+	// (collapseLocalServers), one per self-hosted server this run
+	// collapsed. "doctor"'s own "modelRouter local …" line repeats them;
+	// /model's describe suffix only says " · one model per local server"
+	// rather than restating the whole note, which has little room for it.
+	LocalCollapseNotes []string
 }
 
 // shortestFallbackReason is the shortest of FallbackReasons, "" when there
@@ -315,9 +321,18 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	}
 	coveredRoles, fallbackReasons := warnRoleFallbacks(problems, cfg, shouldWarn, finalFor, warn)
 
+	// fastModel is modelRoles.fast, resolved the same way a router slot
+	// is. It is not itself a router slot, but it is a collapse candidate
+	// below whenever it resolves, and the model the classifier (when
+	// cfg.Classifier) ends up asking -- resolved once, here, rather than
+	// twice.
+	fastModel, fastProblem := routerTarget(ctx, reg, "fast", cfg.ModelRoles["fast"], refreshErrs)
+
+	t, fastModel, localNotes := collapseLocalServers(ctx, reg, t, fastModel, fastProblem == nil, warn)
+
 	auto := router.AutoModel(t)
 	reg.Register(router.NewVirtualProvider(auto))
-	setup := modelRouterSetup{Registered: true, Targets: t, Configured: configured, CoveredRoles: coveredRoles, FallbackReasons: fallbackReasons}
+	setup := modelRouterSetup{Registered: true, Targets: t, Configured: configured, CoveredRoles: coveredRoles, FallbackReasons: fallbackReasons, LocalCollapseNotes: localNotes}
 
 	var fallback func(string) router.Complexity
 	if cfg.Fallback == claudesettings.RouterFallbackHeuristic {
@@ -325,17 +340,187 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	}
 	autoRouter := &router.Auto{Targets: t, Fallback: fallback}
 	if cfg.Classifier {
-		fastModel, problem := routerTarget(ctx, reg, "fast", cfg.ModelRoles["fast"], refreshErrs)
-		if problem == nil {
+		if fastProblem == nil {
 			classifier := &router.LLMClassifier{Resolve: router.ClassifierResolver(reg, fastModel)}
 			autoRouter.Classifier = classifier
 			setup.classifier = classifier
 		} else if cfg.Set {
-			warn(fmt.Sprintf("modelRouter.classifier: %s.", problem))
+			warn(fmt.Sprintf("modelRouter.classifier: %s.", fastProblem))
 		}
 	}
 	setup.Routers.Add(auto.Provider, auto.ID, autoRouter)
 	return setup
+}
+
+// localRouterSlot is one router.Targets field this package's
+// collapseLocalServers can read and overwrite, paired with the
+// claudesettings.RouterSlot name it corresponds to for the collapse
+// note.
+type localRouterSlot struct {
+	name string
+	get  func(router.Targets) provider.Model
+	set  func(*router.Targets, provider.Model)
+}
+
+var localRouterSlots = []localRouterSlot{
+	{claudesettings.RouterSlotImplement,
+		func(t router.Targets) provider.Model { return t.Implement },
+		func(t *router.Targets, m provider.Model) { t.Implement = m }},
+	{claudesettings.RouterSlotPlan,
+		func(t router.Targets) provider.Model { return t.Plan },
+		func(t *router.Targets, m provider.Model) { t.Plan = m }},
+	{claudesettings.RouterSlotPlanComplex,
+		func(t router.Targets) provider.Model { return t.PlanComplex },
+		func(t *router.Targets, m provider.Model) { t.PlanComplex = m }},
+	{claudesettings.RouterSlotDirect,
+		func(t router.Targets) provider.Model { return t.Direct },
+		func(t *router.Targets, m provider.Model) { t.Direct = m }},
+}
+
+// selfHostedHost looks up m's provider in reg and, when it implements
+// provider.SelfHosted, returns it along with its Host(m) grouping key.
+// ok is false for a cloud provider, or any provider without the
+// capability -- this is the only place collapseLocalServers asks "is
+// this local", and it asks by interface assertion, never by provider ID
+// or name.
+func selfHostedHost(reg *provider.Registry, m provider.Model) (provider.SelfHosted, string, bool) {
+	p, ok := reg.Provider(m.Provider)
+	if !ok {
+		return nil, "", false
+	}
+	sh, ok := p.(provider.SelfHosted)
+	if !ok {
+		return nil, "", false
+	}
+	return sh, sh.Host(m), true
+}
+
+// localHostGroup is every candidate (router.LocalCandidate) this run
+// found on one self-hosted server, plus the provider that server's
+// Resident call goes through.
+type localHostGroup struct {
+	sh         provider.SelfHosted
+	providerID string
+	candidates []router.LocalCandidate
+}
+
+// collapseLocalServers applies Design 1, "one model per local server": a
+// self-hosted server (internal/provider.SelfHosted) whose router
+// targets and/or fastModel span two or more distinct models gets
+// collapsed onto one of them (router.CollapseLocal), so kiln/auto never
+// makes that server swap models mid-session. It queries Resident
+// (/api/ps for Ollama) at most once per host, and only for a host with
+// two or more candidates. t and fastModel are returned updated in
+// place; a host that was not collapsed (fewer than two local candidates,
+// or every one of them already resident) is returned unchanged. Every
+// collapse is warned once, through warn (the same startup-note path
+// warnRoleFallbacks uses), and also returned as notes for doctor.
+func collapseLocalServers(ctx context.Context, reg *provider.Registry, t router.Targets, fastModel provider.Model, fastResolves bool, warn func(string)) (router.Targets, provider.Model, []string) {
+	groups := map[string]*localHostGroup{}
+	var order []string
+	add := func(slot string, m provider.Model) {
+		sh, host, ok := selfHostedHost(reg, m)
+		if !ok {
+			return
+		}
+		g, exists := groups[host]
+		if !exists {
+			g = &localHostGroup{sh: sh, providerID: m.Provider}
+			groups[host] = g
+			order = append(order, host)
+		}
+		g.candidates = append(g.candidates, router.LocalCandidate{Slot: slot, Model: m})
+	}
+	for _, s := range localRouterSlots {
+		add(s.name, s.get(t))
+	}
+	if fastResolves {
+		add("fast", fastModel)
+	}
+
+	var notes []string
+	for _, host := range order {
+		g := groups[host]
+		if distinctLocalModels(g.candidates) < 2 {
+			continue
+		}
+		var resident []string
+		if ids, err := g.sh.Resident(ctx); err == nil {
+			resident = ids
+		}
+		collapse, changed := router.CollapseLocal(g.candidates, resident)
+		if !changed {
+			continue
+		}
+		for _, c := range g.candidates {
+			if c.Slot == "fast" {
+				fastModel = collapse.Chosen
+				continue
+			}
+			for _, s := range localRouterSlots {
+				if s.name == c.Slot {
+					s.set(&t, collapse.Chosen)
+				}
+			}
+		}
+		note := localCollapseNote(reg, g.providerID, host, g.candidates, collapse)
+		warn(note)
+		notes = append(notes, note)
+	}
+	return t, fastModel, notes
+}
+
+// distinctLocalModels counts the distinct provider/id models among
+// candidates, so collapseLocalServers only calls Resident for a host
+// with two or more of them -- a host where every slot (and fast)
+// already names the same model has nothing to collapse, and asking
+// /api/ps there would be a wasted round trip.
+func distinctLocalModels(candidates []router.LocalCandidate) int {
+	seen := map[string]bool{}
+	for _, c := range candidates {
+		seen[c.Model.Provider+"/"+c.Model.ID] = true
+	}
+	return len(seen)
+}
+
+// localCollapseNote is the startup note for one collapsed host, e.g.
+// "kiln/auto: the Ollama server at 192.168.3.168:11434 keeps one model
+// loaded, so plan and planComplex use qwen3.8 (already loaded) instead
+// of qwen3:30b-a3b and gpt-oss:20b. Keep all of them loaded to route
+// between them." Only candidates whose model actually changed are named
+// ("the classifier" for fast, since it is not itself a modelRouter slot).
+func localCollapseNote(reg *provider.Registry, providerID, host string, candidates []router.LocalCandidate, collapse router.LocalCollapse) string {
+	providerName := providerID
+	if p, ok := reg.Provider(providerID); ok {
+		providerName = p.Name()
+	}
+	addr := strings.TrimPrefix(host, providerID+" ")
+	addr = strings.TrimPrefix(addr, "http://")
+	addr = strings.TrimPrefix(addr, "https://")
+
+	var changed []string
+	for _, c := range candidates {
+		if c.Model.Provider == collapse.Chosen.Provider && c.Model.ID == collapse.Chosen.ID {
+			continue
+		}
+		if c.Slot == "fast" {
+			changed = append(changed, "the classifier")
+			continue
+		}
+		changed = append(changed, c.Slot)
+	}
+
+	chosenLabel := collapse.Chosen.ID
+	if collapse.AlreadyLoaded {
+		chosenLabel += " (already loaded)"
+	}
+	var otherIDs []string
+	for _, m := range collapse.Others {
+		otherIDs = append(otherIDs, m.ID)
+	}
+
+	return fmt.Sprintf("kiln/auto: the %s server at %s keeps one model loaded, so %s use %s instead of %s. Keep all of them loaded to route between them.",
+		providerName, addr, joinAnd(changed), chosenLabel, joinAnd(otherIDs))
 }
 
 // fallbackGroup is every slot whose target collapsed to the same

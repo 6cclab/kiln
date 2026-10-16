@@ -584,6 +584,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if reason := modelRouter.shortestFallbackReason(); reason != "" {
 			routerAutoDescribe += " · fallback: " + reason
 		}
+		if len(modelRouter.LocalCollapseNotes) > 0 {
+			routerAutoDescribe += " · one model per local server"
+		}
 	}
 	var providerID, modelID string
 	var resolved provider.Resolved
