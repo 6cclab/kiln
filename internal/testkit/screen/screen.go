@@ -525,7 +525,16 @@ func (s *Screen) WaitQuiet(quiet, timeout time.Duration, ignore ...func([]string
 // pattern appears the frame under it can still be the previous one (a
 // spinner row under a finished turn's summary). A person never sees that
 // frame; a dump taken inside it does.
+//
+// It gives up after settleMax even when the deadline is further off: a
+// screen that keeps changing (a reply streaming in faster than
+// settleQuiet) never goes quiet, and settling until the deadline held
+// WaitFor for the whole stream, so the caller's next key landed long
+// after the moment it waited for.
 func (s *Screen) settle(deadline time.Time) {
+	if limit := time.Now().Add(settleMax); limit.Before(deadline) {
+		deadline = limit
+	}
 	last := strings.Join(s.Viewport(), "\n")
 	quietSince := time.Now()
 	for time.Now().Before(deadline) {
@@ -548,6 +557,11 @@ func (s *Screen) settle(deadline time.Time) {
 // hostage: while the spinner animates the frame changes every 80ms, so the
 // 60ms window still closes between ticks.
 const settleQuiet = 60 * time.Millisecond
+
+// settleMax bounds settle on a screen that never goes quiet: many frames,
+// so a finished frame still lands first, but short next to the waits
+// tests time their keys against.
+const settleMax = 500 * time.Millisecond
 
 // diffRows lists the rows that differ between two joined viewports.
 func diffRows(before, after string) string {

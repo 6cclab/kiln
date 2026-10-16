@@ -249,6 +249,13 @@ func TestTUI_Esc_InterruptsAContinuedTurn(t *testing.T) {
 	if err := s.WaitFor("Slow words keep streaming", 10*time.Second); err != nil {
 		t.Fatalf("the continued reply never started: %v", err)
 	}
+	// The hook blocks every stop, so once the slow reply has finished the
+	// turn continues on the faux's instant "script exhausted" replies. Esc
+	// must land while the slow reply is still streaming, or the count
+	// below measures the test's timing, not kiln.
+	if n := len(requests()); n != 2 {
+		t.Fatalf("%d model requests before Esc, want 2: the slow reply finished before the test pressed Esc", n)
+	}
 	s.SendKey("esc")
 	if err := s.WaitFor("Interrupted. Tell kiln what to do instead.", 5*time.Second); err != nil {
 		t.Fatalf("never saw the interrupted note: %v", err)

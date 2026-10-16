@@ -272,7 +272,7 @@ func TestWaitQuietWaitsOutADelayedSecondPaint(t *testing.T) {
 
 func TestWaitQuietTimesOutOnAScreenThatKeepsChanging(t *testing.T) {
 	s := screen.Start(t, "/bin/sh", []string{"-c", "i=0; while [ $i -lt 60 ]; do i=$((i+1)); echo tick $i; sleep 0.05; done"}, 40, 8)
-	// Not WaitFor: its own settle would sit out the whole loop.
+	// Not WaitFor: its settle (up to settleMax) would spend part of the loop.
 	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(strings.Join(s.Viewport(), "\n"), "tick"); {
 		if time.Now().After(deadline) {
 			t.Fatal("the ticking shell never painted")
@@ -281,6 +281,22 @@ func TestWaitQuietTimesOutOnAScreenThatKeepsChanging(t *testing.T) {
 	}
 	if err := s.WaitQuiet(300*time.Millisecond, time.Second); err == nil {
 		t.Fatal("WaitQuiet returned nil on a screen that never stopped changing")
+	}
+}
+
+// WaitFor's settle is short: on a screen that keeps changing (a reply
+// streaming in, a spinner) it returns soon after the pattern appears, not
+// once the screen goes quiet or the timeout runs out. Settling until the
+// deadline held TestTUI_Esc_InterruptsAContinuedTurn's WaitFor for the
+// whole slow reply, so its Esc landed after the reply had finished.
+func TestWaitForReturnsPromptlyOnAScreenThatKeepsChanging(t *testing.T) {
+	s := screen.Start(t, "/bin/sh", []string{"-c", "echo ready; i=0; while [ $i -lt 400 ]; do i=$((i+1)); echo tick $i; sleep 0.02; done"}, 40, 8)
+	start := time.Now()
+	if err := s.WaitFor("tick", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("WaitFor took %s on a screen that never stops changing: its settle must be bounded, not run to the timeout", took)
 	}
 }
 
