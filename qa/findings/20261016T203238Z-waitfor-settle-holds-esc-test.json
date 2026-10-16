@@ -1,0 +1,25 @@
+{
+ "id": "20261016T203238Z-waitfor-settle-holds-esc-test",
+ "found_at": "2026-10-16T20:32:38Z",
+ "scenario": "e2e/TestTUI_Esc_InterruptsAContinuedTurn",
+ "step": null,
+ "terminals": [
+  "headless-pty"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "WaitFor's settle runs to the timeout on a streaming screen, so TestTUI_Esc_InterruptsAContinuedTurn presses Esc after the slow reply ended",
+ "observed": "Intermittent '39 model requests, want 2' / '23 model requests, want 2'. screen.WaitFor matches, then settle() waits for 60ms of no change bounded only by the WaitFor deadline. The continued reply streams a chunk every 60ms plus an 80ms spinner, so settle held WaitFor for up to 6.4s (100-run measurement, median 1.1s) while the 6.8s reply streamed; when it outlasted the reply, the always-blocking Stop hook continued the turn on instant 'script exhausted' replies until Esc finally landed. With chunk_delay 30ms it fails 5/5 (31-245 requests). Not a kiln interrupt defect: Esc aborted the turn every time.",
+ "expected": "WaitFor returns shortly after its pattern appears, so a test's next key lands while the state it waited for still holds.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/testkit/screen/screen.go",
+   "test/e2e/tui_stop_hook_unix_test.go"
+  ],
+  "regression_test": "TestWaitForReturnsPromptlyOnAScreenThatKeepsChanging",
+  "updated_at": "2026-10-16T20:32:41Z"
+ }
+}
