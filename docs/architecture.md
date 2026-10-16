@@ -574,8 +574,25 @@ successful `edit`/`write`, send `direct` requests to `direct`. Its state is
 `{phase, model}`. `internal/cli/modelrouter.go` resolves its slots from
 user-scope `modelRouter` and `modelRoles` (`settings.LoadModelRouter`) and,
 when `implement` resolves, registers the `kiln` provider
-(`router.VirtualProvider`) with a model sized to its smallest target, so the
-tier kiln sizes once at startup fits every routed model. Subagents inherit
+(`router.VirtualProvider`) with a model that declares its `plan` target's
+window, the model a session's first request goes to. The budgets follow the
+routed model from there: `Lane.route` calls the synchronous
+`Hooks.OnRoute` (never for `direct`, never on a physical lane) after it
+resolves and before the `EventRoute` emit — outside any emit, because
+`Events.Emit` holds a non-reentrant lock and the setters a re-size calls
+(`SetSystemPrompt`, `SetCompactionSettings`, `AddTools`) emit themselves.
+`agent.Start` registers a handler that calls `agent.Retier` when the routed
+window differs from the session's (`Started.CurrentTier`): compaction
+settings, `Harness.SetToolOutputTokens`, then `Started.OnTierChanged`, where
+the CLI (`internal/cli/tiersizing.go`, `sessionSizing`) rebuilds the system
+prompt from a per-window memo of memory, auto memory and the skills listing
+(loaded at startup for every target window, so no disk IO on the lane),
+replaces the `task` tool, and moves the MCP session's tier without a
+re-gate (every tier's strategy is posture-index). `drive` reads these live
+after routing, so the routed request itself is built with them. `/model`
+(`agent.SetModel`) goes through the same `Retier`. A target whose window
+fails `budget.RequireTierForWindow` is an unusable target (it falls back
+with a note) rather than a reason to refuse `kiln/auto`. Subagents inherit
 `kiln/auto` through `Dispatcher.Routers` and route from a fresh state in
 their own session; `Dispatcher.Approved` lets the paid-provider prompt pass
 the router's own targets. A resumed `kiln/auto` session whose router no
@@ -592,8 +609,15 @@ since the classifier is built before the harness is). `Auto.rate` falls
 back to `router.Heuristic` (`heuristics.go`) when `modelRouter.fallback` is
 `"heuristic"`, else to `Standard` (`plan`, jev's own fallback) — except
 when ctx itself was cancelled mid-classification (Esc), which `Auto.Route`
-propagates as an error instead of falling back. See `docs/configuration.md`
-§6a.
+propagates as an error instead of falling back. After `setupModelRouter`
+resolves the slots and before it builds `kiln`'s virtual model,
+`collapseLocalServers` groups them (plus `fast`) by host through the
+optional `provider.SelfHosted` interface (`Host`, `Resident`) and, for a
+host with two or more distinct models, calls `router.CollapseLocal`
+(`internal/router/local.go`) to move them all onto one — the model
+`Resident` (`/api/ps` for Ollama) says is already loaded, so a self-hosted
+server that can only hold one model at a time never has to swap mid-session.
+See `docs/configuration.md` §6a.
 
 ## TUI
 

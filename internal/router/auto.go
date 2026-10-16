@@ -258,23 +258,18 @@ func editedThisTurn(messages []msg.Message) bool {
 	return false
 }
 
-// AutoModel is kiln/auto's catalog entry for targets. The budgets kiln
-// sizes once at startup (the tier's system prompt and tool shares) must
-// fit every model a request may go to, so its window and output cap are
-// the smallest of its targets', and its inputs those every target takes.
+// AutoModel is kiln/auto's catalog entry for targets. Its window and
+// output cap are the Plan target's: a session starts sized for the model
+// its first request goes to (plan, or planComplex on a complex prompt),
+// and each later request re-sizes it for the model it is routed to (the
+// harness's OnRoute hook, agent.Retier), as pi's limits follow the
+// physical model that answered. Its inputs are those every target takes.
 // It reasons if any target does; Set.Resolve clamps each request's level
-// to the model it goes to. pi declares a virtual model's limits itself
-// (jev's 272k shared by its three models) and switches to the answering
-// model's after the first reply.
+// to the model it goes to.
 func AutoModel(t Targets) provider.Model {
-	m := provider.Model{ID: AutoModelID, Name: AutoName, Api: provider.ApiVirtual, Provider: AutoProvider}
+	m := provider.Model{ID: AutoModelID, Name: AutoName, Api: provider.ApiVirtual, Provider: AutoProvider,
+		ContextWindow: t.Plan.ContextWindow, MaxTokens: t.Plan.MaxTokens}
 	for i, target := range t.All() {
-		if i == 0 || target.ContextWindow < m.ContextWindow {
-			m.ContextWindow = target.ContextWindow
-		}
-		if i == 0 || target.MaxTokens < m.MaxTokens {
-			m.MaxTokens = target.MaxTokens
-		}
 		if i == 0 {
 			m.Input = append([]string(nil), target.Input...)
 		} else {

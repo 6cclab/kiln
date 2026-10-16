@@ -220,8 +220,11 @@ func TestAutoModel(t *testing.T) {
 	if m.Provider != "kiln" || m.ID != "auto" || m.Name != "Auto (kiln)" || !provider.IsVirtual(m) {
 		t.Errorf("identity = %+v", m)
 	}
-	if m.ContextWindow != 32768 || m.MaxTokens != 4096 {
-		t.Errorf("window/max = %d/%d, want 32768/4096", m.ContextWindow, m.MaxTokens)
+	// The Plan target's limits, not the smallest target's (cheap's
+	// 32768/direct's 4096): the session starts sized for the model its
+	// first request goes to and re-sizes on each route.
+	if m.ContextWindow != 200000 || m.MaxTokens != 64000 {
+		t.Errorf("window/max = %d/%d, want plan's 200000/64000", m.ContextWindow, m.MaxTokens)
 	}
 	if !reflect.DeepEqual(m.Input, []string{"text"}) {
 		t.Errorf("input = %v, want [text]", m.Input)

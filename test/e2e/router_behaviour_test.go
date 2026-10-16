@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,6 +278,42 @@ func TestRouter_ResumeFallsBackToTheLastPhysicalModel(t *testing.T) {
 	}
 }
 
+// TestRouter_FallbackNote: modelRoles.heavy names a real anthropic model
+// but this scratch HOME has no anthropic credentials, so planComplex
+// (heavy's default slot) falls back to plan. kiln/auto still registers
+// (implement/plan/direct all resolve on faux) and prints exactly one
+// combined note on stderr naming the fallback, with no second,
+// vaguer "Model role heavy: ..." line from the subagent-role validator —
+// the router note already covers "heavy" and says subagents asking for
+// it run on the current model instead.
+func TestRouter_FallbackNote(t *testing.T) {
+	addr, _ := startFaux(t, "models:\n  faux-1:\n    - text: \"planned\"\n      end_turn: true\n")
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeUserSettings(t, home, `{"modelRoles": {"structured": "faux/faux-1", "fast": "faux/faux-1", "heavy": "anthropic/claude-opus-5"}, "modelRouter": {"classifier": false}}`)
+	env := baseEnv(home, sessDir, addr)
+	// No ANTHROPIC_* credentials anywhere in this scratch HOME/env: the
+	// fallback must come from "no credentials", not a real API call.
+	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+		delete(env, k)
+	}
+
+	res := runHarness(t, proj, env, "--model", "kiln/auto", "-p", "hello", "--output-format", "text")
+	if res.Code != 0 {
+		t.Fatalf("exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	noteCount := strings.Count(res.Stderr, "kiln/auto: anthropic has no credentials")
+	if noteCount != 1 {
+		t.Fatalf("stderr = %q, want exactly one fallback note", res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "kiln login anthropic") || !strings.Contains(res.Stderr, "planComplex") {
+		t.Errorf("stderr = %q, want the login hint and the affected slot", res.Stderr)
+	}
+	if strings.Contains(res.Stderr, "Model role heavy:") {
+		t.Errorf("stderr = %q, want no separate ValidateRoles line for heavy (the router note already covers it)", res.Stderr)
+	}
+}
+
 // classifierRoles is the user settings for the classifier tests below:
 // faux-3 is modelRoles.fast, the classifier's own model, never a routing
 // target itself — modelRouter.roles sends implement and direct to
@@ -394,5 +431,70 @@ func TestRouter_ClassifierUsageSurvivesResume(t *testing.T) {
 	}
 	if !strings.Contains(res.Stdout, "by model:") || !strings.Contains(res.Stdout, "model router classifier · faux/faux-3") {
 		t.Errorf("/cost after -c is missing the classifier's row:\n%s", res.Stdout)
+	}
+}
+
+// writeLongUserSkills writes n user-scope skills in the scratch HOME whose
+// descriptions together fit faux-1's skills listing (1% of 128,000 tokens)
+// but not faux-2's (1% of 32,768): each description ends in a marker only
+// the full listing carries.
+func writeLongUserSkills(t *testing.T, home string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("long-skill-%d", i)
+		dir := filepath.Join(home, ".claude", "skills", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		desc := strings.Repeat("walks through a careful multi-step procedure ", 5) + fmt.Sprintf("FULLDESC-%d", i)
+		body := fmt.Sprintf("---\nname: %s\ndescription: %q\n---\nBody of %s.\n", name, desc, name)
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestRouter_SkillsListingFollowsTheRoutedModel: on kiln/auto the system
+// prompt is sized for the model each request goes to, not for the
+// smallest target. faux-1 (128k) plans with the full skills listing; once
+// the edit moves the session to faux-2 (32k), faux-2's requests carry the
+// listing truncated to its own budget.
+func TestRouter_SkillsListingFollowsTheRoutedModel(t *testing.T) {
+	const skillCount = 6
+	addr, srv := startFaux(t, loadFauxScript(t, "router-plan-implement"))
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeUserSettings(t, home, routerRoles)
+	writeLongUserSkills(t, home, skillCount)
+	env := baseEnv(home, sessDir, addr)
+
+	res := runHarness(t, proj, env, "--model", "kiln/auto", "-p", "fix the bug in src/math.js", "--output-format", "text", "--permission-mode", "bypassPermissions")
+	if res.Code != 0 {
+		t.Fatalf("exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	if got, want := requestModels(srv), []string{"faux-1", "faux-1", "faux-2"}; !sameModels(got, want) {
+		t.Fatalf("requests went to %v, want %v", got, want)
+	}
+	for _, r := range srv.Requests() {
+		if !strings.Contains(r.System, "<available_skills>") || !strings.Contains(r.System, "long-skill-0") {
+			t.Errorf("%s request has no skills listing:\n%s", r.Model, r.System)
+			continue
+		}
+		full := 0
+		for i := 0; i < skillCount; i++ {
+			if strings.Contains(r.System, fmt.Sprintf("FULLDESC-%d", i)) {
+				full++
+			}
+		}
+		switch r.Model {
+		case "faux-1":
+			if full != skillCount {
+				t.Errorf("faux-1 request carries %d of %d full descriptions, want all", full, skillCount)
+			}
+		case "faux-2":
+			if full == skillCount {
+				t.Errorf("faux-2 request carries the full listing sized for faux-1")
+			}
+		}
 	}
 }

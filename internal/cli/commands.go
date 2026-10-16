@@ -186,7 +186,7 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		CurrentModel: func() (string, string) {
 			return started.Model.Provider, started.Model.ID
 		},
-		CurrentTier:    func() budget.Tier { return started.Tier },
+		CurrentTier:    started.CurrentTier,
 		ModelLabel:     func() string { return deps.ModelLabel },
 		ContextUsed:    deps.ContextUsed,
 		FileReadTokens: deps.FileReadTokens,
@@ -260,7 +260,7 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 	registry.Add(slashcommands.AccountCommands(slashcommands.AccountDeps{
 		Registry:    reg,
 		Todos:       deps.Todos,
-		Tier:        started.Tier,
+		Tier:        started.CurrentTier(),
 		ModelLabel:  deps.ModelLabel,
 		ContextUsed: deps.ContextUsed,
 	}))
@@ -270,7 +270,7 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		Gate:               gate,
 		Hooks:              deps.Hooks,
 		Agents:             deps.Agents,
-		Tier:               started.Tier,
+		Tier:               started.CurrentTier(),
 		Cwd:                deps.Cwd,
 		ModelLabel:         deps.ModelLabel,
 		ActiveTools:        func() ([]string, error) { return started.Lane.GetActiveTools() },

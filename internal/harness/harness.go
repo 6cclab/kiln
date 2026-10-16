@@ -157,13 +157,31 @@ func (h *Harness) AddTools(tools ...*tool.Tool) {
 	h.events.Emit(Event{Type: EventConfigUpdate, ConfigProperty: ConfigTools})
 }
 
-// SetCompactionSettings replaces the default compaction settings new
-// operations pick up; it does not affect an operation already running.
+// SetCompactionSettings replaces the compaction settings. The turn loop
+// reads them live, so they apply from the next compaction check or
+// request fit on, including within an operation already running; only
+// the copy recorded in the operation's state (opSettings) is a snapshot.
 func (h *Harness) SetCompactionSettings(s CompactionSettings) {
 	h.mu.Lock()
 	h.opts.Compaction = s
 	h.mu.Unlock()
 	h.events.Emit(Event{Type: EventConfigUpdate, ConfigProperty: ConfigCompactionSettings})
+}
+
+// SetToolOutputTokens replaces the ceiling for a single tool result's text
+// (Options.ToolOutputTokens; 0 is unlimited). It applies to tool results
+// committed after the call, including within an operation already running.
+func (h *Harness) SetToolOutputTokens(n int) {
+	h.mu.Lock()
+	h.opts.ToolOutputTokens = n
+	h.mu.Unlock()
+}
+
+// ToolOutputTokens returns the current ceiling for a single tool result.
+func (h *Harness) ToolOutputTokens() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.opts.ToolOutputTokens
 }
 
 // SetName sets the session's display name (pi.session.name) and emits a

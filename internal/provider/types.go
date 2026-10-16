@@ -444,3 +444,27 @@ type Provider interface {
 	// stream.
 	Stream(ctx context.Context, model Model, transcript []msg.Message, opts StreamOptions) (<-chan msg.StreamEvent, func() (*msg.AssistantMessage, error))
 }
+
+// SelfHosted is implemented by a Provider whose models run on a physical
+// server that can hold only a limited number of them loaded at once (a
+// bare Ollama box, say). It is optional: a caller detects it with an
+// interface assertion (reg.Provider(id).(SelfHosted)) rather than
+// switching on a provider's ID or name, so the one-model-per-local-server
+// collapse (internal/router/local.go, wired from
+// internal/cli/modelrouter.go) stays a capability check, not a
+// provider-specific branch. Ollama is the only implementation today
+// (internal/provider/ollama).
+type SelfHosted interface {
+	// Host identifies the physical server m runs on: two models with the
+	// same Host value are candidates for the same collapse decision.
+	// Ollama's is the provider ID plus its normalised base URL, e.g.
+	// "ollama http://192.168.3.168:11434".
+	Host(m Model) string
+	// Resident lists the model ids this host currently has loaded, in
+	// the same id format Models() uses (callers normalise a trailing
+	// ":latest" themselves where that could differ). An error means
+	// residency could not be determined (the host was unreachable, or
+	// timed out) -- the caller treats that the same as "nothing
+	// resident", never as "everything resident".
+	Resident(ctx context.Context) ([]string, error)
+}

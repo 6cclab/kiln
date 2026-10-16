@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -315,10 +316,22 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	// below, so a provider both calls would touch refreshes once.
 	roleProvidersRefreshed := map[string]bool{}
 	modelRouter := loadModelRouter(ctx, cwd, reg, settingsSources(args.SettingSources), args.Settings, func(w string) { routerWarnings = append(routerWarnings, w) }, nil, roleProvidersRefreshed)
-	problems = append(problems, routerWarnings...)
+	// The one-model-per-local-server note is informational, not a
+	// problem: it is shown once, on the "modelRouter local" line below.
+	for _, w := range routerWarnings {
+		if !slices.Contains(modelRouter.LocalCollapseNotes, w) {
+			problems = append(problems, w)
+		}
+	}
 	if modelRouter.Configured {
 		if modelRouter.Registered {
 			lines = append(lines, "modelRouter kiln/auto: "+modelRouter.Targets.Describe())
+			if len(modelRouter.FallbackReasons) > 0 {
+				lines = append(lines, "modelRouter fallback "+strings.Join(modelRouter.FallbackReasons, "; "))
+			}
+			if len(modelRouter.LocalCollapseNotes) > 0 {
+				lines = append(lines, "modelRouter local "+strings.Join(modelRouter.LocalCollapseNotes, "; "))
+			}
 		} else {
 			lines = append(lines, "modelRouter not available: "+modelRouter.Reason)
 		}

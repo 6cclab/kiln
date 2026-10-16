@@ -197,7 +197,10 @@ const maxAutoContext = 32_768
 // /api/ps's context_length (a resident model's CURRENT serving window) is
 // deliberately not consulted: now that every request carries its own
 // num_ctx, the next request is what sets the window, not whatever an
-// earlier caller happened to load the model with.
+// earlier caller happened to load the model with. /api/ps itself is used
+// elsewhere (Provider.Resident below), but only to tell which models are
+// loaded right now, for the one-model-per-host collapse
+// (internal/router/local.go) -- never for sizing a window.
 func ResolveContextWindow(args ResolveContextWindowArgs) int {
 	if n, ok := numCtxFromParameters(args.ShowParameters); ok {
 		return capAtTraining(n, args.TrainingContext)
@@ -426,6 +429,66 @@ func New(opts Options) *Provider {
 
 func (p *Provider) ID() string   { return ProviderID }
 func (p *Provider) Name() string { return "Ollama" }
+
+// BaseURL is this provider's configured host, for a caller that reports a
+// refresh failure by name (the model router's fallback note: "ollama at
+// <url> unreachable: …", internal/cli/modelrouter.go). Not part of the
+// provider.Provider interface; callers detect it with an interface
+// assertion so they stay provider-agnostic otherwise.
+func (p *Provider) BaseURL() string { return p.opts.baseURL() }
+
+// Host implements provider.SelfHosted: the provider ID plus the
+// normalised base URL. Every model this provider serves shares one Host
+// value, since there is one Ollama provider (and so one host) per
+// process.
+func (p *Provider) Host(provider.Model) string {
+	return ProviderID + " " + p.opts.baseURL()
+}
+
+// residentTimeout bounds Resident's /api/ps call: it reads from memory,
+// not a model's own generation path, so it should answer fast, and a
+// hung or overloaded server must not block the one-model-per-host
+// collapse at startup.
+const residentTimeout = 2 * time.Second
+
+// psModel is one entry of /api/ps's "models" array.
+type psModel struct {
+	Model string `json:"model"`
+}
+
+type psResponse struct {
+	Models []psModel `json:"models"`
+}
+
+// Resident implements provider.SelfHosted via GET /api/ps -- the one
+// place this provider calls it; see the ResolveContextWindow doc comment
+// above for why windows never read it. Ids are normalised the same way a
+// trailing ":latest" is handled elsewhere in this package, in case
+// /api/ps's "model" field carries it where /api/tags' does not (or vice
+// versa) for the same tag.
+func (p *Provider) Resident(ctx context.Context) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, residentTimeout)
+	defer cancel()
+	client := &http.Client{Timeout: residentTimeout}
+	if p.opts.HTTPClient != nil {
+		client.Transport = p.opts.HTTPClient.Transport
+	}
+	var ps psResponse
+	if err := getJSON(ctx, client, p.opts.baseURL(), "/api/ps", p.opts.APIKey, "", nil, &ps); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(ps.Models))
+	for _, m := range ps.Models {
+		ids = append(ids, normalizeModelID(m.Model))
+	}
+	return ids, nil
+}
+
+// normalizeModelID trims a trailing ":latest" tag, so a bare model name
+// from one endpoint compares equal to the explicit-tag form from another.
+func normalizeModelID(id string) string {
+	return strings.TrimSuffix(id, ":latest")
+}
 
 func (p *Provider) Auth() provider.AuthSpec {
 	return provider.AuthSpec{Kind: provider.AuthKindAPIKey, EnvVars: []string{"OLLAMA_HOST"}}

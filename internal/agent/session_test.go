@@ -384,8 +384,8 @@ func TestSetModelSwitchesLaneAndCompaction(t *testing.T) {
 	if !sawCompactionUpdate {
 		t.Fatal("SetModel did not emit a compactionSettings config_update event")
 	}
-	if started.Tier.Name != "large" {
-		t.Fatalf("started.Tier.Name = %q, want large", started.Tier.Name)
+	if started.CurrentTier().Name != "large" {
+		t.Fatalf("started.CurrentTier().Name = %q, want large", started.CurrentTier().Name)
 	}
 	if started.Model.ID != "faux-2" {
 		t.Fatalf("started.Model.ID = %q, want faux-2", started.Model.ID)

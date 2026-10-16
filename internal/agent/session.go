@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -128,7 +129,12 @@ type Started struct {
 	// TranscriptPath is the absolute path of this session's JSONL log.
 	TranscriptPath string
 	Model          provider.Model
-	Tier           budget.Tier
+	// tier is the budget tier the session is currently sized for
+	// (CurrentTier). Retier moves it, from /model's goroutine or, on a
+	// virtual model, the lane's own when a request is routed to a model
+	// with a different window.
+	tierMu sync.Mutex
+	tier   budget.Tier
 	// Created reports whether Start created a brand-new session file
 	// (true) or opened/forked an existing one (false).
 	Created bool
@@ -138,6 +144,41 @@ type Started struct {
 	// hooks this to re-gate active tools against the new tier's strategy;
 	// SetModel itself does not touch ActiveToolNames.
 	OnModelChanged func(ctx context.Context, resolved provider.Resolved)
+
+	// OnTierChanged, if set, is called by Retier once the harness's own
+	// budgets (compaction, tool output) follow tier: the caller re-sizes
+	// what it built from the tier (the system prompt, the task tool's
+	// text). On a virtual model it runs on the lane's goroutine, before
+	// the routed request is built, so it must not block on the UI and
+	// should do no disk IO.
+	OnTierChanged func(ctx context.Context, tier budget.Tier)
+}
+
+// CurrentTier is the budget tier the session is sized for now: the
+// resolved model's at Start, the new model's after /model, and on a
+// virtual model (kiln/auto) the tier of the model its last request was
+// routed to.
+func (s *Started) CurrentTier() budget.Tier {
+	s.tierMu.Lock()
+	defer s.tierMu.Unlock()
+	return s.tier
+}
+
+// Retier sizes started for tier: the harness's compaction settings and
+// tool-output ceiling, the session's CurrentTier, then started's own
+// OnTierChanged for everything the caller built from the tier. /model
+// (SetModel) and, on a virtual model, every route to a model with a
+// different window (Start's OnRoute handler) go through it, so both
+// re-size the same budgets.
+func Retier(ctx context.Context, started *Started, tier budget.Tier) {
+	started.Harness.SetCompactionSettings(compactionFromTier(tier))
+	started.Harness.SetToolOutputTokens(tier.ToolOutputTokens)
+	started.tierMu.Lock()
+	started.tier = tier
+	started.tierMu.Unlock()
+	if started.OnTierChanged != nil {
+		started.OnTierChanged(ctx, tier)
+	}
 }
 
 // Start resolves which session file to open (or creates one), builds the
@@ -248,15 +289,29 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 		}
 	}
 
-	return &Started{
+	started := &Started{
 		Harness:        h,
 		Lane:           lane,
 		SessionID:      meta.ID,
 		TranscriptPath: meta.Path,
 		Model:          model,
-		Tier:           tier,
+		tier:           tier,
 		Created:        created,
-	}, nil
+	}
+	// On a virtual model (kiln/auto) the budgets follow the model each
+	// request is routed to, as pi's limits follow the physical model that
+	// answered: a route to a model whose window differs from the one the
+	// session is sized for re-sizes it before that request is built. Every
+	// session gets this, a subagent's included, each on its own harness.
+	h.Hooks().OnRoute(func(ctx context.Context, info harness.RouteInfo) error {
+		window := info.Model.ContextWindow
+		if window <= 0 || window == started.CurrentTier().ContextWindow {
+			return nil
+		}
+		Retier(ctx, started, budget.TierForWindow(window))
+		return nil
+	})
+	return started, nil
 }
 
 // ResumeIncomplete completes an operation a previous process left running
@@ -304,8 +359,9 @@ func ResumeIncomplete(ctx context.Context, started *Started, notice func(string)
 }
 
 // SetModel switches a started session's model, mirroring cli.ts's model
-// switch: the lane's own model configuration and the harness's compaction
-// settings both move to resolved's tier. Tool re-gating (which tools stay
+// switch: the lane's own model configuration moves to resolved, and every
+// tier-derived budget to resolved's tier (Retier, which also calls
+// started.OnTierChanged). Tool re-gating (which tools stay
 // active under the new tier's strategy) is left to started.OnModelChanged,
 // which SetModel calls last, if set.
 func SetModel(ctx context.Context, started *Started, resolved provider.Resolved) error {
@@ -316,9 +372,8 @@ func SetModel(ctx context.Context, started *Started, resolved provider.Resolved)
 	if err := started.Lane.SetModel(modelRef, ""); err != nil {
 		return fmt.Errorf("agent: switch model: %w", err)
 	}
-	started.Harness.SetCompactionSettings(compactionFromTier(resolved.Tier))
 	started.Model = resolved.Model
-	started.Tier = resolved.Tier
+	Retier(ctx, started, resolved.Tier)
 	if started.OnModelChanged != nil {
 		started.OnModelChanged(ctx, resolved)
 	}

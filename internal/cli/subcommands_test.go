@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 )
 
 // writeUserModelRouterSettings writes ~/.claude/settings.json with
@@ -182,6 +184,100 @@ func TestDoctor_NoModelRouterConfigured(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "modelRouter") {
 		t.Errorf("doctor output has an unwanted modelRouter line:\n%s", stdout.String())
+	}
+}
+
+// TestDoctor_ModelRouterFallbackLine checks /doctor reports a "modelRouter
+// fallback …" line when a defined role could not be used (here,
+// modelRoles.heavy names a real anthropic model but this scratch HOME has
+// no anthropic credentials), on top of its ordinary "modelRouter
+// kiln/auto: …" summary line. No modelRouter key is written at all (only
+// modelRoles): the fallback is reported because the role is defined, not
+// because the user wrote a modelRouter key — the gate this phase fixes.
+func TestDoctor_ModelRouterFallbackLine(t *testing.T) {
+	startFaux(t, unreadScript)
+	scratchProject(t)
+	home := os.Getenv("HOME")
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"modelRoles": {"structured": "faux/faux-1", "fast": "faux/faux-1", "heavy": "anthropic/claude-opus-5"}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	args := baseArgs()
+	var stdout, stderr bytes.Buffer
+	code := Doctor(context.Background(), args, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "modelRouter fallback") || !strings.Contains(out, "anthropic has no credentials") {
+		t.Errorf("doctor output missing the fallback line:\n%s", out)
+	}
+}
+
+// TestDoctor_ModelRouterLocalCollapseLine checks `kiln doctor` reports a
+// "modelRouter local …" line when a mixed-stack modelRoles collapses
+// kiln/auto onto one Ollama model (Design 1): buildRegistry's own Ollama
+// provider is pointed at a fake /api/tags+/api/show+/api/ps server via
+// OLLAMA_HOST (never the real one), matching chat_test.go's own
+// precedent for isolating it.
+func TestDoctor_ModelRouterLocalCollapseLine(t *testing.T) {
+	scratchProject(t)
+	srv, _ := newFakeOllama(t, []fakeOllamaModel{
+		chatModel("qwen3.8"), chatModel("qwen3:30b-a3b"), chatModel("gpt-oss:20b"),
+	}, []string{"qwen3.8"})
+	t.Setenv("OLLAMA_HOST", srv.URL)
+
+	home := os.Getenv("HOME")
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"modelRoles": {"fast": "ollama/qwen3.8", "structured": "ollama/qwen3:30b-a3b", "heavy": "ollama/gpt-oss:20b"}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	args := baseArgs()
+	var stdout, stderr bytes.Buffer
+	code := Doctor(context.Background(), args, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "modelRouter local") || !strings.Contains(out, "one model loaded") || !strings.Contains(out, "qwen3.8") {
+		t.Errorf("doctor output missing the local-collapse line:\n%s", out)
+	}
+	// The note is informational: shown once, on its own line, and not
+	// again under the problems list.
+	if n := strings.Count(out, "keeps one model loaded"); n != 1 {
+		t.Errorf("the local-collapse note appears %d times, want once:\n%s", n, out)
+	}
+	if strings.Contains(out, "  - kiln/auto: the ") {
+		t.Errorf("the local-collapse note is listed as a problem:\n%s", out)
+	}
+}
+
+// TestKilnAutoUnavailable_DefinedFastWithNoCredentials: modelRoles.fast is
+// defined (the implement/direct slots' default role) but its provider has
+// no credentials, so kiln/auto never registers — and, since the role is
+// defined (not merely left at an untouched default), it still warns
+// (today's "kiln/auto is not available" gate used to require an explicit
+// modelRouter key; this is the same bug this phase fixes for every other
+// slot).
+func TestKilnAutoUnavailable_DefinedFastWithNoCredentials(t *testing.T) {
+	reg := routerRegistry(t)
+	cfg := claudesettings.ModelRouterConfig{ModelRoles: map[string]string{"fast": "paid/big"}}
+	s, warnings := runSetup(t, reg, cfg)
+	if s.Registered {
+		t.Fatalf("router registered: %+v, want kiln/auto unavailable", s.Targets)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "kiln/auto is not available") {
+		t.Errorf("warnings = %q, want one \"kiln/auto is not available\" warning", warnings)
 	}
 }
 
