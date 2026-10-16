@@ -39,6 +39,16 @@ func TestRenderGolden_StatusLineCtx80Cost(t *testing.T) {
 	assertRenderGolden(t, "status-line-ctx80-cost", []string{RenderStatusLine(s, 80)})
 }
 
+// TestRenderGolden_StatusLineSubcentCost pins
+// qa/findings/20261016T122837Z-cost-session-rounds-away-subcent.json: a
+// nonzero cost under a cent must not render as "$0.00" in the footer, the
+// way $0.0011 did next to the design's two-decimal format.
+func TestRenderGolden_StatusLineSubcentCost(t *testing.T) {
+	withRenderEnv(t, 80)
+	s := StatusState{Mode: "manual", Cwd: "~/src/relay-api", Git: &GitStatus{Branch: "main"}, ContextWindow: 200_000, Cost: 0.0011}
+	assertRenderGolden(t, "status-line-subcent-cost", []string{RenderStatusLine(s, 80)})
+}
+
 // TestRenderGolden_StatusLineAutoNoRoute: kiln/auto before its first
 // routed request renders as plain "auto" — no "→", since there is
 // nothing routed yet.

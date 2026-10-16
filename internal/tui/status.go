@@ -5,6 +5,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"github.com/andrepato/harness/internal/money"
 )
 
 // The status line — one row, ported from the kiln design handoff's "Status
@@ -332,7 +334,7 @@ func RenderStatusLine(s StatusState, width int) string {
 	// Always shown, including $0.00 (design scene 01) — cost is part of the
 	// dashboard even before anything has been spent, not hidden until it
 	// is nonzero.
-	costSeg := Muted(fmt.Sprintf("$%.2f", s.Cost))
+	costSeg := Muted(money.USD(s.Cost))
 
 	// build tries, in order: the full cwd, a left-shortened cwd sized to
 	// whatever room is left once the mode segment, branch and right side

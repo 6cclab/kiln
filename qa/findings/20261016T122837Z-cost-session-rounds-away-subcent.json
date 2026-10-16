@@ -15,9 +15,15 @@
  "evidence": [
   "qa/runs/model-router-iterm-20261016T122749Z/iterm-dark/commands-model-router-120x40/02-cost-switches.png"
  ],
- "status": "open",
+ "status": "fixed",
  "fix": {
   "note": "Pre-existing: /cost \"Session: $%.2f\" is on main (internal/commands/builtins.go); the new re-billed line copies that precision.",
-  "updated_at": "2026-10-16T12:30:01Z"
+  "updated_at": "2026-10-16T20:04:17Z",
+  "files": [
+   "internal/money/money.go",
+   "internal/commands/builtins.go",
+   "internal/tui/status.go"
+  ],
+  "regression_test": "TestUSD,TestCostCommand_SubcentSessionNotZero,TestRenderGolden_StatusLineSubcentCost"
  }
 }
