@@ -1,0 +1,24 @@
+# kiln/auto with modelRoles structured=faux-1 (plan) and fast=faux-2
+# (implement): faux-1 plans, reads the file and makes the first edit; the
+# request after the edit's successful result goes to faux-2, and the
+# session stays there (a resumed turn too).
+models:
+  faux-1:
+    - tool_call: {name: read, args: {path: src/math.js}, id: tc1}
+    - on_tool_result: tc1
+      then:
+        - tool_call:
+            name: edit
+            args:
+              path: src/math.js
+              edits:
+                - oldText: "return a - b;"
+                  newText: "return a + b;"
+            id: tc2
+  faux-2:
+    - on_tool_result: tc2
+      then:
+        - text: "Fixed."
+          end_turn: true
+    - text: "Still implementing."
+      end_turn: true

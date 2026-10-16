@@ -28,9 +28,10 @@ const (
 
 // autoCompact checks whether the lane's branch at tip has crossed the
 // configured compaction threshold and, if so, runs one compaction pass. It
-// is called before an operation's first request and at the end of each
-// tool step in drive(). Compaction is best-effort, a run's assistant
-// response is not (pi's behaviour), so a failure does not fail the run:
+// is called before an operation's first request and before the request
+// after each tool step in drive(), once that request is routed.
+// Compaction is best-effort, a run's assistant response is not (pi's
+// behaviour), so a failure does not fail the run:
 // autoCompact returns it as a *CompactionFailedError for drive to report
 // once it knows whether the request recovered (fitRequest may still
 // compact it to fit, see drive).
@@ -38,7 +39,10 @@ const (
 // compaction ran, or the new compaction entry's id if one did (the caller
 // must update its own tip bookkeeping, since this commits directly to
 // storage rather than through drive()'s normal write sequence).
-func (l *Lane) autoCompact(ctx context.Context, tip string) (string, error) {
+//
+// target is the model the next request goes to: the threshold is its
+// window, so a virtual lane routed to a smaller model compacts first.
+func (l *Lane) autoCompact(ctx context.Context, tip string, target routed) (string, error) {
 	if !l.h.opts.Compaction.Enabled {
 		return tip, nil
 	}
@@ -46,19 +50,19 @@ func (l *Lane) autoCompact(ctx context.Context, tip string) (string, error) {
 	if err != nil {
 		return tip, nil
 	}
-	_, cfg, err := l.resolveModel()
+	cfg, err := l.config()
 	if err != nil {
 		return tip, nil
 	}
-	model, ok := l.h.opts.Registry.GetModel(cfg.Model.Provider, cfg.Model.ModelID)
-	if !ok {
-		return tip, nil
-	}
 	usage := compaction.CalculateContextTokens(pathEntries)
-	if !compaction.ShouldCompact(usage.Tokens, model.ContextWindow, l.h.opts.Compaction) {
+	if !compaction.ShouldCompact(usage.Tokens, target.Model.ContextWindow, l.h.opts.Compaction) {
 		return tip, nil
 	}
-	if err := l.runCompaction(ctx, pathEntries, model, cfg, nil, TriggerAuto); err != nil {
+	summariser, err := l.summariser(ctx, target, entriesToTranscript(pathEntries))
+	if err != nil {
+		return tip, &CompactionFailedError{Err: err}
+	}
+	if err := l.runCompaction(ctx, pathEntries, summariser, target.streamConfig(cfg), nil, TriggerAuto); err != nil {
 		if ctx.Err() != nil { // an interrupted turn is not a compaction fault
 			return tip, nil
 		}
@@ -115,7 +119,8 @@ const compactionAttempts = 2
 
 // runCompaction is the shared body of Lane.Compact and autoCompact: prepare
 // the cut point, call summariser to summarize, and commit the resulting
-// session.EntryCompaction. summariser is normally the lane's own model;
+// session.EntryCompaction. summariser is normally the lane's own model,
+// or on a virtual lane the model its router picks for a direct request;
 // Lane.CompactWith may name another. The cut point and the summary's size
 // always come from the harness's compaction settings, which follow the
 // lane's current model: the result has to fit that model, whoever writes it.
@@ -311,30 +316,36 @@ func (l *Lane) requestLimit(model provider.Model) int {
 // fits the model's window: if it does not, it compacts once (when the
 // operation has not already) and checks again. It returns the tip, which
 // moves if a compaction ran, and the transcript to send, or a
-// *ContextOverflowError when nothing more can be done.
-func (l *Lane) fitRequest(ctx context.Context, tip string, recoveryUsed *bool) (string, []msg.Message, error) {
+// *ContextOverflowError when nothing more can be done. target is the
+// model the request goes to.
+func (l *Lane) fitRequest(ctx context.Context, tip string, recoveryUsed *bool, target routed) (string, []msg.Message, error) {
 	for {
 		entries, err := l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "oldestFirst"})
 		if err != nil {
 			return tip, nil, err
 		}
 		transcript := l.invokeTransformContext(ctx, entriesToTranscript(entries))
-		model, cfg, err := l.resolveModel()
+		cfg, err := l.config()
 		if err != nil {
 			return tip, nil, err
 		}
+		model := target.Model
 		limit := l.requestLimit(model)
 		tokens := l.requestTokens(transcript)
 		if limit <= 0 || tokens <= limit {
 			return tip, transcript, nil
 		}
-		overflow := &ContextOverflowError{Model: cfg.Model.Provider + "/" + cfg.Model.ModelID, Tokens: tokens, Limit: limit, Window: model.ContextWindow}
+		overflow := &ContextOverflowError{Model: model.Provider + "/" + model.ID, Tokens: tokens, Limit: limit, Window: model.ContextWindow}
 		if *recoveryUsed || !l.h.opts.Compaction.Enabled {
 			return tip, nil, overflow
 		}
 		*recoveryUsed = true
 		before, _ := l.GetTipID()
-		if err := l.runCompaction(ctx, entries, model, cfg, nil, TriggerOverflow); err != nil {
+		summariser, err := l.summariser(ctx, target, entriesToTranscript(entries))
+		if err != nil {
+			return tip, nil, fmt.Errorf("%w (compacting it failed: %v)", overflow, err)
+		}
+		if err := l.runCompaction(ctx, entries, summariser, target.streamConfig(cfg), nil, TriggerOverflow); err != nil {
 			if ctx.Err() != nil {
 				return tip, nil, ctx.Err()
 			}
@@ -361,8 +372,8 @@ func isContextOverflow(err error) bool {
 
 // compactForOverflow compacts the branch at tip now, after a provider
 // refused a request as too large. It reports the new tip and whether a
-// compaction entry was written.
-func (l *Lane) compactForOverflow(ctx context.Context, tip string) (string, bool) {
+// compaction entry was written. target is the request that overflowed.
+func (l *Lane) compactForOverflow(ctx context.Context, tip string, target routed) (string, bool) {
 	if !l.h.opts.Compaction.Enabled {
 		return tip, false
 	}
@@ -370,11 +381,16 @@ func (l *Lane) compactForOverflow(ctx context.Context, tip string) (string, bool
 	if err != nil {
 		return tip, false
 	}
-	model, cfg, err := l.resolveModel()
+	cfg, err := l.config()
 	if err != nil {
 		return tip, false
 	}
-	if err := l.runCompaction(ctx, entries, model, cfg, nil, TriggerOverflow); err != nil {
+	summariser, err := l.summariser(ctx, target, entriesToTranscript(entries))
+	if err != nil {
+		l.h.events.Emit(Event{Type: EventFault, Lane: l.name, Err: fmt.Errorf("harness: overflow compaction failed: %w", err)})
+		return tip, false
+	}
+	if err := l.runCompaction(ctx, entries, summariser, target.streamConfig(cfg), nil, TriggerOverflow); err != nil {
 		l.h.events.Emit(Event{Type: EventFault, Lane: l.name, Err: fmt.Errorf("harness: overflow compaction failed: %w", err)})
 		return tip, false
 	}

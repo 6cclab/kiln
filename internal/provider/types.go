@@ -32,6 +32,10 @@ const (
 	ApiBedrockConverseStream Api = "bedrock-converse-stream"
 	ApiMistralConversations  Api = "mistral-conversations"
 	ApiPiMessages            Api = "pi-messages"
+	// ApiVirtual marks a virtual model: a catalog entry whose router picks
+	// a physical model for every request (internal/router). No provider
+	// streams it. pi's VIRTUAL_MODEL_API ("pi-virtual").
+	ApiVirtual Api = "kiln-virtual"
 )
 
 // ThinkingLevel is a reasoning effort level a model can be asked for.

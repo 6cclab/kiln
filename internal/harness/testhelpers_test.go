@@ -39,6 +39,14 @@ func newTestRig(t *testing.T, scriptYAML string, activeTools []string) *testRig 
 // real, unwrapped *jsonl.Storage, for assertions against the file on disk.
 func newTestRigWithStorage(t *testing.T, scriptYAML string, activeTools []string, wrap func(session.Storage) session.Storage) *testRig {
 	t.Helper()
+	return newTestRigWith(t, scriptYAML, activeTools, wrap, nil)
+}
+
+// newTestRigWith is newTestRigWithStorage with a last say over the
+// Harness: setup, when non-nil, may change the options and register more
+// providers before the Harness is built.
+func newTestRigWith(t *testing.T, scriptYAML string, activeTools []string, wrap func(session.Storage) session.Storage, setup func(*Options, *provider.Registry)) *testRig {
+	t.Helper()
 
 	fauxSrv, err := tkfaux.New(tkfaux.Options{ScriptYAML: scriptYAML})
 	if err != nil {
@@ -83,7 +91,7 @@ func newTestRigWithStorage(t *testing.T, scriptYAML string, activeTools []string
 		wrapped = wrap(storage)
 	}
 
-	h, err := New(Options{
+	opts := Options{
 		Storage:         wrapped,
 		Registry:        registry,
 		Model:           session.ModelRef{Provider: fauxprovider.ProviderID, ModelID: fauxprovider.ModelID},
@@ -92,7 +100,11 @@ func newTestRigWithStorage(t *testing.T, scriptYAML string, activeTools []string
 		ActiveToolNames: activeTools,
 		SystemPrompt:    "test harness",
 		Cwd:             cwd,
-	})
+	}
+	if setup != nil {
+		setup(&opts, registry)
+	}
+	h, err := New(opts)
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}

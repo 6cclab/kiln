@@ -95,6 +95,14 @@ type registryDeps struct {
 	// UsageByModel reports this session's accumulated usage keyed by
 	// "provider/model", for /cost's by-model table. Nil when not tracked.
 	UsageByModel func() map[string]msg.Usage
+	// RouterCostStats reports the model router's switch count and
+	// estimated cache re-billing this session, for /cost's "switches N ·
+	// cache re-billed ~$X" line. Nil when not tracked.
+	RouterCostStats func() (switches int, cacheRebilled float64)
+	// RouterAutoDescribe is kiln/auto's role summary ("plan→<model> ·
+	// complex→<model> · implement→<model>", router.Targets.Describe),
+	// "" when kiln/auto is not registered this run.
+	RouterAutoDescribe string
 	// SessionStartedAt is when this session's Run began (captured right
 	// around agent.Start in chat.go), for /cost's one-line design summary
 	// ("... · 71s", Terminal.dc.html:320) via BuiltinDeps.SessionElapsed.
@@ -212,10 +220,12 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		SwitchModel: func(ctx context.Context, providerID, modelID string) (budget.Tier, error) {
 			return switchModel(ctx, reg, started, mcpSess, providerID, modelID)
 		},
-		Agents:           deps.Agents,
-		SessionsDir:      deps.SessionsDir,
-		UsageByModel:     deps.UsageByModel,
-		AutoMemoryStatus: func() string { return deps.AutoMemoryStatus },
+		Agents:             deps.Agents,
+		SessionsDir:        deps.SessionsDir,
+		UsageByModel:       deps.UsageByModel,
+		RouterCostStats:    deps.RouterCostStats,
+		RouterAutoDescribe: deps.RouterAutoDescribe,
+		AutoMemoryStatus:   func() string { return deps.AutoMemoryStatus },
 		SessionElapsed: func() time.Duration {
 			if deps.SessionStartedAt.IsZero() {
 				return 0

@@ -58,6 +58,7 @@ import (
 	"github.com/andrepato/harness/internal/provider/builtin"
 	fauxprovider "github.com/andrepato/harness/internal/provider/faux"
 	"github.com/andrepato/harness/internal/provider/ollama"
+	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/search"
 	"github.com/andrepato/harness/internal/session/jsonl"
 	"github.com/andrepato/harness/internal/tool"
@@ -107,8 +108,9 @@ func ollamaOptionsFromEnv() ollama.Options {
 	return ollama.Options{URL: url, ServerDefaultContext: serverDefault}
 }
 
-// refreshRoleProviders refreshes the model list of every provider a role
-// points at, other than the one already refreshed for the main model.
+// refreshRoleProvidersInto refreshes the model list of every provider a
+// role points at, other than the one already refreshed for the main
+// model (skip) or already refreshed into done.
 //
 // Without this a role on a dynamic provider that is not the parent's
 // (an Anthropic session with `fast: ollama/...`) has an empty model list
@@ -116,8 +118,20 @@ func ollamaOptionsFromEnv() ollama.Options {
 // the role never fires. Roles are fixed for the session, so once at
 // startup is enough; a failure is reported and otherwise ignored exactly
 // like the main refresh above.
-func refreshRoleProviders(ctx context.Context, reg *provider.Registry, roles map[string]string, skip string, stderr io.Writer) {
-	done := map[string]bool{skip: true}
+//
+// done is supplied by the caller (and mutated in place) so two role maps
+// that overlap in this run — the model router's own slot values and the
+// full modelRoles set refreshed again for subagent role validation —
+// refresh each provider at most once between them, not once per map.
+// Before this, setupModelRouter's internal refresh and chat.go's own (for
+// ValidateRoles) each started from an empty done set, so an Ollama role
+// shared by both refreshed twice at startup; pass nil for a one-off
+// caller with nothing else to dedup against.
+func refreshRoleProvidersInto(ctx context.Context, reg *provider.Registry, roles map[string]string, done map[string]bool, skip string, stderr io.Writer) {
+	if done == nil {
+		done = map[string]bool{}
+	}
+	done[skip] = true
 	for _, value := range roles {
 		providerID, _, ok := splitProviderModel(value)
 		if !ok || done[providerID] {
@@ -541,6 +555,21 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 
 	reg := buildRegistry()
+	// kiln/auto, the built-in virtual model, before the model is resolved:
+	// --model, settings or a resumed session may name it. Its settings
+	// come from user scope only (LoadModelRouter), through the same path
+	// `kiln models`/`kiln doctor` use (loadModelRouter, modelrouter.go).
+	// roleProvidersRefreshed is shared with the ValidateRoles refresh
+	// below, so a dynamic (Ollama) provider named by both the router's
+	// own slots and the full modelRoles set refreshes once, not twice.
+	roleProvidersRefreshed := map[string]bool{}
+	modelRouter := loadModelRouter(ctx, cwd, reg, settingsSources(args.SettingSources), args.Settings, startupWarn, stderr, roleProvidersRefreshed)
+	// routerAutoDescribe is "" unless kiln/auto is registered: /model and
+	// "kiln models" use it in place of kiln/auto's context/tier row.
+	routerAutoDescribe := ""
+	if modelRouter.Registered {
+		routerAutoDescribe = modelRouter.Targets.Describe()
+	}
 	var providerID, modelID string
 	var resolved provider.Resolved
 	var resolveErr error
@@ -560,9 +589,23 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				}
 			}
 			resolved, resolveErr = reg.Resolve(providerID, modelID)
+			if resolveErr != nil && providerID == router.AutoProvider && !modelRouter.Registered {
+				resolveErr = fmt.Errorf("%s is not available: %s", wanted, modelRouter.Reason)
+			}
 		}
 		if resolveErr == nil || restoring == "" || wanted != restoring {
 			break
+		}
+		// A virtual model that no longer resolves gives way to the
+		// physical model that answered last, as pi's getBranchSelection
+		// does: the conversation was last sized for it.
+		if providerID == router.AutoProvider {
+			if ref, ok := agent.ResumedLastPhysical(agent.Options{Cwd: cwd, Resume: args.Resume, ResumeLatest: args.ResumeLatest || args.ContinueLatest}); ok {
+				last := ref.Provider + "/" + ref.ModelID
+				startupWarn(fmt.Sprintf("Could not resume on this session's model %s (%v); using %s, the model that answered last.", restoring, resolveErr, last))
+				wanted, restoring = last, last
+				continue
+			}
 		}
 		// The session's model is gone (or refused): say so and carry on
 		// with the configured one, as pi does.
@@ -585,7 +628,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// comment). Not fatal: a bad role is a misconfiguration to fix, not a
 	// reason to refuse to start.
 	if len(settings.ModelRoles) > 0 {
-		refreshRoleProviders(ctx, reg, settings.ModelRoles, providerID, stderr)
+		refreshRoleProvidersInto(ctx, reg, settings.ModelRoles, roleProvidersRefreshed, providerID, stderr)
 		if available, err := reg.Available(ctx); err == nil {
 			var candidates []claudeagents.Candidate
 			for _, p := range available {
@@ -877,6 +920,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		SessionsRoot: sessionRepo.Root,
 		Env:          env,
 		OnEvent:      subagentEventSink(stderr),
+		Routers:      modelRouter.Routers,
+		Approved:     modelRouter.approved,
 	}
 	// Claude Code mods among the active plugins (hooks modules, run by
 	// internal/mods). Nil when none has one.
@@ -915,7 +960,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// (below), so planController.OnApprove — built here, before the lane
 	// exists — can revert the effort level when the plan it approves leaves
 	// plan mode.
-	baseEffort := effortOrSetting(args.Effort, settings.EffortLevel, resolved.Model.Api == provider.ApiAnthropicMessages)
+	baseEffort := effortOrSetting(args.Effort, settings.EffortLevel, effortSettingApplies(resolved.Model))
 	startEffort := baseEffort
 	planEffort := planEffortOverride()
 	if planEffort != "" && permissionMode == claudesettings.ModePlan {
@@ -1019,6 +1064,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Env:             env,
 		ExtraTools:      extraTools,
 		ActiveToolNames: mcpSess.activeToolNames(),
+		Routers:         modelRouter.Routers,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "kiln:", err)
@@ -1079,7 +1125,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			diag.L().Info("auto mode", "note", w)
 		}
 	}
-	wireAutoMode(gate, reg, started, memory.Text, autoModeConfig)
+	wireAutoMode(gate, reg, started, memory.Text, autoModeConfig, modelRouter.direct)
+	// The model router's own classifier (kiln/auto's first-request call on
+	// modelRoles.fast) is built in setupModelRouter, before the harness
+	// exists; its usage is wired in now, as auto mode's classifier's is
+	// above, so it reaches the session's cost (footer, /cost, resume).
+	modelRouter.wireClassifierUsage(started.Harness.RecordSideUsage)
 
 	if dir := setupScratchpad(gate, cwd, started.SessionID); dir != "" {
 		scratchpadPrompt = scratchpadInstructions(dir)
@@ -1186,9 +1237,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// usageByModel accumulates this session's usage per "provider/model",
 	// for /cost's by-model breakdown (internal/commands/builtins.go). The
 	// parent's own turns are added here from EventUsage's per-turn delta
-	// (UsageRow), keyed by started.Model at the time of the event — read
-	// live rather than captured once, so a /model switch mid-session
-	// attributes turns to whichever model actually ran them. A dispatched
+	// (UsageRow), keyed by the model that answered (creditUsage). A dispatched
 	// subagent's usage is added separately, from OnSubagentStop below,
 	// since that is the one dispatcher hook this file sets that neither
 	// print mode's subagentEventSink nor the TUI's bridge.SubagentSink
@@ -1209,16 +1258,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		addUsageAs(providerID+"/"+modelID, u)
 	}
 	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
-		if ev.SideUsage != nil {
-			// A call beside the conversation (auto mode's classifier),
-			// under its own label.
-			addUsageAs(ev.UsageSource, *ev.SideUsage)
-			return
-		}
-		if ev.UsageRow == nil {
-			return
-		}
-		addUsage(started.Model.Provider, started.Model.ID, *ev.UsageRow)
+		creditUsage(ev, started.Model.Provider, started.Model.ID, addUsageAs)
 	})
 	getUsageByModel := func() map[string]msg.Usage {
 		usageByModelMu.Lock()
@@ -1228,6 +1268,56 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			out[k] = v
 		}
 		return out
+	}
+
+	// Router switches and the cache re-billing they cause, for /cost's
+	// "switches N · cache re-billed ~$X" line: a virtual model's router
+	// (kiln/auto) can move a lane to a different physical model between
+	// requests (never mid-request), and the next request to the new
+	// model pays full price for the whole prompt a steady model would
+	// have served from cache. "direct" routes (compaction) are not a
+	// turn-loop switch and are excluded, matching the footer's own
+	// EventRoute filter (internal/tui/bridge.go). The re-billed estimate
+	// is the switched-to request's own reported Cost.Input: on a fresh
+	// model there is no cache to read from, so its whole uncached input
+	// is exactly the tokens that would otherwise have been a cheap cache
+	// read — mirroring pi's computeCacheWaste (interactive-mode.ts:6775-
+	// 6781), labelled "~" because, like pi's, it is an estimate for
+	// providers with no separate cache-write price.
+	var routerMu sync.Mutex
+	lastRouted := map[string]string{}  // lane -> "provider/id"
+	pendingRebill := map[string]bool{} // lane -> next usage row is a post-switch one
+	var routerSwitches int
+	var cacheRebilled float64
+	started.Harness.Events().On(harness.EventRoute, func(ev harness.Event) {
+		if ev.RouteReason == string(router.ReasonDirect) {
+			return
+		}
+		key := ev.RouteModel.Provider + "/" + ev.RouteModel.ModelID
+		routerMu.Lock()
+		if prev, ok := lastRouted[ev.Lane]; ok && prev != key {
+			routerSwitches++
+			pendingRebill[ev.Lane] = true
+		}
+		lastRouted[ev.Lane] = key
+		routerMu.Unlock()
+	})
+	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
+		if ev.UsageRow == nil {
+			return
+		}
+		routerMu.Lock()
+		defer routerMu.Unlock()
+		if !pendingRebill[ev.Lane] {
+			return
+		}
+		pendingRebill[ev.Lane] = false
+		cacheRebilled += ev.UsageRow.Cost.Input
+	})
+	getRouterCostStats := func() (switches int, rebilled float64) {
+		routerMu.Lock()
+		defer routerMu.Unlock()
+		return routerSwitches, cacheRebilled
 	}
 
 	settingsLoadedFrom := make([]string, 0, len(settings.LoadedFrom))
@@ -1364,6 +1454,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		ContextUsed:        contextUsed,
 		FileReadTokens:     getFileReadTokens,
 		UsageByModel:       getUsageByModel,
+		RouterCostStats:    getRouterCostStats,
+		RouterAutoDescribe: routerAutoDescribe,
 		SessionStartedAt:   sessionStartedAt,
 		MCPConfigPath:      mcpgate.ConfigPath(args.MCPConfig),
 		AutoMemoryStatus:   autoMemory.StatusLine(),
@@ -2102,4 +2194,40 @@ func effortOrSetting(flag, setting string, claudeModel bool) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(setting))
+}
+
+// effortSettingApplies is effortOrSetting's claudeModel argument for the
+// session's resolved model: a physical Claude model, or a virtual model
+// (kiln/auto) whose targets may themselves be Claude models. A virtual
+// model is never itself provider.ApiAnthropicMessages, so without this
+// the setting was silently dropped on kiln/auto even when every one of
+// its targets was Claude. provider.ClampThinkingLevel (via
+// router.Set.Resolve) fits the level to whichever target a request
+// actually routes to, including stepping it down to "off" for a
+// non-reasoning target.
+func effortSettingApplies(m provider.Model) bool {
+	return m.Api == provider.ApiAnthropicMessages || provider.IsVirtual(m)
+}
+
+// creditUsage files one EventUsage under the model it belongs to, through
+// add: a side call under its own label, a turn under the model that
+// answered it (UsageModel). An event that names no model falls back to the
+// session's model, providerID/modelID, read when the event arrives so a
+// /model switch mid-session still counts. Crediting every turn to the
+// session's model filed a request a router sent elsewhere under the wrong
+// model.
+func creditUsage(ev harness.Event, providerID, modelID string, add func(key string, u msg.Usage)) {
+	if ev.SideUsage != nil {
+		// A call beside the conversation (auto mode's classifier),
+		// under its own label.
+		add(ev.UsageSource, *ev.SideUsage)
+		return
+	}
+	if ev.UsageRow == nil {
+		return
+	}
+	if ev.UsageModel != nil {
+		providerID, modelID = ev.UsageModel.Provider, ev.UsageModel.ModelID
+	}
+	add(providerID+"/"+modelID, *ev.UsageRow)
 }

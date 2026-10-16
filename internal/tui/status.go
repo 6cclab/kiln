@@ -46,6 +46,14 @@ type StatusState struct {
 	// state because callers (MsgThinking) still set it and other code may
 	// read it back via FooterState.State().
 	Thinking bool
+	// RoutedModel/RoutedLevel report the latest EventRoute for a virtual
+	// model (kiln/auto): RoutedModel is the physical model id the last
+	// request actually went to, RoutedLevel its (possibly clamped)
+	// thinking level, "" when the router reported none. Both are ""
+	// before the first routed request, so a physical-model session's
+	// render is untouched.
+	RoutedModel string
+	RoutedLevel string
 	// StartedAt is session start; RenderStatusLine no longer shows an
 	// elapsed clock (kept for callers that still read it).
 	StartedAt time.Time
@@ -338,23 +346,45 @@ func RenderStatusLine(s StatusState, width int) string {
 	// banner's "· model <m>" shows. It outlives cost when the row is tight
 	// (after a /model switch, which model is answering matters more than the
 	// running spend) but gives way before cwd · branch.
+	// routeSuffix renders " → <model>[ • <level>]" for the full model
+	// segment, Muted on the arrow and separator, Ink on the names ("->"
+	// in plain mode, per the design's Action glyph).
+	arrow := "→"
+	if p {
+		arrow = "->"
+	}
+	levelSuffix := func() string {
+		if s.RoutedLevel == "" {
+			return ""
+		}
+		return Muted(" • ") + Muted(s.RoutedLevel)
+	}
 	modelSeg := ""
 	if s.ModelLabel != "" {
 		modelSeg = Ink(s.ModelLabel)
+		if s.RoutedModel != "" {
+			modelSeg += Muted(" "+arrow+" ") + Ink(s.RoutedModel) + levelSuffix()
+		}
+	}
+	// modelSegCollapsed is just the routed model id, for a row too tight
+	// for the full "auto → model" segment.
+	modelSegCollapsed := modelSeg
+	if s.RoutedModel != "" {
+		modelSegCollapsed = Ink(s.RoutedModel) + levelSuffix()
 	}
 
 	// needLoc: refuse a row that would only fit by dropping the location
 	// entirely, so a tight row gives up cost, then the model, before the
 	// cwd · branch (defect: a long cwd blanked the branch too).
-	build := func(includeCost, includeModel, needLoc bool) string {
+	build := func(includeCost, includeModel, needLoc bool, modelVariant string) string {
 		r := ctxSeg
 		if includeCost {
 			r += "  " + costSeg
 		}
 		rw := VisibleWidth(r)
 		model := ""
-		if includeModel && modelSeg != "" {
-			model = "  " + modelSeg
+		if includeModel && modelVariant != "" {
+			model = "  " + modelVariant
 		}
 		lwMode := VisibleWidth(modeSeg) + VisibleWidth(model)
 
@@ -394,10 +424,17 @@ func RenderStatusLine(s StatusState, width int) string {
 	// trying {cost, no model} before giving up on cost let a wider row
 	// drop cost while a narrower one kept it by keeping the model instead,
 	// qa/findings/20261004T204953Z-narrow-footer-and-panel-clipping.json).
-	for _, try := range []struct{ cost, model, needLoc bool }{
-		{true, true, true}, {false, true, true}, {false, false, true}, {false, false, false},
+	for _, try := range []struct {
+		cost, model, needLoc bool
+		variant              string
+	}{
+		{true, true, true, modelSeg},
+		{false, true, true, modelSeg},
+		{false, true, true, modelSegCollapsed},
+		{false, false, true, ""},
+		{false, false, false, ""},
 	} {
-		if out := build(try.cost, try.model, try.needLoc); out != "" {
+		if out := build(try.cost, try.model, try.needLoc, try.variant); out != "" {
 			return out
 		}
 	}

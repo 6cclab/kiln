@@ -49,6 +49,12 @@ func subscriptionProviders(reg *provider.Registry) []string {
 // is currently configured.
 func Providers(ctx context.Context, stdout, stderr io.Writer) int {
 	reg := buildRegistry()
+	// kiln/auto's provider ("kiln"), through the same path startup uses
+	// (loadModelRouter), so it is listed exactly when a session would
+	// actually get it.
+	if cwd, err := os.Getwd(); err == nil {
+		loadModelRouter(ctx, cwd, reg, nil, "", func(string) {}, nil, nil)
+	}
 	statuses := authlogin.Status(ctx, reg, reg.Credentials())
 	subs := subscriptionProviders(reg)
 
@@ -80,6 +86,17 @@ func truncateString(s string, n int) string {
 // small to run) why it is listed as unusable rather than hidden.
 func Models(ctx context.Context, stdout, stderr io.Writer, providerID string) int {
 	reg := buildRegistry()
+	// kiln/auto, through the same path startup uses (loadModelRouter), so
+	// it is listed in the table below exactly when a session would
+	// actually get it, before providerID/available filtering so
+	// `kiln models kiln` finds the provider it just registered.
+	// roleProvidersRefreshed is shared with the roles-table refresh below,
+	// so a provider both calls would touch (e.g. an Ollama role used by
+	// both the router and a plain modelRoles entry) refreshes once.
+	roleProvidersRefreshed := map[string]bool{}
+	if cwd, err := os.Getwd(); err == nil {
+		loadModelRouter(ctx, cwd, reg, nil, "", func(string) {}, nil, roleProvidersRefreshed)
+	}
 
 	if providerID != "" {
 		p, ok := reg.Provider(providerID)
@@ -152,7 +169,7 @@ func Models(ctx context.Context, stdout, stderr io.Writer, providerID string) in
 	if cwd, err := os.Getwd(); err == nil {
 		settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{Trusted: folderTrusted(cwd), Headless: true})
 		if len(settings.ModelRoles) > 0 {
-			refreshRoleProviders(ctx, reg, settings.ModelRoles, providerID, nil)
+			refreshRoleProvidersInto(ctx, reg, settings.ModelRoles, roleProvidersRefreshed, providerID, nil)
 			var all []provider.Model
 			for _, p := range available {
 				for _, m := range p.Models() {
@@ -288,6 +305,24 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	var problems []string
 
 	reg := buildRegistry()
+	// kiln/auto, through the same path startup uses (loadModelRouter):
+	// its warnings (an unresolved slot, a role naming no usable model)
+	// become doctor problems, and its Configured gate is doctor's own
+	// gate for printing a modelRouter line at all — quiet when the user
+	// set up nothing for it to read, same as the roles table below.
+	var routerWarnings []string
+	// roleProvidersRefreshed is shared with the roles-table refresh
+	// below, so a provider both calls would touch refreshes once.
+	roleProvidersRefreshed := map[string]bool{}
+	modelRouter := loadModelRouter(ctx, cwd, reg, settingsSources(args.SettingSources), args.Settings, func(w string) { routerWarnings = append(routerWarnings, w) }, nil, roleProvidersRefreshed)
+	problems = append(problems, routerWarnings...)
+	if modelRouter.Configured {
+		if modelRouter.Registered {
+			lines = append(lines, "modelRouter kiln/auto: "+modelRouter.Targets.Describe())
+		} else {
+			lines = append(lines, "modelRouter not available: "+modelRouter.Reason)
+		}
+	}
 	var strategy budget.ToolStrategy
 	providerID, modelID, ok := splitProviderModel(wanted)
 	if ok {
@@ -304,7 +339,7 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	}
 
 	if len(settings.ModelRoles) > 0 {
-		refreshRoleProviders(ctx, reg, settings.ModelRoles, providerID, nil)
+		refreshRoleProvidersInto(ctx, reg, settings.ModelRoles, roleProvidersRefreshed, providerID, nil)
 		if available, err := reg.Available(ctx); err == nil {
 			var candidates []claudeagents.Candidate
 			var models []provider.Model

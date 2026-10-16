@@ -1,7 +1,6 @@
 package agents
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -217,19 +216,6 @@ const (
 	// resolved, so the parent's model was kept.
 	ResolveFallback ResolveKind = "fallback"
 )
-
-// Chooser is the seam for a future classifier that picks a model role
-// (e.g. "fast", "heavy") from a subagent's description and prompt, rather
-// than requiring every agent definition to spell out its own `model:`.
-// ResolveModel does not call this in this phase - it is defined so that
-// seam exists on the API, and ships unused; a nil Chooser is the correct
-// value everywhere today, and callers should treat it as "inherit".
-type Chooser interface {
-	// Choose returns a role name (a key ResolveModel would look up in its
-	// roles map) for the given subagent description/prompt, or ok=false to
-	// mean "no opinion, inherit".
-	Choose(ctx context.Context, description, prompt string) (role string, ok bool)
-}
 
 // builtinAliasRoles maps Claude Code's Anthropic-shaped bare aliases onto
 // this harness's own role names, so a definition that says "model: sonnet"

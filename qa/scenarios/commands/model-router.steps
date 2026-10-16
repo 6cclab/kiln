@@ -1,0 +1,42 @@
+# kiln/auto's built-in model router (internal/router/auto.go, a port of
+# pi's jev-router), driven live end to end: faux-1 plans and edits
+# src/math.js; the request after the edit's successful result moves to
+# faux-2 and the session stays there. Settings mirror test/e2e/
+# router_behaviour_test.go's routerRoles const: modelRoles maps
+# structured/fast to faux-1/faux-2, classifier off (this fixture scripts
+# no classifier call) — written to $HOME/.kiln/settings.json, the
+# kiln-specific overlay LoadModelRouter also reads.
+@faux testdata/faux/router-plan-implement.yaml
+@args --model kiln/auto --permission-mode bypassPermissions
+@setup mkdir -p {HOME}/.kiln
+@setup printf '{"modelRoles": {"structured": "faux/faux-1", "fast": "faux/faux-2"}, "modelRouter": {"classifier": false}}' > {HOME}/.kiln/settings.json
+@setup mkdir -p {PROJ}/src
+@setup printf 'function add(a, b) {\n  return a - b;\n}\n\nfunction mul(a, b) {\n  return a * b;\n}\n' > {PROJ}/src/math.js
+
+WAITFOR /describe a task/ 20
+SEND fix the bug in src/math.js
+# The faux fixture answers fast enough on localhost that the whole chain
+# (plan on faux-1, read, edit, switch to faux-2, "Fixed.") settles before
+# a screen poll ever catches the transient "kiln/auto → faux-1" frame —
+# the same class of race tui_design_test.go's streaming scene flags for
+# this reason (text arriving faster than WAITFOR can observe a mid-state).
+# The plan-on-faux-1 step is proven instead by test/e2e/
+# router_behaviour_test.go's TestRouter_PlanThenImplement, which asserts
+# the faux server's own request log (not the screen) got faux-1 twice
+# before faux-2 — this scenario only asserts what the screen can actually
+# observe: the settled, post-switch state.
+WAITFOR /Fixed\./ 20
+SHOT routed-implement
+EXPECT /kiln\/auto → faux-2/
+TYPE /cost
+KEY enter
+WAITFOR /switches 1/ 20
+SHOT cost-switches
+EXPECT /switches 1 · cache re-billed/
+TYPE /model
+KEY enter
+WAITFOR /Select model/ 20
+SHOT model-dialog
+EXPECT /kiln\/auto/
+KEY esc
+EXPECT_NOT /panic|goroutine/

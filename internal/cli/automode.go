@@ -17,14 +17,16 @@ import (
 // gate, whatever mode the session starts in: Shift+Tab can enter auto mode
 // later. The classifier runs on cfg.FastRole — modelRoles.fast from user
 // settings or --settings only, never a repository's — when it resolves,
-// else on the session's current model.
-func wireAutoMode(gate *permission.Gate, reg *provider.Registry, started *agent.Started, memoryText string, cfg claudesettings.AutoModeConfig) {
+// else on the session's current model. A virtual session model (kiln/auto)
+// is never streamed, so then it runs on the router's direct target, which
+// virtualDirect reports.
+func wireAutoMode(gate *permission.Gate, reg *provider.Registry, started *agent.Started, memoryText string, cfg claudesettings.AutoModeConfig, virtualDirect func() (provider.Model, bool)) {
 	var roles map[string]string
 	if cfg.FastRole != "" {
 		roles = map[string]string{"fast": cfg.FastRole}
 	}
 	gate.SetClassifier(&automode.Classifier{
-		Resolve: automode.Resolver(reg, roles, func() provider.Model { return started.Model }),
+		Resolve: automode.Resolver(reg, roles, func() provider.Model { return classifierSessionModel(started.Model, virtualDirect) }),
 		Config:  cfg,
 		Memory:  memoryText,
 		// The classifier's calls are part of what the session costs: they
@@ -36,6 +38,18 @@ func wireAutoMode(gate *permission.Gate, reg *provider.Registry, started *agent.
 			}
 		},
 	})
+}
+
+// classifierSessionModel is the model auto mode's classifier runs on when
+// no fast role resolves: the session's model, or for a virtual one the
+// router's direct target.
+func classifierSessionModel(session provider.Model, virtualDirect func() (provider.Model, bool)) provider.Model {
+	if provider.IsVirtual(session) && virtualDirect != nil {
+		if m, ok := virtualDirect(); ok {
+			return m
+		}
+	}
+	return session
 }
 
 // ClassifierUsageSource is how /cost labels the auto mode classifier's

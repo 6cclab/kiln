@@ -46,6 +46,7 @@ import (
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/tool"
 	"github.com/andrepato/harness/internal/tools"
 )
@@ -126,6 +127,16 @@ type Dispatcher struct {
 	// agent.spawn, and tool.call and turn events inside a subagent). Child
 	// dispatchers inherit it. Nil for none.
 	Hooks SubagentHooks
+	// Routers route the virtual models (kiln/auto) a subagent may run on,
+	// the parent's own included: a task from a kiln/auto parent inherits
+	// kiln/auto and routes in its own session, with its own router state.
+	// Child dispatchers inherit it.
+	Routers router.Set
+	// Approved reports models the user has already chosen to spend on
+	// (kiln/auto's targets, from user settings), which the paid-provider
+	// gate lets through without asking. Child dispatchers inherit it. Nil
+	// approves none.
+	Approved func(providerID, modelID string) bool
 }
 
 // SubagentHooks is what a caller can do around a dispatch. AgentID is the
@@ -231,7 +242,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	// local Ollama tier change) and free models never hit this: it is
 	// scoped to exactly the case that can cost real money on a provider
 	// the user did not already choose for this turn.
-	if d.Gate != nil && choice.ProviderID != parentModel.ProviderID && resolved.Model.Cost.ModelCostRates.Input > 0 {
+	//
+	// A model kiln/auto routes to was chosen by the user in user settings
+	// (modelRouter, modelRoles), and a kiln/auto parent sends requests to
+	// it anyway, so it is not asked about again. kiln/auto itself costs
+	// nothing to name (its Cost is zero): its targets are those same
+	// approved models.
+	approved := d.Approved != nil && d.Approved(choice.ProviderID, choice.ModelID)
+	if d.Gate != nil && !approved && choice.ProviderID != parentModel.ProviderID && resolved.Model.Cost.ModelCostRates.Input > 0 {
 		blocked, err := d.Gate.Check(ctx, permission.Request{
 			ToolName:   "task",
 			PrimaryArg: "role:" + requested,
@@ -311,6 +329,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			UserHistory:        d.UserHistory,
 			Depth:              depth,
 			Hooks:              d.Hooks,
+			Routers:            d.Routers,
+			Approved:           d.Approved,
 		}
 		extraTools = append(extraTools, tools.TaskTool(adaptDispatch(child.Dispatch), d.Agents, d.Roles, resolved.Tier))
 	}
@@ -338,6 +358,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		ParentSessionID: d.Parent.SessionID,
 		ExtraTools:      extraTools,
 		ActiveToolNames: activeToolNames,
+		Routers:         d.Routers,
 	})
 	if err != nil {
 		return DispatchResult{}, fmt.Errorf("agent: start subagent session for %q: %w", def.Name, err)

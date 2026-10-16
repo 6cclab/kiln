@@ -1,0 +1,17 @@
+# The classifier's model (faux-3, modelRoles.fast) answers unreadable
+# text, never valid {"complexity":...} JSON: the classifier call itself
+# succeeds (a clean stop), but the answer does not parse, so Auto.rate
+# falls back. With modelRouter.fallback left at its "plan" default, that
+# fallback is Standard (faux-1, structured). With "fallback": "heuristic"
+# and a long typed prompt, the heuristic rates it Complex instead
+# (faux-2, heavy).
+models:
+  faux-3:
+    - text: "I cannot answer that in JSON."
+      end_turn: true
+  faux-1:
+    - text: "Planned on plan (the classifier's fallback)."
+      end_turn: true
+  faux-2:
+    - text: "Planned on planComplex (the heuristic fallback)."
+      end_turn: true

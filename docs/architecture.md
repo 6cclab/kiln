@@ -545,6 +545,56 @@ UI via `Dispatcher.OnEvent` (`SubagentEvent`), never to the model; the
 parent only ever receives the subagent's final assistant text
 (`EventMessageEnd`'s last non-empty chunk, replaced not accumulated).
 
+## Model routing
+
+kiln follows pi's virtual models (`packages/coding-agent/src/core/
+virtual-models.ts`). A lane may name a virtual model (`provider.ApiVirtual`,
+`provider.IsVirtual`); no provider ever streams one. Before every request
+`Lane.route` (`internal/harness/route.go`) asks the model's router, from
+`Options.Routers` (`router.Set`), which physical model and thinking level to
+use, giving it pi's reason (`user`, `continuation`, `retry`, `direct`), the
+conversation, the previous reply's model, a retry's failed request, and the
+state the router last stored on the branch. `router.Set.Resolve` checks the
+answer as pi's `ModelRuntime.resolveModel` does: the target is a physical
+model in the registry whose provider has credentials, and the thinking level
+is clamped to it. A physical lane's route is its own model, at no cost.
+
+Routing comes before the compaction threshold and the fit, so both use the
+routed model's window; a retry the router sends to another model is checked
+again first (`Lane.refit`). Router state is a `kiln.router.state` custom
+entry, committed with the request it decided and read newest-first from the
+branch, so it follows `/rewind` and forks. Compaction summaries take the
+`direct` route. `EventRoute` reports each route and `EventUsage.UsageModel`
+the model that answered, so `/cost` files a turn under it.
+
+The one virtual model kiln ships is `kiln/auto` (`internal/router/auto.go`),
+a port of pi's example `jev-router.ts`: plan on `plan` (or keep the planning
+model the session already uses), switch once to `implement` after the first
+successful `edit`/`write`, send `direct` requests to `direct`. Its state is
+`{phase, model}`. `internal/cli/modelrouter.go` resolves its slots from
+user-scope `modelRouter` and `modelRoles` (`settings.LoadModelRouter`) and,
+when `implement` resolves, registers the `kiln` provider
+(`router.VirtualProvider`) with a model sized to its smallest target, so the
+tier kiln sizes once at startup fits every routed model. Subagents inherit
+`kiln/auto` through `Dispatcher.Routers` and route from a fresh state in
+their own session; `Dispatcher.Approved` lets the paid-provider prompt pass
+the router's own targets. A resumed `kiln/auto` session whose router no
+longer resolves continues on the physical model that answered last
+(`agent.ResumedLastPhysical`). The classifier that picks `planComplex`
+(pi's Jev classifier) is `router.LLMClassifier` (`internal/router/
+classify.go`): one call on `modelRoles.fast`, no tools, thinking off, with
+jev's own question and criteria, trusting only a clean stop and a strict
+`{"complexity":"standard"|"complex"}` answer; `setupModelRouter` wires it
+whenever `fast` resolves and `modelRouter.classifier` is not `false`, and
+its usage reaches `Harness.RecordSideUsage` once the harness exists (the
+same late-binding `modelrouter.go` uses for the registered `*router.Auto`,
+since the classifier is built before the harness is). `Auto.rate` falls
+back to `router.Heuristic` (`heuristics.go`) when `modelRouter.fallback` is
+`"heuristic"`, else to `Standard` (`plan`, jev's own fallback) — except
+when ctx itself was cancelled mid-classification (Esc), which `Auto.Route`
+propagates as an error instead of falling back. See `docs/configuration.md`
+§6a.
+
 ## TUI
 
 `internal/tui` is the pure rendering layer (`theme.go`, `width.go`,

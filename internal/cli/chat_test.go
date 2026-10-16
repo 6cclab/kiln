@@ -12,9 +12,11 @@ import (
 	"testing"
 
 	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/claude/skills"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/session/jsonl"
 	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
 	"github.com/andrepato/harness/internal/testkit/fauxtest"
@@ -734,6 +736,76 @@ func TestEffortOrSetting(t *testing.T) {
 		if got := effortOrSetting(c.flag, c.setting, c.claude); got != c.want {
 			t.Errorf("effortOrSetting(%q, %q, %v) = %q, want %q", c.flag, c.setting, c.claude, got, c.want)
 		}
+	}
+}
+
+// TestEffortSettingApplies: Claude Code's effortLevel setting must apply
+// to a session on kiln/auto (or any virtual model) just as it does to a
+// physical Claude model, since the setting still reaches a Claude target
+// through ClampThinkingLevel; it must not apply to a physical non-Claude
+// model, where any thinking at all can make some local models loop.
+// Regression for the P2 bug where a virtual model silently dropped
+// effortLevel (resolved.Model.Api is never ApiAnthropicMessages for a
+// virtual model).
+func TestEffortSettingApplies(t *testing.T) {
+	cases := []struct {
+		name string
+		m    provider.Model
+		want bool
+	}{
+		{"a physical Claude model", provider.Model{Api: provider.ApiAnthropicMessages}, true},
+		{"kiln/auto, a virtual model", provider.Model{Provider: "kiln", ID: "auto", Api: provider.ApiVirtual}, true},
+		{"a physical non-Claude model", provider.Model{Api: provider.ApiOpenAICompletions}, false},
+	}
+	for _, c := range cases {
+		if got := effortSettingApplies(c.m); got != c.want {
+			t.Errorf("%s: effortSettingApplies = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// countingProvider counts RefreshModels calls, for
+// TestRefreshRoleProvidersInto_SharedDoneRefreshesOnce.
+type countingProvider struct {
+	id       string
+	models   []provider.Model
+	refreshN *int
+}
+
+func (p countingProvider) ID() string   { return p.id }
+func (p countingProvider) Name() string { return p.id }
+func (p countingProvider) Auth() provider.AuthSpec {
+	return provider.AuthSpec{Kind: provider.AuthKindNone}
+}
+func (p countingProvider) Models() []provider.Model { return p.models }
+func (p countingProvider) RefreshModels(ctx context.Context) error {
+	*p.refreshN++
+	return nil
+}
+func (p countingProvider) Stream(context.Context, provider.Model, []msg.Message, provider.StreamOptions) (<-chan msg.StreamEvent, func() (*msg.AssistantMessage, error)) {
+	panic("not streamed")
+}
+
+// TestRefreshRoleProvidersInto_SharedDoneRefreshesOnce is the regression
+// for the plan's "double refresh" fix: setupModelRouter's own role
+// refresh and chat.go's later refresh (for ValidateRoles) used to each
+// start from an empty "done" set, so a dynamic (Ollama) provider named by
+// a role in both calls refreshed twice at startup. Sharing one "done" map
+// across both refreshRoleProvidersInto calls (as Run, Models and Doctor
+// now do) must bring that down to once.
+func TestRefreshRoleProvidersInto_SharedDoneRefreshesOnce(t *testing.T) {
+	var n int
+	reg := provider.NewRegistry(auth.NewFileCredentialStore(filepath.Join(t.TempDir(), "auth.json")))
+	reg.Register(countingProvider{id: "ollama", models: []provider.Model{{ID: "qwen", Provider: "ollama"}}, refreshN: &n})
+
+	done := map[string]bool{}
+	// Two role maps that both name the same dynamic provider, exactly as
+	// the model router's slot values and the full modelRoles set do.
+	refreshRoleProvidersInto(context.Background(), reg, map[string]string{"implement": "ollama/qwen"}, done, "", nil)
+	refreshRoleProvidersInto(context.Background(), reg, map[string]string{"structured": "ollama/qwen", "fast": "ollama/qwen"}, done, "", nil)
+
+	if n != 1 {
+		t.Errorf("RefreshModels called %d times, want 1 (shared done set)", n)
 	}
 }
 

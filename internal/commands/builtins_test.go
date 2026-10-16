@@ -10,6 +10,7 @@ import (
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/router"
 )
 
 // fakeProvider is a minimal provider.Provider for tests: no network, no
@@ -266,6 +267,55 @@ func TestModelRolesTableReportsResolvedAndUnresolvedRoles(t *testing.T) {
 	}
 }
 
+// TestModelCommand_KilnAutoShowsRoleSummary: /model lists kiln/auto with
+// its role summary (RouterAutoDescribe) in place of the ordinary
+// context/tier row every other model gets.
+func TestModelCommand_KilnAutoShowsRoleSummary(t *testing.T) {
+	reg := testRegistry(t)
+	reg.Register(fakeProvider{
+		id:     "kiln",
+		models: []provider.Model{{ID: "auto", Provider: "kiln", Api: provider.ApiVirtual}},
+	})
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:           reg,
+		CurrentModel:       func() (string, string) { return "kiln", "auto" },
+		CurrentTier:        func() budget.Tier { return budget.Tier{} },
+		RouterAutoDescribe: "plan→claude-sonnet-4-5 · complex→claude-opus-4-1 · implement→claude-haiku-4-5",
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model *Command
+	for i := range cmds {
+		if cmds[i].Name == "model" {
+			model = &cmds[i]
+		}
+	}
+	if model == nil {
+		t.Fatal("no model command registered")
+	}
+	res, err := model.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("model.Run: %v", err)
+	}
+	if res.Modal == nil {
+		t.Fatal("no modal returned")
+	}
+	var found bool
+	for _, it := range res.Modal.Items {
+		if it.Value == "kiln/auto" {
+			found = true
+			if it.Description != "plan→claude-sonnet-4-5 · complex→claude-opus-4-1 · implement→claude-haiku-4-5" {
+				t.Errorf("kiln/auto description = %q, want the role summary", it.Description)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("kiln/auto not listed")
+	}
+}
+
 func TestCostCommandShowsByModelTable(t *testing.T) {
 	reg := testRegistry(t)
 	source := BuiltinCommands(BuiltinDeps{
@@ -311,6 +361,83 @@ func TestCostCommandShowsByModelTable(t *testing.T) {
 	}
 	if !strings.Contains(out, "ollama/qwen3.8:latest") || !strings.Contains(out, "cost -") {
 		t.Fatalf("output = %q, want the free model's cost shown as \"-\"", out)
+	}
+}
+
+// TestCostCommand_RouterSwitchesAndRebilled: once the model router has
+// switched this session to a different physical model, /cost adds a
+// "switches N · cache re-billed ~$X" line, with the estimate labelled
+// "~" since it is derived (the switched-to request's own Cost.Input,
+// mirroring pi's cacheWaste).
+func TestCostCommand_RouterSwitchesAndRebilled(t *testing.T) {
+	reg := testRegistry(t)
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     reg,
+		CurrentModel: func() (string, string) { return "ollama", "qwen3.8:latest" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{} },
+		UsageByModel: func() map[string]msg.Usage {
+			return map[string]msg.Usage{
+				"ollama/qwen3.8:latest":   {Input: 100, Output: 50, TotalTokens: 150, Cost: msg.Cost{Total: 0.42}},
+				"anthropic/claude-opus-5": {Input: 10, Output: 5, TotalTokens: 15, Cost: msg.Cost{Total: 0.10}},
+			}
+		},
+		RouterCostStats: func() (int, float64) { return 2, 0.1234 },
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cost *Command
+	for i := range cmds {
+		if cmds[i].Name == "cost" {
+			cost = &cmds[i]
+		}
+	}
+	if cost == nil {
+		t.Fatal("no cost command registered")
+	}
+	res, err := cost.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("cost.Run: %v", err)
+	}
+	out := strings.Join(res.Output, "\n")
+	if !strings.Contains(out, "switches 2 · cache re-billed ~$0.12") {
+		t.Fatalf("output = %q, want the switches/re-billed line", out)
+	}
+}
+
+// TestCostCommand_NoSwitchesOmitsLine: with RouterCostStats reporting no
+// switches, /cost does not add the line at all.
+func TestCostCommand_NoSwitchesOmitsLine(t *testing.T) {
+	reg := testRegistry(t)
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     reg,
+		CurrentModel: func() (string, string) { return "ollama", "qwen3.8:latest" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{} },
+		UsageByModel: func() map[string]msg.Usage {
+			return map[string]msg.Usage{
+				"ollama/qwen3.8:latest": {Input: 100, Output: 50, TotalTokens: 150, Cost: msg.Cost{Total: 0.42}},
+			}
+		},
+		RouterCostStats: func() (int, float64) { return 0, 0 },
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cost *Command
+	for i := range cmds {
+		if cmds[i].Name == "cost" {
+			cost = &cmds[i]
+		}
+	}
+	res, err := cost.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("cost.Run: %v", err)
+	}
+	out := strings.Join(res.Output, "\n")
+	if strings.Contains(out, "switches") {
+		t.Fatalf("output = %q, want no switches line with no switches", out)
 	}
 }
 
@@ -721,5 +848,47 @@ func TestWithoutDatedAliases(t *testing.T) {
 	want := "claude-haiku-4-5 claude-opus-4-5-20251101 claude-sonnet-4-5 claude-sonnet-4-5-20250929"
 	if strings.Join(got, " ") != want {
 		t.Errorf("got %v, want %s (dated alias hidden unless current or alone)", got, want)
+	}
+}
+
+// /model lists kiln/auto once it is registered (the router is set up at
+// startup), and choosing it switches to it like any other model.
+func TestModelListsAndSelectsKilnAuto(t *testing.T) {
+	reg := testRegistry(t)
+	target := provider.Model{ID: "qwen3.8:latest", Provider: "ollama", ContextWindow: 49_152}
+	reg.Register(router.NewVirtualProvider(router.AutoModel(router.Targets{Plan: target, PlanComplex: target, Implement: target, Direct: target})))
+	var switched string
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     reg,
+		CurrentModel: func() (string, string) { return "ollama", "qwen3.8:latest" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{Name: "medium", ContextWindow: 49_152} },
+		SwitchModel: func(ctx context.Context, providerID, modelID string) (budget.Tier, error) {
+			switched = providerID + "/" + modelID
+			return budget.TierFor(49_152), nil
+		},
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model Command
+	for _, c := range cmds {
+		if c.Name == "model" {
+			model = c
+		}
+	}
+	res, err := model.Run(context.Background(), "")
+	if err != nil || res.Modal == nil {
+		t.Fatalf("/model = %+v, %v", res, err)
+	}
+	listed := false
+	for _, it := range res.Modal.Items {
+		listed = listed || it.Value == "kiln/auto"
+	}
+	if !listed {
+		t.Fatalf("/model items %+v lack kiln/auto", res.Modal.Items)
+	}
+	if _, err := res.Modal.Select("kiln/auto"); err != nil || switched != "kiln/auto" {
+		t.Fatalf("selecting kiln/auto: switched to %q, %v", switched, err)
 	}
 }

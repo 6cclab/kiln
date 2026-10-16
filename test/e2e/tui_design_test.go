@@ -1139,6 +1139,35 @@ func TestTUI_Design_FullSession(t *testing.T) {
 	}
 }
 
+// --- model router footer (P4) ---------------------------------------------
+//
+// Not a design-handoff scene (the handoff predates kiln/auto): a minimal
+// real-PTY check that EventRoute actually reaches the live footer, which
+// internal/tui's own render-snapshot goldens (status_golden_test.go)
+// cannot exercise end to end. Asserted with anyRowMatches rather than a
+// new golden, since the row under test is exactly the footer, already
+// covered byte-for-byte by those goldens; this test is about the wiring
+// (bridge.go's EventRoute handler, chat.go's router), not the glyphs.
+func TestTUI_Design_ModelRouterFooterRoutes(t *testing.T) {
+	addr, _ := startFaux(t, loadFauxScript(t, "router-plan-implement"))
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeUserSettings(t, home, routerRoles)
+
+	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--model", "kiln/auto", "--permission-mode", "bypassPermissions")
+	waitReady(t, s)
+
+	s.Send("fix the bug in src/math.js")
+	s.SendKey("enter")
+	if err := s.WaitFor(regexp.MustCompile(`auto → faux-2|auto -> faux-2`), 20*time.Second); err != nil {
+		t.Fatalf("footer never showed the post-edit route to faux-2:\n%s", strings.Join(s.Rows(), "\n"))
+	}
+	waitTurnSettled(t, s)
+	if !anyRowMatches(s, regexp.MustCompile(`auto → faux-2|auto -> faux-2`)) {
+		t.Errorf("footer after the turn settled = %s, want it still showing the routed model", strings.Join(s.Rows(), "\n"))
+	}
+}
+
 // waitSingle waits until text appears exactly once on screen and the
 // screen has settled, failing with the screen if it never does.
 func waitSingle(t *testing.T, s *screen.Screen, text string, timeout time.Duration) {

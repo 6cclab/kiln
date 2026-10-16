@@ -1,0 +1,33 @@
+# kiln/auto planning on faux-1 (128k) and implementing on faux-2 (32k).
+# faux-1 reads four ~3k-token outputs and then edits; its last reply
+# reports 30,000 input tokens, which fits faux-1 but crosses faux-2's
+# compaction threshold (~29.5k). The request after the edit goes to faux-2,
+# so it compacts first: faux-2 (also the direct slot) writes the summary,
+# then answers the compacted conversation. Spare faux-2 steps absorb a
+# second summary request if the cut splits a turn.
+models:
+  faux-1:
+    - tool_call: {name: bash, args: {command: "head -c 9000 /dev/zero | base64"}, id: tc0}
+      usage: {input: 2000, output: 20}
+    - tool_call: {name: bash, args: {command: "head -c 9000 /dev/zero | base64"}, id: tc1}
+      usage: {input: 6000, output: 20}
+    - tool_call: {name: bash, args: {command: "head -c 9000 /dev/zero | base64"}, id: tc2}
+      usage: {input: 10000, output: 20}
+    - tool_call: {name: bash, args: {command: "head -c 9000 /dev/zero | base64"}, id: tc3}
+      usage: {input: 14000, output: 20}
+    - tool_call:
+        name: edit
+        args:
+          path: src/math.js
+          edits:
+            - oldText: "return a - b;"
+              newText: "return a + b;"
+        id: tc4
+      usage: {input: 30000, output: 20}
+  faux-2:
+    - text: "ROUTER-SUMMARY-MARKER"
+      end_turn: true
+    - text: "Fixed."
+      end_turn: true
+    - text: "Fixed again."
+      end_turn: true
