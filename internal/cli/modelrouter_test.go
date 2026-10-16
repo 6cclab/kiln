@@ -43,7 +43,7 @@ func routerRegistry(t *testing.T) *provider.Registry {
 		return provider.Model{Provider: p, ID: id, Api: provider.ApiAnthropicMessages, ContextWindow: window, MaxTokens: 8192, Input: []string{"text"}}
 	}
 	reg.Register(stubProvider{id: "faux", models: []provider.Model{mk("faux", "faux-1", 128000), mk("faux", "faux-2", 32768), mk("faux", "faux-3", 128000)}})
-	reg.Register(stubProvider{id: "paid", keyed: true, models: []provider.Model{mk("paid", "big", 200000)}})
+	reg.Register(stubProvider{id: "paid", keyed: true, models: []provider.Model{mk("paid", "big", 200000), mk("paid", "zeta", 200000)}})
 	reg.Register(stubProvider{id: "ollama", models: []provider.Model{mk("ollama", "qwen", 65536)}})
 	return reg
 }
@@ -328,6 +328,22 @@ func TestSetupModelRouter_FallbackNote(t *testing.T) {
 	}
 	if len(s.FallbackReasons) != 1 || !strings.Contains(s.FallbackReasons[0], "no credentials") {
 		t.Errorf("FallbackReasons = %q", s.FallbackReasons)
+	}
+}
+
+// The note pairs each slot with the model it had: plan (structured =
+// paid/zeta) then planComplex (heavy = paid/big), in slot order, not
+// alphabetical order. Found live: "plan and planComplex use qwen3.8
+// instead of claude-opus and claude-sonnet" named them the wrong way round.
+func TestSetupModelRouter_FallbackNoteKeepsSlotOrder(t *testing.T) {
+	reg := routerRegistry(t)
+	cfg := claudesettings.ModelRouterConfig{ModelRoles: map[string]string{"fast": "faux/faux-2", "structured": "paid/zeta", "heavy": "paid/big"}}
+	_, warnings := runSetup(t, reg, cfg)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %q, want 1", warnings)
+	}
+	if want := "so plan and planComplex use faux/faux-2 instead of paid/zeta and paid/big"; !strings.Contains(warnings[0], want) {
+		t.Errorf("note = %q, want it to contain %q", warnings[0], want)
 	}
 }
 

@@ -548,17 +548,19 @@ func localCollapseNote(reg *provider.Registry, providerID, host string, candidat
 // both plan and planComplex, say — reported as one sentence instead of
 // one warning per slot.
 type fallbackGroup struct {
-	reason     string
-	slots      []string
-	roles      map[string]bool
-	origValues map[string]bool
-	finals     map[string]bool
+	reason string
+	slots  []string
+	roles  map[string]bool
+	// origValues and finals keep slot order, so "plan and planComplex use
+	// … instead of X and Y" pairs X with plan and Y with planComplex.
+	origValues []string
+	finals     []string
 }
 
 func (g *fallbackGroup) sentence() string {
 	slots := joinAnd(g.slots)
-	finals := joinAnd(sortedKeys(g.finals))
-	origs := joinAnd(sortedKeys(g.origValues))
+	finals := joinAnd(g.finals)
+	origs := joinAnd(g.origValues)
 	return fmt.Sprintf("%s, so %s use %s instead of %s", g.reason, slots, finals, origs)
 }
 
@@ -594,7 +596,7 @@ func warnRoleFallbacks(problems map[string]*routerProblem, cfg claudesettings.Mo
 		}
 		g, exists := groups[key]
 		if !exists {
-			g = &fallbackGroup{reason: p.reasonPhrase(), roles: map[string]bool{}, origValues: map[string]bool{}, finals: map[string]bool{}}
+			g = &fallbackGroup{reason: p.reasonPhrase(), roles: map[string]bool{}}
 			groups[key] = g
 			order = append(order, key)
 		}
@@ -602,10 +604,10 @@ func warnRoleFallbacks(problems map[string]*routerProblem, cfg claudesettings.Mo
 		g.roles[p.Role] = true
 		coveredRoles[p.Role] = true
 		if p.Value != "" {
-			g.origValues[p.Value] = true
+			g.origValues = appendUnique(g.origValues, p.Value)
 		}
 		if m, ok := finalFor[slot]; ok {
-			g.finals[m.Provider+"/"+m.ID] = true
+			g.finals = appendUnique(g.finals, m.Provider+"/"+m.ID)
 		}
 	}
 	if len(order) == 0 {
@@ -642,6 +644,16 @@ func joinAnd(items []string) string {
 	default:
 		return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 	}
+}
+
+// appendUnique appends v unless list already holds it.
+func appendUnique(list []string, v string) []string {
+	for _, x := range list {
+		if x == v {
+			return list
+		}
+	}
+	return append(list, v)
 }
 
 // sortedKeys returns a set's members sorted, for deterministic prose.
