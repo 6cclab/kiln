@@ -946,12 +946,24 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgModelInfo:
 		label := msg.Label
 		window := msg.ContextWindow
-		m.footer.Apply(StatusPatch{ModelLabel: &label, ContextWindow: nonZeroOr(window, m.footer.State().ContextWindow), ContextUsed: msg.ContextUsed})
+		noRoute := ""
+		m.footer.Apply(StatusPatch{ModelLabel: &label, ContextWindow: nonZeroOr(window, m.footer.State().ContextWindow), ContextUsed: msg.ContextUsed, RoutedModel: &noRoute, RoutedLevel: &noRoute})
 		return m, nil
 
 	case MsgGitStatus:
 		g := msg.Status
 		m.footer.Apply(StatusPatch{Git: &g})
+		return m, nil
+
+	case MsgRoute:
+		model := msg.Model
+		level := msg.ThinkingLevel
+		patch := StatusPatch{RoutedModel: &model, RoutedLevel: &level}
+		if msg.ContextWindow > 0 {
+			w := msg.ContextWindow
+			patch.ContextWindow = &w
+		}
+		m.footer.Apply(patch)
 		return m, nil
 
 	case tea.ColorProfileMsg:

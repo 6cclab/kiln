@@ -108,8 +108,9 @@ func ollamaOptionsFromEnv() ollama.Options {
 	return ollama.Options{URL: url, ServerDefaultContext: serverDefault}
 }
 
-// refreshRoleProviders refreshes the model list of every provider a role
-// points at, other than the one already refreshed for the main model.
+// refreshRoleProvidersInto refreshes the model list of every provider a
+// role points at, other than the one already refreshed for the main
+// model (skip) or already refreshed into done.
 //
 // Without this a role on a dynamic provider that is not the parent's
 // (an Anthropic session with `fast: ollama/...`) has an empty model list
@@ -117,8 +118,20 @@ func ollamaOptionsFromEnv() ollama.Options {
 // the role never fires. Roles are fixed for the session, so once at
 // startup is enough; a failure is reported and otherwise ignored exactly
 // like the main refresh above.
-func refreshRoleProviders(ctx context.Context, reg *provider.Registry, roles map[string]string, skip string, stderr io.Writer) {
-	done := map[string]bool{skip: true}
+//
+// done is supplied by the caller (and mutated in place) so two role maps
+// that overlap in this run — the model router's own slot values and the
+// full modelRoles set refreshed again for subagent role validation —
+// refresh each provider at most once between them, not once per map.
+// Before this, setupModelRouter's internal refresh and chat.go's own (for
+// ValidateRoles) each started from an empty done set, so an Ollama role
+// shared by both refreshed twice at startup; pass nil for a one-off
+// caller with nothing else to dedup against.
+func refreshRoleProvidersInto(ctx context.Context, reg *provider.Registry, roles map[string]string, done map[string]bool, skip string, stderr io.Writer) {
+	if done == nil {
+		done = map[string]bool{}
+	}
+	done[skip] = true
 	for _, value := range roles {
 		providerID, _, ok := splitProviderModel(value)
 		if !ok || done[providerID] {
@@ -544,12 +557,19 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	reg := buildRegistry()
 	// kiln/auto, the built-in virtual model, before the model is resolved:
 	// --model, settings or a resumed session may name it. Its settings
-	// come from user scope only (LoadModelRouter).
-	routerConfig := claudesettings.LoadModelRouter(cwd, claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings})
-	if w := claudesettings.ModelRouterIgnoredWarning(cwd, routerConfig.Ignored); w != "" {
-		startupWarn(w)
+	// come from user scope only (LoadModelRouter), through the same path
+	// `kiln models`/`kiln doctor` use (loadModelRouter, modelrouter.go).
+	// roleProvidersRefreshed is shared with the ValidateRoles refresh
+	// below, so a dynamic (Ollama) provider named by both the router's
+	// own slots and the full modelRoles set refreshes once, not twice.
+	roleProvidersRefreshed := map[string]bool{}
+	modelRouter := loadModelRouter(ctx, cwd, reg, settingsSources(args.SettingSources), args.Settings, startupWarn, stderr, roleProvidersRefreshed)
+	// routerAutoDescribe is "" unless kiln/auto is registered: /model and
+	// "kiln models" use it in place of kiln/auto's context/tier row.
+	routerAutoDescribe := ""
+	if modelRouter.Registered {
+		routerAutoDescribe = modelRouter.Targets.Describe()
 	}
-	modelRouter := setupModelRouter(ctx, reg, routerConfig, startupWarn, stderr)
 	var providerID, modelID string
 	var resolved provider.Resolved
 	var resolveErr error
@@ -608,7 +628,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// comment). Not fatal: a bad role is a misconfiguration to fix, not a
 	// reason to refuse to start.
 	if len(settings.ModelRoles) > 0 {
-		refreshRoleProviders(ctx, reg, settings.ModelRoles, providerID, stderr)
+		refreshRoleProvidersInto(ctx, reg, settings.ModelRoles, roleProvidersRefreshed, providerID, stderr)
 		if available, err := reg.Available(ctx); err == nil {
 			var candidates []claudeagents.Candidate
 			for _, p := range available {
@@ -1250,6 +1270,56 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return out
 	}
 
+	// Router switches and the cache re-billing they cause, for /cost's
+	// "switches N · cache re-billed ~$X" line: a virtual model's router
+	// (kiln/auto) can move a lane to a different physical model between
+	// requests (never mid-request), and the next request to the new
+	// model pays full price for the whole prompt a steady model would
+	// have served from cache. "direct" routes (compaction) are not a
+	// turn-loop switch and are excluded, matching the footer's own
+	// EventRoute filter (internal/tui/bridge.go). The re-billed estimate
+	// is the switched-to request's own reported Cost.Input: on a fresh
+	// model there is no cache to read from, so its whole uncached input
+	// is exactly the tokens that would otherwise have been a cheap cache
+	// read — mirroring pi's computeCacheWaste (interactive-mode.ts:6775-
+	// 6781), labelled "~" because, like pi's, it is an estimate for
+	// providers with no separate cache-write price.
+	var routerMu sync.Mutex
+	lastRouted := map[string]string{}  // lane -> "provider/id"
+	pendingRebill := map[string]bool{} // lane -> next usage row is a post-switch one
+	var routerSwitches int
+	var cacheRebilled float64
+	started.Harness.Events().On(harness.EventRoute, func(ev harness.Event) {
+		if ev.RouteReason == string(router.ReasonDirect) {
+			return
+		}
+		key := ev.RouteModel.Provider + "/" + ev.RouteModel.ModelID
+		routerMu.Lock()
+		if prev, ok := lastRouted[ev.Lane]; ok && prev != key {
+			routerSwitches++
+			pendingRebill[ev.Lane] = true
+		}
+		lastRouted[ev.Lane] = key
+		routerMu.Unlock()
+	})
+	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
+		if ev.UsageRow == nil {
+			return
+		}
+		routerMu.Lock()
+		defer routerMu.Unlock()
+		if !pendingRebill[ev.Lane] {
+			return
+		}
+		pendingRebill[ev.Lane] = false
+		cacheRebilled += ev.UsageRow.Cost.Input
+	})
+	getRouterCostStats := func() (switches int, rebilled float64) {
+		routerMu.Lock()
+		defer routerMu.Unlock()
+		return routerSwitches, cacheRebilled
+	}
+
 	settingsLoadedFrom := make([]string, 0, len(settings.LoadedFrom))
 	for _, s := range settings.LoadedFrom {
 		settingsLoadedFrom = append(settingsLoadedFrom, s.Label())
@@ -1384,6 +1454,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		ContextUsed:        contextUsed,
 		FileReadTokens:     getFileReadTokens,
 		UsageByModel:       getUsageByModel,
+		RouterCostStats:    getRouterCostStats,
+		RouterAutoDescribe: routerAutoDescribe,
 		SessionStartedAt:   sessionStartedAt,
 		MCPConfigPath:      mcpgate.ConfigPath(args.MCPConfig),
 		AutoMemoryStatus:   autoMemory.StatusLine(),

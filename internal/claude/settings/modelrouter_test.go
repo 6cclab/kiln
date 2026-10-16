@@ -55,8 +55,11 @@ func TestLoadModelRouter_ProjectIgnoredFlagWins(t *testing.T) {
 	if got := cfg.RoleFor(RouterSlotPlan); got != "fast" {
 		t.Errorf("plan = %q, want the user file's fast (the project's heavy is ignored)", got)
 	}
-	if got := cfg.RoleFor(RouterSlotPlanComplex); got != "" {
-		t.Errorf("planComplex = %q, want unset (named roles replace the defaults)", got)
+	// planComplex is not named in "roles", so it uses its own default
+	// (DefaultRouterRoles["planComplex"] = "heavy"), not "" — see
+	// TestRoleFor_UnlistedSlotUsesDefault for the regression this guards.
+	if got, want := cfg.RoleFor(RouterSlotPlanComplex), DefaultRouterRoles[RouterSlotPlanComplex]; got != want {
+		t.Errorf("planComplex = %q, want its default %q (an unlisted slot keeps its default role)", got, want)
 	}
 	if cfg.Classifier || cfg.Fallback != RouterFallbackHeuristic {
 		t.Errorf("Classifier/Fallback = %v/%q", cfg.Classifier, cfg.Fallback)
@@ -100,5 +103,24 @@ func TestLoadModelRouter_Problems(t *testing.T) {
 	writeJSONFile(t, filepath.Join(home, ".claude", "settings.json"), `{"modelRouter": "yes"}`)
 	if cfg := LoadModelRouter(cwd, LoadOptions{}); cfg.Set || len(cfg.Problems) != 1 {
 		t.Errorf("a string modelRouter: %+v", cfg)
+	}
+}
+
+// Regression: once "roles" names any slot, a slot it leaves out must keep
+// its DefaultRouterRoles entry, not collapse to "". Before the fix,
+// RoleFor returned cfg.Roles[slot] directly once cfg.Roles was non-nil, so
+// {"roles":{"plan":"heavy"}} silently dropped "implement" and "direct" to
+// "" (routerTarget then reported "modelRouter.roles.implement names no
+// usable model" and kiln/auto never registered), rather than falling back
+// to their own defaults ("fast").
+func TestRoleFor_UnlistedSlotUsesDefault(t *testing.T) {
+	cfg := ModelRouterConfig{Set: true, Roles: map[string]string{RouterSlotPlan: "heavy"}}
+	if got, want := cfg.RoleFor(RouterSlotPlan), "heavy"; got != want {
+		t.Errorf("plan = %q, want the explicit %q", got, want)
+	}
+	for _, slot := range []string{RouterSlotPlanComplex, RouterSlotImplement, RouterSlotDirect} {
+		if got, want := cfg.RoleFor(slot), DefaultRouterRoles[slot]; got != want {
+			t.Errorf("RoleFor(%s) = %q, want its default %q (unlisted slots must not collapse to \"\")", slot, got, want)
+		}
 	}
 }

@@ -54,9 +54,12 @@ type ModelRouterConfig struct {
 	// Disabled is "modelRouter": false.
 	Disabled bool
 	// Roles maps a slot (RouterSlots) to a modelRoles name. Nil when the
-	// block names no roles, which means DefaultRouterRoles. A slot left
-	// out falls back along planComplex -> plan -> implement and direct ->
-	// implement.
+	// block names no roles, which means DefaultRouterRoles. A slot the
+	// map does not list (RoleFor) uses its own DefaultRouterRoles entry,
+	// not the planComplex -> plan -> implement / direct -> implement
+	// chain: that chain applies only once the resolved role itself does
+	// not name a usable model (setupModelRouter's pick), not merely
+	// because the user left the slot out of "roles".
 	Roles map[string]string
 	// Classifier is whether the planning model is picked by a classifier
 	// call on the fast role (true unless the block says false).
@@ -74,12 +77,17 @@ type ModelRouterConfig struct {
 	Problems []string
 }
 
-// RoleFor is the modelRoles name configured for slot, "" when none is.
+// RoleFor is the modelRoles name configured for slot: the explicit entry
+// in c.Roles when "roles" names that slot, its DefaultRouterRoles entry
+// otherwise (whether "roles" is absent, or set but silent on this slot).
+// "" only when slot is not a router slot at all.
 func (c ModelRouterConfig) RoleFor(slot string) string {
-	if c.Roles == nil {
-		return DefaultRouterRoles[slot]
+	if c.Roles != nil {
+		if role, ok := c.Roles[slot]; ok {
+			return role
+		}
 	}
-	return c.Roles[slot]
+	return DefaultRouterRoles[slot]
 }
 
 type rawModelRouter struct {

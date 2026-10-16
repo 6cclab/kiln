@@ -3,9 +3,26 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// writeUserModelRouterSettings writes ~/.claude/settings.json with
+// modelRoles that resolve kiln/auto against the faux provider (faux-1
+// plans and implements), for the subcommand listing tests below.
+func writeUserModelRouterSettings(t *testing.T, home string) {
+	t.Helper()
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"modelRoles": {"structured": "faux/faux-1", "fast": "faux/faux-1"}, "modelRouter": {"classifier": false}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // TestProviders_Faux checks `harness providers` lists the faux provider
 // once HARNESS_FAUX_ADDR is set, with "configured" status (faux needs no
@@ -43,6 +60,42 @@ func TestModels_Faux(t *testing.T) {
 	}
 	if !strings.Contains(out, "medium") {
 		t.Errorf("models output missing the medium tier for a 128000-token window:\n%s", out)
+	}
+}
+
+// TestProviders_KilnAutoWhenConfigured checks `harness providers` lists
+// the "kiln" provider (kiln/auto) once modelRoles resolve it, through the
+// same path (loadModelRouter) startup uses.
+func TestProviders_KilnAutoWhenConfigured(t *testing.T) {
+	startFaux(t, unreadScript)
+	scratchProject(t)
+	writeUserModelRouterSettings(t, os.Getenv("HOME"))
+
+	var stdout, stderr bytes.Buffer
+	code := Providers(context.Background(), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "kiln") {
+		t.Errorf("providers output missing kiln:\n%s", stdout.String())
+	}
+}
+
+// TestModels_KilnAutoWhenConfigured checks `harness models` lists
+// kiln/auto once modelRoles resolve it.
+func TestModels_KilnAutoWhenConfigured(t *testing.T) {
+	startFaux(t, unreadScript)
+	scratchProject(t)
+	writeUserModelRouterSettings(t, os.Getenv("HOME"))
+
+	var stdout, stderr bytes.Buffer
+	code := Models(context.Background(), &stdout, &stderr, "")
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "kiln") || !strings.Contains(out, "auto") {
+		t.Errorf("models output missing kiln/auto:\n%s", out)
 	}
 }
 
@@ -90,6 +143,45 @@ func TestDoctor_BypassPermissionsIsAProblem(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "bypassPermissions") {
 		t.Errorf("doctor output did not flag bypassPermissions:\n%s", stdout.String())
+	}
+}
+
+// TestDoctor_ModelRouterLine checks /doctor reports kiln/auto's role
+// summary once modelRoles resolve it, and stays quiet (no "modelRouter"
+// line) when nothing is configured (TestDoctor_Runs covers that case
+// implicitly: its output is asserted not to need a modelRouter line).
+func TestDoctor_ModelRouterLine(t *testing.T) {
+	startFaux(t, unreadScript)
+	scratchProject(t)
+	writeUserModelRouterSettings(t, os.Getenv("HOME"))
+
+	args := baseArgs()
+	var stdout, stderr bytes.Buffer
+	code := Doctor(context.Background(), args, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "modelRouter kiln/auto:") || !strings.Contains(out, "plan→faux-1") {
+		t.Errorf("doctor output missing the modelRouter line:\n%s", out)
+	}
+}
+
+// TestDoctor_NoModelRouterConfigured checks /doctor prints no
+// "modelRouter" line when the user configured neither modelRoles nor
+// modelRouter (the common case) — quiet, like the roles table.
+func TestDoctor_NoModelRouterConfigured(t *testing.T) {
+	startFaux(t, unreadScript)
+	scratchProject(t)
+
+	args := baseArgs()
+	var stdout, stderr bytes.Buffer
+	code := Doctor(context.Background(), args, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "modelRouter") {
+		t.Errorf("doctor output has an unwanted modelRouter line:\n%s", stdout.String())
 	}
 }
 

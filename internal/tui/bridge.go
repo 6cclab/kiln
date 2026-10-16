@@ -22,6 +22,7 @@ import (
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/tools"
 )
 
@@ -713,6 +714,16 @@ type MsgModelInfo struct {
 // MsgGitStatus carries a freshly read git status.
 type MsgGitStatus struct{ Status GitStatus }
 
+// MsgRoute carries a virtual model's latest EventRoute for the footer:
+// which physical model the last turn-loop request actually went to, its
+// thinking level ("" when none), and that model's context window so the
+// meter's denominator follows it.
+type MsgRoute struct {
+	Model         string
+	ThinkingLevel string
+	ContextWindow int
+}
+
 // MsgPermissionPrompt asks the app to show a tool-permission prompt. Reply
 // is answered by the app once the user picks; the gate's own goroutine
 // blocks on it.
@@ -1244,6 +1255,19 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 			cost = &c
 		}
 		b.Send(MsgUsage{ContextUsed: contextUsed, Cost: cost, Tokens: tokens})
+
+	case harness.EventRoute:
+		// A compaction/direct route is not what answers the user, so it
+		// never touches the footer; only a turn-loop route (user/
+		// continuation/retry) does.
+		if ev.RouteReason == string(router.ReasonDirect) {
+			break
+		}
+		b.Send(MsgRoute{
+			Model:         ev.RouteModel.ModelID,
+			ThinkingLevel: ev.RouteThinkingLevel,
+			ContextWindow: ev.RouteContextWindow,
+		})
 
 	case harness.EventFault:
 		msg := "unknown fault"

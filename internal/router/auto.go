@@ -51,6 +51,15 @@ func (t Targets) All() []provider.Model {
 	return []provider.Model{t.Plan, t.PlanComplex, t.Implement, t.Direct}
 }
 
+// Describe is kiln/auto's role summary for /model and "kiln models":
+// "plan→<id> · complex→<id> · implement→<id>" — the three slots a
+// request actually plans or implements on (Direct, compaction's own, is
+// not shown: it is rarely distinct from Implement and would just add
+// noise to an already-dense row).
+func (t Targets) Describe() string {
+	return fmt.Sprintf("plan→%s · complex→%s · implement→%s", t.Plan.ID, t.PlanComplex.ID, t.Implement.ID)
+}
+
 // Complexity is a classifier's rating of a request (jev's criteria).
 type Complexity string
 

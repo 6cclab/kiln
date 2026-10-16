@@ -88,6 +88,17 @@ type BuiltinDeps struct {
 	// actually ran on. Nil (or a nil return) means "not tracked", and
 	// /cost falls back to just its single-model summary.
 	UsageByModel func() map[string]msg.Usage
+	// RouterCostStats reports how many times a virtual model's router
+	// (kiln/auto) switched this session to a different physical model
+	// (compaction's "direct" routes excluded), and the dollar estimate
+	// of the cache re-billing those switches caused, for /cost's
+	// "switches N · cache re-billed ~$X" line. Nil, or switches == 0,
+	// omits the line.
+	RouterCostStats func() (switches int, cacheRebilled float64)
+	// RouterAutoDescribe is kiln/auto's role summary ("plan→<model> ·
+	// complex→<model> · implement→<model>"), shown by /model in place of
+	// kiln/auto's context/tier row. "" when kiln/auto is not registered.
+	RouterAutoDescribe string
 	// SessionElapsed reports how long this session has been running, for
 	// /cost's one-line design summary ("Session: $0.27 · 66k tokens in
 	// context · 71s", Terminal.dc.html:320). Nil (or a nil return of 0)
@@ -523,6 +534,16 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				}
 				out := []string{summary}
 
+				// A virtual model (kiln/auto) that switched physical
+				// models this session: how many times, and the dollar
+				// estimate of the cache re-billing those switches caused
+				// (prefixed "~": it is an estimate, like pi's own).
+				if deps.RouterCostStats != nil {
+					if switches, rebilled := deps.RouterCostStats(); switches > 0 {
+						out = append(out, fmt.Sprintf("switches %d · cache re-billed ~$%.2f", switches, rebilled))
+					}
+				}
+
 				// "by model" table: this session's parent turns plus
 				// every dispatched subagent's usage, broken out by
 				// whichever model it actually ran on — a session that
@@ -563,7 +584,11 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 					if wanted != "" && !strings.Contains(strings.ToLower(id), wanted) {
 						continue
 					}
-					out = append(out, Completion{Value: id, Label: id, Description: modelDescription(m)})
+					desc := modelDescription(m)
+					if id == "kiln/auto" && deps.RouterAutoDescribe != "" {
+						desc = deps.RouterAutoDescribe
+					}
+					out = append(out, Completion{Value: id, Label: id, Description: desc})
 				}
 				return out
 			},
@@ -642,12 +667,16 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				lines := []string{fmt.Sprintf("current: %s", orUnknown(currentID)), ""}
 				for i, m := range models {
 					id := modelID(m)
+					desc := modelDialogDescription(m)
+					if id == "kiln/auto" && deps.RouterAutoDescribe != "" {
+						desc = deps.RouterAutoDescribe
+					}
 					it := Item{
 						Value: id,
 						// Numbers right-aligned, so "10." does not push its
 						// name a column right of " 9.".
 						Label:       fmt.Sprintf("%*d. %s", len(strconv.Itoa(len(models))), i+1, id),
-						Description: modelDialogDescription(m),
+						Description: desc,
 					}
 					if id == currentID {
 						it.Marker = "✔"

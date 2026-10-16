@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/claude/skills"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
@@ -760,6 +761,51 @@ func TestEffortSettingApplies(t *testing.T) {
 		if got := effortSettingApplies(c.m); got != c.want {
 			t.Errorf("%s: effortSettingApplies = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// countingProvider counts RefreshModels calls, for
+// TestRefreshRoleProvidersInto_SharedDoneRefreshesOnce.
+type countingProvider struct {
+	id       string
+	models   []provider.Model
+	refreshN *int
+}
+
+func (p countingProvider) ID() string   { return p.id }
+func (p countingProvider) Name() string { return p.id }
+func (p countingProvider) Auth() provider.AuthSpec {
+	return provider.AuthSpec{Kind: provider.AuthKindNone}
+}
+func (p countingProvider) Models() []provider.Model { return p.models }
+func (p countingProvider) RefreshModels(ctx context.Context) error {
+	*p.refreshN++
+	return nil
+}
+func (p countingProvider) Stream(context.Context, provider.Model, []msg.Message, provider.StreamOptions) (<-chan msg.StreamEvent, func() (*msg.AssistantMessage, error)) {
+	panic("not streamed")
+}
+
+// TestRefreshRoleProvidersInto_SharedDoneRefreshesOnce is the regression
+// for the plan's "double refresh" fix: setupModelRouter's own role
+// refresh and chat.go's later refresh (for ValidateRoles) used to each
+// start from an empty "done" set, so a dynamic (Ollama) provider named by
+// a role in both calls refreshed twice at startup. Sharing one "done" map
+// across both refreshRoleProvidersInto calls (as Run, Models and Doctor
+// now do) must bring that down to once.
+func TestRefreshRoleProvidersInto_SharedDoneRefreshesOnce(t *testing.T) {
+	var n int
+	reg := provider.NewRegistry(auth.NewFileCredentialStore(filepath.Join(t.TempDir(), "auth.json")))
+	reg.Register(countingProvider{id: "ollama", models: []provider.Model{{ID: "qwen", Provider: "ollama"}}, refreshN: &n})
+
+	done := map[string]bool{}
+	// Two role maps that both name the same dynamic provider, exactly as
+	// the model router's slot values and the full modelRoles set do.
+	refreshRoleProvidersInto(context.Background(), reg, map[string]string{"implement": "ollama/qwen"}, done, "", nil)
+	refreshRoleProvidersInto(context.Background(), reg, map[string]string{"structured": "ollama/qwen", "fast": "ollama/qwen"}, done, "", nil)
+
+	if n != 1 {
+		t.Errorf("RefreshModels called %d times, want 1 (shared done set)", n)
 	}
 }
 

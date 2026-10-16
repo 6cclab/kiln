@@ -115,7 +115,8 @@ func (l *Lane) route(ctx context.Context, reason router.Reason, tip string, tran
 	l.h.events.Emit(Event{Type: EventRoute, Lane: l.name, RouteReason: string(reason),
 		RouteVirtual:       session.ModelRef{Provider: model.Provider, ModelID: model.ID},
 		RouteModel:         session.ModelRef{Provider: route.Model.Provider, ModelID: route.Model.ID},
-		RouteThinkingLevel: out.Thinking})
+		RouteThinkingLevel: out.Thinking,
+		RouteContextWindow: route.Model.ContextWindow})
 	return out, cfg, nil
 }
 

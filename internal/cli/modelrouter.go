@@ -5,12 +5,34 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/andrepato/harness/internal/claude/paths"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/router"
 )
+
+// loadModelRouter loads user-scope modelRouter/modelRoles for cwd and, when
+// they resolve, registers kiln/auto (provider kiln) in reg: the one path
+// `kiln`'s startup (chat.go) and the `kiln models`/`kiln providers`/
+// `kiln doctor` subcommands (subcommands.go) all call, so whether kiln/auto
+// is listed never drifts from whether a session would actually get it.
+// sources/extraSettings mirror LoadOptions.Sources/Extra (settingsSources'
+// return and --settings respectively); warn/stderr are setupModelRouter's
+// own (startup warnings, and the classifier's debug line). refreshed is
+// setupModelRouter's dynamic-provider dedup set (refreshRoleProvidersInto);
+// pass the same map a caller's own later refreshRoleProviders call uses
+// (e.g. chat.go's subagent-role refresh) so a provider both calls would
+// touch refreshes only once, or nil for a one-off caller that refreshes
+// nothing else.
+func loadModelRouter(ctx context.Context, cwd string, reg *provider.Registry, sources []paths.Scope, extraSettings string, warn func(string), stderr io.Writer, refreshed map[string]bool) modelRouterSetup {
+	routerConfig := claudesettings.LoadModelRouter(cwd, claudesettings.LoadOptions{Sources: sources, Extra: extraSettings})
+	if w := claudesettings.ModelRouterIgnoredWarning(cwd, routerConfig.Ignored); w != "" {
+		warn(w)
+	}
+	return setupModelRouter(ctx, reg, routerConfig, warn, stderr, refreshed)
+}
 
 // modelRouterSetup is kiln/auto as this run configured it.
 type modelRouterSetup struct {
@@ -21,6 +43,13 @@ type modelRouterSetup struct {
 	Reason     string
 	Targets    router.Targets
 	Routers    router.Set
+	// Configured reports that the user actually set up something for the
+	// router to read (a modelRouter key, or at least one modelRoles
+	// entry) — doctor's gate for printing a "modelRouter" line at all,
+	// the same gate the roles table already uses (len(ModelRoles) > 0),
+	// so a session with neither stays quiet rather than reporting
+	// "modelRouter: not available" on every run.
+	Configured bool
 	// classifier is the LLM classifier wired into the registered Auto
 	// router, nil when the classifier is off or "fast" does not resolve.
 	// Its OnUsage is set later, once the harness exists (see
@@ -81,15 +110,19 @@ func ModelRouterClassifierUsageSource(model provider.Model) string {
 //
 // The roles' dynamic providers (Ollama) are refreshed first, as
 // refreshRoleProviders does for subagent roles, so a role on one resolves.
-func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudesettings.ModelRouterConfig, warn func(string), stderr io.Writer) modelRouterSetup {
+func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudesettings.ModelRouterConfig, warn func(string), stderr io.Writer, refreshed map[string]bool) modelRouterSetup {
+	if refreshed == nil {
+		refreshed = map[string]bool{}
+	}
 	for _, p := range cfg.Problems {
 		warn(p)
 	}
+	configured := cfg.Set || len(cfg.ModelRoles) > 0
 	if cfg.Disabled {
-		return modelRouterSetup{Reason: `modelRouter is false in user settings`}
+		return modelRouterSetup{Reason: `modelRouter is false in user settings`, Configured: configured}
 	}
 	if !cfg.Set && len(cfg.ModelRoles) == 0 {
-		return modelRouterSetup{Reason: "user settings have no modelRoles for it to route to"}
+		return modelRouterSetup{Reason: "user settings have no modelRoles for it to route to", Configured: configured}
 	}
 	values := map[string]string{}
 	for _, slot := range claudesettings.RouterSlots {
@@ -103,7 +136,7 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	if cfg.ModelRoles["fast"] != "" {
 		values["modelRouterFast"] = cfg.ModelRoles["fast"]
 	}
-	refreshRoleProviders(ctx, reg, values, "", stderr)
+	refreshRoleProvidersInto(ctx, reg, values, refreshed, "", stderr)
 
 	resolved := map[string]provider.Model{}
 	for _, slot := range claudesettings.RouterSlots {
@@ -129,7 +162,7 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 		if cfg.Set {
 			warn("kiln/auto is not available: " + reason + ".")
 		}
-		return modelRouterSetup{Reason: reason}
+		return modelRouterSetup{Reason: reason, Configured: configured}
 	}
 	pick := func(slot string, fallback provider.Model) provider.Model {
 		if m, ok := resolved[slot]; ok {
@@ -145,7 +178,7 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 
 	auto := router.AutoModel(t)
 	reg.Register(router.NewVirtualProvider(auto))
-	setup := modelRouterSetup{Registered: true, Targets: t}
+	setup := modelRouterSetup{Registered: true, Targets: t, Configured: configured}
 
 	var fallback func(string) router.Complexity
 	if cfg.Fallback == claudesettings.RouterFallbackHeuristic {

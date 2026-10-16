@@ -37,6 +37,8 @@ type StatusPatch struct {
 	Git           *GitStatus
 	Mode          *string
 	Thinking      *bool
+	RoutedModel   *string
+	RoutedLevel   *string
 }
 
 // Apply patches the state.
@@ -61,6 +63,12 @@ func (f *FooterState) Apply(p StatusPatch) {
 	}
 	if p.Thinking != nil {
 		f.state.Thinking = *p.Thinking
+	}
+	if p.RoutedModel != nil {
+		f.state.RoutedModel = *p.RoutedModel
+	}
+	if p.RoutedLevel != nil {
+		f.state.RoutedLevel = *p.RoutedLevel
 	}
 }
 

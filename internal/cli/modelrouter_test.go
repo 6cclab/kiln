@@ -50,7 +50,7 @@ func routerRegistry(t *testing.T) *provider.Registry {
 func runSetup(t *testing.T, reg *provider.Registry, cfg claudesettings.ModelRouterConfig) (modelRouterSetup, []string) {
 	t.Helper()
 	var warnings []string
-	s := setupModelRouter(context.Background(), reg, cfg, func(w string) { warnings = append(warnings, w) }, nil)
+	s := setupModelRouter(context.Background(), reg, cfg, func(w string) { warnings = append(warnings, w) }, nil, nil)
 	return s, warnings
 }
 
@@ -80,22 +80,30 @@ func TestSetupModelRouter(t *testing.T) {
 			claudesettings.ModelRouterConfig{}, "", 0},
 		{"disabled",
 			claudesettings.ModelRouterConfig{Set: true, Disabled: true, ModelRoles: roles}, "", 0},
-		{"explicit roles; planComplex falls back to plan, direct to implement",
+		{"explicit roles; the unlisted slots use their own defaults, not a fallback chain",
 			claudesettings.ModelRouterConfig{Set: true, ModelRoles: roles, Roles: map[string]string{"plan": "heavy", "implement": "structured"}},
-			"faux-3,faux-3,faux-1,faux-1", 0},
-		{"explicit roles; no plan: plan falls back to implement",
+			// planComplex is unlisted, so it keeps its own default role
+			// ("heavy" = faux-3, which happens to equal plan here); direct
+			// is unlisted too and keeps its default ("fast" = faux-2),
+			// which resolves on its own rather than falling back to
+			// implement (faux-1).
+			"faux-3,faux-3,faux-1,faux-2", 0},
+		{"explicit roles; the unlisted plan keeps its own default (structured), not implement's fallback",
 			claudesettings.ModelRouterConfig{Set: true, ModelRoles: roles, Roles: map[string]string{"implement": "fast", "planComplex": "heavy"}},
-			"faux-2,faux-3,faux-2,faux-2", 0},
-		{"explicit role missing from modelRoles: warned, falls back",
+			"faux-1,faux-3,faux-2,faux-2", 0},
+		{"explicit role missing from modelRoles: warned, falls back; the unlisted planComplex/direct still resolve on their own defaults",
 			claudesettings.ModelRouterConfig{Set: true, ModelRoles: roles, Roles: map[string]string{"plan": "ghost", "implement": "fast"}},
-			"faux-2,faux-2,faux-2,faux-2", 1},
+			"faux-2,faux-3,faux-2,faux-2", 1},
 		{"explicit implement unresolved: warned, no kiln/auto",
 			claudesettings.ModelRouterConfig{Set: true, ModelRoles: roles, Roles: map[string]string{"plan": "structured", "implement": "ghost"}},
 			"", 2},
 		{"a target whose provider has no credentials is not used",
-			claudesettings.ModelRouterConfig{Set: true, ModelRoles: map[string]string{"fast": "faux/faux-2", "heavy": "paid/big"},
+			claudesettings.ModelRouterConfig{Set: true, ModelRoles: map[string]string{"fast": "faux/faux-2", "structured": "faux/faux-1", "heavy": "paid/big"},
 				Roles: map[string]string{"planComplex": "heavy", "implement": "fast"}},
-			"faux-2,faux-2,faux-2,faux-2", 1},
+			// plan is unlisted and defaults to "structured" (faux-1, which
+			// resolves cleanly); only planComplex's explicit "heavy" hits
+			// the credential-less provider and falls back to plan.
+			"faux-1,faux-1,faux-2,faux-2", 1},
 		{"problems are passed on",
 			claudesettings.ModelRouterConfig{ModelRoles: roles, Problems: []string{"bad fallback"}}, "faux-1,faux-3,faux-2,faux-2", 1},
 	}
@@ -156,7 +164,10 @@ func TestSetupModelRouterOffline(t *testing.T) {
 	if !s.Registered || ids(s.Targets) != "qwen,qwen,qwen,qwen" {
 		t.Fatalf("targets = %s, want only the local model", ids(s.Targets))
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "HARNESS_OFFLINE") {
+	// Two warnings: the explicit plan=heavy and the unlisted planComplex's
+	// own default (also heavy) both name the remote paid/big, which
+	// HARNESS_OFFLINE refuses; both fall back to the local qwen target.
+	if len(warnings) != 2 || !strings.Contains(warnings[0], "HARNESS_OFFLINE") || !strings.Contains(warnings[1], "HARNESS_OFFLINE") {
 		t.Errorf("warnings = %q", warnings)
 	}
 }
@@ -206,7 +217,12 @@ func TestSetupModelRouter_Classifier(t *testing.T) {
 	t.Run("classifier: true explicit but fast does not resolve: warned", func(t *testing.T) {
 		reg := routerRegistry(t)
 		cfg := claudesettings.ModelRouterConfig{Set: true, Classifier: true,
-			ModelRoles: map[string]string{"structured": "faux/faux-1", "fast": "ghost/nope"},
+			// heavy is given so the unlisted planComplex's own default
+			// resolves quietly; only "fast" (the unlisted direct's
+			// default, and the classifier's own role) is unresolvable,
+			// so it warns twice: once for direct's fallback, once for
+			// the classifier itself.
+			ModelRoles: map[string]string{"structured": "faux/faux-1", "heavy": "faux/faux-3", "fast": "ghost/nope"},
 			Roles:      map[string]string{"implement": "structured"}}
 		s, warnings := runSetup(t, reg, cfg)
 		if !s.Registered {
@@ -215,8 +231,11 @@ func TestSetupModelRouter_Classifier(t *testing.T) {
 		if s.classifier != nil {
 			t.Error("classifier wired despite fast not resolving")
 		}
-		if len(warnings) != 1 || !strings.Contains(warnings[0], "modelRouter.classifier") {
-			t.Errorf("warnings = %q, want one mentioning modelRouter.classifier", warnings)
+		if len(warnings) != 2 {
+			t.Fatalf("warnings = %q, want 2 (direct's fallback and the classifier)", warnings)
+		}
+		if !strings.Contains(warnings[0], "modelRouter.roles.direct") || !strings.Contains(warnings[1], "modelRouter.classifier") {
+			t.Errorf("warnings = %q, want roles.direct then classifier", warnings)
 		}
 	})
 	t.Run("defaults (modelRouter absent) with no fast: quiet", func(t *testing.T) {

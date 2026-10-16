@@ -190,6 +190,10 @@ type Event struct {
 	RouteVirtual       session.ModelRef
 	RouteModel         session.ModelRef
 	RouteThinkingLevel string
+	// RouteContextWindow is the routed model's context window, so the
+	// footer's meter denominator follows the model that actually answers
+	// a request rather than the virtual model's (smallest-of-targets) tier.
+	RouteContextWindow int
 
 	// run_end / turn_end
 	Status string // "completed" | "aborted" | "failed"
