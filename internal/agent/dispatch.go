@@ -39,6 +39,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/automode"
+	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/agents"
 	"github.com/andrepato/harness/internal/claude/permission"
 	"github.com/andrepato/harness/internal/diag"
@@ -368,6 +369,16 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	defer func() { _ = started.Harness.Close() }()
 	if child != nil {
 		child.Parent = started
+		// On kiln/auto a route to a model with another window re-sizes
+		// this session (Start's OnRoute handler, Retier). Its harness
+		// budgets follow on their own; the task tool's agent and role
+		// text is truncated per tier, so it is rebuilt for the new one
+		// (AddTools replaces by name). The system prompt is def.Prompt,
+		// which nothing sizes, so it stays as it is.
+		dispatch := adaptDispatch(child.Dispatch)
+		started.OnTierChanged = func(_ context.Context, tier budget.Tier) {
+			started.Harness.AddTools(tools.TaskTool(dispatch, d.Agents, d.Roles, tier))
+		}
 	}
 
 	// Installed before the first prompt, so no tool call can slip through

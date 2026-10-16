@@ -135,6 +135,10 @@ type Started struct {
 	// with a different window.
 	tierMu sync.Mutex
 	tier   budget.Tier
+	// retierMu makes each Retier one unit: the harness's budgets, tier
+	// and OnTierChanged all move together. It is held while OnTierChanged
+	// runs, which may read CurrentTier (tierMu), so the two are separate.
+	retierMu sync.Mutex
 	// Created reports whether Start created a brand-new session file
 	// (true) or opened/forked an existing one (false).
 	Created bool
@@ -170,7 +174,19 @@ func (s *Started) CurrentTier() budget.Tier {
 // (SetModel) and, on a virtual model, every route to a model with a
 // different window (Start's OnRoute handler) go through it, so both
 // re-size the same budgets.
+//
+// /model and a route can call it at once, from different goroutines; the
+// whole body is one unit (retierMu), so the session always ends sized for
+// one tier throughout, never with one tier's compaction and another's
+// tool-output ceiling.
 func Retier(ctx context.Context, started *Started, tier budget.Tier) {
+	started.retierMu.Lock()
+	defer started.retierMu.Unlock()
+	retierLocked(ctx, started, tier)
+}
+
+// retierLocked is Retier's body; the caller holds started.retierMu.
+func retierLocked(ctx context.Context, started *Started, tier budget.Tier) {
 	started.Harness.SetCompactionSettings(compactionFromTier(tier))
 	started.Harness.SetToolOutputTokens(tier.ToolOutputTokens)
 	started.tierMu.Lock()
@@ -303,12 +319,26 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 	// answered: a route to a model whose window differs from the one the
 	// session is sized for re-sizes it before that request is built. Every
 	// session gets this, a subagent's included, each on its own harness.
+	//
+	// A /model that moved the lane off the virtual model while this route
+	// was being decided has sized the session for the model the user
+	// picked, so the route leaves it be. The lane's model is read under
+	// retierMu, and SetModel moves the lane before its own Retier, so in
+	// either order the picked model's size is the one that stays.
 	h.Hooks().OnRoute(func(ctx context.Context, info harness.RouteInfo) error {
 		window := info.Model.ContextWindow
-		if window <= 0 || window == started.CurrentTier().ContextWindow {
+		if window <= 0 {
 			return nil
 		}
-		Retier(ctx, started, budget.TierForWindow(window))
+		started.retierMu.Lock()
+		defer started.retierMu.Unlock()
+		if window == started.CurrentTier().ContextWindow {
+			return nil
+		}
+		if ref, err := lane.Model(); err != nil || ref.Provider != info.Virtual.Provider || ref.ModelID != info.Virtual.ID {
+			return nil
+		}
+		retierLocked(ctx, started, budget.TierForWindow(window))
 		return nil
 	})
 	return started, nil
