@@ -1,0 +1,16 @@
+{
+ "id": "20261016T205055Z-harness-opts-unlocked-reads",
+ "found_at": "2026-10-16T20:50:55Z",
+ "scenario": "none/race-probe",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Lane reads harness options without h.mu while setters write them from other goroutines",
+ "observed": "go test -race with Retier looping during Lane.Prompt reports data races at internal/harness/turn.go:160 (opSettings reads l.h.opts.Compaction) and turn.go:645/685 (buildStreamOptions copies l.h.opts). SetCompactionSettings, SetToolOutputTokens, AddTools and SetSystemPrompt write under h.mu from /model, MCP connect and mods. Predates PR #55.",
+ "expected": "The turn loop takes a locked snapshot of the options it reads, so a concurrent setter never races a request being built.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "open",
+ "fix": null
+}
