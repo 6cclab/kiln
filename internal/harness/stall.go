@@ -38,7 +38,7 @@ func (e *StallError) Timeout() bool { return true }
 
 // stallLimits returns the first-token allowance for a prompt of
 // promptTokens and the idle limit, from Options or compaction's defaults.
-func (o Options) stallLimits(promptTokens int) (first, idle time.Duration) {
+func (o *Options) stallLimits(promptTokens int) (first, idle time.Duration) {
 	first = compaction.DefaultFirstEventTimeout(promptTokens)
 	if o.StallFirstEvent != nil {
 		first = o.StallFirstEvent(promptTokens)

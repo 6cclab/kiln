@@ -158,9 +158,10 @@ func (h *Harness) AddTools(tools ...*tool.Tool) {
 }
 
 // SetCompactionSettings replaces the compaction settings. The turn loop
-// reads them live, so they apply from the next compaction check or
-// request fit on, including within an operation already running; only
-// the copy recorded in the operation's state (opSettings) is a snapshot.
+// reads them, under h.mu, at each compaction check or request fit, so they
+// apply from the next one on, including within an operation already
+// running; the copy recorded in the operation's state (opSettings) is
+// taken once.
 func (h *Harness) SetCompactionSettings(s CompactionSettings) {
 	h.mu.Lock()
 	h.opts.Compaction = s
@@ -344,6 +345,19 @@ func initialLaneWrites(lane string, model session.ModelRef, thinkingLevel string
 		return nil, err
 	}
 	return []session.Write{tip, cfg, st}, nil
+}
+
+// requestOptions returns a copy of the options, taken under the lock the
+// setters (SetSystemPrompt, SetTools, AddTools, SetCompactionSettings,
+// SetToolOutputTokens) write them with. The turn loop runs on a lane's
+// goroutine while /model, the MCP connect path and mods call those setters
+// from others, so it builds each request, and makes each compaction
+// decision, from one such snapshot rather than reading h.opts directly.
+// Taken after the route hook has run, it carries what that hook set.
+func (h *Harness) requestOptions() Options {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.opts
 }
 
 // toolSet returns the tool set the next request will resolve active tool

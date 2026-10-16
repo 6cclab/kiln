@@ -43,7 +43,8 @@ const (
 // target is the model the next request goes to: the threshold is its
 // window, so a virtual lane routed to a smaller model compacts first.
 func (l *Lane) autoCompact(ctx context.Context, tip string, target routed) (string, error) {
-	if !l.h.opts.Compaction.Enabled {
+	settings := l.h.CompactionSettings()
+	if !settings.Enabled {
 		return tip, nil
 	}
 	pathEntries, err := l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "oldestFirst"})
@@ -55,7 +56,7 @@ func (l *Lane) autoCompact(ctx context.Context, tip string, target routed) (stri
 		return tip, nil
 	}
 	usage := compaction.CalculateContextTokens(pathEntries)
-	if !compaction.ShouldCompact(usage.Tokens, target.Model.ContextWindow, l.h.opts.Compaction) {
+	if !compaction.ShouldCompact(usage.Tokens, target.Model.ContextWindow, settings) {
 		return tip, nil
 	}
 	summariser, err := l.summariser(ctx, target, entriesToTranscript(pathEntries))
@@ -125,7 +126,8 @@ const compactionAttempts = 2
 // always come from the harness's compaction settings, which follow the
 // lane's current model: the result has to fit that model, whoever writes it.
 func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, summariser provider.Model, cfg session.LaneConfiguration, customInstructions *string, trigger string) error {
-	prep, err := compaction.Prepare(pathEntries, l.h.opts.Compaction)
+	settings := l.h.CompactionSettings()
+	prep, err := compaction.Prepare(pathEntries, settings)
 	if err != nil {
 		return err
 	}
@@ -137,7 +139,7 @@ func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, s
 		// automatic one keeps as recent, as Claude Code's /compact does:
 		// the user wants the room now. Only the latest turn stays
 		// verbatim; a conversation of one turn has nothing to summarise.
-		keepLatest := l.h.opts.Compaction
+		keepLatest := settings
 		keepLatest.KeepRecentTokens = latestTurnTokens(pathEntries)
 		if prep, err = compaction.Prepare(pathEntries, keepLatest); err != nil {
 			return err
@@ -176,7 +178,10 @@ func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, s
 	// projection (it also runs on every real request), so running it again
 	// here has no side effect worth guarding against.
 	liveTranscript := l.invokeTransformContext(ctx, entriesToTranscript(pathEntries))
-	liveStreamOpts := buildStreamOptions(l.h.opts, cfg)
+	// Snapshot again: the before_compaction hooks above may have changed
+	// the system prompt or tools, and the fast path must match the request
+	// the loop would send next.
+	liveStreamOpts := buildStreamOptions(l.h.requestOptions(), cfg)
 	fastPath := &compaction.FastPathInput{
 		SystemPrompt: liveStreamOpts.SystemPrompt,
 		Tools:        liveStreamOpts.Tools,
@@ -283,7 +288,7 @@ func kTokens(n int) string {
 // last reported usage, which was counted by whatever model answered last,
 // not the one about to be asked.
 func (l *Lane) requestTokens(transcript []msg.Message) int {
-	n := (len(l.h.opts.SystemPrompt) + 3) / 4
+	n := (len(l.h.SystemPrompt()) + 3) / 4
 	if tools, err := l.ToolSchemaTokens(); err == nil {
 		n += tools
 	}
@@ -309,7 +314,7 @@ func RequestLimit(window, reserve int) int {
 }
 
 func (l *Lane) requestLimit(model provider.Model) int {
-	return RequestLimit(model.ContextWindow, l.h.opts.Compaction.ReserveTokens)
+	return RequestLimit(model.ContextWindow, l.h.CompactionSettings().ReserveTokens)
 }
 
 // fitRequest builds the transcript for the next request and makes sure it
@@ -336,7 +341,7 @@ func (l *Lane) fitRequest(ctx context.Context, tip string, recoveryUsed *bool, t
 			return tip, transcript, nil
 		}
 		overflow := &ContextOverflowError{Model: model.Provider + "/" + model.ID, Tokens: tokens, Limit: limit, Window: model.ContextWindow}
-		if *recoveryUsed || !l.h.opts.Compaction.Enabled {
+		if *recoveryUsed || !l.h.CompactionSettings().Enabled {
 			return tip, nil, overflow
 		}
 		*recoveryUsed = true
@@ -374,7 +379,7 @@ func isContextOverflow(err error) bool {
 // refused a request as too large. It reports the new tip and whether a
 // compaction entry was written. target is the request that overflowed.
 func (l *Lane) compactForOverflow(ctx context.Context, tip string, target routed) (string, bool) {
-	if !l.h.opts.Compaction.Enabled {
+	if !l.h.CompactionSettings().Enabled {
 		return tip, false
 	}
 	entries, err := l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "oldestFirst"})

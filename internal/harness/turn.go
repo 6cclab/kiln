@@ -157,7 +157,7 @@ func derefOr(s *string, def string) string {
 }
 
 func (l *Lane) opSettings() OpSettings {
-	c := l.h.opts.Compaction
+	c := l.h.CompactionSettings()
 	return OpSettings{
 		Compaction: OpCompactionSettings{
 			Enabled:          c.Enabled,
@@ -642,7 +642,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		return nil, target, tip, fmt.Errorf("harness: unknown provider %q", target.Model.Provider)
 	}
 	m := target.Model
-	opts := buildStreamOptions(l.h.opts, target.streamConfig(cfg))
+	opts := buildStreamOptions(l.h.requestOptions(), target.streamConfig(cfg))
 
 	responseEntryID := ""
 	if raw, _, ok := l.h.opts.Storage.GetValue(session.NamespaceOpState, operationID); ok {
@@ -679,7 +679,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 				}
 				promptTokens = l.requestTokens(transcript)
 			}
-			target, m, opts = next, next.Model, buildStreamOptions(l.h.opts, next.streamConfig(cfg))
+			target, m, opts = next, next.Model, buildStreamOptions(l.h.requestOptions(), next.streamConfig(cfg))
 		}
 		reqCtx, cancelReq := context.WithCancelCause(ctx)
 		first, idle := l.h.opts.stallLimits(promptTokens)
@@ -787,7 +787,7 @@ func buildStreamOptions(opts Options, cfg session.LaneConfiguration) provider.St
 // hit the "unknown tool" error path in beginTool exactly as it always did,
 // alone in its own run.
 func (l *Lane) isConcurrentTool(name string) bool {
-	t, ok := l.h.opts.Tools.Get(name)
+	t, ok := l.h.toolSet().Get(name)
 	return ok && t.Concurrent
 }
 
@@ -889,8 +889,11 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	// A call that cannot run is refused before the before-tool hooks: they
 	// include the permission gate, and asking the user to approve a call
 	// that is then refused anyway wastes their answer.
+	// One view of the tool set for the whole call: AddTools and SetTools
+	// replace it from other goroutines (MCP connect, mods).
+	tools := l.h.toolSet()
 	var refusal *tool.Result
-	if _, registered := l.h.opts.Tools.Get(call.Name); !registered {
+	if _, registered := tools.Get(call.Name); !registered {
 		// Distinct from the "not in the active tool set" branch below: a
 		// name that was never registered anywhere is a typo or a
 		// hallucinated tool, not an access restriction, and the two read
@@ -919,7 +922,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	// (each runs its own Harness through this same loop) and resumed calls
 	// alike.
 	if refusal == nil && call.InvalidArgs == "" {
-		t, _ := l.h.opts.Tools.Get(call.Name)
+		t, _ := tools.Get(call.Name)
 		if err := tool.CheckArgsMapFor(t, call.Arguments); err != nil {
 			diag.L().Info("tool refused: ambiguous input", "lane", l.name, "tool", call.Name, "reason", err.Error())
 			r := argsRefusal(call.Name, err)
@@ -940,7 +943,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		// it impossible for the tool to run anything else. Falling back to
 		// the original input on an unparsable rewrite, as this once did,
 		// would run what the gate never judged.
-		t, _ := l.h.opts.Tools.Get(call.Name)
+		t, _ := tools.Get(call.Name)
 		var rewritten map[string]any
 		if err := tool.CheckArgsFor(t, before.RewrittenArgs); err != nil {
 			r := argsRefusal(call.Name, err)
@@ -966,7 +969,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		// Registration was already confirmed above, so Get cannot miss
 		// here; it is repeated rather than threading the *tool.Tool
 		// through the branches above.
-		t, _ := l.h.opts.Tools.Get(call.Name)
+		t, _ := tools.Get(call.Name)
 		argsJSON, _ := json.Marshal(args)
 		res, execErr := t.Execute(ctx, argsJSON, func(tool.Result) {}, tool.Invocation{ToolCallID: call.ID, ToolName: call.Name, Cwd: l.h.opts.Cwd})
 		if execErr != nil {
@@ -998,7 +1001,7 @@ func argsRefusal(toolName string, err error) tool.Result {
 // gate judges that input. An unknown tool name passes: beginTool refuses
 // those itself, before any hook runs.
 func (h *Harness) CheckToolArgs(name string, args map[string]any) error {
-	t, ok := h.opts.Tools.Get(name)
+	t, ok := h.toolSet().Get(name)
 	if !ok {
 		return nil
 	}
