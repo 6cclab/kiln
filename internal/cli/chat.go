@@ -108,6 +108,20 @@ func ollamaOptionsFromEnv() ollama.Options {
 	return ollama.Options{URL: url, ServerDefaultContext: serverDefault}
 }
 
+// sessionModel is the model a session starts on without --model or a
+// resume: settings.json's model in "provider/model" form (it may hold a
+// Claude Code alias like "opus[1m]" that names nothing here), else
+// HARNESS_MODEL, else defaultModel.
+func sessionModel(settingsModel string) string {
+	if strings.Contains(settingsModel, "/") {
+		return settingsModel
+	}
+	if m := os.Getenv("HARNESS_MODEL"); m != "" {
+		return m
+	}
+	return defaultModel
+}
+
 // refreshRoleProvidersInto refreshes the model list of every provider a
 // role points at, other than the one already refreshed for the main
 // model (skip) or already refreshed into done.
@@ -541,16 +555,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// A resumed session continues on the model it last ran on, as pi does
 	// (agent.ResumedModel): its conversation was sized for that model's
 	// window. Claude Code resumes on the settings model instead.
-	configured := ""
-	if strings.Contains(settings.Model, "/") {
-		configured = settings.Model
-	}
-	if configured == "" {
-		configured = os.Getenv("HARNESS_MODEL")
-	}
-	if configured == "" {
-		configured = defaultModel
-	}
+	configured := sessionModel(settings.Model)
 	wanted := args.Model
 	restoring := ""
 	if wanted == "" {
@@ -572,7 +577,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// below, so a dynamic (Ollama) provider named by both the router's
 	// own slots and the full modelRoles set refreshes once, not twice.
 	roleProvidersRefreshed := map[string]bool{}
-	modelRouter := loadModelRouter(ctx, cwd, reg, settingsSources(args.SettingSources), args.Settings, startupWarn, stderr, roleProvidersRefreshed)
+	routerSession := configured
+	if args.Model != "" && !strings.HasPrefix(args.Model, router.AutoProvider+"/") {
+		routerSession = args.Model
+	}
+	modelRouter := loadModelRouter(ctx, cwd, reg, settingsSources(args.SettingSources), args.Settings, routerSession, startupWarn, stderr, roleProvidersRefreshed)
 	// routerAutoDescribe is "" unless kiln/auto is registered: /model and
 	// "kiln models" use it in place of kiln/auto's context/tier row. A
 	// run that fell back for at least one slot appends the shortest
@@ -586,6 +595,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 		if len(modelRouter.LocalCollapseNotes) > 0 {
 			routerAutoDescribe += " · one model per local server"
+		}
+		if len(modelRouter.DerivedRoles) > 0 {
+			routerAutoDescribe += " · default roles"
 		}
 	}
 	var providerID, modelID string
@@ -638,6 +650,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 		fmt.Fprintln(stderr, "kiln:", resolveErr)
 		return 1
+	}
+	// Roles kiln/auto picked itself are worth a line only on a session
+	// that routes with them; /model and doctor show them otherwise.
+	if providerID == router.AutoProvider && modelRouter.DerivedNote != "" {
+		startupWarn(modelRouter.DerivedNote)
 	}
 
 	// modelRoles warnings: reported once, up front, so a broken role is

@@ -29,6 +29,7 @@ import (
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/search"
 )
 
@@ -54,7 +55,7 @@ func Providers(ctx context.Context, stdout, stderr io.Writer) int {
 	// (loadModelRouter), so it is listed exactly when a session would
 	// actually get it.
 	if cwd, err := os.Getwd(); err == nil {
-		loadModelRouter(ctx, cwd, reg, nil, "", func(string) {}, nil, nil)
+		loadModelRouter(ctx, cwd, reg, nil, "", configuredSessionModel(cwd), func(string) {}, nil, nil)
 	}
 	statuses := authlogin.Status(ctx, reg, reg.Credentials())
 	subs := subscriptionProviders(reg)
@@ -72,6 +73,13 @@ func Providers(ctx context.Context, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "\nLog in with a plan:  kiln login <%s>\n", strings.Join(subs, "|"))
 	}
 	return 0
+}
+
+// configuredSessionModel is sessionModel for cwd's merged settings, for
+// the subcommands that take no settings flags of their own.
+func configuredSessionModel(cwd string) string {
+	settings := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{Trusted: folderTrusted(cwd), Headless: true})
+	return sessionModel(settings.Model)
 }
 
 func truncateString(s string, n int) string {
@@ -96,7 +104,7 @@ func Models(ctx context.Context, stdout, stderr io.Writer, providerID string) in
 	// both the router and a plain modelRoles entry) refreshes once.
 	roleProvidersRefreshed := map[string]bool{}
 	if cwd, err := os.Getwd(); err == nil {
-		loadModelRouter(ctx, cwd, reg, nil, "", func(string) {}, nil, roleProvidersRefreshed)
+		loadModelRouter(ctx, cwd, reg, nil, "", configuredSessionModel(cwd), func(string) {}, nil, roleProvidersRefreshed)
 	}
 
 	if providerID != "" {
@@ -311,11 +319,15 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	// become doctor problems, and its Configured gate is doctor's own
 	// gate for printing a modelRouter line at all — quiet when the user
 	// set up nothing for it to read, same as the roles table below.
+	routerSession := sessionModel(settings.Model)
+	if args.Model != "" && !strings.HasPrefix(args.Model, router.AutoProvider+"/") {
+		routerSession = args.Model
+	}
 	var routerWarnings []string
 	// roleProvidersRefreshed is shared with the roles-table refresh
 	// below, so a provider both calls would touch refreshes once.
 	roleProvidersRefreshed := map[string]bool{}
-	modelRouter := loadModelRouter(ctx, cwd, reg, settingsSources(args.SettingSources), args.Settings, func(w string) { routerWarnings = append(routerWarnings, w) }, nil, roleProvidersRefreshed)
+	modelRouter := loadModelRouter(ctx, cwd, reg, settingsSources(args.SettingSources), args.Settings, routerSession, func(w string) { routerWarnings = append(routerWarnings, w) }, nil, roleProvidersRefreshed)
 	// The one-model-per-local-server note is informational, not a
 	// problem: it is shown once, on the "modelRouter local" line below.
 	for _, w := range routerWarnings {
@@ -331,6 +343,9 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 			}
 			if len(modelRouter.LocalCollapseNotes) > 0 {
 				lines = append(lines, "modelRouter local "+strings.Join(modelRouter.LocalCollapseNotes, "; "))
+			}
+			if modelRouter.DerivedNote != "" {
+				lines = append(lines, "modelRouter defaults "+modelRouter.DerivedNote)
 			}
 		} else {
 			lines = append(lines, "modelRouter not available: "+modelRouter.Reason)

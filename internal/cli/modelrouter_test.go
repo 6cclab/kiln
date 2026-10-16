@@ -51,7 +51,7 @@ func routerRegistry(t *testing.T) *provider.Registry {
 func runSetup(t *testing.T, reg *provider.Registry, cfg claudesettings.ModelRouterConfig) (modelRouterSetup, []string) {
 	t.Helper()
 	var warnings []string
-	s := setupModelRouter(context.Background(), reg, cfg, func(w string) { warnings = append(warnings, w) }, nil, nil)
+	s := setupModelRouter(context.Background(), reg, cfg, "", func(w string) { warnings = append(warnings, w) }, nil, nil)
 	return s, warnings
 }
 

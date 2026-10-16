@@ -29,13 +29,14 @@ import (
 // pass the same map a caller's own later refreshRoleProviders call uses
 // (e.g. chat.go's subagent-role refresh) so a provider both calls would
 // touch refreshes only once, or nil for a one-off caller that refreshes
-// nothing else.
-func loadModelRouter(ctx context.Context, cwd string, reg *provider.Registry, sources []paths.Scope, extraSettings string, warn func(string), stderr io.Writer, refreshed map[string]bool) modelRouterSetup {
+// nothing else. session is the configured session model (sessionModel),
+// which deriveRoles makes the fast role when it is local.
+func loadModelRouter(ctx context.Context, cwd string, reg *provider.Registry, sources []paths.Scope, extraSettings, session string, warn func(string), stderr io.Writer, refreshed map[string]bool) modelRouterSetup {
 	routerConfig := claudesettings.LoadModelRouter(cwd, claudesettings.LoadOptions{Sources: sources, Extra: extraSettings})
 	if w := claudesettings.ModelRouterIgnoredWarning(cwd, routerConfig.Ignored); w != "" {
 		warn(w)
 	}
-	return setupModelRouter(ctx, reg, routerConfig, warn, stderr, refreshed)
+	return setupModelRouter(ctx, reg, routerConfig, session, warn, stderr, refreshed)
 }
 
 // modelRouterSetup is kiln/auto as this run configured it.
@@ -76,6 +77,12 @@ type modelRouterSetup struct {
 	// /model's describe suffix only says " · one model per local server"
 	// rather than restating the whole note, which has little room for it.
 	LocalCollapseNotes []string
+	// DerivedRoles is the modelRoles entries deriveRoles filled in because
+	// user modelRoles left them out, and DerivedNote the line naming
+	// them: the startup note when the session runs on kiln/auto, and
+	// doctor's "modelRouter defaults" line.
+	DerivedRoles map[string]string
+	DerivedNote  string
 }
 
 // shortestFallbackReason is the shortest of FallbackReasons, "" when there
@@ -230,7 +237,7 @@ func (p *routerProblem) reasonPhrase() string {
 //
 // The roles' dynamic providers (Ollama) are refreshed first, as
 // refreshRoleProviders does for subagent roles, so a role on one resolves.
-func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudesettings.ModelRouterConfig, warn func(string), stderr io.Writer, refreshed map[string]bool) modelRouterSetup {
+func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudesettings.ModelRouterConfig, session string, warn func(string), stderr io.Writer, refreshed map[string]bool) modelRouterSetup {
 	if refreshed == nil {
 		refreshed = map[string]bool{}
 	}
@@ -241,9 +248,11 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	if cfg.Disabled {
 		return modelRouterSetup{Reason: `modelRouter is false in user settings`, Configured: configured}
 	}
-	if !cfg.Set && len(cfg.ModelRoles) == 0 {
-		return modelRouterSetup{Reason: "user settings have no modelRoles for it to route to", Configured: configured}
+	modelRoles, derived := deriveRoles(ctx, reg, cfg, session, refreshed, stderr)
+	if !cfg.Set && len(cfg.ModelRoles) == 0 && distinctValues(derived) < 2 {
+		return modelRouterSetup{Reason: "user settings have no modelRoles and no logged-in provider has default roles to route to (kiln login anthropic)", Configured: configured}
 	}
+	cfg.ModelRoles = modelRoles
 	values := map[string]string{}
 	for _, slot := range claudesettings.RouterSlots {
 		if role := cfg.RoleFor(slot); role != "" && cfg.ModelRoles[role] != "" {
@@ -352,7 +361,10 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 
 	auto := router.AutoModel(t)
 	reg.Register(router.NewVirtualProvider(auto))
-	setup := modelRouterSetup{Registered: true, Targets: t, Configured: configured, CoveredRoles: coveredRoles, FallbackReasons: fallbackReasons, LocalCollapseNotes: localNotes}
+	setup := modelRouterSetup{Registered: true, Targets: t, Configured: configured || len(derived) > 0, CoveredRoles: coveredRoles, FallbackReasons: fallbackReasons, LocalCollapseNotes: localNotes}
+	if len(derived) > 0 {
+		setup.DerivedRoles, setup.DerivedNote = derived, derivedRolesNote(derived, session)
+	}
 
 	var fallback func(string) router.Complexity
 	if cfg.Fallback == claudesettings.RouterFallbackHeuristic {
@@ -728,4 +740,112 @@ func groupThousands(n int) string {
 		return "-" + b.String()
 	}
 	return b.String()
+}
+
+// deriveRoles fills the roles (router.DefaultRoleNames) the user's
+// modelRoles leaves out, so kiln/auto works with no modelRoles at all. A
+// self-hosted session model (Ollama) is the fast role, and nothing else
+// on that server is added, since a local server that swaps models costs
+// minutes a request. structured and heavy, and fast when the session
+// model is not local, come from router.DefaultRoles: the session model's
+// provider first when it has a row, then the table's order, taking the
+// first one with credentials and never mixing two cloud providers. Only
+// a value that routerTarget accepts is filled in, so a derived role never
+// produces a fallback warning of its own. It returns the merged
+// modelRoles (a copy; cfg's map is untouched) and the entries it added.
+func deriveRoles(ctx context.Context, reg *provider.Registry, cfg claudesettings.ModelRouterConfig, session string, refreshed map[string]bool, stderr io.Writer) (map[string]string, map[string]string) {
+	merged := make(map[string]string, len(cfg.ModelRoles)+len(router.DefaultRoleNames))
+	for k, v := range cfg.ModelRoles {
+		merged[k] = v
+	}
+	derived := map[string]string{}
+	missing := func(role string) bool { return merged[role] == "" }
+	usable := func(role, value string, errs map[string]error) (provider.Model, bool) {
+		m, problem := routerTarget(ctx, reg, role, value, errs)
+		return m, problem == nil
+	}
+
+	sessionProvider, _, ok := splitProviderModel(session)
+	if !ok || sessionProvider == router.AutoProvider {
+		sessionProvider = ""
+	}
+	if missing("fast") && sessionProvider != "" {
+		errs := refreshRoleProvidersInto(ctx, reg, map[string]string{"session": session}, refreshed, "", stderr)
+		if m, ok := usable("fast", session, errs); ok {
+			if _, _, local := selfHostedHost(reg, m); local {
+				merged["fast"], derived["fast"] = session, session
+			}
+		}
+	}
+
+	rows := make([]router.ProviderRoles, 0, len(router.DefaultRoles))
+	for _, row := range router.DefaultRoles {
+		if row.Provider == sessionProvider {
+			rows = append([]router.ProviderRoles{row}, rows...)
+		} else {
+			rows = append(rows, row)
+		}
+	}
+	for _, row := range rows {
+		if hasAuth, err := reg.CheckAuth(ctx, row.Provider); err != nil || !hasAuth {
+			continue
+		}
+		added := false
+		for _, role := range router.DefaultRoleNames {
+			if !missing(role) || row.Roles[role] == "" {
+				continue
+			}
+			value := row.Provider + "/" + row.Roles[role]
+			if _, ok := usable(role, value, nil); ok {
+				merged[role], derived[role] = value, value
+				added = true
+			}
+		}
+		if added {
+			break
+		}
+	}
+	return merged, derived
+}
+
+// derivedRolesNote is the one line naming the roles deriveRoles filled
+// in, "" when it filled none.
+func derivedRolesNote(derived map[string]string, session string) string {
+	var parts []string
+	for _, role := range router.DefaultRoleNames {
+		v := derived[role]
+		if v == "" {
+			continue
+		}
+		if v == session {
+			v += " (the session model)"
+		}
+		parts = append(parts, role+" "+v)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "kiln/auto: user modelRoles does not set " + joinAnd(rolesOf(derived)) + ", so it uses " + strings.Join(parts, ", ") + ". Set modelRoles in user settings to choose."
+}
+
+// rolesOf lists derived's roles in router.DefaultRoleNames order.
+func rolesOf(derived map[string]string) []string {
+	var out []string
+	for _, role := range router.DefaultRoleNames {
+		if derived[role] != "" {
+			out = append(out, role)
+		}
+	}
+	return out
+}
+
+// distinctValues counts the distinct models in roles.
+func distinctValues(roles map[string]string) int {
+	seen := map[string]bool{}
+	for _, v := range roles {
+		if v != "" {
+			seen[v] = true
+		}
+	}
+	return len(seen)
 }
