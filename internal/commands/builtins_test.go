@@ -356,7 +356,7 @@ func TestCostCommandShowsByModelTable(t *testing.T) {
 	if !strings.Contains(out, "by model:") {
 		t.Fatalf("output = %q, want a by-model section", out)
 	}
-	if !strings.Contains(out, "anthropic/claude-opus-5") || !strings.Contains(out, "$0.4200") {
+	if !strings.Contains(out, "anthropic/claude-opus-5") || !strings.Contains(out, "$0.42") {
 		t.Fatalf("output = %q, want the priced model's cost", out)
 	}
 	if !strings.Contains(out, "ollama/qwen3.8:latest") || !strings.Contains(out, "cost -") {
@@ -518,6 +518,43 @@ func TestCostCommand_OmitsElapsedWhenUnknown(t *testing.T) {
 	want := "Session: $0.00 · 0 tokens in context"
 	if len(res.Output) != 1 || res.Output[0] != want {
 		t.Errorf("Output = %v, want a single line %q with no elapsed segment", res.Output, want)
+	}
+}
+
+// TestCostCommand_SubcentSessionNotZero pins
+// qa/findings/20261016T122837Z-cost-session-rounds-away-subcent.json: a
+// session whose only spend is a sub-cent cost (e.g. a faux model's
+// $0.0011) must not render "Session: $0.00" — the two-decimal format
+// that reads fine once a cost clears a cent rounds a smaller nonzero
+// amount away to nothing.
+func TestCostCommand_SubcentSessionNotZero(t *testing.T) {
+	reg := testRegistry(t)
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     reg,
+		CurrentModel: func() (string, string) { return "ollama", "qwen3.8:latest" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{} },
+		UsageByModel: func() map[string]msg.Usage {
+			return map[string]msg.Usage{
+				"faux/faux-2": {Input: 10, Output: 5, TotalTokens: 15, Cost: msg.Cost{Total: 0.0011}},
+			}
+		},
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cost *Command
+	for i := range cmds {
+		if cmds[i].Name == "cost" {
+			cost = &cmds[i]
+		}
+	}
+	res, err := cost.Run(context.Background(), "")
+	if err != nil {
+		t.Fatalf("cost.Run: %v", err)
+	}
+	if len(res.Output) == 0 || res.Output[0] != "Session: $0.0011 · 0 tokens in context" {
+		t.Fatalf("Output = %v, want the session line to show the sub-cent total, not $0.00", res.Output)
 	}
 }
 

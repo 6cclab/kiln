@@ -12,6 +12,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/agents"
 	"github.com/andrepato/harness/internal/claude/writesettings"
 	"github.com/andrepato/harness/internal/harness"
+	"github.com/andrepato/harness/internal/money"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/plural"
 	"github.com/andrepato/harness/internal/provider"
@@ -526,7 +527,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 					}
 				}
 
-				summary := fmt.Sprintf("Session: $%.2f · %s tokens in context", totalCost, formatTokens(contextTokens))
+				summary := fmt.Sprintf("Session: %s · %s tokens in context", money.USD(totalCost), formatTokens(contextTokens))
 				if deps.SessionElapsed != nil {
 					if d := deps.SessionElapsed(); d > 0 {
 						summary += fmt.Sprintf(" · %ds", int(d.Round(time.Second).Seconds()))
@@ -540,7 +541,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				// (prefixed "~": it is an estimate, like pi's own).
 				if deps.RouterCostStats != nil {
 					if switches, rebilled := deps.RouterCostStats(); switches > 0 {
-						out = append(out, fmt.Sprintf("switches %d · cache re-billed ~$%.2f", switches, rebilled))
+						out = append(out, fmt.Sprintf("switches %d · cache re-billed ~%s", switches, money.USD(rebilled)))
 					}
 				}
 
@@ -560,7 +561,7 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						u := byModel[name]
 						cost := "-"
 						if u.Cost.Total != 0 {
-							cost = fmt.Sprintf("$%.4f", u.Cost.Total)
+							cost = money.USD(u.Cost.Total)
 						}
 						out = append(out, fmt.Sprintf("  %-24s input %-8d output %-8d cost %s", name, u.Input, u.Output, cost))
 					}
