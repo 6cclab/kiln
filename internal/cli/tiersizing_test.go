@@ -14,6 +14,7 @@ import (
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/provider"
 	fauxprovider "github.com/andrepato/harness/internal/provider/faux"
+	"github.com/andrepato/harness/internal/router"
 	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
 	"github.com/andrepato/harness/internal/tool"
 	"github.com/andrepato/harness/internal/tools"
@@ -55,6 +56,15 @@ type sizingRig struct {
 
 func newSizingRig(t *testing.T, script string) *sizingRig {
 	t.Helper()
+	return newSizingRigWith(t, script, nil)
+}
+
+// newSizingRigWith is newSizingRig with setup choosing the session's
+// model and Start's options: it gets the registry (faux registered) and
+// returns the resolved model and a change to the options, either nil for
+// faux-1 and the defaults.
+func newSizingRigWith(t *testing.T, script string, setup func(reg *provider.Registry) (provider.Resolved, func(*agent.Options))) *sizingRig {
+	t.Helper()
 	srv, err := tkfaux.New(tkfaux.Options{ScriptYAML: script})
 	if err != nil {
 		t.Fatal(err)
@@ -72,6 +82,10 @@ func newSizingRig(t *testing.T, script string) *sizingRig {
 	resolved, err := reg.Resolve(fauxprovider.ProviderID, "faux-1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	var modify func(*agent.Options)
+	if setup != nil {
+		resolved, modify = setup(reg)
 	}
 
 	rig := &sizingRig{srv: srv, reg: reg}
@@ -97,12 +111,16 @@ func newSizingRig(t *testing.T, script string) *sizingRig {
 		mcpIndex: "mcp index",
 		taskTool: func(tier budget.Tier) *tool.Tool { return tools.TaskTool(dispatch, agentsList, nil, tier) },
 	}
-	started, err := agent.Start(context.Background(), agent.Options{
+	opts := agent.Options{
 		Registry: reg, Resolved: resolved, Cwd: t.TempDir(), SessionsRoot: t.TempDir(),
 		SystemPrompt:    rig.sizing.prompt(resolved.Tier),
 		ExtraTools:      []*tool.Tool{rig.sizing.taskTool(resolved.Tier)},
 		ActiveToolNames: []string{"task"},
-	})
+	}
+	if modify != nil {
+		modify(&opts)
+	}
+	started, err := agent.Start(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,5 +268,75 @@ func TestGroupThousands(t *testing.T) {
 		if got := groupThousands(n); got != want {
 			t.Errorf("groupThousands(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+// A session resumed on kiln/auto is sized for the target that answered
+// it last (faux-2, small) from the start, not for the plan target that
+// kiln/auto declares (faux-1, medium): the system prompt the next request
+// carries, and /context measures, is faux-2's before any route.
+func TestResumeOnKilnAutoSizesForTheLastTarget(t *testing.T) {
+	cwd, root := t.TempDir(), t.TempDir()
+	var targets router.Targets
+	var last provider.Model
+	var onTarget bool
+	rig := newSizingRigWith(t, "models:\n  faux-2:\n    - text: \"earlier\"\n", func(reg *provider.Registry) (provider.Resolved, func(*agent.Options)) {
+		faux1, _ := reg.GetModel(fauxprovider.ProviderID, "faux-1")
+		faux2, _ := reg.GetModel(fauxprovider.ProviderID, "faux-2")
+		targets = router.Targets{Plan: faux1, PlanComplex: faux1, Implement: faux2, Direct: faux2}
+		reg.Register(router.NewVirtualProvider(router.AutoModel(targets)))
+
+		// The earlier session: faux-2 answered it last.
+		r2, err := reg.Resolve(fauxprovider.ProviderID, "faux-2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		earlier, err := agent.Start(context.Background(), agent.Options{Registry: reg, Resolved: r2, Cwd: cwd, SessionsRoot: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := earlier.Lane.Prompt(context.Background(), "hi", nil); err != nil {
+			t.Fatal(err)
+		}
+		_ = earlier.Harness.Close()
+
+		resume := agent.Options{Cwd: cwd, SessionsRoot: root, ResumeLatest: true}
+		last, onTarget = resumedRouterTarget(resume, targets.All())
+		auto, err := reg.Resolve(router.AutoProvider, router.AutoModelID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return auto, func(o *agent.Options) { o.Cwd, o.SessionsRoot, o.ResumeLatest = cwd, root, true }
+	})
+	if !onTarget || last.ID != "faux-2" {
+		t.Fatalf("resumedRouterTarget = %s, %v; want faux-2", last.ID, onTarget)
+	}
+	if rig.started.Created {
+		t.Fatal("Start created a session instead of resuming the earlier one")
+	}
+	if !strings.Contains(rig.started.Harness.SystemPrompt(), "FULLDESC-7") {
+		t.Fatal("before sizing, the prompt is not the plan target's (faux-1, medium)")
+	}
+
+	sizeForResumedTarget(context.Background(), rig.started, last)
+
+	small := budget.TierForWindow(last.ContextWindow)
+	if got := rig.started.CurrentTier(); got != small {
+		t.Errorf("CurrentTier = %s (%d), want faux-2's %s (%d)", got.Name, got.ContextWindow, small.Name, small.ContextWindow)
+	}
+	if got := rig.started.Harness.ToolOutputTokens(); got != small.ToolOutputTokens {
+		t.Errorf("ToolOutputTokens = %d, want %d", got, small.ToolOutputTokens)
+	}
+	got := rig.started.Harness.SystemPrompt()
+	if strings.Contains(got, "FULLDESC-7") || got != rig.sizing.prompt(small) {
+		t.Errorf("the resumed session's system prompt is not faux-2's sized prompt:\n%s", got)
+	}
+
+	// A session Start created (no earlier one) keeps the plan target's size.
+	fresh := newSizingRig(t, "model: faux-1\nsteps:\n  - text: \"hi\"\n")
+	before := fresh.started.CurrentTier()
+	sizeForResumedTarget(context.Background(), fresh.started, last)
+	if got := fresh.started.CurrentTier(); got != before {
+		t.Errorf("a new session was re-sized to %s", got.Name)
 	}
 }

@@ -168,6 +168,15 @@ func (h *Harness) SetCompactionSettings(s CompactionSettings) {
 	h.events.Emit(Event{Type: EventConfigUpdate, ConfigProperty: ConfigCompactionSettings})
 }
 
+// CompactionSettings returns the compaction settings in force now. The
+// turn loop reads them through it: /model sets them from another
+// goroutine while a turn may be running.
+func (h *Harness) CompactionSettings() CompactionSettings {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.opts.Compaction
+}
+
 // SetToolOutputTokens replaces the ceiling for a single tool result's text
 // (Options.ToolOutputTokens; 0 is unlimited). It applies to tool results
 // committed after the call, including within an operation already running.

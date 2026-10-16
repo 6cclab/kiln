@@ -6,6 +6,7 @@ import (
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/budget"
+	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/tool"
 )
 
@@ -133,4 +134,34 @@ func (s *sessionSizing) onTierChanged(ctx context.Context, tier budget.Tier) {
 		s.started.Harness.AddTools(s.taskTool(tier))
 	}
 	s.refresh(nil)
+}
+
+// resumedRouterTarget is the kiln/auto target that last answered the
+// session opts resumes (agent.ResumedLastPhysical), when that model is
+// still one of targets. It reads the session before agent.Start opens or
+// forks it.
+func resumedRouterTarget(opts agent.Options, targets []provider.Model) (provider.Model, bool) {
+	ref, ok := agent.ResumedLastPhysical(opts)
+	if !ok {
+		return provider.Model{}, false
+	}
+	for _, m := range targets {
+		if m.Provider == ref.Provider && m.ID == ref.ModelID {
+			return m, true
+		}
+	}
+	return provider.Model{}, false
+}
+
+// sizeForResumedTarget sizes a session resumed on kiln/auto for last, the
+// target that answered it last (resumedRouterTarget): the conversation
+// was last sized for it, and its next request is likely to go there
+// again. Without it the session starts sized for the plan target that
+// kiln/auto declares, and the system prompt and /context show that size
+// until the first route. A session Start created is left alone.
+func sizeForResumedTarget(ctx context.Context, started *agent.Started, last provider.Model) {
+	if started.Created || last.ContextWindow <= 0 || last.ContextWindow == started.CurrentTier().ContextWindow {
+		return
+	}
+	agent.Retier(ctx, started, budget.TierForWindow(last.ContextWindow))
 }

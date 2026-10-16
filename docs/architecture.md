@@ -590,14 +590,25 @@ prompt from a per-window memo of memory, auto memory and the skills listing
 replaces the `task` tool, and moves the MCP session's tier without a
 re-gate (every tier's strategy is posture-index). `drive` reads these live
 after routing, so the routed request itself is built with them. `/model`
-(`agent.SetModel`) goes through the same `Retier`. A target whose window
+(`agent.SetModel`) goes through the same `Retier`. Each `Retier` is one unit
+(`Started.retierMu`), so a `/model` and a route that race (the `/model`
+picker applies on a command goroutine, and Esc closes it before the switch
+lands) leave the session sized for one tier throughout; the route handler
+also skips its re-size when the lane is no longer on the virtual model it
+routed for, so a `/model` that lands mid-route keeps the picked model's size.
+A subagent's harness budgets follow its routes through the same handler;
+its system prompt is the agent definition's body, which nothing sizes, and
+its nested `task` tool (whose agent and role text is truncated per tier) is
+rebuilt in its own `OnTierChanged` (`dispatch.go`). A target whose window
 fails `budget.RequireTierForWindow` is an unusable target (it falls back
 with a note) rather than a reason to refuse `kiln/auto`. Subagents inherit
 `kiln/auto` through `Dispatcher.Routers` and route from a fresh state in
 their own session; `Dispatcher.Approved` lets the paid-provider prompt pass
 the router's own targets. A resumed `kiln/auto` session whose router no
 longer resolves continues on the physical model that answered last
-(`agent.ResumedLastPhysical`). The classifier that picks `planComplex`
+(`agent.ResumedLastPhysical`); one whose router still resolves starts sized
+for that model when it is one of the targets (`resumedRouterTarget`,
+`sizeForResumedTarget` in `tiersizing.go`), not for the plan target. The classifier that picks `planComplex`
 (pi's Jev classifier) is `router.LLMClassifier` (`internal/router/
 classify.go`): one call on `modelRoles.fast`, no tools, thinking off, with
 jev's own question and criteria, trusting only a clean stop and a strict

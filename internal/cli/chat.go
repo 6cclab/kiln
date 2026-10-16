@@ -1122,14 +1122,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	var resumedLastTarget provider.Model
 	resumedOnTarget := false
 	if providerID == router.AutoProvider && modelRouter.Registered {
-		if ref, ok := agent.ResumedLastPhysical(agent.Options{Cwd: cwd, SessionsRoot: sessionRepo.Root, Resume: args.Resume, ResumeLatest: args.ResumeLatest || args.ContinueLatest}); ok {
-			for _, m := range modelRouter.Targets.All() {
-				if m.Provider == ref.Provider && m.ID == ref.ModelID {
-					resumedLastTarget, resumedOnTarget = m, true
-					break
-				}
-			}
-		}
+		resumedLastTarget, resumedOnTarget = resumedRouterTarget(agent.Options{Cwd: cwd, SessionsRoot: sessionRepo.Root, Resume: args.Resume, ResumeLatest: args.ResumeLatest || args.ContinueLatest}, modelRouter.Targets.All())
 	}
 
 	started, err := agent.Start(ctx, agent.Options{
@@ -1220,12 +1213,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	if dir := setupScratchpad(gate, cwd, started.SessionID); dir != "" {
 		sizing.setScratchpad(scratchpadInstructions(dir))
 	}
-	// A session resumed on kiln/auto continues sized for the model that
-	// answered it last, when that model is still one of its targets: the
-	// conversation was last sized for it, and its next request is likely
-	// to go there again.
-	if resumedOnTarget && !started.Created && resumedLastTarget.ContextWindow != started.CurrentTier().ContextWindow {
-		agent.Retier(ctx, started, budget.TierForWindow(resumedLastTarget.ContextWindow))
+	if resumedOnTarget {
+		sizeForResumedTarget(ctx, started, resumedLastTarget)
 	}
 
 	// applyMCP registers the catalog once the background connect is done:
