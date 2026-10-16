@@ -9,6 +9,11 @@ BIN_DIR := bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/andrepato/harness/internal/cli.Version=$(VERSION)
 
+# One staticcheck for everyone. A locally installed copy drifts behind the Go
+# toolchain (2026.2.1 cannot read go1.27 export data) and @latest moves under
+# CI; bump this deliberately.
+STATICCHECK_VERSION := 2026.2.2
+
 # build also installs kiln where shells find it: Go's bin directory
 # ($GOBIN, else $GOPATH/bin, normally ~/go/bin). The copy is renamed into
 # place, so a kiln already running keeps its old binary. Skip the install
@@ -36,11 +41,7 @@ check:
 	@echo "==> go vet"
 	go vet ./...
 	@echo "==> staticcheck"
-	@if [ -x "$$HOME/go/bin/staticcheck" ]; then \
-		"$$HOME/go/bin/staticcheck" ./...; \
-	else \
-		go run honnef.co/go/tools/cmd/staticcheck@latest ./...; \
-	fi
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 	@echo "==> go test"
 	go test ./...
 	@echo "==> go vet (e2e build tag)"
