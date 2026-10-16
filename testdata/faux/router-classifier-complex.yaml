@@ -1,0 +1,13 @@
+# kiln/auto with modelRoles fast=faux-3 (the model router's own
+# classifier), structured=faux-1 (plan) and heavy=faux-2 (planComplex),
+# and modelRouter.roles overriding implement/direct away from "fast" (the
+# classifier's own slot is never a routing target in this fixture).
+# faux-3 answers "complex", so the session's first request skips faux-1
+# and lands on faux-2 directly.
+models:
+  faux-3:
+    - text: '{"complexity":"complex"}'
+      end_turn: true
+  faux-2:
+    - text: "Planned on the complex target."
+      end_turn: true

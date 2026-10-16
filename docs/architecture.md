@@ -581,9 +581,19 @@ their own session; `Dispatcher.Approved` lets the paid-provider prompt pass
 the router's own targets. A resumed `kiln/auto` session whose router no
 longer resolves continues on the physical model that answered last
 (`agent.ResumedLastPhysical`). The classifier that picks `planComplex`
-(pi uses its Jev classifier) is a seam (`router.Classifier`) not yet
-filled; without it every session plans on `plan`, as jev does. See
-`docs/configuration.md` §6a.
+(pi's Jev classifier) is `router.LLMClassifier` (`internal/router/
+classify.go`): one call on `modelRoles.fast`, no tools, thinking off, with
+jev's own question and criteria, trusting only a clean stop and a strict
+`{"complexity":"standard"|"complex"}` answer; `setupModelRouter` wires it
+whenever `fast` resolves and `modelRouter.classifier` is not `false`, and
+its usage reaches `Harness.RecordSideUsage` once the harness exists (the
+same late-binding `modelrouter.go` uses for the registered `*router.Auto`,
+since the classifier is built before the harness is). `Auto.rate` falls
+back to `router.Heuristic` (`heuristics.go`) when `modelRouter.fallback` is
+`"heuristic"`, else to `Standard` (`plan`, jev's own fallback) — except
+when ctx itself was cancelled mid-classification (Esc), which `Auto.Route`
+propagates as an error instead of falling back. See `docs/configuration.md`
+§6a.
 
 ## TUI
 

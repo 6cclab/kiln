@@ -940,7 +940,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// (below), so planController.OnApprove — built here, before the lane
 	// exists — can revert the effort level when the plan it approves leaves
 	// plan mode.
-	baseEffort := effortOrSetting(args.Effort, settings.EffortLevel, resolved.Model.Api == provider.ApiAnthropicMessages)
+	baseEffort := effortOrSetting(args.Effort, settings.EffortLevel, effortSettingApplies(resolved.Model))
 	startEffort := baseEffort
 	planEffort := planEffortOverride()
 	if planEffort != "" && permissionMode == claudesettings.ModePlan {
@@ -1106,6 +1106,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 	}
 	wireAutoMode(gate, reg, started, memory.Text, autoModeConfig, modelRouter.direct)
+	// The model router's own classifier (kiln/auto's first-request call on
+	// modelRoles.fast) is built in setupModelRouter, before the harness
+	// exists; its usage is wired in now, as auto mode's classifier's is
+	// above, so it reaches the session's cost (footer, /cost, resume).
+	modelRouter.wireClassifierUsage(started.Harness.RecordSideUsage)
 
 	if dir := setupScratchpad(gate, cwd, started.SessionID); dir != "" {
 		scratchpadPrompt = scratchpadInstructions(dir)
@@ -2117,6 +2122,19 @@ func effortOrSetting(flag, setting string, claudeModel bool) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(setting))
+}
+
+// effortSettingApplies is effortOrSetting's claudeModel argument for the
+// session's resolved model: a physical Claude model, or a virtual model
+// (kiln/auto) whose targets may themselves be Claude models. A virtual
+// model is never itself provider.ApiAnthropicMessages, so without this
+// the setting was silently dropped on kiln/auto even when every one of
+// its targets was Claude. provider.ClampThinkingLevel (via
+// router.Set.Resolve) fits the level to whichever target a request
+// actually routes to, including stepping it down to "off" for a
+// non-reasoning target.
+func effortSettingApplies(m provider.Model) bool {
+	return m.Api == provider.ApiAnthropicMessages || provider.IsVirtual(m)
 }
 
 // creditUsage files one EventUsage under the model it belongs to, through

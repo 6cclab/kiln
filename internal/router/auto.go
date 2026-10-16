@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
@@ -109,7 +110,10 @@ func (a *Auto) Route(ctx context.Context, req Request) (Route, error) {
 	}
 	state, ok := parseAutoState(req.State)
 	if !ok {
-		m := a.choosePlanningModel(ctx, req)
+		m, err := a.choosePlanningModel(ctx, req)
+		if err != nil {
+			return Route{}, err
+		}
 		return routeTo(req, m, &AutoState{Phase: PhasePlanning, Model: modelKey(m)})
 	}
 	// The planning model made the first edit: hand the rest of the work
@@ -161,44 +165,66 @@ func (a *Auto) stateModel(s AutoState) (m provider.Model, current bool) {
 }
 
 // choosePlanningModel is jev's choosePlanningModel: PlanComplex for
-// complex work, Plan otherwise or when no classifier answers.
-func (a *Auto) choosePlanningModel(ctx context.Context, req Request) provider.Model {
+// complex work, Plan otherwise or when no classifier answers. An error
+// means the caller's ctx was cancelled (Esc) during classification: the
+// turn must abort, not fall back.
+func (a *Auto) choosePlanningModel(ctx context.Context, req Request) (provider.Model, error) {
 	// Keep a planning model the session already uses, so switching to
 	// kiln/auto costs no cache miss.
 	if p := req.Previous; p != nil {
 		switch modelKey(p.Model) {
 		case modelKey(a.Targets.PlanComplex):
-			return a.Targets.PlanComplex
+			return a.Targets.PlanComplex, nil
 		case modelKey(a.Targets.Plan):
-			return a.Targets.Plan
+			return a.Targets.Plan, nil
 		}
 	}
-	if a.rate(ctx, lastUserText(req.Messages)) == Complex {
-		return a.Targets.PlanComplex
+	c, err := a.rate(ctx, lastUserText(req.Messages))
+	if err != nil {
+		return provider.Model{}, err
 	}
-	return a.Targets.Plan
+	if c == Complex {
+		return a.Targets.PlanComplex, nil
+	}
+	return a.Targets.Plan, nil
 }
 
 // rate asks the classifier, then the fallback, how demanding prompt is.
-func (a *Auto) rate(ctx context.Context, prompt string) Complexity {
+// An error is returned only when ctx itself was cancelled while the
+// classifier was running: that must abort the turn, never fall back, so
+// Esc during classification does not quietly pick a model instead of
+// stopping.
+func (a *Auto) rate(ctx context.Context, prompt string) (Complexity, error) {
 	if runes := []rune(prompt); len(runes) > classifierPromptChars {
 		prompt = string(runes[:classifierPromptChars])
 	}
 	if a.Classifier != nil {
-		if c, err := a.Classifier.Classify(ctx, prompt); err == nil && (c == Standard || c == Complex) {
-			return c
+		c, err := a.Classifier.Classify(ctx, prompt)
+		if err == nil && (c == Standard || c == Complex) {
+			return c, nil
+		}
+		if err != nil && ctx.Err() != nil {
+			return "", ctx.Err()
 		}
 	}
 	if a.Fallback != nil {
-		return a.Fallback(prompt)
+		return a.Fallback(prompt), nil
 	}
-	return Standard
+	return Standard, nil
 }
 
-// lastUserText is jev's lastUserText: the text of the last user message.
+// lastUserText is jev's lastUserText, reading what the user actually
+// typed (msg.UserMessage.KilnTyped) rather than the content kiln built
+// around it, so @file expansions, hook context and command output never
+// reach the classifier or the heuristic fallback. A message kiln wrote
+// before KilnTyped existed, or one no user typed, falls back to its
+// content.
 func lastUserText(messages []msg.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if um, ok := messages[i].(msg.UserMessage); ok {
+			if typed := strings.TrimSpace(um.KilnTyped); typed != "" {
+				return um.KilnTyped
+			}
 			return msg.TextOf(um.Content)
 		}
 	}

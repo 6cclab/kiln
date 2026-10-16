@@ -116,6 +116,13 @@ func (s *Set) Has(providerID, modelID string) bool {
 	return ok
 }
 
+// Get returns providerID/modelID's router, for inspecting what
+// setupModelRouter built (its Classifier, its Fallback) in a test.
+func (s *Set) Get(providerID, modelID string) (Router, bool) {
+	r, ok := s.routers[key(providerID, modelID)]
+	return r, ok
+}
+
 // Resolve asks req.Virtual's router for one request's model and checks the
 // answer as pi's ModelRuntime.resolveModel does, with its messages less
 // the trailing period (Go error style): the virtual model must be

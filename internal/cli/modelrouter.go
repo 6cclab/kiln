@@ -6,6 +6,8 @@ import (
 	"io"
 
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/diag"
+	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/router"
 )
@@ -19,6 +21,11 @@ type modelRouterSetup struct {
 	Reason     string
 	Targets    router.Targets
 	Routers    router.Set
+	// classifier is the LLM classifier wired into the registered Auto
+	// router, nil when the classifier is off or "fast" does not resolve.
+	// Its OnUsage is set later, once the harness exists (see
+	// wireClassifierUsage), as gate.SetClassifier is for auto mode's.
+	classifier *router.LLMClassifier
 }
 
 // approved reports whether providerID/modelID is one of kiln/auto's
@@ -40,6 +47,28 @@ func (s modelRouterSetup) approved(providerID, modelID string) bool {
 // modelRoles.fast is unset; ok is false when kiln/auto is not registered.
 func (s modelRouterSetup) direct() (provider.Model, bool) {
 	return s.Targets.Direct, s.Registered
+}
+
+// wireClassifierUsage binds the model router classifier's usage into the
+// session's cost, once the harness that can record it exists. It mirrors
+// wireAutoMode's late binding of the gate's classifier: setupModelRouter
+// runs before the harness is built, so this is called afterward with
+// Harness.RecordSideUsage.
+func (s modelRouterSetup) wireClassifierUsage(record func(source string, u msg.Usage) error) {
+	if s.classifier == nil {
+		return
+	}
+	s.classifier.OnUsage = func(model provider.Model, u msg.Usage) {
+		if err := record(ModelRouterClassifierUsageSource(model), u); err != nil {
+			diag.L().Warn("model router classifier usage", "err", err)
+		}
+	}
+}
+
+// ModelRouterClassifierUsageSource is how /cost labels the model router
+// classifier's spend on model.
+func ModelRouterClassifierUsageSource(model provider.Model) string {
+	return "model router classifier · " + model.Provider + "/" + model.ID
 }
 
 // setupModelRouter resolves modelRouter's slots against the user's
@@ -67,6 +96,12 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 		if role := cfg.RoleFor(slot); role != "" && cfg.ModelRoles[role] != "" {
 			values[slot] = cfg.ModelRoles[role]
 		}
+	}
+	// "fast" is the classifier's own role, read directly (it is not a
+	// router slot), and is refreshed here too so it resolves even when no
+	// slot happens to use it.
+	if cfg.ModelRoles["fast"] != "" {
+		values["modelRouterFast"] = cfg.ModelRoles["fast"]
 	}
 	refreshRoleProviders(ctx, reg, values, "", stderr)
 
@@ -111,11 +146,23 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	auto := router.AutoModel(t)
 	reg.Register(router.NewVirtualProvider(auto))
 	setup := modelRouterSetup{Registered: true, Targets: t}
-	// The classifier (cfg.Classifier) and the heuristic fallback
-	// (cfg.Fallback) come in the router's next phase; until then every
-	// new session plans on the plan slot, as jev does without its
-	// classifier.
-	setup.Routers.Add(auto.Provider, auto.ID, &router.Auto{Targets: t})
+
+	var fallback func(string) router.Complexity
+	if cfg.Fallback == claudesettings.RouterFallbackHeuristic {
+		fallback = router.Heuristic
+	}
+	autoRouter := &router.Auto{Targets: t, Fallback: fallback}
+	if cfg.Classifier {
+		fastModel, problem := routerTarget(ctx, reg, "fast", cfg.ModelRoles["fast"])
+		if problem == "" {
+			classifier := &router.LLMClassifier{Resolve: router.ClassifierResolver(reg, fastModel)}
+			autoRouter.Classifier = classifier
+			setup.classifier = classifier
+		} else if cfg.Set {
+			warn(fmt.Sprintf("modelRouter.classifier: %s.", problem))
+		}
+	}
+	setup.Routers.Add(auto.Provider, auto.ID, autoRouter)
 	return setup
 }
 

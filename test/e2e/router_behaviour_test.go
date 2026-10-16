@@ -17,10 +17,15 @@ import (
 // against the faux server. Its settings live in the scratch HOME's user
 // settings; the router reads modelRoles and modelRouter from there only.
 
-// routerRoles is the user modelRoles every test here starts from: with no
-// modelRouter key, kiln/auto plans on structured (faux-1) and implements
-// on fast (faux-2), which is also its direct slot.
-const routerRoles = `{"modelRoles": {"structured": "faux/faux-1", "fast": "faux/faux-2"}}`
+// routerRoles is the user modelRoles every test here starts from: kiln/auto
+// plans on structured (faux-1) and implements on fast (faux-2), which is
+// also its direct slot. The classifier is turned off explicitly (P3 turns
+// it on by default whenever fast resolves, which it does here): these
+// tests are P1/P2's and exercise the plan/implement switch, compaction and
+// resume mechanics, not the classifier, so their fixtures script no
+// classifier call. TestRouter_Classifier* below cover the classifier
+// itself, with its own settings.
+const routerRoles = `{"modelRoles": {"structured": "faux/faux-1", "fast": "faux/faux-2"}, "modelRouter": {"classifier": false}}`
 
 // writeUserSettings writes the scratch HOME's ~/.claude/settings.json.
 func writeUserSettings(t *testing.T, home, body string) {
@@ -269,5 +274,125 @@ func TestRouter_ResumeFallsBackToTheLastPhysicalModel(t *testing.T) {
 	}
 	if got := requestModels(srv); !sameModels(got, []string{"faux-1", "faux-1"}) {
 		t.Errorf("requests went to %v, want [faux-1 faux-1] (resumed on the last physical model)", got)
+	}
+}
+
+// classifierRoles is the user settings for the classifier tests below:
+// faux-3 is modelRoles.fast, the classifier's own model, never a routing
+// target itself — modelRouter.roles sends implement and direct to
+// "structured" instead of the default "fast", so faux-3's only job is
+// answering the classifier's question. Every slot is named explicitly:
+// once modelRouter.roles is set at all, ModelRouterConfig.RoleFor no
+// longer defaults an unlisted slot to DefaultRouterRoles, so leaving plan
+// or planComplex out here would fall them both back to implement
+// (structured/faux-1), losing the planComplex/faux-2 split these tests
+// depend on.
+const classifierRolesBase = `{"modelRoles": {"structured": "faux/faux-1", "heavy": "faux/faux-2", "fast": "faux/faux-3"}, "modelRouter": {"roles": {"plan": "structured", "planComplex": "heavy", "implement": "structured", "direct": "structured"}`
+
+func classifierRoles(extra string) string {
+	if extra == "" {
+		return classifierRolesBase + "}}"
+	}
+	return classifierRolesBase + ", " + extra + "}}"
+}
+
+// TestRouter_ClassifierComplexGoesToPlanComplex: the classifier (faux-3,
+// modelRoles.fast) answers "complex" for the session's first request, so
+// it skips the plan model (faux-1) entirely and lands on planComplex
+// (faux-2).
+func TestRouter_ClassifierComplexGoesToPlanComplex(t *testing.T) {
+	addr, srv := startFaux(t, loadFauxScript(t, "router-classifier-complex"))
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeUserSettings(t, home, classifierRoles(""))
+	env := baseEnv(home, sessDir, addr)
+	env["HARNESS_FAUX_EXTRA_MODELS"] = "faux-3"
+
+	res := runHarness(t, proj, env, "--model", "kiln/auto", "-p", "design a new subsystem", "--output-format", "text", "--permission-mode", "bypassPermissions")
+	if res.Code != 0 {
+		t.Fatalf("exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "Planned on the complex target.") {
+		t.Errorf("stdout = %q, want planComplex's (faux-2's) reply", res.Stdout)
+	}
+	if got, want := requestModels(srv), []string{"faux-3", "faux-2"}; !sameModels(got, want) {
+		t.Fatalf("requests went to %v, want %v (the classifier, then planComplex directly)", got, want)
+	}
+}
+
+// TestRouter_ClassifierUnreadableFallsBackToPlan: the classifier's model
+// answers something that is not the expected JSON. The call itself
+// succeeds (a clean stop), so Auto.rate's fallback runs: with
+// modelRouter.fallback left at its "plan" default, that is Standard, so
+// the request goes to plan (faux-1), never planComplex.
+func TestRouter_ClassifierUnreadableFallsBackToPlan(t *testing.T) {
+	addr, srv := startFaux(t, loadFauxScript(t, "router-classifier-fallback"))
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeUserSettings(t, home, classifierRoles(""))
+	env := baseEnv(home, sessDir, addr)
+	env["HARNESS_FAUX_EXTRA_MODELS"] = "faux-3"
+
+	res := runHarness(t, proj, env, "--model", "kiln/auto", "-p", "fix the typo", "--output-format", "text", "--permission-mode", "bypassPermissions")
+	if res.Code != 0 {
+		t.Fatalf("exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "Planned on plan (the classifier's fallback).") {
+		t.Errorf("stdout = %q, want plan's (faux-1's) reply", res.Stdout)
+	}
+	if got, want := requestModels(srv), []string{"faux-3", "faux-1"}; !sameModels(got, want) {
+		t.Fatalf("requests went to %v, want %v (the classifier, then plan)", got, want)
+	}
+}
+
+// TestRouter_ClassifierUnreadableWithHeuristicFallback: the same
+// unreadable classifier answer, but with modelRouter.fallback set to
+// "heuristic" and a long (>=1,200 character) typed prompt, which the
+// heuristic rates Complex: the request goes to planComplex (faux-2)
+// instead of plan.
+func TestRouter_ClassifierUnreadableWithHeuristicFallback(t *testing.T) {
+	addr, srv := startFaux(t, loadFauxScript(t, "router-classifier-fallback"))
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeUserSettings(t, home, classifierRoles(`"fallback": "heuristic"`))
+	env := baseEnv(home, sessDir, addr)
+	env["HARNESS_FAUX_EXTRA_MODELS"] = "faux-3"
+
+	long := "please help: " + strings.Repeat("this request is long enough to trip the heuristic's character count. ", 20)
+	res := runHarness(t, proj, env, "--model", "kiln/auto", "-p", long, "--output-format", "text", "--permission-mode", "bypassPermissions")
+	if res.Code != 0 {
+		t.Fatalf("exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "Planned on planComplex (the heuristic fallback).") {
+		t.Errorf("stdout = %q, want planComplex's (faux-2's) reply", res.Stdout)
+	}
+	if got, want := requestModels(srv), []string{"faux-3", "faux-2"}; !sameModels(got, want) {
+		t.Fatalf("requests went to %v, want %v (the classifier, then the heuristic's planComplex)", got, want)
+	}
+}
+
+// TestRouter_ClassifierUsageSurvivesResume: the model router classifier's
+// own call (faux-3) is recorded as a side usage row (Harness.RecordSideUsage,
+// labelled "model router classifier · faux/faux-3"), and that row is still
+// in the session's cost after a resume, exactly as auto mode's classifier's
+// is (precedent: qa/findings/20261004T204953Z-classifier-cost-not-in-
+// footer.json in the harness repo).
+func TestRouter_ClassifierUsageSurvivesResume(t *testing.T) {
+	addr, _ := startFaux(t, loadFauxScript(t, "router-classifier-complex"))
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeUserSettings(t, home, classifierRoles(""))
+	env := baseEnv(home, sessDir, addr)
+	env["HARNESS_FAUX_EXTRA_MODELS"] = "faux-3"
+
+	if res := runHarness(t, proj, env, "--model", "kiln/auto", "-p", "design a new subsystem", "--output-format", "text", "--permission-mode", "bypassPermissions"); res.Code != 0 {
+		t.Fatalf("first run: exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	res := runHarness(t, proj, env, "-c", "-p", "/cost", "--output-format", "text")
+	if res.Code != 0 {
+		t.Fatalf("/cost: exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "by model:") || !strings.Contains(res.Stdout, "model router classifier · faux/faux-3") {
+		t.Errorf("/cost after -c is missing the classifier's row:\n%s", res.Stdout)
 	}
 }

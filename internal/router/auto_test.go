@@ -161,6 +161,58 @@ func TestAutoClassifierReadsTheLastUserText(t *testing.T) {
 	}
 }
 
+// The classifier reads what the user typed (KilnTyped), not the content
+// kiln built around it, so an @file expansion never reaches it.
+func TestAutoClassifierReadsTypedTextNotContent(t *testing.T) {
+	cl := &stubClassifier{c: Standard}
+	a := Auto{Targets: autoT, Classifier: cl}
+	typed := msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.TextContent{Type: "text", Text: "fix @foo.go\n\n<attached contents of foo.go, 400 lines>"}}, KilnTyped: "fix @foo.go"}
+	if _, err := a.Route(context.Background(), Request{Reason: ReasonUser, Messages: []msg.Message{typed}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(cl.prompts) != 1 || cl.prompts[0] != "fix @foo.go" {
+		t.Fatalf("classifier read %q, want the typed line only", cl.prompts)
+	}
+}
+
+// A message with no KilnTyped (a subagent's delegated task, or one
+// written before the field existed) falls back to its content.
+func TestAutoClassifierFallsBackToContentWithoutKilnTyped(t *testing.T) {
+	cl := &stubClassifier{c: Standard}
+	a := Auto{Targets: autoT, Classifier: cl}
+	if _, err := a.Route(context.Background(), Request{Reason: ReasonUser, Messages: []msg.Message{user("plain content")}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(cl.prompts) != 1 || cl.prompts[0] != "plain content" {
+		t.Fatalf("classifier read %q, want the message's content", cl.prompts)
+	}
+}
+
+// Esc during classification (ctx cancelled) must abort the turn: Route
+// returns the cancellation error, never a fallback choice, even when a
+// Fallback is configured.
+func TestAutoRouteAbortsOnCtxCancelDuringClassification(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cl := &cancelingClassifier{cancel: cancel}
+	a := Auto{Targets: autoT, Classifier: cl, Fallback: func(string) Complexity { return Complex }}
+	_, err := a.Route(ctx, Request{Reason: ReasonUser, Messages: []msg.Message{user("go")}})
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// cancelingClassifier cancels ctx itself (simulating Esc firing while the
+// call is in flight) and returns an error, as a provider call aborted by
+// ctx cancellation would.
+type cancelingClassifier struct {
+	cancel context.CancelFunc
+}
+
+func (c *cancelingClassifier) Classify(ctx context.Context, prompt string) (Complexity, error) {
+	c.cancel()
+	return "", context.Canceled
+}
+
 // kiln/auto's limits fit every target: the smallest window and output
 // cap, the inputs all of them take, and reasoning if any reasons.
 func TestAutoModel(t *testing.T) {

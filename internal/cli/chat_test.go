@@ -15,6 +15,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/skills"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/session/jsonl"
 	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
 	"github.com/andrepato/harness/internal/testkit/fauxtest"
@@ -733,6 +734,31 @@ func TestEffortOrSetting(t *testing.T) {
 	for _, c := range cases {
 		if got := effortOrSetting(c.flag, c.setting, c.claude); got != c.want {
 			t.Errorf("effortOrSetting(%q, %q, %v) = %q, want %q", c.flag, c.setting, c.claude, got, c.want)
+		}
+	}
+}
+
+// TestEffortSettingApplies: Claude Code's effortLevel setting must apply
+// to a session on kiln/auto (or any virtual model) just as it does to a
+// physical Claude model, since the setting still reaches a Claude target
+// through ClampThinkingLevel; it must not apply to a physical non-Claude
+// model, where any thinking at all can make some local models loop.
+// Regression for the P2 bug where a virtual model silently dropped
+// effortLevel (resolved.Model.Api is never ApiAnthropicMessages for a
+// virtual model).
+func TestEffortSettingApplies(t *testing.T) {
+	cases := []struct {
+		name string
+		m    provider.Model
+		want bool
+	}{
+		{"a physical Claude model", provider.Model{Api: provider.ApiAnthropicMessages}, true},
+		{"kiln/auto, a virtual model", provider.Model{Provider: "kiln", ID: "auto", Api: provider.ApiVirtual}, true},
+		{"a physical non-Claude model", provider.Model{Api: provider.ApiOpenAICompletions}, false},
+	}
+	for _, c := range cases {
+		if got := effortSettingApplies(c.m); got != c.want {
+			t.Errorf("%s: effortSettingApplies = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
