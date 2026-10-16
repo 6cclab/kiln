@@ -11,6 +11,16 @@
  "expected": "The turn loop takes a locked snapshot of the options it reads, so a concurrent setter never races a request being built.",
  "design_ref": null,
  "evidence": [],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/harness.go",
+   "internal/harness/turn.go",
+   "internal/harness/compaction.go",
+   "internal/harness/stall.go"
+  ],
+  "regression_test": "internal/harness/opts_race_test.go TestSettersRacingATurnLoop (go test -race)",
+  "note": "The turn loop reads settable options (Tools, SystemPrompt, Compaction) through h.mu: requestOptions snapshots, CompactionSettings, SystemPrompt and toolSet; stallLimits takes a pointer so it no longer copies the struct.",
+  "updated_at": "2026-10-16T20:59:29Z"
+ }
 }
