@@ -58,6 +58,7 @@ import (
 	"github.com/andrepato/harness/internal/provider/builtin"
 	fauxprovider "github.com/andrepato/harness/internal/provider/faux"
 	"github.com/andrepato/harness/internal/provider/ollama"
+	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/search"
 	"github.com/andrepato/harness/internal/session/jsonl"
 	"github.com/andrepato/harness/internal/tool"
@@ -541,6 +542,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 
 	reg := buildRegistry()
+	// kiln/auto, the built-in virtual model, before the model is resolved:
+	// --model, settings or a resumed session may name it. Its settings
+	// come from user scope only (LoadModelRouter).
+	routerConfig := claudesettings.LoadModelRouter(cwd, claudesettings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings})
+	if w := claudesettings.ModelRouterIgnoredWarning(cwd, routerConfig.Ignored); w != "" {
+		startupWarn(w)
+	}
+	modelRouter := setupModelRouter(ctx, reg, routerConfig, startupWarn, stderr)
 	var providerID, modelID string
 	var resolved provider.Resolved
 	var resolveErr error
@@ -560,9 +569,23 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				}
 			}
 			resolved, resolveErr = reg.Resolve(providerID, modelID)
+			if resolveErr != nil && providerID == router.AutoProvider && !modelRouter.Registered {
+				resolveErr = fmt.Errorf("%s is not available: %s", wanted, modelRouter.Reason)
+			}
 		}
 		if resolveErr == nil || restoring == "" || wanted != restoring {
 			break
+		}
+		// A virtual model that no longer resolves gives way to the
+		// physical model that answered last, as pi's getBranchSelection
+		// does: the conversation was last sized for it.
+		if providerID == router.AutoProvider {
+			if ref, ok := agent.ResumedLastPhysical(agent.Options{Cwd: cwd, Resume: args.Resume, ResumeLatest: args.ResumeLatest || args.ContinueLatest}); ok {
+				last := ref.Provider + "/" + ref.ModelID
+				startupWarn(fmt.Sprintf("Could not resume on this session's model %s (%v); using %s, the model that answered last.", restoring, resolveErr, last))
+				wanted, restoring = last, last
+				continue
+			}
 		}
 		// The session's model is gone (or refused): say so and carry on
 		// with the configured one, as pi does.
@@ -877,6 +900,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		SessionsRoot: sessionRepo.Root,
 		Env:          env,
 		OnEvent:      subagentEventSink(stderr),
+		Routers:      modelRouter.Routers,
+		Approved:     modelRouter.approved,
 	}
 	// Claude Code mods among the active plugins (hooks modules, run by
 	// internal/mods). Nil when none has one.
@@ -1019,6 +1044,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Env:             env,
 		ExtraTools:      extraTools,
 		ActiveToolNames: mcpSess.activeToolNames(),
+		Routers:         modelRouter.Routers,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "kiln:", err)
@@ -1079,7 +1105,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			diag.L().Info("auto mode", "note", w)
 		}
 	}
-	wireAutoMode(gate, reg, started, memory.Text, autoModeConfig)
+	wireAutoMode(gate, reg, started, memory.Text, autoModeConfig, modelRouter.direct)
 
 	if dir := setupScratchpad(gate, cwd, started.SessionID); dir != "" {
 		scratchpadPrompt = scratchpadInstructions(dir)

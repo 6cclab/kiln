@@ -283,7 +283,10 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 
 		l.h.events.Emit(Event{Type: EventMessageStart, Lane: l.name, OperationID: operationID, EntryID: responseEntryID})
 
-		final, target, err := l.requestWithRetry(ctx, operationID, tip, transcript, cfg, target)
+		// tip is drive's own, not a new one for this iteration: a retry
+		// routed to another model may compact and move it.
+		var final *msg.AssistantMessage
+		final, target, tip, err = l.requestWithRetry(ctx, operationID, tip, transcript, cfg, target, &overflowRecoveryUsed)
 		if err != nil && ctx.Err() == nil && !overflowRecoveryUsed && isContextOverflow(err) {
 			// The provider refused a request the estimate said would fit
 			// (chars/4 undercounts dense text). Compact once and resend,
@@ -303,7 +306,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 				if fitErr != nil {
 					err = fitErr
 				} else {
-					final, target, err = l.requestWithRetry(ctx, operationID, tip, transcript, cfg, resend)
+					final, target, tip, err = l.requestWithRetry(ctx, operationID, tip, transcript, cfg, resend, &overflowRecoveryUsed)
 				}
 			}
 		}
@@ -627,12 +630,16 @@ func (l *Lane) finishOperation(operationID, tip, status, errMsg string) error {
 // retriable provider errors per l.h.opts.Retry, and records every stream
 // event as a pi.pending.assistant_frame append. On a virtual lane each
 // retry is routed again (reason retry, with the failed request), so it may
-// go to another model. It returns the route the last attempt took.
-func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, transcript []msg.Message, cfg session.LaneConfiguration, target routed) (*msg.AssistantMessage, routed, error) {
+// go to another model. A retry routed to another model is checked against
+// that model's window first, compacting if it crosses the threshold or
+// does not fit (refit), as pi's prepareRequest re-runs its threshold check
+// before every request. It returns the route the last attempt took and the
+// branch tip, which moves if a compaction ran.
+func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, transcript []msg.Message, cfg session.LaneConfiguration, target routed, recoveryUsed *bool) (*msg.AssistantMessage, routed, string, error) {
 	l.invokeBeforeRequest(ctx)
 	p, ok := l.h.opts.Registry.Provider(target.Model.Provider)
 	if !ok {
-		return nil, target, fmt.Errorf("harness: unknown provider %q", target.Model.Provider)
+		return nil, target, tip, fmt.Errorf("harness: unknown provider %q", target.Model.Provider)
 	}
 	m := target.Model
 	opts := buildStreamOptions(l.h.opts, target.streamConfig(cfg))
@@ -661,10 +668,16 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		if attempt > 1 && target.virtual != nil {
 			next, _, err := l.route(ctx, router.ReasonRetry, tip, transcript, target.failure(lastErr), &target)
 			if err != nil {
-				return nil, target, err
+				return nil, target, tip, err
 			}
 			if p, ok = l.h.opts.Registry.Provider(next.Model.Provider); !ok {
-				return nil, next, fmt.Errorf("harness: unknown provider %q", next.Model.Provider)
+				return nil, next, tip, fmt.Errorf("harness: unknown provider %q", next.Model.Provider)
+			}
+			if next.Model.Provider != target.Model.Provider || next.Model.ID != target.Model.ID {
+				if tip, transcript, err = l.refit(ctx, operationID, tip, next, recoveryUsed); err != nil {
+					return nil, next, tip, err
+				}
+				promptTokens = l.requestTokens(transcript)
 			}
 			target, m, opts = next, next.Model, buildStreamOptions(l.h.opts, next.streamConfig(cfg))
 		}
@@ -692,24 +705,43 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		}
 		cancelReq(nil)
 		if err == nil {
-			return final, target, nil
+			return final, target, tip, nil
 		}
 		lastErr = err
 		if ctx.Err() != nil {
 			// Interrupted: hand back what had streamed (drive keeps it).
-			return interrupted, target, err
+			return interrupted, target, tip, err
 		}
 		if !isRetriable(err) || attempt == retry.MaxAttempts {
-			return nil, target, err
+			return nil, target, tip, err
 		}
 		delay := retry.delay(attempt)
 		l.h.events.Emit(Event{Type: EventRetryScheduled, Lane: l.name, OperationID: operationID, Attempt: attempt, MaxAttempts: retry.MaxAttempts, DelayMs: delay.Milliseconds(), RetryError: err.Error()})
 		if sleepErr := sleepCtx(ctx, delay, l.retryNow); sleepErr != nil {
-			return nil, target, sleepErr
+			return nil, target, tip, sleepErr
 		}
 		l.h.events.Emit(Event{Type: EventRetryStart, Lane: l.name, OperationID: operationID, Attempt: attempt + 1})
 	}
-	return nil, target, lastErr
+	return nil, target, tip, lastErr
+}
+
+// refit prepares a retry that was routed to another model, next: the
+// compaction threshold and the fit are checked against next's window, as
+// before the operation's first request (drive). It returns the tip, which
+// moves if a compaction ran, and the transcript to send.
+func (l *Lane) refit(ctx context.Context, operationID, tip string, next routed, recoveryUsed *bool) (string, []msg.Message, error) {
+	tip, compactErr := l.autoCompact(ctx, tip, next)
+	beforeFit := tip
+	tip, transcript, err := l.fitRequest(ctx, tip, recoveryUsed, next)
+	if err != nil {
+		return tip, nil, err
+	}
+	// As in drive: a failed threshold compaction is reported only when the
+	// fit did not compact the conversation instead.
+	if compactErr != nil && tip == beforeFit {
+		l.h.events.Emit(Event{Type: EventFault, Lane: l.name, OperationID: operationID, Err: compactErr})
+	}
+	return tip, transcript, nil
 }
 
 // recordedFrame reports whether a stream event is written as a pending

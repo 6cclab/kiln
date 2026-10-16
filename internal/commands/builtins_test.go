@@ -10,6 +10,7 @@ import (
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/router"
 )
 
 // fakeProvider is a minimal provider.Provider for tests: no network, no
@@ -721,5 +722,47 @@ func TestWithoutDatedAliases(t *testing.T) {
 	want := "claude-haiku-4-5 claude-opus-4-5-20251101 claude-sonnet-4-5 claude-sonnet-4-5-20250929"
 	if strings.Join(got, " ") != want {
 		t.Errorf("got %v, want %s (dated alias hidden unless current or alone)", got, want)
+	}
+}
+
+// /model lists kiln/auto once it is registered (the router is set up at
+// startup), and choosing it switches to it like any other model.
+func TestModelListsAndSelectsKilnAuto(t *testing.T) {
+	reg := testRegistry(t)
+	target := provider.Model{ID: "qwen3.8:latest", Provider: "ollama", ContextWindow: 49_152}
+	reg.Register(router.NewVirtualProvider(router.AutoModel(router.Targets{Plan: target, PlanComplex: target, Implement: target, Direct: target})))
+	var switched string
+	source := BuiltinCommands(BuiltinDeps{
+		Registry:     reg,
+		CurrentModel: func() (string, string) { return "ollama", "qwen3.8:latest" },
+		CurrentTier:  func() budget.Tier { return budget.Tier{Name: "medium", ContextWindow: 49_152} },
+		SwitchModel: func(ctx context.Context, providerID, modelID string) (budget.Tier, error) {
+			switched = providerID + "/" + modelID
+			return budget.TierFor(49_152), nil
+		},
+	})
+	cmds, err := source.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model Command
+	for _, c := range cmds {
+		if c.Name == "model" {
+			model = c
+		}
+	}
+	res, err := model.Run(context.Background(), "")
+	if err != nil || res.Modal == nil {
+		t.Fatalf("/model = %+v, %v", res, err)
+	}
+	listed := false
+	for _, it := range res.Modal.Items {
+		listed = listed || it.Value == "kiln/auto"
+	}
+	if !listed {
+		t.Fatalf("/model items %+v lack kiln/auto", res.Modal.Items)
+	}
+	if _, err := res.Modal.Select("kiln/auto"); err != nil || switched != "kiln/auto" {
+		t.Fatalf("selecting kiln/auto: switched to %q, %v", switched, err)
 	}
 }

@@ -540,3 +540,69 @@ steps:
 		t.Fatalf("ContextTokens = %d, want the measured 96000", got)
 	}
 }
+
+// A retry routed to a smaller model is checked against that model's
+// window before it is sent, as pi's prepareRequest re-runs its threshold
+// check for every request: the conversation fits faux-1 (128k) but crosses
+// faux-2's (32k) threshold, so the retry compacts first and faux-2 never
+// receives the long first prompt.
+func TestRouterRetryToASmallerModelCompactsFirst(t *testing.T) {
+	r := &scriptedRouter{pick: func(req router.Request) string {
+		switch {
+		case req.Reason == router.ReasonDirect:
+			return "faux-3"
+		case req.Failed != nil:
+			return "faux-2"
+		}
+		return "faux-1"
+	}}
+	t.Setenv("HARNESS_FAUX_EXTRA_MODELS", "faux-3")
+	rig := newRoutedRig(t, `
+models:
+  faux-1:
+    - text: "first reply"
+      usage: {input: 20000, output: 10}
+    - error: {status: 529, type: overloaded_error, message: "Overloaded"}
+  faux-2:
+    - text: "second reply"
+  faux-3:
+    - text: "a summary"
+      end_turn: true
+`, r, 128000)
+	rig.H.opts.Retry = RetryPolicy{BaseDelayMs: 1, MaxAgentDelayMs: 1, MaxAttempts: 2}
+	rig.H.SetCompactionSettings(compaction.Settings{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 1})
+	lane := rig.mustLane("main")
+	marker := "ZEBRA-MARKER "
+	for _, p := range []string{marker + longText(19000), "go on"} {
+		if res, err := lane.Prompt(context.Background(), p, nil); err != nil || res.Status != StatusCompleted {
+			t.Fatalf("prompt: %+v, %v", res, err)
+		}
+	}
+	if got, want := r.reasons(), []router.Reason{router.ReasonUser, router.ReasonUser, router.ReasonRetry, router.ReasonDirect}; !eq(got, want) {
+		t.Errorf("reasons = %v, want %v (the retry's compaction routed as direct)", got, want)
+	}
+	compacted := false
+	entries, _ := lane.FindEntries(context.Background())
+	for _, e := range entries {
+		compacted = compacted || e.Type == session.EntryCompaction
+	}
+	if !compacted {
+		t.Fatal("no compaction before the retry on faux-2")
+	}
+	sent := requestsFor(rig.Faux, "faux-2")
+	if len(sent) != 1 {
+		t.Fatalf("%d requests to faux-2, want the retry", len(sent))
+	}
+	if strings.Contains(string(sent[0].Messages), "ZEBRA-MARKER") {
+		t.Error("faux-2 received the long first prompt: the retry was not compacted to its window")
+	}
+	if !strings.Contains(string(sent[0].Messages), "a summary") {
+		t.Error("faux-2's request lacks the compaction summary")
+	}
+	// The reply follows the compaction on the branch.
+	tip, _ := lane.GetTipID()
+	e, ok := rig.H.opts.Storage.GetEntries([]string{tip})[tip]
+	if am, isAM := e.Message.(msg.AssistantMessage); !ok || !isAM || msg.TextOf(am.Content) != "second reply" {
+		t.Fatalf("tip = %+v, want faux-2's reply", e)
+	}
+}

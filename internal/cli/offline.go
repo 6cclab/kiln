@@ -9,8 +9,10 @@ import (
 // the scripted faux server and a local Ollama. Everything else is a paid or
 // remote endpoint and is refused, so a scripted or visual test run can never
 // spend money or leave the machine by accident (the same guard the eval
-// runner applies through KILN_EVAL_LIVE).
-var offlineProviders = map[string]bool{"faux": true, "ollama": true}
+// runner applies through KILN_EVAL_LIVE). kiln is the virtual kiln/auto,
+// which is registered under HARNESS_OFFLINE=1 only when every model it
+// routes to is local (routerTarget).
+var offlineProviders = map[string]bool{"faux": true, "ollama": true, "kiln": true}
 
 // offlineGuard refuses providerID when HARNESS_OFFLINE=1 names it as
 // non-local.

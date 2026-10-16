@@ -16,6 +16,7 @@ import (
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/session/jsonl"
 	"github.com/andrepato/harness/internal/tool"
@@ -108,6 +109,10 @@ type Options struct {
 	// Now, if set, replaces time.Now for session/entry timestamps (tests
 	// only).
 	Now func() time.Time
+
+	// Routers route the virtual models (kiln/auto) the session may run
+	// on (harness.Options.Routers). The zero Set routes none.
+	Routers router.Set
 }
 
 // Started is what Start returns: everything a caller needs to drive the
@@ -206,6 +211,7 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 		ToolOutputTokens: tier.ToolOutputTokens,
 		Cwd:              cwd,
 		Now:              now,
+		Routers:          opts.Routers,
 	})
 	if err != nil {
 		_ = storage.Close()
@@ -479,31 +485,8 @@ func newSessionID(createdAtMs int64) (string, error) {
 // follows pi, whose session format it writes, because a resumed
 // conversation sized for one model's window may not fit another's.
 func ResumedModel(opts Options) (session.ModelRef, bool) {
-	if opts.Resume == "" && !opts.ResumeLatest {
-		return session.ModelRef{}, false
-	}
-	cwd := opts.Cwd
-	if cwd == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return session.ModelRef{}, false
-		}
-		cwd = wd
-	}
-	root := opts.SessionsRoot
-	if root == "" {
-		root = os.Getenv(defaultSessionsDirEnv)
-	}
-	repo, err := jsonl.NewRepo(root)
-	if err != nil {
-		return session.ModelRef{}, false
-	}
-	candidates, err := repo.List(cwd)
-	if err != nil {
-		return session.ModelRef{}, false
-	}
-	match, err := selectResumeCandidate(candidates, opts.Resume, opts.ResumeLatest)
-	if err != nil || match == nil {
+	match, ok := resumeTarget(opts)
+	if !ok {
 		return session.ModelRef{}, false
 	}
 	raw, ok := jsonl.LastValue(match.Path, session.NamespaceLaneConfig, MainLane)
@@ -515,4 +498,57 @@ func ResumedModel(opts Options) (session.ModelRef, bool) {
 		return session.ModelRef{}, false
 	}
 	return cfg.Model, true
+}
+
+// ResumedLastPhysical reports the physical model that last answered in the
+// session opts would resume: the newest successful assistant reply in its
+// file. A resumed session whose virtual model (kiln/auto) no longer
+// resolves continues on it, as pi's getBranchSelection falls back to the
+// physical model that answered last when a virtual model is no longer
+// registered (virtual-models.ts). pi reads the branch; this reads the
+// file, newest reply first, which is the branch's own unless the session
+// was rewound and not continued since. ok is false when opts resumes
+// nothing or no reply succeeded.
+func ResumedLastPhysical(opts Options) (session.ModelRef, bool) {
+	match, ok := resumeTarget(opts)
+	if !ok {
+		return session.ModelRef{}, false
+	}
+	providerID, modelID, ok := jsonl.LastResponseModel(match.Path)
+	if !ok {
+		return session.ModelRef{}, false
+	}
+	return session.ModelRef{Provider: providerID, ModelID: modelID}, true
+}
+
+// resumeTarget is the session file opts would resume, without opening it.
+func resumeTarget(opts Options) (*jsonl.Metadata, bool) {
+	if opts.Resume == "" && !opts.ResumeLatest {
+		return nil, false
+	}
+	cwd := opts.Cwd
+	if cwd == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil, false
+		}
+		cwd = wd
+	}
+	root := opts.SessionsRoot
+	if root == "" {
+		root = os.Getenv(defaultSessionsDirEnv)
+	}
+	repo, err := jsonl.NewRepo(root)
+	if err != nil {
+		return nil, false
+	}
+	candidates, err := repo.List(cwd)
+	if err != nil {
+		return nil, false
+	}
+	match, err := selectResumeCandidate(candidates, opts.Resume, opts.ResumeLatest)
+	if err != nil || match == nil {
+		return nil, false
+	}
+	return match, true
 }

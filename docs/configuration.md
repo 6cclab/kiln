@@ -207,11 +207,12 @@ Not shipped: `~/.harness/plans/<slug>.md` is named only in a doc comment (`inter
 ### Model precedence
 
 1. `--model <provider/model>`
-2. `settings.json`'s `model` key, **only if it contains `/`** — a Claude Code alias like `opus[1m]` names nothing on this machine and is skipped (`chat.go`)
-3. `HARNESS_MODEL`
-4. `defaultModel` = `ollama/qwen3.8:latest` (`chat.go`)
+2. a resumed session's own model (`agent.ResumedModel`), as pi resumes; if it no longer resolves, the configured model below, with a startup note. A resumed `kiln/auto` session that no longer resolves (its router settings are gone) first tries the physical model that answered last (`agent.ResumedLastPhysical`), as pi falls back from a virtual model that is no longer registered
+3. `settings.json`'s `model` key, **only if it contains `/`** — a Claude Code alias like `opus[1m]` names nothing on this machine and is skipped (`chat.go`)
+4. `HARNESS_MODEL`
+5. `defaultModel` = `ollama/qwen3.8:latest` (`chat.go`)
 
-The resolved `provider/model` is split on the first `/` (`splitProviderModel`, `chat.go`) and resolved against the provider registry; a window that's too small for the harness's own floor refuses to start (`budget.ContextTooSmallError`).
+Any of these may name `kiln/auto`, the built-in router (§6a), when it is registered; asking for it when it is not fails with `kiln/auto is not available: <why>`. The resolved `provider/model` is split on the first `/` (`splitProviderModel`, `chat.go`) and resolved against the provider registry; a window that's too small for the harness's own floor refuses to start (`budget.ContextTooSmallError`).
 
 ### Effort
 
@@ -265,6 +266,7 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 | `autoMemoryEnabled` | `*bool` | last non-nil wins (§7's "Auto memory") |
 | `autoMemoryDirectory` | `string` | last non-empty wins; absolute or `~/`-prefixed (§7's "Auto memory") |
 | `autoMode.environment`, `autoMode.allow`, `autoMode.soft_deny`, `autoMode.hard_deny` | `AutoModeConfig` (`settings/automode.go`, `LoadAutoMode`) | read **only** from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`, concatenated in that order; ignored in project and local settings, with a startup warning (see "Auto mode classifier") |
+| `modelRouter` | `ModelRouterConfig` (`settings/modelrouter.go`, `LoadModelRouter`) | read **only** from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`, a later file's value replacing an earlier one's; ignored in project and local settings, with a startup warning. Its role names resolve against `modelRoles` from those same files only (§6a) |
 | `sandbox` | `Sandbox` (`sandbox.go`) | Claude Code's rules: booleans last-set wins, arrays combined; some keys only from user settings or `--settings` (see "Sandbox" below) |
 
 ### Permission rule syntax (`MatchesRule`, `settings.go`)
@@ -477,7 +479,49 @@ kiln's only settings writer, and it never writes a `.claude` file. `AddRule`/`Re
 
 `ValidateRoles(roles, candidates)` reports (for diagnostics only — `doctor`, `kiln models`, startup warnings) every role whose value isn't `provider/model`-shaped or doesn't resolve to an available model; `ResolveModel` itself never errors, only falls back.
 
-A `task` call that crosses to a different, metered provider than the parent is separately gated by the permission system as `task(role:<name>)` — see §5.
+A `task` call that crosses to a different, metered provider than the parent is separately gated by the permission system as `task(role:<name>)` — see §5. A model `kiln/auto` routes to is not gated: the user chose it in user settings (§6a).
+
+## 6a. `modelRouter`
+
+`internal/claude/settings/modelrouter.go`, `internal/cli/modelrouter.go`, `internal/router/auto.go`
+
+`kiln/auto` is a virtual model: before every request, its router picks which physical model gets it. It is a port of pi's example router (`jev-router.ts`, pi's "virtual models"): it plans on a strong or mid model, hands the work to a cheap model after the first successful edit, and sends requests outside the turn loop (compaction summaries) to the cheap one. Select it like any model: `--model kiln/auto`, `"model": "kiln/auto"`, or `/model`.
+
+```json
+{
+  "modelRoles": { "fast": "anthropic/claude-haiku-4-5", "structured": "anthropic/claude-sonnet-4-5", "heavy": "anthropic/claude-opus-4-1" },
+  "modelRouter": {
+    "roles": { "plan": "structured", "planComplex": "heavy", "implement": "fast", "direct": "fast" },
+    "classifier": true,
+    "fallback": "plan"
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `roles.plan` | plans an ordinary request (jev's Terra) |
+| `roles.planComplex` | plans a complex request (jev's Sol) |
+| `roles.implement` | every request after the first successful `edit` or `write` (jev's Luna) |
+| `roles.direct` | requests outside the turn loop: compaction summaries (jev's Luna) |
+| `classifier` | parsed; the classifier that tells complex from ordinary requests is not built yet, so every new session plans on `plan`, as jev does without its classifier |
+| `fallback` | `"plan"` (pi's choice) or `"heuristic"`; parsed, and until the heuristic is built both mean `plan` |
+
+- **Values are role names**, resolved against `modelRoles`; model names stay in `modelRoles`. A role must name a physical model in the registry whose provider has credentials (and, under `HARNESS_OFFLINE=1`, is local).
+- **Defaults.** With no `modelRouter` key, the roles above apply whenever user-scope `modelRoles` exist. An object without `roles` uses them too; an object with `roles` uses only the slots it names.
+- **Missing slots** fall back: `planComplex → plan → implement`, `direct → implement`. Without an `implement` model there is no `kiln/auto`; with a `modelRouter` you wrote, a startup warning says why, while the defaults fail quietly.
+- **`"modelRouter": false`** turns it off.
+- **User scope only.** `modelRouter`, and the `modelRoles` it reads, come from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`; a project or local `modelRouter` is ignored with a startup warning, so a cloned repository cannot choose which paid model gets every request. Dynamic providers (Ollama) named by its roles are refreshed at startup.
+- **Its limits.** `kiln/auto`'s context window and output cap are the smallest of its targets', its inputs those every target accepts, and it reasons if any target does: the budgets kiln sizes once at startup (system prompt, tools, memory) must fit every model a request can go to. Before each request the compaction threshold and the fit are checked against the routed model's window, so a switch to a smaller model compacts first, retries included.
+- **Routing**, per request (`router.Auto.Route`):
+  1. a compaction summary goes to `direct`;
+  2. a session's first request plans on the planning model it already used, when the previous reply came from `plan` or `planComplex` (no cache miss), otherwise on `plan`;
+  3. once an `edit` or `write` has succeeded since the last user message, the next request goes to `implement`, and the session stays there (it does not re-plan, like jev);
+  4. otherwise the model its state names. The state (`{phase, model}`) is a `kiln.router.state` entry on the session branch, so it follows `/rewind`, forks and resumes. A state naming a model the settings no longer route to is re-derived from its phase.
+  The thinking level passes through, clamped to the routed model.
+- **Subagents.** A `task` from a `kiln/auto` session inherits `kiln/auto` and routes on its own, from a fresh state; an explicit role or model still wins.
+- **Auto mode.** With `modelRoles.fast` unset, the auto mode classifier runs on `direct` rather than on the virtual model.
+- **Not yet:** the classifier and the heuristic fallback, the footer's `auto → <model>`, and the `/cost` switch count.
 
 ### Mods (`internal/mods`, `internal/cli/mods.go`, `internal/tui/mod*.go`)
 
