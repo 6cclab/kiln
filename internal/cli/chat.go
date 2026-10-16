@@ -859,7 +859,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
 	}
-	defer sandboxMgr.Close()
+	defer stopSandbox(sandboxMgr)
 
 	// --- MCP ---------------------------------------------------------
 	// Ported from cli.ts's MCP block (src/cli.ts:180-348): connect every

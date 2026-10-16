@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -74,6 +75,36 @@ func TestRun_Sandbox_AutoAllowsInManualMode(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(proj, "hi.txt")); err != nil {
 		t.Errorf("the command did not run: %v", err)
+	}
+}
+
+// TestRun_Sandbox_GitLeavesClosedSandbox: a session with the sandbox on
+// routes kiln's own git calls through it (startSandbox), and the session
+// closes the sandbox when it ends. Those calls must come off it then: left
+// on, every later git status in the process went through the closed
+// sandbox and failed ("sandbox: session closed"), which is how
+// TestReadGitStatusIgnoresFsmonitor failed on macOS under -count>1.
+func TestRun_Sandbox_GitLeavesClosedSandbox(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("needs sandbox-exec")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	startFaux(t, bashCallScript)
+	proj := scratchProject(t)
+	t.Setenv("HARNESS_TRUST_ALL", "1")
+	writeProjectSettings(t, proj, `{"sandbox":{"enabled":true}}`)
+	if code, _, stderr := runPrint(t, "manual"); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	if _, err := runKilnGit(context.Background(), repo, "status", "--porcelain"); err != nil {
+		t.Fatalf("kiln's git after the sandboxed session ended: %v", err)
 	}
 }
 

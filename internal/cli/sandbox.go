@@ -57,6 +57,18 @@ func startSandbox(cwd string, s claudesettings.Settings, perms claudesettings.Pe
 	return m, nil
 }
 
+// stopSandbox ends the session's sandbox: it takes kiln's own git calls off
+// it (startSandbox put them on it) before closing it, so git run after the
+// session (the next Run in this process, a test) does not go through a
+// closed sandbox and fail with "sandbox: session closed".
+func stopSandbox(m *sandbox.Manager) {
+	if m == nil {
+		return
+	}
+	setGitSandbox(nil)
+	m.Close()
+}
+
 // protectSettingsFiles is the sandbox's write-deny entries for the
 // settings files: each as named and, when it resolves elsewhere through
 // symlinks (a ~/.claude/settings.json linked into a dotfiles repository),
