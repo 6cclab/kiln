@@ -1,0 +1,29 @@
+{
+ "id": "20261016T122837Z-router-default-slot-warns",
+ "found_at": "2026-10-16T12:28:37Z",
+ "scenario": "commands/model-router",
+ "step": "startup",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "Startup warns about a modelRouter slot the user never named",
+ "observed": "With modelRouter {\"classifier\": false} and modelRoles {structured, fast}, startup prints: modelRouter.roles.planComplex: role \"heavy\" is not in user modelRoles.",
+ "expected": "A slot left at its default role falls back silently (planComplex -> plan); only a role the user names in modelRouter.roles warns when it does not resolve.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/model-router-iterm-20261016T122749Z/iterm-dark/commands-model-router-120x40/01-routed-implement.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/modelrouter.go"
+  ],
+  "regression_test": "TestSetupModelRouter/a_default_slot_whose_role_modelRoles_does_not_define_falls_back_quietly",
+  "after_evidence": [
+   "qa/runs/model-router-iterm-20261016T122931Z/iterm-dark/commands-model-router-120x40/01-routed-implement.png"
+  ],
+  "updated_at": "2026-10-16T12:30:00Z"
+ }
+}

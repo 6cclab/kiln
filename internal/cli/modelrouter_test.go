@@ -104,6 +104,12 @@ func TestSetupModelRouter(t *testing.T) {
 			// resolves cleanly); only planComplex's explicit "heavy" hits
 			// the credential-less provider and falls back to plan.
 			"faux-1,faux-1,faux-2,faux-2", 1},
+		{"a default slot whose role modelRoles does not define falls back quietly",
+			claudesettings.ModelRouterConfig{Set: true, ModelRoles: map[string]string{"fast": "faux/faux-2", "structured": "faux/faux-1"}},
+			// planComplex defaults to "heavy", which is not defined: it
+			// falls back to plan without a warning (qa finding
+			// router-default-slot-warns).
+			"faux-1,faux-1,faux-2,faux-2", 0},
 		{"problems are passed on",
 			claudesettings.ModelRouterConfig{ModelRoles: roles, Problems: []string{"bad fallback"}}, "faux-1,faux-3,faux-2,faux-2", 1},
 	}

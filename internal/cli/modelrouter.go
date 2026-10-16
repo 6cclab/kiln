@@ -146,7 +146,13 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 		}
 		m, problem := routerTarget(ctx, reg, role, cfg.ModelRoles[role])
 		if problem != "" {
-			if cfg.Set {
+			// A slot left at a default role that modelRoles does not
+			// define falls back quietly: the user asked for neither. A
+			// role they named, or one they defined that cannot be used,
+			// is worth a warning.
+			_, named := cfg.Roles[slot]
+			_, defined := cfg.ModelRoles[role]
+			if cfg.Set && (named || defined) {
 				warn(fmt.Sprintf("modelRouter.roles.%s: %s.", slot, problem))
 			}
 			continue

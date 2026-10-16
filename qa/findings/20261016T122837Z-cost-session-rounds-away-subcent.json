@@ -1,0 +1,23 @@
+{
+ "id": "20261016T122837Z-cost-session-rounds-away-subcent",
+ "found_at": "2026-10-16T12:28:37Z",
+ "scenario": "commands/model-router",
+ "step": "02-cost-switches",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "/cost session total and re-billed line round sub-cent costs to $0.00 next to a $0.0011 model row",
+ "observed": "Session: $0.00 and \"cache re-billed ~$0.00\" above \"faux/faux-2 ... cost $0.0011\"",
+ "expected": "One cost precision across the /cost block (and footer), so the total is never shown as zero while a row is non-zero.",
+ "design_ref": null,
+ "evidence": [
+  "qa/runs/model-router-iterm-20261016T122749Z/iterm-dark/commands-model-router-120x40/02-cost-switches.png"
+ ],
+ "status": "open",
+ "fix": {
+  "note": "Pre-existing: /cost \"Session: $%.2f\" is on main (internal/commands/builtins.go); the new re-billed line copies that precision.",
+  "updated_at": "2026-10-16T12:30:01Z"
+ }
+}
