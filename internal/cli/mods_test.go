@@ -19,12 +19,12 @@ import (
 
 func TestClaudeToolName(t *testing.T) {
 	cases := map[string]string{
-		"bash":       "Bash",
-		"read":       "Read",
-		"task":       "Agent",
-		"tool_search": "ToolSearch",
+		"bash":               "Bash",
+		"read":               "Read",
+		"task":               "Agent",
+		"tool_search":        "ToolSearch",
 		"mcp__squad__status": "mcp__squad__status", // not in the map: passes through
-		"":           "",
+		"":                   "",
 	}
 	for in, want := range cases {
 		if got := claudeToolName(in); got != want {
