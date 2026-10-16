@@ -127,11 +127,16 @@ func ollamaOptionsFromEnv() ollama.Options {
 // ValidateRoles) each started from an empty done set, so an Ollama role
 // shared by both refreshed twice at startup; pass nil for a one-off
 // caller with nothing else to dedup against.
-func refreshRoleProvidersInto(ctx context.Context, reg *provider.Registry, roles map[string]string, done map[string]bool, skip string, stderr io.Writer) {
+// It returns each provider's refresh error, keyed by provider ID, so a
+// caller can report WHY a role on it then fails to resolve ("ollama at
+// <url> unreachable: …") instead of the generic "not an available
+// model" routerTarget would otherwise give it.
+func refreshRoleProvidersInto(ctx context.Context, reg *provider.Registry, roles map[string]string, done map[string]bool, skip string, stderr io.Writer) map[string]error {
 	if done == nil {
 		done = map[string]bool{}
 	}
 	done[skip] = true
+	errs := map[string]error{}
 	for _, value := range roles {
 		providerID, _, ok := splitProviderModel(value)
 		if !ok || done[providerID] {
@@ -139,11 +144,15 @@ func refreshRoleProvidersInto(ctx context.Context, reg *provider.Registry, roles
 		}
 		done[providerID] = true
 		if p, ok := reg.Provider(providerID); ok {
-			if err := p.RefreshModels(ctx); err != nil && stderr != nil {
-				fmt.Fprintf(stderr, "kiln: refreshing %s for roles: %v\n", providerID, err)
+			if err := p.RefreshModels(ctx); err != nil {
+				errs[providerID] = err
+				if stderr != nil {
+					fmt.Fprintf(stderr, "kiln: refreshing %s for roles: %v\n", providerID, err)
+				}
 			}
 		}
 	}
+	return errs
 }
 
 // splitProviderModel splits "provider/model" into its two halves. A model
@@ -565,10 +574,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	roleProvidersRefreshed := map[string]bool{}
 	modelRouter := loadModelRouter(ctx, cwd, reg, settingsSources(args.SettingSources), args.Settings, startupWarn, stderr, roleProvidersRefreshed)
 	// routerAutoDescribe is "" unless kiln/auto is registered: /model and
-	// "kiln models" use it in place of kiln/auto's context/tier row.
+	// "kiln models" use it in place of kiln/auto's context/tier row. A
+	// run that fell back for at least one slot appends the shortest
+	// reason, so the row that otherwise reads as "working as configured"
+	// says it isn't.
 	routerAutoDescribe := ""
 	if modelRouter.Registered {
 		routerAutoDescribe = modelRouter.Targets.Describe()
+		if reason := modelRouter.shortestFallbackReason(); reason != "" {
+			routerAutoDescribe += " · fallback: " + reason
+		}
 	}
 	var providerID, modelID string
 	var resolved provider.Resolved
@@ -637,6 +652,19 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				}
 			}
 			for _, problem := range claudeagents.ValidateRoles(settings.ModelRoles, candidates) {
+				// A role the model router's own fallback note already
+				// named (modelRouter.CoveredRoles) is not repeated here
+				// under a vaguer message: the router note says exactly
+				// where the slots that used it went, and already adds
+				// "subagents asking for <role> run on the current
+				// model" for it.
+				name := problem
+				if idx := strings.IndexByte(problem, ':'); idx >= 0 {
+					name = problem[:idx]
+				}
+				if modelRouter.CoveredRoles[name] {
+					continue
+				}
 				startupWarn("Model role " + problem + "; subagents asking for it run on the current model.")
 			}
 		}

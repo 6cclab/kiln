@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -170,10 +171,12 @@ func TestSetupModelRouterOffline(t *testing.T) {
 	if !s.Registered || ids(s.Targets) != "qwen,qwen,qwen,qwen" {
 		t.Fatalf("targets = %s, want only the local model", ids(s.Targets))
 	}
-	// Two warnings: the explicit plan=heavy and the unlisted planComplex's
-	// own default (also heavy) both name the remote paid/big, which
-	// HARNESS_OFFLINE refuses; both fall back to the local qwen target.
-	if len(warnings) != 2 || !strings.Contains(warnings[0], "HARNESS_OFFLINE") || !strings.Contains(warnings[1], "HARNESS_OFFLINE") {
+	// One combined warning: the explicit plan=heavy and the unlisted
+	// planComplex's own default (also heavy) both name the remote
+	// paid/big, which HARNESS_OFFLINE refuses; both fall back to the
+	// local qwen target, grouped into one sentence rather than one
+	// warning per slot (Design 3's "one note per run").
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "HARNESS_OFFLINE") || !strings.Contains(warnings[0], "plan") || !strings.Contains(warnings[0], "planComplex") {
 		t.Errorf("warnings = %q", warnings)
 	}
 }
@@ -238,10 +241,10 @@ func TestSetupModelRouter_Classifier(t *testing.T) {
 			t.Error("classifier wired despite fast not resolving")
 		}
 		if len(warnings) != 2 {
-			t.Fatalf("warnings = %q, want 2 (direct's fallback and the classifier)", warnings)
+			t.Fatalf("warnings = %q, want 2 (direct's grouped fallback note and the classifier)", warnings)
 		}
-		if !strings.Contains(warnings[0], "modelRouter.roles.direct") || !strings.Contains(warnings[1], "modelRouter.classifier") {
-			t.Errorf("warnings = %q, want roles.direct then classifier", warnings)
+		if !strings.Contains(warnings[0], "direct") || !strings.Contains(warnings[0], "ghost") || !strings.Contains(warnings[1], "modelRouter.classifier") {
+			t.Errorf("warnings = %q, want direct's fallback note then classifier", warnings)
 		}
 	})
 	t.Run("defaults (modelRouter absent) with no fast: quiet", func(t *testing.T) {
@@ -295,4 +298,107 @@ func TestSetupModelRouter_Classifier(t *testing.T) {
 			t.Errorf("fallback(long prompt) = %q, want complex", got)
 		}
 	})
+}
+
+// TestSetupModelRouter_FallbackNote: a defined role that cannot be used
+// (here, no credentials) warns even with no modelRouter key at all
+// (Set: false) — before this phase it stayed silent, since the old gate
+// required cfg.Set. The c88cecb case (a default slot whose role
+// modelRoles never mentions) must stay quiet; that is
+// TestSetupModelRouter's own "falls back quietly" case, unchanged.
+func TestSetupModelRouter_FallbackNote(t *testing.T) {
+	reg := routerRegistry(t)
+	cfg := claudesettings.ModelRouterConfig{ModelRoles: map[string]string{"fast": "faux/faux-2", "heavy": "paid/big"}}
+	s, warnings := runSetup(t, reg, cfg)
+	if !s.Registered {
+		t.Fatalf("router did not register: %s", s.Reason)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %q, want exactly 1 (today it gives 0)", warnings)
+	}
+	note := warnings[0]
+	for _, want := range []string{"paid", "no credentials", "planComplex", "kiln login paid"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note = %q, want it to mention %q", note, want)
+		}
+	}
+	if !s.CoveredRoles["heavy"] {
+		t.Errorf("CoveredRoles = %v, want \"heavy\" covered", s.CoveredRoles)
+	}
+	if len(s.FallbackReasons) != 1 || !strings.Contains(s.FallbackReasons[0], "no credentials") {
+		t.Errorf("FallbackReasons = %q", s.FallbackReasons)
+	}
+}
+
+// unreachableProvider is routerRegistry's "ollama" stand-in for a host
+// that is down: RefreshModels always fails, so it never has any models to
+// resolve a role against. It implements the same optional BaseURL()
+// interface internal/provider/ollama.Provider does, so routerTarget can
+// name the host in its "unreachable" problem.
+type unreachableProvider struct {
+	stubProvider
+	url string
+	err error
+}
+
+func (p unreachableProvider) RefreshModels(ctx context.Context) error { return p.err }
+func (p unreachableProvider) BaseURL() string                         { return p.url }
+
+// TestSetupModelRouter_Unreachable: a role on a provider whose
+// RefreshModels fails (an unreachable Ollama host, modelled here by a
+// stub rather than a real HTTP server, since routerTarget only needs the
+// refresh error and the provider's BaseURL()) is reported as
+// "unreachable", not the generic "not an available model" — and the
+// host's URL is in the note.
+func TestSetupModelRouter_Unreachable(t *testing.T) {
+	reg := routerRegistry(t)
+	downErr := errors.New("dial tcp 127.0.0.1:11434: connect: connection refused")
+	reg.Register(unreachableProvider{
+		stubProvider: stubProvider{id: "down-ollama"},
+		url:          "http://127.0.0.1:11434",
+		err:          downErr,
+	})
+	cfg := claudesettings.ModelRouterConfig{ModelRoles: map[string]string{
+		"fast": "faux/faux-2", "structured": "faux/faux-1", "heavy": "down-ollama/qwen3.8",
+	}}
+	s, warnings := runSetup(t, reg, cfg)
+	if !s.Registered {
+		t.Fatalf("router did not register: %s", s.Reason)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %q, want exactly 1", warnings)
+	}
+	note := warnings[0]
+	for _, want := range []string{"down-ollama", "unreachable", "http://127.0.0.1:11434", downErr.Error(), "planComplex"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note = %q, want it to mention %q", note, want)
+		}
+	}
+}
+
+// TestModelRouterSetup_ShortestFallbackReason checks shortestFallbackReason
+// picks the shortest of several reasons (the one /model's describe row has
+// room for) and that chat.go's own suffix construction ("Targets.Describe()
+// + \" · fallback: \" + shortestFallbackReason()") reads as intended.
+func TestModelRouterSetup_ShortestFallbackReason(t *testing.T) {
+	s := modelRouterSetup{FallbackReasons: []string{
+		"ollama at http://192.168.3.168:11434 unreachable: dial tcp: i/o timeout",
+		"paid has no credentials (kiln login paid)",
+	}}
+	if got := s.shortestFallbackReason(); got != "paid has no credentials (kiln login paid)" {
+		t.Errorf("shortestFallbackReason() = %q, want the shorter of the two", got)
+	}
+	s.Targets = router.Targets{
+		Plan:        provider.Model{Provider: "faux", ID: "faux-1"},
+		PlanComplex: provider.Model{Provider: "faux", ID: "faux-1"},
+		Implement:   provider.Model{Provider: "faux", ID: "faux-2"},
+	}
+	describe := s.Targets.Describe() + " · fallback: " + s.shortestFallbackReason()
+	want := "plan→faux-1 · complex→faux-1 · implement→faux-2 · fallback: paid has no credentials (kiln login paid)"
+	if describe != want {
+		t.Errorf("describe = %q, want %q", describe, want)
+	}
+	if got := (modelRouterSetup{}).shortestFallbackReason(); got != "" {
+		t.Errorf("shortestFallbackReason() with none = %q, want \"\"", got)
+	}
 }

@@ -319,6 +319,9 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 	if modelRouter.Configured {
 		if modelRouter.Registered {
 			lines = append(lines, "modelRouter kiln/auto: "+modelRouter.Targets.Describe())
+			if len(modelRouter.FallbackReasons) > 0 {
+				lines = append(lines, "modelRouter fallback "+strings.Join(modelRouter.FallbackReasons, "; "))
+			}
 		} else {
 			lines = append(lines, "modelRouter not available: "+modelRouter.Reason)
 		}

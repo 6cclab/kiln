@@ -427,6 +427,13 @@ func New(opts Options) *Provider {
 func (p *Provider) ID() string   { return ProviderID }
 func (p *Provider) Name() string { return "Ollama" }
 
+// BaseURL is this provider's configured host, for a caller that reports a
+// refresh failure by name (the model router's fallback note: "ollama at
+// <url> unreachable: …", internal/cli/modelrouter.go). Not part of the
+// provider.Provider interface; callers detect it with an interface
+// assertion so they stay provider-agnostic otherwise.
+func (p *Provider) BaseURL() string { return p.opts.baseURL() }
+
 func (p *Provider) Auth() provider.AuthSpec {
 	return provider.AuthSpec{Kind: provider.AuthKindAPIKey, EnvVars: []string{"OLLAMA_HOST"}}
 }

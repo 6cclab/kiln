@@ -277,6 +277,42 @@ func TestRouter_ResumeFallsBackToTheLastPhysicalModel(t *testing.T) {
 	}
 }
 
+// TestRouter_FallbackNote: modelRoles.heavy names a real anthropic model
+// but this scratch HOME has no anthropic credentials, so planComplex
+// (heavy's default slot) falls back to plan. kiln/auto still registers
+// (implement/plan/direct all resolve on faux) and prints exactly one
+// combined note on stderr naming the fallback, with no second,
+// vaguer "Model role heavy: ..." line from the subagent-role validator —
+// the router note already covers "heavy" and says subagents asking for
+// it run on the current model instead.
+func TestRouter_FallbackNote(t *testing.T) {
+	addr, _ := startFaux(t, "models:\n  faux-1:\n    - text: \"planned\"\n      end_turn: true\n")
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	writeUserSettings(t, home, `{"modelRoles": {"structured": "faux/faux-1", "fast": "faux/faux-1", "heavy": "anthropic/claude-opus-5"}, "modelRouter": {"classifier": false}}`)
+	env := baseEnv(home, sessDir, addr)
+	// No ANTHROPIC_* credentials anywhere in this scratch HOME/env: the
+	// fallback must come from "no credentials", not a real API call.
+	for _, k := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+		delete(env, k)
+	}
+
+	res := runHarness(t, proj, env, "--model", "kiln/auto", "-p", "hello", "--output-format", "text")
+	if res.Code != 0 {
+		t.Fatalf("exit %d, stderr=%s", res.Code, res.Stderr)
+	}
+	noteCount := strings.Count(res.Stderr, "kiln/auto: anthropic has no credentials")
+	if noteCount != 1 {
+		t.Fatalf("stderr = %q, want exactly one fallback note", res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "kiln login anthropic") || !strings.Contains(res.Stderr, "planComplex") {
+		t.Errorf("stderr = %q, want the login hint and the affected slot", res.Stderr)
+	}
+	if strings.Contains(res.Stderr, "Model role heavy:") {
+		t.Errorf("stderr = %q, want no separate ValidateRoles line for heavy (the router note already covers it)", res.Stderr)
+	}
+}
+
 // classifierRoles is the user settings for the classifier tests below:
 // faux-3 is modelRoles.fast, the classifier's own model, never a routing
 // target itself — modelRouter.roles sends implement and direct to

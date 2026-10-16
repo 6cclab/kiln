@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 
 	"github.com/andrepato/harness/internal/claude/paths"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
@@ -55,6 +57,30 @@ type modelRouterSetup struct {
 	// Its OnUsage is set later, once the harness exists (see
 	// wireClassifierUsage), as gate.SetClassifier is for auto mode's.
 	classifier *router.LLMClassifier
+	// CoveredRoles is every modelRoles role name (not router slot) named
+	// in the combined fallback note this run printed: chat.go's own
+	// ValidateRoles warnings drop a role already named here, rather than
+	// print it a second time under a vaguer message.
+	CoveredRoles map[string]bool
+	// FallbackReasons is one phrase per distinct (provider, reason) group
+	// the fallback note covered this run, in the order the note printed
+	// them — "doctor"'s own "modelRouter fallback …" line and /model's
+	// "· fallback: <shortest reason>" suffix are built from this rather
+	// than re-parsing the note text.
+	FallbackReasons []string
+}
+
+// shortestFallbackReason is the shortest of FallbackReasons, "" when there
+// are none: /model's describe row has little room, so it shows the most
+// compact reason rather than the first or a concatenation of all of them.
+func (s modelRouterSetup) shortestFallbackReason() string {
+	shortest := ""
+	for _, r := range s.FallbackReasons {
+		if shortest == "" || len(r) < len(shortest) {
+			shortest = r
+		}
+	}
+	return shortest
 }
 
 // approved reports whether providerID/modelID is one of kiln/auto's
@@ -100,13 +126,90 @@ func ModelRouterClassifierUsageSource(model provider.Model) string {
 	return "model router classifier · " + model.Provider + "/" + model.ID
 }
 
+// routerProblemKind classifies why one modelRoles value could not be used
+// as a router target. Undefined and NotProviderModel are role-shape
+// problems (the value itself is missing or malformed); the rest are
+// operational — the role names a real provider/model, but the provider
+// cannot serve it right now — and are the ones the grouped fallback note
+// (warnRoleFallbacks) reports, by provider and reason, in place of a
+// silent collapse.
+type routerProblemKind int
+
+const (
+	problemUndefined routerProblemKind = iota
+	problemNotProviderModel
+	problemUnavailable
+	problemUnreachable
+	problemOffline
+	problemNoCredentials
+)
+
+// routerProblem is why one modelRoles value, read for role, could not be
+// resolved to a usable router target.
+type routerProblem struct {
+	Role     string
+	Provider string
+	Value    string
+	Kind     routerProblemKind
+	Err      error
+	// detail overrides reasonPhrase's default wording for this problem
+	// (only Unreachable sets it, with the provider's host baked in —
+	// routerTarget is the only place that can reach the provider to ask).
+	detail string
+}
+
+// String is the per-role phrase existing single-role warnings use
+// ("modelRouter.roles.%s: %s.", "modelRouter.classifier: %s.", and
+// kiln/auto's own "is not available" reason) — unchanged wording from
+// before this type existed, for every kind but Unreachable, which is new.
+func (p *routerProblem) String() string {
+	switch p.Kind {
+	case problemUndefined:
+		return fmt.Sprintf("role %q is not in user modelRoles", p.Role)
+	case problemNotProviderModel:
+		return fmt.Sprintf("role %q is %q, not provider/model", p.Role, p.Value)
+	case problemUnreachable:
+		return fmt.Sprintf("role %q names %s, whose provider is unreachable: %v", p.Role, p.Value, p.Err)
+	case problemOffline:
+		return fmt.Sprintf("role %q names %s: %v", p.Role, p.Value, p.Err)
+	case problemNoCredentials:
+		return fmt.Sprintf("role %q names %s, whose provider has no credentials", p.Role, p.Value)
+	default: // problemUnavailable
+		return fmt.Sprintf("role %q names %s, which is not an available model", p.Role, p.Value)
+	}
+}
+
+// reasonPhrase is the clause the grouped fallback note uses for this
+// problem's provider ("anthropic has no credentials (kiln login
+// anthropic)"), independent of which role or slot hit it — every slot in
+// a group shares one of these.
+func (p *routerProblem) reasonPhrase() string {
+	switch p.Kind {
+	case problemNoCredentials:
+		return fmt.Sprintf("%s has no credentials (kiln login %s)", p.Provider, p.Provider)
+	case problemUnreachable:
+		return p.detail
+	case problemOffline:
+		return fmt.Sprintf("%s is offline (HARNESS_OFFLINE)", p.Provider)
+	case problemUnavailable:
+		return fmt.Sprintf("%s has no model %s", p.Provider, p.Value)
+	default:
+		return fmt.Sprintf("%s is unavailable", p.Provider)
+	}
+}
+
 // setupModelRouter resolves modelRouter's slots against the user's
 // modelRoles and, when they resolve, registers kiln/auto (provider kiln)
-// in reg with its router. A slot without a model falls back along
-// planComplex -> plan -> implement and direct -> implement; without an
-// implement model there is no kiln/auto. Problems with a modelRouter the
-// user wrote are passed to warn; the defaults (no modelRouter key) fail
-// quietly, since modelRoles alone does not ask for a router.
+// in reg with its router. A slot left at its own default role that
+// modelRoles does not define at all falls back along planComplex -> plan
+// -> implement and direct -> implement quietly: the user asked for
+// neither a specific role there nor defined the default one, so there is
+// nothing to warn about. Any other problem — a role the user named
+// explicitly, or one they defined that cannot be used right now (no
+// credentials, unreachable, offline, missing) — is reported in one
+// combined startup note, grouped by provider and reason
+// (warnRoleFallbacks), rather than silently collapsing. Without an
+// implement model there is no kiln/auto at all.
 //
 // The roles' dynamic providers (Ollama) are refreshed first, as
 // refreshRoleProviders does for subagent roles, so a role on one resolves.
@@ -136,36 +239,58 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	if cfg.ModelRoles["fast"] != "" {
 		values["modelRouterFast"] = cfg.ModelRoles["fast"]
 	}
-	refreshRoleProvidersInto(ctx, reg, values, refreshed, "", stderr)
+	refreshErrs := refreshRoleProvidersInto(ctx, reg, values, refreshed, "", stderr)
 
 	resolved := map[string]provider.Model{}
+	problems := map[string]*routerProblem{}
 	for _, slot := range claudesettings.RouterSlots {
 		role := cfg.RoleFor(slot)
 		if role == "" {
 			continue
 		}
-		m, problem := routerTarget(ctx, reg, role, cfg.ModelRoles[role])
-		if problem != "" {
-			// A slot left at a default role that modelRoles does not
-			// define falls back quietly: the user asked for neither. A
-			// role they named, or one they defined that cannot be used,
-			// is worth a warning.
-			_, named := cfg.Roles[slot]
-			_, defined := cfg.ModelRoles[role]
-			if cfg.Set && (named || defined) {
-				warn(fmt.Sprintf("modelRouter.roles.%s: %s.", slot, problem))
-			}
+		m, problem := routerTarget(ctx, reg, role, cfg.ModelRoles[role], refreshErrs)
+		if problem != nil {
+			problems[slot] = problem
 			continue
 		}
 		resolved[slot] = m
 	}
+
+	// shouldWarn is the "did the user actually ask for this" gate: a role
+	// named explicitly for the slot (modelRouter.roles.<slot>), or a
+	// default role the user defined in modelRoles even though they did
+	// not name it for this slot. Neither true means the slot is sitting
+	// on an unmodified default whose role modelRoles never mentions at
+	// all — c88cecb's quiet case. (This used to also require cfg.Set; a
+	// role the user defined is worth a warning whether or not they wrote
+	// a modelRouter key at all.)
+	// shouldWarn's "defined" half requires a non-empty value: a role the
+	// user set to "" explicitly reads the same as one modelRoles never
+	// mentions at all (defaults-fail-quietly), not as "the user defined
+	// it".
+	shouldWarn := func(slot, role string) bool {
+		_, named := cfg.Roles[slot]
+		defined := cfg.ModelRoles[role] != ""
+		return named || defined
+	}
+
 	implement, ok := resolved[claudesettings.RouterSlotImplement]
 	if !ok {
-		reason := fmt.Sprintf("its implement role %q names no usable model in user modelRoles", cfg.RoleFor(claudesettings.RouterSlotImplement))
-		if cfg.RoleFor(claudesettings.RouterSlotImplement) == "" {
+		role := cfg.RoleFor(claudesettings.RouterSlotImplement)
+		reason := fmt.Sprintf("its implement role %q names no usable model in user modelRoles", role)
+		if role == "" {
 			reason = "modelRouter.roles names no implement role"
 		}
-		if cfg.Set {
+		if shouldWarn(claudesettings.RouterSlotImplement, role) {
+			// A role-shape problem (a typo, or a value that is not
+			// "provider/model") also gets its own generic line, as every
+			// other slot's does; an operational one (no credentials,
+			// unreachable, offline, missing) does not repeat itself —
+			// there is no fallback target to describe, so the
+			// "not available" reason below is the whole story.
+			if p := problems[claudesettings.RouterSlotImplement]; p != nil && (p.Kind == problemUndefined || p.Kind == problemNotProviderModel) {
+				warn(fmt.Sprintf("modelRouter.roles.%s: %s.", claudesettings.RouterSlotImplement, p.String()))
+			}
 			warn("kiln/auto is not available: " + reason + ".")
 		}
 		return modelRouterSetup{Reason: reason, Configured: configured}
@@ -182,9 +307,17 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	t.PlanComplex = pick(claudesettings.RouterSlotPlanComplex, t.Plan)
 	t.Direct = pick(claudesettings.RouterSlotDirect, t.Implement)
 
+	finalFor := map[string]provider.Model{
+		claudesettings.RouterSlotPlan:        t.Plan,
+		claudesettings.RouterSlotPlanComplex: t.PlanComplex,
+		claudesettings.RouterSlotImplement:   t.Implement,
+		claudesettings.RouterSlotDirect:      t.Direct,
+	}
+	coveredRoles, fallbackReasons := warnRoleFallbacks(problems, cfg, shouldWarn, finalFor, warn)
+
 	auto := router.AutoModel(t)
 	reg.Register(router.NewVirtualProvider(auto))
-	setup := modelRouterSetup{Registered: true, Targets: t, Configured: configured}
+	setup := modelRouterSetup{Registered: true, Targets: t, Configured: configured, CoveredRoles: coveredRoles, FallbackReasons: fallbackReasons}
 
 	var fallback func(string) router.Complexity
 	if cfg.Fallback == claudesettings.RouterFallbackHeuristic {
@@ -192,8 +325,8 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	}
 	autoRouter := &router.Auto{Targets: t, Fallback: fallback}
 	if cfg.Classifier {
-		fastModel, problem := routerTarget(ctx, reg, "fast", cfg.ModelRoles["fast"])
-		if problem == "" {
+		fastModel, problem := routerTarget(ctx, reg, "fast", cfg.ModelRoles["fast"], refreshErrs)
+		if problem == nil {
 			classifier := &router.LLMClassifier{Resolve: router.ClassifierResolver(reg, fastModel)}
 			autoRouter.Classifier = classifier
 			setup.classifier = classifier
@@ -205,26 +338,146 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	return setup
 }
 
+// fallbackGroup is every slot whose target collapsed to the same
+// provider for the same reason — "anthropic has no credentials" covering
+// both plan and planComplex, say — reported as one sentence instead of
+// one warning per slot.
+type fallbackGroup struct {
+	reason     string
+	slots      []string
+	roles      map[string]bool
+	origValues map[string]bool
+	finals     map[string]bool
+}
+
+func (g *fallbackGroup) sentence() string {
+	slots := joinAnd(g.slots)
+	finals := joinAnd(sortedKeys(g.finals))
+	origs := joinAnd(sortedKeys(g.origValues))
+	return fmt.Sprintf("%s, so %s use %s instead of %s", g.reason, slots, finals, origs)
+}
+
+// warnRoleFallbacks turns every slot-level problem the gate approves into
+// warnings: a role-shape problem (undefined or not-provider-model) keeps
+// its own line, exactly as before this phase; every operational problem
+// (no credentials, unreachable, offline, missing) is grouped by provider
+// and reason and folded into one combined "kiln/auto: …" note — Design
+// 3's "exactly one note per run". It returns the modelRoles role names
+// the note named (for chat.go's ValidateRoles dedupe) and one reason
+// phrase per group (for doctor and /model's describe suffix).
+func warnRoleFallbacks(problems map[string]*routerProblem, cfg claudesettings.ModelRouterConfig, shouldWarn func(slot, role string) bool, finalFor map[string]provider.Model, warn func(string)) (map[string]bool, []string) {
+	groups := map[string]*fallbackGroup{}
+	var order []string
+	coveredRoles := map[string]bool{}
+	for _, slot := range claudesettings.RouterSlots {
+		p, ok := problems[slot]
+		if !ok || slot == claudesettings.RouterSlotImplement {
+			continue
+		}
+		role := cfg.RoleFor(slot)
+		if !shouldWarn(slot, role) {
+			continue
+		}
+		if p.Kind == problemUndefined || p.Kind == problemNotProviderModel {
+			warn(fmt.Sprintf("modelRouter.roles.%s: %s.", slot, p.String()))
+			continue
+		}
+		key := fmt.Sprintf("%d|%s|%v", p.Kind, p.Provider, p.Err)
+		g, exists := groups[key]
+		if !exists {
+			g = &fallbackGroup{reason: p.reasonPhrase(), roles: map[string]bool{}, origValues: map[string]bool{}, finals: map[string]bool{}}
+			groups[key] = g
+			order = append(order, key)
+		}
+		g.slots = append(g.slots, slot)
+		g.roles[p.Role] = true
+		coveredRoles[p.Role] = true
+		if p.Value != "" {
+			g.origValues[p.Value] = true
+		}
+		if m, ok := finalFor[slot]; ok {
+			g.finals[m.Provider+"/"+m.ID] = true
+		}
+	}
+	if len(order) == 0 {
+		return coveredRoles, nil
+	}
+	var sentences []string
+	var reasons []string
+	allRoles := map[string]bool{}
+	for _, key := range order {
+		g := groups[key]
+		sentences = append(sentences, g.sentence())
+		reasons = append(reasons, g.reason)
+		for r := range g.roles {
+			allRoles[r] = true
+		}
+	}
+	note := "kiln/auto: " + strings.Join(sentences, "; ") + "."
+	if len(allRoles) > 0 {
+		note += " Subagents asking for " + joinAnd(sortedKeys(allRoles)) + " run on the current model."
+	}
+	warn(note)
+	return coveredRoles, reasons
+}
+
+// joinAnd renders a list as English prose: "a", "a and b", "a, b and c".
+func joinAnd(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+	}
+}
+
+// sortedKeys returns a set's members sorted, for deterministic prose.
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // routerTarget resolves one modelRoles value for the router: a physical
 // model in the registry whose provider has credentials and, under
-// HARNESS_OFFLINE=1, is local. problem says why not, as a phrase.
-func routerTarget(ctx context.Context, reg *provider.Registry, role, value string) (provider.Model, string) {
+// HARNESS_OFFLINE=1, is local. refreshErrs is setupModelRouter's
+// per-provider refresh outcome (refreshRoleProvidersInto): when value's
+// provider failed to refresh and so has no models to find value in, the
+// problem is reported as unreachable (with the provider's host, when it
+// exposes one) rather than the more generic "not an available model".
+func routerTarget(ctx context.Context, reg *provider.Registry, role, value string, refreshErrs map[string]error) (provider.Model, *routerProblem) {
 	if value == "" {
-		return provider.Model{}, fmt.Sprintf("role %q is not in user modelRoles", role)
+		return provider.Model{}, &routerProblem{Role: role, Kind: problemUndefined}
 	}
 	providerID, modelID, ok := splitProviderModel(value)
 	if !ok {
-		return provider.Model{}, fmt.Sprintf("role %q is %q, not provider/model", role, value)
+		return provider.Model{}, &routerProblem{Role: role, Value: value, Kind: problemNotProviderModel}
 	}
 	m, ok := reg.GetModel(providerID, modelID)
 	if !ok || provider.IsVirtual(m) {
-		return provider.Model{}, fmt.Sprintf("role %q names %s, which is not an available model", role, value)
+		if err, bad := refreshErrs[providerID]; bad {
+			detail := fmt.Sprintf("%s unreachable: %v", providerID, err)
+			if p, ok := reg.Provider(providerID); ok {
+				if u, ok := p.(interface{ BaseURL() string }); ok {
+					detail = fmt.Sprintf("%s at %s unreachable: %v", providerID, u.BaseURL(), err)
+				}
+			}
+			return provider.Model{}, &routerProblem{Role: role, Provider: providerID, Value: value, Kind: problemUnreachable, Err: err, detail: detail}
+		}
+		return provider.Model{}, &routerProblem{Role: role, Provider: providerID, Value: value, Kind: problemUnavailable}
 	}
 	if err := offlineGuard(providerID); err != nil {
-		return provider.Model{}, fmt.Sprintf("role %q names %s: %v", role, value, err)
+		return provider.Model{}, &routerProblem{Role: role, Provider: providerID, Value: value, Kind: problemOffline, Err: err}
 	}
 	if hasAuth, err := reg.CheckAuth(ctx, providerID); err != nil || !hasAuth {
-		return provider.Model{}, fmt.Sprintf("role %q names %s, whose provider has no credentials", role, value)
+		return provider.Model{}, &routerProblem{Role: role, Provider: providerID, Value: value, Kind: problemNoCredentials}
 	}
-	return m, ""
+	return m, nil
 }
