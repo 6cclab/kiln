@@ -741,6 +741,32 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	allSkills := append(append([]skills.Skill{}, skillList...), pluginSkills...)
 	skillsIndex := formatSkillsIndex(allSkills, resolved.Tier.SkillsListingTokens)
 
+	// The tier-sized part of the system prompt, per context window. The
+	// startup tier's is what was just loaded (with its warnings); with
+	// kiln/auto registered, every target's window is loaded now too, so
+	// a route that re-sizes the session (agent.Retier, sessionSizing)
+	// reads no files on the lane's goroutine. Another window (/model to a
+	// model none of them has) is loaded when first asked for.
+	promptMemo := newTierPromptMemo(func(tier budget.Tier) tierPrompt {
+		mem := claudememory.LoadMemory(cwd, tier.SystemPromptTokens)
+		auto := claudememory.LoadAutoMemory(cwd, claudememory.AutoMemoryOptions{
+			Directory:    autoMemoryDirectorySetting,
+			Enabled:      settings.AutoMemoryEnabled,
+			EnvDisabled:  os.Getenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY") == "1",
+			SmallTier:    tier.Name == "small",
+			BudgetTokens: tier.SystemPromptTokens - mem.EstimatedTokens,
+		})
+		return tierPrompt{Memory: mem.Text, AutoMemory: auto.Text, Skills: formatSkillsIndex(allSkills, tier.SkillsListingTokens)}
+	})
+	promptMemo.seed(resolved.Tier, tierPrompt{Memory: memory.Text, AutoMemory: autoMemory.Text, Skills: skillsIndex})
+	// Primed whenever kiln/auto is registered, not only when the session
+	// starts on it: /model can switch to it later.
+	if modelRouter.Registered {
+		for _, m := range modelRouter.Targets.All() {
+			promptMemo.prime(m.ContextWindow)
+		}
+	}
+
 	// The `skill` tool's catalog: every project/user/plugin skill except
 	// ones marked disable-model-invocation:true (deliverable 3 —
 	// UserInvocable:false skills ARE included here; that flag only hides
@@ -1056,10 +1082,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// --append-system-prompt, the plan-mode prompt (only in plan mode),
 	// memory, the skills index, the MCP tool index.
 	envBlock := environmentPrompt(ctx, cwd, time.Now())
-	// scratchpadPrompt names the session scratchpad once it exists (it
-	// needs the session id, known after agent.Start).
-	var scratchpadPrompt string
-	buildSystemPrompt := func(mcpIndexText string) string {
+	// The scratchpad instructions name the session scratchpad once it
+	// exists (it needs the session id, known after agent.Start).
+	buildSystemPrompt := func(tp tierPrompt, scratchpadPrompt, mcpIndexText string) string {
 		systemPromptBase := args.SystemPrompt
 		if systemPromptBase == "" {
 			systemPromptBase = defaultSystemPrompt
@@ -1070,15 +1095,42 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if reviewEnabled() {
 			promptParts = append(promptParts, reviewPrompt)
 		}
-		promptParts = append(promptParts, scratchpadPrompt, memory.Text, autoMemory.Text, skillsIndex, mcpIndexText)
+		promptParts = append(promptParts, scratchpadPrompt, tp.Memory, tp.AutoMemory, tp.Skills, mcpIndexText)
 		return strings.Join(nonEmpty(promptParts), "\n\n")
 	}
-	systemPrompt := buildSystemPrompt(mcpIndexText)
+	// sizing rebuilds the prompt, the task tool's text and the MCP
+	// session's tier when the tier moves (/model, or a kiln/auto route to
+	// a model with another window): started.OnTierChanged, below.
+	sizing := &sessionSizing{
+		mcpSess:  mcpSess,
+		memo:     promptMemo,
+		build:    buildSystemPrompt,
+		mcpIndex: mcpIndexText,
+		taskTool: func(tier budget.Tier) *tool.Tool {
+			return tools.TaskTool(dispatchFn, agentsList, settings.ModelRoles, tier)
+		},
+	}
+	systemPrompt := sizing.prompt(resolved.Tier)
 	phase("session start", "model", providerID+"/"+modelID, "tools", len(extraTools))
 	// Captured here, at the same "session start" point the phase log
 	// above marks, for /cost's one-line design summary's elapsed segment
 	// (registryDeps.SessionStartedAt -> BuiltinDeps.SessionElapsed).
 	sessionStartedAt := time.Now()
+
+	// The kiln/auto target that last answered the session this run
+	// resumes, read before Start opens (or forks) it.
+	var resumedLastTarget provider.Model
+	resumedOnTarget := false
+	if providerID == router.AutoProvider && modelRouter.Registered {
+		if ref, ok := agent.ResumedLastPhysical(agent.Options{Cwd: cwd, SessionsRoot: sessionRepo.Root, Resume: args.Resume, ResumeLatest: args.ResumeLatest || args.ContinueLatest}); ok {
+			for _, m := range modelRouter.Targets.All() {
+				if m.Provider == ref.Provider && m.ID == ref.ModelID {
+					resumedLastTarget, resumedOnTarget = m, true
+					break
+				}
+			}
+		}
+	}
 
 	started, err := agent.Start(ctx, agent.Options{
 		Registry:        reg,
@@ -1103,6 +1155,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 	mcpSess.lane = started.Lane
 	laneRef = started.Lane
+	sizing.started = started
+	started.OnTierChanged = sizing.onTierChanged
 	phase("session started", "session", started.SessionID, "transcript", started.TranscriptPath)
 	diag.L().Info("run log", "session", started.SessionID, "path", logPath)
 	logHarnessEvents(started.Harness)
@@ -1164,8 +1218,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	modelRouter.wireClassifierUsage(started.Harness.RecordSideUsage)
 
 	if dir := setupScratchpad(gate, cwd, started.SessionID); dir != "" {
-		scratchpadPrompt = scratchpadInstructions(dir)
-		started.Harness.SetSystemPrompt(buildSystemPrompt(mcpIndexText))
+		sizing.setScratchpad(scratchpadInstructions(dir))
+	}
+	// A session resumed on kiln/auto continues sized for the model that
+	// answered it last, when that model is still one of its targets: the
+	// conversation was last sized for it, and its next request is likely
+	// to go there again.
+	if resumedOnTarget && !started.Created && resumedLastTarget.ContextWindow != started.CurrentTier().ContextWindow {
+		agent.Retier(ctx, started, budget.TierForWindow(resumedLastTarget.ContextWindow))
 	}
 
 	// applyMCP registers the catalog once the background connect is done:
@@ -1177,7 +1237,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		extras, idx := buildMCPExtras(mcpTools)
 		mcpSess.setTools(mcpTools)
 		started.Harness.AddTools(extras...)
-		started.Harness.SetSystemPrompt(buildSystemPrompt(idx))
+		sizing.setMCPIndex(idx)
 		if err := mcpSess.regate(); err != nil {
 			diag.L().Warn("mcp regate failed", "err", err)
 		}

@@ -259,7 +259,10 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		Bridge:           bridge,
 
 		ResolveMentions: func(ctx context.Context, line string) (string, []msg.ImageContent, []string) {
-			resolved, err := ResolveMentions(line, Options{Cwd: deps.Cwd, Tier: &deps.Resolved.Tier, Roots: deps.Gate.Roots()})
+			// The tier the session is sized for now: /model and, on
+			// kiln/auto, each route to a model with another window move it.
+			tier := deps.Started.CurrentTier()
+			resolved, err := ResolveMentions(line, Options{Cwd: deps.Cwd, Tier: &tier, Roots: deps.Gate.Roots()})
 			if err != nil || len(resolved.Mentions) == 0 {
 				return line, nil, nil
 			}
@@ -428,13 +431,10 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			used = &n
 		}
 		bridge.ModelSwitch(resolved.Model.Provider+"/"+resolved.Model.ID, resolved.Tier.Name, resolved.Tier.ContextWindow, used)
-		// deps.Resolved is what ResolveMentions (above, closed over
-		// &deps.Resolved.Tier) and anything else built from `deps` reads
-		// for the rest of the session. Without updating it here, a model
-		// switch moved started.Tier (agent.SetModel) and the footer
-		// (bridge.ModelSwitch just above) to the new tier but left this
-		// closure's view of the tier - and so @mention inlining's
-		// per-mention token budget - on the model it started with.
+		// deps.Resolved is what anything built from `deps` reads for the
+		// model for the rest of the session. (@mention inlining's
+		// per-mention budget reads started.CurrentTier() instead, which
+		// also follows kiln/auto's routes.)
 		deps.Resolved = resolved
 	}
 

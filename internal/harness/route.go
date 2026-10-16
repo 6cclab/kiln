@@ -111,6 +111,11 @@ func (l *Lane) route(ctx context.Context, reason router.Reason, tip string, tran
 		l.mu.Lock()
 		l.lastRouted = &session.ModelRef{Provider: route.Model.Provider, ModelID: route.Model.ID}
 		l.mu.Unlock()
+		// The budgets that follow the answering model (system prompt,
+		// compaction, tool output) are re-sized here, synchronously and
+		// outside any Emit: drive reads them after routing, so the request
+		// this route decided is built with them.
+		l.invokeRoute(ctx, RouteInfo{Reason: reason, Virtual: model, Model: route.Model})
 	}
 	l.h.events.Emit(Event{Type: EventRoute, Lane: l.name, RouteReason: string(reason),
 		RouteVirtual:       session.ModelRef{Provider: model.Provider, ModelID: model.ID},

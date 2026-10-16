@@ -252,6 +252,14 @@ func TestDoctor_ModelRouterLocalCollapseLine(t *testing.T) {
 	if !strings.Contains(out, "modelRouter local") || !strings.Contains(out, "one model loaded") || !strings.Contains(out, "qwen3.8") {
 		t.Errorf("doctor output missing the local-collapse line:\n%s", out)
 	}
+	// The note is informational: shown once, on its own line, and not
+	// again under the problems list.
+	if n := strings.Count(out, "keeps one model loaded"); n != 1 {
+		t.Errorf("the local-collapse note appears %d times, want once:\n%s", n, out)
+	}
+	if strings.Contains(out, "  - kiln/auto: the ") {
+		t.Errorf("the local-collapse note is listed as a problem:\n%s", out)
+	}
 }
 
 // TestKilnAutoUnavailable_DefinedFastWithNoCredentials: modelRoles.fast is

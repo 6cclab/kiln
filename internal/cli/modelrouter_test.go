@@ -138,7 +138,8 @@ func TestSetupModelRouter(t *testing.T) {
 	}
 }
 
-// kiln/auto in the registry is sized to its smallest target.
+// kiln/auto in the registry is sized to its Plan target (faux-1 here): the
+// first request goes there, and later ones re-size on each route.
 func TestSetupModelRouterRegistersTheVirtualModel(t *testing.T) {
 	reg := routerRegistry(t)
 	s, _ := runSetup(t, reg, claudesettings.ModelRouterConfig{ModelRoles: map[string]string{"fast": "faux/faux-2", "structured": "faux/faux-1"}})
@@ -149,8 +150,8 @@ func TestSetupModelRouterRegistersTheVirtualModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !provider.IsVirtual(resolved.Model) || resolved.Model.ContextWindow != 32768 {
-		t.Errorf("kiln/auto = %+v, want a virtual model with faux-2's 32k window", resolved.Model)
+	if !provider.IsVirtual(resolved.Model) || resolved.Model.ContextWindow != 128000 {
+		t.Errorf("kiln/auto = %+v, want a virtual model with plan's (faux-1's) 128k window", resolved.Model)
 	}
 	if !s.approved("faux", "faux-1") || s.approved("faux", "faux-3") {
 		t.Error("approved does not match the targets")

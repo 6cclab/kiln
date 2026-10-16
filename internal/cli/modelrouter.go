@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/paths"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/diag"
@@ -148,6 +150,7 @@ const (
 	problemUnreachable
 	problemOffline
 	problemNoCredentials
+	problemTooSmall
 )
 
 // routerProblem is why one modelRoles value, read for role, could not be
@@ -162,6 +165,10 @@ type routerProblem struct {
 	// (only Unreachable sets it, with the provider's host baked in —
 	// routerTarget is the only place that can reach the provider to ask).
 	detail string
+	// Window is the model's context window, for TooSmall.
+	Window int
+	// model is the model a TooSmall problem refused as a target.
+	model provider.Model
 }
 
 // String is the per-role phrase existing single-role warnings use
@@ -180,6 +187,8 @@ func (p *routerProblem) String() string {
 		return fmt.Sprintf("role %q names %s: %v", p.Role, p.Value, p.Err)
 	case problemNoCredentials:
 		return fmt.Sprintf("role %q names %s, whose provider has no credentials", p.Role, p.Value)
+	case problemTooSmall:
+		return fmt.Sprintf("role %q names %s, whose %s-token window is too small to run", p.Role, p.Value, groupThousands(p.Window))
 	default: // problemUnavailable
 		return fmt.Sprintf("role %q names %s, which is not an available model", p.Role, p.Value)
 	}
@@ -197,6 +206,8 @@ func (p *routerProblem) reasonPhrase() string {
 		return p.detail
 	case problemOffline:
 		return fmt.Sprintf("%s is offline (HARNESS_OFFLINE)", p.Provider)
+	case problemTooSmall:
+		return fmt.Sprintf("%s's %s-token window is too small to run", p.Value, groupThousands(p.Window))
 	case problemUnavailable:
 		return fmt.Sprintf("%s has no model %s", p.Provider, p.Value)
 	default:
@@ -327,8 +338,17 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	// cfg.Classifier) ends up asking -- resolved once, here, rather than
 	// twice.
 	fastModel, fastProblem := routerTarget(ctx, reg, "fast", cfg.ModelRoles["fast"], refreshErrs)
+	// fastCollapses: fast is a collapse candidate only when it could run
+	// a session itself, or a slot collapsed onto it would be a target too
+	// small to run. The classifier only sends a short prompt, so a fast
+	// model that is merely too small still classifies, as it did before
+	// targets were size-checked.
+	fastCollapses := fastProblem == nil
+	if fastProblem != nil && fastProblem.Kind == problemTooSmall {
+		fastModel, fastProblem = fastProblem.model, nil
+	}
 
-	t, fastModel, localNotes := collapseLocalServers(ctx, reg, t, fastModel, fastProblem == nil, warn)
+	t, fastModel, localNotes := collapseLocalServers(ctx, reg, t, fastModel, fastCollapses, warn)
 
 	auto := router.AutoModel(t)
 	reg.Register(router.NewVirtualProvider(auto))
@@ -568,6 +588,10 @@ func warnRoleFallbacks(problems map[string]*routerProblem, cfg claudesettings.Mo
 			continue
 		}
 		key := fmt.Sprintf("%d|%s|%v", p.Kind, p.Provider, p.Err)
+		if p.Kind == problemTooSmall {
+			// Each too-small model is its own reason: its phrase names it.
+			key += "|" + p.Value
+		}
 		g, exists := groups[key]
 		if !exists {
 			g = &fallbackGroup{reason: p.reasonPhrase(), roles: map[string]bool{}, origValues: map[string]bool{}, finals: map[string]bool{}}
@@ -664,5 +688,32 @@ func routerTarget(ctx context.Context, reg *provider.Registry, role, value strin
 	if hasAuth, err := reg.CheckAuth(ctx, providerID); err != nil || !hasAuth {
 		return provider.Model{}, &routerProblem{Role: role, Provider: providerID, Value: value, Kind: problemNoCredentials}
 	}
+	// A request routed to m is sized for m's own window (agent.Retier), so
+	// a window no session could run in (Ollama's 8,192 fallback, say) makes
+	// m unusable as a target: the slot falls back like any other, rather
+	// than refusing kiln/auto as a whole.
+	if _, err := budget.RequireTierForWindow(m.ContextWindow); err != nil {
+		return provider.Model{}, &routerProblem{Role: role, Provider: providerID, Value: value, Kind: problemTooSmall, Err: err, Window: m.ContextWindow, model: m}
+	}
 	return m, nil
+}
+
+// groupThousands renders n with comma thousands separators ("8,192").
+func groupThousands(n int) string {
+	s := strconv.Itoa(n)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	var b strings.Builder
+	for i, r := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	if neg {
+		return "-" + b.String()
+	}
+	return b.String()
 }

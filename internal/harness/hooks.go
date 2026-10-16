@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/router"
 )
 
 // ToolBlock is what OnBeforeTool returns to refuse a call: it becomes an
@@ -44,6 +46,7 @@ type Hooks struct {
 	beforeStop       []func(ctx context.Context, info StopInfo) (StopVerdict, error)
 	transformContext []func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error)
 	beforeRequest    []func(ctx context.Context) error
+	route            []func(ctx context.Context, info RouteInfo) error
 	beforePayload    []func(ctx context.Context, payload map[string]any) (map[string]any, error)
 	afterResponse    []func(ctx context.Context, m *msg.AssistantMessage) error
 	beforeTool       []func(ctx context.Context, call msg.ToolCall) (BeforeToolResult, error)
@@ -119,6 +122,30 @@ func (h *Hooks) OnBeforeRequest(fn func(ctx context.Context) error) func() {
 	h.beforeRequest = append(h.beforeRequest, fn)
 	i := len(h.beforeRequest) - 1
 	return func() { h.beforeRequest[i] = nil }
+}
+
+// RouteInfo is what an OnRoute handler learns about a routed request.
+type RouteInfo struct {
+	// Reason is why the request was routed (user, continuation, retry).
+	Reason router.Reason
+	// Virtual is the lane's virtual model (kiln/auto).
+	Virtual provider.Model
+	// Model is the physical model the request goes to.
+	Model provider.Model
+}
+
+// OnRoute registers a handler called synchronously on the lane's goroutine
+// each time a virtual lane routes a turn-loop request (the first request,
+// a continuation, an overflow resend or a retry), after the route is
+// resolved and before the request is built. It is not called for a direct
+// route (a compaction summary) or on a physical lane. It runs outside any
+// event emit, so a handler may call the Harness's setters
+// (SetSystemPrompt, SetCompactionSettings, AddTools, SetToolOutputTokens):
+// what they set applies to the request being routed.
+func (h *Hooks) OnRoute(fn func(ctx context.Context, info RouteInfo) error) func() {
+	h.route = append(h.route, fn)
+	i := len(h.route) - 1
+	return func() { h.route[i] = nil }
 }
 
 func (h *Hooks) OnBeforePayload(fn func(ctx context.Context, payload map[string]any) (map[string]any, error)) func() {
@@ -204,6 +231,17 @@ func (l *Lane) invokeBeforeRequest(ctx context.Context) {
 		}
 		if err := runGuarded(func() error { return fn(ctx) }); err != nil {
 			l.h.events.Emit(Event{Type: EventHandlerError, Lane: l.name, HookName: "before_request", Err: err})
+		}
+	}
+}
+
+func (l *Lane) invokeRoute(ctx context.Context, info RouteInfo) {
+	for _, fn := range l.h.hooks.route {
+		if fn == nil {
+			continue
+		}
+		if err := runGuarded(func() error { return fn(ctx, info) }); err != nil {
+			l.h.events.Emit(Event{Type: EventHandlerError, Lane: l.name, HookName: "route", Err: err})
 		}
 	}
 }
