@@ -498,3 +498,31 @@ func TestRouter_SkillsListingFollowsTheRoutedModel(t *testing.T) {
 		}
 	}
 }
+
+// TestRouter_DoctorShowsDefaultRoles: with no modelRoles at all and an
+// Anthropic key in the environment, doctor reports kiln/auto on the
+// built-in default roles. doctor makes no model request, so the key is
+// never sent anywhere.
+func TestRouter_DoctorShowsDefaultRoles(t *testing.T) {
+	addr, _ := startFaux(t, "models:\n  faux-1:\n    - text: \"unused\"\n      end_turn: true\n")
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	env := baseEnv(home, sessDir, addr)
+	env["ANTHROPIC_API_KEY"] = "kiln-e2e-not-a-key"
+
+	res := runHarness(t, proj, env, "doctor")
+	for _, want := range []string{
+		"modelRouter kiln/auto: plan→claude-sonnet-5",
+		"modelRouter defaults kiln/auto: user modelRoles does not set fast, structured and heavy",
+		"heavy anthropic/claude-opus-5-5",
+	} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Errorf("doctor stdout = %q, want %q", res.Stdout, want)
+		}
+	}
+	delete(env, "ANTHROPIC_API_KEY")
+	res = runHarness(t, proj, env, "doctor")
+	if strings.Contains(res.Stdout, "modelRouter") {
+		t.Errorf("doctor stdout = %q, want no modelRouter line without a login", res.Stdout)
+	}
+}
