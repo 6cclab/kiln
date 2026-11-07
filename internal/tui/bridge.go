@@ -887,6 +887,18 @@ type MsgRetryStart struct{ Attempt int }
 // so the busy line can show " · N queued" (spinner.go's SetQueueLen).
 type MsgQueue struct{ Len int }
 
+// MsgChannelEvent is one server-pushed channel event (an MCP channel's
+// notifications/claude/channel), carried from the hub into the TUI. Source
+// is the channel's source label ("design-studio"); Content is the prose to
+// act on; Meta is the structured fields beside it (project, request/decision
+// id, event, page). The app frames it as a <channel source="..."> turn and
+// injects it like a submitted prompt.
+type MsgChannelEvent struct {
+	Source  string
+	Content string
+	Meta    map[string]any
+}
+
 // MsgHookActivity carries what a running Stop/SubagentStop hook chain is
 // doing, for the busy line's first muted segment; "" clears it.
 type MsgHookActivity struct{ Text string }

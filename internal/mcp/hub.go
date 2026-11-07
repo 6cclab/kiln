@@ -172,6 +172,20 @@ type Hub struct {
 	// connect attempt finishes, so a UI can show progress while the
 	// remaining servers connect. Called from ConnectAll's goroutine.
 	OnServer func(ServerStatus)
+
+	// Channels names the servers to connect as channels, by their hub
+	// server name, each mapped to the source label to tag its events with
+	// (the plugin's declared channel server name, e.g. "design-studio").
+	// A channel server connects with the legacy protocol (so the server
+	// mints a session id and opens the channel stream) and its
+	// notifications/claude/channel pushes are delivered to OnChannel.
+	// Set before ConnectAll.
+	Channels map[string]string
+
+	// OnChannel, if set, receives each server-pushed channel event: the
+	// hub server name, its source label, and the event. Called from the
+	// connection's read goroutine, so it must not block.
+	OnChannel func(server, source string, ev ChannelEvent)
 }
 
 // NewHub builds an empty, unconnected Hub.
@@ -323,8 +337,18 @@ func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, tim
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "harness", Version: "0.0.0"}, nil)
 
+	var sessOpts *sdk.ClientSessionOptions
+	if source, isChannel := h.Channels[name]; isChannel {
+		transport = &channelTapTransport{inner: transport, onEvent: func(ev ChannelEvent) {
+			if h.OnChannel != nil {
+				h.OnChannel(name, source, ev)
+			}
+		}}
+		sessOpts = &sdk.ClientSessionOptions{ProtocolVersion: channelProtocolVersion}
+	}
+
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
-	session, err := client.Connect(connectCtx, transport, nil)
+	session, err := client.Connect(connectCtx, transport, sessOpts)
 	cancel()
 	if err != nil {
 		// Client.Connect already closes the session (and, for stdio, the

@@ -56,6 +56,7 @@ type manifestRaw struct {
 	Version    string          `json:"version"`
 	MCPServers json.RawMessage `json:"mcpServers"`
 	Hooks      json.RawMessage `json:"hooks"`
+	Channels   json.RawMessage `json:"channels"`
 }
 
 func installedPluginsPath(cwd string) string {
@@ -115,6 +116,7 @@ type marketplaceEntry struct {
 	Version    string          `json:"version"`
 	MCPServers json.RawMessage `json:"mcpServers"`
 	Hooks      json.RawMessage `json:"hooks"`
+	Channels   json.RawMessage `json:"channels"`
 }
 
 type marketplaceFile struct {
@@ -615,6 +617,55 @@ func MCPServers(p Plugin) map[string]mcpcfg.ServerConfig {
 		cfg.Scope = mcpcfg.ScopePlugin
 		qualified := fmt.Sprintf("plugin_%s_%s", p.Name, name)
 		out[qualified] = mcpcfg.ExpandConfig(cfg)
+	}
+	return out
+}
+
+// Channel is one channel a plugin declares: a reference to one of the
+// plugin's own MCP servers whose server-initiated "notifications/claude/channel"
+// messages are injected into the session as they arrive.
+type Channel struct {
+	// Server is the hub-qualified server name ("plugin_<plugin>_<server>"),
+	// matching the keys MCPServers returns, so a subscriber can find the
+	// connected session for the channel.
+	Server string
+	// Source is the raw server name as declared in the manifest
+	// ("design-studio"), used as the source="..." label on injected events,
+	// matching Claude Code.
+	Source      string
+	DisplayName string
+}
+
+// Channels returns the channels a plugin's manifest declares in its
+// "channels" array ([{server, displayName}]), each server resolved to the
+// same "plugin_<plugin>_<server>" name MCPServers uses. A plugin with no
+// channels (the common case) returns nil. A channel naming a server the
+// plugin does not declare is kept — the subscriber warns and skips it, so a
+// typo is visible rather than silently dropped here.
+func Channels(p Plugin) []Channel {
+	mf, ok := pluginManifest(p.Root, p.Name, p.Marketplace)
+	if !ok || len(mf.Channels) == 0 {
+		return nil
+	}
+	var decls []struct {
+		Server      string `json:"server"`
+		DisplayName string `json:"displayName"`
+	}
+	if err := json.Unmarshal(mf.Channels, &decls); err != nil {
+		diag.L().Warn("plugins: broken channels", "plugin", p.Key, "error", err)
+		return nil
+	}
+	var out []Channel
+	for _, d := range decls {
+		if d.Server == "" {
+			diag.L().Warn("plugins: channel with no server", "plugin", p.Key)
+			continue
+		}
+		out = append(out, Channel{
+			Server:      fmt.Sprintf("plugin_%s_%s", p.Name, d.Server),
+			Source:      d.Server,
+			DisplayName: d.DisplayName,
+		})
 	}
 	return out
 }

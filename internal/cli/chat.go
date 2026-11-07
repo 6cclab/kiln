@@ -744,6 +744,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	var pluginAgents []claudeagents.Definition
 	pluginHooks := claudehooks.Config{}
 	pluginMCPServers := map[string]mcpgate.ServerConfig{}
+	// Channel subscriptions: a plugin's declared channels whose
+	// "<plugin>@<marketplace>" key is on in settings.json's "channels" map
+	// (settings-driven, unlike Claude Code's --channels flag). Keyed by the
+	// hub-qualified server name, valued by the source label its events carry.
+	channelOn := claudesettings.LoadChannelsFrom(cwd, settingsSources(args.SettingSources))
+	channelServers := map[string]string{}
 	for _, p := range activePlugins {
 		pluginSkills = append(pluginSkills, claudeplugins.Skills(p)...)
 		pluginCommands = append(pluginCommands, claudeplugins.Commands(p)...)
@@ -753,6 +759,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 		for name, cfg := range claudeplugins.MCPServers(p) {
 			pluginMCPServers[name] = cfg
+		}
+		if channelOn[p.Key] {
+			for _, ch := range claudeplugins.Channels(p) {
+				if _, ok := pluginMCPServers[ch.Server]; !ok {
+					diag.L().Warn("channel names a server the plugin does not declare", "plugin", p.Key, "server", ch.Server)
+					continue
+				}
+				channelServers[ch.Server] = ch.Source
+			}
 		}
 	}
 	allSkills := append(append([]skills.Skill{}, skillList...), pluginSkills...)
@@ -886,6 +901,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	todos := agent.NewTodoStore()
 
 	hub := mcpgate.NewHub()
+	// Channel servers connect with the legacy protocol and have their
+	// notifications/claude/channel pushes tapped; OnChannel is installed by
+	// the interactive TUI (which owns the bridge the events post to).
+	hub.Channels = channelServers
 	// Every scope Claude Code reads (user, local, .mcp.json) plus
 	// --mcp-config. A project's .mcp.json runs commands a clone can ship,
 	// so its servers start only in a trusted folder: now, when it already
@@ -1796,6 +1815,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				connectMCP(mcpCtx)
 				applyMCP()
 				return hub.Statuses()
+			},
+			InstallChannelSink: func(sink func(server, source string, ev mcpgate.ChannelEvent)) {
+				hub.OnChannel = sink
 			},
 			PendingMCPCount: len(pendingMCP),
 			// The allow rules held until the folder is trusted, re-read

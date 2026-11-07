@@ -86,6 +86,12 @@ type InteractiveDeps struct {
 	// only once the trust dialog is accepted.
 	PendingMCPCount   int
 	ConnectPendingMCP func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus
+	// InstallChannelSink, if non-nil, is called once during startup with a
+	// sink the hub invokes for each server-pushed channel event. The TUI
+	// passes a sink that posts the event into the session (as a
+	// <channel source="..."> turn); it installs this before MCP connect so
+	// a channel server's first push has somewhere to go.
+	InstallChannelSink func(sink func(server, source string, ev mcpgate.ChannelEvent))
 	// ApplyHeldRules applies what waited for the folder to be trusted:
 	// the allow rules settings held (claudesettings.Settings.HeldAllow)
 	// and the hooks. Run once the trust dialog is accepted, on the TUI's
@@ -152,6 +158,14 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	bridge := tui.NewBridge(deps.Cwd)
 	unwire := bridge.Wire(deps.Started, deps.Resolved.Tier.ToolOutputTokens)
 	defer unwire()
+
+	// Let the hub post channel events into the session. Installed before
+	// MCP connect (below) so a channel server's first push has a sink.
+	if deps.InstallChannelSink != nil {
+		deps.InstallChannelSink(func(server, source string, ev mcpgate.ChannelEvent) {
+			bridge.SendAsync(tui.MsgChannelEvent{Source: source, Content: ev.Content, Meta: ev.Meta})
+		})
+	}
 
 	// Notification fires when the user is about to be asked for
 	// permission, before the prompt paints, as Claude Code's

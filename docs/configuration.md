@@ -543,7 +543,19 @@ Supported in this version (what squad and savvy-progress use):
 
 Not supported: `$.fs`, `$.process`, `$.http`, `$.model`, `$.store`, `$.mcp`, the other events, plugin tiers, a `{result}` answer for one of kiln's own tools (the tool runs), streaming `turn.step` chunks, `Svg`, terminal images. An unsupported `$` call rejects with "… is not available in kiln (mods v1)"; an unknown event is logged.
 
-A mod's own tool (`mcp__<plugin>__<name>`) is answered by the mod and needs no permission prompt; deny and ask rules still apply. Subagents get the mods' tools too. Panes open in the live region above the input; **Ctrl+X then Tab** focuses one, and while focused its button hotkeys, Tab/Shift+Tab, Enter, Up/Down and Esc go to it.
+A mod's own tool (`mcp__<plugin>__<name>`) is answered by the mod and needs no permission prompt; deny and ask rules still apply. Subagents get the mods' tools too. Panes open in the live region above the input; a pane that requests a column count renders as a right-hand column of that width once the terminal is at least 144 columns wide, else full width. **Ctrl+X then Tab** focuses one, and while focused its button hotkeys, Tab/Shift+Tab, Enter, Up/Down and Esc go to it; **Ctrl+X then W** closes the focused pane (or the first open one), whatever its `closeOnEscape`, and each pane's header shows the `⌃x w to close` hint.
+
+### Channels (`internal/mcp/channeltap.go`, `internal/claude/settings/channels.go`)
+
+A plugin may declare **channels** in its manifest (`"channels": [{ "server": "<mcp-server>", "displayName": "…" }]`), each naming one of the plugin's own MCP servers. When a channel is on, that server's server-initiated `notifications/claude/channel` messages are injected into the session as `<channel source="…">` turns — queued behind a running turn, steered into one mid-flight, or started as a new turn when idle. It is the path the design studio uses to push a request straight into a session.
+
+Unlike Claude Code's `--channels` flag, kiln drives channels from `settings.json`, so one can be enabled globally in the user scope and overridden off for a single repo:
+
+```json
+{ "channels": { "design-studio@6cclab": true } }
+```
+
+The key is `<plugin>@<marketplace>` (the same key `enabledPlugins` uses), merged **per key** across user/project/local scope; a channel is active only when its merged value is `true` and the plugin is also enabled. A channel server connects with the legacy MCP protocol (the modern, stateless revision carries no session id, so a server won't act as a channel over it). An OAuth-only server is not reachable yet (kiln has no MCP OAuth flow — see the hub's connect-error note); a loopback server, or one given a token under its `headers`, works.
 
 ## 7. `.claude/` assets
 

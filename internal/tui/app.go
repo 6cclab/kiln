@@ -781,6 +781,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.SetActivity(msg.Text)
 		return m, nil
 
+	case MsgChannelEvent:
+		return m.injectChannelEvent(msg)
+
 	case MsgQueue:
 		m.spinner.SetQueueLen(msg.Len)
 		// Len 0 is only ever sent by the lane's own drain (drainInbox's
