@@ -56,3 +56,33 @@ func TestModPanesRender_RightColumnAtWideWidth(t *testing.T) {
 		t.Errorf("narrow terminal should render full-width, not right-aligned: %q", narrow[0])
 	}
 }
+
+// ctrl+x w closes the focused pane, or the first open pane when none is
+// focused — so any pane can be dismissed regardless of CloseOnEscape.
+func TestModPanesCloseActive(t *testing.T) {
+	p := &ModPanes{}
+	p.Open("squad", mods.PaneRequest{ID: "squad", Title: "Squad", Columns: 52})
+	p.Open("other", mods.PaneRequest{ID: "other", Title: "Other"})
+
+	// No focus: closes the first open pane (squad).
+	if !p.CloseActive() {
+		t.Fatal("CloseActive returned false with panes open")
+	}
+	if got := p.IDs(); len(got) != 1 || got[0] != "other" {
+		t.Fatalf("after close-first, panes = %v, want [other]", got)
+	}
+
+	// Focused: closes the focused one.
+	p.Focus("other")
+	if !p.CloseActive() {
+		t.Fatal("CloseActive returned false for a focused pane")
+	}
+	if got := p.IDs(); len(got) != 0 {
+		t.Fatalf("after closing focused, panes = %v, want none", got)
+	}
+
+	// Nothing open: reports false, no panic.
+	if p.CloseActive() {
+		t.Error("CloseActive returned true with no panes")
+	}
+}

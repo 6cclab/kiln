@@ -102,6 +102,14 @@ func (d *ModsDriver) ClosePane(id string) bool {
 	return ok
 }
 
+// CloseActive closes the focused pane (or the first open one), backing the
+// ctrl+x w chord.
+func (d *ModsDriver) CloseActive() bool {
+	ok := d.panes.CloseActive()
+	d.Invalidate()
+	return ok
+}
+
 func (d *ModsDriver) Panes() []string { return d.panes.IDs() }
 
 // Toast shows a mod's short note.

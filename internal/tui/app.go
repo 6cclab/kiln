@@ -1756,8 +1756,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.cfg.Mods != nil {
 		if m.modsChord {
 			m.modsChord = false
-			if msg.String() == "tab" && m.cfg.Mods.FocusNext() {
-				return m, nil
+			switch msg.String() {
+			case "tab":
+				if m.cfg.Mods.FocusNext() {
+					return m, nil
+				}
+			case "w":
+				if m.cfg.Mods.CloseActive() {
+					return m, nil
+				}
 			}
 		} else if msg.String() == "ctrl+x" && len(m.cfg.Mods.Panes()) > 0 {
 			m.modsChord = true

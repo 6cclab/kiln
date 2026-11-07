@@ -152,6 +152,26 @@ func (p *ModPanes) IDs() []string {
 	return out
 }
 
+// CloseActive closes the focused pane, or the first open pane if none holds
+// the focus, and reports whether it closed one. Backs the ctrl+x w close
+// chord so any pane can be dismissed from the keyboard, whether or not it
+// asked for CloseOnEscape.
+func (p *ModPanes) CloseActive() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	id := p.focused
+	if id == "" {
+		if len(p.order) == 0 {
+			return false
+		}
+		id = p.order[0]
+	}
+	return p.closeLocked(id)
+}
+
 // Focus gives a pane the keyboard focus (a focus chord or a click on it).
 // A no-op if id is not open.
 func (p *ModPanes) Focus(id string) {
@@ -278,9 +298,9 @@ func (p *ModPanes) Render(width int) []string {
 		// The focused pane takes the keys: its rule turns amber, kiln's
 		// accent for what has the input, and says how to give them back.
 		if id == p.focused {
-			paneLines = append(paneLines, labelRule(paneTitle(pane), KilnAmber, "esc to return", cols))
+			paneLines = append(paneLines, labelRule(paneTitle(pane), KilnAmber, "esc to return · ⌃x w to close", cols))
 		} else {
-			paneLines = append(paneLines, labelRule(paneTitle(pane), Muted, "", cols))
+			paneLines = append(paneLines, labelRule(paneTitle(pane), Muted, "⌃x w to close", cols))
 		}
 		if pane.drawing.Tree == nil {
 			pane.lastButtons = nil
