@@ -17,6 +17,35 @@ import (
 // does not say (PaneRequest.Rows <= 0).
 const defaultPaneBodyRows = 12
 
+// sidePaneMinWidth is the terminal width at or above which a pane that asked
+// for a column count (PaneRequest.Columns) is laid out as a narrow right-hand
+// column of that width rather than spanning the whole terminal, matching
+// Claude Code's 144-column rule. Below it, or when the pane asked for no
+// width, the pane spans the full width as before.
+const sidePaneMinWidth = 144
+
+// paneColumns is the body width a pane renders to: its requested Columns when
+// it asked for one and the terminal is wide enough to set it aside as a right
+// column, else the full width.
+func paneColumns(req mods.PaneRequest, width int) int {
+	if req.Columns > 0 && req.Columns < width && width >= sidePaneMinWidth {
+		return req.Columns
+	}
+	return max(0, width)
+}
+
+// rightAlignPane pushes each line of a pane laid out as a right-hand column
+// to the right edge of width (reusing rightAlign per line); a no-op when the
+// pane already fills the width.
+func rightAlignPane(lines []string, cols, width int) {
+	if cols >= width {
+		return
+	}
+	for i := range lines {
+		lines[i] = rightAlign(lines[i], width)
+	}
+}
+
 // modPane is one open pane's state.
 type modPane struct {
 	plugin  string
@@ -220,7 +249,7 @@ func (p *ModPanes) Site(id string, width int) mods.Site {
 	return mods.Site{
 		Component:   "Pane",
 		RequestID:   pane.req.ID,
-		BodyColumns: max(0, width),
+		BodyColumns: paneColumns(pane.req, width),
 		BodyRows:    rows,
 		Surface:     "terminal",
 		Title:       pane.req.Title,
@@ -244,18 +273,22 @@ func (p *ModPanes) Render(width int) []string {
 	var out []string
 	for _, id := range p.order {
 		pane := p.panes[id]
+		cols := paneColumns(pane.req, width)
+		var paneLines []string
 		// The focused pane takes the keys: its rule turns amber, kiln's
 		// accent for what has the input, and says how to give them back.
 		if id == p.focused {
-			out = append(out, labelRule(paneTitle(pane), KilnAmber, "esc to return", width))
+			paneLines = append(paneLines, labelRule(paneTitle(pane), KilnAmber, "esc to return", cols))
 		} else {
-			out = append(out, labelRule(paneTitle(pane), Muted, "", width))
+			paneLines = append(paneLines, labelRule(paneTitle(pane), Muted, "", cols))
 		}
 		if pane.drawing.Tree == nil {
 			pane.lastButtons = nil
+			rightAlignPane(paneLines, cols, width)
+			out = append(out, paneLines...)
 			continue
 		}
-		rendered := RenderModTree(*pane.drawing.Tree, width)
+		rendered := RenderModTree(*pane.drawing.Tree, cols)
 		pane.lastButtons = rendered.Buttons
 		if len(pane.lastButtons) == 0 {
 			pane.selected = 0
@@ -271,7 +304,9 @@ func (p *ModPanes) Render(width int) []string {
 		maxStart := max(0, len(lines)-rows)
 		pane.scroll = clamp(pane.scroll, 0, maxStart)
 		end := min(len(lines), pane.scroll+rows)
-		out = append(out, lines[pane.scroll:end]...)
+		paneLines = append(paneLines, lines[pane.scroll:end]...)
+		rightAlignPane(paneLines, cols, width)
+		out = append(out, paneLines...)
 	}
 	return out
 }
