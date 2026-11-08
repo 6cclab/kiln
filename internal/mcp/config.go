@@ -22,6 +22,11 @@ type ServerConfig struct {
 	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 
+	// OAuth, when set, makes an http server authenticate with the OAuth 2.1
+	// authorization-code flow (the server manifest's "oauth" block). See
+	// internal/mcp/oauth.go.
+	OAuth *OAuthConfig `json:"oauth,omitempty"`
+
 	// Scope is where the entry came from (ScopeUser, ScopeLocal,
 	// ScopeProject or ScopeFlag); set by Resolve, never read from or
 	// written to a config file.
@@ -260,6 +265,21 @@ func expandString(s string) string {
 // (e.g. an API key) expanded the same way.
 func ExpandConfig(cfg ServerConfig) ServerConfig { return expandConfig(cfg) }
 
+// OAuthConfig is an http MCP server's OAuth 2.1 settings, from its manifest's
+// "oauth" block. The authorization server is discovered from the server's
+// protected-resource metadata; only the preregistered client id, the loopback
+// callback port, the requested scopes, and the redirect path (which must match
+// the client's registration at the IdP) are configured here.
+type OAuthConfig struct {
+	ClientID     string   `json:"clientId,omitempty"`
+	CallbackPort int      `json:"callbackPort,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+	// RedirectPath is the path of the loopback redirect URI; defaults to
+	// "/callback". The full URI is http://127.0.0.1:<CallbackPort><RedirectPath>
+	// and must match a redirect URI registered for ClientID at the IdP.
+	RedirectPath string `json:"redirectPath,omitempty"`
+}
+
 func expandConfig(cfg ServerConfig) ServerConfig {
 	cfg.Command = expandString(cfg.Command)
 	cfg.URL = expandString(cfg.URL)
@@ -282,6 +302,19 @@ func expandConfig(cfg ServerConfig) ServerConfig {
 	}
 	cfg.Env = expandMap(cfg.Env)
 	cfg.Headers = expandMap(cfg.Headers)
+	if cfg.OAuth != nil {
+		oa := *cfg.OAuth
+		oa.ClientID = expandString(oa.ClientID)
+		oa.RedirectPath = expandString(oa.RedirectPath)
+		if oa.Scopes != nil {
+			scopes := make([]string, len(oa.Scopes))
+			for i, s := range oa.Scopes {
+				scopes[i] = expandString(s)
+			}
+			oa.Scopes = scopes
+		}
+		cfg.OAuth = &oa
+	}
 	return cfg
 }
 
