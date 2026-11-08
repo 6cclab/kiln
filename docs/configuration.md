@@ -555,7 +555,18 @@ Unlike Claude Code's `--channels` flag, kiln drives channels from `settings.json
 { "channels": { "design-studio@6cclab": true } }
 ```
 
-The key is `<plugin>@<marketplace>` (the same key `enabledPlugins` uses), merged **per key** across user/project/local scope; a channel is active only when its merged value is `true` and the plugin is also enabled. A channel server connects with the legacy MCP protocol (the modern, stateless revision carries no session id, so a server won't act as a channel over it). An OAuth-only server is not reachable yet (kiln has no MCP OAuth flow — see the hub's connect-error note); a loopback server, or one given a token under its `headers`, works.
+The key is `<plugin>@<marketplace>` (the same key `enabledPlugins` uses), merged **per key** across user/project/local scope; a channel is active only when its merged value is `true` and the plugin is also enabled. A channel server connects with the legacy MCP protocol (the modern, stateless revision removes the server-push SSE stream a channel needs). A channel server that needs OAuth uses the same flow as any http MCP server (see Server OAuth below).
+
+### Server OAuth (`internal/mcp/oauth.go`, `internal/mcp/config.go`)
+
+An http MCP server whose config carries an `oauth` block authenticates with the OAuth 2.1 authorization-code flow (PKCE), discovered from the server's protected-resource metadata:
+
+```json
+{ "mcpServers": { "studio": { "type": "http", "url": "https://studio/mcp",
+  "oauth": { "clientId": "…", "callbackPort": 43123, "redirectPath": "/callback", "scopes": ["openid", "groups"] } } } }
+```
+
+The go-sdk `AuthorizationCodeHandler` runs the protocol; kiln opens the browser, captures the code on a `127.0.0.1:<callbackPort><redirectPath>` loopback redirect, and persists the token (`~/.harness/mcp-oauth.json`, `0600`) so later sessions refresh without a new sign-in. `redirectPath` (default `/callback`) must match a redirect URI registered for `clientId` at the authorization server. In print mode (no terminal), a server with no cached token fails fast rather than opening a browser. Discovery, token exchange and refresh follow the MCP spec; only a preregistered client is supported (no Dynamic Client Registration yet).
 
 ## 7. `.claude/` assets
 
