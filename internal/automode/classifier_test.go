@@ -377,6 +377,21 @@ func TestClassify_SendsTheBuiltRequest(t *testing.T) {
 	}
 }
 
+// TestClassify_AnswerBudgetLeavesRoomForThinking guards the board-q7 option-C
+// fix. On an adaptive-thinking model (claude-opus-4-8, forceAdaptiveThinking)
+// the classifier spends output tokens thinking before it emits the one-line
+// JSON answer, and those thinking tokens count against maxAnswerTokens. At
+// 1024 real opus-4-8 classifications burned the whole budget thinking, hit
+// StopReason=length, were discarded as "answer did not finish", and auto mode
+// fell back to a permission prompt. The cap must stay well above a short JSON
+// answer so a deep-think judgment can finish. (TestClassify_SendsTheBuiltRequest
+// asserts this cap is the one actually streamed.)
+func TestClassify_AnswerBudgetLeavesRoomForThinking(t *testing.T) {
+	if maxAnswerTokens < 4096 {
+		t.Fatalf("maxAnswerTokens = %d: too small. Adaptive-thinking models spend this budget thinking before the JSON answer; 1024 truncated real opus-4-8 answers and auto mode asked the user instead (board q7 option C).", maxAnswerTokens)
+	}
+}
+
 func TestClassify_FailuresAreErrors(t *testing.T) {
 	cases := map[string]*fakeStreamer{
 		"garbage":        answering("I would allow this."),
