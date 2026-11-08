@@ -186,6 +186,15 @@ type Hub struct {
 	// hub server name, its source label, and the event. Called from the
 	// connection's read goroutine, so it must not block.
 	OnChannel func(server, source string, ev ChannelEvent)
+
+	// Headless is set in print mode / when there is no terminal: an OAuth
+	// server with no cached token then fails fast instead of trying to open
+	// a browser. Set before ConnectAll.
+	Headless bool
+
+	// OAuthNotify, if set, is called with a line telling the user to finish
+	// an OAuth sign-in in the browser. Set before ConnectAll.
+	OAuthNotify func(string)
 }
 
 // NewHub builds an empty, unconnected Hub.
@@ -337,6 +346,23 @@ func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, tim
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "harness", Version: "0.0.0"}, nil)
 
+	connectTimeout := timeout
+	if cfg.OAuth != nil {
+		// The browser sign-in happens inside Connect; the normal ~30s connect
+		// timeout would cancel it mid-flow (design review P0 #1).
+		if st, ok := transport.(*sdk.StreamableClientTransport); ok {
+			handler, herr := buildOAuthHandler(cfg.URL, cfg.OAuth, h.Headless, h.OAuthNotify)
+			if herr != nil {
+				h.record(ServerStatus{Name: name, OK: false, Error: "oauth: " + herr.Error(), Detail: herr.Error(), Ms: elapsedMs(started)})
+				return
+			}
+			st.OAuthHandler = handler
+			connectTimeout = authorizeTimeout + 30*time.Second
+		} else {
+			diag.L().Warn("oauth: configured on a non-http server; ignored", "server", name)
+		}
+	}
+
 	var sessOpts *sdk.ClientSessionOptions
 	if source, isChannel := h.Channels[name]; isChannel {
 		transport = &channelTapTransport{inner: transport, onEvent: func(ev ChannelEvent) {
@@ -347,7 +373,7 @@ func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, tim
 		sessOpts = &sdk.ClientSessionOptions{ProtocolVersion: channelProtocolVersion}
 	}
 
-	connectCtx, cancel := context.WithTimeout(ctx, timeout)
+	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	session, err := client.Connect(connectCtx, transport, sessOpts)
 	cancel()
 	if err != nil {
