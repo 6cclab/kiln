@@ -1,105 +1,65 @@
 package mcp
 
 import (
-	"context"
-	"encoding/json"
 	"io"
+	"strings"
 	"testing"
-
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
-// scriptedConn is a fake transport Connection that returns a fixed sequence
-// of messages from Read, then io.EOF.
-type scriptedConn struct {
-	msgs []jsonrpc.Message
-	i    int
-}
+// filterChannelSSE drops notifications/claude/channel events (forwarding them)
+// and passes every other SSE byte through verbatim.
+func TestFilterChannelSSE(t *testing.T) {
+	// A ping comment, a channel notification, and an unrelated notification.
+	in := ": ping\n\n" +
+		`data: {"jsonrpc":"2.0","method":"notifications/claude/channel","params":{"content":"do it","meta":{"request":"c_1"}}}` + "\n\n" +
+		`data: {"jsonrpc":"2.0","method":"notifications/message","params":{"x":1}}` + "\n\n"
 
-func (c *scriptedConn) Read(context.Context) (jsonrpc.Message, error) {
-	if c.i >= len(c.msgs) {
-		return nil, io.EOF
-	}
-	m := c.msgs[c.i]
-	c.i++
-	return m, nil
-}
-func (c *scriptedConn) Write(context.Context, jsonrpc.Message) error { return nil }
-func (c *scriptedConn) Close() error                                 { return nil }
-func (c *scriptedConn) SessionID() string                            { return "test" }
-
-func channelReq(t *testing.T, content string, meta map[string]any) *jsonrpc.Request {
-	t.Helper()
-	params, err := json.Marshal(channelParams{Content: content, Meta: meta})
+	var got []ChannelEvent
+	rc := filterChannelSSE(io.NopCloser(strings.NewReader(in)), func(ev ChannelEvent) { got = append(got, ev) })
+	out, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &jsonrpc.Request{Method: channelMethod, Params: params}
-}
 
-// A channelMethod notification is parsed, forwarded to onEvent and swallowed;
-// the messages around it (a tool result, an unrelated notification) pass
-// through in order, so the SDK never sees the method it would reject.
-func TestChannelTap_InterceptsAndPassesThrough(t *testing.T) {
-	var got []ChannelEvent
-	toolResult := &jsonrpc.Response{ID: mustID(t, "r1")}
-	otherNotif := &jsonrpc.Request{Method: "notifications/message"}
-
-	inner := &scriptedConn{msgs: []jsonrpc.Message{
-		toolResult,
-		channelReq(t, "A new request", map[string]any{"project": "margin", "request": "c_1", "event": "request"}),
-		otherNotif,
-	}}
-	conn := &channelTapConn{Connection: inner, onEvent: func(ev ChannelEvent) { got = append(got, ev) }}
-
-	// First Read returns the tool response untouched.
-	if m, err := conn.Read(context.Background()); err != nil || m != toolResult {
-		t.Fatalf("first Read = %v, %v; want the tool response", m, err)
+	// The channel event was forwarded...
+	if len(got) != 1 || got[0].Content != "do it" || got[0].Meta["request"] != "c_1" {
+		t.Fatalf("forwarded events = %+v, want one {do it, c_1}", got)
 	}
-	// Second Read skips the swallowed channel notification and returns the
-	// next real message (the other notification).
-	if m, err := conn.Read(context.Background()); err != nil || m != otherNotif {
-		t.Fatalf("second Read = %v, %v; want the passed-through notification", m, err)
+	// ...and removed from the passed-through body, which keeps the ping and the
+	// unrelated notification verbatim.
+	o := string(out)
+	if strings.Contains(o, "claude/channel") {
+		t.Errorf("channel event not filtered out of body:\n%s", o)
 	}
-	// Stream drained.
-	if _, err := conn.Read(context.Background()); err != io.EOF {
-		t.Fatalf("third Read err = %v; want io.EOF", err)
-	}
-
-	if len(got) != 1 {
-		t.Fatalf("got %d events, want 1: %+v", len(got), got)
-	}
-	if got[0].Content != "A new request" {
-		t.Errorf("Content = %q, want %q", got[0].Content, "A new request")
-	}
-	if got[0].Meta["request"] != "c_1" || got[0].Meta["event"] != "request" {
-		t.Errorf("Meta = %v, want request=c_1 event=request", got[0].Meta)
+	if !strings.Contains(o, ": ping") || !strings.Contains(o, "notifications/message") {
+		t.Errorf("non-channel events not passed through:\n%s", o)
 	}
 }
 
-// A channelMethod notification with broken params is dropped (no event, no
-// panic) and still swallowed.
-func TestChannelTap_BrokenParamsDropped(t *testing.T) {
-	var got []ChannelEvent
-	bad := &jsonrpc.Request{Method: channelMethod, Params: json.RawMessage(`"not an object"`)}
-	after := &jsonrpc.Response{ID: mustID(t, "r2")}
-	conn := &channelTapConn{
-		Connection: &scriptedConn{msgs: []jsonrpc.Message{bad, after}},
-		onEvent:    func(ev ChannelEvent) { got = append(got, ev) },
+// A data payload that isn't a channel notification is left for passthrough.
+func TestChannelData(t *testing.T) {
+	if p, ok := channelData([]byte(`{"method":"notifications/claude/channel","params":{"content":"hi","meta":{"a":"b"}}}`)); !ok || p.Content != "hi" {
+		t.Errorf("channel notif not recognised: %+v ok=%v", p, ok)
 	}
-	if m, err := conn.Read(context.Background()); err != nil || m != after {
-		t.Fatalf("Read = %v, %v; want the message after the broken one", m, err)
+	if _, ok := channelData([]byte(`{"method":"notifications/message"}`)); ok {
+		t.Error("non-channel method should not be recognised")
 	}
-	if len(got) != 0 {
-		t.Errorf("got %d events, want 0 for broken params", len(got))
+	if _, ok := channelData([]byte("not json")); ok {
+		t.Error("non-json should not be recognised")
+	}
+	if _, ok := channelData([]byte("")); ok {
+		t.Error("empty should not be recognised")
 	}
 }
 
-func mustID(t *testing.T, v any) jsonrpc.ID {
-	t.Helper()
-	id, err := jsonrpc.MakeID(v)
-	if err != nil {
-		t.Fatal(err)
+func TestSSEData(t *testing.T) {
+	if v, ok := sseData([]byte("data: hello\n")); !ok || string(v) != "hello" {
+		t.Errorf("sseData = %q ok=%v, want hello", v, ok)
 	}
-	return id
+	if v, ok := sseData([]byte("data:no-space\n")); !ok || string(v) != "no-space" {
+		t.Errorf("sseData = %q, want no-space", v)
+	}
+	if _, ok := sseData([]byte(": comment\n")); ok {
+		t.Error("a comment line is not data")
+	}
 }

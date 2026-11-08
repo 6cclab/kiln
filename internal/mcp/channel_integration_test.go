@@ -92,6 +92,7 @@ func TestChannelPushReachesOnChannel(t *testing.T) {
 	defer srv.Close()
 
 	h := NewHub()
+	defer h.Close(context.Background())
 	h.Channels = map[string]string{"studio": "design-studio"}
 	got := make(chan ChannelEvent, 1)
 	h.OnChannel = func(server, source string, ev ChannelEvent) {

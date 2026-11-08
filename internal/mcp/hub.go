@@ -365,11 +365,20 @@ func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, tim
 
 	var sessOpts *sdk.ClientSessionOptions
 	if source, isChannel := h.Channels[name]; isChannel {
-		transport = &channelTapTransport{inner: transport, onEvent: func(ev ChannelEvent) {
-			if h.OnChannel != nil {
-				h.OnChannel(name, source, ev)
+		// Tap the channel notifications out of the SSE body at the http layer.
+		// NOT by wrapping the Connection: that hides the SDK's concrete
+		// *streamableClientConn and stops the standalone GET SSE stream (which
+		// carries the pushes) from ever opening. See channeltap.go.
+		if st, ok := transport.(*sdk.StreamableClientTransport); ok && st.HTTPClient != nil {
+			st.HTTPClient.Transport = channelTapRoundTripper{
+				inner: st.HTTPClient.Transport,
+				onEvent: func(ev ChannelEvent) {
+					if h.OnChannel != nil {
+						h.OnChannel(name, source, ev)
+					}
+				},
 			}
-		}}
+		}
 		sessOpts = &sdk.ClientSessionOptions{ProtocolVersion: channelProtocolVersion}
 	}
 
