@@ -32,8 +32,17 @@ type Streamer interface {
 // failed call asks the user.
 const DefaultTimeout = 60 * time.Second
 
-// maxAnswerTokens caps the classifier's reply: one short JSON object.
-const maxAnswerTokens = 1024
+// maxAnswerTokens caps the classifier's reply. The answer itself is one
+// short JSON object (tens to a few hundred tokens), but on an adaptive-
+// thinking model (e.g. claude-opus-4-8, forceAdaptiveThinking) the model
+// spends output tokens thinking *before* it emits that JSON, and thinking
+// tokens count against this cap. At 1024 a hard-to-judge action could burn
+// the whole budget thinking, hit StopReason=length, and be discarded as
+// "answer did not finish" — which in auto mode falls back to a permission
+// prompt (decision board q7, option C: keep thinking, give it room). 4096
+// leaves headroom for thinking plus the JSON; normal calls finish far below
+// it and are unaffected, so this only rescues the rare deep-think case.
+const maxAnswerTokens = 4096
 
 // Classifier is the model-backed permission.Classifier.
 type Classifier struct {
