@@ -724,6 +724,12 @@ type MsgRoute struct {
 	ContextWindow int
 }
 
+// MsgShells carries the current count of running background shells
+// (bash_background). Pushed by the shell registry's OnChange hook whenever a
+// shell starts, exits or is killed, so the status-line indicator stays
+// accurate even while the user is idle.
+type MsgShells struct{ Running int }
+
 // MsgPermissionPrompt asks the app to show a tool-permission prompt. Reply
 // is answered by the app once the user picks; the gate's own goroutine
 // blocks on it.

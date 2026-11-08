@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/andrepato/harness/internal/money"
+	"github.com/andrepato/harness/internal/plural"
 )
 
 // The status line — one row, ported from the kiln design handoff's "Status
@@ -43,6 +44,10 @@ type StatusState struct {
 	Cwd string
 	// Mode is the permission mode driving the dot/label colour and text.
 	Mode string
+	// Shells is the number of background shells (bash_background) still
+	// running. Zero hides the indicator; >0 shows "⟳ N shells" in amber,
+	// the running colour, between the model and the context meter.
+	Shells int
 	// Thinking is set while the model is reasoning. RenderStatusLine does
 	// not use this itself (the busy line owns "thinking" now); kept on the
 	// state because callers (MsgThinking) still set it and other code may
@@ -375,10 +380,21 @@ func RenderStatusLine(s StatusState, width int) string {
 		modelSegCollapsed = Ink(s.RoutedModel) + levelSuffix()
 	}
 
+	// --- background-shell segment ---
+	// "⟳ N shells" in amber (the running colour, same as the subagents
+	// panel), shown only while at least one background shell is running. It
+	// sits with the session state on the left, after the model and before
+	// the flexible spacer; it drops after cost but before the model when the
+	// row is tight (see the drop order below).
+	shellsSeg := ""
+	if s.Shells > 0 {
+		shellsSeg = KilnAmber(G().Shells + " " + plural.Count(s.Shells, "shell"))
+	}
+
 	// needLoc: refuse a row that would only fit by dropping the location
 	// entirely, so a tight row gives up cost, then the model, before the
 	// cwd · branch (defect: a long cwd blanked the branch too).
-	build := func(includeCost, includeModel, needLoc bool, modelVariant string) string {
+	build := func(includeCost, includeShells, includeModel, needLoc bool, modelVariant string) string {
 		r := ctxSeg
 		if includeCost {
 			r += "  " + costSeg
@@ -388,7 +404,11 @@ func RenderStatusLine(s StatusState, width int) string {
 		if includeModel && modelVariant != "" {
 			model = "  " + modelVariant
 		}
-		lwMode := VisibleWidth(modeSeg) + VisibleWidth(model)
+		shells := ""
+		if includeShells && shellsSeg != "" {
+			shells = "  " + shellsSeg
+		}
+		lwMode := VisibleWidth(modeSeg) + VisibleWidth(model) + VisibleWidth(shells)
 
 		tryLoc := func(cwdWidth int) string {
 			left := modeSeg
@@ -398,6 +418,7 @@ func RenderStatusLine(s StatusState, width int) string {
 				return ""
 			}
 			left += model
+			left += shells
 			lw := VisibleWidth(left)
 			spacer := width - 1 - lw - rw
 			if spacer < 1 {
@@ -419,24 +440,28 @@ func RenderStatusLine(s StatusState, width int) string {
 	}
 
 	// Drop order as the row narrows, fixed and monotonic: shorten the cwd
-	// (inside build) first, then drop cost, then the model, and only then
-	// the location itself. Each step is strictly narrower than the last —
-	// nothing comes back once dropped — so two terminal widths one column
-	// apart never show a different combination of segments (defect:
-	// trying {cost, no model} before giving up on cost let a wider row
-	// drop cost while a narrower one kept it by keeping the model instead,
-	// qa/findings/20261004T204953Z-narrow-footer-and-panel-clipping.json).
+	// (inside build) first, then drop cost, then the shells indicator, then
+	// collapse the model ("auto → model" to just the routed model), then drop
+	// the model, and only then the location itself. Each step is strictly
+	// narrower than the last — nothing comes back once dropped — so two
+	// terminal widths one column apart never show a different combination of
+	// segments (defect: trying {cost, no model} before giving up on cost let
+	// a wider row drop cost while a narrower one kept it by keeping the model
+	// instead, qa/findings/20261004T204953Z-narrow-footer-and-panel-clipping.json).
+	// When no shell is running shellsSeg is "", so the shells flag has no
+	// effect and the sequence collapses to the original cost→model→loc order.
 	for _, try := range []struct {
-		cost, model, needLoc bool
-		variant              string
+		cost, shells, model, needLoc bool
+		variant                      string
 	}{
-		{true, true, true, modelSeg},
-		{false, true, true, modelSeg},
-		{false, true, true, modelSegCollapsed},
-		{false, false, true, ""},
-		{false, false, false, ""},
+		{true, true, true, true, modelSeg},
+		{false, true, true, true, modelSeg},
+		{false, false, true, true, modelSeg},
+		{false, false, true, true, modelSegCollapsed},
+		{false, false, false, true, ""},
+		{false, false, false, false, ""},
 	} {
-		if out := build(try.cost, try.model, try.needLoc, try.variant); out != "" {
+		if out := build(try.cost, try.shells, try.model, try.needLoc, try.variant); out != "" {
 			return out
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,58 @@ func TestStartReturnsImmediately(t *testing.T) {
 		t.Fatalf("status = %q, want running", shell.Status)
 	}
 	shells.Kill(shell.ID)
+}
+
+// TestRunningCountAndOnChange guards the status-line indicator's two needs:
+// Running() must count only shells still running, and OnChange must fire on
+// every lifecycle transition (start, exit, kill) so the footer refreshes even
+// while the user is idle.
+func TestRunningCountAndOnChange(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	shells := NewBackgroundShells()
+
+	var changes atomic.Int32
+	shells.SetOnChange(func() { changes.Add(1) })
+
+	if got := shells.Running(); got != 0 {
+		t.Fatalf("Running() on an empty registry = %d, want 0", got)
+	}
+
+	longRunner, err := shells.Start(context.Background(), "sleep 5", env)
+	if err != nil {
+		t.Fatalf("Start long: %v", err)
+	}
+	quick, err := shells.Start(context.Background(), "exit 0", env)
+	if err != nil {
+		t.Fatalf("Start quick: %v", err)
+	}
+
+	// The quick shell exits on its own; the long one keeps running.
+	settle(600 * time.Millisecond)
+	if got := shells.Running(); got != 1 {
+		t.Fatalf("Running() after one exit = %d, want 1", got)
+	}
+
+	// OnChange fired at least for: 2 starts + the quick shell's exit.
+	if got := changes.Load(); got < 3 {
+		t.Fatalf("OnChange fired %d times, want >=3 (2 starts + 1 exit)", got)
+	}
+
+	before := changes.Load()
+	shells.Kill(longRunner.ID)
+	if got := shells.Running(); got != 0 {
+		t.Fatalf("Running() after kill = %d, want 0", got)
+	}
+	if changes.Load() <= before {
+		t.Fatalf("OnChange did not fire on kill (stayed at %d)", before)
+	}
+
+	// Killing an already-dead shell must not fire OnChange again.
+	steady := changes.Load()
+	shells.Kill(quick.ID)
+	if changes.Load() != steady {
+		t.Fatalf("OnChange fired on killing an already-finished shell")
+	}
 }
 
 func TestReadIncrementallyNeverRepeats(t *testing.T) {

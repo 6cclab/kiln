@@ -39,6 +39,7 @@ type StatusPatch struct {
 	Thinking      *bool
 	RoutedModel   *string
 	RoutedLevel   *string
+	Shells        *int
 }
 
 // Apply patches the state.
@@ -69,6 +70,9 @@ func (f *FooterState) Apply(p StatusPatch) {
 	}
 	if p.RoutedLevel != nil {
 		f.state.RoutedLevel = *p.RoutedLevel
+	}
+	if p.Shells != nil {
+		f.state.Shells = *p.Shells
 	}
 }
 

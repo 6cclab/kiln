@@ -95,11 +95,55 @@ type BackgroundShells struct {
 	shells map[string]*shellEntry
 	order  []string
 	nextID int
+	// onChange, if set, is called after any lifecycle transition (a shell
+	// starts, exits or is killed) so a UI can refresh its running count. It
+	// runs with no registry lock held and must not call back into the
+	// registry synchronously in a way that blocks. nil (print mode, tests)
+	// means no notification.
+	onChange func()
 }
 
 // NewBackgroundShells returns an empty registry.
 func NewBackgroundShells() *BackgroundShells {
 	return &BackgroundShells{shells: map[string]*shellEntry{}, nextID: 1}
+}
+
+// SetOnChange registers a callback fired after every lifecycle transition.
+// Set once at wiring time, before any shell starts.
+func (b *BackgroundShells) SetOnChange(fn func()) {
+	b.mu.Lock()
+	b.onChange = fn
+	b.mu.Unlock()
+}
+
+// Running is how many shells are still running — what the status-line
+// indicator shows.
+func (b *BackgroundShells) Running() int {
+	b.mu.Lock()
+	entries := make([]*shellEntry, 0, len(b.shells))
+	for _, id := range b.order {
+		entries = append(entries, b.shells[id])
+	}
+	b.mu.Unlock()
+	n := 0
+	for _, e := range entries {
+		e.mu.Lock()
+		if e.status == ShellRunning {
+			n++
+		}
+		e.mu.Unlock()
+	}
+	return n
+}
+
+// notify calls onChange (if any) with no lock held.
+func (b *BackgroundShells) notify() {
+	b.mu.Lock()
+	fn := b.onChange
+	b.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // splitLines splits without the empty trailing element a final newline
@@ -166,11 +210,11 @@ func (b *BackgroundShells) Start(ctx context.Context, command string, env *exece
 		})
 
 		entry.mu.Lock()
-		defer entry.mu.Unlock()
 		if entry.status == ShellKilled {
-			// Kill already set status/endedAt; do not overwrite them with
-			// whatever env.Exec happened to return once cancellation
-			// propagated.
+			// Kill already set status/endedAt (and notified); do not
+			// overwrite them with whatever env.Exec happened to return once
+			// cancellation propagated.
+			entry.mu.Unlock()
 			return
 		}
 		now := time.Now()
@@ -182,9 +226,12 @@ func (b *BackgroundShells) Start(ctx context.Context, command string, env *exece
 		} else {
 			entry.status = ShellFailed
 		}
+		entry.mu.Unlock()
+		b.notify()
 	})
 
 	snap := entry.snapshot()
+	b.notify()
 	return &snap, nil
 }
 
@@ -314,14 +361,20 @@ func (b *BackgroundShells) Kill(id string) (Shell, bool) {
 		return Shell{}, false
 	}
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
+	changed := false
 	if entry.status == ShellRunning {
 		entry.status = ShellKilled
 		now := time.Now()
 		entry.endedAt = &now
 		entry.cancel()
+		changed = true
 	}
-	return entry.snapshotLocked(), true
+	snap := entry.snapshotLocked()
+	entry.mu.Unlock()
+	if changed {
+		b.notify()
+	}
+	return snap, true
 }
 
 // Get returns the current snapshot without reading output.
@@ -360,6 +413,7 @@ func (b *BackgroundShells) KillAll() {
 	}
 	b.mu.Unlock()
 
+	changed := false
 	for _, e := range shells {
 		e.mu.Lock()
 		if e.status == ShellRunning {
@@ -367,8 +421,12 @@ func (b *BackgroundShells) KillAll() {
 			now := time.Now()
 			e.endedAt = &now
 			e.cancel()
+			changed = true
 		}
 		e.mu.Unlock()
+	}
+	if changed {
+		b.notify()
 	}
 }
 
