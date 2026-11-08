@@ -616,6 +616,7 @@ type Glyphs struct {
 	Approval    string // permission prompt: "?"
 	Plan        string // plan label: "≡"
 	Subagents   string // subagents label: "∥"
+	Shells      string // background-shell indicator (status line): "⟳"
 	Error       string // error label: "!"
 	Context     string // context label: "◧"
 	OK          string // success: "✓"
@@ -648,6 +649,7 @@ var UnicodeGlyphs = Glyphs{
 	Approval:    "?",
 	Plan:        "≡",
 	Subagents:   "∥",
+	Shells:      "⟳",
 	Error:       "!",
 	Context:     "◧",
 	OK:          "✓",
@@ -680,6 +682,7 @@ var ASCIIGlyphs = Glyphs{
 	Approval:    "?",
 	Plan:        "#",
 	Subagents:   "||",
+	Shells:      "@",
 	Error:       "!",
 	Context:     "#",
 	OK:          "+",

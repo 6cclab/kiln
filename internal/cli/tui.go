@@ -61,6 +61,9 @@ type InteractiveDeps struct {
 	Registry   *slashcommands.Registry
 	Env        *execenv.Env
 	Dispatcher *agent.Dispatcher
+	// Shells is the background-shell registry (bash_background). Its running
+	// count drives the status-line indicator; nil in runs without one.
+	Shells *agent.BackgroundShells
 	// Hooks is the hooks to run now: none until the folder is trusted
 	// in an interactive session (trustedHooks).
 	Hooks        func() claudehooks.Config
@@ -220,6 +223,15 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			transcriptSink(e)
 			panelSink(e)
 		}
+	}
+
+	// Refresh the status-line shell indicator whenever a background shell
+	// starts, exits or is killed. SendAsync is non-blocking and safe from the
+	// registry's own exit goroutine.
+	if deps.Shells != nil {
+		deps.Shells.SetOnChange(func() {
+			bridge.SendAsync(tui.MsgShells{Running: deps.Shells.Running()})
+		})
 	}
 
 	historyPath := editor.Path()
