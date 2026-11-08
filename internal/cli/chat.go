@@ -1598,6 +1598,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		exitCode := RunInteractive(ctx, InteractiveDeps{
 			StartupNotes:   startupNotes,
 			Cwd:            cwd,
+			Shells:         shells,
 			Effort:         args.Effort,
 			AuthKind:       authKindLabel(ctx, reg, providerID),
 			Keybindings:    keys.Bindings,

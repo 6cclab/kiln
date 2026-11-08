@@ -954,6 +954,11 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.footer.Apply(StatusPatch{Git: &g})
 		return m, nil
 
+	case MsgShells:
+		n := msg.Running
+		m.footer.Apply(StatusPatch{Shells: &n})
+		return m, nil
+
 	case tea.ColorProfileMsg:
 		// A 256-colour terminal (Terminal.app) rounds every colour to the
 		// palette; surfaces are chosen so the rounding keeps them visible.

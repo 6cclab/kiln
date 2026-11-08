@@ -199,6 +199,39 @@ func TestRenderStatusLine_FitsWidthDroppingSegments(t *testing.T) {
 	}
 }
 
+// TestRenderStatusLine_ShellsIndicator guards the background-shell indicator:
+// hidden with none running, "⟳ N shells" (amber) when some are, singular at 1,
+// and never overflowing the row as the width narrows.
+func TestRenderStatusLine_ShellsIndicator(t *testing.T) {
+	// Hidden when none run — no churn to the existing status line.
+	if got := RenderStatusLine(baseState(), 80); strings.Contains(got, "shell") {
+		t.Fatalf("status line shows a shell indicator with 0 running:\n%s", got)
+	}
+
+	s := baseState()
+	s.Shells = 2
+	out := RenderStatusLine(s, 80)
+	if want := G().Shells + " 2 shells"; !strings.Contains(out, want) {
+		t.Fatalf("status line missing shell indicator %q:\n%s", want, out)
+	}
+
+	s.Shells = 1
+	if got := RenderStatusLine(s, 80); !strings.Contains(got, "1 shell") || strings.Contains(got, "1 shells") {
+		t.Fatalf("singular shell indicator wrong:\n%s", got)
+	}
+
+	// The indicator participates in the fit — the row never overflows, at any
+	// width, with shells running.
+	s.Shells = 3
+	s.Cost = 1.23
+	s.ContextUsed = intPtr(1000)
+	for w := 10; w <= 120; w++ {
+		if out := RenderStatusLine(s, w); VisibleWidth(out) > w {
+			t.Fatalf("status line overflowed width %d with shells running: %q (%d cols)", w, out, VisibleWidth(out))
+		}
+	}
+}
+
 // TestShortenPathLeft covers the left-truncation helper defect 1 relies on:
 // leading ellipsis, trailing components kept, unchanged when it already
 // fits.
