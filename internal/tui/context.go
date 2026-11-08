@@ -42,6 +42,7 @@ func contextSegmentColor(label string) func(string) string {
 // (proportional to width, minimum one cell, one space between runs,
 // coloured per contextSegmentColor), then legend rows: a coloured "■", the
 // label, the token count, and a right-aligned percentage.
+// design-studio: kiln / Terminal {"scene":"context","layout":"ruled"}
 func RenderContext(b commands.ContextBreakdown, width int) []string {
 	lines := []string{labelRule("context", Muted, "", width)}
 

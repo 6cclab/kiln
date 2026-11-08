@@ -166,6 +166,7 @@ func compactionRetryLabel(part int, reason string) string {
 // compactionLabel is the busy-line text for a compaction: which part, and
 // whether the model is still reading the prompt (nothing streams until it
 // has) or already writing the summary. The spinner adds the elapsed time.
+// design-studio: kiln / Terminal {"scene":"compacting","layout":"ruled"}
 func compactionLabel(model string, part, parts, promptTokens, outputTokens int) string {
 	label := "Compacting conversation"
 	if parts > 1 {

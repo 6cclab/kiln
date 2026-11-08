@@ -95,6 +95,8 @@ func SummarizeArg(req PermissionRequest, cwd string) string {
 // at each line-building site above it: almost everything this prompt
 // shows is content from elsewhere — a bash command, a diff hunk, a line
 // the user is typing — so any of it can be wider than the terminal.
+// design-studio: kiln / Terminal {"scene":"permnetwork","layout":"ruled"}
+// design-studio: kiln / Terminal {"scene":"permmcp","layout":"ruled"}
 func RenderPermissionPrompt(req PermissionRequest, cwd string, width int, selected int, feedbackMode bool, feedback string) []string {
 	// A sandbox network approval (permission.NetworkToolName, checked by
 	// value rather than importing that package — see promptToolName's own
@@ -298,6 +300,7 @@ func permissionOptionRows(key, label string, selected bool, width int) []string 
 // a plain-text capture with no SGR — so it is a reuse of the same kiln
 // amber accent theme.go documents for a selected row elsewhere.
 // [chk].
+// design-studio: kiln / Terminal {"scene":"permission","layout":"ruled"}
 func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) []string {
 	amberRule := KilnAmber(strings.Repeat(RuleFillChar(), maxInt(width, 1)))
 	lines := []string{
@@ -411,6 +414,7 @@ type EditPermissionRequest struct {
 // capture pattern RenderPermissionPrompt already uses elsewhere in this
 // file — there is no reference capture of the edit prompt's feedback
 // state to diff against, so that specific wording is [chk].
+// design-studio: kiln / Terminal {"scene":"permedit","layout":"ruled"}
 func RenderEditPermissionPrompt(req EditPermissionRequest, width, selected int, feedbackMode bool, feedback string) []string {
 	verb := "edit"
 	if req.Kind == EditKindWrite {
@@ -721,6 +725,7 @@ func firstLine(s string) string {
 // handlePlanKey), so its caller always passes 0 today; selected=2 is
 // exercised only by the unit test, not by any live key path — see the
 // handback report.
+// design-studio: kiln / Terminal {"scene":"planapprove","layout":"ruled"}
 func RenderPlanApproval(plan, planPath string, width, height, selected int, feedbackMode bool, feedback string) []string {
 	amberRule := KilnAmber(strings.Repeat(RuleFillChar(), maxInt(width, 1)))
 

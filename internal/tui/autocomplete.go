@@ -131,6 +131,8 @@ func (p *Popup) Accept() (replacement string, cursorCol int) {
 // items are "+ <path>", middle-truncated to keep the file name. The
 // selected row is painted in the suggestion colour; there is no marker
 // glyph. Every returned line is exactly width columns via VisibleWidth.
+// design-studio: kiln / Terminal {"scene":"palette","layout":"ruled"}
+// design-studio: kiln / Terminal {"scene":"atfile","layout":"ruled"}
 func (p *Popup) Render(width, maxRows int) []string {
 	if width < 1 {
 		width = 1

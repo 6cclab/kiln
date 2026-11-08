@@ -837,6 +837,8 @@ var kilnWordmark = [2]string{
 
 // styleBanner renders the banner rows from newBanner's data with the
 // current theme tokens.
+// design-studio: kiln / Terminal {"scene":"welcome","layout":"ruled"}
+// design-studio: kiln / Terminal {"scene":"resume","layout":"ruled"}
 func styleBanner(verLabel, loc string, recent []recentSession, art bool) []string {
 	tips := tui.KilnAmber("/") + " " + tui.Muted("commands") + "   " +
 		tui.KilnAmber("@") + " " + tui.Muted("add files") + "   " +

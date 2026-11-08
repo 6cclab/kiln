@@ -449,6 +449,8 @@ func CompactReadGroup(views []ToolCallView, verbose bool) bool {
 //	read ─────────────────────────────────────────────  4 files
 //	web/src/api.ts · 56 lines
 //	web/src/App.tsx · 293 lines
+//
+// design-studio: kiln / Terminal {"scene":"readgroup","layout":"ruled"}
 func RenderReadGroup(views []ToolCallView) []string {
 	allRead := true
 	for _, v := range views {
@@ -642,6 +644,7 @@ func ParseUnifiedDiff(patch string, startLine int) *ToolDiff {
 // from a unified patch without the "Added/removed" summary row (e.g. an
 // inline permission-prompt preview): it parses the patch and renders only
 // the numbered rows.
+// design-studio: kiln / Terminal {"scene":"diff","layout":"ruled"}
 func RenderDiff(patch string, startLine int) []string {
 	return RenderDiffLines(ParseUnifiedDiff(patch, startLine).Lines)
 }
@@ -796,6 +799,7 @@ func PickLabel(seed int) string {
 
 // RenderError renders an error message: red, visually distinct from
 // ordinary tool output.
+// design-studio: kiln / Terminal {"scene":"error","layout":"ruled"}
 func RenderError(message string) []string {
 	// Wrapped, never clipped: provider errors carry a raw response body
 	// whose tail (the error type) is the part worth reading.
@@ -841,6 +845,7 @@ type ThinkingView struct {
 // handleThinking, ended case) — so a thinking block was invisible in
 // every state, never reachable by ctrl+o (defect
 // 20260926T232657Z-thinking-invisible).
+// design-studio: kiln / Terminal {"scene":"thinking","layout":"ruled"}
 func RenderThinking(view ThinkingView) []string {
 	body := strings.TrimSpace(view.Text)
 	if body == "" {
@@ -950,6 +955,7 @@ func RenderUserMessageMeta(text, meta string, width int) []string {
 // interrupted (defect 20260926T232249Z-queued-block-order) — the lane's own
 // drain (turn.go's drainInbox) is what turns this into a real, ordinary
 // RenderUserMessage block, at the point it actually lands on the branch.
+// design-studio: kiln / Terminal {"scene":"queued","layout":"ruled"}
 func RenderQueuedFollowUp(text string, width int) []string {
 	inner := width - 2*userBlockPad
 	if inner < 1 {
@@ -1102,6 +1108,8 @@ func blockText(blocks []any) []string {
 // streaming flag — the live region during streaming is owned by
 // bridge.go/app.go, outside this file's scope), so the trailing "▍" caret
 // the design calls for while streaming is not added here.
+// design-studio: kiln / Terminal {"scene":"streaming","layout":"ruled"}
+// design-studio: kiln / Terminal {"scene":"done","layout":"ruled"}
 func RenderAssistantText(lines []string) []string {
 	if len(lines) == 0 {
 		return lines

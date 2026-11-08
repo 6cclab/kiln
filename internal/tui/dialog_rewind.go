@@ -128,6 +128,7 @@ func NewRewindDialog(entries []RewindEntry, onSelect func(entryID string) error)
 // FrameLabel names the label rule DialogTopRule draws above Rewind.
 func (d *rewindDialog) FrameLabel() string { return "rewind" }
 
+// design-studio: kiln / Terminal {"scene":"rewind","layout":"ruled"}
 func (d *rewindDialog) Render(width, height int) []string {
 	var out []string
 	out = append(out, dialogIndent+KilnAmber(Bold("Rewind")))

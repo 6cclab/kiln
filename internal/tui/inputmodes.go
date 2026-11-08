@@ -58,6 +58,7 @@ const (
 // the "you" block above already shows it. The output is never sent to the
 // model: if the user wants the model to see it, they reference it in
 // their next message.
+// design-studio: kiln / Terminal {"scene":"shell","layout":"ruled"}
 func RunBang(ctx context.Context, command string, env *execenv.Env, width int) []string {
 	block := func(meta string, colour func(string) string, body []string) []string {
 		out := []string{"", labelRule("shell", Muted, meta, width)}

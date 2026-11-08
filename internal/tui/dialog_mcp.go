@@ -263,6 +263,7 @@ func (d *dialogMCP) renderDetail(width, height int) []string {
 	return out
 }
 
+// design-studio: kiln / Terminal {"scene":"mcp","layout":"ruled"}
 func (d *dialogMCP) Render(width, height int) []string {
 	if d.detail {
 		return d.renderDetail(width, height)

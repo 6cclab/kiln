@@ -34,6 +34,7 @@ const trustSafetyParagraph = "Quick safety check: Is this a project you created 
 // FrameLabel names the label rule DialogTopRule draws above Trust.
 func (d *trustDialog) FrameLabel() string { return "trust" }
 
+// design-studio: kiln / Terminal {"scene":"trust","layout":"ruled"}
 func (d *trustDialog) Render(width, height int) []string {
 	var out []string
 	out = append(out, KilnAmber(Bold("Accessing workspace:")))

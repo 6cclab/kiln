@@ -80,6 +80,7 @@ func askUserOptionLabel(opt AskUserOptionView, multiSelect, checked bool) string
 // picking a listed option; otherText is what has been typed so far.
 // selected is the highlighted row (0..len(q.Options), the last row being
 // the automatic "Other" choice) when not in otherMode.
+// design-studio: kiln / Terminal {"scene":"question","layout":"ruled"}
 func RenderAskUserQuestion(headers []string, index int, q AskUserQuestionView, width, selected int, checked map[int]bool, otherMode bool, otherText string) []string {
 	amberRule := KilnAmber(strings.Repeat(RuleFillChar(), maxInt(width, 1)))
 	lines := []string{

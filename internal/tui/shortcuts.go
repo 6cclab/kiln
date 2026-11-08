@@ -32,6 +32,7 @@ const shortcutGap = 4
 // while `?` is active: two columns, each a key column padded to its widest
 // key and a description. Widths are counted in cells, so a multi-byte glyph
 // (⇧, ⏎) does not push its row out of line. Rows are fitted to width.
+// design-studio: kiln / Terminal {"scene":"shortcuts","layout":"ruled"}
 func RenderShortcuts(width int) []string {
 	keyWidth := func(col []shortcut) int {
 		w := 0

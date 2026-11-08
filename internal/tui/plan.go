@@ -17,6 +17,7 @@ import (
 // in-progress item amber with ink text, and a pending item a faint circle
 // with muted text, so "which one is happening now" is answerable at a
 // glance (docs/kiln-design-handoff/README.md, "plan" row).
+// design-studio: kiln / Terminal {"scene":"plan","layout":"ruled"}
 func RenderPlan(items []TodoView, width int) []string {
 	gl := G()
 	done := 0

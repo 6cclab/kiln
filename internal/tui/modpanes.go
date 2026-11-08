@@ -284,6 +284,7 @@ func (p *ModPanes) Site(id string, width int) mods.Site {
 // A pane with no drawing yet (SetDrawing not called, or its tree is nil —
 // the mod called next or has no hook for this site) draws just its label
 // rule, no body.
+// design-studio: kiln / Terminal {"scene":"modpane","layout":"ruled"}
 func (p *ModPanes) Render(width int) []string {
 	if p == nil {
 		return nil

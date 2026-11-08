@@ -111,6 +111,7 @@ func clockOverride() (time.Time, bool) {
 // two-row Render used to append are gone: the note now surfaces via
 // Note() in the status row's own slot (app.go renderStatusRow), and the
 // busy hint moved to the busy line ("esc to stop", spinner.go).
+// design-studio: kiln / Terminal {"scene":"footer","layout":"ruled"}
 func (f *FooterState) RenderLine(width int) string {
 	s := f.state
 	if t, ok := clockOverride(); ok {

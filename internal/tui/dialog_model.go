@@ -371,6 +371,7 @@ func renderModelOptionRowsWindowed(items []commands.Item, cursor, width, budget 
 	return rows, start, len(items) - end
 }
 
+// design-studio: kiln / Terminal {"scene":"model","layout":"ruled"}
 func (d *dialogModel) Render(width, height int) []string {
 	header := append([]string(nil), renderTitleAndDescription(dialogModelTitle, dialogModelDescription, width)...)
 	header = append(header, "")

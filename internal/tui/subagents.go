@@ -221,6 +221,7 @@ const tokensColWidth = 6
 // already committed its current state and drops out of the live region
 // until Apply makes it live again), so callers can append its result
 // unconditionally.
+// design-studio: kiln / Terminal {"scene":"agents","layout":"ruled"}
 func (p *SubagentPanelState) Render(width int) []string {
 	if p == nil {
 		return nil

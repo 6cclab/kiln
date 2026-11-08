@@ -396,6 +396,9 @@ func (d *commandDialog) selected() (commands.Item, bool) {
 	return d.spec.Items[d.cursor], true
 }
 
+// design-studio: kiln / Terminal {"scene":"dlgperms","layout":"ruled"}
+// design-studio: kiln / Terminal {"scene":"dlgagents","layout":"ruled"}
+// design-studio: kiln / Terminal {"scene":"dlgconfig","layout":"ruled"}
 func (d *commandDialog) Render(width, height int) []string {
 	var out []string
 	// The label rule above already names the dialog; a title that only

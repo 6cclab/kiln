@@ -1278,6 +1278,7 @@ func (m Model) finishTurn(msg msgTurnResult) (Model, tea.Cmd) {
 		m.cfg.Bridge.CommitSynthetic(lines)
 	}
 	m.subagents.Reset()
+	// design-studio: kiln / Terminal {"scene":"interrupted","layout":"ruled"}
 	if msg.result.Status == harness.StatusAborted && m.cfg.Bridge != nil {
 		// Follow-ups queued during the interrupted turn go back into the
 		// input rather than riding along with whatever the user says

@@ -265,6 +265,9 @@ func AbbrevHome(path, home string) string {
 // has already dropped cost never brings it back by dropping the model
 // instead, so two widths one column apart show a consistent, predictable
 // set of segments.
+// design-studio: kiln / Terminal {"scene":"shells","layout":"ruled"}
+// design-studio: kiln / Terminal {"scene":"routed","layout":"ruled"}
+// design-studio: kiln / Terminal {"scene":"bypass","layout":"ruled"}
 func RenderStatusLine(s StatusState, width int) string {
 	p := IsPlain()
 
