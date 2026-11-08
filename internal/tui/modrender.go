@@ -825,23 +825,25 @@ func renderImage(el mods.Element, avail int) modBox {
 // ---- Link ----
 
 // renderLink draws its label (or its one text child, or href if neither is
-// set), underlined. kiln has no OSC 8 hyperlink helper yet (grepped for
-// "\x1b]8" — only stream_wrap_test.go's fixture string uses that escape, no
-// production helper emits it), so href is not wired up as a clickable
-// hyperlink; this is the "else the label" fallback the brief calls for.
+// set), underlined, and wraps it in an OSC 8 terminal hyperlink to href so a
+// supporting terminal makes it clickable (Hyperlink is a no-op without href or
+// when styling is off, and the escape is zero-width, so the clip and width
+// below are unaffected).
 func renderLink(el mods.Element, avail int) modBox {
 	label := propStringDefault(el.Props, "label", "")
 	if label == "" {
 		label = textPlain(el)
 	}
+	href := propStringDefault(el.Props, "href", "")
 	if label == "" {
-		label = propStringDefault(el.Props, "href", "")
+		label = href
 	}
 	styled := label
 	if enabled {
 		styled = lipgloss.NewStyle().Underline(true).Render(label)
 	}
 	line := clipWidth(styled, avail)
+	line = Hyperlink(href, line)
 	return modBox{lines: []string{line}, width: VisibleWidth(line)}
 }
 
