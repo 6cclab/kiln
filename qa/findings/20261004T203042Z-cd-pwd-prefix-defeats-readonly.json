@@ -1,0 +1,28 @@
+{
+ "id": "20261004T203042Z-cd-pwd-prefix-defeats-readonly",
+ "found_at": "2026-10-04T20:30:42Z",
+ "scenario": "manual-qa/build-on-opus",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "Opus prefixes every command with 'cd \"$PWD\" &&', which makes kiln treat read-only commands as unknown and prompt (sed -n, git status)",
+ "observed": "Model behaviour plus kiln strictness. Every bash call Opus made in this session started 'cd \"$PWD\" && …'. Because $PWD is an expansion, kiln cannot prove the cd stays in the workspace, so the read-only fast path drops: 'cd \"$PWD\" && sed -n '1,15p' internal/httpapi/server_test.go' prompted (prompts.log t6c-3), and git status was offered as a rule 'git status *' in several prompts. kiln's bash tool description does not mention cd (internal/tools/bash.go).",
+ "expected": "Either treat a leading 'cd \"$PWD\"' (or 'cd .') as the no-op it is, as kiln already does for a cd to the working directory itself, or tell the model in the bash tool description that commands already run in the working directory and need no cd.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/prompts.log (t6c-3, t1b)",
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tools/bash.go"
+  ],
+  "regression_test": "TestBashToolSaysNoCdIsNeeded",
+  "note": "04817c4 on branch worktree-agent-ae1e528c60b007fe6 (not merged). Read-only check NOT widened: Claude Code also treats cd with $PWD as not read-only (containsUnquotedExpansion flags $ inside double quotes). Fixed through the bash tool description; a literal cd to a workspace dir was already transparent. Whether models stop adding the prefix is unverified.",
+  "updated_at": "2026-10-04T21:27:19Z"
+ }
+}

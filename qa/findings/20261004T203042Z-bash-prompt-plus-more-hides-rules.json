@@ -1,0 +1,27 @@
+{
+ "id": "20261004T203042Z-bash-prompt-plus-more-hides-rules",
+ "found_at": "2026-10-04T20:30:42Z",
+ "scenario": "manual-qa/build-on-opus",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "Bash prompt's 'don't ask again for: git mv *, +2 more' hides which rules it will save (here sed -i rules)",
+ "observed": "kiln defect (UX). Prompt for 'cd \"$PWD\" && mkdir -p … && git mv … && sed -i '' 's/^package main$/package store/' … && sed -i '' … && ls -R internal' offered '2  Yes, and don't ask again for: git mv *, +2 more'. The two hidden rules are persistent allow rules written to .kiln/settings.local.json, and at least one is an in-place sed that rewrites files. The user cannot see them before agreeing, and the prompt has room for a second line.",
+ "expected": "List every rule the option will save (wrapping to more rows), or let Tab or a key expand the list before confirming.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1 (*t6-prompt*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/permission_render.go"
+  ],
+  "regression_test": "TestDontAskLabel,TestRenderGolden_PermBashDontAsk5Rules",
+  "note": "7c2dfff on branch worktree-agent-ae1e528c60b007fe6 (not merged): every rule is named, one per row when they do not fit; no real-terminal re-drive",
+  "updated_at": "2026-10-04T21:27:18Z"
+ }
+}

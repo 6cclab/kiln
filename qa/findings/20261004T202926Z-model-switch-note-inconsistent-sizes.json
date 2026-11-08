@@ -1,0 +1,32 @@
+{
+ "id": "20261004T202926Z-model-switch-note-inconsistent-sizes",
+ "found_at": "2026-10-04T20:29:26Z",
+ "scenario": "manual-qa/model-switch",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "/model size warning gives three different conversation sizes, and says ~46.1k is 'over' a 49.2k window",
+ "observed": "kiln defect (wording/accuracy). Just before the switch, /context said 'anthropic/claude-opus-4-8 · 96k of 1000k tokens' (conversation 78.8k). '/model ollama/qwen3.8:latest' then printed: 'Now on ollama/qwen3.8:latest · medium tier · 37.5k usable. The conversation (~46.1k tokens) is over qwen3.8:latest's 49.2k window: the next message compacts it with qwen3.8:latest first, in parts that fit. Or /compact now to summarise it with anthropic/claude-opus-4-8, which holds all of it' (no final period). The footer then showed 'ctx ━━━━━━━━━━ 196%'. Compaction actually read 19.1k + 1.2k prompt tokens. 46.1k < 49.2k, so the sentence contradicts itself (the real limit is the 37.5k usable).",
+ "expected": "One consistent number (or say which tokenizer each estimate uses), compared against the limit that matters ('~46k, more than the 37.5k usable in qwen3.8's 49.2k window'). The footer percentage should agree with it.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1 (*model-switch*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/lane.go",
+   "internal/commands/switchfit.go",
+   "internal/commands/builtins.go",
+   "internal/cli/chat.go",
+   "internal/cli/tui.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestContextTokensFollowsTheModel,TestSwitchFit,TestMsgModelInfo_ReplacesContextUsed",
+  "note": "branch worktree-agent-af33998aae4701c16 0f7bda3",
+  "updated_at": "2026-10-04T21:32:30Z"
+ }
+}

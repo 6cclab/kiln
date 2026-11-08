@@ -1,0 +1,26 @@
+{
+ "id": "20261005T112547Z-hook-cancel-says-permission-failed",
+ "found_at": "2026-10-05T11:25:47Z",
+ "scenario": "qa/scenarios/errors/hook-esc-cancels.steps",
+ "step": "KEY esc",
+ "terminals": [
+  "iterm-dark"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "Esc during a PreToolUse hook reports 'the permission check failed (context canceled)'",
+ "observed": "After Esc interrupts a slow PreToolUse hook, the bash block reads: '→ the permission check failed (context canceled), so the call did not run.' The turn is correctly interrupted and the tool does not run.",
+ "expected": "Wording that says the user interrupted it, e.g. 'interrupted while a hook was running, so the call did not run', with no Go error text.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa-iterm-35-38/iterm-dark/errors-hook-esc-cancels-120x40/02-interrupted.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "regression_test": "internal/harness/hooks_test.go TestBeforeToolInterruptIsNotAPermissionFailure; qa/scenarios/errors/hook-esc-cancels.steps",
+  "after_evidence": [
+   "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa-iterm-hookfix/iterm-dark/errors-hook-esc-cancels-120x40/02-interrupted.png"
+  ],
+  "updated_at": "2026-10-05T11:35:25Z"
+ }
+}

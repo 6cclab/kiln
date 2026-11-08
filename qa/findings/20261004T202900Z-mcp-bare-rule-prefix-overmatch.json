@@ -1,0 +1,29 @@
+{
+ "id": "20261004T202900Z-mcp-bare-rule-prefix-overmatch",
+ "found_at": "2026-10-04T20:29:00Z",
+ "scenario": "manual-qa/mcp",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Bare rule mcp__homelab auto-allows every tool of server homelab-kb (string-prefix match), including its delete/ingest tools",
+ "observed": "kiln defect. Steps: scratch HOME with Andre's ~/.claude/settings.json (allow list has bare 'mcp__homelab', no homelab-kb rule); kiln --permission-mode acceptEdits on Opus; ask a question that needs the homelab-kb MCP. mcp__homelab-kb__hk_search ran with no prompt (log 16:00:52 tool_start, no permission prompt on screen). Cause: internal/claude/settings/settings.go:341 MatchesRule returns strings.HasPrefix(tool, bare) for a bare mcp__ rule, so 'mcp__homelab' also covers server 'homelab-kb', including hk_delete_entry and hk_ingest_entry (live writes). The same prefix logic makes an exact tool rule such as 'mcp__pocket-id__user_get' cover any longer tool name with that prefix. Not exercised destructively (read-only rule kept).",
+ "expected": "Claude Code (src/utils/permissions/permissions.ts toolMatchesRule) parses the rule with mcpInfoFromString and requires ruleInfo.serverName === toolInfo.serverName (the tool part must be absent or '*'); a full tool rule matches only that exact name. mcp__homelab should match only server 'homelab', so homelab-kb tools should prompt in acceptEdits.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/logs/harness-20261004-154307-73447.log (16:00:52 mcp__homelab-kb__hk_search)",
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1 (*mcp-midturn*)",
+  "internal/claude/settings/settings.go:341"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/settings/settings.go"
+  ],
+  "regression_test": "TestMatchesRuleMCPServerExact",
+  "note": "b66380a on branch worktree-agent-ae1e528c60b007fe6 (not merged; unit tests only, no real-terminal re-drive)",
+  "updated_at": "2026-10-04T21:27:17Z"
+ }
+}

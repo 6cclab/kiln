@@ -1,0 +1,31 @@
+{
+ "id": "20261004T204953Z-resume-footer-zero-and-model-reset",
+ "found_at": "2026-10-04T20:49:53Z",
+ "scenario": "manual-qa/model-switch",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "kiln -c resumes on the default model, not the session's last one, and the footer reads 'ctx 0% $0.00' for a large resumed conversation",
+ "observed": "kiln defect (UX). Session last ran on anthropic/claude-opus-4-8 (switched back from qwen). After Ctrl+D and 'kiln -c --permission-mode acceptEdits', the status line showed 'ollama/qwen3.8:latest' (kiln's fallback, because Andre's settings model is the alias 'opus') and 'ctx ──────────  0%  $0.00', though the resumed conversation is ~60k tokens (2 compactions in it) and would overflow qwen's 49k window. After one small Opus turn the footer jumped to 6% and $6.05 (cumulative). Resume itself was fast (<5s for a 6 MB session file) and the transcript was restored.",
+ "expected": "Either restore the session's last model on resume or say on resume which model it is running and why. Compute ctx and cost for the resumed conversation at load, not after the first request.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1c (*resume*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/chat.go",
+   "internal/agent/session.go",
+   "internal/session/jsonl/lastvalue.go",
+   "internal/cli/tui.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestResumeContinuesOnTheSessionsModel,TestResumedModelAndStartAlignTheLane,TestResumedFooterStartsFromTheSession,TestLastValue",
+  "note": "branch worktree-agent-af33998aae4701c16 67fd55d",
+  "updated_at": "2026-10-04T21:32:31Z"
+ }
+}

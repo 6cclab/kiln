@@ -1,0 +1,27 @@
+{
+ "id": "20261004T203909Z-block-reason-double-period",
+ "found_at": "2026-10-04T20:39:09Z",
+ "scenario": "manual-qa/auto-mode",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "style",
+ "severity": "low",
+ "title": "Auto-mode block result has a doubled period: '…soft-blocked operation.. Do not try…'",
+ "observed": "kiln defect (copy). The bash block shows '→ auto mode blocked this action: This pipes a downloaded script straight into a shell (curl | sh), which runs untrusted code in one step and is a soft-blocked operation.. Do not try to reach the same result another way.' The classifier's reason ends with '.' and kiln appends '. '.",
+ "expected": "Trim a trailing period from the reason before appending.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s2 (*a5-dialog*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/permission/classifier.go"
+  ],
+  "regression_test": "TestAutoBlockMessage",
+  "note": "f710197 on branch worktree-agent-ae1e528c60b007fe6 (not merged)",
+  "updated_at": "2026-10-04T21:27:18Z"
+ }
+}

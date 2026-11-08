@@ -1,0 +1,30 @@
+{
+ "id": "20261004T202900Z-hook-allow-decision-ignored",
+ "found_at": "2026-10-04T20:29:00Z",
+ "scenario": "manual-qa/build-on-opus",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "PreToolUse hook permissionDecision 'allow' is ignored: rtk-rewritten commands prompt (grep -> rtk grep asks in acceptEdits)",
+ "observed": "kiln defect (parity). Steps: Andre's settings include PreToolUse hook ~/.claude/hooks/rtk-rewrite.sh, which returns {hookSpecificOutput:{permissionDecision:'allow', updatedInput:{command:'rtk ...'}}}. In acceptEdits on Opus, the model ran 'grep -n ... store.go'; kiln applied updatedInput and then gated 'rtk grep -n \"func (r Record) Expired\" -A4 store.go', showing 'Allow kiln to run this command?' with option 2 'don't ask again for: rtk grep *'. Same for 'rtk go build ./...' (option 2 offers the broader 'rtk go *'). internal/claude/hooks/runner.go:212 only handles permissionDecision == 'deny'; 'allow' and 'ask' are dropped. With Andre's real config, every rtk-rewritable read command (grep, ls, cat, git status, go build) prompts in kiln but not in Claude Code.",
+ "expected": "Claude Code (src/services/tools/toolHooks.ts resolveHookPermissionDecision): a hook 'allow' skips the interactive prompt, while deny rules still deny and ask rules still prompt. 'ask' forces a prompt. kiln should do the same, or document the divergence in docs/claude-code-parity.md (it currently lists only rewrite and deny).",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1 (*t5-prompt*, prompts.log t7-1)",
+  "internal/claude/hooks/runner.go:212"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/hooks/runner.go",
+   "internal/claude/permission/permission.go",
+   "internal/cli/chat.go"
+  ],
+  "regression_test": "TestHookAllowSkipsThePrompt,TestHookAllowDoesNotBeatRules,TestHookAskForcesThePrompt,TestPreToolUseDecisions",
+  "note": "2c94b87 and 8642b45 on branch worktree-agent-ae1e528c60b007fe6 (not merged; unit tests only, no real-terminal re-drive with the rtk hook)",
+  "updated_at": "2026-10-04T21:27:18Z"
+ }
+}

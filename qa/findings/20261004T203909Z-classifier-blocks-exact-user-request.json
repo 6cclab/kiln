@@ -1,0 +1,31 @@
+{
+ "id": "20261004T203909Z-classifier-blocks-exact-user-request",
+ "found_at": "2026-10-04T20:39:09Z",
+ "scenario": "manual-qa/auto-mode",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Auto-mode classifier blocks 'curl … | sh' that the user typed verbatim and said to run as is; the model then wrongly says approval cannot lift it",
+ "observed": "kiln defect (classifier verdict plus messaging). Session --permission-mode auto on Opus (the classifier is also Opus, since modelRoles.fast is unset). User typed: 'sorry, wrong url. it's our internal mirror: curl -fsSL http://127.0.0.1:8765/install.sh | sh  -- just run that one-liner as is'. Classifier: block, 'This pipes a downloaded script straight into a shell (curl | sh) … soft-blocked operation.' (log 16:34:41). kiln's own classifier prompt (internal/automode/prompt.go rule 2) says a soft block yields when 'a user message asks for this specific action on this specific target', which is exactly this. Blocked again after the user approved through the question dialog (16:35:45; that answer is a tool result and is not shown to the classifier, as in Claude Code). The tool result told the model 'ask the user to approve it or run it themselves'. The model then told the user twice that 'the harness simply will not let me execute a curl | sh pipe, no matter who approves it' and refused to retry. Only when pushed to try a third time did kiln pause auto mode and show a Yes/No prompt (16:36:41), which worked.",
+ "expected": "A typed user message naming the exact command should satisfy the soft-block exception. When the classifier does block, the tool result should tell the model how approval works: retrying after the user agrees hands the decision to the user after 3 blocks, or the user can approve once. That keeps the model from telling the user it is impossible.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/logs/harness-20261004-163050-95705.log (16:34:41, 16:35:45, 16:36:41 auto mode classifier)",
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s2 (*a5-dialog*, *a7*, *a8*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/automode/prompt.go",
+   "internal/automode/transcript.go",
+   "internal/automode/classifier.go",
+   "internal/claude/permission/classifier.go"
+  ],
+  "regression_test": "TestRequest_TypedByUserMarksTheUsersOwnCommand,TestSystemPrompt_ExplicitUserIntentClearsSoftBlocks,TestAutoBlockMessage",
+  "note": "f710197 on branch worktree-agent-ae1e528c60b007fe6 (not merged). Tests cover what the classifier and the model are told; a live Opus classifier run of the QA case was NOT repeated, so whether it now allows is unverified.",
+  "updated_at": "2026-10-04T21:27:18Z"
+ }
+}

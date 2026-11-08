@@ -1,0 +1,31 @@
+{
+ "id": "20261004T204953Z-interrupt-discards-partial-reply",
+ "found_at": "2026-10-04T20:49:53Z",
+ "scenario": "manual-qa/input-ux",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Esc mid-stream erases the partial reply from the screen and the conversation",
+ "observed": "kiln defect. Opus session (s1c), asked for a long design doc printed in chat. After 35s the screen showed ~1 screen of streamed text (ending '…GetUserByUsername(name string) (User, error) / GetUser(id▍'). Pressed Esc: the whole partial reply disappeared and only 'system ■ Interrupted. Tell kiln what to do instead.' remained under the user message. The session file has the text only as pi.pending.assistant_frame deltas; no assistant message was committed, so the next turn cannot see what was written either. The footer cost also stayed at $6.34 across both interrupted turns although Opus had streamed output.",
+ "expected": "Keep the partial reply in the transcript, marked as interrupted, as Claude Code does as far as I know (not checked in its source), and count the tokens already streamed in the cost. The user was reading it, and 'tell kiln what to do instead' usually refers to it.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1c (*esc2-before*, *esc2-after*)",
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/sessions (01a10871… jsonl, last frames seq ~20259)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/interrupt.go",
+   "internal/harness/turn.go",
+   "internal/compaction/estimate.go",
+   "internal/provider/cost.go"
+  ],
+  "regression_test": "TestInterruptKeepsThePartialReply,TestTUI_Esc_KeepsThePartialReply",
+  "note": "branch worktree-agent-af33998aae4701c16 4f4a11b",
+  "updated_at": "2026-10-04T21:32:31Z"
+ }
+}

@@ -1,0 +1,28 @@
+{
+ "id": "20261004T202900Z-allow-glob-misses-multiline",
+ "found_at": "2026-10-04T20:29:00Z",
+ "scenario": "manual-qa/build-on-opus",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Allow rule Bash(git commit *) does not match a commit with a multi-line -m message ('*' does not cross newlines)",
+ "observed": "kiln defect. Steps: approve 'git add *, git commit *, git log *' via option 2 (saved to .kiln/settings.local.json). Later Opus ran 'cd \"$PWD\" && git add -A && git commit -q -m \"Add file-backed store...\\n\\ninternal/store/filestore.go: ...\"' (multi-line message). kiln prompted, with no 'don't ask again' option. internal/claude/settings/settings.go MatchesRule turns '*' into '.*' and compiles '^...$' without (?s), so '.' stops at the newline inside the message. Hypothesis, not run: the same applies to deny rules, so a newline inside an argument could slip past a 'Bash(rm *)'-style deny glob.",
+ "expected": "Claude Code (src/utils/permissions/shellRuleMatching.ts matchWildcardPattern) compiles with the 's' (dotAll) flag, so 'Bash(git commit *)' matches multi-line commit messages and heredocs. kiln should compile with (?s).",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1 (*t7-12-prompt*)",
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/work/linkshort/.kiln/settings.local.json"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/settings/settings.go"
+  ],
+  "regression_test": "TestRuleGlobMatchesAcrossNewlines",
+  "note": "e76649b on branch worktree-agent-ae1e528c60b007fe6 (not merged; unit tests only). Deny side confirmed before the fix: a Bash(rm *) deny missed rm -rf with a quoted newline (DecideIn returned allow under a Bash allow); now deny.",
+  "updated_at": "2026-10-04T21:27:18Z"
+ }
+}

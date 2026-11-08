@@ -1,0 +1,30 @@
+{
+ "id": "20261004T202926Z-protected-prompt-offers-current-mode",
+ "found_at": "2026-10-04T20:29:26Z",
+ "scenario": "manual-qa/protected-paths",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "usability",
+ "severity": "low",
+ "title": "Protected-path edit prompt in acceptEdits offers '2 Yes, and switch to accept edits … for this session' though the session is already in accept edits",
+ "observed": "kiln defect (UX). In --permission-mode acceptEdits, asking Opus to add a [user] section to .git/config with the edit tool, and to write .claude/settings.json, both prompted correctly with the note '<path> is a protected path: changing it can run code or change permissions later, so it always needs the user's approval.' Both prompts still offered '2  Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)'. Choosing 2 for .claude/settings.json wrote the file and left the mode unchanged. The option is a no-op, and it suggests accept edits would have covered this path, which it never does.",
+ "expected": "Leave out option 2 when the mode is already acceptEdits (and on a protected path, where switching modes cannot pre-approve the next one); offer Yes / No.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1 (*t2-prompt*, *t3-prompt*)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/permission/permission.go",
+   "internal/tui/permissionview.go",
+   "internal/tui/permission_render.go",
+   "internal/tui/bridge.go"
+  ],
+  "regression_test": "TestPromptOptions_NoSwitchToTheModeAlreadyOn,TestPromptSaysWhichModeSwitchMeansAnything",
+  "note": "7c2dfff on branch worktree-agent-ae1e528c60b007fe6 (not merged; unit tests and make e2e, no real-terminal re-drive)",
+  "updated_at": "2026-10-04T21:27:18Z"
+ }
+}

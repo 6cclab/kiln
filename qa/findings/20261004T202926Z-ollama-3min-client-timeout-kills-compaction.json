@@ -1,0 +1,34 @@
+{
+ "id": "20261004T202926Z-ollama-3min-client-timeout-kills-compaction",
+ "found_at": "2026-10-04T20:29:26Z",
+ "scenario": "manual-qa/model-switch",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "Ollama HTTP client has a 3-minute whole-request timeout: compaction and long turns on a slow local model are cut off mid-stream and redone",
+ "observed": "kiln defect. Steps: build ~96k context on Opus, '/model ollama/qwen3.8:latest' (49k window), send a message. Auto-compaction part 1 (19,073 prompt tokens) streamed its summary (UI: 'writing the summary (965 tokens)') and then died exactly 180s after starting: log 16:02:14.916 compaction_part -> 16:05:14.922 compaction_end err='provider: stream interrupted: context deadline exceeded (Client.Timeout or context cancellation while reading body)'. kiln then re-ran it as trigger=overflow and it succeeded at 16:07:17 (5 min total, about 3 min wasted). The same happened on the next mid-turn compaction (16:17:57 -> 16:20:57, retried 16:22:02), and an ordinary chat request also timed out awaiting headers after 3 min (16:10:17 retry_scheduled). Cause: internal/cli/chat.go:104 builds ollama.Options with &http.Client{Timeout: 3 * time.Minute}, which bounds the whole response body, not idle time.",
+ "expected": "A slow but progressing stream is not killed. Use an idle or first-byte timeout (or none, with ctx cancellation via Esc) for streaming requests, so compaction on a slow local model completes on its first attempt.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/logs/harness-20261004-154307-73447.log (16:02:14-16:07:17, 16:17:57-16:22:02, 16:10:17)",
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/caps/s1 (*after-compact*)",
+  "internal/cli/chat.go:104"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/chat.go",
+   "internal/eval/runner.go",
+   "internal/provider/ollama/ollama.go",
+   "internal/provider/api/httpclient.go",
+   "internal/harness/stall.go",
+   "internal/harness/turn.go"
+  ],
+  "regression_test": "TestRequest_StallBeforeFirstTokenEndsRequest,TestRequest_SlowProgressingStreamCompletes,TestStreamClientHasNoTotalDeadline,TestOllamaOptionsHaveNoWholeRequestTimeout",
+  "note": "branch worktree-agent-af33998aae4701c16 940946a",
+  "updated_at": "2026-10-04T21:32:30Z"
+ }
+}

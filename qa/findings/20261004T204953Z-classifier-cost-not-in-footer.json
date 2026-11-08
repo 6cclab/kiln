@@ -1,0 +1,31 @@
+{
+ "id": "20261004T204953Z-classifier-cost-not-in-footer",
+ "found_at": "2026-10-04T20:49:53Z",
+ "scenario": "manual-qa/auto-mode",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "bug",
+ "severity": "low",
+ "title": "Auto-mode classifier spend is not counted in the footer or session cost",
+ "observed": "kiln defect (accuracy). Auto session s2: footer and 'kiln session inspect' both total $1.40 (agent usage only). The run log shows 22 classifier calls on Opus (modelRoles.fast unset) with 170,799 cache-write, 50,694 cache-read and 2,007 output tokens, about $1.14 at the rates kiln itself uses (derived, not measured by kiln), i.e. ~80% on top of what the footer shows.",
+ "expected": "Include classifier calls in the session cost (or show them as a separate line in /cost), so auto mode's real cost is visible.",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/logs/harness-20261004-163050-95705.log (auto mode classifier lines)"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/harness.go",
+   "internal/harness/events.go",
+   "internal/automode/classifier.go",
+   "internal/cli/automode.go",
+   "internal/cli/chat.go"
+  ],
+  "regression_test": "TestRecordSideUsageCountsInTotals,TestClassify_ReportsUsage",
+  "note": "branch worktree-agent-af33998aae4701c16 624a4bb",
+  "updated_at": "2026-10-04T21:32:31Z"
+ }
+}

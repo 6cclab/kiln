@@ -1,0 +1,27 @@
+{
+ "id": "20261004T205021Z-session-file-stream-frames-bloat",
+ "found_at": "2026-10-04T20:50:21Z",
+ "scenario": "manual-qa/build-on-opus",
+ "step": null,
+ "terminals": [
+  "kiln-drive-120x40"
+ ],
+ "category": "bug",
+ "severity": "low",
+ "title": "Session JSONL keeps every streaming delta: 96% of lines are pending frames (6 MB for one ~2h session)",
+ "observed": "Observation (kiln storage). Main session file: 6.0 MB, 18,688 lines, 18,011 of them namespace pi.pending.assistant_frame text/toolcall deltas, kept after the assistant message is committed. Auto session: 2,555 of 2,776 lines. Resume (-c) was still under 5s, so no user-visible slowdown was measured.",
+ "expected": "Drop or compact a turn's pending frames once its message is committed (they matter only for crash recovery of the in-flight turn).",
+ "design_ref": null,
+ "evidence": [
+  "/private/tmp/claude-501/-Users-andrepato-projects-harness/310feec7-bf40-493f-8447-f16d7ce8567d/scratchpad/qa/sessions/*/2026-10-04T19-43-07-754Z_01a10871-07ea-789b-ae5b-441aaf7c1dba.jsonl"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/turn.go"
+  ],
+  "regression_test": "TestStreamedReplyWritesNoDeltaFrames",
+  "note": "branch worktree-agent-af33998aae4701c16 7f0f183; QA copy 6.07MB/18688 lines -> 2.01MB/1427 lines (derived by filtering delta frames)",
+  "updated_at": "2026-10-04T21:32:31Z"
+ }
+}
