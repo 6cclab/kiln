@@ -1207,7 +1207,74 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if modsRT == nil {
 			return
 		}
-		for _, err := range modsRT.start(ctx, cwd, started.SessionID) {
+		root := ""
+		if rr, ok := gitfiles.Find(cwd); ok {
+			root = rr.WorkTree
+		}
+		dep := egressDeps{
+			root: root,
+			model: func() string {
+				if l, err := started.Harness.Lane("main"); err == nil {
+					if m, err := l.Model(); err == nil {
+						return m.ModelID
+					}
+				}
+				return started.Model.ID
+			},
+			mcpCall: func(ctx context.Context, server, tool string, args map[string]any) (json.RawMessage, error) {
+				res, err := hub.Call(ctx, "mcp__"+server+"__"+tool, args)
+				if err != nil {
+					return nil, err
+				}
+				return json.Marshal(res)
+			},
+			classify: func(ctx context.Context, text string, labels []string) (string, error) {
+				// A one-shot classification on the session model (no fast
+				// role): the same provider.Stream path the auto-mode
+				// classifier uses, with a label-picking prompt.
+				resolve := automode.Resolver(reg, nil, func() provider.Model {
+					return classifierSessionModel(started.Model, modelRouter.direct)
+				})
+				streamer, model, err := resolve()
+				if err != nil {
+					return "", err
+				}
+				cctx, cancel := context.WithTimeout(ctx, automode.DefaultTimeout)
+				defer cancel()
+				maxTokens := 1024
+				if model.MaxTokens > 0 && model.MaxTokens < maxTokens {
+					maxTokens = model.MaxTokens
+				}
+				system := "You are a classifier. Choose the single label from the allowed list that best fits the text. Reply with exactly that label and nothing else. If none fits, reply with the single word NONE."
+				user := "Allowed labels:\n" + strings.Join(labels, "\n") + "\n\nText:\n" + text
+				ch, wait := streamer.Stream(cctx, model, []msg.Message{
+					msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(user)}, Timestamp: time.Now().UnixMilli()},
+				}, provider.StreamOptions{SystemPrompt: system, MaxTokens: maxTokens})
+				for range ch {
+				}
+				am, werr := wait()
+				if werr != nil {
+					return "", werr
+				}
+				if am == nil {
+					return "", errors.New("model.classify: no response")
+				}
+				u := am.Usage
+				if u.Input != 0 || u.Output != 0 || u.CacheRead != 0 || u.CacheWrite != 0 {
+					if err := started.Harness.RecordSideUsage("mod · model.classify · "+model.Provider+"/"+model.ID, u); err != nil {
+						diag.L().Warn("mod classify usage", "err", err)
+					}
+				}
+				answer := strings.TrimSpace(msg.TextOf(am.Content))
+				for _, l := range labels {
+					if strings.EqualFold(answer, l) {
+						return l, nil
+					}
+				}
+				return "", nil
+			},
+		}
+		for _, err := range modsRT.start(ctx, cwd, started.SessionID, dep) {
 			startupWarn(fmt.Sprintf("mod not loaded: %v", err))
 		}
 		modsRT.host.usage = func() mods.Usage {

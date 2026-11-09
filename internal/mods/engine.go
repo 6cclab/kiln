@@ -95,6 +95,20 @@ type Options struct {
 	Logger *slog.Logger
 	// LookupEnv backs $.env.get; nil is os.LookupEnv.
 	LookupEnv func(string) (string, bool)
+	// SessionRoot is the session's repository root ($.session.root()); "" when
+	// the cwd is not inside a repo.
+	SessionRoot string
+	// Model returns the session's current model id ($.session.model()); nil
+	// yields "". Called on the engine's worker, so it must be cheap.
+	Model func() string
+	// McpCall backs $.mcp.call: invoke an MCP tool (server, tool, args) and
+	// return its result marshaled as JSON (Claude Code's McpToolResult). nil
+	// rejects mcp.call. Called from a background goroutine, so it may block.
+	McpCall func(ctx context.Context, server, tool string, args map[string]any) (json.RawMessage, error)
+	// Classify backs $.model.classify: pick the label that fits text, or ""
+	// when none does (the mod sees null). nil rejects model.classify. Called
+	// from a background goroutine, so it may block.
+	Classify func(ctx context.Context, text string, labels []string) (string, error)
 	// HookBudget and CatchBudget override DefaultHookBudget and
 	// DefaultCatchBudget (tests shorten them).
 	HookBudget  time.Duration

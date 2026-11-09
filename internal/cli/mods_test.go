@@ -196,7 +196,7 @@ func startedRuntime(t *testing.T) *modsRuntime {
 	if r == nil {
 		t.Fatal("newModsRuntime returned nil")
 	}
-	errs := r.start(context.Background(), t.TempDir(), "test-session")
+	errs := r.start(context.Background(), t.TempDir(), "test-session", egressDeps{})
 	if len(errs) != 0 {
 		t.Fatalf("start() errors: %v", errs)
 	}
@@ -211,7 +211,7 @@ func TestModsRuntime_StartIsIdempotent(t *testing.T) {
 		t.Fatal("get() = nil after start")
 	}
 	// A second start is a no-op (r.engine already set).
-	if errs := r.start(context.Background(), t.TempDir(), "test-session"); errs != nil {
+	if errs := r.start(context.Background(), t.TempDir(), "test-session", egressDeps{}); errs != nil {
 		t.Fatalf("second start() = %v, want nil", errs)
 	}
 	if r.get() != e1 {
@@ -447,7 +447,7 @@ func startedRuntimeNoPlugin(t *testing.T) *modsRuntime {
 		agents:  map[string]*mods.AgentInfo{},
 	}
 	r.host = &modsHost{r: r}
-	if errs := r.start(context.Background(), t.TempDir(), "test-session"); errs != nil {
+	if errs := r.start(context.Background(), t.TempDir(), "test-session", egressDeps{}); errs != nil {
 		t.Fatalf("start() errors: %v", errs)
 	}
 	t.Cleanup(r.close)

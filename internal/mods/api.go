@@ -1,20 +1,25 @@
 package mods
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/dop251/goja"
+
+	"github.com/andrepato/harness/internal/crash"
 )
 
 // fsMaxBytes caps one $.fs.read, as Claude Code does (4 MiB per file).
@@ -33,11 +38,15 @@ var implemented = map[string]bool{
 	"clock.now": true, "clock.every": true, "clock.after": true, "clock.sleep": true,
 	"env.get": true, "settings.read": true,
 	"fs.exists": true, "fs.list": true, "fs.read": true,
-	"http.fetch": true,
-	"fs.write":   true, "fs.stat": true, "fs.ancestors": true,
+	"http.fetch":  true,
+	"process.run": true,
+	"fs.write":    true, "fs.stat": true, "fs.ancestors": true,
 	"store.get": true, "store.set": true, "store.delete": true, "store.keys": true,
-	"env.set":       true,
-	"session.usage": true, "session.cwd": true, "session.id": true,
+	"env.set":        true,
+	"mcp.call":       true,
+	"model.classify": true,
+	"session.usage":  true, "session.cwd": true, "session.id": true,
+	"session.root": true, "session.model": true,
 	"agent.list":       true,
 	"command.register": true, "tool.register": true,
 }
@@ -48,10 +57,10 @@ var implemented = map[string]bool{
 var documented = []string{
 	"agent.register", "agent.spawn", "audio.play", "audio.speak",
 	"command.list", "config.list",
-	"mcp.call", "model.classify", "model.complete", "model.fork",
-	"process.run", "process.spawn", "prompt.read", "prompt.submit",
+	"model.complete", "model.fork",
+	"prompt.read", "prompt.submit",
 	"session.append", "session.authorize", "session.compact", "session.messages",
-	"session.model", "session.repo", "session.root", "session.send", "session.surface",
+	"session.repo", "session.send", "session.surface",
 	"session.surfaces", "session.turns", "session.version",
 	"tool.call", "tool.list", "turn.abort",
 	"ui.blit", "ui.log", "ui.notice", "ui.status",
@@ -259,6 +268,15 @@ func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, e
 	case "session.id":
 		return e.opts.SessionID, nil
 
+	case "session.root":
+		return e.opts.SessionRoot, nil
+
+	case "session.model":
+		if e.opts.Model != nil {
+			return e.opts.Model(), nil
+		}
+		return "", nil
+
 	case "fs.exists":
 		_, err := os.Stat(e.fsPath(str(arg(0))))
 		return err == nil, nil
@@ -402,6 +420,15 @@ func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, e
 
 	case "http.fetch":
 		return e.httpFetch(arg)
+
+	case "process.run":
+		return e.processRun(arg)
+
+	case "mcp.call":
+		return e.mcpCall(arg)
+
+	case "model.classify":
+		return e.modelClassify(arg)
 
 	case "agent.list":
 		out := []any{}
@@ -695,6 +722,7 @@ func (e *Engine) httpFetch(arg func(int) goja.Value) (any, error) {
 	}
 	promise, resolve, reject := vm.NewPromise()
 	go func() {
+		defer crash.Guard()
 		resp, derr := client.Do(req)
 		var (
 			status int
@@ -725,6 +753,170 @@ func (e *Engine) httpFetch(arg func(int) goja.Value) (any, error) {
 				return
 			}
 			_ = resolve(val)
+		})
+	}()
+	return promise, nil
+}
+
+// processRun serves $.process.run: a subprocess on a background goroutine
+// (exec must not block the engine's worker), resolving a promise with
+// { exitCode, stdout, stderr } to match Claude Code's ProcessRunResult. Like
+// Claude Code, a mod's subprocess is not permission-gated: a loaded mod is
+// trusted (user decision 2026-11-09). init.env is merged over the inherited
+// environment; a failure to start (program not found, bad cwd) rejects, while
+// a non-zero exit resolves with that exitCode (-1 when signal-killed, e.g. on
+// timeout).
+func (e *Engine) processRun(arg func(int) goja.Value) (any, error) {
+	vm := e.w.vm
+	var argv []string
+	if a, ok := arg(0).Export().([]any); ok {
+		for _, v := range a {
+			argv = append(argv, fmt.Sprint(v))
+		}
+	}
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("process.run(argv): argv must be a non-empty array")
+	}
+	dir := e.opts.Cwd
+	stdin := ""
+	var timeout time.Duration
+	env := os.Environ()
+	if obj, ok := arg(1).(*goja.Object); ok {
+		if c := str(obj.Get("cwd")); c != "" {
+			dir = e.fsPath(c)
+		}
+		stdin = str(obj.Get("stdin"))
+		if ms := num(obj.Get("timeoutMs")); ms > 0 {
+			timeout = duration(ms)
+		}
+		if ev, ok := obj.Get("env").(*goja.Object); ok {
+			for _, k := range ev.Keys() {
+				env = append(env, k+"="+str(ev.Get(k)))
+			}
+		}
+	}
+	promise, resolve, reject := vm.NewPromise()
+	go func() {
+		defer crash.Guard()
+		ctx := context.Background()
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd.Dir = dir
+		cmd.Env = env
+		if stdin != "" {
+			cmd.Stdin = strings.NewReader(stdin)
+		}
+		var out, errb bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errb
+		runErr := cmd.Run()
+		exit := 0
+		var startErr error
+		if runErr != nil {
+			var exErr *exec.ExitError
+			if errors.As(runErr, &exErr) {
+				exit = exErr.ExitCode() // -1 when signal-killed (e.g. timeout)
+			} else {
+				startErr = runErr // could not start: program not found, bad cwd
+			}
+		}
+		// goja is single-threaded: build the result and settle on the worker.
+		e.w.post(func() {
+			if startErr != nil {
+				_ = reject(e.errorValue(startErr.Error()))
+				return
+			}
+			val, verr := e.toJS(map[string]any{"exitCode": exit, "stdout": out.String(), "stderr": errb.String()})
+			if verr != nil {
+				_ = reject(e.errorValue(verr.Error()))
+				return
+			}
+			_ = resolve(val)
+		})
+	}()
+	return promise, nil
+}
+
+// mcpCall serves $.mcp.call: an MCP tool invocation on a background goroutine
+// (the server round-trip must not block the worker), resolving with Claude
+// Code's McpToolResult (the MCP CallToolResult: { content, structuredContent?,
+// isError }). It rejects when no MCP session is wired, when the tool is
+// unknown, or when its server is not connected.
+func (e *Engine) mcpCall(arg func(int) goja.Value) (any, error) {
+	vm := e.w.vm
+	server := str(arg(0))
+	tool := str(arg(1))
+	if server == "" || tool == "" {
+		return nil, fmt.Errorf("mcp.call(server, tool): server and tool are required")
+	}
+	if e.opts.McpCall == nil {
+		return nil, fmt.Errorf("mcp.call is not available: kiln has no MCP session")
+	}
+	var args map[string]any
+	if m, ok := arg(2).Export().(map[string]any); ok {
+		args = m
+	}
+	call := e.opts.McpCall
+	promise, resolve, reject := vm.NewPromise()
+	go func() {
+		defer crash.Guard()
+		raw, err := call(context.Background(), server, tool, args)
+		// goja is single-threaded: parse and settle on the worker.
+		e.w.post(func() {
+			if err != nil {
+				_ = reject(e.errorValue(err.Error()))
+				return
+			}
+			val, perr := e.parseJSON(raw, true)
+			if perr != nil {
+				_ = reject(e.errorValue(perr.Error()))
+				return
+			}
+			_ = resolve(val)
+		})
+	}()
+	return promise, nil
+}
+
+// modelClassify serves $.model.classify: label text on a background goroutine
+// (the model call must not block the worker), resolving the chosen label or
+// null when none fits (Claude Code's string? return). It rejects when no model
+// session is wired.
+func (e *Engine) modelClassify(arg func(int) goja.Value) (any, error) {
+	vm := e.w.vm
+	text := str(arg(0))
+	var labels []string
+	if a, ok := arg(1).Export().([]any); ok {
+		for _, v := range a {
+			labels = append(labels, fmt.Sprint(v))
+		}
+	}
+	if len(labels) == 0 {
+		return nil, fmt.Errorf("model.classify(text, labels): labels must be a non-empty array")
+	}
+	if e.opts.Classify == nil {
+		return nil, fmt.Errorf("model.classify is not available: kiln has no model session")
+	}
+	classify := e.opts.Classify
+	promise, resolve, reject := vm.NewPromise()
+	go func() {
+		defer crash.Guard()
+		label, err := classify(context.Background(), text, labels)
+		// goja is single-threaded: settle on the worker.
+		e.w.post(func() {
+			if err != nil {
+				_ = reject(e.errorValue(err.Error()))
+				return
+			}
+			if label == "" {
+				_ = resolve(goja.Null())
+				return
+			}
+			_ = resolve(vm.ToValue(label))
 		})
 	}()
 	return promise, nil

@@ -129,15 +129,29 @@ func pluginConfigOptions() map[string]map[string]any {
 	return out
 }
 
+// egressDeps are the per-session capabilities the mod engine reaches out
+// through: the repo root, the live model id, an MCP tool call, and a
+// one-shot model classification.
+type egressDeps struct {
+	root     string
+	model    func() string
+	mcpCall  func(ctx context.Context, server, tool string, args map[string]any) (json.RawMessage, error)
+	classify func(ctx context.Context, text string, labels []string) (string, error)
+}
+
 // start loads every module and runs session.start; then the mods' tools
 // and commands exist. Errors are logged and returned for a startup note.
-func (r *modsRuntime) start(ctx context.Context, cwd, sessionID string) []error {
+func (r *modsRuntime) start(ctx context.Context, cwd, sessionID string, dep egressDeps) []error {
 	if r == nil || r.engine.Load() != nil {
 		return nil
 	}
 	home, _ := os.UserHomeDir()
 	cache := filepath.Join(home, ".harness", "cache", "mods")
-	e := mods.New(r.host, mods.Options{CacheDir: cache, Cwd: cwd, SessionID: sessionID, Logger: diag.L()})
+	e := mods.New(r.host, mods.Options{
+		CacheDir: cache, Cwd: cwd, SessionID: sessionID, Logger: diag.L(),
+		SessionRoot: dep.root, Model: dep.model,
+		McpCall: dep.mcpCall, Classify: dep.classify,
+	})
 	errs := e.Load(r.modules)
 	for _, err := range errs {
 		diag.L().Warn("mods: module failed to load", "error", err)
