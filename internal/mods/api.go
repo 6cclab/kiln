@@ -1,13 +1,19 @@
 package mods
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/dop251/goja"
 )
+
+// fsMaxBytes caps one $.fs.read, as Claude Code does (4 MiB per file).
+const fsMaxBytes = 4 << 20
 
 // implemented are the $ methods kiln answers in v1. Every other documented
 // method (claude-code.d.ts's request map) exists on $ and rejects, naming
@@ -18,7 +24,8 @@ var implemented = map[string]bool{
 	"state.get": true, "state.set": true,
 	"clock.now": true, "clock.every": true, "clock.after": true, "clock.sleep": true,
 	"env.get": true, "settings.read": true,
-	"session.usage": true, "session.cwd": true,
+	"fs.exists": true, "fs.list": true, "fs.read": true,
+	"session.usage": true, "session.cwd": true, "session.id": true,
 	"agent.list":       true,
 	"command.register": true, "tool.register": true,
 }
@@ -29,10 +36,10 @@ var implemented = map[string]bool{
 var documented = []string{
 	"agent.register", "agent.spawn", "audio.play", "audio.speak",
 	"command.list", "config.list", "env.set",
-	"fs.ancestors", "fs.exists", "fs.list", "fs.read", "fs.stat", "fs.write",
+	"fs.ancestors", "fs.stat", "fs.write",
 	"http.fetch", "mcp.call", "model.classify", "model.complete", "model.fork",
 	"process.run", "process.spawn", "prompt.read", "prompt.submit",
-	"session.append", "session.authorize", "session.compact", "session.id", "session.messages",
+	"session.append", "session.authorize", "session.compact", "session.messages",
 	"session.model", "session.repo", "session.root", "session.send", "session.surface",
 	"session.surfaces", "session.turns", "session.version",
 	"store.delete", "store.get", "store.keys", "store.set",
@@ -72,7 +79,10 @@ func (e *Engine) apiCall(call goja.FunctionCall) goja.Value {
 	vm := e.w.vm
 	if !implemented[name] {
 		msg := fmt.Sprintf("$.%s is not available in kiln (mods v1)", name)
-		e.log.Warn(fmt.Sprintf("%s: %s", p.name, msg), "plugin", p.name, "call", name)
+		if key := p.name + "\x00" + name; !e.warnedUnimpl[key] {
+			e.warnedUnimpl[key] = true
+			e.log.Warn(fmt.Sprintf("%s: %s", p.name, msg), "plugin", p.name, "call", name)
+		}
 		return e.rejected(msg)
 	}
 	switch name {
@@ -235,6 +245,66 @@ func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, e
 
 	case "session.cwd":
 		return e.opts.Cwd, nil
+
+	case "session.id":
+		return e.opts.SessionID, nil
+
+	case "fs.exists":
+		_, err := os.Stat(e.fsPath(str(arg(0))))
+		return err == nil, nil
+
+	case "fs.list":
+		entries, err := os.ReadDir(e.fsPath(str(arg(0))))
+		if err != nil {
+			return nil, err
+		}
+		// os.ReadDir sorts by name, as Claude Code's fs.list does.
+		out := make([]any, 0, len(entries))
+		for _, ent := range entries {
+			isLink := ent.Type()&os.ModeSymlink != 0
+			kind := "other"
+			switch {
+			case isLink:
+				kind = "other" // a symlink is "other" with isLink, as Claude Code reports.
+			case ent.IsDir():
+				kind = "dir"
+			case ent.Type().IsRegular():
+				kind = "file"
+			}
+			var size int64
+			if info, ierr := ent.Info(); ierr == nil && !info.IsDir() {
+				size = info.Size()
+			}
+			out = append(out, map[string]any{"name": ent.Name(), "kind": kind, "size": size, "isLink": isLink})
+		}
+		return e.toJS(out)
+
+	case "fs.read":
+		path := e.fsPath(str(arg(0)))
+		as := "text"
+		if obj, ok := arg(1).(*goja.Object); ok {
+			if s := str(obj.Get("as")); s != "" {
+				as = s
+			}
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("%s is a directory", path)
+		}
+		if info.Size() > fsMaxBytes {
+			return nil, fmt.Errorf("file is larger than 4 MiB")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if as == "bytes" {
+			return e.toJS(map[string]any{"base64": base64.StdEncoding.EncodeToString(data)})
+		}
+		return string(data), nil
 
 	case "agent.list":
 		out := []any{}
@@ -403,6 +473,16 @@ func (t *timer) fire() {
 }
 
 // --- value helpers ----------------------------------------------------------------
+
+// fsPath resolves a $.fs path the way Claude Code does: an absolute path is
+// used as given, a relative one against the session's working directory. A
+// missing/undefined path ("") means the working directory itself (fs.list()).
+func (e *Engine) fsPath(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(e.opts.Cwd, p)
+}
 
 func str(v goja.Value) string {
 	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {

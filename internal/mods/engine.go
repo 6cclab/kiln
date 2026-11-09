@@ -86,6 +86,8 @@ type Options struct {
 	// Cwd is the session's working directory (session.start's e.cwd and
 	// $.session.cwd()).
 	Cwd string
+	// SessionID is the session's id ($.session.id()); "" when unknown.
+	SessionID string
 	// Clock backs $.clock; nil is the real clock.
 	Clock Clock
 	// Logger receives every line the engine reports (a skipped hook, a
@@ -151,6 +153,10 @@ type Engine struct {
 	nextCallback  int
 	paneOwner     map[string]string
 	paneTitle     map[string]string
+	// warnedUnimpl remembers the plugin+call pairs an unimplemented $ call
+	// already logged, so a mod that polls one (squad calls $.session.id and
+	// $.fs.* every few seconds) warns once, not on every tick.
+	warnedUnimpl map[string]bool
 
 	// mu guards what kiln reads from other goroutines.
 	mu       sync.Mutex
@@ -193,6 +199,7 @@ func New(host Host, opts Options) *Engine {
 		siteCallbacks: map[string][]int{},
 		paneOwner:     map[string]string{},
 		paneTitle:     map[string]string{},
+		warnedUnimpl:  map[string]bool{},
 	}
 	if e.log == nil {
 		e.log = diag.L()

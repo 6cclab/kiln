@@ -1207,7 +1207,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if modsRT == nil {
 			return
 		}
-		for _, err := range modsRT.start(ctx, cwd) {
+		for _, err := range modsRT.start(ctx, cwd, started.SessionID) {
 			startupWarn(fmt.Sprintf("mod not loaded: %v", err))
 		}
 		modsRT.host.usage = func() mods.Usage {
