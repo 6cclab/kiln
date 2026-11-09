@@ -25,6 +25,9 @@ var implemented = map[string]bool{
 	"clock.now": true, "clock.every": true, "clock.after": true, "clock.sleep": true,
 	"env.get": true, "settings.read": true,
 	"fs.exists": true, "fs.list": true, "fs.read": true,
+	"fs.write": true, "fs.stat": true, "fs.ancestors": true,
+	"store.get": true, "store.set": true, "store.delete": true, "store.keys": true,
+	"env.set":       true,
 	"session.usage": true, "session.cwd": true, "session.id": true,
 	"agent.list":       true,
 	"command.register": true, "tool.register": true,
@@ -35,14 +38,12 @@ var implemented = map[string]bool{
 // prompt.submit, tool.call, agent.spawn).
 var documented = []string{
 	"agent.register", "agent.spawn", "audio.play", "audio.speak",
-	"command.list", "config.list", "env.set",
-	"fs.ancestors", "fs.stat", "fs.write",
+	"command.list", "config.list",
 	"http.fetch", "mcp.call", "model.classify", "model.complete", "model.fork",
 	"process.run", "process.spawn", "prompt.read", "prompt.submit",
 	"session.append", "session.authorize", "session.compact", "session.messages",
 	"session.model", "session.repo", "session.root", "session.send", "session.surface",
 	"session.surfaces", "session.turns", "session.version",
-	"store.delete", "store.get", "store.keys", "store.set",
 	"tool.call", "tool.list", "turn.abort",
 	"ui.blit", "ui.log", "ui.notice", "ui.status",
 }
@@ -306,6 +307,90 @@ func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, e
 		}
 		return string(data), nil
 
+	case "env.set":
+		if goja.IsUndefined(arg(1)) {
+			return goja.Undefined(), os.Unsetenv(str(arg(0)))
+		}
+		return goja.Undefined(), os.Setenv(str(arg(0)), str(arg(1)))
+
+	case "fs.write":
+		path := e.fsPath(str(arg(0)))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, err
+		}
+		return goja.Undefined(), os.WriteFile(path, []byte(str(arg(1))), 0o644)
+
+	case "fs.stat":
+		path := e.fsPath(str(arg(0)))
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, err
+		}
+		isLink := info.Mode()&os.ModeSymlink != 0
+		kind := "other" // a symlink is "other" with isLink, as in fs.list.
+		switch {
+		case isLink:
+		case info.IsDir():
+			kind = "dir"
+		case info.Mode().IsRegular():
+			kind = "file"
+		}
+		out := map[string]any{"kind": kind, "size": info.Size(), "mtimeMs": info.ModTime().UnixMilli(), "isLink": isLink}
+		if obj, ok := arg(1).(*goja.Object); ok && truthy(obj.Get("resolve")) {
+			if real, rerr := filepath.EvalSymlinks(path); rerr == nil {
+				out["realPath"] = real
+			}
+		}
+		return e.toJS(out)
+
+	case "fs.ancestors":
+		obj, ok := arg(0).(*goja.Object)
+		if !ok {
+			return nil, fmt.Errorf("takes { names, of?, below? }")
+		}
+		var names []string
+		if raw, ok := e.fromJS(obj.Get("names")); ok {
+			if err := json.Unmarshal(raw, &names); err != nil {
+				return nil, fmt.Errorf("names must be an array of strings")
+			}
+		}
+		dir := e.opts.Cwd
+		if of := str(obj.Get("of")); of != "" {
+			dir = e.fsPath(of)
+		}
+		dir = filepath.Clean(dir)
+		below := ""
+		if b := str(obj.Get("below")); b != "" {
+			below = filepath.Clean(e.fsPath(b))
+		}
+		out := []any{}
+		for {
+			for _, n := range names {
+				fp := filepath.Join(dir, n)
+				info, err := os.Stat(fp)
+				if err != nil || !info.Mode().IsRegular() || info.Size() > fsMaxBytes {
+					continue
+				}
+				data, err := os.ReadFile(fp)
+				if err != nil {
+					continue
+				}
+				// Simplification vs Claude Code: @-includes are not expanded; content is the raw file.
+				text := string(data)
+				out = append(out, map[string]any{"dir": dir, "name": n, "content": text,
+					"parts": []any{map[string]any{"path": fp, "content": text}}})
+			}
+			parent := filepath.Dir(dir)
+			if dir == below || parent == dir {
+				break
+			}
+			dir = parent
+		}
+		return e.toJS(out)
+
+	case "store.get", "store.set", "store.delete", "store.keys":
+		return e.storeCall(p.name, name, arg)
+
 	case "agent.list":
 		out := []any{}
 		for _, a := range e.host.Agents() {
@@ -482,6 +567,78 @@ func (e *Engine) fsPath(p string) string {
 		return p
 	}
 	return filepath.Join(e.opts.Cwd, p)
+}
+
+type storeEntry struct {
+	Key   string          `json:"key"`
+	Value json.RawMessage `json:"value"`
+}
+
+// storeCall serves $.store.*: a per-plugin key-value file, insertion-ordered,
+// read and rewritten on every call.
+func (e *Engine) storeCall(plugin, name string, arg func(int) goja.Value) (any, error) {
+	dir := e.opts.CacheDir
+	if dir == "" {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return nil, fmt.Errorf("no cache directory: %v", err)
+		}
+		dir = filepath.Join(base, "kiln", "mods")
+	}
+	file := filepath.Join(dir, "store", plugin+".json")
+	entries := []storeEntry{}
+	if data, err := os.ReadFile(file); err == nil {
+		if err := json.Unmarshal(data, &entries); err != nil {
+			return nil, fmt.Errorf("%s: %v", file, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	save := func() error {
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			return err
+		}
+		data, err := json.Marshal(entries)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(file, data, 0o644)
+	}
+	key := str(arg(0))
+	i := -1
+	for j, en := range entries {
+		if en.Key == key {
+			i = j
+		}
+	}
+	switch name {
+	case "store.get":
+		if i < 0 {
+			return goja.Undefined(), nil
+		}
+		return e.parseJSON(entries[i].Value, false)
+	case "store.keys":
+		keys := make([]string, 0, len(entries))
+		for _, en := range entries {
+			keys = append(keys, en.Key)
+		}
+		return e.toJS(keys)
+	case "store.set":
+		if raw, ok := e.fromJS(arg(1)); ok {
+			if i < 0 {
+				entries = append(entries, storeEntry{key, raw})
+			} else {
+				entries[i].Value = raw
+			}
+			return goja.Undefined(), save()
+		}
+	}
+	// store.delete, or store.set of undefined.
+	if i >= 0 {
+		entries = append(entries[:i], entries[i+1:]...)
+		return goja.Undefined(), save()
+	}
+	return goja.Undefined(), nil
 }
 
 func str(v goja.Value) string {
