@@ -131,13 +131,13 @@ func pluginConfigOptions() map[string]map[string]any {
 
 // start loads every module and runs session.start; then the mods' tools
 // and commands exist. Errors are logged and returned for a startup note.
-func (r *modsRuntime) start(ctx context.Context, cwd string) []error {
+func (r *modsRuntime) start(ctx context.Context, cwd, sessionID string) []error {
 	if r == nil || r.engine.Load() != nil {
 		return nil
 	}
 	home, _ := os.UserHomeDir()
 	cache := filepath.Join(home, ".harness", "cache", "mods")
-	e := mods.New(r.host, mods.Options{CacheDir: cache, Cwd: cwd, Logger: diag.L()})
+	e := mods.New(r.host, mods.Options{CacheDir: cache, Cwd: cwd, SessionID: sessionID, Logger: diag.L()})
 	errs := e.Load(r.modules)
 	for _, err := range errs {
 		diag.L().Warn("mods: module failed to load", "error", err)

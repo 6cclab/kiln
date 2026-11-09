@@ -451,12 +451,11 @@ func TestUnknownApiCallRejectsNotCrash(t *testing.T) {
 	h.load(t, "unknown")
 	h.e.SessionStart(ctxT(t))
 
-	if got := runCommand(t, h, "fs", ""); got != "$.fs.read is not available in kiln (mods v1)" {
-		t.Errorf("$.fs.read = %q", got)
+	if got := runCommand(t, h, "net", ""); got != "$.http.fetch is not available in kiln (mods v1)" {
+		t.Errorf("$.http.fetch = %q", got)
 	}
 	logs := h.logs.String()
 	for _, want := range []string{
-		"unknown: $.fs.read is not available in kiln (mods v1)",
 		"unknown: $.http.fetch is not available in kiln (mods v1)",
 		"unknown: kiln does not raise prompt.submit (mods v1); this hook never runs",
 	} {
@@ -468,8 +467,62 @@ func TestUnknownApiCallRejectsNotCrash(t *testing.T) {
 		t.Errorf("a rejected $ call failed its hook:\n%s", logs)
 	}
 	// Still answering afterwards.
-	if got := runCommand(t, h, "fs", ""); got == "" {
+	if got := runCommand(t, h, "net", ""); got == "" {
 		t.Error("engine stopped answering")
+	}
+	// The warning is throttled: $.http.fetch is called at session.start and
+	// again on each command.run, but logs once per plugin+call, not per call.
+	if n := strings.Count(logs, "$.http.fetch is not available"); n != 1 {
+		t.Errorf("$.http.fetch warned %d times, want 1 (throttled)", n)
+	}
+}
+
+// Regression for the squad papercut: squad polls $.session.id and the $.fs
+// read API every few seconds to render its offload panel. Before they were
+// implemented the calls rejected (spamming a WARN every tick) and the panel
+// stayed empty. session.id must return the session's id, and fs.exists/list/
+// read must reach the session's working directory.
+func TestSessionIDAndFsRead(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	h := newHarness(t, Options{Cwd: dir, SessionID: "sess-123"})
+	h.load(t, "files")
+	h.e.SessionStart(ctxT(t))
+
+	got := runCommand(t, h, "probe", "")
+	var out struct {
+		ID         string `json:"id"`
+		ExistsHere bool   `json:"existsHere"`
+		ExistsNot  bool   `json:"existsNot"`
+		Names      string `json:"names"`
+		Body       string `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Fatalf("probe = %q: %v", got, err)
+	}
+	if out.ID != "sess-123" {
+		t.Errorf("session.id = %q, want sess-123", out.ID)
+	}
+	if !out.ExistsHere {
+		t.Error("fs.exists(a.txt) = false, want true")
+	}
+	if out.ExistsNot {
+		t.Error("fs.exists(nope.txt) = true, want false")
+	}
+	if out.Body != "hello" {
+		t.Errorf("fs.read(a.txt) = %q, want hello", out.Body)
+	}
+	if want := "a.txt:file:false,sub:dir:false"; out.Names != want {
+		t.Errorf("fs.list(.) = %q, want %q", out.Names, want)
+	}
+	if strings.Contains(h.logs.String(), "is not available in kiln") {
+		t.Errorf("a $ call was rejected:\n%s", h.logs)
 	}
 }
 
