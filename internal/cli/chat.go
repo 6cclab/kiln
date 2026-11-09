@@ -1211,7 +1211,153 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if rr, ok := gitfiles.Find(cwd); ok {
 			root = rr.WorkTree
 		}
+		// resolveModel picks the streamer + model for a model.complete request:
+		// "" is the session model (as the classifier resolves it), a
+		// provider/model id resolves directly, and a bare id is searched for
+		// across providers. An unknown model is an error (the promise rejects).
+		resolveModel := func(want string) (provider.Provider, provider.Model, error) {
+			if want == "" {
+				m := classifierSessionModel(started.Model, modelRouter.direct)
+				p, ok := reg.Provider(m.Provider)
+				if !ok {
+					return nil, provider.Model{}, fmt.Errorf("unknown provider %q", m.Provider)
+				}
+				return p, m, nil
+			}
+			if pid, mid, ok := splitProviderModel(want); ok {
+				if m, ok := reg.GetModel(pid, mid); ok {
+					if p, ok := reg.Provider(m.Provider); ok {
+						return p, m, nil
+					}
+				}
+			}
+			for _, p := range reg.Providers() {
+				if m, ok := reg.GetModel(p.ID(), want); ok {
+					return p, m, nil
+				}
+			}
+			return nil, provider.Model{}, fmt.Errorf("unknown model %q", want)
+		}
+		modelUsage := func(u msg.Usage) map[string]any {
+			return map[string]any{
+				"input_tokens": u.Input, "output_tokens": u.Output,
+				"cache_read_input_tokens": u.CacheRead, "cache_creation_input_tokens": u.CacheWrite,
+			}
+		}
+		// runModel runs one completion and returns the ModelCompleteResult map.
+		// It records the spend on the session's cost and never returns an error:
+		// an API failure is a resolved { isAnswered: false } result, as Claude
+		// Code returns.
+		runModel := func(ctx context.Context, label string, strm provider.Provider, model provider.Model, system string, transcript []msg.Message, maxTokens int, effort provider.ThinkingLevel) map[string]any {
+			opts := provider.StreamOptions{SystemPrompt: system, MaxTokens: maxTokens, ThinkingLevel: provider.ClampThinkingLevel(model, effort)}
+			ch, wait := strm.Stream(ctx, model, transcript, opts)
+			for range ch {
+			}
+			am, werr := wait()
+			var u msg.Usage
+			if am != nil {
+				u = am.Usage
+			}
+			if u.Input != 0 || u.Output != 0 || u.CacheRead != 0 || u.CacheWrite != 0 {
+				if err := started.Harness.RecordSideUsage(label+" · "+model.Provider+"/"+model.ID, u); err != nil {
+					diag.L().Warn("mod model usage", "err", err)
+				}
+			}
+			if werr != nil {
+				if ctx.Err() != nil {
+					return map[string]any{"isAnswered": false, "reason": "aborted", "usage": modelUsage(u)}
+				}
+				// kiln cannot classify a provider error into Claude Code's
+				// kinds or recover the HTTP status, so it reports the honest
+				// "unknown" with a null status.
+				return map[string]any{"isAnswered": false, "reason": "api-error", "status": nil, "error": "unknown", "usage": modelUsage(u)}
+			}
+			text := ""
+			if am != nil {
+				text = msg.TextOf(am.Content)
+			}
+			if strings.TrimSpace(text) == "" {
+				return map[string]any{"isAnswered": false, "reason": "empty-reply", "usage": modelUsage(u)}
+			}
+			return map[string]any{"isAnswered": true, "text": text, "usage": modelUsage(u)}
+		}
+		joinBlocks := func(blocks []mods.ModelTextBlock) string {
+			parts := make([]string, 0, len(blocks))
+			for _, b := range blocks {
+				parts = append(parts, b.Text)
+			}
+			return strings.Join(parts, "\n")
+		}
+		userMsg := func(text string) msg.Message {
+			return msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(text)}, Timestamp: time.Now().UnixMilli()}
+		}
 		dep := egressDeps{
+			version: Version,
+			repo: func(ctx context.Context) (map[string]any, error) {
+				rr, ok := gitfiles.Find(cwd)
+				if !ok {
+					return nil, nil // not inside a repo: the mod sees null
+				}
+				remote := gitRemoteURL(ctx, rr.WorkTree)
+				var remoteVal any
+				if remote != "" {
+					remoteVal = remote
+				}
+				// internal is Claude Code's own-org flag; kiln has no such
+				// notion, so a repo is never internal and name stays null.
+				return map[string]any{"root": rr.WorkTree, "remote": remoteVal, "internal": false, "name": nil}, nil
+			},
+			turns: func(ctx context.Context) (int, error) {
+				// A turn is a prompt the user typed: a UserMessage with
+				// KilnTyped set. Synthesized user messages (delegated tasks,
+				// hook follow-ups) leave it empty and do not count.
+				n := 0
+				for _, m := range automode.BranchMessages(ctx, started.Lane) {
+					switch u := m.(type) {
+					case msg.UserMessage:
+						if u.KilnTyped != "" {
+							n++
+						}
+					case *msg.UserMessage:
+						if u != nil && u.KilnTyped != "" {
+							n++
+						}
+					}
+				}
+				return n, nil
+			},
+			complete: func(ctx context.Context, req mods.ModelRequest) (map[string]any, error) {
+				strm, model, err := resolveModel(req.Model)
+				if err != nil {
+					return nil, err
+				}
+				maxTokens := req.MaxTokens
+				if maxTokens <= 0 {
+					maxTokens = 1024 // Claude Code's model.complete default
+				}
+				if model.MaxTokens > 0 && maxTokens > model.MaxTokens {
+					maxTokens = model.MaxTokens
+				}
+				return runModel(ctx, "mod · model.complete", strm, model, joinBlocks(req.System),
+					[]msg.Message{userMsg(joinBlocks(req.Prompt))}, maxTokens, provider.ThinkingLevel(req.Effort)), nil
+			},
+			fork: func(ctx context.Context, prompt string) (map[string]any, error) {
+				branch := automode.BranchMessages(ctx, started.Lane)
+				if len(branch) == 0 {
+					return map[string]any{"isAnswered": false, "reason": "nothing-to-fork"}, nil
+				}
+				m := classifierSessionModel(started.Model, modelRouter.direct)
+				strm, ok := reg.Provider(m.Provider)
+				if !ok {
+					return nil, fmt.Errorf("unknown provider %q", m.Provider)
+				}
+				maxTokens := 1024
+				if m.MaxTokens > 0 && maxTokens > m.MaxTokens {
+					maxTokens = m.MaxTokens
+				}
+				transcript := append(append([]msg.Message{}, branch...), userMsg(prompt))
+				return runModel(ctx, "mod · model.fork", strm, m, "", transcript, maxTokens, ""), nil
+			},
 			root: root,
 			model: func() string {
 				if l, err := started.Harness.Lane("main"); err == nil {

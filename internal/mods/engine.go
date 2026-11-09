@@ -109,6 +109,25 @@ type Options struct {
 	// when none does (the mod sees null). nil rejects model.classify. Called
 	// from a background goroutine, so it may block.
 	Classify func(ctx context.Context, text string, labels []string) (string, error)
+	// Version is kiln's build version ($.session.version().version); "" when
+	// unknown.
+	Version string
+	// Repo backs $.session.repo: describe the working copy's repository, or nil
+	// when the cwd is not inside one (the mod sees null). nil rejects
+	// session.repo. Called from a background goroutine, so it may block.
+	Repo func(ctx context.Context) (map[string]any, error)
+	// Turns backs $.session.turns: how many prompts the user has sent this
+	// session. nil rejects session.turns. Called from a background goroutine,
+	// so it may block.
+	Turns func(ctx context.Context) (int, error)
+	// Complete backs $.model.complete: run a one-shot model request and return
+	// the ModelCompleteResult as a map. nil rejects model.complete. Called from
+	// a background goroutine, so it may block.
+	Complete func(ctx context.Context, req ModelRequest) (map[string]any, error)
+	// Fork backs $.model.fork: continue the main thread with one more prompt on
+	// the session model and return the ModelCompleteResult as a map. nil rejects
+	// model.fork. Called from a background goroutine, so it may block.
+	Fork func(ctx context.Context, prompt string) (map[string]any, error)
 	// HookBudget and CatchBudget override DefaultHookBudget and
 	// DefaultCatchBudget (tests shorten them).
 	HookBudget  time.Duration
@@ -125,6 +144,26 @@ type Module struct {
 	Root    string
 	Path    string
 	Options map[string]any
+}
+
+// ModelTextBlock is one block of a model.complete prompt or system prompt. Cache
+// marks a block as a prompt-cache breakpoint (Claude Code's { text, cache: true }).
+type ModelTextBlock struct {
+	Text  string
+	Cache bool
+}
+
+// ModelRequest is a parsed $.model.complete request, handed to Options.Complete.
+// Model is the requested model (an alias, a full provider/model id, a bare model
+// id, or "" for the session model). Effort is "" or one of low/medium/high/
+// xhigh/max. MaxTokens is 0 when the mod left it out (the closure applies the
+// default).
+type ModelRequest struct {
+	Model     string
+	Prompt    []ModelTextBlock
+	System    []ModelTextBlock
+	MaxTokens int
+	Effort    string
 }
 
 // Engine runs loaded mods. Every method is safe from any goroutine except

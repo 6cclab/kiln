@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -49,6 +50,25 @@ func claudeToolName(name string) string {
 		return cc
 	}
 	return name
+}
+
+// gitRemoteURL is the origin's push URL for the repo at root, "" when there is
+// no origin (or git is unavailable). Claude Code's session.repo prefers the push
+// URL; kiln reads it the same way, falling back to the fetch URL.
+func gitRemoteURL(ctx context.Context, root string) string {
+	run := func(args ...string) string {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = root
+		out, err := cmd.Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if u := run("remote", "get-url", "--push", "origin"); u != "" {
+		return u
+	}
+	return run("remote", "get-url", "origin")
 }
 
 // modsRuntime connects the mod engine to a session: the main conversation
@@ -130,13 +150,19 @@ func pluginConfigOptions() map[string]map[string]any {
 }
 
 // egressDeps are the per-session capabilities the mod engine reaches out
-// through: the repo root, the live model id, an MCP tool call, and a
-// one-shot model classification.
+// through: the repo root, the live model id, an MCP tool call, a one-shot
+// model classification, the build version, the working copy's repository, the
+// user's turn count, and one-shot model completion and fork.
 type egressDeps struct {
 	root     string
 	model    func() string
 	mcpCall  func(ctx context.Context, server, tool string, args map[string]any) (json.RawMessage, error)
 	classify func(ctx context.Context, text string, labels []string) (string, error)
+	version  string
+	repo     func(ctx context.Context) (map[string]any, error)
+	turns    func(ctx context.Context) (int, error)
+	complete func(ctx context.Context, req mods.ModelRequest) (map[string]any, error)
+	fork     func(ctx context.Context, prompt string) (map[string]any, error)
 }
 
 // start loads every module and runs session.start; then the mods' tools
@@ -151,6 +177,8 @@ func (r *modsRuntime) start(ctx context.Context, cwd, sessionID string, dep egre
 		CacheDir: cache, Cwd: cwd, SessionID: sessionID, Logger: diag.L(),
 		SessionRoot: dep.root, Model: dep.model,
 		McpCall: dep.mcpCall, Classify: dep.classify,
+		Version: dep.version, Repo: dep.repo, Turns: dep.turns,
+		Complete: dep.complete, Fork: dep.fork,
 	})
 	errs := e.Load(r.modules)
 	for _, err := range errs {

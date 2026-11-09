@@ -1,11 +1,11 @@
 # Mods v1 gap: kiln vs Claude Code
 
 What kiln's mod runtime (`internal/mods`) implements, measured against Claude Code's
-mod API surface. The authoritative Claude Code surface is its type declarations,
-`mods/types/claude-code.d.ts` (header: "Written by Claude Code 2.1.277",
-marked EARLY ACCESS). kiln's side is `internal/mods/api.go` (the `implemented`
-map and the `documented` reject-list) and `internal/mods/events.go` (the events it
-raises). Captured 2026-11-09.
+mod API surface. The authoritative Claude Code surface is its type declarations
+(the `.d.ts`, Claude Code 2.1.302, marked EARLY ACCESS, vendored in the recall
+plugin's `types/claude-code/index.d.ts`). kiln's side is `internal/mods/api.go`
+(the `implemented` map and the `documented` reject-list) and
+`internal/mods/events.go` (the events it raises). Captured 2026-11-09.
 
 **Legend**
 - ✅ implemented — kiln answers it.
@@ -83,9 +83,9 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `session.messages` | `() => Promise<SessionMessage[]>` | 🚫 |
 | `session.root` | `() => Promise<string>` | ✅ repo root (gitfiles) |
 | `session.model` | `() => Promise<string>` | ✅ live lane model |
-| `session.turns` | `() => Promise<number>` | 🚫 |
-| `session.repo` | `() => Promise<SessionRepo\|null>` | 🚫 |
-| `session.version` | `() => Promise<SessionVersion>` | 🚫 SessionVersion shape unverified |
+| `session.turns` | `() => Promise<number>` | ✅ user-typed prompts (KilnTyped) |
+| `session.repo` | `() => Promise<SessionRepo\|null>` | ✅ git root + push URL; internal:false, name:null |
+| `session.version` | `() => Promise<SessionVersion>` | ⚠️ `{version}` only (no base/builtAt: kiln's version is a git sha) |
 | `session.compact` | `(input?) => Promise<…>` | 🚫 |
 | `session.append` | `(args) => Promise<…>` | 🚫 |
 | `session.authorize` | `() => Promise<SessionAuthorization>` | 🚫 |
@@ -144,9 +144,9 @@ Grouped by namespace. "Signature" is Claude Code's.
 ### model / audio / mcp / http / process
 | call | signature | kiln |
 |---|---|---|
-| `model.complete` | `(request) => Promise<string>` | 🚫 request shape unverified |
+| `model.complete` | `(request) => Promise<ModelCompleteResult>` | ✅ via provider.Stream; resolves alias/id/"" model; block `cache` flag ignored |
 | `model.classify` | `(text, labels, options?) => Promise<string?>` | ✅ via provider.Stream; options ignored |
-| `model.fork` | `(request) => Promise<…>` | 🚫 no one-shot primitive |
+| `model.fork` | `(request) => Promise<ModelForkResult>` | ✅ session model + branch transcript; `nothing-to-fork` when empty |
 | `audio.play` / `audio.speak` | `(…) => Promise<…>` | 🚫 no audio in kiln (user decision) |
 | `mcp.call` | `(server, tool, args?) => Promise<McpToolResult>` | ✅ via mcp hub |
 | `http.fetch` | `(url, init?) => Promise<HttpResponse>` | ✅ text body; no auth handle |
@@ -173,39 +173,35 @@ Claude Code `$` equivalent. ✅ for the atom use squad/savvy make.
 
 ---
 
-## Stale entries in kiln's reject-list
-
-`internal/mods/api.go`'s `documented` still names **`session.send`**, which Claude
-Code's 2.1.277 `.d.ts` does not (no such method). Harmless — it just rejects — but
-it should be dropped or corrected when this list is next touched. (`process.spawn`
-was dropped when `process.run` landed.)
-
----
-
 ## What actually matters
 
-Most remaining 🚫/❌ rows are for features no mod Andre runs touches. The whole
-egress/exec tier now lands: **`http.fetch`**, **`process.run`** (ungated, matching
-Claude Code — a loaded mod is trusted; user decision 2026-11-09), **`mcp.call`**,
+Most remaining 🚫/❌ rows are for features no mod Andre runs touches. The egress/
+exec tier lands — **`http.fetch`**, **`process.run`** (ungated, matching Claude
+Code — a loaded mod is trusted; user decision 2026-11-09), **`mcp.call`**,
 **`model.classify`**, plus **`fs.write`/`fs.stat`/`fs.ancestors`**, **`store.*`**,
-**`env.set`**, and the **`session.root`/`session.model`** getters. The deliberate
-stops left:
+**`env.set`** — as do the model and session-meta tiers once the `.d.ts` was
+recovered (CC 2.1.302): **`model.complete`** and **`model.fork`** on the
+`provider.Stream` path (usage recorded to session cost), and the
+**`session.root`/`session.model`/`session.version`/`session.repo`/`session.turns`**
+getters (user decision 2026-11-09: build these, revisiting the earlier
+classify-only call). The deliberate stops left:
 
 1. **`session.end`** (➖ event) — the only lifecycle hook for a mod to flush or
    clean up on exit. Nothing kiln runs needs it yet, but it is the most common
    "real mod" expectation after `session.start`. Needs a shutdown event kiln does
    not raise.
-2. **`model.complete` / `model.fork`** — `complete`'s request/response shape lives
-   only in the `.d.ts` (unrecoverable this session), and `fork` has no one-shot
-   primitive in kiln. `model.classify` ships; these two reject by name.
-3. **`audio.play` / `audio.speak`** — no audio playback or capture in kiln (user
+2. **`audio.play` / `audio.speak`** — no audio playback or capture in kiln (user
    decision 2026-11-09).
-4. **`turn.step` streaming** (⚠️) — kiln fires the event but not the chunk stream,
+3. **`turn.step` streaming** (⚠️) — kiln fires the event but not the chunk stream,
    so a live-token mod sees only the final step.
-5. **`session.version` / `session.repo` / `session.turns`** — their return types
-   (`SessionVersion`, `SessionRepo`) are object shapes the `.d.ts` defines and this
-   session cannot verify, so they reject rather than return a guessed shape.
-6. Everything under `prompt.*`, `config.*`, `agent.offer`, `tool.check`,
+4. **Simplifications in the tiers that did land:** `model.complete`/`fork` ignore a
+   text block's `cache` flag (kiln's `StreamOptions` has no per-block prompt-cache
+   breakpoint) and report an API error as the honest `unknown` kind with a null
+   status (kiln can't recover the provider's HTTP status or classify it);
+   `session.version` returns `{version}` only (no `base`/`builtAt` — kiln's version
+   is a git sha); `session.repo` reports `internal:false`, `name:null` (kiln has no
+   own-org notion).
+5. Everything under `prompt.*`, `config.*`, `agent.offer`, `tool.check`,
    `skill.prompt`, `attribution.text` — deep integration points; no consumer, low
    priority.
 

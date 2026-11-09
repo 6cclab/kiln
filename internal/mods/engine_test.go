@@ -451,12 +451,12 @@ func TestUnknownApiCallRejectsNotCrash(t *testing.T) {
 	h.load(t, "unknown")
 	h.e.SessionStart(ctxT(t))
 
-	if got := runCommand(t, h, "gen", ""); got != "$.model.complete is not available in kiln (mods v1)" {
-		t.Errorf("$.model.complete = %q", got)
+	if got := runCommand(t, h, "gen", ""); got != "$.agent.spawn is not available in kiln (mods v1)" {
+		t.Errorf("$.agent.spawn = %q", got)
 	}
 	logs := h.logs.String()
 	for _, want := range []string{
-		"unknown: $.model.complete is not available in kiln (mods v1)",
+		"unknown: $.agent.spawn is not available in kiln (mods v1)",
 		"unknown: kiln does not raise prompt.submit (mods v1); this hook never runs",
 	} {
 		if !strings.Contains(logs, want) {
@@ -470,10 +470,10 @@ func TestUnknownApiCallRejectsNotCrash(t *testing.T) {
 	if got := runCommand(t, h, "gen", ""); got == "" {
 		t.Error("engine stopped answering")
 	}
-	// The warning is throttled: $.model.complete is called at session.start and
+	// The warning is throttled: $.agent.spawn is called at session.start and
 	// again on each command.run, but logs once per plugin+call, not per call.
-	if n := strings.Count(logs, "$.model.complete is not available"); n != 1 {
-		t.Errorf("$.model.complete warned %d times, want 1 (throttled)", n)
+	if n := strings.Count(logs, "$.agent.spawn is not available"); n != 1 {
+		t.Errorf("$.agent.spawn warned %d times, want 1 (throttled)", n)
 	}
 }
 

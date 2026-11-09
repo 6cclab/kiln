@@ -44,24 +44,23 @@ var implemented = map[string]bool{
 	"store.get": true, "store.set": true, "store.delete": true, "store.keys": true,
 	"env.set":        true,
 	"mcp.call":       true,
-	"model.classify": true,
-	"session.usage":  true, "session.cwd": true, "session.id": true,
+	"model.classify": true, "model.complete": true, "model.fork": true,
+	"session.usage": true, "session.cwd": true, "session.id": true,
 	"session.root": true, "session.model": true,
+	"session.version": true, "session.repo": true, "session.turns": true,
 	"agent.list":       true,
 	"command.register": true, "tool.register": true,
 }
 
-// documented lists the rest of the mod API as Claude Code 2.1.277 declares
-// it, plus methods its docs name (session.compact/send/append,
-// prompt.submit, tool.call, agent.spawn).
+// documented lists the rest of the mod API as Claude Code declares it, plus
+// methods its docs name (session.compact/append, prompt.submit, tool.call,
+// agent.spawn).
 var documented = []string{
 	"agent.register", "agent.spawn", "audio.play", "audio.speak",
 	"command.list", "config.list",
-	"model.complete", "model.fork",
 	"prompt.read", "prompt.submit",
 	"session.append", "session.authorize", "session.compact", "session.messages",
-	"session.repo", "session.send", "session.surface",
-	"session.surfaces", "session.turns", "session.version",
+	"session.surface", "session.surfaces",
 	"tool.call", "tool.list", "turn.abort",
 	"ui.blit", "ui.log", "ui.notice", "ui.status",
 }
@@ -276,6 +275,21 @@ func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, e
 			return e.opts.Model(), nil
 		}
 		return "", nil
+
+	case "session.version":
+		return e.toJS(map[string]any{"version": e.opts.Version})
+
+	case "session.repo":
+		return e.sessionRepo()
+
+	case "session.turns":
+		return e.sessionTurns()
+
+	case "model.complete":
+		return e.modelComplete(arg)
+
+	case "model.fork":
+		return e.modelFork(arg)
 
 	case "fs.exists":
 		_, err := os.Stat(e.fsPath(str(arg(0))))
@@ -920,6 +934,168 @@ func (e *Engine) modelClassify(arg func(int) goja.Value) (any, error) {
 		})
 	}()
 	return promise, nil
+}
+
+// sessionRepo serves $.session.repo: describe the working copy's repository on a
+// background goroutine (git must not block the worker), resolving the SessionRepo
+// map or null when the cwd is not inside a repo.
+func (e *Engine) sessionRepo() (any, error) {
+	vm := e.w.vm
+	if e.opts.Repo == nil {
+		return nil, fmt.Errorf("session.repo is not available in kiln")
+	}
+	repo := e.opts.Repo
+	promise, resolve, reject := vm.NewPromise()
+	go func() {
+		defer crash.Guard()
+		out, err := repo(context.Background())
+		// goja is single-threaded: build the result and settle on the worker.
+		e.w.post(func() {
+			if err != nil {
+				_ = reject(e.errorValue(err.Error()))
+				return
+			}
+			if out == nil {
+				_ = resolve(goja.Null())
+				return
+			}
+			val, verr := e.toJS(out)
+			if verr != nil {
+				_ = reject(e.errorValue(verr.Error()))
+				return
+			}
+			_ = resolve(val)
+		})
+	}()
+	return promise, nil
+}
+
+// sessionTurns serves $.session.turns: count the prompts the user has sent this
+// session on a background goroutine (reading the transcript does I/O), resolving
+// the number.
+func (e *Engine) sessionTurns() (any, error) {
+	vm := e.w.vm
+	if e.opts.Turns == nil {
+		return nil, fmt.Errorf("session.turns is not available in kiln")
+	}
+	turns := e.opts.Turns
+	promise, resolve, reject := vm.NewPromise()
+	go func() {
+		defer crash.Guard()
+		n, err := turns(context.Background())
+		// goja is single-threaded: settle on the worker.
+		e.w.post(func() {
+			if err != nil {
+				_ = reject(e.errorValue(err.Error()))
+				return
+			}
+			_ = resolve(vm.ToValue(n))
+		})
+	}()
+	return promise, nil
+}
+
+// modelComplete serves $.model.complete: run a one-shot model request on a
+// background goroutine (the model call must not block the worker), resolving the
+// ModelCompleteResult (isAnswered + text/usage, or a reason). It rejects only
+// when no model session is wired or the request is malformed; an API error is a
+// resolved { isAnswered: false, reason: 'api-error', ... } result, as Claude
+// Code returns.
+func (e *Engine) modelComplete(arg func(int) goja.Value) (any, error) {
+	vm := e.w.vm
+	if e.opts.Complete == nil {
+		return nil, fmt.Errorf("model.complete is not available: kiln has no model session")
+	}
+	obj, ok := arg(0).(*goja.Object)
+	if !ok {
+		return nil, fmt.Errorf("model.complete(request): request must be an object")
+	}
+	req := ModelRequest{
+		Model:     str(obj.Get("model")),
+		Prompt:    modelBlocks(obj.Get("prompt")),
+		System:    modelBlocks(obj.Get("system")),
+		MaxTokens: int(num(obj.Get("maxTokens"))),
+		Effort:    str(obj.Get("effort")),
+	}
+	if len(req.Prompt) == 0 {
+		return nil, fmt.Errorf("model.complete(request): prompt is required")
+	}
+	complete := e.opts.Complete
+	promise, resolve, reject := vm.NewPromise()
+	go func() {
+		defer crash.Guard()
+		out, err := complete(context.Background(), req)
+		e.settleResult(resolve, reject, out, err)
+	}()
+	return promise, nil
+}
+
+// modelFork serves $.model.fork: continue the session's main thread with one more
+// prompt on a background goroutine, resolving the ModelCompleteResult (or
+// { isAnswered: false, reason: 'nothing-to-fork' } when there is no main thread
+// to fork). It rejects only when no model session is wired or prompt is missing.
+func (e *Engine) modelFork(arg func(int) goja.Value) (any, error) {
+	vm := e.w.vm
+	if e.opts.Fork == nil {
+		return nil, fmt.Errorf("model.fork is not available: kiln has no model session")
+	}
+	obj, ok := arg(0).(*goja.Object)
+	if !ok {
+		return nil, fmt.Errorf("model.fork(request): request must be an object")
+	}
+	prompt := str(obj.Get("prompt"))
+	if prompt == "" {
+		return nil, fmt.Errorf("model.fork(request): prompt is required")
+	}
+	fork := e.opts.Fork
+	promise, resolve, reject := vm.NewPromise()
+	go func() {
+		defer crash.Guard()
+		out, err := fork(context.Background(), prompt)
+		e.settleResult(resolve, reject, out, err)
+	}()
+	return promise, nil
+}
+
+// settleResult settles a model.complete/fork promise on the worker: reject on a
+// wiring error, otherwise resolve the result map (which already carries
+// isAnswered and any reason). goja is single-threaded, so this runs on the worker.
+func (e *Engine) settleResult(resolve, reject func(any) error, out map[string]any, err error) {
+	e.w.post(func() {
+		if err != nil {
+			_ = reject(e.errorValue(err.Error()))
+			return
+		}
+		val, verr := e.toJS(out)
+		if verr != nil {
+			_ = reject(e.errorValue(verr.Error()))
+			return
+		}
+		_ = resolve(val)
+	})
+}
+
+// modelBlocks parses a model.complete prompt or system field: a string becomes
+// one block, an array of { text, cache? } becomes that many. Anything else
+// (undefined, null) is no blocks.
+func modelBlocks(v goja.Value) []ModelTextBlock {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return nil
+	}
+	if arr, ok := v.(*goja.Object); ok && arr.ClassName() == "Array" {
+		n := int(num(arr.Get("length")))
+		out := make([]ModelTextBlock, 0, n)
+		for i := 0; i < n; i++ {
+			item := arr.Get(fmt.Sprint(i))
+			if obj, ok := item.(*goja.Object); ok {
+				out = append(out, ModelTextBlock{Text: str(obj.Get("text")), Cache: truthy(obj.Get("cache"))})
+			} else {
+				out = append(out, ModelTextBlock{Text: str(item)})
+			}
+		}
+		return out
+	}
+	return []ModelTextBlock{{Text: v.String()}}
 }
 
 // errorValue is an Error object carrying message, for rejecting a promise.
