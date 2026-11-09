@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,27 +40,84 @@ func copyTree(t *testing.T, src, dst string) {
 	}
 }
 
-// realMod copies an installed mod from ~/.claude/plugins/cache into a temp
-// dir (never touching the original) and returns its Module; it skips the
-// test when the mod is not installed.
-func realMod(t *testing.T, name, cacheRel string) Module {
+// realMod copies the newest installed version of a mod from
+// ~/.claude/plugins/cache/<pluginDir> into a temp dir (never touching the
+// original) and returns its Module with opts as its config; it skips the test
+// when no version with a hooks/register.tsx is installed. Tracking the newest
+// version keeps the test on the mod the person actually runs, rather than a
+// pinned version that silently goes stale (and so quietly verifies nothing the
+// current mod does).
+func realMod(t *testing.T, name, pluginDir string, opts map[string]any) Module {
 	t.Helper()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip("no home directory")
 	}
-	src := filepath.Join(home, ".claude", "plugins", "cache", cacheRel)
-	if _, err := os.Stat(filepath.Join(src, "hooks", "register.tsx")); err != nil {
-		t.Skipf("%s is not installed at %s", name, src)
+	base := filepath.Join(home, ".claude", "plugins", "cache", pluginDir)
+	src := newestVersionWithHooks(base)
+	if src == "" {
+		t.Skipf("%s is not installed under %s", name, base)
 	}
 	dst := filepath.Join(t.TempDir(), name)
 	copyTree(t, src, dst)
-	return Module{Plugin: name, Root: dst, Path: filepath.Join(dst, "hooks", "register.tsx")}
+	return Module{Plugin: name, Root: dst, Path: filepath.Join(dst, "hooks", "register.tsx"), Options: opts}
+}
+
+// newestVersionWithHooks returns the highest-numbered version directory under
+// base that has a hooks/register.tsx, or "" when there is none.
+func newestVersionWithHooks(base string) string {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return ""
+	}
+	best := ""
+	var bestV []int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(base, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "hooks", "register.tsx")); err != nil {
+			continue
+		}
+		v := parseVersion(e.Name())
+		if best == "" || lessVersion(bestV, v) {
+			best, bestV = dir, v
+		}
+	}
+	return best
+}
+
+// parseVersion splits a dotted numeric version into its parts; a non-numeric
+// name yields nil, which sorts below any real version.
+func parseVersion(s string) []int {
+	parts := strings.Split(s, ".")
+	out := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return nil
+		}
+		out[i] = n
+	}
+	return out
+}
+
+// lessVersion reports whether a sorts before b, component by component.
+func lessVersion(a, b []int) bool {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return len(a) < len(b)
 }
 
 func TestRealModsLoad(t *testing.T) {
-	squad := realMod(t, "squad", "apato-plugins/squad/1.0.0")
-	savvy := realMod(t, "savvy-progress", "claude-kit/savvy-progress/1.2.0")
+	// squad's step tool and its prompt note are opt-in (userConfig askForSteps)
+	// as of 1.1.x; the assertions below exercise that path.
+	squad := realMod(t, "squad", "apato-plugins/squad", map[string]any{"askForSteps": true})
+	savvy := realMod(t, "savvy-progress", "claude-kit/savvy-progress", nil)
 
 	h := newHarness(t, Options{CacheDir: t.TempDir(), Cwd: "/work"})
 	h.host.usage = Usage{ContextWindow: 200_000, ContextTokens: 12_000}
