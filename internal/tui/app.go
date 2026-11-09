@@ -91,6 +91,13 @@ type Config struct {
 	ResolveMentions ResolveMentionsFunc
 	RunPromptHooks  RunPromptHooksFunc
 	GitStatus       GitStatusFunc
+	// SuggestNextPrompt returns a short "what you might ask next" line to
+	// show as dim ghost text in the empty input box after a completed turn
+	// (Claude Code's prompt suggestion, Tab to accept). It makes a cheap
+	// model call off the branch transcript, so it runs in a tea.Cmd. "" (or
+	// an error) means no suggestion. Nil disables the feature (tests, and
+	// any run without a model to ask).
+	SuggestNextPrompt func(ctx context.Context) (string, error)
 
 	// HistoryPath, if set, is appended to (editor.Append) after every
 	// submitted line.
@@ -556,6 +563,16 @@ type msgTurnResult struct {
 	result  harness.RunResult
 	err     error
 	seconds int
+}
+
+// msgSuggestion carries a prompt suggestion back from SuggestNextPrompt (the
+// cheap model call finishTurn kicks off). gen is the turn counter at the time
+// the call started; the handler drops the suggestion if anything has happened
+// since (a new turn, or the user has started typing), so a slow suggestion
+// never clobbers live input.
+type msgSuggestion struct {
+	text string
+	gen  int
 }
 
 // --- Update ---------------------------------------------------------------
@@ -1061,6 +1078,15 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case msgTurnResult:
 		return m.finishTurn(msg)
 
+	case msgSuggestion:
+		// Drop a stale suggestion: a new turn started, the user is typing,
+		// or the box is no longer empty (so there is nowhere to show it).
+		if msg.text == "" || msg.gen != m.turn || m.busy || m.editor.Value() != "" {
+			return m, nil
+		}
+		m.editor.SetSuggestion(msg.text)
+		return m, nil
+
 	case msgBackgroundDone:
 		return m.finishBackground(msg)
 
@@ -1311,7 +1337,45 @@ func (m Model) finishTurn(msg msgTurnResult) (Model, tea.Cmd) {
 	m.footer.SetNote("")
 	m.editor.SetPlaceholder(editor.DefaultPlaceholder)
 	m = m.refreshMode()
-	return m.drainDeferredCommands()
+
+	// After a clean turn, ask the model what the user might want next and
+	// show it as dim ghost text (Tab to accept). Skipped when a deferred
+	// command or a queued follow-up is about to run (the box won't be idle),
+	// or when the user has already typed something.
+	suggest := m.cfg.SuggestNextPrompt != nil &&
+		msg.err == nil &&
+		msg.result.Status == harness.StatusCompleted &&
+		len(m.queued) == 0 &&
+		len(m.deferredCmds) == 0 &&
+		m.editor.Value() == "" &&
+		!m.inPlanMode() // Claude Code skips suggestions in plan mode
+
+	mm, cmd := m.drainDeferredCommands()
+	if suggest {
+		return mm, tea.Batch(cmd, mm.suggestCmd())
+	}
+	return mm, cmd
+}
+
+// inPlanMode reports whether the permission gate is in plan mode, where
+// Claude Code does not generate prompt suggestions.
+func (m Model) inPlanMode() bool {
+	return m.cfg.Gate != nil && m.cfg.Gate.Mode() == claudesettings.ModePlan
+}
+
+// suggestCmd runs SuggestNextPrompt off the UI goroutine and delivers the
+// result as msgSuggestion, tagged with the current turn counter so a slow
+// reply that lands after the next turn begins is dropped.
+func (m Model) suggestCmd() tea.Cmd {
+	fn := m.cfg.SuggestNextPrompt
+	gen := m.turn
+	return func() tea.Msg {
+		text, err := fn(context.Background())
+		if err != nil {
+			return msgSuggestion{gen: gen}
+		}
+		return msgSuggestion{text: strings.TrimSpace(text), gen: gen}
+	}
 }
 
 // drainDeferredCommands runs, in order, every slash/bang line
@@ -2504,6 +2568,7 @@ func (m Model) startResume() (Model, tea.Cmd) {
 	m.turn++
 	m.footer.SetBusy(true)
 	m.editor.SetPlaceholder("queue a follow-up, or esc to stop")
+	m.editor.ClearSuggestion()
 	m.subagents.Reset()
 	m.plan.Reset()
 
@@ -2541,6 +2606,7 @@ func (m Model) beginTurn(prompt, typed string, images []msg.ImageContent) (tea.M
 	m.turn++
 	m.footer.SetBusy(true)
 	m.editor.SetPlaceholder("queue a follow-up, or esc to stop")
+	m.editor.ClearSuggestion()
 	// A fresh turn starts with no dispatches: the previous turn's
 	// subagents panel (if any) does not linger into this one.
 	m.subagents.Reset()

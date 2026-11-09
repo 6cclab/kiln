@@ -264,6 +264,7 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 | `env` | `map[string]string` | shallow-merged per key, unconditionally (no empty check) |
 | `statusLine.type`, `statusLine.command`, `statusLine.padding` | `*StatusLineConfig` | replaced wholesale, only when the later scope's `command` is non-empty |
 | `autoMemoryEnabled` | `*bool` | last non-nil wins (§7's "Auto memory") |
+| `promptSuggestionEnabled` | `*bool` | last non-nil wins (§7's "Prompt suggestion") |
 | `autoMemoryDirectory` | `string` | last non-empty wins; absolute or `~/`-prefixed (§7's "Auto memory") |
 | `autoMode.environment`, `autoMode.allow`, `autoMode.soft_deny`, `autoMode.hard_deny` | `AutoModeConfig` (`settings/automode.go`, `LoadAutoMode`) | read **only** from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`, concatenated in that order; ignored in project and local settings, with a startup warning (see "Auto mode classifier") |
 | `modelRouter` | `ModelRouterConfig` (`settings/modelrouter.go`, `LoadModelRouter`) | read **only** from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`, a later file's value replacing an earlier one's; ignored in project and local settings, with a startup warning. Its role names resolve against `modelRoles` from those same files only (§6a) |
@@ -619,6 +620,14 @@ Budget: `LoadMemory(cwd, budgetTokens)` estimates tokens as `ceil(len/4)`; the b
 - **Not the filesystem root, home, or an ancestor of home**, trusted or not (`unsafeAutoMemoryDirectory`). Any of these, added as a read-only root, would turn the setting into "read anything under my home directory (or the whole disk) without asking." A rejected value falls back to the default directory and prints a one-line startup warning (`AutoMemory.DirectoryOverrideRejected`).
 
 **Permissions**: the resolved directory is added to the permission gate as a **read-only root** (`GateOptions.ReadOnlyRoots`, `permission.go`'s `WithinReadOnlyRoots`) — a read-only tool's (`settings.ReadOnly`) path there is not treated as outside the workspace, so reading a topic file never prompts. `WithinReadOnlyRoots` resolves symlinks on both the stored root and the checked path before comparing, so a symlink planted inside the directory that points elsewhere does not inherit the root's no-prompt treatment for wherever it actually points. A mutating tool's path there is **not** exempted: it is checked only against the regular `Roots`, so a write or edit into the auto-memory directory is refused/asked exactly as any other outside-workspace path always was. kiln never writes auto memory, by construction, not just by convention.
+
+### Prompt suggestion (Claude Code's next-prompt ghost), off by default
+
+`internal/cli/suggest.go`, wired in `chat.go`'s `suggestNextPrompt`. After a turn completes, kiln can show a dim ghost guess of your likely next prompt in the empty input box; **Tab** (or **Right**) accepts it, typing dismisses it — Claude Code's prompt suggestion. The guess is one cheap call on the session model (`classifierSessionModel`) over the current branch, capped at 64 output tokens and recorded as side usage (`suggest · <provider>/<model>`, visible in `/cost`), exactly like the mod model tier.
+
+**Off by default**, matching Claude Code's interactive default: left off, the TUI makes **no** extra model call.
+
+**Enabling**: `promptSuggestionEnabled: true` in `settings.json` (user or project scope — see §5's keys table; last-non-nil scope wins), or the `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION` env var. The env var takes precedence over the setting (`1`/`true`/`yes`/`on` enable, `0`/`false`/`no`/`off` disable; an unrecognised value falls back to the setting). The guess is skipped for a turn that ended in an error, while a prompt is queued, while the box already has text, and in plan mode.
 
 ### Keybindings
 

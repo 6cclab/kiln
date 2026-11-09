@@ -86,6 +86,12 @@ type Settings struct {
 	// writes auto memory itself, but honours the same switch Claude Code
 	// does so a project that opted out stays opted out here too.
 	AutoMemoryEnabled *bool
+	// PromptSuggestionEnabled mirrors Claude Code's promptSuggestionEnabled
+	// setting (the /config "Prompt suggestions" toggle): nil means unset, and
+	// kiln defaults it off in interactive mode as Claude Code does. The
+	// CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION env var takes precedence over it
+	// (resolved at the call site, not here).
+	PromptSuggestionEnabled *bool
 	// AutoMemoryDirectory mirrors Claude Code's autoMemoryDirectory
 	// setting: an absolute path or one starting with "~/", overriding
 	// where the auto-memory directory is resolved to. "" means unset.
@@ -165,14 +171,15 @@ type rawPermissions struct {
 }
 
 type rawSettings struct {
-	Permissions         *rawPermissions   `json:"permissions"`
-	Model               string            `json:"model"`
-	EffortLevel         string            `json:"effortLevel"`
-	ModelRoles          map[string]string `json:"modelRoles"`
-	Env                 map[string]string `json:"env"`
-	StatusLine          *StatusLineConfig `json:"statusLine"`
-	AutoMemoryEnabled   *bool             `json:"autoMemoryEnabled"`
-	AutoMemoryDirectory string            `json:"autoMemoryDirectory"`
+	Permissions             *rawPermissions   `json:"permissions"`
+	Model                   string            `json:"model"`
+	EffortLevel             string            `json:"effortLevel"`
+	ModelRoles              map[string]string `json:"modelRoles"`
+	Env                     map[string]string `json:"env"`
+	StatusLine              *StatusLineConfig `json:"statusLine"`
+	AutoMemoryEnabled       *bool             `json:"autoMemoryEnabled"`
+	PromptSuggestionEnabled *bool             `json:"promptSuggestionEnabled"`
+	AutoMemoryDirectory     string            `json:"autoMemoryDirectory"`
 }
 
 // LoadOptions configures LoadSettings.
@@ -467,6 +474,9 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		}
 		if raw.AutoMemoryEnabled != nil {
 			merged.AutoMemoryEnabled = raw.AutoMemoryEnabled
+		}
+		if raw.PromptSuggestionEnabled != nil {
+			merged.PromptSuggestionEnabled = raw.PromptSuggestionEnabled
 		}
 		if raw.AutoMemoryDirectory != "" {
 			merged.AutoMemoryDirectory = raw.AutoMemoryDirectory

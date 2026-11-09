@@ -131,6 +131,10 @@ type InteractiveDeps struct {
 	// behind the fullscreen TUI until exit; they show as system notes
 	// under the banner instead.
 	StartupNotes []string
+	// SuggestNextPrompt makes a cheap model call off the branch transcript
+	// to guess the user's next prompt, shown as dim ghost text after a
+	// completed turn (Claude Code's prompt suggestion). Nil disables it.
+	SuggestNextPrompt func(ctx context.Context) (string, error)
 }
 
 // connectInBackground connects n MCP servers off the UI goroutine,
@@ -311,7 +315,8 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			}
 			return "", outcome.Context
 		},
-		GitStatus: readGitStatus,
+		GitStatus:         readGitStatus,
+		SuggestNextPrompt: deps.SuggestNextPrompt,
 
 		HistoryPath:    historyPath,
 		StartupHistory: history,

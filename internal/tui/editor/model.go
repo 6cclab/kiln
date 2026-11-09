@@ -115,6 +115,12 @@ type Model struct {
 	// placeholder overrides DefaultPlaceholder — the app switches this per
 	// state (idle/busy/waiting on a prompt) via SetPlaceholder.
 	placeholder string
+
+	// suggestion is the dim ghost prompt shown in an empty box, Tab to
+	// accept (Claude Code's prompt.suggest). The app sets it after a turn
+	// via SetSuggestion and clears it when a turn starts; the editor itself
+	// drops it on any edit. It shows in place of the placeholder when set.
+	suggestion string
 }
 
 // New builds an unfocused, empty Model. Call Focus (and issue its Cmd) once
@@ -147,6 +153,20 @@ func (m *Model) SetPlaceholder(s string) {
 	}
 	m.placeholder = s
 }
+
+// SetSuggestion sets the dim ghost prompt shown in an empty box (Tab to
+// accept). The app pushes one after a completed turn; an empty string clears
+// it. It only renders while the box is empty, so a suggestion set while the
+// user has already typed stays hidden until they clear the box.
+func (m *Model) SetSuggestion(s string) {
+	m.suggestion = s
+}
+
+// Suggestion returns the current ghost suggestion, if any.
+func (m Model) Suggestion() string { return m.suggestion }
+
+// ClearSuggestion drops the ghost suggestion.
+func (m *Model) ClearSuggestion() { m.suggestion = "" }
 
 // SetStyles replaces the marker/rule/placeholder colours (and the cursor
 // colour neutralTextareaStyles derives from MarkerStyle) after construction
@@ -335,6 +355,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd, Event) {
 	m.pendingBackslash = false
 
 	switch {
+	case (s == "tab" || s == "right") && m.ta.Value() == "" && m.suggestion != "":
+		// Accept the ghost suggestion into the box, like Claude Code's
+		// Tab/Right-arrow-to-fill. The box is empty here, so Right has
+		// nothing else to do. The text lands as an ordinary draft the user
+		// can edit or submit.
+		accepted := m.suggestion
+		m.suggestion = ""
+		m.ta.SetValue(accepted)
+		m.historyIdx = -1
+		m.syncHeight()
+		return m, nil, Event{}
+
 	case m.is(s, KeySubmit):
 		if wasPendingBackslash {
 			m.removeTrailingBackslash()
@@ -346,16 +378,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd, Event) {
 		text := m.ta.Value()
 		m.ta.Reset()
 		m.exitHistoryBrowsing()
+		m.suggestion = ""
 		m.syncHeight()
 		return m, nil, Event{Kind: EventSubmit, Text: text}
 
 	case m.is(s, KeyNewLine):
 		m.ta.InsertString("\n")
 		m.historyIdx = -1
+		m.suggestion = ""
 		m.syncHeight()
 		return m, nil, Event{}
 
 	case s == "esc":
+		m.suggestion = ""
 		return m, nil, Event{Kind: EventCancel}
 
 	case m.is(s, KeyHistoryPrevious):
@@ -401,8 +436,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd, Event) {
 	if m.ta.Value() != before {
 		// Any edit adopts the currently-shown text (which may be a
 		// recalled history entry) as the new draft, exactly like pi-tui's
-		// exitHistoryBrowsing-on-edit.
+		// exitHistoryBrowsing-on-edit, and drops the ghost suggestion.
 		m.historyIdx = -1
+		m.suggestion = ""
 		if msg.Text == "\\" {
 			m.pendingBackslash = true
 		}
@@ -431,6 +467,7 @@ func (m *Model) exitHistoryBrowsing() {
 // entry restores that draft rather than continuing into "future" history
 // that does not exist.
 func (m *Model) navigateHistory(dir int) {
+	m.suggestion = ""
 	if dir < 0 {
 		if m.historyIdx == -1 {
 			if len(m.history) == 0 {

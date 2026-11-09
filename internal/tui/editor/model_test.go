@@ -310,6 +310,106 @@ func TestPopupActiveOwnsTabEnterEsc(t *testing.T) {
 	}
 }
 
+func TestSuggestionAcceptedByTab(t *testing.T) {
+	m := newTestModel()
+	m.SetSuggestion("add a regression test")
+	ev := press(t, &m, "tab")
+	if ev.Kind != EventNone {
+		t.Fatalf("tab accept produced %+v, want EventNone", ev)
+	}
+	if got := m.Value(); got != "add a regression test" {
+		t.Fatalf("Value() after Tab = %q, want the suggestion", got)
+	}
+	if got := m.Suggestion(); got != "" {
+		t.Fatalf("Suggestion() after accept = %q, want cleared", got)
+	}
+	// The accepted text is now an ordinary editable draft: another Tab does
+	// not re-accept anything (no suggestion left) and does not duplicate it.
+	press(t, &m, "tab")
+	if got := m.Value(); got != "add a regression test" {
+		t.Fatalf("Value() after second Tab = %q, want unchanged", got)
+	}
+}
+
+func TestSuggestionAcceptedByRightArrow(t *testing.T) {
+	m := newTestModel()
+	m.SetSuggestion("open the PR")
+	var ev Event
+	m, _, ev = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if ev.Kind != EventNone {
+		t.Fatalf("right-arrow accept produced %+v, want EventNone", ev)
+	}
+	if got := m.Value(); got != "open the PR" {
+		t.Fatalf("Value() after Right = %q, want the suggestion", got)
+	}
+	if got := m.Suggestion(); got != "" {
+		t.Fatalf("Suggestion() after accept = %q, want cleared", got)
+	}
+}
+
+func TestSuggestionClearedByTyping(t *testing.T) {
+	m := newTestModel()
+	m.SetSuggestion("run the tests")
+	typeText(t, &m, "g")
+	if got := m.Suggestion(); got != "" {
+		t.Fatalf("Suggestion() after typing = %q, want cleared", got)
+	}
+	if got := m.Value(); got != "g" {
+		t.Fatalf("Value() = %q, want %q (typing, not acceptance)", got, "g")
+	}
+}
+
+func TestTabIgnoresSuggestionWhenBoxNonEmpty(t *testing.T) {
+	m := newTestModel()
+	typeText(t, &m, "hi")
+	m.SetSuggestion("do something else")
+	press(t, &m, "tab")
+	if got := m.Value(); got == "do something else" {
+		t.Fatalf("Tab accepted the suggestion over typed text; Value() = %q", got)
+	}
+}
+
+func TestSuggestionClearedBySubmit(t *testing.T) {
+	m := newTestModel()
+	m.SetSuggestion("stale")
+	typeText(t, &m, "real prompt")
+	// typing already cleared it, but re-set it to prove submit also clears.
+	m.SetSuggestion("stale")
+	press(t, &m, "enter")
+	if got := m.Suggestion(); got != "" {
+		t.Fatalf("Suggestion() after submit = %q, want cleared", got)
+	}
+}
+
+func TestSuggestionClearedByHistoryNav(t *testing.T) {
+	m := newTestModel()
+	m.SetHistory([]string{"older prompt"})
+	m.SetSuggestion("ghost")
+	press(t, &m, "up")
+	if got := m.Suggestion(); got != "" {
+		t.Fatalf("Suggestion() after history Up = %q, want cleared", got)
+	}
+	if got := m.Value(); got != "older prompt" {
+		t.Fatalf("Value() after Up = %q, want recalled history", got)
+	}
+}
+
+func TestPopupKeepsSuggestionAwayFromTab(t *testing.T) {
+	m := newTestModel()
+	m.PopupActive = true
+	m.SetSuggestion("do not accept")
+	ev := press(t, &m, "tab")
+	if ev.Kind != EventNone {
+		t.Fatalf("tab under popup produced %+v, want EventNone", ev)
+	}
+	if got := m.Value(); got != "" {
+		t.Fatalf("Value() = %q, want empty (popup owns Tab, suggestion not accepted)", got)
+	}
+	if got := m.Suggestion(); got != "do not accept" {
+		t.Fatalf("Suggestion() = %q, want untouched under popup", got)
+	}
+}
+
 func TestEscCancelsWhenNoPopup(t *testing.T) {
 	m := newTestModel()
 	ev := press(t, &m, "esc")

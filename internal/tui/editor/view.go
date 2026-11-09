@@ -68,7 +68,14 @@ func (m Model) View(width int) []string {
 	out = append(out, m.rule(width, above))
 	for i, line := range body {
 		if empty && i == 0 {
-			line = m.splicePlaceholder(line, inner)
+			// A completed turn can leave a dim ghost suggestion (Tab to
+			// accept); it takes the placeholder's slot while the box is
+			// empty, rendered in the same dim style.
+			ghost := m.placeholder
+			if m.suggestion != "" {
+				ghost = m.suggestion
+			}
+			line = m.splicePlaceholder(line, inner, ghost)
 		} else {
 			line = fitWidth(line, inner)
 		}
@@ -142,13 +149,13 @@ func (m Model) scrollHints(ta interface {
 // the marker, matching startup-default-home.txt row 9 — instead of the
 // extra blank cell an earlier pass here left in place for the inline-cursor
 // layout pi-tui uses but this package does not.
-func (m Model) splicePlaceholder(line string, inner int) string {
+func (m Model) splicePlaceholder(line string, inner int, ghost string) string {
 	trimmed := strings.TrimRight(line, " ")
 	room := inner - ansi.StringWidth(trimmed)
 	if room < 0 {
 		room = 0
 	}
-	ph := m.placeholder
+	ph := ghost
 	if ph == "" {
 		ph = DefaultPlaceholder
 	}

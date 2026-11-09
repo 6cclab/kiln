@@ -2023,14 +2023,60 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			fmt.Fprintf(stderr, "keybindings: %s\n", conflict)
 		}
 		phase("tui start")
+		// suggestNextPrompt guesses the user's likely next prompt off the
+		// current branch, shown as dim ghost text in the input box (Claude
+		// Code's prompt suggestion, Tab to accept). One cheap call on the
+		// session model, recorded as side usage like the mod model tier.
+		suggestNextPrompt := func(ctx context.Context) (string, error) {
+			branch := automode.BranchMessages(ctx, started.Lane)
+			if len(branch) == 0 {
+				return "", nil
+			}
+			model := classifierSessionModel(started.Model, modelRouter.direct)
+			strm, ok := reg.Provider(model.Provider)
+			if !ok {
+				return "", fmt.Errorf("unknown provider %q", model.Provider)
+			}
+			transcript := append(append([]msg.Message{}, branch...), msg.UserMessage{
+				Role:      msg.RoleUser,
+				Content:   msg.Blocks{msg.Text(suggestPromptInstruction)},
+				Timestamp: time.Now().UnixMilli(),
+			})
+			opts := provider.StreamOptions{SystemPrompt: suggestSystemPrompt, MaxTokens: 64}
+			ch, wait := strm.Stream(ctx, model, transcript, opts)
+			for range ch {
+			}
+			am, err := wait()
+			if am != nil {
+				u := am.Usage
+				if u.Input != 0 || u.Output != 0 || u.CacheRead != 0 || u.CacheWrite != 0 {
+					if rerr := started.Harness.RecordSideUsage("suggest · "+model.Provider+"/"+model.ID, u); rerr != nil {
+						diag.L().Warn("suggest usage", "err", rerr)
+					}
+				}
+			}
+			if err != nil {
+				return "", err
+			}
+			return cleanSuggestion(msg.TextOf(am.Content)), nil
+		}
+		// Off by default, as Claude Code leaves prompt suggestions off in
+		// interactive mode; the promptSuggestionEnabled setting (or the
+		// CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION env var) opts in. Left nil,
+		// the TUI makes no extra model call.
+		var suggestFn func(context.Context) (string, error)
+		if promptSuggestionsEnabled(settings.PromptSuggestionEnabled) {
+			suggestFn = suggestNextPrompt
+		}
 		exitCode := RunInteractive(ctx, InteractiveDeps{
-			StartupNotes:   startupNotes,
-			Cwd:            cwd,
-			Shells:         shells,
-			Effort:         args.Effort,
-			AuthKind:       authKindLabel(ctx, reg, providerID),
-			Keybindings:    keys.Bindings,
-			MCPServerCount: len(mcpConfigs),
+			SuggestNextPrompt: suggestFn,
+			StartupNotes:      startupNotes,
+			Cwd:               cwd,
+			Shells:            shells,
+			Effort:            args.Effort,
+			AuthKind:          authKindLabel(ctx, reg, providerID),
+			Keybindings:       keys.Bindings,
+			MCPServerCount:    len(mcpConfigs),
 			ConnectMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
 				hub.OnServer = progress
 				connectMCP(mcpCtx)

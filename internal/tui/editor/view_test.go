@@ -83,6 +83,45 @@ func TestPlaceholderPresentWhenEmptyGoneAfterTyping(t *testing.T) {
 	}
 }
 
+func TestSuggestionRendersAsGhostAndTakesPlaceholderSlot(t *testing.T) {
+	m := New(testStyles())
+	m.Focus()
+	m.SetSuggestion("write the migration")
+
+	view := strings.Join(m.View(80), "\n")
+	if !strings.Contains(view, "write the migration") {
+		t.Fatalf("ghost suggestion missing from empty view:\n%s", view)
+	}
+	// The suggestion occupies the placeholder's slot, so the default
+	// placeholder is not also drawn.
+	if strings.Contains(view, "describe a task") {
+		t.Fatalf("placeholder shown alongside suggestion:\n%s", view)
+	}
+
+	// Once the box has text, the ghost is not drawn.
+	m.SetValue("go")
+	typed := strings.Join(m.View(80), "\n")
+	if strings.Contains(typed, "write the migration") {
+		t.Fatalf("ghost suggestion still shown over typed text:\n%s", typed)
+	}
+}
+
+func TestSuggestionKeepsWidthInvariant(t *testing.T) {
+	for _, width := range widthsUnderTest {
+		for _, s := range []string{"short next step", strings.Repeat("y", 400)} {
+			m := New(testStyles())
+			m.Focus()
+			m.SetSuggestion(s)
+			for _, line := range m.View(width) {
+				if got := ansi.StringWidth(line); got != width {
+					t.Fatalf("width=%d suggestion=%q: line %q width %d, want %d",
+						width, truncateForError(s), line, got, width)
+				}
+			}
+		}
+	}
+}
+
 // TestMarkerOnFirstLineOnly checks only the editor's first rendered content
 // row carries the marker; every row after it — including a second logical
 // line the user typed with Shift+Enter, as here — gets the same-width
