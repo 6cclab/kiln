@@ -13,6 +13,14 @@
  "evidence": [
   "Reviewer report only; no repro steps or logs captured yet."
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/app.go",
+   "internal/cli/tui.go"
+  ],
+  "regression_test": "TestTUI_Continue_AfterKilledPrintRun",
+  "note": "Root cause: the TUI ran agent.ResumeIncomplete synchronously in cli/tui.go before program.Run(); Lane.Resume re-executes the interrupted tool, whose lifecycle events reach the UI via Bridge.Send -> tea.Program.Send, which blocks until the event loop drains its channel — which only starts at program.Run(). So the first resumed tool event deadlocked and --continue hung on a blank screen (goroutine dump: Program.Send at tea.go:1196 <- beginTool <- Lane.Resume <- ResumeIncomplete <- RunInteractive). Fix: tui.Model.startResume dispatches Lane.Resume as a tea.Cmd after the banner commits (mirroring beginTurn), so it runs off the Update goroutine with the loop live; print mode still calls agent.ResumeIncomplete directly, which is correct there (no event loop).",
+  "updated_at": "2026-11-09T12:28:51Z"
+ }
 }

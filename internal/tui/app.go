@@ -235,6 +235,10 @@ type Model struct {
 	shortcuts bool
 	// bannerDone is set once Banner has been committed.
 	bannerDone bool
+	// resumeStarted is set once startResume has dispatched the command that
+	// finishes an operation a previous process left unfinished on the lane,
+	// so it fires at most once (both banner-commit paths call startResume).
+	resumeStarted bool
 	// bannerRowCount is how many rows commitBanner's own commit contributed
 	// to committedRows (0 if there was no banner to commit). Compared
 	// against committedRows by transcriptIsEmpty to tell whether anything
@@ -913,7 +917,8 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msgCommitBanner:
-		return m.commitBanner(), nil
+		m = m.commitBanner()
+		return m.startResume()
 
 	case MsgTrustAnswered:
 		if !msg.Trusted {
@@ -1000,6 +1005,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			// it somehow hasn't yet, the later tick still commits once it
 			// does.
 			m = m.commitBanner()
+			return m.startResume()
 		}
 		return m, nil
 
@@ -2458,6 +2464,70 @@ func (m Model) runMode(c Classified) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// startResume completes an operation a previous process left running on the
+// lane — a `kiln -p`/TUI run killed mid-tool-call — driving it the same way
+// beginTurn drives a user turn: the lane call runs inside a tea.Cmd, off the
+// Update goroutine, with the event loop live, so the lifecycle events Resume
+// emits (tool labels, permission prompts) reach a running program. The old
+// path ran agent.ResumeIncomplete synchronously in cli/tui.go before
+// program.Run(), where Resume's first tool event hit Bridge.Send ->
+// tea.Program.Send and blocked forever on a message channel nothing was
+// draining yet — the continue hung on a blank screen (finding
+// continue-hangs-after-killed-print-run).
+//
+// It is dispatched from both commitBanner call sites, after the banner (and,
+// for a resumed session, the replayed transcript) is on screen, so the
+// resumed op's output lands below the restored history; resumeStarted keeps
+// it to one dispatch. A lane with no pending operation is a no-op, so a plain
+// --continue of a cleanly-finished session does nothing here.
+func (m Model) startResume() (Model, tea.Cmd) {
+	if m.resumeStarted || m.busy || m.cfg.Lane == nil {
+		return m, nil
+	}
+	opID, pending := m.cfg.Lane.PendingOperation()
+	if !pending {
+		return m, nil
+	}
+	m.resumeStarted = true
+	if m.cfg.Bridge != nil {
+		m.cfg.Bridge.Commit([]string{Muted("  resuming interrupted operation " + opID)})
+	}
+
+	// The busy/turn bookkeeping below mirrors beginTurn exactly: a resume is
+	// a turn the user did not type, so it shares the spinner, footer, queued-
+	// input gating and msgTurnResult completion path.
+	m.busy = true
+	m.turnStartedAt = time.Now()
+	m.spinner.Start(m.turn)
+	m.turn++
+	m.footer.SetBusy(true)
+	m.editor.SetPlaceholder("queue a follow-up, or esc to stop")
+	m.subagents.Reset()
+	m.plan.Reset()
+
+	lane := m.cfg.Lane
+	bridge := m.cfg.Bridge
+	gitFn := m.cfg.GitStatus
+	startedAt := m.turnStartedAt
+	if bridge != nil {
+		bridge.ResetTurnCounters()
+	}
+	cmd := func() tea.Msg {
+		result, err := lane.Resume(context.Background())
+		seconds := int(time.Since(startedAt).Round(time.Second) / time.Second)
+		if seconds < 1 {
+			seconds = 1
+		}
+		if gitFn != nil && bridge != nil {
+			if status, ok := gitFn(context.Background()); ok {
+				bridge.Send(MsgGitStatus{Status: status})
+			}
+		}
+		return msgTurnResult{result: result, err: err, seconds: seconds}
+	}
+	return m, tea.Batch(cmd, tickCmd())
 }
 
 // beginTurn sends prompt; typed is the line the user typed for it, stored

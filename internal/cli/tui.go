@@ -404,19 +404,17 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	program := tea.NewProgram(model, opts...)
 	bridge.SetProgram(program)
 
-	// Finish any operation a previous process left running (see
-	// agent.ResumeIncomplete's doc comment) before the program starts
-	// accepting input — "the first user turn" for the TUI is whatever the
-	// person types into the editor, which cannot happen before
-	// program.Run() below, so this runs synchronously here instead.
-	// bridge.Commit only enqueues (see its own doc comment), so this note
-	// lands in the transcript right alongside the debug-log line and any
-	// MCP notices, all enqueued ahead of program.Run() the same way.
-	if _, err := agent.ResumeIncomplete(ctx, deps.Started, func(m string) {
-		bridge.Commit([]string{tui.Muted("  " + m)})
-	}); err != nil {
-		diag.L().Warn("resume incomplete operation", "err", err)
-	}
+	// Finishing an operation a previous process left running (a run killed
+	// mid-tool-call) is driven by the TUI itself, not here: tui.Model.
+	// startResume dispatches harness.Lane.Resume as a tea.Cmd once the banner
+	// is on screen. It cannot run synchronously here, before program.Run():
+	// Resume re-executes the interrupted tool, whose lifecycle events reach
+	// the program through tea.Program.Send, which blocks until the event loop
+	// is draining its channel — which only happens once program.Run() below
+	// starts. Calling it here deadlocked --continue on a blank screen (finding
+	// continue-hangs-after-killed-print-run). Print mode keeps calling
+	// agent.ResumeIncomplete directly (chat.go): it has no event loop to wait
+	// on, so the synchronous path is correct there.
 
 	// The startup banner is cfg.Banner: the app commits it on its first
 	// frame, fitted to the terminal width. Commit only enqueues (see

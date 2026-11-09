@@ -1,0 +1,6 @@
+model: faux-1
+steps:
+  - tool_call: {name: bash, args: {command: "sleep 1 && echo done"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "finished after resume"
