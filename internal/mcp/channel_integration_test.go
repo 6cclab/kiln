@@ -85,6 +85,101 @@ func writeJSONRPC(w http.ResponseWriter, id json.RawMessage, result any) {
 	w.Write(data)
 }
 
+// rootsAskingServer is a minimal MCP Streamable-HTTP channel server that, like
+// the design studio, sends a roots/list request on its standalone GET SSE
+// stream and reports the uri the client answers with on gotRoot. It exists to
+// prove the hub advertises its configured roots: the studio reads the first
+// root to tie a session to a project, so an empty answer means "no project
+// detected".
+func rootsAskingServer(t *testing.T, gotRoot chan<- string) *httptest.Server {
+	t.Helper()
+	const sessionID = "roots-session"
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			var req struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+				Result struct {
+					Roots []struct {
+						URI string `json:"uri"`
+					} `json:"roots"`
+				} `json:"result"`
+			}
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &req)
+			w.Header().Set("Mcp-Session-Id", sessionID)
+			// The client's roots/list answer: a response (no method) carrying
+			// the roots. Report the first uri, matching the studio's
+			// roots?.[0]?.uri.
+			if req.Method == "" && len(req.Result.Roots) > 0 {
+				select {
+				case gotRoot <- req.Result.Roots[0].URI:
+				default:
+				}
+			}
+			switch req.Method {
+			case "initialize":
+				writeJSONRPC(w, req.ID, map[string]any{
+					"protocolVersion": "2025-11-25",
+					"capabilities":    map[string]any{},
+					"serverInfo":      map[string]any{"name": "raw", "version": "0"},
+				})
+			case "notifications/initialized":
+				w.WriteHeader(http.StatusAccepted)
+			case "tools/list":
+				writeJSONRPC(w, req.ID, map[string]any{"tools": []any{}})
+			default:
+				writeJSONRPC(w, req.ID, map[string]any{})
+			}
+		case http.MethodGet:
+			fl, ok := w.(http.Flusher)
+			if !ok {
+				t.Error("no flusher")
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			fl.Flush()
+			// Ask for roots, exactly as lib/mcp.ts does on the channel stream.
+			fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"id\":\"studio-roots\",\"method\":\"roots/list\"}\n\n")
+			fl.Flush()
+			<-r.Context().Done()
+		}
+	}))
+}
+
+// Regression for "kiln does not auto-detect a project": the studio ties a
+// channel session to a project from its roots/list answer. Before the hub
+// advertised any roots, the SDK answered with an empty list, so the studio
+// saw no folder and could not scope the session. The hub must advertise its
+// configured Roots.
+func TestRootsAdvertisedToChannelServer(t *testing.T) {
+	gotRoot := make(chan string, 1)
+	srv := rootsAskingServer(t, gotRoot)
+	defer srv.Close()
+
+	h := NewHub()
+	defer h.Close(context.Background())
+	h.Channels = map[string]string{"studio": "design-studio"}
+	h.Roots = []string{"/Users/someone/projects/margin app"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	h.ConnectAll(ctx, map[string]ServerConfig{"studio": {Type: "http", URL: srv.URL}})
+
+	select {
+	case uri := <-gotRoot:
+		// The studio reconstructs the path with decodeURIComponent(uri.slice(7)).
+		const want = "file:///Users/someone/projects/margin%20app"
+		if uri != want {
+			t.Errorf("advertised root uri = %q, want %q", uri, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("hub never answered roots/list with a root (studio sees no project)")
+	}
+}
+
 // End to end: a channel server's notifications/claude/channel push reaches the
 // hub's OnChannel, through the real sdk client + the channelTap wrapper.
 func TestChannelPushReachesOnChannel(t *testing.T) {

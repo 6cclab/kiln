@@ -905,6 +905,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// notifications/claude/channel pushes tapped; OnChannel is installed by
 	// the interactive TUI (which owns the bridge the events post to).
 	hub.Channels = channelServers
+	// Advertise the working directory as an MCP root (as Claude Code does), so
+	// a server that asks roots/list can scope to it — the design studio reads
+	// it to tie this session to the project in this folder.
+	hub.Roots = []string{cwd}
 	// Print mode has no terminal to run a browser sign-in: an OAuth server
 	// with no cached token fails fast rather than hanging.
 	hub.Headless = args.Print

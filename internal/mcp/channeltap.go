@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/andrepato/harness/internal/crash"
@@ -46,6 +47,14 @@ type ChannelEvent struct {
 type channelParams struct {
 	Content string         `json:"content"`
 	Meta    map[string]any `json:"meta"`
+}
+
+// fileURI renders an absolute path as a file:// URI (file:///abs/path), with
+// the path percent-encoded, the form a roots/list answer carries. The design
+// studio reconstructs the path with decodeURIComponent(uri.slice(7)), so a
+// path with spaces or other reserved bytes round-trips.
+func fileURI(path string) string {
+	return (&url.URL{Scheme: "file", Path: path}).String()
 }
 
 // channelTapRoundTripper wraps an http.RoundTripper so a channel server's

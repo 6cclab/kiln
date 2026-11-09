@@ -195,6 +195,14 @@ type Hub struct {
 	// OAuthNotify, if set, is called with a line telling the user to finish
 	// an OAuth sign-in in the browser. Set before ConnectAll.
 	OAuthNotify func(string)
+
+	// Roots are the absolute workspace directories advertised to every
+	// server via the MCP roots capability (Claude Code advertises the
+	// working directory the same way). A server that asks roots/list — the
+	// design studio does this on its channel stream to learn which project a
+	// session is in — gets these back; without them the studio can't tie the
+	// session to a project. Set before ConnectAll.
+	Roots []string
 }
 
 // NewHub builds an empty, unconnected Hub.
@@ -345,6 +353,16 @@ func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, tim
 	}
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "harness", Version: "0.0.0"}, nil)
+
+	// Advertise the workspace directories so a server that asks roots/list can
+	// scope itself to them. The design studio reads the first root to tie this
+	// session to a project (its channel stream only carries a project's
+	// requests once it knows the folder); without a root it can't. AddRoots
+	// before Connect so the list is populated when the server first asks.
+	for _, dir := range h.Roots {
+		//lint:ignore SA1019 roots is deprecated upstream (SEP-2577) but is how the design studio ties this session to its project — it sends roots/list on the channel stream and reads the first root — and the SDK keeps it functional through the deprecation window, so kiln uses it exactly as Claude Code does.
+		client.AddRoots(&sdk.Root{URI: fileURI(dir)})
+	}
 
 	connectTimeout := timeout
 	if cfg.OAuth != nil {
