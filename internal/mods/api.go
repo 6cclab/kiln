@@ -1,12 +1,17 @@
 package mods
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/dop251/goja"
@@ -14,6 +19,9 @@ import (
 
 // fsMaxBytes caps one $.fs.read, as Claude Code does (4 MiB per file).
 const fsMaxBytes = 4 << 20
+
+// httpMaxBytes caps one $.http.fetch response body kiln reads into memory.
+const httpMaxBytes = 16 << 20
 
 // implemented are the $ methods kiln answers in v1. Every other documented
 // method (claude-code.d.ts's request map) exists on $ and rejects, naming
@@ -25,7 +33,8 @@ var implemented = map[string]bool{
 	"clock.now": true, "clock.every": true, "clock.after": true, "clock.sleep": true,
 	"env.get": true, "settings.read": true,
 	"fs.exists": true, "fs.list": true, "fs.read": true,
-	"fs.write": true, "fs.stat": true, "fs.ancestors": true,
+	"http.fetch": true,
+	"fs.write":   true, "fs.stat": true, "fs.ancestors": true,
 	"store.get": true, "store.set": true, "store.delete": true, "store.keys": true,
 	"env.set":       true,
 	"session.usage": true, "session.cwd": true, "session.id": true,
@@ -39,7 +48,7 @@ var implemented = map[string]bool{
 var documented = []string{
 	"agent.register", "agent.spawn", "audio.play", "audio.speak",
 	"command.list", "config.list",
-	"http.fetch", "mcp.call", "model.classify", "model.complete", "model.fork",
+	"mcp.call", "model.classify", "model.complete", "model.fork",
 	"process.run", "process.spawn", "prompt.read", "prompt.submit",
 	"session.append", "session.authorize", "session.compact", "session.messages",
 	"session.model", "session.repo", "session.root", "session.send", "session.surface",
@@ -391,6 +400,9 @@ func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, e
 	case "store.get", "store.set", "store.delete", "store.keys":
 		return e.storeCall(p.name, name, arg)
 
+	case "http.fetch":
+		return e.httpFetch(arg)
+
 	case "agent.list":
 		out := []any{}
 		for _, a := range e.host.Agents() {
@@ -639,6 +651,92 @@ func (e *Engine) storeCall(plugin, name string, arg func(int) goja.Value) (any, 
 		return goja.Undefined(), save()
 	}
 	return goja.Undefined(), nil
+}
+
+// httpFetch serves $.http.fetch: an outbound request on a background
+// goroutine (network must not block the engine's worker), resolving a promise
+// with { status, ok, headers, text }. It matches Claude Code's HttpResponse
+// (a text body only; headers lowercased). An auth handle is not supported:
+// kiln has no $.session.authorize to mint one.
+func (e *Engine) httpFetch(arg func(int) goja.Value) (any, error) {
+	vm := e.w.vm
+	url := str(arg(0))
+	if url == "" {
+		return nil, fmt.Errorf("http.fetch(url): url is required")
+	}
+	method := "GET"
+	var body io.Reader
+	header := http.Header{}
+	socketPath := ""
+	if obj, ok := arg(1).(*goja.Object); ok {
+		if m := str(obj.Get("method")); m != "" {
+			method = strings.ToUpper(m)
+		}
+		if b := obj.Get("body"); b != nil && !goja.IsUndefined(b) && !goja.IsNull(b) {
+			body = strings.NewReader(b.String())
+		}
+		socketPath = str(obj.Get("socketPath"))
+		if h, ok := obj.Get("headers").(*goja.Object); ok {
+			for _, k := range h.Keys() {
+				header.Set(k, str(h.Get(k)))
+			}
+		}
+	}
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = header
+	client := &http.Client{Timeout: 30 * time.Second}
+	if socketPath != "" {
+		client.Transport = &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+		}}
+	}
+	promise, resolve, reject := vm.NewPromise()
+	go func() {
+		resp, derr := client.Do(req)
+		var (
+			status int
+			hdrs   = map[string]any{}
+			text   string
+		)
+		if derr == nil {
+			data, rerr := io.ReadAll(io.LimitReader(resp.Body, httpMaxBytes))
+			resp.Body.Close()
+			derr = rerr
+			status = resp.StatusCode
+			text = string(data)
+			for k, v := range resp.Header {
+				if len(v) > 0 {
+					hdrs[strings.ToLower(k)] = v[0]
+				}
+			}
+		}
+		// goja is single-threaded: build the result and settle on the worker.
+		e.w.post(func() {
+			if derr != nil {
+				_ = reject(e.errorValue(derr.Error()))
+				return
+			}
+			val, verr := e.toJS(map[string]any{"status": status, "ok": status >= 200 && status < 300, "headers": hdrs, "text": text})
+			if verr != nil {
+				_ = reject(e.errorValue(verr.Error()))
+				return
+			}
+			_ = resolve(val)
+		})
+	}()
+	return promise, nil
+}
+
+// errorValue is an Error object carrying message, for rejecting a promise.
+func (e *Engine) errorValue(message string) goja.Value {
+	vm := e.w.vm
+	if errObj, err := vm.New(vm.Get("Error"), vm.ToValue(message)); err == nil {
+		return errObj
+	}
+	return vm.ToValue(message)
 }
 
 func str(v goja.Value) string {
