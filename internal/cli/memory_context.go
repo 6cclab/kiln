@@ -70,13 +70,7 @@ func memoryContextForProjectAndGlobal(store *memory.Store, scope, root string, a
 			if text == "" {
 				return transcript, nil
 			}
-			out := append([]msg.Message(nil), transcript...)
-			user.Content = append(append(msg.Blocks(nil), user.Content...), msg.Text(prefix+text+suffix))
-			if user.KilnTyped == "" {
-				user.KilnTyped = query
-			}
-			out[i] = user
-			return out, nil
+			return appendRuntimeContext(transcript, prefix+text+suffix), nil
 		}
 		return transcript, nil
 	}

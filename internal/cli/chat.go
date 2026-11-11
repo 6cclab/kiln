@@ -1963,7 +1963,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 
 	// postToolCtxQueue carries PostToolUse additionalContext into the
-	// model's NEXT request via the transform_context hook.
+	// model's next successful assistant request via transform_context.
 	//
 	// Read directly (internal/harness/turn.go's commitToolResult): the
 	// tool's own toolResult entry is committed to the branch (Storage.Commit
@@ -1977,7 +1977,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// again immediately after this tool result — within the same
 	// operation, before the model's next turn — so the context still
 	// reaches the very next request, just as a synthetic context message
-	// rather than as part of the tool_result content block.
+	// rather than as part of the tool_result content block. The transform
+	// must only read the queue: fitting and compaction may invoke it before
+	// the actual assistant request, and a failed request may be retried.
 	// HARNESS_EXP_AUDIT (switch 2, experiments.go): auditArmed is set once,
 	// by planController.OnApprove above, on the plan's approval. The first
 	// response afterward that ends the turn with no tool calls (not a
@@ -2025,8 +2027,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	var postToolCtxQueue []string
 	started.Harness.Hooks().OnTransformContext(func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error) {
 		postToolCtxMu.Lock()
-		pending := postToolCtxQueue
-		postToolCtxQueue = nil
+		pending := append([]string(nil), postToolCtxQueue...)
 		postToolCtxMu.Unlock()
 		if len(pending) == 0 {
 			return transcript, nil
@@ -2035,8 +2036,15 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return append(transcript, msg.UserMessage{
 			Role:      msg.RoleUser,
 			Content:   msg.Blocks{msg.Text(text)},
+			KilnHook:  "PostToolUse",
 			Timestamp: time.Now().UnixMilli(),
 		}), nil
+	})
+	started.Harness.Hooks().OnAfterResponse(func(context.Context, *msg.AssistantMessage) error {
+		postToolCtxMu.Lock()
+		postToolCtxQueue = nil
+		postToolCtxMu.Unlock()
+		return nil
 	})
 
 	started.Harness.Hooks().OnAfterTool(func(ctx context.Context, call msg.ToolCall, result *msg.ToolResultMessage) error {

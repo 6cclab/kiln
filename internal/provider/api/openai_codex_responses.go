@@ -24,7 +24,8 @@ import (
 // deliberately self-contained: it does not import anything from a sibling
 // openai_responses.go (which may not exist in this package yet), so its
 // wire shapes, headers helper and SSE state machine are small, local
-// duplicates of the same-shaped pieces there, in the same spirit as
+// duplicates of the same-shaped pieces there (text item replay uses the
+// shared responses_text_signature.go helper), in the same spirit as
 // anthropic_messages.go and openai_completions.go each carrying their own
 // copies of this package's conventions.
 //
@@ -372,12 +373,9 @@ func convertCodexMessages(model provider.Model, transcript []msg.Message) []map[
 					}
 					out = append(out, raw)
 				case msg.TextContent:
-					id := fmt.Sprintf("msg_pi_%d", msgIndex)
-					if textBlockIndex > 0 {
-						id = fmt.Sprintf("msg_pi_%d_%d", msgIndex, textBlockIndex)
-					}
+					id, phase := replayResponsesText(c, t, model, provider.ApiOpenAICodexResponses, msgIndex, textBlockIndex)
 					textBlockIndex++
-					out = append(out, map[string]any{
+					textItem := map[string]any{
 						"type": "message",
 						"role": "assistant",
 						"content": []map[string]any{
@@ -385,7 +383,11 @@ func convertCodexMessages(model provider.Model, transcript []msg.Message) []map[
 						},
 						"status": "completed",
 						"id":     id,
-					})
+					}
+					if phase != "" {
+						textItem["phase"] = phase
+					}
+					out = append(out, textItem)
 				case msg.ToolCall:
 					callID, itemID := codexSplitToolCallID(c.ID)
 					args, _ := json.Marshal(c.Arguments)
@@ -467,6 +469,7 @@ func convertCodexToolResultOutput(model provider.Model, content msg.Blocks) any 
 type codexItem struct {
 	Type      string `json:"type"`
 	ID        string `json:"id"`
+	Phase     string `json:"phase"`
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -589,6 +592,8 @@ type codexSlot struct {
 	kind        string // "thinking" | "text" | "toolCall"
 	pos         int
 	partialJSON string
+	id          string
+	phase       string
 }
 
 func (c *OpenAICodexResponsesClient) run(ctx context.Context, model provider.Model, transcript []msg.Message, opts provider.StreamOptions, auth Auth, events chan<- msg.StreamEvent) (*msg.AssistantMessage, error) {
@@ -670,9 +675,9 @@ func (c *OpenAICodexResponsesClient) run(ctx context.Context, model provider.Mod
 				slots[env.OutputIndex] = &codexSlot{kind: "thinking", pos: pos}
 				events <- msg.StreamEvent{Type: msg.EventThinkingStart, ContentIndex: pos, Partial: partial}
 			case "message":
-				partial.Content = append(partial.Content, msg.Text(""))
+				partial.Content = append(partial.Content, stampResponsesText(msg.Text(""), *partial, item.ID, item.Phase))
 				pos := len(partial.Content) - 1
-				slots[env.OutputIndex] = &codexSlot{kind: "text", pos: pos}
+				slots[env.OutputIndex] = &codexSlot{kind: "text", pos: pos, id: item.ID, phase: item.Phase}
 				events <- msg.StreamEvent{Type: msg.EventTextStart, ContentIndex: pos, Partial: partial}
 			case "function_call":
 				id := item.CallID
@@ -821,6 +826,14 @@ func (c *OpenAICodexResponsesClient) run(ctx context.Context, model provider.Mod
 				}
 				tc := partial.Content[slot.pos].(msg.TextContent)
 				tc.Text = strings.Join(parts, "")
+				id, phase := item.ID, item.Phase
+				if id == "" {
+					id = slot.id
+				}
+				if phase == "" {
+					phase = slot.phase
+				}
+				tc = stampResponsesText(tc, *partial, id, phase)
 				partial.Content[slot.pos] = tc
 				events <- msg.StreamEvent{Type: msg.EventTextEnd, ContentIndex: slot.pos, Content: tc.Text, Partial: partial}
 				delete(slots, env.OutputIndex)
@@ -930,6 +943,12 @@ func (c *OpenAICodexResponsesClient) run(ctx context.Context, model provider.Mod
 			terminated = true
 		}
 	})
+	for _, slot := range slots {
+		if slot.kind == "text" {
+			c := partial.Content[slot.pos].(msg.TextContent)
+			partial.Content[slot.pos] = stampResponsesText(c, *partial, slot.id, slot.phase)
+		}
+	}
 	if streamErr != io.EOF {
 		// A read error before the terminal event (unexpected EOF from a
 		// mid-stream disconnect, or another transport failure) is a

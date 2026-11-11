@@ -56,8 +56,8 @@ func discoveryIndex(list []skills.Skill, config claudesettings.SkillDiscovery, t
 	return formatSkillsIndex(selected, config.Budget(tier))
 }
 
-// Suggestions are derived from the latest user request, not tool output. Copy
-// both slice and content so context transforms never mutate persisted messages.
+// Suggestions are derived from the latest user request, not tool output or
+// other runtime context. Append them without rewriting the conversation.
 func skillDiscoveryContext(records []tools.SkillRecord, config claudesettings.SkillDiscovery, budget func() int) func(context.Context, []msg.Message) ([]msg.Message, error) {
 	return func(_ context.Context, transcript []msg.Message) ([]msg.Message, error) {
 		if config.Mode == "search" || config.Mode == "catalog" {
@@ -105,13 +105,7 @@ func skillDiscoveryContext(records []tools.SkillRecord, config claudesettings.Sk
 			if text == "" {
 				return transcript, nil
 			}
-			out := append([]msg.Message(nil), transcript...)
-			user.Content = append(append(msg.Blocks(nil), user.Content...), msg.Text(prefix+text+suffix))
-			if user.KilnTyped == "" {
-				user.KilnTyped = query
-			}
-			out[i] = user
-			return out, nil
+			return appendRuntimeContext(transcript, prefix+text+suffix), nil
 		}
 		return transcript, nil
 	}

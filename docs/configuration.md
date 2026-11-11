@@ -764,7 +764,8 @@ points to `capability_search` rather than listing every installed skill and
 MCP tool. It ranks eligible skills and posture-scoped MCP tools together by
 name and description, with a bounded result count and response size. Results
 give the matched query terms and the exact action to take. Relevant metadata
-suggestions may accompany the latest user request. Search and suggestions do
+suggestions for the latest user request are appended at the end of each model
+request, preserving earlier conversation text. Search and suggestions do
 not read skill bodies or call a model; `skill` loads full instructions only
 when invoked. Explicit `capability_search` admits returned MCP matches into
 the active tool set, so they are callable on the next step. Suggestions do not
@@ -827,7 +828,13 @@ separate. Outside Git, the canonical working directory is the scope.
 Set `"personalMemoryEnabled": false` to disable model memory tools for a session.
 When enabled, `memory_recall` searches locally and `memory_write` remembers,
 corrects, or forgets a key through the permission gate. Writes are refused in
-plan mode. Memory records are absent from startup context. Relevant records are retrieved per user request under a 512-token default allowance (`memoryRetrievalTokens`, configurable from 128 to 8192). Set `memoryAutoRetrieve: false` to use explicit recall only.
+plan mode. Memory records are absent from startup context. Relevant records are
+retrieved using the latest user request under a 512-token default allowance
+(`memoryRetrievalTokens`, configurable from 128 to 8192). Retrieval refreshes
+before each model request so permission changes and stale sources take effect
+immediately. The bounded block is appended after the conversation, rather than
+rewriting an earlier user message. Set `memoryAutoRetrieve: false` to use explicit
+recall only.
 Model-written records remain attributed observations, not verified instructions.
 Kinds are preference, fact, procedure, and observation. Each record requires
 text and evidence; an optional Unix expiry timestamp removes it from recall
@@ -965,8 +972,10 @@ reported usage; interrupted calls or missing usage retain the reservation.
 Limits reset when the process restarts, including when resuming a session.
 
 The USD guard uses catalog pricing, including the highest configured price tier
-and conservative cache-write allowance. It is a request admission control, not
-a guarantee of the provider's invoice or protection against stale catalog
+and conservative cache-write allowance. It reserves the full context at the
+maximum input/cache rate, since uncached, cache-read and cache-write tokens are
+disjoint categories, plus the output allowance. It is a request admission
+control, not a guarantee of the provider's invoice or protection against stale catalog
 pricing. Unknown zero-valued prices fail closed under a USD ceiling; list exact
 `provider/model` identifiers in `freeModels` only for known zero-cost models.
 Provider-native tools with unbounded additional charges are refused under a USD

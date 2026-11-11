@@ -290,7 +290,7 @@ func buildGoogleRequest(model provider.Model, transcript []msg.Message, opts pro
 // convertGoogleMessages ports google-shared.js's convertMessages: user/
 // assistant/toolResult -> Gemini Content[], with thought signatures kept
 // only when the assistant message that produced them is from the same
-// provider+model as the one we're about to call (see resolveThoughtSignature).
+// API, provider and model as the one we're about to call.
 func convertGoogleMessages(model provider.Model, transcript []msg.Message) []googleContent {
 	var contents []googleContent
 	includeID := requiresGoogleToolCallID(model.ID)
@@ -316,13 +316,13 @@ func convertGoogleMessages(model provider.Model, transcript []msg.Message) []goo
 			contents = append(contents, googleContent{Role: "user", Parts: parts})
 
 		case msg.AssistantMessage:
-			sameProviderModel := t.Provider == model.Provider && t.Model == model.ID
+			sameSource := t.API == string(model.Api) && t.Provider == model.Provider && t.Model == model.ID
 			var parts []googlePart
 			for _, b := range t.Content {
 				switch c := b.(type) {
 				case msg.TextContent:
 					sig := ""
-					if sameProviderModel {
+					if sameSource {
 						sig = c.TextSignature
 					}
 					if strings.TrimSpace(c.Text) == "" && sig == "" {
@@ -330,7 +330,7 @@ func convertGoogleMessages(model provider.Model, transcript []msg.Message) []goo
 					}
 					parts = append(parts, googlePart{Text: c.Text, ThoughtSignature: sig})
 				case msg.ThinkingContent:
-					if sameProviderModel {
+					if sameSource {
 						sig := c.ThinkingSignature
 						if strings.TrimSpace(c.Thinking) == "" && sig == "" {
 							continue
@@ -344,7 +344,7 @@ func convertGoogleMessages(model provider.Model, transcript []msg.Message) []goo
 					}
 				case msg.ToolCall:
 					sig := ""
-					if sameProviderModel {
+					if sameSource {
 						sig = c.ThoughtSignature
 					}
 					fc := &googleFunctionCall{Name: c.Name, Args: c.Arguments}
@@ -490,6 +490,9 @@ func runGoogleGenerateContentStream(ctx context.Context, httpClient *http.Client
 		Content:    msg.Blocks{},
 	}
 
+	// apiName is the actual client shape; callers may supply a Model with
+	// an unset Api, so use the stream's API when guarding thought signatures.
+	model.Api = apiName
 	wireReq := buildGoogleRequest(model, transcript, opts)
 	body, err := json.Marshal(wireReq)
 	if err != nil {

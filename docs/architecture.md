@@ -70,7 +70,11 @@ Starting from a user prompt in the TUI or `-p` mode:
    `provider.StreamOptions.SystemPrompt` on every request.
 5. **Transcript build + `transform_context` hooks.** `drive` scans the
    branch (`Storage.ScanBranch`), projects entries to `[]msg.Message`
-   (`entriesToTranscript`), and runs `Hooks.OnTransformContext`.
+   (`entriesToTranscript`), and runs `Hooks.OnTransformContext`. Automatic
+   memory, discovery suggestions and recovered task notes append transient
+   context after the conversation; they preserve the replayed prefix and remain
+   distinguishable from typed user queries. These hooks also run during fitting
+   and compaction, so they must not consume pending feedback speculatively.
 6. **Provider stream.** `Lane.requestWithRetry` resolves the provider/model
    and calls `Provider.Stream`, retrying retriable errors (429/529/5xx/
    network) per `RetryPolicy` (`internal/harness/retry.go`). Every stream

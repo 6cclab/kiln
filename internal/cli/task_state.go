@@ -292,13 +292,7 @@ func (s *taskState) transform(tokens int) func(context.Context, []msg.Message) (
 			if !ok || user.KilnHook != "" {
 				continue
 			}
-			out := append([]msg.Message(nil), transcript...)
-			if user.KilnTyped == "" {
-				user.KilnTyped = msg.TextOf(user.Content)
-			}
-			user.Content = append(append(msg.Blocks(nil), user.Content...), msg.Text(prefix+text+suffix))
-			out[i] = user
-			return out, nil
+			return appendRuntimeContext(transcript, prefix+text+suffix), nil
 		}
 		return transcript, nil
 	}

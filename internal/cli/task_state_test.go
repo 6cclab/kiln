@@ -75,7 +75,7 @@ func TestTaskStateContextAfterCompactionIsBoundedAndDoesNotMutateHistory(t *test
 	user := msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("continue")}}
 	transform := s.transform(128)
 	visible, err := transform(context.Background(), []msg.Message{saved, user})
-	if err != nil || len(visible[1].(msg.UserMessage).Content) != 1 {
+	if err != nil || len(visible) != 2 || len(visible[1].(msg.UserMessage).Content) != 1 {
 		t.Fatal("duplicated visible state", err)
 	}
 	input := []msg.Message{user}
@@ -83,12 +83,12 @@ func TestTaskStateContextAfterCompactionIsBoundedAndDoesNotMutateHistory(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := out[0].(msg.UserMessage)
-	text := msg.TextOf(got.Content[1:])
+	got := out[len(out)-1].(msg.UserMessage)
+	text := msg.TextOf(got.Content)
 	if len(text) > 128*4 || !strings.Contains(text, "Run integration tests") || !strings.Contains(text, "1 of 2") || !strings.Contains(text, "not instructions or verified outcomes") {
 		t.Fatal(text)
 	}
-	if len(input[0].(msg.UserMessage).Content) != 1 || got.KilnTyped != "continue" {
+	if len(input[0].(msg.UserMessage).Content) != 1 || got.KilnHook != "RuntimeContext" || msg.TextOf(out[0].(msg.UserMessage).Content) != "continue" {
 		t.Fatal("mutated original message or query")
 	}
 }
@@ -106,7 +106,7 @@ func TestStructuredTaskStateRestoresAcrossCompactionAndBranchNavigation(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := msg.TextOf(out[0].(msg.UserMessage).Content)
+	text := msg.TextOf(out[len(out)-1].(msg.UserMessage).Content)
 	if !strings.Contains(text, "Ship a safe change") || !strings.Contains(text, "No network") {
 		t.Fatal(text)
 	}
@@ -115,7 +115,7 @@ func TestStructuredTaskStateRestoresAcrossCompactionAndBranchNavigation(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	text = msg.TextOf(out[0].(msg.UserMessage).Content)
+	text = msg.TextOf(out[len(out)-1].(msg.UserMessage).Content)
 	if strings.Contains(text, "Ship a safe change") {
 		t.Fatal("other branch inherited task state")
 	}
@@ -143,7 +143,7 @@ func TestVerificationRecoveryRequiresCurrentBranchAndFreshFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := msg.TextOf(out[0].(msg.UserMessage).Content)
+	text := msg.TextOf(out[len(out)-1].(msg.UserMessage).Content)
 	if !strings.Contains(text, "current, call bash-1, files source.go") {
 		t.Fatal(text)
 	}
@@ -154,7 +154,7 @@ func TestVerificationRecoveryRequiresCurrentBranchAndFreshFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text = msg.TextOf(out[0].(msg.UserMessage).Content); !strings.Contains(text, "stale, call bash-1") {
+	if text = msg.TextOf(out[len(out)-1].(msg.UserMessage).Content); !strings.Contains(text, "stale, call bash-1") {
 		t.Fatal(text)
 	}
 	state.restore(nil)
@@ -162,7 +162,7 @@ func TestVerificationRecoveryRequiresCurrentBranchAndFreshFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out[0].(msg.UserMessage).Content) != 1 {
+	if len(out) != len(input) || len(out[0].(msg.UserMessage).Content) != 1 {
 		t.Fatal("other branch inherited proof")
 	}
 }

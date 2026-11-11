@@ -7,7 +7,8 @@ package api
 // OpenAI-responses and Codex-responses, but re-implemented here
 // standalone per package convention: every client in this package is
 // self-contained, duplicating the small amount of shared SSE-parsing logic
-// locally rather than importing a sibling client file).
+// locally rather than importing a sibling client file; text item replay uses
+// the shared responses_text_signature.go helper).
 //
 // Azure's own buildParams is deliberately simpler than plain OpenAI
 // Responses's: no prompt_cache_retention/prompt_cache_options/service_tier/
@@ -174,6 +175,7 @@ type azureAssistantMessageItem struct {
 	Content []azureOutputTextPart `json:"content"`
 	Status  string                `json:"status"`
 	ID      string                `json:"id"`
+	Phase   string                `json:"phase,omitempty"`
 }
 
 type azureFunctionCallItem struct {
@@ -247,10 +249,7 @@ func buildAzureInput(model provider.Model, transcript []msg.Message, opts provid
 			for _, b := range t.Content {
 				switch c := b.(type) {
 				case msg.TextContent:
-					id := fmt.Sprintf("msg_pi_%d", msgIndex)
-					if textBlockIndex > 0 {
-						id = fmt.Sprintf("msg_pi_%d_%d", msgIndex, textBlockIndex)
-					}
+					id, phase := replayResponsesText(c, t, model, provider.ApiAzureOpenAIResponses, msgIndex, textBlockIndex)
 					textBlockIndex++
 					marshal(azureAssistantMessageItem{
 						Type:    "message",
@@ -258,6 +257,7 @@ func buildAzureInput(model provider.Model, transcript []msg.Message, opts provid
 						Content: []azureOutputTextPart{{Type: "output_text", Text: c.Text, Annotations: []any{}}},
 						Status:  "completed",
 						ID:      id,
+						Phase:   phase,
 					})
 				case msg.ThinkingContent:
 					if c.ThinkingSignature != "" && json.Valid([]byte(c.ThinkingSignature)) {
@@ -472,6 +472,7 @@ type azureItemContentPart struct {
 type azureItemWire struct {
 	Type             string                 `json:"type"`
 	ID               string                 `json:"id"`
+	Phase            string                 `json:"phase,omitempty"`
 	CallID           string                 `json:"call_id"`
 	Name             string                 `json:"name"`
 	Arguments        string                 `json:"arguments"`
@@ -532,6 +533,8 @@ type azureSlot struct {
 	kind        string // "thinking" | "text" | "toolCall"
 	pos         int
 	partialJSON string
+	id          string
+	phase       string
 }
 
 func createAzureSlot(partial *msg.AssistantMessage, events chan<- msg.StreamEvent, slots map[int]*azureSlot, outputIndex int, item *azureItemWire) *azureSlot {
@@ -544,9 +547,9 @@ func createAzureSlot(partial *msg.AssistantMessage, events chan<- msg.StreamEven
 		events <- msg.StreamEvent{Type: msg.EventThinkingStart, ContentIndex: pos, Partial: partial}
 		return slot
 	case "message":
-		partial.Content = append(partial.Content, msg.Text(""))
+		partial.Content = append(partial.Content, stampResponsesText(msg.Text(""), *partial, item.ID, item.Phase))
 		pos := len(partial.Content) - 1
-		slot := &azureSlot{kind: "text", pos: pos}
+		slot := &azureSlot{kind: "text", pos: pos, id: item.ID, phase: item.Phase}
 		slots[outputIndex] = slot
 		events <- msg.StreamEvent{Type: msg.EventTextStart, ContentIndex: pos, Partial: partial}
 		return slot
@@ -900,6 +903,14 @@ func (c *AzureOpenAIResponsesClient) run(ctx context.Context, model provider.Mod
 				}
 				tc := partial.Content[slot.pos].(msg.TextContent)
 				tc.Text = strings.Join(texts, "")
+				id, phase := e.Item.ID, e.Item.Phase
+				if id == "" {
+					id = slot.id
+				}
+				if phase == "" {
+					phase = slot.phase
+				}
+				tc = stampResponsesText(tc, *partial, id, phase)
 				partial.Content[slot.pos] = tc
 				events <- msg.StreamEvent{Type: msg.EventTextEnd, ContentIndex: slot.pos, Content: tc.Text, Partial: partial}
 				delete(slots, e.OutputIndex)
@@ -969,6 +980,12 @@ func (c *AzureOpenAIResponsesClient) run(ctx context.Context, model provider.Mod
 			streamFailure = errors.New(errMsg)
 		}
 	})
+	for _, slot := range slots {
+		if slot.kind == "text" {
+			c := partial.Content[slot.pos].(msg.TextContent)
+			partial.Content[slot.pos] = stampResponsesText(c, *partial, slot.id, slot.phase)
+		}
+	}
 
 	if streamErr != io.EOF {
 		// A read error before the terminal event (unexpected EOF from a

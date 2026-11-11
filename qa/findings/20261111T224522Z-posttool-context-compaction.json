@@ -1,0 +1,28 @@
+{
+ "id": "20261111T224522Z-posttool-context-compaction",
+ "found_at": "2026-11-11T22:45:22Z",
+ "scenario": "regression/TestPostToolContextSurvivesCompaction",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Compaction consumes pending tool-hook feedback",
+ "observed": "Speculative context transforms drained PostToolUse additionalContext before the next assistant request.",
+ "expected": "Deliver pending feedback through compaction and failed attempts, then clear after successful response.",
+ "design_ref": null,
+ "evidence": [
+  "docs/request-fidelity-improvements.md"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/chat.go"
+  ],
+  "regression_test": "TestPostToolContextSurvivesCompaction",
+  "after_evidence": [
+   "docs/request-fidelity-improvements.md"
+  ],
+  "note": "Behavioral regression failed before the fix and passes afterward; live performance comparison deferred.",
+  "updated_at": "2026-11-11T22:45:22Z"
+ }
+}

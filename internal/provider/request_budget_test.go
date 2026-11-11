@@ -77,3 +77,59 @@ func TestRequestBudgetSettlementOnce(t *testing.T) {
 		t.Fatal(b.Snapshot())
 	}
 }
+
+func TestRequestBudgetUSDExactConservativeBound(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		rates ModelCostRates
+		tiers []ModelCostTier
+		limit float64
+	}{
+		{"uncached input", ModelCostRates{Input: 17, Output: 30, CacheRead: 2, CacheWrite: 4}, nil, 20},
+		{"cache read", ModelCostRates{Input: 5, Output: 30, CacheRead: 17, CacheWrite: 4}, nil, 20},
+		{"long cache write", ModelCostRates{Input: 5, Output: 30, CacheRead: 2, CacheWrite: 8}, nil, 19},
+		{"highest tier rates", ModelCostRates{Input: 5, Output: 25, CacheRead: 1, CacheWrite: 4}, []ModelCostTier{
+			{ModelCostRates: ModelCostRates{Input: 7, Output: 30, CacheRead: 2, CacheWrite: 8}, InputTokensAbove: 100_000},
+			{ModelCostRates: ModelCostRates{Input: 9, Output: 26, CacheRead: 3, CacheWrite: 6}, InputTokensAbove: 500_000},
+		}, 19},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := Model{Provider: "test", ID: "priced", ContextWindow: 1_000_000, MaxTokens: 100_000,
+				Cost: ModelCost{ModelCostRates: tc.rates, Tiers: tc.tiers}}
+			b := &RequestBudget{MaxUSD: tc.limit}
+			if _, err := b.reserve(model, StreamOptions{}); err != nil {
+				t.Fatalf("exact conservative bound rejected: %v", err)
+			}
+			if got := b.Snapshot().USD; got != tc.limit {
+				t.Fatalf("reservation = $%g, want $%g", got, tc.limit)
+			}
+			if _, err := (&RequestBudget{MaxUSD: tc.limit - 0.01}).reserve(model, StreamOptions{}); err == nil {
+				t.Fatal("budget below conservative bound admitted")
+			}
+		})
+	}
+}
+
+func TestRequestBudgetConcurrentUSDReservationsRetainUnknownUsage(t *testing.T) {
+	model := Model{Provider: "test", ID: "priced", ContextWindow: 1_000_000, MaxTokens: 100_000,
+		Cost: ModelCost{ModelCostRates: ModelCostRates{Input: 5, Output: 30, CacheWrite: 8}}}
+	b := &RequestBudget{MaxUSD: 19}
+	var admitted atomic.Int32
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			finish, err := b.reserve(model, StreamOptions{})
+			if err != nil {
+				return
+			}
+			admitted.Add(1)
+			finish(nil, context.Canceled)
+		}()
+	}
+	wg.Wait()
+	if admitted.Load() != 1 || b.Snapshot().Calls != 1 || b.Snapshot().USD != 19 {
+		t.Fatalf("admitted %d, ledger %+v; want one retained $19 reservation", admitted.Load(), b.Snapshot())
+	}
+}

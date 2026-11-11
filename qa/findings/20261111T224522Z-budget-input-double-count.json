@@ -1,0 +1,28 @@
+{
+ "id": "20261111T224522Z-budget-input-double-count",
+ "found_at": "2026-11-11T22:45:22Z",
+ "scenario": "regression/TestRequestBudgetUSDExactConservativeBound",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "USD admission double counts input cache categories",
+ "observed": "Reservation charged the full context at uncached input plus cache rate, rejecting requests that fit the conservative bound.",
+ "expected": "Use the maximum of disjoint input categories while retaining highest tiers, long-lived-write allowance and unknown-usage reservations.",
+ "design_ref": null,
+ "evidence": [
+  "docs/request-fidelity-improvements.md"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/provider/request_budget.go"
+  ],
+  "regression_test": "TestRequestBudgetUSDExactConservativeBound",
+  "after_evidence": [
+   "docs/request-fidelity-improvements.md"
+  ],
+  "note": "Behavioral regression failed before the fix and passes afterward; live performance comparison deferred.",
+  "updated_at": "2026-11-11T22:45:22Z"
+ }
+}

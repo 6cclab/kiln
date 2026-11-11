@@ -50,8 +50,8 @@ func capabilitySearchBudget(config claudesettings.SkillDiscovery, session *mcpSe
 	}
 }
 
-// capabilitySuggestionContext adds bounded metadata matches to the current
-// user turn. It does not admit MCP tools; explicit capability_search does.
+// capabilitySuggestionContext appends bounded metadata matches for the latest
+// user request. It does not admit MCP tools; explicit capability_search does.
 func capabilitySuggestionContext(catalog tools.CapabilityCatalogFunc, config claudesettings.SkillDiscovery, budget func() int) func(context.Context, []msg.Message) ([]msg.Message, error) {
 	return func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error) {
 		if config.Mode == "search" || config.Mode == "catalog" {
@@ -108,13 +108,7 @@ func capabilitySuggestionContext(catalog tools.CapabilityCatalogFunc, config cla
 			if b.Len() == 0 {
 				return transcript, nil
 			}
-			out := append([]msg.Message(nil), transcript...)
-			user.Content = append(append(msg.Blocks(nil), user.Content...), msg.Text(prefix+b.String()+suffix))
-			if user.KilnTyped == "" {
-				user.KilnTyped = query
-			}
-			out[i] = user
-			return out, nil
+			return appendRuntimeContext(transcript, prefix+b.String()+suffix), nil
 		}
 		return transcript, nil
 	}

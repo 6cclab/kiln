@@ -65,6 +65,11 @@ being mistaken for the complete roadmap.
   faster and cheaper; Kiln passed more hidden cases, but its FIFO hang and
   Codex's imported-scope rejection both block merge. Cumulative estimated external
   comparison spend is $41.60/$50, including interrupted driver attempts.
+- [Request fidelity improvements](request-fidelity-improvements.md): dynamic
+  context preserves the conversation prefix; hook feedback survives compaction
+  and retries; Responses adapters retain text identity/phase; USD reservations
+  avoid double-counting disjoint input categories. Local regressions cover these
+  changes; their effect on live cost and generated-code quality is not measured.
 
 ## Still outstanding from the full plan
 

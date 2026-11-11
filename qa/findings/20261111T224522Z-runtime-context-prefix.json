@@ -1,0 +1,32 @@
+{
+ "id": "20261111T224522Z-runtime-context-prefix",
+ "found_at": "2026-11-11T22:45:22Z",
+ "scenario": "regression/TestRuntimeContextPreservesRequestPrefix",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Runtime context rewrites historical request prefix",
+ "observed": "Memory, discovery and task recovery changed the latest historical user message in projected model requests.",
+ "expected": "Preserve prior conversation bytes and append fresh bounded context.",
+ "design_ref": null,
+ "evidence": [
+  "docs/request-fidelity-improvements.md"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/runtime_context.go",
+   "internal/cli/memory_context.go",
+   "internal/cli/capabilities.go",
+   "internal/cli/discovery.go",
+   "internal/cli/task_state.go"
+  ],
+  "regression_test": "TestRuntimeContextPreservesRequestPrefix",
+  "after_evidence": [
+   "docs/request-fidelity-improvements.md"
+  ],
+  "note": "Behavioral regression failed before the fix and passes afterward; live performance comparison deferred.",
+  "updated_at": "2026-11-11T22:45:22Z"
+ }
+}

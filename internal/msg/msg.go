@@ -333,6 +333,8 @@ type UserMessage struct {
 	// reads it as a user message, but no user wrote it, so a replay shows
 	// it as a hook note rather than as something the user said. kiln's own
 	// field, like KilnTyped; never sent to a provider.
+	// Unstored context transforms also use this marker (RuntimeContext) so
+	// derived notes are never mistaken for a typed user query by later hooks.
 	KilnHook  string `json:"kilnHook,omitempty"`
 	Role      Role   `json:"role"`
 	Timestamp int64  `json:"timestamp"`

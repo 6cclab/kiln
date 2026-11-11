@@ -23,12 +23,12 @@ func TestDiscoveryDoesNotMutateHistory(t *testing.T) {
 	if len(input[0].(msg.UserMessage).Content) != 1 {
 		t.Fatal("mutated stored history")
 	}
-	text := msg.TextOf(got[0].(msg.UserMessage).Content)
+	text := msg.TextOf(got[len(got)-1].(msg.UserMessage).Content)
 	if !strings.Contains(text, "sql:") || strings.Contains(text, "design:") {
 		t.Fatal(text)
 	}
 	again, _ := hook(context.Background(), input)
-	if msg.TextOf(again[0].(msg.UserMessage).Content) != text {
+	if msg.TextOf(again[len(again)-1].(msg.UserMessage).Content) != text {
 		t.Fatal("unstable selection")
 	}
 }
@@ -42,7 +42,7 @@ func TestDiscoveryModesAndExclusions(t *testing.T) {
 	for _, mode := range []string{"search", "catalog"} {
 		input := []msg.Message{msg.UserMessage{Content: msg.Blocks{msg.Text("public")}}}
 		got, _ := skillDiscoveryContext(filtered, settings.SkillDiscovery{Mode: mode}, func() int { return 256 })(context.Background(), input)
-		if len(got[0].(msg.UserMessage).Content) != 1 {
+		if len(got) != len(input) || len(got[0].(msg.UserMessage).Content) != 1 {
 			t.Fatal(mode)
 		}
 	}
@@ -82,7 +82,7 @@ func TestDiscoveryBudgetIncludesFraming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	added := msg.TextOf(out[0].(msg.UserMessage).Content[1:])
+	added := msg.TextOf(out[len(out)-1].(msg.UserMessage).Content)
 	if added == "" || len(added) > 512 {
 		t.Fatalf("full suggestion block has %d bytes", len(added))
 	}

@@ -61,9 +61,10 @@ func (b *RequestBudget) reserve(model Model, opts StreamOptions) (func(*msg.Assi
 		rates.CacheRead = math.Max(rates.CacheRead, tier.CacheRead)
 		rates.CacheWrite = math.Max(rates.CacheWrite, tier.CacheWrite)
 	}
-	// Cache-write multipliers can exceed uncached pricing. Reserve conservatively
-	// for input plus the highest cache rate, including long-lived writes.
-	inputRate := rates.Input + math.Max(rates.CacheRead, 2*rates.CacheWrite)
+	// Input, cache reads and cache writes partition the context tokens: no
+	// token pays all three rates at once. Use the highest rate, including
+	// the conservative long-lived cache-write multiplier.
+	inputRate := math.Max(rates.Input, math.Max(rates.CacheRead, 2*rates.CacheWrite))
 	cost := (float64(model.ContextWindow)*inputRate + float64(output)*rates.Output) / 1e6
 	free := b.FreeModels[model.Provider+"/"+model.ID]
 	if b.MaxUSD > 0 {

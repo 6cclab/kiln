@@ -33,7 +33,7 @@ func TestMemoryContextHonorsPermissionsAndPreservesTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := msg.TextOf(out[0].(msg.UserMessage).Content)
+	text := msg.TextOf(out[len(out)-1].(msg.UserMessage).Content)
 	if !strings.Contains(text, "Use go test") || !strings.Contains(text, "not instructions") {
 		t.Fatal(text)
 	}
@@ -42,7 +42,7 @@ func TestMemoryContextHonorsPermissionsAndPreservesTranscript(t *testing.T) {
 	}
 	allowed = false
 	out, err = transform(ctx, input)
-	if err != nil || len(out[0].(msg.UserMessage).Content) != 1 {
+	if err != nil || len(out) != len(input) || len(out[0].(msg.UserMessage).Content) != 1 {
 		t.Fatal("permission change ignored")
 	}
 }
@@ -68,7 +68,7 @@ func TestMemoryContextBudgetIncludesFraming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	added := msg.TextOf(out[0].(msg.UserMessage).Content[1:])
+	added := msg.TextOf(out[len(out)-1].(msg.UserMessage).Content)
 	if added == "" || len(added) > 512 {
 		t.Fatalf("full memory block has %d bytes", len(added))
 	}
@@ -90,7 +90,7 @@ func TestMemoryContextGlobalPreferenceOptInAndPermission(t *testing.T) {
 	}
 	input := []msg.Message{msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("runner tests")}}}
 	plain, err := memoryContextForProject(store, "project", "", func() bool { return true })(ctx, input)
-	if err != nil || len(plain[0].(msg.UserMessage).Content) != 1 {
+	if err != nil || len(plain) != len(input) || len(plain[0].(msg.UserMessage).Content) != 1 {
 		t.Fatalf("global read without opt-in: %v %v", plain, err)
 	}
 	withGlobal := memoryContextForProjectAndGlobal(store, "project", "", func() bool { return true }, true)
@@ -98,12 +98,12 @@ func TestMemoryContextGlobalPreferenceOptInAndPermission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := msg.TextOf(out[0].(msg.UserMessage).Content)
+	text := msg.TextOf(out[len(out)-1].(msg.UserMessage).Content)
 	if !strings.Contains(text, "Use go test") || !strings.Contains(text, memory.GlobalPreferencesScope) {
 		t.Fatal(text)
 	}
 	denied, err := memoryContextForProjectAndGlobal(store, "project", "", func() bool { return false }, true)(ctx, input)
-	if err != nil || len(denied[0].(msg.UserMessage).Content) != 1 {
+	if err != nil || len(denied) != len(input) || len(denied[0].(msg.UserMessage).Content) != 1 {
 		t.Fatalf("global read bypassed permission: %v %v", denied, err)
 	}
 }

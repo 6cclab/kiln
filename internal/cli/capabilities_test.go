@@ -83,8 +83,8 @@ func TestCapabilitySuggestionsPinsBoundsAndDoNotAdmit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := msg.TextOf(got[0].(msg.UserMessage).Content)
-	if !strings.Contains(text, "pinned [skill]") || strings.Contains(text, "excluded") || len(text)-len("database") > 512 {
+	text := msg.TextOf(got[len(got)-1].(msg.UserMessage).Content)
+	if !strings.Contains(text, "pinned [skill]") || strings.Contains(text, "excluded") || len(text) > 512 {
 		t.Fatalf("suggestion: %q", text)
 	}
 	if len(state.AdmittedNames()) != 0 {
@@ -120,7 +120,7 @@ func TestCapabilitySuggestionsAgentCollisionAndDisabled(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			text := msg.TextOf(got[0].(msg.UserMessage).Content)
+			text := msg.TextOf(got[len(got)-1].(msg.UserMessage).Content)
 			if !strings.Contains(text, "review [skill]") || strings.Contains(text, "review [agent]") != tc.want || strings.Contains(text, "private agent instructions") {
 				t.Fatalf("agent suggestion: %q", text)
 			}
