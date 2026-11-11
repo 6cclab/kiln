@@ -391,9 +391,16 @@ func convertResponsesTools(model provider.Model, tools []provider.ToolDef, compa
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
 		tool := responsesFunctionTool{Type: "function", Name: td.Name, Description: td.Description, Parameters: schema}
-		if supportsStrict {
-			strict := model.SupportsStrictMode()
-			tool.Strict = &strict
+		if supportsStrict && model.SupportsStrictMode() {
+			// Strict mode needs the schema in OpenAI's strict subset; transform
+			// it, and fall back to non-strict for this tool when it cannot be
+			// expressed strictly (pi's "prefer" fallback) rather than letting
+			// the API reject the whole request.
+			if strictSchema, err := makeStrictJSONSchema(schema); err == nil {
+				tool.Parameters = strictSchema
+				strict := true
+				tool.Strict = &strict
+			}
 		}
 		out = append(out, tool)
 	}

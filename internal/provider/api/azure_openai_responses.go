@@ -367,9 +367,14 @@ func buildAzureTools(model provider.Model, opts provider.StreamOptions) []azureT
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
 		tool := azureToolWire{Type: "function", Name: td.Name, Description: td.Description, Parameters: schema}
-		if supportsStrictGate {
-			v := model.SupportsStrictMode()
-			tool.Strict = &v
+		if supportsStrictGate && model.SupportsStrictMode() {
+			// Transform the schema into OpenAI's strict subset; fall back to
+			// non-strict for this tool when it cannot be (pi's "prefer" path).
+			if strictSchema, err := makeStrictJSONSchema(schema); err == nil {
+				tool.Parameters = strictSchema
+				v := true
+				tool.Strict = &v
+			}
 		}
 		out = append(out, tool)
 	}

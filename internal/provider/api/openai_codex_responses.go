@@ -283,14 +283,26 @@ func convertCodexTools(tools []provider.ToolDef, supportsStrictMode bool) []map[
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
+		// Strict mode requires the schema to be in OpenAI's strict subset
+		// (additionalProperties:false, every property required). Transform it
+		// when strict is supported; if it can't be expressed strictly, send
+		// this tool non-strict rather than letting the backend reject the
+		// whole request (pi's "prefer" fallback).
+		strict := false
+		if supportsStrictMode {
+			if strictSchema, err := makeStrictJSONSchema(schema); err == nil {
+				schema = strictSchema
+				strict = true
+			}
+		}
 		item := map[string]any{
 			"type":        "function",
 			"name":        td.Name,
 			"description": td.Description,
 			"parameters":  schema,
 		}
-		if supportsStrictMode {
-			item["strict"] = supportsStrictMode
+		if strict {
+			item["strict"] = true
 		}
 		out = append(out, item)
 	}
