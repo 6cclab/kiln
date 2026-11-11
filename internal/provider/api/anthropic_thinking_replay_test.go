@@ -1,13 +1,101 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 )
+
+// A redacted thinking block contains opaque data, not a thinking/signature
+// pair. It must survive streaming, session JSON, and the next tool-result
+// request unchanged so Anthropic can continue the same assistant turn.
+func TestAnthropicRedactedThinkingRoundTrip(t *testing.T) {
+	const opaque = "encrypted+opaque/bytes=="
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		sse := strings.Join([]string{
+			`event: message_start` + "\n" + `data: {"message":{"id":"msg_1","usage":{"input_tokens":1}}}`,
+			`event: content_block_start` + "\n" + fmt.Sprintf(`data: {"index":0,"content_block":{"type":"redacted_thinking","data":%q}}`, opaque),
+			`event: content_block_stop` + "\n" + `data: {"index":0}`,
+			`event: content_block_start` + "\n" + `data: {"index":1,"content_block":{"type":"tool_use","id":"tool_1","name":"read","input":{"path":"a.go"}}}`,
+			`event: content_block_stop` + "\n" + `data: {"index":1}`,
+			`event: message_delta` + "\n" + `data: {"delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}`,
+		}, "\n\n") + "\n\n"
+		if _, err := io.WriteString(w, sse); err != nil {
+			t.Errorf("write SSE fixture: %v", err)
+		}
+	}))
+	defer server.Close()
+	model := provider.Model{ID: "claude-test", Provider: "anthropic", BaseURL: server.URL, MaxTokens: 1024}
+	events, wait := (&AnthropicClient{}).Stream(context.Background(), model, nil, provider.StreamOptions{}, Auth{APIKey: "test"})
+	var toolStart, toolEnd bool
+	for ev := range events {
+		if strings.Contains(ev.Content, opaque) || strings.Contains(ev.Delta, opaque) {
+			t.Fatalf("opaque data leaked through %s event content", ev.Type)
+		}
+		switch ev.Type {
+		case msg.EventThinkingStart, msg.EventThinkingDelta, msg.EventThinkingEnd:
+			t.Fatalf("redacted block emitted a thinking display event: %s", ev.Type)
+		case msg.EventToolCallStart:
+			toolStart = true
+			if ev.ContentIndex != 1 {
+				t.Fatalf("tool start index = %d, want 1 after redacted block", ev.ContentIndex)
+			}
+		case msg.EventToolCallEnd:
+			toolEnd = true
+			if ev.ContentIndex != 1 || ev.ToolCall == nil || ev.ToolCall.ID != "tool_1" {
+				t.Fatalf("tool end = %+v, want tool_1 at index 1", ev)
+			}
+		}
+	}
+	if !toolStart || !toolEnd {
+		t.Fatalf("tool events missing: start=%v end=%v", toolStart, toolEnd)
+	}
+	answer, err := wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted msg.AssistantMessage
+	stored, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(stored, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	req := buildAnthropicRequest(model, []msg.Message{persisted, msg.ToolResultMessage{ToolCallID: "tool_1", Content: msg.Blocks{msg.Text("file contents")}}}, provider.StreamOptions{}, Auth{})
+	requestJSON, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Messages []struct {
+			Role    string            `json:"role"`
+			Content []json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(requestJSON, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Messages) != 2 || len(wire.Messages[0].Content) != 2 {
+		t.Fatalf("replayed messages = %s", requestJSON)
+	}
+	var redacted map[string]any
+	if err := json.Unmarshal(wire.Messages[0].Content[0], &redacted); err != nil {
+		t.Fatal(err)
+	}
+	if redacted["type"] != "redacted_thinking" || redacted["data"] != opaque || len(redacted) != 2 {
+		t.Fatalf("replayed redacted block = %s", wire.Messages[0].Content[0])
+	}
+}
 
 // TestConvertBlocksToAnthropic_ThinkingReplay guards the wire shape of a
 // replayed thinking block. Before the fix the block went out as

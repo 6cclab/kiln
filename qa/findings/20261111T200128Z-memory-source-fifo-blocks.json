@@ -1,0 +1,25 @@
+{
+ "id": "20261111T200128Z-memory-source-fifo-blocks",
+ "found_at": "2026-11-11T20:01:28Z",
+ "scenario": "memory/source-validation",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Memory source validation blocks on FIFO",
+ "observed": "CaptureSources, SourcesCurrent, and SourcesCurrentAt opened a FIFO before checking regularity and blocked until the regression subprocess deadline.",
+ "expected": "Reject nonregular sources without blocking, including a FIFO swapped in between the metadata check and open.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/memory/sources.go",
+   "internal/memory/nonblock_unix.go",
+   "internal/memory/nonblock_other.go"
+  ],
+  "regression_test": "TestMemorySourcesRejectFIFO",
+  "note": "All three child probes timed out before the fix; memory race tests pass after the fix.",
+  "updated_at": "2026-11-11T20:01:28Z"
+ }
+}

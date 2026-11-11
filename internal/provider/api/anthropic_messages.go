@@ -559,6 +559,7 @@ type anthropicSSEContentBlockStart struct {
 		Type      string          `json:"type"`
 		Text      string          `json:"text"`
 		Thinking  string          `json:"thinking"`
+		Data      string          `json:"data"`
 		Signature string          `json:"signature"`
 		ID        string          `json:"id"`
 		Name      string          `json:"name"`
@@ -753,12 +754,25 @@ func (c *AnthropicClient) run(ctx context.Context, model provider.Model, transcr
 				indexOf[cb.Index] = pos
 				blocks[cb.Index] = &blockInfo{kind: "text"}
 				events <- msg.StreamEvent{Type: msg.EventTextStart, ContentIndex: pos, Partial: partial}
-			case "thinking", "redacted_thinking":
+			case "thinking":
 				partial.Content = append(partial.Content, msg.Thinking(cb.ContentBlock.Thinking))
 				pos := len(partial.Content) - 1
 				indexOf[cb.Index] = pos
 				blocks[cb.Index] = &blockInfo{kind: "thinking"}
 				events <- msg.StreamEvent{Type: msg.EventThinkingStart, ContentIndex: pos, Partial: partial}
+			case "redacted_thinking":
+				// Its encrypted data is opaque and must be replayed unchanged
+				// with the next tool result. A ThinkingContent cannot hold the
+				// data field, so keep it as a provider-native block instead.
+				raw, _ := json.Marshal(struct {
+					Type string `json:"type"`
+					Data string `json:"data"`
+				}{Type: "redacted_thinking", Data: cb.ContentBlock.Data})
+				partial.Content = append(partial.Content, msg.ProviderBlock{Provider: "anthropic", Type: "providerBlock", Raw: raw})
+				pos := len(partial.Content) - 1
+				indexOf[cb.Index] = pos
+				blocks[cb.Index] = &blockInfo{kind: "providerBlockDone"}
+				events <- msg.StreamEvent{Type: msg.EventProviderBlockEnd, ContentIndex: pos, Partial: partial}
 			case "tool_use":
 				var args map[string]any
 				if len(cb.ContentBlock.Input) > 0 {

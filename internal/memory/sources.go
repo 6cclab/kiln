@@ -27,12 +27,21 @@ func sourceDigest(root, path string) (string, error) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("memory source is outside project")
 	}
-	f, err := os.Open(resolved)
+	// Reject special files before opening them. Open nonblocking as well:
+	// a regular file can be replaced by a FIFO between Stat and OpenFile.
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return "", fmt.Errorf("memory sources must be regular files at most 1 MiB")
+	}
+	f, err := os.OpenFile(resolved, os.O_RDONLY|openNonblock, 0)
 	if err != nil {
 		return "", err
 	}
 	defer diag.Close(f)
-	info, err := f.Stat()
+	info, err = f.Stat()
 	if err != nil {
 		return "", err
 	}

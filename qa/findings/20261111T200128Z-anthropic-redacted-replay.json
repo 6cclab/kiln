@@ -1,0 +1,23 @@
+{
+ "id": "20261111T200128Z-anthropic-redacted-replay",
+ "found_at": "2026-11-11T20:01:28Z",
+ "scenario": "provider/anthropic-thinking",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Anthropic redacted thinking data lost on replay",
+ "observed": "The stream parser treated redacted_thinking as ordinary thinking and discarded its opaque data before the next tool-result request.",
+ "expected": "Preserve redacted provider blocks across streaming, persistence, and request replay without displaying opaque content.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/provider/api/anthropic_messages.go"
+  ],
+  "regression_test": "TestAnthropicRedactedThinkingRoundTrip",
+  "note": "Offline streamed-response, JSON persistence, and next-request regression failed before the fix and passes after it.",
+  "updated_at": "2026-11-11T20:01:28Z"
+ }
+}

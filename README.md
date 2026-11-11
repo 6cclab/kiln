@@ -177,7 +177,7 @@ Claude Code's `CLAUDE.md` files in your editor.
 |---|---|
 | `~/.claude/skills`, `.claude/skills` | loaded, user-invocable ones become slash commands |
 | `.claude/commands/*.md` | slash commands; nested dirs become `namespace:command` |
-| `CLAUDE.md`, `@imports`, `.claude/rules/*.md` | system prompt, budgeted against the tier |
+| `CLAUDE.md`, `@imports`, `.claude/rules/**/*.md` | system prompt, budgeted against the tier |
 | `.claude/settings.json` | permissions, merged `user` → `project` → `local` |
 | `~/.claude/projects/<project>/memory/MEMORY.md` | Claude Code's auto memory, read-only |
 | `.claude/agents/*.md` | subagents, dispatched with the `task` tool |

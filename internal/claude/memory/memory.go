@@ -25,19 +25,26 @@ func homeDir() string {
 	return h
 }
 
-// listRules returns markdown files in a .claude/rules directory, sorted
-// for stable ordering. A missing directory is the normal case.
+// listRules returns markdown files in a .claude/rules directory and its
+// subdirectories, sorted for stable ordering. A missing directory is normal.
 func listRules(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
 	var out []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-			out = append(out, filepath.Join(dir, e.Name()))
+	var visit func(string)
+	visit = func(current string) {
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return
+		}
+		for _, entry := range entries {
+			path := filepath.Join(current, entry.Name())
+			if entry.IsDir() {
+				visit(path)
+			} else if strings.HasSuffix(entry.Name(), ".md") {
+				out = append(out, path)
+			}
 		}
 	}
+	visit(dir)
 	sort.Strings(out)
 	return out
 }

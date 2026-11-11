@@ -86,6 +86,74 @@ func TestLoadMemoryRules(t *testing.T) {
 	}
 }
 
+func TestLoadMemoryNestedRules(t *testing.T) {
+	home := setupHome(t)
+	cwd := t.TempDir()
+	userRule := filepath.Join(home, ".claude", "rules", "coding", "go.md")
+	projectRootRule := filepath.Join(cwd, ".claude", "rules", "general.md")
+	projectRule := filepath.Join(cwd, ".claude", "rules", "tests", "regressions.md")
+	writeFile(t, userRule, "Run the Go formatter.")
+	writeFile(t, projectRootRule, "Check the whole project.")
+	writeFile(t, projectRule, "---\npaths:\n  - 'internal/**/*.go'\n---\nAdd a regression test for each fix.")
+	writeFile(t, filepath.Join(cwd, ".claude", "rules", "tests", "notes.txt"), "Not a rule.")
+
+	assembled := LoadMemory(cwd, 10_000)
+	for _, want := range []string{"Run the Go formatter.", "Check the whole project.", "Add a regression test for each fix."} {
+		if !strings.Contains(assembled.Text, want) {
+			t.Errorf("nested rule %q missing from memory:\n%s", want, assembled.Text)
+		}
+	}
+	if strings.Contains(assembled.Text, "Not a rule.") {
+		t.Errorf("non-Markdown file loaded as a rule:\n%s", assembled.Text)
+	}
+	wantPaths := []string{userRule, projectRootRule, projectRule}
+	if len(assembled.Files) != len(wantPaths) {
+		t.Fatalf("loaded files = %+v, want paths %v", assembled.Files, wantPaths)
+	}
+	for i, want := range wantPaths {
+		if assembled.Files[i].Path != want {
+			t.Errorf("loaded file %d = %s, want %s", i, assembled.Files[i].Path, want)
+		}
+	}
+}
+
+func TestListRulesMissingDirectoryAndSymlinkCycle(t *testing.T) {
+	root := t.TempDir()
+	if got := listRules(filepath.Join(root, "missing")); len(got) != 0 {
+		t.Fatalf("missing rules directory returned %v", got)
+	}
+	writeFile(t, filepath.Join(root, "nested", "rule.md"), "A rule.")
+	if err := os.Symlink(root, filepath.Join(root, "nested", "cycle")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listRules(root); len(got) != 1 || got[0] != filepath.Join(root, "nested", "rule.md") {
+		t.Errorf("rules with symlink cycle = %v, want only the Markdown file", got)
+	}
+}
+
+func TestListRulesSymlinkedRoot(t *testing.T) {
+	root := t.TempDir()
+	shared := filepath.Join(root, "shared")
+	writeFile(t, filepath.Join(shared, "direct.md"), "Direct rule.")
+	logical := filepath.Join(root, ".claude", "rules")
+	if err := os.MkdirAll(filepath.Dir(logical), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shared, logical); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join(logical, "direct.md")}
+	got := listRules(logical)
+	if len(got) != len(want) {
+		t.Fatalf("symlinked rules root returned %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("symlinked rules root returned %v, want %v", got, want)
+		}
+	}
+}
+
 // TestLoadMemoryTightBudgetIndexesRules: under a tight budget every
 // CLAUDE.md still loads in full; rules that do not fit are listed by path
 // and description, the most specific (project) rules loading first.

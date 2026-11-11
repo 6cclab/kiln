@@ -1,0 +1,23 @@
+{
+ "id": "20261111T200128Z-nested-rules-omitted",
+ "found_at": "2026-11-11T20:01:28Z",
+ "scenario": "instructions/nested-rules",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Nested Claude rules omitted from model instructions",
+ "observed": "The loader only inspected direct Markdown children; nested user and project rules were absent from assembled context.",
+ "expected": "Discover nested Markdown rules deterministically while preserving symlinked root behavior.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/memory/memory.go"
+  ],
+  "regression_test": "TestLoadMemoryNestedRules",
+  "note": "The regression failed with no nested files before the fix; package and race tests pass after it.",
+  "updated_at": "2026-11-11T20:01:28Z"
+ }
+}

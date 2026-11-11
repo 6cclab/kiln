@@ -52,6 +52,10 @@ being mistaken for the complete roadmap.
   two memory-import attempts per harness, hidden acceptance, independent blind
   reviews, and reproduced counterexamples. All four pass 29 acceptance cases
   but require revisions; candidate patches remain evaluation artifacts.
+- An [offline harness-fidelity audit](harness-fidelity-audit.md) with regressions
+  for omitted nested instructions, lost Anthropic redacted replay data, and
+  FIFO blocking in memory source validation. These are specific correctness
+  repairs; generated-code quality parity remains unproven.
 
 ## Still outstanding from the full plan
 
