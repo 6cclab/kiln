@@ -40,12 +40,24 @@ import (
 
 // TaskDispatchResult mirrors agent.DispatchResult's shape.
 type TaskDispatchResult struct {
-	Text      string
-	ToolCalls int
-	Chars     int
+	UsageByModel map[string]msg.Usage `json:"usageByModel,omitempty"`
+	Artifact     *TaskArtifact        `json:"artifact,omitempty"`
+	Text         string
+	ToolCalls    int
+	Chars        int
 	// Model is the provider/model the subagent actually ran on.
 	Model string
 	Usage msg.Usage
+}
+
+// TaskArtifact is the integration handle returned by an isolated worker.
+type TaskArtifact struct {
+	ManifestPath string   `json:"manifestPath,omitempty"`
+	BaseCommit   string   `json:"baseCommit"`
+	PatchPath    string   `json:"patchPath"`
+	SHA256       string   `json:"sha256"`
+	Bytes        int      `json:"bytes"`
+	ChangedFiles []string `json:"changedFiles,omitempty"`
 }
 
 // TaskRequest mirrors agent.DispatchRequest's shape — what the task tool
@@ -137,15 +149,44 @@ func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, roles map[str
 				// A failed subagent is a failed tool call, not a failed
 				// session. The parent can retry, dispatch elsewhere, or do
 				// the work itself.
-				return tool.Text(fmt.Sprintf("Subagent %q failed: %s", wanted, err.Error())), nil
+				out := tool.Text(fmt.Sprintf("Subagent %q failed: %s%s", wanted, err.Error(), taskArtifactText(result.Artifact)))
+				out.Usage = &result.Usage
+				out.UsageByModel = result.UsageByModel
+				if details, encodeErr := taskArtifactDetails(result.Artifact); encodeErr == nil {
+					out.Details = details
+				}
+				return out, nil
 			}
 			text := result.Text
 			if text == "" {
 				text = "(the subagent returned nothing)"
 			}
-			return tool.Text(text), nil
+			text += taskArtifactText(result.Artifact)
+			out := tool.Text(text)
+			out.Usage = &result.Usage
+			out.UsageByModel = result.UsageByModel
+			if details, encodeErr := taskArtifactDetails(result.Artifact); encodeErr == nil {
+				out.Details = details
+			}
+			return out, nil
 		},
 	}
+}
+
+func taskArtifactDetails(a *TaskArtifact) (json.RawMessage, error) {
+	if a == nil {
+		return nil, nil
+	}
+	return json.Marshal(struct {
+		Artifact *TaskArtifact `json:"artifact"`
+	}{Artifact: a})
+}
+
+func taskArtifactText(a *TaskArtifact) string {
+	if a == nil {
+		return ""
+	}
+	return fmt.Sprintf("\n\nWorker patch manifest: %s (%d bytes; %d files; base %s; SHA256 %s). Apply explicitly after review.", a.ManifestPath, a.Bytes, len(a.ChangedFiles), a.BaseCommit, a.SHA256)
 }
 
 // describeAgents is a standalone duplicate of agent.DescribeAgents; see

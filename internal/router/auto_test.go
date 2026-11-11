@@ -251,3 +251,20 @@ func TestVirtualProviderRefusesToStream(t *testing.T) {
 		t.Fatalf("Stream error = %v", err)
 	}
 }
+
+func TestConservativeRouterKeepsQualityAndEscalates(t *testing.T) {
+	a := Auto{Targets: autoT, Conservative: true}
+	got, err := a.Route(context.Background(), Request{Reason: ReasonContinuation, State: state(t, PhasePlanning, heavy), Messages: []msg.Message{user("go"), toolResult("edit", false)}})
+	if err != nil || modelKey(got.Model) != modelKey(heavy) {
+		t.Fatalf("downgraded after edit: %+v %v", got, err)
+	}
+	got, err = a.Route(context.Background(), Request{Reason: ReasonContinuation, State: state(t, PhaseImplementation, cheap), Messages: []msg.Message{user("go"), toolResult("bash", true), toolResult("bash", true)}})
+	if err != nil || modelKey(got.Model) != modelKey(heavy) {
+		t.Fatalf("failed to escalate: %+v %v", got, err)
+	}
+	a.Classifier = &stubClassifier{c: Complex}
+	got, err = a.Route(context.Background(), Request{Reason: ReasonUser, State: state(t, PhaseImplementation, cheap), Messages: []msg.Message{user("a new hard problem")}})
+	if err != nil || modelKey(got.Model) != modelKey(heavy) {
+		t.Fatalf("stale routing: %+v %v", got, err)
+	}
+}

@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -136,6 +137,8 @@ func runOne(c scenario.Check, art Artifacts) CheckResult {
 		return checkTurns(c, art)
 	case "subagent_used":
 		return checkSubagentUsed(c, art)
+	case "request_tokens":
+		return checkRequestTokens(c, art)
 	case "system_prompt_tokens":
 		return checkSystemPromptTokens(c, art)
 	default:
@@ -347,4 +350,28 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// checkRequestTokens estimates the complete recorded request, including tool
+// descriptions and schemas omitted by the legacy system-only check. It is a
+// wire-size estimate, not provider tokenization or billable usage.
+func checkRequestTokens(c scenario.Check, art Artifacts) CheckResult {
+	if art.FauxRequests == nil {
+		return skip(c, "no faux server for this run (live model)")
+	}
+	if len(art.FauxRequests) == 0 {
+		return result(c, false, "no requests recorded")
+	}
+	raw := art.FauxRequests[0].Body
+	if len(raw) == 0 {
+		return result(c, false, "no serialized request body recorded")
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return result(c, false, "invalid request body")
+	}
+	component := func(key string) int { return (len(payload[key]) + 3) / 4 }
+	total := (len(raw) + 3) / 4
+	detail := fmt.Sprintf("request wire estimate ~%d tokens (system ~%d, tools ~%d, messages ~%d); not provider usage", total, component("system"), component("tools"), component("messages"))
+	return result(c, c.Max <= 0 || total <= c.Max, detail)
 }

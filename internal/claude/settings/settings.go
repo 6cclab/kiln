@@ -66,9 +66,23 @@ type RuleSource struct {
 
 // Settings is the merged result of loading settings.json across scopes.
 type Settings struct {
-	Permissions Permissions
-	Model       string
-	EffortLevel string
+	LearningAutomation LearningAutomation
+	RuntimeEfficiency  RuntimeEfficiency
+	// EfficiencySources records the last accepted explicit source per efficiency field.
+	EfficiencySources      map[string]string
+	TaskVerificationStatus *bool
+	TaskStateEnabled       *bool
+	TaskStateTokens        *int
+	LearningEnabled        *bool
+	MemoryRetrievalTokens  *int
+	MemoryAutoRetrieve     *bool
+	RequestBudget          RequestBudget
+	Orchestration          Orchestration
+	PersonalMemoryEnabled  *bool
+	SkillDiscovery         SkillDiscovery
+	Permissions            Permissions
+	Model                  string
+	EffortLevel            string
 	// ModelRoles maps a role name (e.g. "fast", "structured", "heavy") to
 	// a "provider/model" string. Roles let a subagent or alias request a
 	// class of model ("give me something fast") without naming a literal
@@ -171,15 +185,27 @@ type rawPermissions struct {
 }
 
 type rawSettings struct {
-	Permissions             *rawPermissions   `json:"permissions"`
-	Model                   string            `json:"model"`
-	EffortLevel             string            `json:"effortLevel"`
-	ModelRoles              map[string]string `json:"modelRoles"`
-	Env                     map[string]string `json:"env"`
-	StatusLine              *StatusLineConfig `json:"statusLine"`
-	AutoMemoryEnabled       *bool             `json:"autoMemoryEnabled"`
-	PromptSuggestionEnabled *bool             `json:"promptSuggestionEnabled"`
-	AutoMemoryDirectory     string            `json:"autoMemoryDirectory"`
+	LearningAutomation      LearningAutomation `json:"learningAutomation"`
+	RuntimeEfficiency       RuntimeEfficiency  `json:"runtimeEfficiency"`
+	TaskVerificationStatus  *bool              `json:"taskVerificationStatus"`
+	TaskStateEnabled        *bool              `json:"taskStateEnabled"`
+	TaskStateTokens         *int               `json:"taskStateTokens"`
+	LearningEnabled         *bool              `json:"learningEnabled"`
+	MemoryRetrievalTokens   *int               `json:"memoryRetrievalTokens"`
+	MemoryAutoRetrieve      *bool              `json:"memoryAutoRetrieve"`
+	RequestBudget           RequestBudget      `json:"requestBudget"`
+	Orchestration           Orchestration      `json:"orchestration"`
+	PersonalMemoryEnabled   *bool              `json:"personalMemoryEnabled"`
+	SkillDiscovery          SkillDiscovery     `json:"skillDiscovery"`
+	Permissions             *rawPermissions    `json:"permissions"`
+	Model                   string             `json:"model"`
+	EffortLevel             string             `json:"effortLevel"`
+	ModelRoles              map[string]string  `json:"modelRoles"`
+	Env                     map[string]string  `json:"env"`
+	StatusLine              *StatusLineConfig  `json:"statusLine"`
+	AutoMemoryEnabled       *bool              `json:"autoMemoryEnabled"`
+	PromptSuggestionEnabled *bool              `json:"promptSuggestionEnabled"`
+	AutoMemoryDirectory     string             `json:"autoMemoryDirectory"`
 }
 
 // LoadOptions configures LoadSettings.
@@ -445,6 +471,64 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 				}
 			}
 		}
+		beforeEfficiency := efficiencyPointers(merged)
+		trustedEfficiencySource := f.cli || f.Scope == paths.ScopeUser
+		if !trustedEfficiencySource {
+			// Repository settings can turn off local learning and memory,
+			// but cannot undo a user's opt-out or enable opt-in capture.
+			if raw.LearningAutomation.Enabled != nil && *raw.LearningAutomation.Enabled {
+				raw.LearningAutomation.Enabled = nil
+			}
+			if raw.LearningEnabled != nil && *raw.LearningEnabled {
+				raw.LearningEnabled = nil
+			}
+			if raw.MemoryAutoRetrieve != nil && *raw.MemoryAutoRetrieve {
+				raw.MemoryAutoRetrieve = nil
+			}
+			if raw.PersonalMemoryEnabled != nil && *raw.PersonalMemoryEnabled {
+				raw.PersonalMemoryEnabled = nil
+			}
+			if raw.LearningAutomation.MaxOutcomes != nil && *raw.LearningAutomation.MaxOutcomes > PositiveOr(merged.LearningAutomation.MaxOutcomes, 100) {
+				raw.LearningAutomation.MaxOutcomes = nil
+			}
+			if raw.MemoryRetrievalTokens != nil && *raw.MemoryRetrievalTokens > PositiveOr(merged.MemoryRetrievalTokens, 512) {
+				raw.MemoryRetrievalTokens = nil
+			}
+		}
+		merged.LearningAutomation.merge(raw.LearningAutomation)
+		merged.RuntimeEfficiency.merge(raw.RuntimeEfficiency)
+		merged.SkillDiscovery.merge(raw.SkillDiscovery, f.Path)
+		merged.Orchestration.merge(raw.Orchestration)
+		if trustedEfficiencySource {
+			merged.RequestBudget.merge(raw.RequestBudget)
+		} else if !merged.RequestBudget.mergeRestrictive(raw.RequestBudget) {
+			// Rejected additions are not the effective freeModels source.
+			raw.RequestBudget.FreeModels = nil
+		}
+		if raw.TaskVerificationStatus != nil {
+			merged.TaskVerificationStatus = raw.TaskVerificationStatus
+		}
+		if raw.TaskStateEnabled != nil {
+			merged.TaskStateEnabled = raw.TaskStateEnabled
+		}
+		if raw.TaskStateTokens != nil && *raw.TaskStateTokens >= 128 && *raw.TaskStateTokens <= 8192 {
+			v := *raw.TaskStateTokens
+			merged.TaskStateTokens = &v
+		}
+		if raw.MemoryRetrievalTokens != nil && *raw.MemoryRetrievalTokens >= 128 && *raw.MemoryRetrievalTokens <= 8192 {
+			v := *raw.MemoryRetrievalTokens
+			merged.MemoryRetrievalTokens = &v
+		}
+		if raw.LearningEnabled != nil {
+			merged.LearningEnabled = raw.LearningEnabled
+		}
+		if raw.MemoryAutoRetrieve != nil {
+			merged.MemoryAutoRetrieve = raw.MemoryAutoRetrieve
+		}
+		if raw.PersonalMemoryEnabled != nil {
+			merged.PersonalMemoryEnabled = raw.PersonalMemoryEnabled
+		}
+		merged.recordEfficiencySources(beforeEfficiency, raw, f.Path)
 		if raw.Model != "" {
 			merged.Model = raw.Model
 		}
@@ -662,17 +746,22 @@ func urlHost(raw string) string {
 // not, and the difference is in an argument this cannot inspect safely.
 // Erring toward asking is the only correct default there.
 var ReadOnly = map[string]bool{
-	"read":           true,
-	"glob":           true,
-	"grep":           true,
-	"session_search": true,
-	"tool_search":    true,
-	"bash_output":    true,
+	"read":              true,
+	"glob":              true,
+	"grep":              true,
+	"session_search":    true,
+	"capability_search": true,
+	"skill_search":      true,
+	"memory_recall":     true,
+	"tool_search":       true,
+	"bash_output":       true,
 	// exit_plan_mode changes nothing on disk and is the only way out of plan
 	// mode; the TS READ_ONLY set omitted it, which made plan mode a dead end.
-	// todo_write only edits the in-memory todo list.
-	"exit_plan_mode": true,
-	"todo_write":     true,
+	// Task notes are session metadata; they do not edit project files.
+	"exit_plan_mode":      true,
+	"todo_write":          true,
+	"verification_status": true,
+	"task_state_write":    true,
 	// skill only reads a SKILL.md's own content; it changes nothing on
 	// disk, so plan mode (and manual mode) allow it the same way Read
 	// does.
@@ -823,7 +912,7 @@ func DecideFromHits(h Hits, toolName, primaryArg string, mode PermissionMode) De
 // PlanOverridesAllow reports a call that no allow rule, mode or session
 // "don't ask again" grant approves while planning: an edit.
 func PlanOverridesAllow(toolName, _ string) bool {
-	return toolFileKind(toolName) == kindEdit
+	return toolFileKind(toolName) == kindEdit || strings.EqualFold(toolName, "memory_write")
 }
 
 func decideRules(h Hits, toolName, primaryArg string, mode PermissionMode) Decision {

@@ -153,7 +153,7 @@ func (c *Classifier) Classify(ctx context.Context, req permission.ClassifyReques
 	if model.MaxTokens > 0 && model.MaxTokens < maxTokens {
 		maxTokens = model.MaxTokens
 	}
-	ch, wait := streamer.Stream(callCtx, model, []msg.Message{
+	ch, wait := provider.Stream(callCtx, streamer, model, []msg.Message{
 		msg.UserMessage{Role: msg.RoleUser, Content: user, Timestamp: time.Now().UnixMilli()},
 	}, provider.StreamOptions{SystemPrompt: system, MaxTokens: maxTokens})
 	for range ch {

@@ -47,6 +47,9 @@ const (
 // with modelRoles from those same files, which its role names resolve
 // against.
 type ModelRouterConfig struct {
+	ConservativeSource string
+	ConservativeSet    bool
+	Conservative       bool
 	// Set reports that a trusted file has a modelRouter key. When it is
 	// not set the router still runs on DefaultRouterRoles if ModelRoles
 	// resolves them.
@@ -91,9 +94,10 @@ func (c ModelRouterConfig) RoleFor(slot string) string {
 }
 
 type rawModelRouter struct {
-	Roles      map[string]string `json:"roles"`
-	Classifier *bool             `json:"classifier"`
-	Fallback   *string           `json:"fallback"`
+	Conservative *bool             `json:"conservative"`
+	Roles        map[string]string `json:"roles"`
+	Classifier   *bool             `json:"classifier"`
+	Fallback     *string           `json:"fallback"`
 }
 
 // LoadModelRouter reads "modelRouter" and "modelRoles" from user settings
@@ -167,10 +171,16 @@ func (cfg *ModelRouterConfig) applyRouter(path string, raw json.RawMessage) {
 		return
 	case "false":
 		cfg.Set, cfg.Disabled = true, true
+		cfg.Conservative = false
+		cfg.ConservativeSet = false
+		cfg.ConservativeSource = ""
 		cfg.Roles, cfg.Classifier, cfg.Fallback = nil, true, RouterFallbackPlan
 		return
 	case "true":
 		cfg.Set, cfg.Disabled = true, false
+		cfg.Conservative = false
+		cfg.ConservativeSet = false
+		cfg.ConservativeSource = ""
 		cfg.Roles, cfg.Classifier, cfg.Fallback = nil, true, RouterFallbackPlan
 		return
 	}
@@ -180,6 +190,13 @@ func (cfg *ModelRouterConfig) applyRouter(path string, raw json.RawMessage) {
 		return
 	}
 	cfg.Set, cfg.Disabled = true, false
+	cfg.ConservativeSet = r.Conservative != nil
+	cfg.Conservative = false
+	cfg.ConservativeSource = ""
+	if r.Conservative != nil {
+		cfg.Conservative = *r.Conservative
+		cfg.ConservativeSource = path
+	}
 	cfg.Roles, cfg.Classifier, cfg.Fallback = nil, true, RouterFallbackPlan
 	if r.Roles != nil {
 		cfg.Roles = map[string]string{}

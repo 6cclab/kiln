@@ -360,14 +360,15 @@ type AssistantMessage struct {
 
 // ToolResultMessage is the outcome of one tool call.
 type ToolResultMessage struct {
-	Content    Blocks          `json:"content"`
-	Details    json.RawMessage `json:"details,omitempty"`
-	IsError    bool            `json:"isError"`
-	Role       Role            `json:"role"`
-	Timestamp  int64           `json:"timestamp"`
-	ToolCallID string          `json:"toolCallId"`
-	ToolName   string          `json:"toolName"`
-	Usage      *Usage          `json:"usage,omitempty"`
+	UsageByModel map[string]Usage `json:"usageByModel,omitempty"`
+	Content      Blocks           `json:"content"`
+	Details      json.RawMessage  `json:"details,omitempty"`
+	IsError      bool             `json:"isError"`
+	Role         Role             `json:"role"`
+	Timestamp    int64            `json:"timestamp"`
+	ToolCallID   string           `json:"toolCallId"`
+	ToolName     string           `json:"toolName"`
+	Usage        *Usage           `json:"usage,omitempty"`
 }
 
 func (m SystemMessage) MessageRole() Role     { return RoleSystem }

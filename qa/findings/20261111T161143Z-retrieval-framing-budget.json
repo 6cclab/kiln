@@ -1,0 +1,29 @@
+{
+ "id": "20261111T161143Z-retrieval-framing-budget",
+ "found_at": "2026-11-11T16:11:43Z",
+ "scenario": "TestMemoryContextBudgetIncludesFraming",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "low",
+ "title": "Automatic retrieval framing exceeded configured context budgets",
+ "observed": "Memory and skill suggestion content consumed the full allowance before wrapper text was added.",
+ "expected": "The complete injected block fits its configured estimated token budget.",
+ "design_ref": null,
+ "evidence": [
+  "internal/cli/memory_context_test.go",
+  "internal/cli/discovery_test.go"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/discovery.go",
+   "internal/cli/memory_context.go"
+  ],
+  "regression_test": "TestDiscoveryBudgetIncludesFraming,TestMemoryContextBudgetIncludesFraming",
+  "after_evidence": [
+   "/tmp/kiln-latest-unit.log"
+  ],
+  "updated_at": "2026-11-11T16:12:06Z"
+ }
+}

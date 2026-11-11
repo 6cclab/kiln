@@ -72,6 +72,7 @@ func TestSkillsBudget_OverflowedSkillStillInvocableByModel(t *testing.T) {
 
 	addr, srv := startFaux(t, skillCallScript("faux-2", overflowed))
 	home, sessDir := scratchHome(t)
+	writeUserSettings(t, home, `{"skillDiscovery":{"mode":"catalog"}}`)
 	proj := scratchProject(t)
 	writeOverflowSkills(t, proj, skillCount)
 

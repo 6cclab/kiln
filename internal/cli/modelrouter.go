@@ -36,6 +36,15 @@ func loadModelRouter(ctx context.Context, cwd string, reg *provider.Registry, so
 	if w := claudesettings.ModelRouterIgnoredWarning(cwd, routerConfig.Ignored); w != "" {
 		warn(w)
 	}
+	efficiency := claudesettings.LoadSettings(cwd, claudesettings.LoadOptions{Sources: sources, Extra: extraSettings, Trusted: folderTrusted(cwd), Headless: true})
+	if !routerConfig.ConservativeSet && (efficiency.LearningEnabled == nil || *efficiency.LearningEnabled) && len(routerConfig.Roles) == 0 {
+		active, err := compatiblePolicy(ctx, cwd, routerConfig.ModelRoles)
+		if err != nil {
+			warn("Learned routing policy unavailable: " + err.Error())
+		} else {
+			applyLearnedRouting(&routerConfig, active)
+		}
+	}
 	return setupModelRouter(ctx, reg, routerConfig, session, warn, stderr, refreshed)
 }
 
@@ -370,7 +379,7 @@ func setupModelRouter(ctx context.Context, reg *provider.Registry, cfg claudeset
 	if cfg.Fallback == claudesettings.RouterFallbackHeuristic {
 		fallback = router.Heuristic
 	}
-	autoRouter := &router.Auto{Targets: t, Fallback: fallback}
+	autoRouter := &router.Auto{Targets: t, Fallback: fallback, Conservative: cfg.Conservative}
 	if cfg.Classifier {
 		if fastProblem == nil {
 			classifier := &router.LLMClassifier{Resolve: router.ClassifierResolver(reg, fastModel)}

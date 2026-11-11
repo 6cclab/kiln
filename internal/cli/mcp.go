@@ -139,7 +139,7 @@ func scopedMCPTools(tools []mcpgate.McpTool, active mcpgate.Posture) []mcpgate.M
 // same regate() rather than three copies of activeToolNames' argument
 // list drifting apart.
 type mcpSession struct {
-	// mu guards tools and tier: the background MCP connect writes them
+	// mu guards tools, tier, posture, state, and resident names: the background MCP connect writes them
 	// from its own goroutine while tool_search's admit and /model's switch
 	// read them from turn and command goroutines.
 	mu       sync.Mutex
@@ -169,9 +169,10 @@ type laneSetter interface {
 func (m *mcpSession) activeToolNames() []string {
 	m.mu.Lock()
 	tools, strategy := m.tools, m.tier.ToolStrategy
+	scope, state := mcpgate.IndexScope(m.posture, strategy), m.state
 	resident := append([]string(nil), m.resident...)
 	m.mu.Unlock()
-	return mcpgate.ActiveToolNames(tools, m.indexScope(), strategy, m.state, resident)
+	return mcpgate.ActiveToolNames(tools, scope, strategy, state, resident)
 }
 
 // addResident keeps names active whatever the MCP posture: tools that
@@ -184,17 +185,6 @@ func (m *mcpSession) addResident(names ...string) {
 		}
 	}
 	m.mu.Unlock()
-}
-
-// indexScope is the posture that scopes the index, tool_search and
-// admission under the current tier's strategy (mcpgate.IndexScope): the
-// configured posture on posture-index, every server on the full
-// strategies. Read fresh each time because /model can change the tier.
-func (m *mcpSession) indexScope() mcpgate.Posture {
-	m.mu.Lock()
-	strategy := m.tier.ToolStrategy
-	m.mu.Unlock()
-	return mcpgate.IndexScope(m.posture, strategy)
 }
 
 // regate recomputes the active tool set and pushes it onto the lane. A nil
@@ -250,8 +240,10 @@ func switchPosture(mcpSess *mcpSession, name string) error {
 	if !ok {
 		return fmt.Errorf("unknown posture %q", name)
 	}
+	mcpSess.mu.Lock()
 	mcpSess.posture = p
 	mcpSess.state = mcpgate.NewGateState()
+	mcpSess.mu.Unlock()
 	// tool_search and the prompt's server index were built for the old
 	// posture and hold the old gate state: without a rebuild, a search
 	// after the switch saw the old posture's servers and admitted tools

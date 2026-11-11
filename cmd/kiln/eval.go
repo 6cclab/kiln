@@ -15,22 +15,65 @@ import (
 	"strings"
 
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
+	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/eval"
+	"github.com/andrepato/harness/internal/learning"
 )
 
 func evalCommand(ctx context.Context, argv []string, stdout, stderr io.Writer) int {
 	if len(argv) == 0 {
-		fmt.Fprintln(stderr, "usage: kiln eval <run|report> [flags]")
+		evalDiagnostic(stderr, "usage: kiln eval <run|report|compare|plan> [flags]")
 		return 2
 	}
 	switch argv[0] {
+	case "plan":
+		return evalPlan(argv[1:], stdout, stderr)
 	case "run":
 		return evalRun(ctx, argv[1:], stdout, stderr)
 	case "report":
 		return evalReport(ctx, argv[1:], stdout, stderr)
+	case "compare":
+		return evalCompare(argv[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "kiln eval: unknown subcommand %q (want run or report)\n", argv[0])
+		evalDiagnostic(stderr, fmt.Sprintf("kiln eval: unknown subcommand %q (want run, report, compare or plan)", argv[0]))
 		return 2
+	}
+}
+
+func evalCompare(argv []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("kiln eval compare", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	kilnPath := fs.String("kiln", "", "kiln results JSONL file")
+	externalPath := fs.String("external", "", "external harness JSONL file")
+	planPath := fs.String("plan", "", "optional benchmark plan enforcing cohort and provenance")
+	format := fs.String("format", "text", "output format: text or json")
+	if err := fs.Parse(argv); err != nil {
+		return 2
+	}
+	if *kilnPath == "" || *externalPath == "" || fs.NArg() != 0 {
+		evalDiagnostic(stderr, "usage: kiln eval compare --kiln <results.jsonl> --external <external.jsonl> [--plan benchmark-plan.json] [--format text|json]")
+		return 2
+	}
+	comparison, err := comparePlannedFiles(*planPath, *kilnPath, *externalPath)
+	if err != nil {
+		evalDiagnostic(stderr, "kiln eval compare:", err)
+		return 2
+	}
+	out, err := eval.RenderComparison(comparison, *format)
+	if err != nil {
+		evalDiagnostic(stderr, "kiln eval compare:", err)
+		return 2
+	}
+	if _, err := io.WriteString(stdout, out); err != nil {
+		evalDiagnostic(stderr, "kiln eval compare:", err)
+		return 1
+	}
+	return 0
+}
+
+func evalDiagnostic(out io.Writer, values ...any) {
+	if _, err := fmt.Fprintln(out, values...); err != nil {
+		diag.L().Warn("evaluation diagnostic failed", "error", err)
 	}
 }
 
@@ -90,11 +133,13 @@ func evalRun(ctx context.Context, argv []string, stdout, stderr io.Writer) int {
 	fixturesDir := fs.String("fixtures", "eval/fixtures", "directory of fixture subdirectories")
 	resultsDir := fs.String("results", "eval/results", "directory to write results JSONL into")
 	modelsFlag := fs.String("models", "faux/faux-1", "comma-separated provider/model list")
+	policyFile := fs.String("policy", "", "validated efficiency policy JSON to evaluate")
 	rolesFlag := fs.String("roles", "", "role file (JSON) or k=v,k=v list; defaults to this machine's own modelRoles")
 	repeat := fs.Int("repeat", 1, "repeats per (scenario, model)")
 	parallel := fs.Int("j", defaultParallel(), "parallel workers")
 	keep := fs.Bool("keep", false, "keep per-run artifacts under <results>/runs/")
 	judge := fs.String("judge", "", "provider/model to grade live runs against a scenario's judge rubric")
+	onlyExact := fs.String("only-exact", "", "comma-separated exact scenario names; missing names are errors")
 	only := fs.String("only", "", "comma-separated scenario name/tag filter")
 	if err := fs.Parse(argv); err != nil {
 		return 2
@@ -128,6 +173,32 @@ func evalRun(ctx context.Context, argv []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	var exact []string
+	exactProvided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "only-exact" {
+			exactProvided = true
+		}
+	})
+	if exactProvided {
+		for _, name := range strings.Split(*onlyExact, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				if _, err := fmt.Fprintln(stderr, "kiln eval run: --only-exact requires nonempty scenario names"); err != nil {
+					return 1
+				}
+				return 2
+			}
+			exact = append(exact, name)
+		}
+	}
+	if len(exact) > 0 && len(filter) > 0 {
+		if _, err := fmt.Fprintln(stderr, "kiln eval run: --only and --only-exact are mutually exclusive"); err != nil {
+			return 1
+		}
+		return 2
+	}
+
 	// Live runs are judged by the evaluator's own "fast" role unless a
 	// judge is named: the plan's default, and the cheapest model configured.
 	if *judge == "" {
@@ -137,18 +208,31 @@ func evalRun(ctx context.Context, argv []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	var policy *learning.Policy
+	if *policyFile != "" {
+		p, err := learning.ReadPolicy(*policyFile)
+		if err != nil {
+			if _, writeErr := fmt.Fprintln(stderr, err); writeErr != nil {
+				return 1
+			}
+			return 2
+		}
+		policy = &p
+	}
 	summary, err := eval.Run(ctx, eval.RunOptions{
-		KilnBin:      *kilnBin,
-		ScenariosDir: *scenariosDir,
-		FixturesDir:  *fixturesDir,
-		ResultsDir:   *resultsDir,
-		Models:       models,
-		Roles:        roles,
-		Repeat:       *repeat,
-		Parallel:     *parallel,
-		Keep:         *keep,
-		Judge:        *judge,
-		Filter:       filter,
+		Policy:         policy,
+		KilnBin:        *kilnBin,
+		ScenariosDir:   *scenariosDir,
+		FixturesDir:    *fixturesDir,
+		ResultsDir:     *resultsDir,
+		Models:         models,
+		Roles:          roles,
+		Repeat:         *repeat,
+		Parallel:       *parallel,
+		Keep:           *keep,
+		Judge:          *judge,
+		Filter:         filter,
+		ExactScenarios: exact,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "kiln eval run:", err)

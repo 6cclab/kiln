@@ -118,7 +118,7 @@ func (c *LLMClassifier) Classify(ctx context.Context, prompt string) (Complexity
 	if model.MaxTokens > 0 && model.MaxTokens < maxTokens {
 		maxTokens = model.MaxTokens
 	}
-	ch, wait := streamer.Stream(callCtx, model, []msg.Message{
+	ch, wait := provider.Stream(callCtx, streamer, model, []msg.Message{
 		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(user)}, Timestamp: time.Now().UnixMilli()},
 	}, provider.StreamOptions{SystemPrompt: system, MaxTokens: maxTokens, ThinkingLevel: provider.ThinkingOff})
 	for range ch {

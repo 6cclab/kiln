@@ -376,7 +376,7 @@ func watchedRequest(ctx context.Context, streamer Streamer, model provider.Model
 	var ttft time.Duration
 	haveFirst := false
 	outChars := 0
-	ch, wait := streamer.Stream(watched, model, transcript, sOpts)
+	ch, wait := provider.Stream(watched, streamer, model, transcript, sOpts)
 	for ev := range ch {
 		watch.Reset(idle, stalledIdle)
 		if !haveFirst {

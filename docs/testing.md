@@ -599,3 +599,11 @@ benchmark directly with:
 ```bash
 go test -bench . -benchmem -run '^$' ./pkg/
 ```
+
+The `request_tokens` mechanical eval check accepts `max` and estimates the
+first faux request's complete serialized body, including tool declarations.
+Unlike `system_prompt_tokens`, it catches schema and description overhead.
+This is a bytes/4 wire-size estimate, not provider tokenization or billed usage;
+it is skipped for live providers. Session cost totals now include task-worker
+usage, recursively, committed with each tool result. Auxiliary usage does not
+replace the latest conversational request's context-occupancy measurement.

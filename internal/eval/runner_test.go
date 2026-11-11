@@ -5,7 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/andrepato/harness/internal/learning"
 )
 
 var kilnBin string
@@ -95,15 +98,19 @@ func setupTinyScenario(t *testing.T) (scenariosDir, fixturesDir string) {
 func TestRunEndToEndFaux(t *testing.T) {
 	scenariosDir, fixturesDir := setupTinyScenario(t)
 	resultsDir := t.TempDir()
+	// Near names and matching tags must not add unplanned evaluation jobs.
+	writeFile(t, filepath.Join(scenariosDir, "tiny-fix-extra", "scenario.yaml"), strings.ReplaceAll(tinyScenarioYAML, "name: tiny-fix", "name: tiny-fix-extra"))
+	writeFile(t, filepath.Join(scenariosDir, "tiny-fix-extra", "faux.yaml"), tinyFauxScript)
 
 	summary, err := Run(context.Background(), RunOptions{
-		KilnBin:      kilnBin,
-		ScenariosDir: scenariosDir,
-		FixturesDir:  fixturesDir,
-		ResultsDir:   resultsDir,
-		Models:       []ModelConfig{{Provider: "faux", Model: "faux-1", Faux: true}},
-		Repeat:       1,
-		Parallel:     2,
+		ExactScenarios: []string{"tiny-fix"},
+		KilnBin:        kilnBin,
+		ScenariosDir:   scenariosDir,
+		FixturesDir:    fixturesDir,
+		ResultsDir:     resultsDir,
+		Models:         []ModelConfig{{Provider: "faux", Model: "faux-1", Faux: true}},
+		Repeat:         1,
+		Parallel:       2,
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -112,6 +119,17 @@ func TestRunEndToEndFaux(t *testing.T) {
 		t.Fatalf("got %d records, want 1", len(summary.Records))
 	}
 	r := summary.Records[0]
+	wantBinary, hashErr := learning.FileHash(kilnBin)
+	if hashErr != nil {
+		t.Fatal(hashErr)
+	}
+	if r.BinaryHash != wantBinary || r.DatasetHash == "" || r.FixtureHash == "" || r.PolicyHash != "" {
+		t.Fatalf("baseline provenance missing or incorrect: %+v", r)
+	}
+	wantFixture, err := learning.Fingerprint(filepath.Join(fixturesDir, "tinymath"), nil)
+	if err != nil || r.FixtureHash != wantFixture {
+		t.Fatalf("fixture-only provenance = %s, want %s: %v", r.FixtureHash, wantFixture, err)
+	}
 	if !r.OK {
 		t.Fatalf("record not ok: reason=%q checks=%+v", r.Reason, r.Checks)
 	}
@@ -168,6 +186,7 @@ func TestRunRefusesLiveModelsWithoutOptIn(t *testing.T) {
 func TestRunKeepArtifacts(t *testing.T) {
 	scenariosDir, fixturesDir := setupTinyScenario(t)
 	resultsDir := t.TempDir()
+	policy := learning.Policy{SkillBudgetTokens: 512, ConservativeRouting: true}
 
 	summary, err := Run(context.Background(), RunOptions{
 		KilnBin:      kilnBin,
@@ -178,12 +197,35 @@ func TestRunKeepArtifacts(t *testing.T) {
 		Repeat:       1,
 		Parallel:     1,
 		Keep:         true,
+		Policy:       &policy,
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	if summary.Records[0].PolicyHash != policy.Hash() || summary.Records[0].DatasetHash == "" || summary.Records[0].FixtureHash == "" || summary.Records[0].BinaryHash == "" {
+		t.Fatalf("candidate provenance missing: %+v", summary.Records[0])
+	}
 	dest := filepath.Join(resultsDir, "runs", summary.Records[0].RunID, "tiny-fix", "faux-faux-1", "1")
-	if _, err := os.Stat(filepath.Join(dest, "stdout.json")); err != nil {
-		t.Fatalf("expected kept stdout.json at %s: %v", dest, err)
+	for _, item := range []struct {
+		name, got string
+	}{
+		{"stdout.json", summary.Records[0].Artifacts.Stdout},
+		{"session.jsonl", summary.Records[0].Artifacts.Session},
+		{"run.log", summary.Records[0].Artifacts.Log},
+	} {
+		want := filepath.Join(dest, item.name)
+		if item.got != want {
+			t.Errorf("recorded %s = %q, want retained path %q", item.name, item.got, want)
+		}
+		if info, err := os.Stat(item.got); err != nil || info.Size() == 0 {
+			t.Errorf("recorded %s is not retained: info=%v err=%v", item.name, info, err)
+		}
+	}
+	fromDisk, err := ReadRecords(summary.ResultsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fromDisk) != 1 || fromDisk[0].Artifacts != summary.Records[0].Artifacts {
+		t.Fatalf("persisted artifact paths = %+v, want %+v", fromDisk, summary.Records[0].Artifacts)
 	}
 }

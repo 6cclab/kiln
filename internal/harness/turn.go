@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/andrepato/harness/internal/crash"
@@ -175,6 +176,10 @@ func (l *Lane) opSettings() OpSettings {
 // start of this iteration.
 func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	l.invokeBeforeDrive(ctx)
+	progress := progressTracker{
+		same:  progressGuard{limit: l.h.opts.ProgressLimit},
+		cycle: cycleGuard{limit: l.h.opts.CycleLimit},
+	}
 	firstIteration := true
 	// compactNext: check the compaction threshold before the next request,
 	// which is an operation's first and every one after a tool step.
@@ -432,16 +437,42 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 				}
 			}
 			var runErr error
+			var effectiveArgs []map[string]any
 			if j-i >= 2 {
-				tip, runErr = l.executeConcurrentRun(ctx, operationID, tip, responseEntryID, toolCalls, batch, i, j)
+				tip, effectiveArgs, runErr = l.executeConcurrentRun(ctx, operationID, tip, responseEntryID, toolCalls, batch, i, j)
 			} else {
-				tip, runErr = l.executeOneTool(ctx, operationID, tip, responseEntryID, toolCalls[i], i, batch)
+				var effective map[string]any
+				tip, effective, runErr = l.executeOneTool(ctx, operationID, tip, responseEntryID, toolCalls[i], i, batch)
+				effectiveArgs = []map[string]any{effective}
 			}
 			if runErr != nil {
 				if ctx.Err() != nil {
 					return l.finishAborted(operationID, tip)
 				}
 				return l.finishFailed(operationID, tip, runErr)
+			}
+			for k := i; progress.enabled() && k < j; k++ {
+				entryID := batch[k].ResultEntryID
+				entry, ok := l.h.opts.Storage.GetEntries([]string{entryID})[entryID]
+				if !ok {
+					continue
+				}
+				result, ok := entry.Message.(msg.ToolResultMessage)
+				if !ok {
+					continue
+				}
+				call := toolCalls[k]
+				call.Arguments = effectiveArgs[k-i]
+				if err := progress.observe(call, result); err != nil {
+					for skipped := j; skipped < len(toolCalls); skipped++ {
+						var skipErr error
+						tip, skipErr = l.skipToolAfterProgressLimit(ctx, operationID, tip, responseEntryID, toolCalls[skipped], skipped, batch)
+						if skipErr != nil {
+							return l.finishFailed(operationID, tip, skipErr)
+						}
+					}
+					return l.finishFailed(operationID, tip, err)
+				}
 			}
 			i = j
 		}
@@ -684,7 +715,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		reqCtx, cancelReq := context.WithCancelCause(ctx)
 		first, idle := l.h.opts.stallLimits(promptTokens)
 		watch := watchStall(cancelReq, first, idle, promptTokens)
-		events, wait := p.Stream(reqCtx, m, transcript, opts)
+		events, wait := provider.Stream(reqCtx, p, m, transcript, opts)
 		for ev := range events {
 			watch.saw(ev)
 			if ev.Type == msg.EventError && ev.Error != nil {
@@ -796,15 +827,31 @@ func (l *Lane) isConcurrentTool(name string) bool {
 // sequential path used by drive() for a run of length 1 and by
 // resume.go's re-run of a not-yet-finished tool call. batch is the whole
 // turn's []ToolCallState; sourceIndex is this call's position in it.
-func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, batch []ToolCallState) (string, error) {
+func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, batch []ToolCallState) (string, map[string]any, error) {
+	if err := l.commitToolPending(operationID, assistantEntryID, call, sourceIndex, batch); err != nil {
+		return tip, nil, err
+	}
+	result, permOutcome, effectiveArgs, err := l.beginTool(ctx, operationID, call)
+	if err != nil {
+		return tip, nil, err
+	}
+	tip, err = l.commitToolResult(ctx, operationID, tip, assistantEntryID, call, sourceIndex, result, permOutcome, batch, true)
+	return tip, effectiveArgs, err
+}
+
+// skipToolAfterProgressLimit pairs a call the model already emitted with a
+// truthful result, without executing its effect. The next prompt can then
+// use a complete transcript even though this operation stopped early.
+func (l *Lane) skipToolAfterProgressLimit(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, batch []ToolCallState) (string, error) {
 	if err := l.commitToolPending(operationID, assistantEntryID, call, sourceIndex, batch); err != nil {
 		return tip, err
 	}
-	result, permOutcome, err := l.beginTool(ctx, operationID, call)
-	if err != nil {
-		return tip, err
+	result := msg.ToolResultMessage{
+		Role: msg.RoleToolResult, ToolCallID: call.ID, ToolName: call.Name,
+		Timestamp: l.now(), IsError: true,
+		Content: msg.Blocks{msg.Text("The call did not run because this operation reached its repeated-failure limit.")},
 	}
-	return l.commitToolResult(ctx, operationID, tip, assistantEntryID, call, sourceIndex, result, permOutcome, batch)
+	return l.commitToolResult(ctx, operationID, tip, assistantEntryID, call, sourceIndex, result, "", batch, false)
 }
 
 // executeConcurrentRun runs toolCalls[start:end] — a maximal run of
@@ -821,22 +868,23 @@ func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEn
 // handled once every goroutine has finished (never mid-flight): the
 // results of the calls before the first failure are committed, in source
 // order, and the first error is returned.
-func (l *Lane) executeConcurrentRun(ctx context.Context, operationID, tip, assistantEntryID string, toolCalls []msg.ToolCall, batch []ToolCallState, start, end int) (string, error) {
+func (l *Lane) executeConcurrentRun(ctx context.Context, operationID, tip, assistantEntryID string, toolCalls []msg.ToolCall, batch []ToolCallState, start, end int) (string, []map[string]any, error) {
 	for idx := start; idx < end; idx++ {
 		if err := l.commitToolPending(operationID, assistantEntryID, toolCalls[idx], idx, batch); err != nil {
-			return tip, err
+			return tip, nil, err
 		}
 	}
 
 	n := end - start
 	results := make([]msg.ToolResultMessage, n)
 	permOutcomes := make([]string, n)
+	effectiveArgs := make([]map[string]any, n)
 	beginErrs := make([]error, n)
 	var wg sync.WaitGroup
 	wg.Add(n)
 	for k := 0; k < n; k++ {
 		crash.Go(func() {
-			results[k], permOutcomes[k], beginErrs[k] = l.beginTool(ctx, operationID, toolCalls[start+k])
+			results[k], permOutcomes[k], effectiveArgs[k], beginErrs[k] = l.beginTool(ctx, operationID, toolCalls[start+k])
 			// Not deferred: after a panic in beginTool the batch must not
 			// go on to commit this call's zero result.
 			wg.Done()
@@ -846,16 +894,16 @@ func (l *Lane) executeConcurrentRun(ctx context.Context, operationID, tip, assis
 
 	for k := 0; k < n; k++ {
 		if err := beginErrs[k]; err != nil {
-			return tip, err
+			return tip, nil, err
 		}
 		idx := start + k
 		var err error
-		tip, err = l.commitToolResult(ctx, operationID, tip, assistantEntryID, toolCalls[idx], idx, results[k], permOutcomes[k], batch)
+		tip, err = l.commitToolResult(ctx, operationID, tip, assistantEntryID, toolCalls[idx], idx, results[k], permOutcomes[k], batch, true)
 		if err != nil {
-			return tip, err
+			return tip, nil, err
 		}
 	}
-	return tip, nil
+	return tip, effectiveArgs, nil
 }
 
 // commitToolPending writes the first of a tool call's three transactions:
@@ -880,9 +928,9 @@ func (l *Lane) commitToolPending(operationID, assistantEntryID string, call msg.
 // It performs no Storage.Commit, which is what makes it safe to run on a
 // goroutine of its own for a Concurrent run: every write for this call
 // happens later, back on the driving goroutine, in commitToolResult.
-func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolCall) (msg.ToolResultMessage, string, error) {
+func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolCall) (msg.ToolResultMessage, string, map[string]any, error) {
 	if err := ctx.Err(); err != nil {
-		return msg.ToolResultMessage{}, "", err
+		return msg.ToolResultMessage{}, "", nil, err
 	}
 	l.h.events.Emit(Event{Type: EventToolStart, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments})
 
@@ -980,14 +1028,16 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 	}
 
 	return msg.ToolResultMessage{
-		Content:    truncateToolResult(sanitizeToolResult(result.Content), l.h.ToolOutputTokens()),
-		Details:    result.Details,
-		IsError:    result.IsError,
-		Role:       msg.RoleToolResult,
-		Timestamp:  l.now(),
-		ToolCallID: call.ID,
-		ToolName:   call.Name,
-	}, before.PermissionOutcome, nil
+		Content:      truncateToolResult(sanitizeToolResult(result.Content), l.h.ToolOutputTokens()),
+		Details:      result.Details,
+		Usage:        result.Usage,
+		UsageByModel: result.UsageByModel,
+		IsError:      result.IsError,
+		Role:         msg.RoleToolResult,
+		Timestamp:    l.now(),
+		ToolCallID:   call.ID,
+		ToolName:     call.Name,
+	}, before.PermissionOutcome, args, nil
 }
 
 // argsRefusal is the tool result for input tool.CheckArgs refused.
@@ -1014,7 +1064,7 @@ func (h *Harness) CheckToolArgs(name string, args map[string]any) error {
 // commit. Both commits carry the whole-batch []ToolCallState snapshot with
 // this call's entry updated. It emits entry_added, runs after_tool, emits
 // tool_end, and returns the branch's new tip (the toolResult entry's id).
-func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, toolResultMsg msg.ToolResultMessage, permOutcome string, batch []ToolCallState) (string, error) {
+func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, toolResultMsg msg.ToolResultMessage, permOutcome string, batch []ToolCallState, runHooks bool) (string, error) {
 	resultEntryID := batch[sourceIndex].ResultEntryID
 
 	pendingRaw, err := json.Marshal(PendingToolResultPayload{Payload: toolResultMsg})
@@ -1051,13 +1101,35 @@ func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistant
 	if err != nil {
 		return tip, err
 	}
-	if _, err := l.h.opts.Storage.Commit([]session.Write{
-		session.EntryWrite{Entry: resultEntry}, pendingDel, tipW, argsDel, stateW3,
-	}); err != nil {
+	writes := []session.Write{session.EntryWrite{Entry: resultEntry}, pendingDel, tipW, argsDel, stateW3}
+	breakdown := toolResultMsg.UsageByModel
+	if len(breakdown) == 0 && toolResultMsg.Usage != nil {
+		breakdown = map[string]msg.Usage{"tool · " + call.Name: *toolResultMsg.Usage}
+	}
+	keys := make([]string, 0, len(breakdown))
+	for key := range breakdown {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for i, key := range keys {
+		details, err := json.Marshal(sideUsageDetails{Source: key})
+		if err != nil {
+			return tip, err
+		}
+		writes = append(writes, session.UsageWrite{Row: session.UsageRow{ID: fmt.Sprintf("%s:usage:%d", resultEntryID, i), EntryID: resultEntryID, Usage: breakdown[key], Details: details}})
+	}
+	if _, err := l.h.opts.Storage.Commit(writes); err != nil {
 		return tip, err
 	}
 	l.h.events.Emit(Event{Type: EventEntryAdded, Lane: l.name, EntryID: resultEntryID, ParentID: parentTip})
-	l.invokeAfterTool(ctx, call, &toolResultMsg)
+	for _, key := range keys {
+		totals := l.h.opts.Storage.GetStats().Usage
+		usage := breakdown[key]
+		l.h.events.Emit(Event{Type: EventUsage, SideUsage: &usage, UsageSource: key, UsageTotals: &totals})
+	}
+	if runHooks {
+		l.invokeAfterTool(ctx, call, &toolResultMsg)
+	}
 	l.h.events.Emit(Event{Type: EventToolEnd, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments, ToolResult: &toolResultMsg, PermissionOutcome: permOutcome})
 
 	// The toolResult commit above already carries op.state=checkpoint as

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -51,7 +52,9 @@ import (
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/gitfiles"
 	"github.com/andrepato/harness/internal/harness"
+	"github.com/andrepato/harness/internal/learning"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
+	personalmemory "github.com/andrepato/harness/internal/memory"
 	"github.com/andrepato/harness/internal/mods"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
@@ -568,6 +571,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		wanted = configured
 	}
 
+	ctx = withRequestBudget(ctx, settings.RequestBudget)
 	reg := buildRegistry()
 	// kiln/auto, the built-in virtual model, before the model is resolved:
 	// --model, settings or a resumed session may name it. Its settings
@@ -770,8 +774,21 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			}
 		}
 	}
+	if settings.SkillDiscovery.BudgetTokens == nil && (settings.LearningEnabled == nil || *settings.LearningEnabled) {
+		active, err := compatiblePolicy(ctx, cwd, settings.ModelRoles)
+		if err != nil {
+			startupWarn("Learned discovery policy unavailable: " + err.Error())
+		} else if active != nil && policyCoversModel(active, providerID+"/"+modelID) {
+			n := active.Policy.SkillBudgetTokens
+			settings.SkillDiscovery.BudgetTokens = &n
+			if settings.SkillDiscovery.Sources == nil {
+				settings.SkillDiscovery.Sources = map[string]string{}
+			}
+			settings.SkillDiscovery.Sources["budgetTokens"] = "evaluated personal policy"
+		}
+	}
 	allSkills := append(append([]skills.Skill{}, skillList...), pluginSkills...)
-	skillsIndex := formatSkillsIndex(allSkills, resolved.Tier.SkillsListingTokens)
+	skillsIndex := discoveryIndex(allSkills, settings.SkillDiscovery, resolved.Tier.SkillsListingTokens)
 
 	// The tier-sized part of the system prompt, per context window. The
 	// startup tier's is what was just loaded (with its warnings); with
@@ -788,7 +805,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			SmallTier:    tier.Name == "small",
 			BudgetTokens: tier.SystemPromptTokens - mem.EstimatedTokens,
 		})
-		return tierPrompt{Memory: mem.Text, AutoMemory: auto.Text, Skills: formatSkillsIndex(allSkills, tier.SkillsListingTokens)}
+		return tierPrompt{Memory: mem.Text, AutoMemory: auto.Text, Skills: discoveryIndex(allSkills, settings.SkillDiscovery, tier.SkillsListingTokens)}
 	})
 	promptMemo.seed(resolved.Tier, tierPrompt{Memory: memory.Text, AutoMemory: autoMemory.Text, Skills: skillsIndex})
 	// Primed whenever kiln/auto is registered, not only when the session
@@ -815,6 +832,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			Dir:         tools.SkillDir(s.FilePath),
 		})
 	}
+	skillRecords = discoveryRecords(skillRecords, settings.SkillDiscovery)
 	skillTool := tools.SkillTool(skillRecords)
 
 	permissionMode := resolvePermissionMode(args, settings)
@@ -976,8 +994,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// server tool, the posture index in the prompt) are built from a tool
 	// list so they can be rebuilt once the background connect finishes.
 	buildMCPExtras := func(mcpTools []mcpgate.McpTool) ([]*tool.Tool, string) {
-		scope := mcpSess.indexScope()
-		extras := []*tool.Tool{tools.ToolSearchTool(mcpTools, scope, mcpSess.state, onAdmit)}
+		mcpSess.mu.Lock()
+		scope := mcpgate.IndexScope(mcpSess.posture, mcpSess.tier.ToolStrategy)
+		state := mcpSess.state
+		mcpSess.mu.Unlock()
+		extras := []*tool.Tool{tools.ToolSearchTool(mcpTools, scope, state, onAdmit)}
 		for _, t := range mcpTools {
 			extras = append(extras, mcpgate.ToHarnessTool(hub, t))
 		}
@@ -1012,7 +1033,21 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// closure is not invoked until the model actually calls the tool
 	// during a turn, by which point it is always set (same reasoning as
 	// mcpSess.lane, just below).
+	var readCache *tools.ReadCache
+	if settings.RuntimeEfficiency.ReadCache != nil && *settings.RuntimeEfficiency.ReadCache {
+		readCache = tools.NewReadCache(claudesettings.PositiveOr(settings.RuntimeEfficiency.ReadCacheEntries, 32), claudesettings.PositiveOr(settings.RuntimeEfficiency.ReadCacheBytes, 4<<20))
+	}
 	dispatcher := &agent.Dispatcher{
+		ReadCache:       readCache,
+		ProgressLimit:   claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLimit, 0),
+		CycleLimit:      claudesettings.PositiveOr(settings.RuntimeEfficiency.CycleLimit, 0),
+		IsolatedWorkers: settings.Orchestration.IsolatedWorkers != nil && *settings.Orchestration.IsolatedWorkers,
+		Limits: &agent.DispatchLimits{
+			Concurrent: claudesettings.PositiveOr(settings.Orchestration.MaxConcurrent, 4),
+			Dispatches: claudesettings.PositiveOr(settings.Orchestration.MaxDispatches, 64),
+			Depth:      claudesettings.PositiveOr(settings.Orchestration.MaxDepth, 2),
+			Timeout:    time.Duration(claudesettings.PositiveOr(settings.Orchestration.TimeoutSeconds, 1800)) * time.Second,
+		},
 		Registry:     reg,
 		Gate:         gate,
 		Agents:       agentsList,
@@ -1038,7 +1073,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			Model:       req.Model,
 			ToolCallID:  req.ToolCallID,
 		})
-		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars, Model: r.Model, Usage: r.Usage}, err
+		result := tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars, Model: r.Model, Usage: r.Usage, UsageByModel: r.UsageByModel}
+		if r.Artifact != nil {
+			result.Artifact = &tools.TaskArtifact{ManifestPath: r.Artifact.ManifestPath, BaseCommit: r.Artifact.BaseCommit, PatchPath: r.Artifact.PatchPath, SHA256: r.Artifact.SHA256, Bytes: r.Artifact.Bytes, ChangedFiles: r.Artifact.ChangedFiles}
+		}
+		return result, err
 	}
 	taskTool := tools.TaskTool(dispatchFn, agentsList, settings.ModelRoles, resolved.Tier)
 
@@ -1114,9 +1153,44 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	mcpExtras, mcpIndexText := buildMCPExtras(mcpTools)
 	extraTools := make([]*tool.Tool, 0, len(mcpExtras)+7)
 	extraTools = append(extraTools, mcpExtras...)
-	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool, tools.WebSearchTool(), tools.AskUserQuestionTool())
+	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool, tools.SkillSearchTool(skillRecords, settings.SkillDiscovery.Budget(resolved.Tier.SkillsListingTokens)), tools.WebSearchTool(), tools.AskUserQuestionTool())
+	mcpSess.addResident("skill_search")
+	unifiedDiscovery := settings.SkillDiscovery.Unified == nil || *settings.SkillDiscovery.Unified
+	capabilities := capabilityCatalogWithAgents(func() []tools.SkillRecord { return skillRecords }, agentsList, settings.SkillDiscovery.IncludeAgents == nil || *settings.SkillDiscovery.IncludeAgents, mcpSess)
+	if unifiedDiscovery {
+		extraTools = append(extraTools, tools.CapabilitySearchToolDynamic(capabilities, capabilitySearchBudget(settings.SkillDiscovery, mcpSess), onAdmit))
+		mcpSess.addResident("capability_search")
+	}
 	extraTools = append(extraTools, bgShellTools...)
 	extraTools = append(extraTools, tools.WebFetchTool(nil))
+	taskReadAllowed := func(path string) bool {
+		return claudesettings.DecideIn(gate.Permissions(), cwd, "read", env.AbsolutePath(path), gate.Mode()) == claudesettings.Allow
+	}
+	verificationProofs := func() []tools.VerificationEvidence { return nil }
+	if settings.TaskStateEnabled == nil || *settings.TaskStateEnabled {
+		extraTools = append(extraTools, tools.TaskStateTool(), tools.VerificationBashTool(tools.BashTool(env), taskReadAllowed))
+		mcpSess.addResident("task_state_write")
+		if settings.TaskVerificationStatus == nil || *settings.TaskVerificationStatus {
+			extraTools = append(extraTools, tools.VerificationStatusTool(cwd, taskReadAllowed, func() []tools.VerificationEvidence { return verificationProofs() }, claudesettings.PositiveOr(settings.TaskStateTokens, 512)))
+			mcpSess.addResident("verification_status")
+		}
+	}
+	var projectMemory *personalmemory.Store
+	if settings.PersonalMemoryEnabled == nil || *settings.PersonalMemoryEnabled {
+		home, homeErr := os.UserHomeDir()
+		if homeErr == nil {
+			store, openErr := personalmemory.Open(filepath.Join(home, ".kiln", "memory.db"))
+			if openErr != nil {
+				startupWarn("Personal memory unavailable: " + openErr.Error())
+			} else {
+				defer diag.Close(store)
+				projectMemory = store
+				scope := memoryScope(cwd)
+				extraTools = append(extraTools, tools.MemoryTools(store, scope, memoryProjectRoot(cwd))...)
+				mcpSess.addResident("memory_recall", "memory_write")
+			}
+		}
+	}
 	if sessionSearch != nil {
 		extraTools = append(extraTools, tools.SessionSearchTool(sessionSearch))
 	}
@@ -1169,6 +1243,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 
 	started, err := agent.Start(ctx, agent.Options{
+		ReadCache:       readCache,
+		ProgressLimit:   claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLimit, 0),
+		CycleLimit:      claudesettings.PositiveOr(settings.RuntimeEfficiency.CycleLimit, 0),
 		Registry:        reg,
 		Resolved:        resolved,
 		Cwd:             cwd,
@@ -1188,6 +1265,16 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	if err != nil {
 		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
+	}
+	observerCleanup, observerErr := attachLearningObserver(ctx, cwd, started, learning.ObservationConfig{
+		Enabled:     (settings.LearningEnabled == nil || *settings.LearningEnabled) && settings.LearningAutomation.Enabled != nil && *settings.LearningAutomation.Enabled,
+		MaxOutcomes: claudesettings.PositiveOr(settings.LearningAutomation.MaxOutcomes, 100),
+		MinSamples:  claudesettings.PositiveOr(settings.LearningAutomation.MinSamples, 5),
+	})
+	if observerErr != nil {
+		startupWarn("Local learning observations unavailable: " + observerErr.Error())
+	} else {
+		defer observerCleanup()
 	}
 	mcpSess.lane = started.Lane
 	laneRef = started.Lane
@@ -1250,7 +1337,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		// Code returns.
 		runModel := func(ctx context.Context, label string, strm provider.Provider, model provider.Model, system string, transcript []msg.Message, maxTokens int, effort provider.ThinkingLevel) map[string]any {
 			opts := provider.StreamOptions{SystemPrompt: system, MaxTokens: maxTokens, ThinkingLevel: provider.ClampThinkingLevel(model, effort)}
-			ch, wait := strm.Stream(ctx, model, transcript, opts)
+			ch, wait := provider.Stream(ctx, strm, model, transcript, opts)
 			for range ch {
 			}
 			am, werr := wait()
@@ -1393,7 +1480,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				}
 				system := "You are a classifier. Choose the single label from the allowed list that best fits the text. Reply with exactly that label and nothing else. If none fits, reply with the single word NONE."
 				user := "Allowed labels:\n" + strings.Join(labels, "\n") + "\n\nText:\n" + text
-				ch, wait := streamer.Stream(cctx, model, []msg.Message{
+				ch, wait := provider.Stream(cctx, streamer, model, []msg.Message{
 					msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(user)}, Timestamp: time.Now().UnixMilli()},
 				}, provider.StreamOptions{SystemPrompt: system, MaxTokens: maxTokens})
 				for range ch {
@@ -1574,10 +1661,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// for /cost's by-model breakdown (internal/commands/builtins.go). The
 	// parent's own turns are added here from EventUsage's per-turn delta
 	// (UsageRow), keyed by the model that answered (creditUsage). A dispatched
-	// subagent's usage is added separately, from OnSubagentStop below,
-	// since that is the one dispatcher hook this file sets that neither
-	// print mode's subagentEventSink nor the TUI's bridge.SubagentSink
-	// (internal/tui/bridge.go) ever overwrites.
+	// subagent's usage is committed atomically with its task result and
+	// delivered through the same events, so resume and live totals agree.
 	var usageByModelMu sync.Mutex
 	// Seeded from the session's own usage rows: a resumed session's /cost
 	// covers its earlier runs too, as the footer's cost already does.
@@ -1589,9 +1674,6 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		usageByModelMu.Lock()
 		usageByModel[key] = usageByModel[key].Add(u)
 		usageByModelMu.Unlock()
-	}
-	addUsage := func(providerID, modelID string, u msg.Usage) {
-		addUsageAs(providerID+"/"+modelID, u)
 	}
 	started.Harness.Events().On(harness.EventUsage, func(ev harness.Event) {
 		creditUsage(ev, started.Model.Provider, started.Model.ID, addUsageAs)
@@ -1735,11 +1817,6 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			OnNotice: notice,
 		})
 	})
-	dispatcher.OnSubagentStop = func(_ context.Context, _ string, sub *agent.Started, _ string) {
-		if sub != nil {
-			addUsage(sub.Model.Provider, sub.Model.ID, sub.Harness.Stats().Usage)
-		}
-	}
 	dispatcher.BeforeSubagentStop = func(ctx context.Context, _ string, sub *agent.Started, info harness.StopInfo) harness.StopVerdict {
 		subSession, subTranscript := sessionID, transcriptPath
 		if sub != nil {
@@ -1919,6 +1996,25 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return started.Lane.Steer(auditFollowUp)
 	})
 
+	if projectMemory != nil && (settings.MemoryAutoRetrieve == nil || *settings.MemoryAutoRetrieve) {
+		started.Harness.Hooks().OnTransformContext(memoryContextForProjectAndGlobal(projectMemory, memoryScope(cwd), memoryProjectRoot(cwd), func() bool {
+			return claudesettings.DecideIn(gate.Permissions(), cwd, "memory_recall", "", gate.Mode()) == claudesettings.Allow
+		}, true, claudesettings.PositiveOr(settings.MemoryRetrievalTokens, 512)))
+	}
+	discoveryBudget := func() int { return settings.SkillDiscovery.Budget(started.CurrentTier().SkillsListingTokens) }
+	if unifiedDiscovery {
+		started.Harness.Hooks().OnTransformContext(capabilitySuggestionContext(capabilities, settings.SkillDiscovery, discoveryBudget))
+	} else {
+		started.Harness.Hooks().OnTransformContext(skillDiscoveryContext(skillRecords, settings.SkillDiscovery, discoveryBudget))
+	}
+	if settings.TaskStateEnabled == nil || *settings.TaskStateEnabled {
+		state, err := wireTaskState(ctx, started, todos, claudesettings.PositiveOr(settings.TaskStateTokens, 512), cwd, taskReadAllowed)
+		if err != nil {
+			writeDiagnostic(stderr, "kiln: task state recovery unavailable:", err)
+		} else {
+			verificationProofs = state.verificationSnapshot
+		}
+	}
 	started.Harness.Hooks().OnTransformContext(reminders.TransformContext)
 	started.Harness.Hooks().OnBeforeCompaction(func(context.Context) error {
 		reminders.Forget()
@@ -2043,7 +2139,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				Timestamp: time.Now().UnixMilli(),
 			})
 			opts := provider.StreamOptions{SystemPrompt: suggestSystemPrompt, MaxTokens: 64}
-			ch, wait := strm.Stream(ctx, model, transcript, opts)
+			ch, wait := provider.Stream(ctx, strm, model, transcript, opts)
 			for range ch {
 			}
 			am, err := wait()

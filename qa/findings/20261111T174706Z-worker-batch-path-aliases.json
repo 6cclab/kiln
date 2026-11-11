@@ -1,0 +1,22 @@
+{
+ "id": "20261111T174706Z-worker-batch-path-aliases",
+ "found_at": "2026-11-11T17:47:06Z",
+ "scenario": "worker/batch-preflight",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Worker batch preflight misses filesystem path aliases",
+ "observed": "Textual path comparison missed case and hard-link aliases; mode filtering omitted index-line submodule and symlink modes.",
+ "expected": "Batch preflight rejects aliased paths and unsupported file modes before applying verified patches.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/agent/worker_batch.go"
+  ],
+  "regression_test": "TestWorkerBatchPreflightFailuresLeaveParentClean",
+  "updated_at": "2026-11-11T17:47:13Z"
+ }
+}

@@ -1,0 +1,626 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-11",
+  "model": "claude-opus-4-8",
+  "kiln_binary_sha256": "e4432db1ec97bd58b2abd15acb40314517e872a5a4998ff618a8896cc02e144e",
+  "claude_cli_version": "2.1.319",
+  "claude_binary_sha256": null,
+  "user_total_cap_usd": 25.0,
+  "reported_total_cost_usd": 1.1484105,
+  "checks_passed": 52,
+  "checks_total": 52,
+  "rows": [
+    {
+      "scenario": "fix-bug",
+      "repeat": 1,
+      "arm": "kiln",
+      "wall_ms": 4914,
+      "reported_cost_usd": 0.0481655,
+      "quality": 1,
+      "checks_passed": 4,
+      "checks_total": 4,
+      "reported_tool_calls": 2,
+      "reported_turns": 3,
+      "binary_sha256": "e4432db1ec97bd58b2abd15acb40314517e872a5a4998ff618a8896cc02e144e",
+      "settings_sha256": "7f03e696b60ce8122af4a1a0ca57079746cd5caa5661ec1290c9b551e182009e",
+      "settings_semantic_sha256": "136963c04ed64ffb3614493ef497f71a7e148e9e6e8b38a4604e9b4aa9c53e31",
+      "fixture_sha256": "a07cc52d803817334819819944bdbaa5c1bb9577c850e53145f31b7710d13a83",
+      "scenario_sha256": "684e3d75a231c3c27669fff11362849575e89ef4506a8815413016155f1f759b",
+      "observed_model": "anthropic/claude-opus-4-8",
+      "observed_model_evidence": "Kiln session-start routing log model field",
+      "model": "anthropic/claude-opus-4-8",
+      "checks": [
+        {
+          "name": "add fixed",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "mul untouched",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        },
+        {
+          "name": "tool_calls",
+          "type": "tool_calls",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "fix-bug",
+      "repeat": 1,
+      "arm": "claude",
+      "wall_ms": 9227,
+      "reported_cost_usd": 0.1017785,
+      "quality": 1,
+      "checks_passed": 4,
+      "checks_total": 4,
+      "reported_tool_calls": 2,
+      "reported_turns": 3,
+      "binary_sha256": null,
+      "settings_sha256": "e5978f472c97131b6ba3c2ed9813d93ecb1bdfc40a350f7b88cc7e8dedf5e2b0",
+      "settings_semantic_sha256": "cc13683a76bfe7ca47a2ee0d586ef735f40db5304b1b380ba31cd2449d771c80",
+      "fixture_sha256": "a07cc52d803817334819819944bdbaa5c1bb9577c850e53145f31b7710d13a83",
+      "scenario_sha256": "684e3d75a231c3c27669fff11362849575e89ef4506a8815413016155f1f759b",
+      "observed_model": "claude-opus-4-8",
+      "observed_model_evidence": "Claude stream init and assistant message model fields",
+      "model": "claude-opus-4-8",
+      "checks": [
+        {
+          "name": "add fixed",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "mul untouched",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        },
+        {
+          "name": "tool_calls",
+          "type": "tool_calls",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "fix-bug",
+      "repeat": 2,
+      "arm": "claude",
+      "wall_ms": 7624,
+      "reported_cost_usd": 0.09035750000000001,
+      "quality": 1,
+      "checks_passed": 4,
+      "checks_total": 4,
+      "reported_tool_calls": 2,
+      "reported_turns": 3,
+      "binary_sha256": null,
+      "settings_sha256": "e5978f472c97131b6ba3c2ed9813d93ecb1bdfc40a350f7b88cc7e8dedf5e2b0",
+      "settings_semantic_sha256": "cc13683a76bfe7ca47a2ee0d586ef735f40db5304b1b380ba31cd2449d771c80",
+      "fixture_sha256": "a07cc52d803817334819819944bdbaa5c1bb9577c850e53145f31b7710d13a83",
+      "scenario_sha256": "684e3d75a231c3c27669fff11362849575e89ef4506a8815413016155f1f759b",
+      "observed_model": "claude-opus-4-8",
+      "observed_model_evidence": "Claude stream init and assistant message model fields",
+      "model": "claude-opus-4-8",
+      "checks": [
+        {
+          "name": "add fixed",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "mul untouched",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        },
+        {
+          "name": "tool_calls",
+          "type": "tool_calls",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "fix-bug",
+      "repeat": 2,
+      "arm": "kiln",
+      "wall_ms": 5187,
+      "reported_cost_usd": 0.021330750000000002,
+      "quality": 1,
+      "checks_passed": 4,
+      "checks_total": 4,
+      "reported_tool_calls": 2,
+      "reported_turns": 3,
+      "binary_sha256": "e4432db1ec97bd58b2abd15acb40314517e872a5a4998ff618a8896cc02e144e",
+      "settings_sha256": "04e3ec8c12722b3d6bfbcd31fe5ddf5685f337d66b1ea2bc3d7093ef0a4c57aa",
+      "settings_semantic_sha256": "03275e982bdd684f74f696cf377ab03cb87066fb6b5b362a089091159d22b1fc",
+      "fixture_sha256": "a07cc52d803817334819819944bdbaa5c1bb9577c850e53145f31b7710d13a83",
+      "scenario_sha256": "684e3d75a231c3c27669fff11362849575e89ef4506a8815413016155f1f759b",
+      "observed_model": "anthropic/claude-opus-4-8",
+      "observed_model_evidence": "Kiln session-start routing log model field",
+      "model": "anthropic/claude-opus-4-8",
+      "checks": [
+        {
+          "name": "add fixed",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "mul untouched",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        },
+        {
+          "name": "tool_calls",
+          "type": "tool_calls",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "add-feature-with-tests",
+      "repeat": 1,
+      "arm": "kiln",
+      "wall_ms": 9840,
+      "reported_cost_usd": 0.03011225,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 3,
+      "reported_turns": 4,
+      "binary_sha256": "e4432db1ec97bd58b2abd15acb40314517e872a5a4998ff618a8896cc02e144e",
+      "settings_sha256": "6cac85c599ac0b753f28e1c7340ca35088950b01444f4792afda330ad8841a70",
+      "settings_semantic_sha256": "fa2e9c4d58c36d1fe94f714e5b481b265c8678b58a4ab4dd94f828b93c00b107",
+      "fixture_sha256": "9bbc4286ad916693620eaf3977bc9891f96dd517cb994930bd8263e299772f03",
+      "scenario_sha256": "ab1cf594d7abff67cf326500a332f0f7a1bbeb50b87b7532ba04456d1c81ab67",
+      "observed_model": "anthropic/claude-opus-4-8",
+      "observed_model_evidence": "Kiln session-start routing log model field",
+      "model": "anthropic/claude-opus-4-8",
+      "checks": [
+        {
+          "name": "multiply added",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "go test passes",
+          "type": "command",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "add-feature-with-tests",
+      "repeat": 1,
+      "arm": "claude",
+      "wall_ms": 12205,
+      "reported_cost_usd": 0.11037649999999999,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 3,
+      "reported_turns": 4,
+      "binary_sha256": null,
+      "settings_sha256": "e5978f472c97131b6ba3c2ed9813d93ecb1bdfc40a350f7b88cc7e8dedf5e2b0",
+      "settings_semantic_sha256": "cc13683a76bfe7ca47a2ee0d586ef735f40db5304b1b380ba31cd2449d771c80",
+      "fixture_sha256": "9bbc4286ad916693620eaf3977bc9891f96dd517cb994930bd8263e299772f03",
+      "scenario_sha256": "ab1cf594d7abff67cf326500a332f0f7a1bbeb50b87b7532ba04456d1c81ab67",
+      "observed_model": "claude-opus-4-8",
+      "observed_model_evidence": "Claude stream init and assistant message model fields",
+      "model": "claude-opus-4-8",
+      "checks": [
+        {
+          "name": "multiply added",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "go test passes",
+          "type": "command",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "add-feature-with-tests",
+      "repeat": 2,
+      "arm": "claude",
+      "wall_ms": 12359,
+      "reported_cost_usd": 0.1101005,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 3,
+      "reported_turns": 4,
+      "binary_sha256": null,
+      "settings_sha256": "e5978f472c97131b6ba3c2ed9813d93ecb1bdfc40a350f7b88cc7e8dedf5e2b0",
+      "settings_semantic_sha256": "cc13683a76bfe7ca47a2ee0d586ef735f40db5304b1b380ba31cd2449d771c80",
+      "fixture_sha256": "9bbc4286ad916693620eaf3977bc9891f96dd517cb994930bd8263e299772f03",
+      "scenario_sha256": "ab1cf594d7abff67cf326500a332f0f7a1bbeb50b87b7532ba04456d1c81ab67",
+      "observed_model": "claude-opus-4-8",
+      "observed_model_evidence": "Claude stream init and assistant message model fields",
+      "model": "claude-opus-4-8",
+      "checks": [
+        {
+          "name": "multiply added",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "go test passes",
+          "type": "command",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "add-feature-with-tests",
+      "repeat": 2,
+      "arm": "kiln",
+      "wall_ms": 8541,
+      "reported_cost_usd": 0.029974,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 3,
+      "reported_turns": 4,
+      "binary_sha256": "e4432db1ec97bd58b2abd15acb40314517e872a5a4998ff618a8896cc02e144e",
+      "settings_sha256": "6cac85c599ac0b753f28e1c7340ca35088950b01444f4792afda330ad8841a70",
+      "settings_semantic_sha256": "fa2e9c4d58c36d1fe94f714e5b481b265c8678b58a4ab4dd94f828b93c00b107",
+      "fixture_sha256": "9bbc4286ad916693620eaf3977bc9891f96dd517cb994930bd8263e299772f03",
+      "scenario_sha256": "ab1cf594d7abff67cf326500a332f0f7a1bbeb50b87b7532ba04456d1c81ab67",
+      "observed_model": "anthropic/claude-opus-4-8",
+      "observed_model_evidence": "Kiln session-start routing log model field",
+      "model": "anthropic/claude-opus-4-8",
+      "checks": [
+        {
+          "name": "multiply added",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "go test passes",
+          "type": "command",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "refactor-preserving-tests",
+      "repeat": 1,
+      "arm": "kiln",
+      "wall_ms": 14181,
+      "reported_cost_usd": 0.04504500000000001,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 4,
+      "reported_turns": 5,
+      "binary_sha256": "e4432db1ec97bd58b2abd15acb40314517e872a5a4998ff618a8896cc02e144e",
+      "settings_sha256": "6cac85c599ac0b753f28e1c7340ca35088950b01444f4792afda330ad8841a70",
+      "settings_semantic_sha256": "fa2e9c4d58c36d1fe94f714e5b481b265c8678b58a4ab4dd94f828b93c00b107",
+      "fixture_sha256": "7f862b802f888a271c8fb58d22301d452ae47105c2471446f2d1942f988df1c4",
+      "scenario_sha256": "0f02b6ad674efc01013870d974666c9740e3b44245fac4b3dfac59399ab2cc6b",
+      "observed_model": "anthropic/claude-opus-4-8",
+      "observed_model_evidence": "Kiln session-start routing log model field",
+      "model": "anthropic/claude-opus-4-8",
+      "checks": [
+        {
+          "name": "Clamp helper added",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "go test passes",
+          "type": "command",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "refactor-preserving-tests",
+      "repeat": 1,
+      "arm": "claude",
+      "wall_ms": 18317,
+      "reported_cost_usd": 0.1423885,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 5,
+      "reported_turns": 6,
+      "binary_sha256": null,
+      "settings_sha256": "e5978f472c97131b6ba3c2ed9813d93ecb1bdfc40a350f7b88cc7e8dedf5e2b0",
+      "settings_semantic_sha256": "cc13683a76bfe7ca47a2ee0d586ef735f40db5304b1b380ba31cd2449d771c80",
+      "fixture_sha256": "7f862b802f888a271c8fb58d22301d452ae47105c2471446f2d1942f988df1c4",
+      "scenario_sha256": "0f02b6ad674efc01013870d974666c9740e3b44245fac4b3dfac59399ab2cc6b",
+      "observed_model": "claude-opus-4-8",
+      "observed_model_evidence": "Claude stream init and assistant message model fields",
+      "model": "claude-opus-4-8",
+      "checks": [
+        {
+          "name": "Clamp helper added",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "go test passes",
+          "type": "command",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "refactor-preserving-tests",
+      "repeat": 2,
+      "arm": "claude",
+      "wall_ms": 21363,
+      "reported_cost_usd": 0.1558075,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 5,
+      "reported_turns": 6,
+      "binary_sha256": null,
+      "settings_sha256": "e5978f472c97131b6ba3c2ed9813d93ecb1bdfc40a350f7b88cc7e8dedf5e2b0",
+      "settings_semantic_sha256": "cc13683a76bfe7ca47a2ee0d586ef735f40db5304b1b380ba31cd2449d771c80",
+      "fixture_sha256": "7f862b802f888a271c8fb58d22301d452ae47105c2471446f2d1942f988df1c4",
+      "scenario_sha256": "0f02b6ad674efc01013870d974666c9740e3b44245fac4b3dfac59399ab2cc6b",
+      "observed_model": "claude-opus-4-8",
+      "observed_model_evidence": "Claude stream init and assistant message model fields",
+      "model": "claude-opus-4-8",
+      "checks": [
+        {
+          "name": "Clamp helper added",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "go test passes",
+          "type": "command",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "refactor-preserving-tests",
+      "repeat": 2,
+      "arm": "kiln",
+      "wall_ms": 11986,
+      "reported_cost_usd": 0.037639,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 3,
+      "reported_turns": 4,
+      "binary_sha256": "e4432db1ec97bd58b2abd15acb40314517e872a5a4998ff618a8896cc02e144e",
+      "settings_sha256": "6cac85c599ac0b753f28e1c7340ca35088950b01444f4792afda330ad8841a70",
+      "settings_semantic_sha256": "fa2e9c4d58c36d1fe94f714e5b481b265c8678b58a4ab4dd94f828b93c00b107",
+      "fixture_sha256": "7f862b802f888a271c8fb58d22301d452ae47105c2471446f2d1942f988df1c4",
+      "scenario_sha256": "0f02b6ad674efc01013870d974666c9740e3b44245fac4b3dfac59399ab2cc6b",
+      "observed_model": "anthropic/claude-opus-4-8",
+      "observed_model_evidence": "Kiln session-start routing log model field",
+      "model": "anthropic/claude-opus-4-8",
+      "checks": [
+        {
+          "name": "Clamp helper added",
+          "type": "file_matches",
+          "pass": true
+        },
+        {
+          "name": "go test passes",
+          "type": "command",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "answer-codebase-question",
+      "repeat": 1,
+      "arm": "kiln",
+      "wall_ms": 5339,
+      "reported_cost_usd": 0.02248625,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 2,
+      "reported_turns": 3,
+      "binary_sha256": "e4432db1ec97bd58b2abd15acb40314517e872a5a4998ff618a8896cc02e144e",
+      "settings_sha256": "e62fb982f93dcba6df2a8d5c51c6e1033cb187ec381bf3850ad7bb514e5f30ae",
+      "settings_semantic_sha256": "9c36573d8bf8030f7b3eac089af9519f0063f32ce9d35ef3750beef2686d68a7",
+      "fixture_sha256": "e59d69ae74c517b9bdbee7df658750185ba07f331e117aa682554dbdff824773",
+      "scenario_sha256": "e8ca4b38352ad40610ab3ad0b261d4ce8710ea8d628333314065ed447d7df6fd",
+      "observed_model": "anthropic/claude-opus-4-8",
+      "observed_model_evidence": "Kiln session-start routing log model field",
+      "model": "anthropic/claude-opus-4-8",
+      "checks": [
+        {
+          "name": "version.go unchanged",
+          "type": "file_equals",
+          "pass": true
+        },
+        {
+          "name": "reports 3.2.1",
+          "type": "text_matches",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "answer-codebase-question",
+      "repeat": 1,
+      "arm": "claude",
+      "wall_ms": 7740,
+      "reported_cost_usd": 0.089549,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 2,
+      "reported_turns": 3,
+      "binary_sha256": null,
+      "settings_sha256": "e5978f472c97131b6ba3c2ed9813d93ecb1bdfc40a350f7b88cc7e8dedf5e2b0",
+      "settings_semantic_sha256": "cc13683a76bfe7ca47a2ee0d586ef735f40db5304b1b380ba31cd2449d771c80",
+      "fixture_sha256": "e59d69ae74c517b9bdbee7df658750185ba07f331e117aa682554dbdff824773",
+      "scenario_sha256": "e8ca4b38352ad40610ab3ad0b261d4ce8710ea8d628333314065ed447d7df6fd",
+      "observed_model": "claude-opus-4-8",
+      "observed_model_evidence": "Claude stream init and assistant message model fields",
+      "model": "claude-opus-4-8",
+      "checks": [
+        {
+          "name": "version.go unchanged",
+          "type": "file_equals",
+          "pass": true
+        },
+        {
+          "name": "reports 3.2.1",
+          "type": "text_matches",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "answer-codebase-question",
+      "repeat": 2,
+      "arm": "claude",
+      "wall_ms": 7851,
+      "reported_cost_usd": 0.08924,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 2,
+      "reported_turns": 3,
+      "binary_sha256": null,
+      "settings_sha256": "e5978f472c97131b6ba3c2ed9813d93ecb1bdfc40a350f7b88cc7e8dedf5e2b0",
+      "settings_semantic_sha256": "cc13683a76bfe7ca47a2ee0d586ef735f40db5304b1b380ba31cd2449d771c80",
+      "fixture_sha256": "e59d69ae74c517b9bdbee7df658750185ba07f331e117aa682554dbdff824773",
+      "scenario_sha256": "e8ca4b38352ad40610ab3ad0b261d4ce8710ea8d628333314065ed447d7df6fd",
+      "observed_model": "claude-opus-4-8",
+      "observed_model_evidence": "Claude stream init and assistant message model fields",
+      "model": "claude-opus-4-8",
+      "checks": [
+        {
+          "name": "version.go unchanged",
+          "type": "file_equals",
+          "pass": true
+        },
+        {
+          "name": "reports 3.2.1",
+          "type": "text_matches",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "scenario": "answer-codebase-question",
+      "repeat": 2,
+      "arm": "kiln",
+      "wall_ms": 5920,
+      "reported_cost_usd": 0.024059749999999998,
+      "quality": 1,
+      "checks_passed": 3,
+      "checks_total": 3,
+      "reported_tool_calls": 2,
+      "reported_turns": 3,
+      "binary_sha256": "e4432db1ec97bd58b2abd15acb40314517e872a5a4998ff618a8896cc02e144e",
+      "settings_sha256": "e62fb982f93dcba6df2a8d5c51c6e1033cb187ec381bf3850ad7bb514e5f30ae",
+      "settings_semantic_sha256": "9c36573d8bf8030f7b3eac089af9519f0063f32ce9d35ef3750beef2686d68a7",
+      "fixture_sha256": "e59d69ae74c517b9bdbee7df658750185ba07f331e117aa682554dbdff824773",
+      "scenario_sha256": "e8ca4b38352ad40610ab3ad0b261d4ce8710ea8d628333314065ed447d7df6fd",
+      "observed_model": "anthropic/claude-opus-4-8",
+      "observed_model_evidence": "Kiln session-start routing log model field",
+      "model": "anthropic/claude-opus-4-8",
+      "checks": [
+        {
+          "name": "version.go unchanged",
+          "type": "file_equals",
+          "pass": true
+        },
+        {
+          "name": "reports 3.2.1",
+          "type": "text_matches",
+          "pass": true
+        },
+        {
+          "name": "result_ok",
+          "type": "result_ok",
+          "pass": true
+        }
+      ]
+    }
+  ]
+}

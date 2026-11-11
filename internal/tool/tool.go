@@ -18,6 +18,9 @@ import (
 // machine-readable details kept in the session but not sent to the model,
 // and whether the call failed.
 type Result struct {
+	UsageByModel map[string]msg.Usage `json:"usageByModel,omitempty"`
+	// Usage is auxiliary model usage incurred by this tool, aggregated once by the driving lane.
+	Usage   *msg.Usage
 	Content msg.Blocks
 	Details json.RawMessage
 	IsError bool

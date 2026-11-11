@@ -1,0 +1,23 @@
+{
+ "id": "20261111T180756Z-repository-memory-learning-optin",
+ "found_at": "2026-11-11T18:07:56Z",
+ "scenario": "settings/efficiency-trust",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Repository settings can enable local learning and memory retrieval",
+ "observed": "Project or local settings can set learningAutomation.enabled, learningEnabled, personalMemoryEnabled, and memoryAutoRetrieve to true after the user disabled them, and increase memory retrieval allowance.",
+ "expected": "Repository settings may disable these controls or tighten retention/retrieval allowances; only user or explicit CLI settings may enable or widen them.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/settings/settings.go"
+  ],
+  "regression_test": "TestProjectCannotEnableOptInLearningOrUndoMemoryOptOut",
+  "note": "Project/local settings may disable but cannot re-enable user opt-outs or opt-in learning capture; numeric retention and retrieval allowances only tighten.",
+  "updated_at": "2026-11-11T18:08:00Z"
+ }
+}
