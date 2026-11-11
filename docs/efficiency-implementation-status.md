@@ -56,6 +56,10 @@ being mistaken for the complete roadmap.
   for omitted nested instructions, lost Anthropic redacted replay data, and
   FIFO blocking in memory source validation. These are specific correctness
   repairs; generated-code quality parity remains unproven.
+- A [post-fix real-work repeat](fidelity-comparison-report.md) with three blinded
+  judges: both harnesses completed twice, and Kiln used 32.5% less reported cost
+  and 42.7% less time. Judges tied the strongest Kiln and Claude patches; all
+  four still need correctness fixes. Cumulative comparison spend is $33.85/$50.
 
 ## Still outstanding from the full plan
 

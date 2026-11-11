@@ -55,3 +55,23 @@ orders. They do not see harness identity, prices, timings, model transcripts, or
 each other's reviews until their independent assessments are complete. Their
 scores are agent-assisted judgments, not human ground truth. One feature and
 two attempts per arm cannot establish general harness superiority.
+
+## Authorized post-fidelity follow-up
+
+The [follow-up report](../../../docs/fidelity-comparison-report.md) retains the
+same task baseline and Opus settings, with Kiln executable revision `d4d870d`
+and three independent blinded GPT-6-Sol judges. Its separate
+`run_fidelity_comparison.py` preserves this cohort's exact paid runner, including
+the single-result parser limitation encountered after Claude's final process
+exited successfully. No paid retry was made; accounting uses its last cumulative
+success result once. This runner is frozen evidence, not a reusable service.
+
+`grade_fidelity_comparison.py` applies the prior cohort's offline infrastructure
+corrections uniformly from the first pass. `supplemental_fidelity_probes.py`
+contains post-review malformed-closing-delimiter cases, separate from the frozen
+29-case acceptance suite. Both make no model calls.
+
+The follow-up ledger begins at $17.7736685 and ends at $33.85363025 of the $50
+authorization. Further paid runs require a new cohort ledger that accounts for
+all existing spend; do not rerun either historical runner as though its starting
+balance were current. Frozen candidate patches are evaluation artifacts only.
