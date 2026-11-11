@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,12 +15,15 @@ func TestVendoredFileCount(t *testing.T) {
 	}
 	n := 0
 	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
 		if filepath.Ext(e.Name()) == ".json" {
 			n++
 		}
 	}
-	if n != 41 {
-		t.Fatalf("vendored provider files = %d, want 41", n)
+	if n != 43 {
+		t.Fatalf("vendored provider files = %d, want 43", n)
 	}
 }
 

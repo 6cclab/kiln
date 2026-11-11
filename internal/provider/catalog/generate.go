@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func main() {
@@ -39,7 +40,10 @@ func main() {
 
 	n := 0
 	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+		// Skip dotfiles (pi-ai 1.5.2 ships a .manifest.json of build hashes
+		// alongside the provider files; it is not a catalog file and must not
+		// be vendored or embedded) and anything that is not a .json file.
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
 		must(copyFile(filepath.Join(srcData, e.Name()), filepath.Join(outDir, e.Name())))

@@ -121,7 +121,7 @@ var Providers = []ProviderConfig{
 	{ID: "google", Name: "Google", AuthKind: AuthAPIKey, EnvVars: []string{"GEMINI_API_KEY"}},
 	{ID: "google-vertex", Name: "Google Vertex", AuthKind: AuthAPIKey, EnvVars: []string{"GOOGLE_CLOUD_API_KEY"}},
 	{ID: "amazon-bedrock", Name: "Amazon Bedrock", AuthKind: AuthAPIKey},
-	{ID: "azure-openai-responses", Name: "Azure OpenAI", AuthKind: AuthAPIKey, EnvVars: []string{"AZURE_OPENAI_API_KEY"}},
+	{ID: "azure", Name: "Azure OpenAI", AuthKind: AuthAPIKey, EnvVars: []string{"AZURE_OPENAI_API_KEY"}},
 	{ID: "mistral", Name: "Mistral", AuthKind: AuthAPIKey, EnvVars: []string{"MISTRAL_API_KEY"}},
 	{ID: "deepseek", Name: "DeepSeek", AuthKind: AuthAPIKey, EnvVars: []string{"DEEPSEEK_API_KEY"}},
 	{ID: "groq", Name: "Groq", AuthKind: AuthAPIKey, EnvVars: []string{"GROQ_API_KEY"}},
@@ -141,10 +141,14 @@ var Providers = []ProviderConfig{
 	{ID: "qwen-token-plan", Name: "Qwen Token Plan", AuthKind: AuthAPIKey, EnvVars: []string{"QWEN_TOKEN_PLAN_API_KEY"}},
 	{ID: "qwen-token-plan-cn", Name: "Qwen Token Plan CN", AuthKind: AuthAPIKey, EnvVars: []string{"QWEN_TOKEN_PLAN_CN_API_KEY"}},
 	{ID: "qwen-token-plan-individual", Name: "Qwen Token Plan Individual", AuthKind: AuthAPIKey, EnvVars: []string{"QWEN_TOKEN_PLAN_API_KEY"}},
+	{ID: "qwen-token-plan-individual-cn", Name: "Qwen Token Plan Individual CN", AuthKind: AuthAPIKey, EnvVars: []string{"QWEN_TOKEN_PLAN_CN_API_KEY"}},
 	{ID: "xiaomi", Name: "Xiaomi", AuthKind: AuthAPIKey, EnvVars: []string{"XIAOMI_API_KEY"}},
 	{ID: "xiaomi-token-plan-ams", Name: "Xiaomi Token Plan AMS", AuthKind: AuthAPIKey, EnvVars: []string{"XIAOMI_TOKEN_PLAN_AMS_API_KEY"}},
 	{ID: "xiaomi-token-plan-cn", Name: "Xiaomi Token Plan CN", AuthKind: AuthAPIKey, EnvVars: []string{"XIAOMI_TOKEN_PLAN_CN_API_KEY"}},
 	{ID: "xiaomi-token-plan-sgp", Name: "Xiaomi Token Plan SGP", AuthKind: AuthAPIKey, EnvVars: []string{"XIAOMI_TOKEN_PLAN_SGP_API_KEY"}},
+	// typesafe serves a single classifier model (jev-latest) over the
+	// typesafe-system-one shape, which this phase lists but does not stream.
+	{ID: "typesafe", Name: "Typesafe", AuthKind: AuthAPIKey, EnvVars: []string{"TYPESAFE_API_KEY"}},
 }
 
 var providerConfigByID map[string]ProviderConfig

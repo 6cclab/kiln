@@ -16,7 +16,7 @@ import (
 	"github.com/andrepato/harness/internal/msg"
 )
 
-// Api is one of pi-ai's ten known API shapes. Custom strings are also valid
+// Api is one of pi-ai's known API shapes. Custom strings are also valid
 // (pi's Api type is KnownApi | string), so Api is a plain string type rather
 // than a closed enum.
 type Api string
@@ -32,6 +32,12 @@ const (
 	ApiBedrockConverseStream Api = "bedrock-converse-stream"
 	ApiMistralConversations  Api = "mistral-conversations"
 	ApiPiMessages            Api = "pi-messages"
+	// Shapes present in the vendored catalog that no provider streams yet
+	// (builtin.implementedAPIs gates them): listed for completeness.
+	ApiOpenAIDecisions           Api = "openai-decisions"
+	ApiOpenRouterImages          Api = "openrouter-images"
+	ApiCloudflareWorkersAISystem Api = "cloudflare-workers-ai-system-one"
+	ApiTypesafeSystemOne         Api = "typesafe-system-one"
 	// ApiVirtual marks a virtual model: a catalog entry whose router picks
 	// a physical model for every request (internal/router). No provider
 	// streams it. pi's VIRTUAL_MODEL_API ("pi-virtual").

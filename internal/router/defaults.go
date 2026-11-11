@@ -17,8 +17,8 @@ type ProviderRoles struct {
 // openai-codex follows pi's jev-router (Luna, Terra, Sol).
 var DefaultRoles = []ProviderRoles{
 	{Provider: "anthropic", Roles: map[string]string{
-		"fast":       "claude-haiku-4-5",
-		"structured": "claude-sonnet-5",
+		"fast":       "claude-haiku-5-5",
+		"structured": "claude-sonnet-5-5",
 		"heavy":      "claude-opus-5-5",
 	}},
 	{Provider: "openai-codex", Roles: map[string]string{

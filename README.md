@@ -31,7 +31,7 @@ reduction, leaving the window for the conversation.
 A single Go binary. The agent loop, session format, compaction and provider
 catalog are ports of [`@earendil-works/pi`](https://github.com/earendil-works/pi)
 (MIT): sessions are pi's JSONL v4 and open in either implementation, and the
-41 providers over 10 API shapes are pi-ai's catalog, vendored under
+43 providers over 14 API shapes are pi-ai's catalog, vendored under
 `internal/provider/catalog`. The terminal UI is
 [Bubble Tea v2](https://github.com/charmbracelet/bubbletea); finished output is
 committed to the terminal's own scrollback, only the live region repaints.

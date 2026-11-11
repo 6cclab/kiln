@@ -23,10 +23,12 @@ import (
 	"github.com/andrepato/harness/internal/provider/catalog"
 )
 
-// Every provider in the vendored catalog is registered (RegisterAll), and
-// all ten pi-ai API shapes have a streaming client. implementedAPIs is kept
-// as the single gate so that an api value the catalog gains before a client
-// exists is reported as "known, not yet streamable" by Stream and
+// Every provider in the vendored catalog is registered (RegisterAll); ten of
+// the catalog's API shapes have a streaming client (implementedAPIs), the
+// rest (openai-decisions, openrouter-images, cloudflare-workers-ai-system-one,
+// typesafe-system-one) are listed but not yet streamed. implementedAPIs is
+// kept as the single gate so that an api value the catalog gains before a
+// client exists is reported as "known, not yet streamable" by Stream and
 // KnownNotStreamable rather than silently omitted.
 
 // implementedAPIs are the api values this phase can stream. Every other

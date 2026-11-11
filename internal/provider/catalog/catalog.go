@@ -1,5 +1,5 @@
 // Package catalog embeds pi-ai's generated model catalog
-// (dist/providers/data/*.json, 41 provider files, 1,495 models as of the
+// (dist/providers/data/*.json, 43 provider files, 1,773 models as of the
 // vendored VERSION) and exposes it as provider.Model values.
 //
 // The data is vendored, not fetched at build/run time: `go generate` (via
@@ -58,7 +58,9 @@ func load() {
 		return
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+		// Skip dotfiles (e.g. a .manifest.json of build hashes) and non-JSON;
+		// only per-provider catalog files are decoded here.
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
 		raw, err := dataFS.ReadFile("data/" + e.Name())

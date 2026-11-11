@@ -9,7 +9,7 @@ model provider, local or hosted. The agent loop, session format, compaction
 and provider catalog are Go ports of [`@earendil-works/pi`](https://github.com/earendil-works/pi):
 sessions are written in pi's JSONL v4 format and are readable by either
 implementation (`internal/session/jsonl/doc.go`), and the provider catalog
-(41 providers, 10 API shapes) is pi-ai's generated catalog, vendored under
+(43 providers, 14 API shapes) is pi-ai's generated catalog, vendored under
 `internal/provider/catalog`. The terminal UI (`internal/tui`) is built on
 Bubble Tea v2, with two patched upstream libraries vendored under
 `third_party/` (`third_party/bubbletea`, `third_party/ultraviolet`; see each
@@ -297,7 +297,7 @@ a closed enum, since pi's own `Api` type is `KnownApi | string`.
 `provider.Registry` (`internal/provider/registry.go`) composes providers by
 id (`Register`/`Provider`/`GetModel`), backed by an `auth.CredentialStore`.
 `internal/provider/builtin` wires the vendored catalog
-(`internal/provider/catalog`, 41 provider files / ~1,495 models, embedded
+(`internal/provider/catalog`, 43 provider files / ~1,773 models, embedded
 and refreshed via `go generate` from a checked-out pi-ai package —
 `catalog.go`'s `//go:generate` directive and `generate.go`) to whichever API
 shapes have a streaming client implemented (`implementedAPIs`); a model
