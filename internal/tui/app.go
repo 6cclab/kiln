@@ -293,6 +293,18 @@ type Model struct {
 	// modsChord: Ctrl+X was pressed while a mod pane is open; Tab next
 	// focuses a pane, as in Claude Code.
 	modsChord bool
+	// bashInput tracks whether the input box currently wears its bash-mode
+	// (violet) styling — true while the input line begins with "!" and no
+	// prompt is up. refreshEditorStyles toggles it so SetStyles is only
+	// re-pushed on the amber↔violet transition, not on every keystroke, and
+	// so the ColorProfile/BackgroundColor re-adaptation keeps whichever mode
+	// is showing.
+	bashInput bool
+	// forceEditorStyles makes the next refreshEditorStyles re-push styles even
+	// when the mode is unchanged — set by the ColorProfile/BackgroundColor
+	// handlers, whose adapted theme tokens must reach the editor whether or
+	// not the amber↔violet mode changed.
+	forceEditorStyles bool
 
 	// modeHintText/modeHintGen replace the mode line for one second after a
 	// Ctrl+C ("Press Ctrl-C again to exit", ctrl-c-hint.txt). modeHintGen
@@ -386,6 +398,52 @@ func editorStyles(marker string) editor.Styles {
 		Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color(text.Faint)),
 		RuleChar:    RuleFillChar(),
 	}
+}
+
+// bashEditorStyles is editorStyles recoloured for bash mode — the input line
+// begins with "!", so the whole box signals a shell command, as Claude Code
+// recolours its input for `!`. The prompt glyph, the box rules and the caret
+// (neutralTextareaStyles derives the caret from MarkerStyle) all turn violet
+// (theme.go's hexViolet, the tools-segment accent); the placeholder keeps the
+// faint token. Colours still come from CurrentTextHex so the violet adapts to
+// the detected terminal background like every other token.
+func bashEditorStyles(marker string) editor.Styles {
+	s := editorStyles(marker)
+	violet := lipgloss.NewStyle().Foreground(lipgloss.Color(CurrentTextHex().Violet))
+	s.MarkerStyle = violet
+	s.Rule = violet
+	return s
+}
+
+// bashModeInput reports whether the input box should wear its bash-mode
+// styling: the line begins with "!" and no prompt is waiting on the next
+// keystroke (a prompt answer like "1" is never a bash line). A line starting
+// with "!" is never a leading path, so no imgpath check is needed here —
+// matching handleSubmit's own isBang test (strings.HasPrefix(line, "!")).
+func (m Model) bashModeInput() bool {
+	return !m.prompt.Active() && strings.HasPrefix(m.editor.Value(), "!")
+}
+
+// refreshEditorStyles pushes the editor styling that matches the current
+// input mode (bash-mode violet vs the normal amber theme), re-reading the
+// theme tokens each call so a background/colour-profile change re-adapts.
+// SetStyles is only called when the mode actually changes, so an ordinary
+// keystroke that leaves the mode unchanged does not churn the editor's
+// styles. Call it after anything that may change the input value, and from
+// the ColorProfile/BackgroundColor handlers so re-adaptation keeps the mode.
+func (m Model) refreshEditorStyles() Model {
+	want := m.bashModeInput()
+	if want == m.bashInput && !m.forceEditorStyles {
+		return m
+	}
+	m.bashInput = want
+	m.forceEditorStyles = false
+	if want {
+		m.editor.SetStyles(bashEditorStyles(G().UserMark))
+	} else {
+		m.editor.SetStyles(editorStyles(G().UserMark))
+	}
+	return m
 }
 
 // abbrevHomeEnv home-abbreviates path against os.UserHomeDir(), falling
@@ -740,6 +798,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			ed, cmd, _ := m.editor.Update(tea.PasteMsg{Content: placeholder})
 			m.editor = ed
 			m = m.refreshPopup()
+			m = m.refreshEditorStyles()
 			return m, cmd
 		} else if refused != "" {
 			m.commitNote(imageRefusalNoteText(refused))
@@ -747,6 +806,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		ed, cmd, _ := m.editor.Update(msg)
 		m.editor = ed
 		m = m.refreshPopup()
+		m = m.refreshEditorStyles()
 		return m, cmd
 
 	case msgSpinnerTick:
@@ -1000,7 +1060,8 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		// A 256-colour terminal (Terminal.app) rounds every colour to the
 		// palette; surfaces are chosen so the rounding keeps them visible.
 		SetColorProfile256(msg.Profile == colorprofile.ANSI256)
-		m.editor.SetStyles(editorStyles(G().UserMark))
+		m.forceEditorStyles = true
+		m = m.refreshEditorStyles()
 		return m, nil
 	case tea.BackgroundColorMsg:
 		SetTerminalBackground(msg.Color)
@@ -1012,7 +1073,8 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		// need pushing back in explicitly or the input box stays on the
 		// pre-detection dark-design hexes forever (defect
 		// *light-bg-you-text-invisible).
-		m.editor.SetStyles(editorStyles(G().UserMark))
+		m.forceEditorStyles = true
+		m = m.refreshEditorStyles()
 		if m.bannerScheduled && !m.bannerDone {
 			// The background reply beat msgCommitBanner's grace-period
 			// tick: commit the banner now, with the just-adapted tokens,
@@ -1336,6 +1398,7 @@ func (m Model) finishTurn(msg msgTurnResult) (Model, tea.Cmd) {
 	}
 	m.footer.SetNote("")
 	m.editor.SetPlaceholder(editor.DefaultPlaceholder)
+	m = m.refreshEditorStyles()
 	m = m.refreshMode()
 
 	// After a clean turn, ask the model what the user might want next and
@@ -2118,12 +2181,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, tea.ClearScreen
 		}
 		m = m.refreshPopup()
+		m = m.refreshEditorStyles()
 		return m, hintCmd
 	}
 
 	ed, cmd, ev := m.editor.Update(msg)
 	m.editor = ed
 	m = m.refreshPopup()
+	m = m.refreshEditorStyles()
 	switch ev.Kind {
 	case editor.EventSubmit:
 		return m.handleSubmit(ev.Text)

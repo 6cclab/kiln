@@ -1,0 +1,25 @@
+# Bash-mode input colouring: while the input line begins with "!" the box
+# (prompt glyph, rules and caret) turns violet, signalling the line runs as a
+# shell command rather than reaching the model. Clearing the "!" returns the
+# box to the amber theme. Colour is only visible in the PNG (EXPECT reads
+# screen text), so the screenshots are the evidence —
+# internal/tui/app.go refreshEditorStyles / bashEditorStyles.
+@faux testdata/faux/hello.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT idle-amber
+EXPECT_NOT /panic|goroutine/
+
+# Typing a leading "!" turns the input box violet.
+TYPE !echo hi
+SHOT bang-violet
+EXPECT /echo hi/
+EXPECT_NOT /panic|goroutine/
+
+# Clearing it (Ctrl+C) returns the box to amber.
+KEY ctrl+c
+WAITFOR /describe a task/ 5
+SHOT cleared-amber
+EXPECT_NOT /echo hi/
+EXPECT_NOT /panic|goroutine/
