@@ -26,6 +26,7 @@ import (
 type fakeInteraction struct {
 	authURL       chan string
 	secretAnswers []string
+	selectAnswers []string
 }
 
 func (f *fakeInteraction) Notify(e auth.Event) {
@@ -45,6 +46,13 @@ func (f *fakeInteraction) Prompt(ctx context.Context, p auth.Prompt) (string, er
 		}
 		v := f.secretAnswers[0]
 		f.secretAnswers = f.secretAnswers[1:]
+		return v, nil
+	case auth.PromptSelect:
+		if len(f.selectAnswers) == 0 {
+			return "", nil
+		}
+		v := f.selectAnswers[0]
+		f.selectAnswers = f.selectAnswers[1:]
 		return v, nil
 	default:
 		return "", nil
@@ -68,6 +76,7 @@ func newTestRegistry(t *testing.T) (*provider.Registry, auth.CredentialStore) {
 	reg := provider.NewRegistry(store)
 	reg.Register(builtin.NewAnthropicProvider(store))
 	reg.Register(builtin.NewOpenAIProvider(store))
+	reg.Register(builtin.NewOpenAICodexProvider(store))
 	return reg, store
 }
 
@@ -174,6 +183,63 @@ func TestLoginAPIKey(t *testing.T) {
 	}
 	if cred == nil || cred.APIKey == nil || cred.APIKey.Key != "sk-test-openai-key" {
 		t.Fatalf("persisted credential = %+v, want api_key sk-test-openai-key", cred)
+	}
+}
+
+// TestLoginOpenAICodexAPIKey asserts that choosing "OpenAI API key" at the
+// openai-codex login prompt stores a plain api_key credential (the path that
+// Stream later routes to the standard OpenAI Responses endpoint), without
+// running the OAuth flow.
+func TestLoginOpenAICodexAPIKey(t *testing.T) {
+	reg, store := newTestRegistry(t)
+	ia := &fakeInteraction{
+		selectAnswers: []string{"api_key"},
+		secretAnswers: []string{"sk-codex-key"},
+	}
+
+	if err := Login(context.Background(), reg, store, "openai-codex", ia); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	cred, err := store.Read("openai-codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred == nil || cred.APIKey == nil || cred.APIKey.Key != "sk-codex-key" {
+		t.Fatalf("persisted credential = %+v, want api_key sk-codex-key", cred)
+	}
+	if cred.OAuth != nil {
+		t.Fatalf("api-key login must not store an OAuth credential: %+v", cred.OAuth)
+	}
+}
+
+// TestLoginOpenAICodexSubscription asserts that choosing the subscription
+// option runs the OAuth flow and stores an OAuth credential. The flow itself
+// is stubbed (the full browser/callback path is covered by the Anthropic
+// test); this pins the login dispatch.
+func TestLoginOpenAICodexSubscription(t *testing.T) {
+	orig := openaiCodexLogin
+	openaiCodexLogin = func(ctx context.Context, ia oauth.FlowInteraction) (oauth.OpenAICodexToken, error) {
+		return oauth.OpenAICodexToken{
+			Token:     oauth.Token{Refresh: "rt-codex", Access: "at-codex", Expires: 123},
+			AccountID: "acc_1",
+		}, nil
+	}
+	defer func() { openaiCodexLogin = orig }()
+
+	reg, store := newTestRegistry(t)
+	ia := &fakeInteraction{selectAnswers: []string{"subscription"}}
+
+	if err := Login(context.Background(), reg, store, "openai-codex", ia); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	cred, err := store.Read("openai-codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred == nil || cred.OAuth == nil || cred.OAuth.Access != "at-codex" {
+		t.Fatalf("persisted credential = %+v, want OAuth access=at-codex", cred)
 	}
 }
 

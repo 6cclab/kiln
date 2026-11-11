@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -32,6 +33,138 @@ const minimalAnthropicSSE = "" +
 
 func collect(ch <-chan msg.StreamEvent) {
 	for range ch {
+	}
+}
+
+// responsesTextSSE is a minimal OpenAI Responses SSE stream (shared wire
+// shape between the openai-responses and openai-codex-responses clients):
+// one text item and a terminal response.completed.
+const responsesTextSSE = `event: response.created
+data: {"type":"response.created","response":{"id":"resp_1"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","status":"in_progress"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","output_index":0,"delta":"hi"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"hi"}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}
+
+`
+
+// codexJWT builds a minimal (unsigned) JWT whose payload carries the
+// chatgpt_account_id claim the codex client extracts. Only the middle
+// segment is decoded, so the header/signature segments are placeholders.
+func codexJWT(accountID string) string {
+	payload := base64.RawURLEncoding.EncodeToString(
+		[]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"` + accountID + `"}}`))
+	return "h." + payload + ".s"
+}
+
+func codexModel(baseURL string) provider.Model {
+	return provider.Model{
+		ID:            "gpt-5.5",
+		Provider:      "openai-codex",
+		Api:           provider.ApiOpenAICodexResponses,
+		BaseURL:       baseURL,
+		ContextWindow: 1000,
+		MaxTokens:     100,
+	}
+}
+
+func streamCodexOnce(t *testing.T, p provider.Provider, model provider.Model) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events, wait := p.Stream(ctx, model, []msg.Message{
+		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("hi")}},
+	}, provider.StreamOptions{})
+	collect(events)
+	if _, err := wait(); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+}
+
+// TestStreamCodexAPIKeyRoutesToResponses asserts that when openai-codex
+// resolves to an api key (stored credential or OPENAI_API_KEY env), the
+// request is routed to the standard OpenAI Responses endpoint (path
+// /responses, Authorization: Bearer <key>) rather than the chatgpt.com codex
+// backend, which only accepts the subscription token.
+func TestStreamCodexAPIKeyRoutesToResponses(t *testing.T) {
+	run := func(t *testing.T, stored bool) {
+		var gotPath, gotAuth string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, responsesTextSSE)
+		}))
+		defer srv.Close()
+		defer SetOpenAICodexAPIKeyBaseURLForTesting(srv.URL)()
+
+		store := auth.NewFileCredentialStore(filepath.Join(t.TempDir(), "credentials.json"))
+		if stored {
+			if err := store.Modify("openai-codex", func(_ *auth.Credential) (*auth.Credential, error) {
+				return &auth.Credential{APIKey: &auth.APIKeyCredential{Key: "sk-key"}}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			t.Setenv("OPENAI_API_KEY", "sk-key")
+		}
+
+		// A codex-backend BaseURL that must be ignored on the api-key path.
+		streamCodexOnce(t, NewOpenAICodexProvider(store), codexModel("https://chatgpt.com/backend-api"))
+
+		if gotPath != "/responses" {
+			t.Fatalf("request path = %q, want /responses (standard OpenAI Responses endpoint)", gotPath)
+		}
+		if gotAuth != "Bearer sk-key" {
+			t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer sk-key")
+		}
+	}
+	t.Run("stored", func(t *testing.T) { run(t, true) })
+	t.Run("env", func(t *testing.T) { run(t, false) })
+}
+
+// TestStreamCodexSubscriptionRoutesToCodexBackend asserts the regression
+// path: a stored OAuth (ChatGPT subscription) credential still streams via
+// the codex client (path /codex/responses, chatgpt-account-id header), and
+// takes precedence over an OPENAI_API_KEY env var.
+func TestStreamCodexSubscriptionRoutesToCodexBackend(t *testing.T) {
+	var gotPath, gotAccountID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAccountID = r.Header.Get("chatgpt-account-id")
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, responsesTextSSE)
+	}))
+	defer srv.Close()
+
+	// Point the api-key fallback at the same server so that, if routing were
+	// wrong, the path assertion still distinguishes the two endpoints.
+	defer SetOpenAICodexAPIKeyBaseURLForTesting(srv.URL)()
+	t.Setenv("OPENAI_API_KEY", "sk-should-not-win")
+
+	store := auth.NewFileCredentialStore(filepath.Join(t.TempDir(), "credentials.json"))
+	future := time.Now().UnixMilli() + 3600_000
+	if err := store.Modify("openai-codex", func(_ *auth.Credential) (*auth.Credential, error) {
+		return &auth.Credential{OAuth: &auth.OAuthCredential{Refresh: "rt", Access: codexJWT("acc_1"), Expires: future}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	streamCodexOnce(t, NewOpenAICodexProvider(store), codexModel(srv.URL))
+
+	if gotPath != "/codex/responses" {
+		t.Fatalf("request path = %q, want /codex/responses (subscription should route to the codex backend)", gotPath)
+	}
+	if gotAccountID != "acc_1" {
+		t.Fatalf("chatgpt-account-id = %q, want acc_1", gotAccountID)
 	}
 }
 

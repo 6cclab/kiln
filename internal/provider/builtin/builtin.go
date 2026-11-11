@@ -46,6 +46,24 @@ var implementedAPIs = map[provider.Api]bool{
 	provider.ApiPiMessages:            true,
 }
 
+// openAICodexAPIKeyBaseURL is the OpenAI Responses base used when the
+// openai-codex provider resolves to an api key rather than a ChatGPT
+// subscription token (Stream routes that case to the openai-responses
+// client; see the ApiOpenAICodexResponses case). The value is the baseUrl
+// the openai catalog's own responses models use. A var, not a const, so a
+// test can point it at an httptest server via
+// SetOpenAICodexAPIKeyBaseURLForTesting.
+var openAICodexAPIKeyBaseURL = "https://api.openai.com/v1"
+
+// SetOpenAICodexAPIKeyBaseURLForTesting points the openai-codex api-key
+// Responses endpoint at base for the duration of a test, returning a restore
+// function.
+func SetOpenAICodexAPIKeyBaseURLForTesting(base string) (restore func()) {
+	orig := openAICodexAPIKeyBaseURL
+	openAICodexAPIKeyBaseURL = base
+	return func() { openAICodexAPIKeyBaseURL = orig }
+}
+
 // oauthRefresher refreshes a stored OAuth credential for one provider id,
 // returning the rotated (refresh, access, expires) triple. Every provider
 // in catalog.Providers with AuthKind==AuthOAuth and a refresh flow this
@@ -143,6 +161,13 @@ func NewAnthropicProvider(creds auth.CredentialStore) provider.Provider {
 // NewOpenAIProvider builds the built-in OpenAI provider.
 func NewOpenAIProvider(creds auth.CredentialStore) provider.Provider {
 	cfg, _ := catalog.ProviderConfigByID("openai")
+	return newProviderFromConfig(cfg, creds)
+}
+
+// NewOpenAICodexProvider builds the built-in OpenAI Codex provider (ChatGPT
+// subscription or OPENAI_API_KEY; see Stream's ApiOpenAICodexResponses case).
+func NewOpenAICodexProvider(creds auth.CredentialStore) provider.Provider {
+	cfg, _ := catalog.ProviderConfigByID("openai-codex")
 	return newProviderFromConfig(cfg, creds)
 }
 
@@ -304,6 +329,17 @@ func (p *catalogProvider) Stream(ctx context.Context, model provider.Model, tran
 	case provider.ApiOpenAIResponses:
 		return p.responsesClient.Stream(ctx, model, transcript, opts, a)
 	case provider.ApiOpenAICodexResponses:
+		// Codex has two auth paths. The ChatGPT subscription (OAuth) token is
+		// a JWT the chatgpt.com codex backend requires; an OPENAI_API_KEY is
+		// not, and that backend rejects it. So an api-key credential is
+		// routed to the standard OpenAI Responses endpoint instead, reusing
+		// the openai-responses client. Every openai-codex model id also
+		// exists in the openai catalog, so the id is valid there.
+		if !isOAuth {
+			apiModel := model
+			apiModel.BaseURL = openAICodexAPIKeyBaseURL
+			return p.responsesClient.Stream(ctx, apiModel, transcript, opts, a)
+		}
 		return p.codexClient.Stream(ctx, model, transcript, opts, a)
 	case provider.ApiAzureOpenAIResponses:
 		return p.azureClient.Stream(ctx, model, transcript, opts, a)

@@ -126,7 +126,7 @@ func Login(ctx context.Context, reg *provider.Registry, store auth.CredentialSto
 
 	var err error
 	if spec.Kind == provider.AuthKindOAuth {
-		err = loginOAuth(ctx, store, providerID, ia)
+		err = loginOAuth(ctx, store, providerID, label, ia)
 	} else {
 		err = loginAPIKey(ctx, store, providerID, label, ia)
 	}
@@ -144,7 +144,7 @@ func storeOAuthCredential(store auth.CredentialStore, providerID string, refresh
 	})
 }
 
-func loginOAuth(ctx context.Context, store auth.CredentialStore, providerID string, ia auth.Interaction) error {
+func loginOAuth(ctx context.Context, store auth.CredentialStore, providerID, label string, ia auth.Interaction) error {
 	adapter := &oauthInteractionAdapter{ia: ia}
 	switch providerID {
 	case "anthropic":
@@ -155,6 +155,24 @@ func loginOAuth(ctx context.Context, store auth.CredentialStore, providerID stri
 		return storeOAuthCredential(store, providerID, tok.Refresh, tok.Access, tok.Expires)
 
 	case "openai-codex":
+		// Codex accepts either a ChatGPT subscription (OAuth) or an OpenAI
+		// API key (routed to the standard Responses endpoint at Stream time).
+		// Offer both here; the api-key choice reuses the same prompt/store
+		// path as any api-key provider.
+		method, err := ia.Prompt(ctx, auth.Prompt{
+			Type:    auth.PromptSelect,
+			Message: "How do you want to sign in to OpenAI Codex?",
+			Options: []auth.SelectOption{
+				{ID: "subscription", Label: "ChatGPT subscription (browser / device login)"},
+				{ID: "api_key", Label: "OpenAI API key"},
+			},
+		})
+		if err != nil {
+			return err
+		}
+		if method == "api_key" {
+			return loginAPIKey(ctx, store, providerID, label, ia)
+		}
 		tok, err := openaiCodexLogin(ctx, adapter)
 		if err != nil {
 			return err

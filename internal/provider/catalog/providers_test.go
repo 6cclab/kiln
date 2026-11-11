@@ -26,10 +26,11 @@ func TestProviderConfigCoversEveryVendoredProvider(t *testing.T) {
 // many AWS credential sources env-api-keys.js checks ad hoc rather than via
 // a single env var list).
 func TestProviderConfigFieldsPopulated(t *testing.T) {
-	// env-api-keys.js's getApiKeyEnvVars() has no entry for these ids:
-	// amazon-bedrock checks several AWS credential sources ad hoc rather
-	// than a single env var, and openai-codex is OAuth-only.
-	noEnvVarsOK := map[string]bool{"amazon-bedrock": true, "openai-codex": true}
+	// env-api-keys.js's getApiKeyEnvVars() has no entry for amazon-bedrock:
+	// it checks several AWS credential sources ad hoc rather than a single
+	// env var. (openai-codex is OAuth-only in pi-ai but kiln adds
+	// OPENAI_API_KEY to it -- see providers.go -- so it is no longer here.)
+	noEnvVarsOK := map[string]bool{"amazon-bedrock": true}
 	for _, p := range Providers {
 		if p.Name == "" {
 			t.Errorf("%s: empty Name", p.ID)
@@ -64,8 +65,8 @@ func TestProviderConfigAuthKindSpotCheck(t *testing.T) {
 			piQuote: `auth: { apiKey: envApiKeyAuth("OpenAI API key", ["OPENAI_API_KEY"]) },`,
 		},
 		{
-			id: "openai-codex", wantKind: AuthOAuth, wantSub: true,
-			piQuote: `auth: { oauth: lazyOAuth({ name: "OpenAI (ChatGPT Plus/Pro)", isSubscription: true, ... }) },`,
+			id: "openai-codex", wantKind: AuthOAuth, wantEnv: []string{"OPENAI_API_KEY"}, wantSub: true,
+			piQuote: `auth: { oauth: lazyOAuth({ name: "OpenAI (ChatGPT Plus/Pro)", isSubscription: true, ... }) } -- kiln adds OPENAI_API_KEY (api-key path), a deliberate deviation from pi`,
 		},
 		{
 			id: "github-copilot", wantKind: AuthOAuth, wantEnv: []string{"COPILOT_GITHUB_TOKEN"}, wantSub: true,

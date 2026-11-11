@@ -137,6 +137,7 @@ Precedence: **a stored credential (`~/.harness/credentials.json`) always wins ov
 |---|---|
 | anthropic | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` |
 | openai | `OPENAI_API_KEY` |
+| openai-codex | `OPENAI_API_KEY` |
 | github-copilot | `COPILOT_GITHUB_TOKEN` |
 | kimi-coding | `KIMI_API_KEY` |
 | openrouter | `OPENROUTER_API_KEY` |
@@ -166,6 +167,8 @@ Precedence: **a stored credential (`~/.harness/credentials.json`) always wins ov
 | xiaomi (+3 variants) | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_AMS/CN/SGP_API_KEY` |
 
 Ollama has no credential — it's reached via `OLLAMA_HOST`/`OLLAMA_BASE_URL` above.
+
+`openai-codex` supports **both** a ChatGPT Plus/Pro subscription and an OpenAI API key. `kiln login openai-codex` offers either the subscription (OAuth) flow or pasting an API key; `OPENAI_API_KEY` works as the env fallback. A stored subscription credential wins over the env var. With a subscription the Codex models stream from the ChatGPT backend (`chatgpt.com/backend-api`); with an API key they are routed to the standard OpenAI Responses endpoint (`api.openai.com/v1`), since the ChatGPT backend only accepts the subscription token.
 
 ### Test / dev only
 

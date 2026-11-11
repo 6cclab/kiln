@@ -101,7 +101,12 @@ var cloudflareAIGatewayHeaderOverrides = []HeaderOverride{
 var Providers = []ProviderConfig{
 	{ID: "anthropic", Name: "Anthropic", AuthKind: AuthOAuth, EnvVars: anthropicEnvVars, IsSubscription: true},
 	{ID: "openai", Name: "OpenAI", AuthKind: AuthAPIKey, EnvVars: []string{"OPENAI_API_KEY"}},
-	{ID: "openai-codex", Name: "OpenAI (ChatGPT Plus/Pro)", AuthKind: AuthOAuth, IsSubscription: true},
+	// openai-codex deliberately diverges from pi-ai, which models it as
+	// OAuth-only: kiln also accepts OPENAI_API_KEY so the Codex models work
+	// without a ChatGPT subscription. An api-key request is routed to the
+	// standard OpenAI Responses endpoint (builtin.Stream), since the
+	// chatgpt.com codex backend only accepts the subscription token.
+	{ID: "openai-codex", Name: "OpenAI (ChatGPT Plus/Pro)", AuthKind: AuthOAuth, EnvVars: []string{"OPENAI_API_KEY"}, IsSubscription: true},
 	{ID: "github-copilot", Name: "GitHub Copilot", AuthKind: AuthOAuth, EnvVars: []string{"COPILOT_GITHUB_TOKEN"}, IsSubscription: true, StaticHeaders: githubCopilotHeaders},
 	{ID: "kimi-coding", Name: "Kimi Code (subscription)", AuthKind: AuthOAuth, EnvVars: []string{"KIMI_API_KEY"}, IsSubscription: true},
 	{ID: "openrouter", Name: "OpenRouter", AuthKind: AuthOAuth, EnvVars: []string{"OPENROUTER_API_KEY"}},
