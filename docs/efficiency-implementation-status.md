@@ -48,6 +48,10 @@ being mistaken for the complete roadmap.
 - A small [live Opus 4.8 comparison](live-comparison-report.md): four tasks,
   two repeats per arm, all 52 mechanical checks passed. This is descriptive
   evidence; external retry attribution remains incomplete.
+- A [real-repository code-quality comparison](real-work-comparison-report.md):
+  two memory-import attempts per harness, hidden acceptance, independent blind
+  reviews, and reproduced counterexamples. All four pass 29 acceptance cases
+  but require revisions; candidate patches remain evaluation artifacts.
 
 ## Still outstanding from the full plan
 
