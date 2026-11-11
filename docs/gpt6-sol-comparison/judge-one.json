@@ -1,0 +1,26 @@
+{
+  "reviewer": "independent GPT-6-Sol judge one",
+  "candidates": {
+    "candidate-01": {
+      "scores": {"correctness_robustness": 3, "security_privacy": 4, "design_maintainability": 3, "test_quality": 3, "scope_usability": 3},
+      "readiness": "minor revisions",
+      "findings": [
+        {"severity": "moderate", "type": "contract violation", "path": "internal/memory/import.go", "line": 67, "trigger": "project import of otherwise valid fact or source-bearing row whose input scope is user:preferences", "observed": "whole batch rejected as invalid global record", "expected": "validate global-only restriction against explicit destination scope", "evidence": "reproduced with built CLI; hidden project_scope_isolation and replace_lineage failed"},
+        {"severity": "minor", "type": "test portability", "path": "internal/memory/import_test.go", "line": 149, "trigger": "macOS /tmp resolves to /private/tmp", "observed": "literal path equality fails in submitted tests", "expected": "canonical path comparison", "evidence": "original unit/race failed; canonical TMPDIR targeted tests passed"}
+      ],
+      "objective_evidence": {"hidden_passed": 27, "hidden_total": 29, "fifo_probe": "passed", "build": "passed", "gofmt": "passed", "vet": "passed", "staticcheck": "passed", "memory_e2e": "passed", "canonical_tmp_targeted_unit": "passed"}
+    },
+    "candidate-02": {
+      "scores": {"correctness_robustness": 2, "security_privacy": 2, "design_maintainability": 3, "test_quality": 2, "scope_usability": 3},
+      "readiness": "major revisions",
+      "findings": [
+        {"severity": "high", "type": "contract and availability blocker", "path": "internal/memory/import.go", "line": 203, "trigger": "source path rebounds to a destination FIFO with no writer", "observed": "sourceDigest calls os.Open before file-type check and import hangs", "expected": "reject nonregular source promptly", "evidence": "independent FIFO probe timed out after three seconds; sourceDigest at internal/memory/sources.go:30-39"},
+        {"severity": "minor", "type": "test portability", "path": "internal/memory/import_test.go", "line": 197, "trigger": "macOS /tmp resolves to /private/tmp", "observed": "literal canonical-path equality fails", "expected": "canonical path comparison", "evidence": "original unit/race failed; canonical TMPDIR targeted unit/race passed"}
+      ],
+      "objective_evidence": {"hidden_passed": 29, "hidden_total": 29, "fifo_probe": "failed_timeout", "build": "passed", "gofmt": "passed", "vet": "passed", "staticcheck": "passed", "memory_e2e": "passed", "canonical_tmp_targeted_unit": "passed", "canonical_tmp_targeted_race": "passed"}
+    }
+  },
+  "comparison": "Candidate 02 handles imported scope correctly but can hang on a FIFO; candidate 01 safely rejects FIFO but rejects some project imports based on untrusted input scope. Favor candidate 01 as the safer base, with neither ready unchanged.",
+  "uncertainty": "The input-scope rejection depends on interpreting global-only validation against the destination, as supported by the task text. Ordinary global Put cannot produce the failing input row.",
+  "baseline_note": "The broad-unit TUI timeout was reproduced on baseline and is not attributed to either patch."
+}

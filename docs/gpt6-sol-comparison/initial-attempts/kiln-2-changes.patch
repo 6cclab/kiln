@@ -1,0 +1,910 @@
+diff --git a/cmd/kiln/main.go b/cmd/kiln/main.go
+index b5498ff..b21224f 100644
+--- a/cmd/kiln/main.go
++++ b/cmd/kiln/main.go
+@@ -72,6 +72,10 @@ func run(argv []string) int {
+ 		return cli.MCPCommand(context.Background(), argv[1:], os.Stdout, os.Stderr)
+ 	}
+ 
++	if len(argv) > 1 && argv[0] == "memory" && (argv[1] == "import" || (len(argv) > 2 && argv[1] == "global" && argv[2] == "import")) {
++		return cli.MemoryImportCommand(context.Background(), argv[1:], os.Stdout, os.Stderr)
++	}
++
+ 	args := cli.Parse(argv)
+ 
+ 	// These two answer before anything else, deliberately ahead of the
+diff --git a/cmd/kiln/memory_import_test.go b/cmd/kiln/memory_import_test.go
+new file mode 100644
+index 0000000..9d3a618
+--- /dev/null
++++ b/cmd/kiln/memory_import_test.go
+@@ -0,0 +1,28 @@
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestMemoryImportDispatch(t *testing.T) {
++	home := t.TempDir()
++	t.Setenv("HOME", home)
++	file := filepath.Join(t.TempDir(), "import.json")
++	if err := os.WriteFile(file, []byte(`[{"id":1,"scope":"elsewhere","key":"k","kind":"preference","text":"v","evidence":"user","created":10}]`), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if code := run([]string{"memory", "global", "import", file, "--dry-run"}); code != 0 {
++		t.Fatalf("dry run: %d", code)
++	}
++	if _, err := os.Stat(filepath.Join(home, ".kiln", "memory.db")); err != nil {
++		t.Fatal(err)
++	}
++	if code := run([]string{"memory", "global", "import", file, "--on-conflict", "skip"}); code != 0 {
++		t.Fatalf("import: %d", code)
++	}
++	if code := run([]string{"memory", "global", "import", file, "--unknown"}); code == 0 {
++		t.Fatal("unknown flag accepted")
++	}
++}
+diff --git a/docs/configuration.md b/docs/configuration.md
+index e8afe5a..4b5ec3c 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -839,6 +839,8 @@ Manage records without starting a model, from the project directory:
+ kiln memory export                 # JSON, including correction history
+ kiln memory forget test-runner     # deletes every version of this key
+ kiln memory restore 12             # restores this project's version as a new record
++kiln memory import backup.json --dry-run
++kiln memory import backup.json --on-conflict replace
+ ```
+ 
+ Explicit user preferences can be shared across projects:
+@@ -848,6 +850,7 @@ kiln memory global remember response-style "Prefer concise answers"
+ kiln memory global export
+ kiln memory global forget response-style
+ kiln memory global restore 12
++kiln memory global import preferences.json --dry-run
+ ```
+ 
+ The global scope accepts preferences only, without project file dependencies.
+@@ -858,6 +861,21 @@ A current project record with the same key overrides the global preference.
+ `memoryAutoRetrieve: false` disables their automatic injection. Explicit model
+ recall remains project-scoped; the global export command provides full inspection.
+ 
++Import reads one exported JSON array from a file (up to 4 MiB and 1000 records).
++It validates all versions, then imports only the highest-ID version of each key
++into the current project (or explicit global preferences), never into the
++exported scope. Imported IDs, timestamps, and correction links are replaced
++with local ones; expiry is preserved. File sources are verified against files
++in the current project and rebound to it; missing, changed, or escaping files
++reject the entire import, even when their records are historical. Global imports
++accept only source-free preferences. The default conflict policy, `error`,
++rejects the whole batch if any key already exists (including expired or stale
++keys). `--on-conflict skip` leaves existing keys untouched; `replace` creates
++new local corrections. `--dry-run` checks the same input and conflicts without
++writing records, and prints counts of the selected keys as if applied. Successful
++imports print JSON counts (`inserted`, `replaced`, `skipped`, `dry_run`). No model
++or network request is made.
++
+ Disabling memory does not delete it; management commands remain available.
+ Forgetting removes database rows and search entries, not external backups or
+ copies previously exported. Automatic extraction of verified facts is not yet implemented. For file-dependent observations, `kiln memory remember <key> <text> [source-files...]` captures source fingerprints; recall checks them against the current worktree and excludes stale records. Model-written observations without source fingerprints remain provisional.
+diff --git a/internal/cli/args.go b/internal/cli/args.go
+index ddd320a..1ed2097 100644
+--- a/internal/cli/args.go
++++ b/internal/cli/args.go
+@@ -351,7 +351,7 @@ commands:
+   mcp list | get <name> | remove     list with a live check, show, remove
+   mcp                                connect every server and report
+   doctor                             check config, credentials and servers
+-  memory export|forget|restore       manage project memory
++  memory export|import|forget|restore  manage project memory
+   config                             show effective efficiency settings
+   learning                           evaluate and manage personal policies
+   worker inspect|apply <manifest>    review or apply an isolated worker patch
+diff --git a/internal/cli/memory_import.go b/internal/cli/memory_import.go
+new file mode 100644
+index 0000000..7eaa3e1
+--- /dev/null
++++ b/internal/cli/memory_import.go
+@@ -0,0 +1,99 @@
++package cli
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"strings"
++
++	"github.com/andrepato/harness/internal/diag"
++	"github.com/andrepato/harness/internal/memory"
++)
++
++// MemoryImportCommand is a local management operation; it never starts a model.
++func MemoryImportCommand(ctx context.Context, args []string, out, stderr io.Writer) int {
++	usage := "usage: kiln memory [global] import <file> [--dry-run] [--on-conflict error|skip|replace]"
++	global := false
++	if len(args) > 0 && args[0] == "global" {
++		global = true
++		args = args[1:]
++	}
++	if len(args) < 2 || args[0] != "import" || args[1] == "" || strings.HasPrefix(args[1], "-") {
++		fmt.Fprintln(stderr, usage)
++		return 2
++	}
++	file := args[1]
++	dryRun := false
++	policy := "error"
++	policySet := false
++	for i := 2; i < len(args); i++ {
++		token := args[i]
++		switch {
++		case token == "--dry-run" && !dryRun:
++			dryRun = true
++		case token == "--on-conflict" && !policySet:
++			i++
++			if i >= len(args) || strings.HasPrefix(args[i], "-") {
++				fmt.Fprintln(stderr, "memory import: missing conflict policy")
++				return 2
++			}
++			policy = args[i]
++			policySet = true
++		case strings.HasPrefix(token, "--on-conflict=") && !policySet:
++			policy = strings.TrimPrefix(token, "--on-conflict=")
++			policySet = true
++		default:
++			fmt.Fprintln(stderr, usage)
++			return 2
++		}
++	}
++	if policy != "error" && policy != "skip" && policy != "replace" {
++		fmt.Fprintln(stderr, "memory import: invalid conflict policy (use error, skip, or replace)")
++		return 2
++	}
++	cwd, err := os.Getwd()
++	if err != nil {
++		writeDiagnostic(stderr, err)
++		return 1
++	}
++	home, err := os.UserHomeDir()
++	if err != nil {
++		writeDiagnostic(stderr, err)
++		return 1
++	}
++	scope := memoryScope(cwd)
++	if global {
++		scope = memory.GlobalPreferencesScope
++	}
++	records, err := memory.ReadImportFile(file, memoryProjectRoot(cwd), scope)
++	if err != nil {
++		writeDiagnostic(stderr, err)
++		return 1
++	}
++	store, err := memory.Open(filepath.Join(home, ".kiln", "memory.db"))
++	if err != nil {
++		fmt.Fprintln(stderr, "memory import: cannot open private database")
++		return 1
++	}
++	defer diag.Close(store)
++	counts, err := store.Import(ctx, scope, memoryProjectRoot(cwd), records, policy, dryRun)
++	if err != nil {
++		if errors.Is(err, memory.ErrImportConflict) {
++			writeDiagnostic(stderr, err)
++		} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
++			fmt.Fprintln(stderr, "memory import: cancelled")
++		} else {
++			fmt.Fprintln(stderr, "memory import: validation or database operation failed")
++		}
++		return 1
++	}
++	if err := json.NewEncoder(out).Encode(counts); err != nil {
++		writeDiagnostic(stderr, err)
++		return 1
++	}
++	return 0
++}
+diff --git a/internal/cli/memory_import_test.go b/internal/cli/memory_import_test.go
+new file mode 100644
+index 0000000..27c05dd
+--- /dev/null
++++ b/internal/cli/memory_import_test.go
+@@ -0,0 +1,58 @@
++package cli
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/andrepato/harness/internal/memory"
++)
++
++func TestMemoryImportCommand(t *testing.T) {
++	home := t.TempDir()
++	t.Setenv("HOME", home)
++	file := filepath.Join(t.TempDir(), "export.json")
++	record := memory.Record{ID: 73, Scope: "another-project", Key: "test", Kind: "preference", Text: "Never echo this credential", Evidence: "user"}
++	raw, err := json.Marshal([]memory.Record{record})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(file, raw, 0600); err != nil {
++		t.Fatal(err)
++	}
++	call := func(args ...string) (int, string, string) {
++		t.Helper()
++		var out, stderr bytes.Buffer
++		code := MemoryImportCommand(context.Background(), args, &out, &stderr)
++		return code, out.String(), stderr.String()
++	}
++	for _, args := range [][]string{{"import"}, {"import", file, "--bogus"}, {"import", file, "extra"}, {"import", file, "--on-conflict"}, {"import", file, "--on-conflict", "invalid"}, {"import", file, "--dry-run", "--dry-run"}} {
++		code, out, diagnostic := call(args...)
++		if code == 0 || out != "" || diagnostic == "" {
++			t.Fatalf("%v: %d %q %q", args, code, out, diagnostic)
++		}
++	}
++	if code, out, diagnostic := call("global", "import", file, "--dry-run"); code != 0 || out != "{\"inserted\":1,\"replaced\":0,\"skipped\":0,\"dry_run\":true}\n" {
++		t.Fatalf("dry: %d %s %s", code, out, diagnostic)
++	}
++	if code, out, diagnostic := call("global", "import", file); code != 0 || out != "{\"inserted\":1,\"replaced\":0,\"skipped\":0,\"dry_run\":false}\n" {
++		t.Fatalf("apply: %d %s %s", code, out, diagnostic)
++	}
++	if code, out, diagnostic := call("global", "import", file); code == 0 || out != "" || strings.Contains(diagnostic, record.Text) {
++		t.Fatalf("conflict: %d %s %s", code, out, diagnostic)
++	}
++	if code, out, diagnostic := call("global", "import", file, "--on-conflict=skip"); code != 0 || !strings.Contains(out, `"skipped":1`) {
++		t.Fatalf("skip: %d %s %s", code, out, diagnostic)
++	}
++	if code, out, diagnostic := call("global", "import", file, "--on-conflict", "replace"); code != 0 || !strings.Contains(out, `"replaced":1`) {
++		t.Fatalf("replace: %d %s %s", code, out, diagnostic)
++	}
++	var projectOut, projectErr bytes.Buffer
++	if code := PersonalMemory(context.Background(), Args{Positional: []string{"export"}}, &projectOut, &projectErr); code != 0 || strings.Contains(projectOut.String(), record.Text) {
++		t.Fatalf("project leaked global: %d %s %s", code, projectOut.String(), projectErr.String())
++	}
++}
+diff --git a/internal/memory/import.go b/internal/memory/import.go
+new file mode 100644
+index 0000000..5e74b79
+--- /dev/null
++++ b/internal/memory/import.go
+@@ -0,0 +1,258 @@
++package memory
++
++import (
++	"bytes"
++	"context"
++	"database/sql"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"sort"
++	"strings"
++	"time"
++)
++
++const maxImportBytes = 4 << 20
++
++// ErrImportConflict means at least one active destination key already exists.
++var ErrImportConflict = errors.New("memory import conflicts with an existing destination key")
++
++// ReadImportFile bounds input before decoding, including when the file grows during reading.
++func ReadImportFile(path, root, scope string) ([]Record, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, errors.New("cannot open memory import file")
++	}
++	defer f.Close()
++	return ParseImport(f, root, scope)
++}
++
++// ParseImport validates every exported version and rebinds its sources to root.
++func ParseImport(input io.Reader, root, scope string) ([]Record, error) {
++	raw, err := io.ReadAll(io.LimitReader(input, maxImportBytes+1))
++	if err != nil {
++		return nil, errors.New("cannot read memory import file")
++	}
++	if len(raw) > maxImportBytes {
++		return nil, errors.New("memory import exceeds 4 MiB")
++	}
++	if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")) {
++		return nil, errors.New("memory import must be a JSON array")
++	}
++	var entries []json.RawMessage
++	if err := decodeImport(raw, &entries); err != nil {
++		return nil, errors.New("invalid memory import JSON or trailing data")
++	}
++	if len(entries) > 1000 {
++		return nil, errors.New("memory import exceeds 1000 records")
++	}
++	canonical, err := filepath.EvalSymlinks(root)
++	if err != nil {
++		return nil, errors.New("cannot resolve destination project root")
++	}
++	records := make([]Record, 0, len(entries))
++	ids := make(map[int64]bool, len(entries))
++	for i, entry := range entries {
++		if !bytes.HasPrefix(bytes.TrimSpace(entry), []byte("{")) {
++			return nil, fmt.Errorf("memory import record %d must be an object", i+1)
++		}
++		var r Record
++		if err := decodeImport(entry, &r); err != nil {
++			return nil, fmt.Errorf("memory import record %d has invalid JSON fields", i+1)
++		}
++		if r.ID <= 0 || ids[r.ID] {
++			return nil, fmt.Errorf("memory import record %d has invalid or duplicate ID", i+1)
++		}
++		ids[r.ID] = true
++		r.Scope = scope
++		if err := validatePut(r); err != nil {
++			return nil, fmt.Errorf("memory import record %d: %w", i+1, err)
++		}
++		if r.Expires < 0 {
++			return nil, fmt.Errorf("memory import record %d has negative expiry", i+1)
++		}
++		if len(r.Sources) > 8 {
++			return nil, fmt.Errorf("memory import record %d exceeds eight source files", i+1)
++		}
++		// A null source entry is not a binding. Reject it even on historical rows.
++		var fields map[string]json.RawMessage
++		if err := json.Unmarshal(entry, &fields); err != nil {
++			return nil, errors.New("invalid memory import record")
++		}
++		if data, ok := fields["sources"]; ok {
++			if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
++				return nil, fmt.Errorf("memory import record %d has null sources", i+1)
++			}
++			var parts []json.RawMessage
++			if err := json.Unmarshal(data, &parts); err != nil {
++				return nil, fmt.Errorf("memory import record %d has invalid sources", i+1)
++			}
++			for _, part := range parts {
++				if !bytes.HasPrefix(bytes.TrimSpace(part), []byte("{")) {
++					return nil, fmt.Errorf("memory import record %d has invalid source", i+1)
++				}
++			}
++		}
++		for j, source := range r.Sources {
++			rebound, err := rebindImportSource(source, canonical)
++			if err != nil {
++				return nil, fmt.Errorf("memory import record %d source %d: %w", i+1, j+1, err)
++			}
++			r.Sources[j] = rebound
++		}
++		records = append(records, r)
++	}
++	return records, nil
++}
++
++func decodeImport(raw []byte, dst any) error {
++	dec := json.NewDecoder(bytes.NewReader(raw))
++	dec.DisallowUnknownFields()
++	if err := dec.Decode(dst); err != nil {
++		return err
++	}
++	if err := dec.Decode(new(any)); err != io.EOF {
++		return errors.New("trailing JSON")
++	}
++	return nil
++}
++
++func rebindImportSource(source Source, root string) (Source, error) {
++	invalid := func() (Source, error) { return Source{}, errors.New("invalid or stale project source binding") }
++	if !filepath.IsAbs(source.Root) || source.Path == "" || len(source.SHA256) != 64 {
++		return invalid()
++	}
++	hash, err := hex.DecodeString(source.SHA256)
++	if err != nil {
++		return invalid()
++	}
++	want := hex.EncodeToString(hash)
++	original := filepath.Clean(source.Root)
++	path := source.Path
++	if !filepath.IsAbs(path) {
++		path = filepath.Join(original, path)
++	}
++	relative, err := filepath.Rel(original, path)
++	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
++		return invalid()
++	}
++	destination := filepath.Join(root, relative)
++	digest, err := sourceDigest(root, destination)
++	if err != nil || digest != want {
++		return invalid()
++	}
++	return Source{Root: root, Path: destination, SHA256: digest}, nil
++}
++
++// ImportCounts describes selected current keys, not historical input rows.
++type ImportCounts struct {
++	Inserted int  `json:"inserted"`
++	Replaced int  `json:"replaced"`
++	Skipped  int  `json:"skipped"`
++	DryRun   bool `json:"dry_run"`
++}
++
++// Import applies selected versions in one transaction, including conflict analysis.
++func (s *Store) Import(ctx context.Context, scope, root string, records []Record, policy string, dryRun bool) (ImportCounts, error) {
++	counts := ImportCounts{DryRun: dryRun}
++	if policy != "error" && policy != "skip" && policy != "replace" {
++		return counts, errors.New("invalid memory import conflict policy")
++	}
++	if len(records) > 1000 || scope == "" {
++		return counts, errors.New("invalid memory import batch")
++	}
++	selected := make(map[string]Record)
++	ids := make(map[int64]bool)
++	canonical, err := filepath.EvalSymlinks(root)
++	if err != nil {
++		return counts, errors.New("cannot resolve destination project root")
++	}
++	for _, r := range records {
++		r.Scope = scope
++		if r.ID <= 0 || ids[r.ID] || r.Expires < 0 || len(r.Sources) > 8 {
++			return counts, errors.New("invalid memory import record")
++		}
++		ids[r.ID] = true
++		if err := validatePut(r); err != nil {
++			return counts, err
++		}
++		for _, source := range r.Sources {
++			if source.Root != canonical || !filepath.IsAbs(source.Path) || !SourcesCurrentAt([]Source{source}, canonical) {
++				return counts, errors.New("invalid or stale project source binding")
++			}
++		}
++		if current, ok := selected[r.Key]; !ok || r.ID > current.ID {
++			selected[r.Key] = r
++		}
++	}
++	keys := make([]string, 0, len(selected))
++	for key := range selected {
++		keys = append(keys, key)
++	}
++	sort.Strings(keys)
++	tx, err := s.db.BeginTx(ctx, nil)
++	if err != nil {
++		return counts, err
++	}
++	defer rollback(tx)
++	for _, key := range keys {
++		r := selected[key]
++		var previous int64
++		err := tx.QueryRowContext(ctx, `SELECT id FROM memories WHERE scope=? AND key=? AND active=1`, scope, key).Scan(&previous)
++		if err != nil && !errors.Is(err, sql.ErrNoRows) {
++			return counts, err
++		}
++		if err == nil {
++			switch policy {
++			case "error":
++				return counts, ErrImportConflict
++			case "skip":
++				counts.Skipped++
++				continue
++			case "replace":
++				counts.Replaced++
++			}
++		} else {
++			counts.Inserted++
++		}
++		if dryRun {
++			continue
++		}
++		if previous != 0 {
++			if _, err := tx.ExecContext(ctx, `UPDATE memories SET active=0 WHERE id=?`, previous); err != nil {
++				return counts, err
++			}
++		}
++		res, err := tx.ExecContext(ctx, `INSERT INTO memories(scope,key,kind,text,evidence,created,expires,supersedes) VALUES(?,?,?,?,?,?,?,?)`, scope, r.Key, r.Kind, r.Text, r.Evidence, time.Now().Unix(), r.Expires, previous)
++		if err != nil {
++			return counts, err
++		}
++		id, err := res.LastInsertId()
++		if err != nil {
++			return counts, err
++		}
++		if _, err := tx.ExecContext(ctx, `INSERT INTO memory_search(rowid,text,evidence) VALUES(?,?,?)`, id, r.Key+"\n"+r.Text, r.Evidence); err != nil {
++			return counts, err
++		}
++		if len(r.Sources) > 0 {
++			raw, err := json.Marshal(r.Sources)
++			if err != nil {
++				return counts, err
++			}
++			if _, err := tx.ExecContext(ctx, `INSERT INTO memory_sources(memory_id,sources) VALUES(?,?)`, id, string(raw)); err != nil {
++				return counts, err
++			}
++		}
++	}
++	if dryRun {
++		if err := ctx.Err(); err != nil {
++			return counts, err
++		}
++		return counts, nil
++	}
++	return counts, tx.Commit()
++}
+diff --git a/internal/memory/import_test.go b/internal/memory/import_test.go
+new file mode 100644
+index 0000000..71f0565
+--- /dev/null
++++ b/internal/memory/import_test.go
+@@ -0,0 +1,325 @@
++package memory
++
++import (
++	"bytes"
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++	"time"
++)
++
++func importStore(t *testing.T) *Store {
++	t.Helper()
++	s, err := Open(filepath.Join(t.TempDir(), "memory.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		if err := s.Close(); err != nil {
++			t.Error(err)
++		}
++	})
++	return s
++}
++
++func importRecord(id int64, key string) Record {
++	return Record{ID: id, Scope: "origin", Key: key, Kind: "fact", Text: "value", Evidence: "user", Created: 12, Supersedes: 91}
++}
++
++func importJSON(t *testing.T, records ...Record) []byte {
++	t.Helper()
++	b, err := json.Marshal(records)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return b
++}
++
++func TestImportHistoryConflictsAndDryRun(t *testing.T) {
++	ctx := context.Background()
++	s := importStore(t)
++	root := t.TempDir()
++	old, err := s.Put(ctx, Record{Scope: "destination", Key: "existing", Kind: "fact", Text: "local", Evidence: "user", Expires: 1})
++	if err != nil {
++		t.Fatal(err)
++	}
++	records := []Record{importRecord(31, "new"), importRecord(22, "existing"), importRecord(8, "new"), importRecord(44, "existing")}
++	records[3].Text = "replacement"
++	records[3].Expires = time.Now().Add(time.Hour).Unix()
++	before, _ := s.Export(ctx, "destination")
++	for _, policy := range []string{"error", "skip", "replace"} {
++		counts, err := s.Import(ctx, "destination", root, records, policy, true)
++		if policy == "error" {
++			if err == nil {
++				t.Fatal("conflict accepted")
++			}
++			continue
++		}
++		if err != nil || counts.Inserted != 1 || counts.DryRun != true || counts.Replaced != map[string]int{"skip": 0, "replace": 1}[policy] || counts.Skipped != map[string]int{"skip": 1, "replace": 0}[policy] {
++			t.Fatalf("dry %s: %+v %v", policy, counts, err)
++		}
++	}
++	after, _ := s.Export(ctx, "destination")
++	if !bytes.Equal(before, after) {
++		t.Fatal("dry run mutated history")
++	}
++	for table, want := range map[string]int{"memory_search": 1, "memory_sources": 0} {
++		var n int
++		if err := s.db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&n); err != nil || n != want {
++			t.Fatalf("dry run mutated %s: %d %v", table, n, err)
++		}
++	}
++	if _, err := s.Import(ctx, "destination", root, records, "error", false); err == nil {
++		t.Fatal("conflict accepted")
++	}
++	after, _ = s.Export(ctx, "destination")
++	if !bytes.Equal(before, after) {
++		t.Fatal("error mutated history")
++	}
++	counts, err := s.Import(ctx, "destination", root, records, "replace", false)
++	if err != nil || counts.Inserted != 1 || counts.Replaced != 1 {
++		t.Fatalf("%+v %v", counts, err)
++	}
++	got, err := s.Current(ctx, "destination", "existing", root)
++	if err != nil || got == nil || got.Supersedes != old || got.ID == 44 || got.Scope != "destination" || got.Created == 12 || got.Expires != records[3].Expires || got.Text != "replacement" {
++		t.Fatalf("current: %+v %v", got, err)
++	}
++	got, err = s.Current(ctx, "destination", "new", root)
++	if err != nil || got == nil || got.ID == 31 || got.Supersedes != 0 {
++		t.Fatalf("new: %+v %v", got, err)
++	}
++	exported, _ := s.Export(ctx, "destination")
++	var history []Record
++	if err := json.Unmarshal(exported, &history); err != nil || len(history) != 3 {
++		t.Fatalf("history: %s %v", exported, err)
++	}
++	found, err := s.Search(ctx, "destination", "replacement", 5, root)
++	if err != nil || len(found) != 1 {
++		t.Fatalf("search: %+v %v", found, err)
++	}
++}
++
++func TestImportSkipKeepsLocalHistory(t *testing.T) {
++	ctx := context.Background()
++	s := importStore(t)
++	root := t.TempDir()
++	old, err := s.Put(ctx, Record{Scope: "dest", Key: "same", Kind: "fact", Text: "local", Evidence: "user"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	counts, err := s.Import(ctx, "dest", root, []Record{importRecord(1, "same"), importRecord(2, "new")}, "skip", false)
++	if err != nil || counts.Inserted != 1 || counts.Skipped != 1 || counts.Replaced != 0 {
++		t.Fatalf("skip: %+v %v", counts, err)
++	}
++	current, err := s.Current(ctx, "dest", "same", root)
++	if err != nil || current == nil || current.ID != old || current.Text != "local" {
++		t.Fatalf("local record changed: %+v %v", current, err)
++	}
++	found, err := s.Search(ctx, "dest", "value", 5, root)
++	if err != nil || len(found) != 1 || found[0].Key != "new" {
++		t.Fatalf("search after skip: %+v %v", found, err)
++	}
++	exported, err := s.Export(ctx, "dest")
++	if err != nil {
++		t.Fatal(err)
++	}
++	var history []Record
++	if err := json.Unmarshal(exported, &history); err != nil || len(history) != 2 {
++		t.Fatalf("history after skip: %s %v", exported, err)
++	}
++}
++
++func TestImportValidationAndAtomicity(t *testing.T) {
++	ctx := context.Background()
++	s := importStore(t)
++	root := t.TempDir()
++	valid := importRecord(1, "ok")
++	cases := map[string][]Record{
++		"duplicate ID": {valid, valid}, "zero ID": {importRecord(0, "bad")}, "negative expiry": {func() Record { r := valid; r.Expires = -1; return r }()},
++		"empty key": {func() Record { r := valid; r.Key = " "; return r }()}, "invalid kind": {func() Record { r := valid; r.Kind = "secret"; return r }()},
++		"long text":              {func() Record { r := valid; r.Text = strings.Repeat("x", 8193); return r }()},
++		"global historical fact": {valid, func() Record { r := importRecord(2, "ok"); r.Kind = "preference"; return r }()},
++	}
++	for name, records := range cases {
++		t.Run(name, func(t *testing.T) {
++			scope := "dest"
++			if strings.HasPrefix(name, "global") {
++				scope = GlobalPreferencesScope
++			}
++			before, _ := s.Export(ctx, scope)
++			if _, err := s.Import(ctx, scope, root, records, "replace", false); err == nil {
++				t.Fatal("invalid batch accepted")
++			}
++			after, _ := s.Export(ctx, scope)
++			if !bytes.Equal(before, after) {
++				t.Fatal("partial import")
++			}
++		})
++	}
++	many := make([]Record, 1001)
++	for i := range many {
++		many[i] = importRecord(int64(i+1), "k")
++	}
++	if _, err := ParseImport(bytes.NewReader(importJSON(t, many...)), root, GlobalPreferencesScope); err == nil {
++		t.Fatal("record limit")
++	}
++	for name, data := range map[string]string{"null": "null", "object": "{}", "trailing": "[] {}", "unknown record": "[{\"id\":1,\"key\":\"k\",\"kind\":\"fact\",\"text\":\"v\",\"evidence\":\"e\",\"extra\":1}]", "null record": "[null]", "malformed": "["} {
++		t.Run(name, func(t *testing.T) {
++			if _, err := ParseImport(strings.NewReader(data), root, "dest"); err == nil {
++				t.Fatal("accepted", data)
++			}
++		})
++	}
++	if _, err := ParseImport(strings.NewReader(strings.Repeat(" ", 4<<20)+"[]"), root, "dest"); err == nil {
++		t.Fatal("oversized input")
++	}
++	if parsed, err := ParseImport(strings.NewReader("[]"), root, "dest"); err != nil || len(parsed) != 0 {
++		t.Fatalf("empty: %v %v", parsed, err)
++	}
++	cancelled, cancel := context.WithCancel(ctx)
++	cancel()
++	if _, err := s.Import(cancelled, "dest", root, []Record{valid}, "replace", false); err == nil {
++		t.Fatal("cancel accepted")
++	}
++	after, _ := s.Export(ctx, "dest")
++	if string(after) != "[]" {
++		t.Fatal("cancel wrote")
++	}
++}
++
++func TestImportWriteFailureRollsBackAllTables(t *testing.T) {
++	ctx := context.Background()
++	s := importStore(t)
++	root := t.TempDir()
++	if err := os.WriteFile(filepath.Join(root, "file"), []byte("data"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	sources, err := CaptureSources(root, []string{"file"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	old, err := s.Put(ctx, Record{Scope: "dest", Key: "k", Kind: "fact", Text: "old", Evidence: "user", Sources: sources})
++	if err != nil {
++		t.Fatal(err)
++	}
++	before, _ := s.Export(ctx, "dest")
++	// Fail after deactivating the old version and inserting the new row and search entry.
++	if _, err := s.db.Exec(`CREATE TRIGGER fail_import BEFORE INSERT ON memory_sources BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
++		t.Fatal(err)
++	}
++	r := importRecord(20, "k")
++	r.Sources = sources
++	if _, err := s.Import(ctx, "dest", root, []Record{r}, "replace", false); err == nil {
++		t.Fatal("write succeeded")
++	}
++	after, _ := s.Export(ctx, "dest")
++	if !bytes.Equal(before, after) {
++		t.Fatalf("history changed: %s", after)
++	}
++	var active int
++	if err := s.db.QueryRow(`SELECT active FROM memories WHERE id=?`, old).Scan(&active); err != nil || active != 1 {
++		t.Fatalf("old active: %d %v", active, err)
++	}
++	for _, table := range []string{"memory_search", "memory_sources"} {
++		var n int
++		if err := s.db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&n); err != nil || n != 1 {
++			t.Fatalf("%s: %d %v", table, n, err)
++		}
++	}
++}
++
++func TestImportSourceFileSize(t *testing.T) {
++	root := t.TempDir()
++	content := bytes.Repeat([]byte("x"), (1<<20)+1)
++	if err := os.WriteFile(filepath.Join(root, "large"), content, 0600); err != nil {
++		t.Fatal(err)
++	}
++	digest := sha256.Sum256(content)
++	r := importRecord(1, "k")
++	r.Sources = []Source{{Root: "/old", Path: "large", SHA256: hex.EncodeToString(digest[:])}}
++	if _, err := ParseImport(bytes.NewReader(importJSON(t, r)), root, "dest"); err == nil {
++		t.Fatal("oversized source accepted")
++	}
++}
++
++func TestImportSourcesReboundAndRejected(t *testing.T) {
++	ctx := context.Background()
++	s := importStore(t)
++	root := t.TempDir()
++	if err := os.WriteFile(filepath.Join(root, "file"), []byte("content"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	original := filepath.Join(string(filepath.Separator), "offline", "original")
++	sources, err := CaptureSources(root, []string{"file"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	valid := importRecord(1, "ok")
++	valid.Sources = []Source{{Root: original, Path: filepath.Join(original, "file"), SHA256: sources[0].SHA256}}
++	cases := map[string]Source{
++		"changed": {Root: original, Path: "file", SHA256: strings.Repeat("0", 64)}, "bad hash": {Root: original, Path: "file", SHA256: "not-a-hash"},
++		"unknown field": valid.Sources[0], "escape": {Root: original, Path: "../file", SHA256: sources[0].SHA256},
++		"absolute escape": {Root: original, Path: filepath.Join(root, "file"), SHA256: sources[0].SHA256},
++		"relative root":   {Root: "relative", Path: "file", SHA256: sources[0].SHA256},
++		"missing":         {Root: original, Path: "missing", SHA256: sources[0].SHA256},
++	}
++	outside := t.TempDir()
++	if err := os.WriteFile(filepath.Join(outside, "file"), []byte("content"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
++		t.Fatal(err)
++	}
++	cases["symlink escape"] = Source{Root: original, Path: "link/file", SHA256: sources[0].SHA256}
++	if err := os.Mkdir(filepath.Join(root, "directory"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	cases["directory"] = Source{Root: original, Path: "directory", SHA256: sources[0].SHA256}
++	for name, source := range cases {
++		if name == "unknown field" {
++			continue
++		}
++		t.Run(name, func(t *testing.T) {
++			historical := valid
++			historical.ID = 2
++			historical.Sources = []Source{source}
++			if _, err := ParseImport(bytes.NewReader(importJSON(t, historical, importRecord(3, "ok"))), root, "dest"); err == nil {
++				t.Fatal("bad historical source accepted")
++			}
++		})
++	}
++	raw := strings.Replace(string(importJSON(t, valid)), `"sha256":`, `"extra":1,"sha256":`, 1)
++	if _, err := ParseImport(strings.NewReader(raw), root, "dest"); err == nil {
++		t.Fatal("unknown source field")
++	}
++	valid.Sources[0].Path = "file"
++	parsed, err := ParseImport(bytes.NewReader(importJSON(t, valid)), root, "dest")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !reflect.DeepEqual(parsed[0].Sources, sources) {
++		t.Fatalf("rebound: %+v vs %+v", parsed[0].Sources, sources)
++	}
++	if _, err := s.Import(ctx, "dest", root, parsed, "error", false); err != nil {
++		t.Fatal(err)
++	}
++	found, err := s.Search(ctx, "dest", "value", 5, root)
++	if err != nil || len(found) != 1 {
++		t.Fatalf("search: %v %v", found, err)
++	}
++	nine := valid
++	nine.ID = 4
++	nine.Sources = make([]Source, 9)
++	if _, err := ParseImport(bytes.NewReader(importJSON(t, nine)), root, "dest"); err == nil {
++		t.Fatal("nine sources")
++	}
++	if _, err := ParseImport(bytes.NewReader(importJSON(t, valid)), root, GlobalPreferencesScope); err == nil {
++		t.Fatal("global sources")
++	}
++}
+diff --git a/internal/memory/store.go b/internal/memory/store.go
+index 6593929..a06f58a 100644
+--- a/internal/memory/store.go
++++ b/internal/memory/store.go
+@@ -70,22 +70,29 @@ func Open(path string) (*Store, error) {
+ // Close releases the database connection.
+ func (s *Store) Close() error { return s.db.Close() }
+ 
+-// Put supersedes a key atomically, retaining the previous record for inspection.
+-// Evidence is attribution, never an automatic claim of verified correctness.
+-func (s *Store) Put(ctx context.Context, r Record) (int64, error) {
++func validatePut(r Record) error {
+ 	if r.Scope == "" || strings.TrimSpace(r.Key) == "" || strings.TrimSpace(r.Text) == "" || strings.TrimSpace(r.Evidence) == "" {
+-		return 0, errors.New("scope, key, text and evidence are required")
++		return errors.New("scope, key, text and evidence are required")
+ 	}
+ 	if len(r.Key) > 256 || len(r.Text) > 8192 || len(r.Evidence) > 2048 {
+-		return 0, errors.New("memory exceeds field limits")
++		return errors.New("memory exceeds field limits")
+ 	}
+ 	switch r.Kind {
+ 	case "preference", "fact", "procedure", "observation":
+ 	default:
+-		return 0, errors.New("invalid memory kind")
++		return errors.New("invalid memory kind")
+ 	}
+ 	if r.Scope == GlobalPreferencesScope && (r.Kind != "preference" || len(r.Sources) != 0) {
+-		return 0, errors.New("global memory accepts explicit preferences without project file sources only")
++		return errors.New("global memory accepts explicit preferences without project file sources only")
++	}
++	return nil
++}
++
++// Put supersedes a key atomically, retaining the previous record for inspection.
++// Evidence is attribution, never an automatic claim of verified correctness.
++func (s *Store) Put(ctx context.Context, r Record) (int64, error) {
++	if err := validatePut(r); err != nil {
++		return 0, err
+ 	}
+ 	tx, err := s.db.BeginTx(ctx, nil)
+ 	if err != nil {

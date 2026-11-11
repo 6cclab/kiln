@@ -1,0 +1,111 @@
+{
+  "prior_reported_usd": 33.85363025,
+  "runs": [
+    {
+      "arm": "codex",
+      "repeat": 1,
+      "status": "completed",
+      "estimated_cost_usd": 1.7601292000000002
+    },
+    {
+      "arm": "kiln",
+      "repeat": 1,
+      "status": "driver_interrupted",
+      "estimated_cost_usd": 1.4973192,
+      "usage_records": 33,
+      "session_sha256": "8a61b2d271b34d32b795e8bd5e6bfbd09fc71f29bb06e4a2ceda555b2a1e3f77",
+      "last_log_event": "time=2026-11-11T16:58:14.388-05:00 level=INFO msg=tool_start lane=main tool=bash id=call_ec142d4ecf9a4dcda1a13a50336f5b5f|fc_05f879d7ec8fd229016af4e4f63d3487d1a3caaeff8c2c03ff",
+      "last_operation_state": {
+        "at": "tools",
+        "control": {
+          "status": "running"
+        },
+        "settings": {
+          "compaction": {
+            "enabled": true,
+            "keepRecentTokens": 68000,
+            "reserveTokens": 27200
+          },
+          "followUpMode": "all",
+          "steeringMode": "all",
+          "toolExecution": "sequential"
+        },
+        "latestAssistantEntryId": null,
+        "batch": {
+          "assistantEntryId": "26191b37-7c79-44b6-8f4c-f6278cbe0837",
+          "calls": [
+            {
+              "resultEntryId": "2687f3b9-ee72-4d12-8ccb-ee4c87b2077c",
+              "sourceIndex": 0,
+              "status": "effect_pending"
+            }
+          ],
+          "configuration": {
+            "activeToolNames": null,
+            "model": {
+              "provider": "",
+              "modelId": ""
+            },
+            "thinkingLevel": ""
+          },
+          "turnId": "26191b37-7c79-44b6-8f4c-f6278cbe0837"
+        }
+      },
+      "last_frame_operation": "delete",
+      "accounting": "All recorded model responses committed usage; last operation executing local Bash, no pending model stream observed. No worker model sessions found."
+    },
+    {
+      "arm": "kiln",
+      "repeat": 2,
+      "status": "driver_interrupted",
+      "estimated_cost_usd": 0.9864040000000001,
+      "usage_records": 45,
+      "session_sha256": "e17662039769db279b34940ff305ae389a3404158a24b87f1fc21ed8cd86358e",
+      "last_log_event": "time=2026-11-11T16:57:57.013-05:00 level=INFO msg=tool_start lane=main tool=bash id=call_5474863a7a704f27b069d138330a033a|fc_0a87db6aa0e8e7d9016af4e4e36ef087d1a8b0100ccbc30bab",
+      "last_operation_state": {
+        "at": "tools",
+        "control": {
+          "status": "running"
+        },
+        "settings": {
+          "compaction": {
+            "enabled": true,
+            "keepRecentTokens": 68000,
+            "reserveTokens": 27200
+          },
+          "followUpMode": "all",
+          "steeringMode": "all",
+          "toolExecution": "sequential"
+        },
+        "latestAssistantEntryId": null,
+        "batch": {
+          "assistantEntryId": "f3ee0ea6-2429-48d5-98bc-b8b00d517718",
+          "calls": [
+            {
+              "resultEntryId": "3c7b5960-fe7b-4831-88bc-2533ceaa4e05",
+              "sourceIndex": 0,
+              "status": "effect_pending"
+            },
+            {
+              "resultEntryId": "872fd915-18e3-478a-a12c-a081c348cc29",
+              "sourceIndex": 1,
+              "status": "planned"
+            }
+          ],
+          "configuration": {
+            "activeToolNames": null,
+            "model": {
+              "provider": "",
+              "modelId": ""
+            },
+            "thinkingLevel": ""
+          },
+          "turnId": "f3ee0ea6-2429-48d5-98bc-b8b00d517718"
+        }
+      },
+      "last_frame_operation": "delete",
+      "accounting": "All recorded model responses committed usage; last operation executing local Bash, no pending model stream observed. No worker model sessions found."
+    }
+  ],
+  "total_reported_usd": 38.09748265
+}

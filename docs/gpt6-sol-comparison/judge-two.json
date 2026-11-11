@@ -1,0 +1,92 @@
+{
+  "reviewer": "judge-two",
+  "review_order": [
+    "candidate-02",
+    "candidate-01"
+  ],
+  "candidates": {
+    "candidate-02": {
+      "scores": {
+        "correctness_robustness": 2,
+        "security_privacy": 2,
+        "design_maintainability": 3,
+        "test_quality": 2,
+        "scope_usability": 4
+      },
+      "readiness": "major revisions",
+      "hidden_acceptance": {
+        "passed": 29,
+        "total": 29
+      },
+      "findings": [
+        {
+          "severity": "major",
+          "type": "contract violation",
+          "path": "internal/memory/import.go",
+          "line": 203,
+          "reproduced": true,
+          "trigger": "Destination source path is a FIFO; valid-shape source-bound import.",
+          "observed": "CLI blocks opening FIFO (2s local, 3s supplemental timeout).",
+          "expected": "Reject nonregular source promptly, including historical records and dry runs.",
+          "related_path": "internal/memory/sources.go",
+          "related_line": 30
+        },
+        {
+          "severity": "minor",
+          "type": "test portability",
+          "path": "internal/memory/import_test.go",
+          "line": 198,
+          "reproduced": true,
+          "trigger": "TMPDIR uses /tmp alias for /private/tmp on macOS.",
+          "observed": "Test compares canonical stored path to noncanonical temp path and fails.",
+          "expected": "Path-equivalent roots compare equal; canonical-temp targeted unit and race runs pass."
+        }
+      ],
+      "submitted_tests": "Broad history, scope, source, conflict, rollback, dry-run and cancellation coverage; misses FIFO and has literal temp-path comparison.",
+      "transaction_cancellation": "Single transaction for conflict analysis and writes; explicit cancellation checks, but blocked FIFO open is outside transaction and cannot respond to context cancellation.",
+      "documentation": "Detailed import, source, conflict, and dry-run guidance in docs/configuration.md."
+    },
+    "candidate-01": {
+      "scores": {
+        "correctness_robustness": 2,
+        "security_privacy": 3,
+        "design_maintainability": 3,
+        "test_quality": 2,
+        "scope_usability": 3
+      },
+      "readiness": "minor revisions",
+      "hidden_acceptance": {
+        "passed": 27,
+        "total": 29
+      },
+      "findings": [
+        {
+          "severity": "moderate",
+          "type": "contract violation",
+          "path": "internal/memory/import.go",
+          "line": 67,
+          "reproduced": true,
+          "trigger": "Project import of valid fact record whose input scope string is user:preferences.",
+          "observed": "Rejected as invalid global record; hidden project_scope_isolation and replace_lineage fail.",
+          "expected": "Destination project scope governs import; do not use untrusted input scope as destination identity."
+        },
+        {
+          "severity": "minor",
+          "type": "test portability",
+          "path": "internal/memory/import_test.go",
+          "line": 150,
+          "reproduced": true,
+          "trigger": "TMPDIR uses /tmp alias for /private/tmp on macOS.",
+          "observed": "Root assertion fails; analogous internal/cli/memory_import_test.go:89 fails.",
+          "expected": "Canonical/path-equivalent comparison; targeted unit and race tests pass with canonical TMPDIR."
+        }
+      ],
+      "submitted_tests": "Broad adversarial and rollback coverage, including nonregular source; misses input-scope edge and has nonportable temp-path assertions.",
+      "transaction_cancellation": "One transaction for conflict analysis and writes with rollback and cancellation checks; source guard rejects FIFO before opening.",
+      "documentation": "Covers history collapse, scope, source validation, conflict policies and dry-run."
+    }
+  },
+  "comparison": "Candidate-02 passes all 29 hidden acceptance cases but has a reproduced FIFO hang and cannot be accepted as submitted. Candidate-01 rejects FIFO promptly but fails two project-scope cases by relying on untrusted input scope. Both have test portability defects. No general model or harness claim follows.",
+  "uncertainty": "A maintainer should confirm the intended acceptance of internally contradictory input scope strings; the task instruction and hidden cases favor acceptance into the selected destination scope. Unchanged TUI unit failure was reproduced on baseline and is excluded from candidate defect scores.",
+  "evidence_notes": "Both build, gofmt, vet, staticcheck, memory e2e, and canonical-temp targeted unit/race checks pass. Original unit/race failures from /tmp alias are retained as test-portability evidence."
+}

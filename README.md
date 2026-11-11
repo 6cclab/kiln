@@ -238,6 +238,10 @@ any non-faux model unless `KILN_EVAL_LIVE=1` is set, so `make eval` never
 leaves the faux provider. `make eval-live MODELS=ollama/qwen3.8` runs the
 suite against real models instead.
 
+The [GPT-6-Sol Kiln/Codex comparison](docs/gpt6-sol-comparison-report.md)
+records a parallel same-model task, adversarial checks, and three blinded code
+reviews. Both patches need fixes; Codex was faster and cheaper on this pair.
+
 ## Development
 
 ```bash

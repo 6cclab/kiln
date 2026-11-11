@@ -59,7 +59,12 @@ being mistaken for the complete roadmap.
 - A [post-fix real-work repeat](fidelity-comparison-report.md) with three blinded
   judges: both harnesses completed twice, and Kiln used 32.5% less reported cost
   and 42.7% less time. Judges tied the strongest Kiln and Claude patches; all
-  four still need correctness fixes. Cumulative comparison spend is $33.85/$50.
+  four still need correctness fixes. Comparison spend through that cohort was $33.85.
+- A [same-model GPT-6-Sol Kiln/Codex pair](gpt6-sol-comparison-report.md), run
+  concurrently with delegation disabled and three blinded judges. Codex was
+  faster and cheaper; Kiln passed more hidden cases, but its FIFO hang and
+  Codex's imported-scope rejection both block merge. Cumulative estimated external
+  comparison spend is $41.60/$50, including interrupted driver attempts.
 
 ## Still outstanding from the full plan
 
