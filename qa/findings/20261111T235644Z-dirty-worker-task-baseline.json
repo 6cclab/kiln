@@ -1,0 +1,30 @@
+{
+ "id": "20261111T235644Z-dirty-worker-task-baseline",
+ "found_at": "2026-11-11T23:56:44Z",
+ "scenario": "test/e2e/worker_snapshot_test.go",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Dirty-worker task results lost baseline metadata",
+ "observed": "During development, the retained worker manifest included its dirty baseline, but task-result conversion omitted it for nested and main agents. The real CLI regression failed with worker result lost the captured baseline metadata.",
+ "expected": "The task result and retained manifest carry the same baseline identity for review and integration.",
+ "design_ref": null,
+ "evidence": [
+  "/tmp/kiln-roadmap-red-baseline-metadata.log"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/agent/dispatch.go",
+   "internal/cli/chat.go",
+   "internal/tools/task.go"
+  ],
+  "regression_test": "TestWorkerIsolationCLIPreservesDirtyParent; TestAdaptDispatchPreservesWorkerBaseline; TestTaskArtifactDetailsPreserveBaseline",
+  "after_evidence": [
+   "/tmp/kiln-roadmap-final-focused.log"
+  ],
+  "note": "Caught before release; the real CLI regression fails before both conversion paths are corrected and passes afterward.",
+  "updated_at": "2026-11-11T23:56:50Z"
+ }
+}

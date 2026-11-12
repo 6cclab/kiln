@@ -27,10 +27,14 @@ being mistaken for the complete roadmap.
 - Structured objective/constraint/decision checkpoints and command evidence
   captured against permitted file snapshots, rechecked for freshness on recovery.
   A bounded verification-status tool reports dependency changes and invalidates
-  superseded evidence without executing or skipping checks.
+  superseded evidence without executing or skipping checks. Explicit directory
+  dependencies include membership changes; an optional plan returns prior commands
+  to rerun or evidence needing review without making safe-to-skip claims.
 - Opt-in clean-checkout editing worktrees, structured retained patch artifacts,
   and explicit digest/base-checked patch application under a repository lock.
   Batch preflight/application combines disjoint artifacts from one clean base.
+  Opt-in dirty-parent snapshots preserve staged/unstaged/untracked inputs and
+  export only worker changes; integration requires the captured baseline to match.
 - Offline exact-cohort comparison with external harness records, including
   strict usage accounting, setup provenance, mechanical quality, and paired costs.
   `eval plan` fingerprints a selected Claude Code cohort without model calls;
@@ -71,15 +75,19 @@ being mistaken for the complete roadmap.
   avoid double-counting disjoint input categories. Local regressions cover these
   changes; their effect on live cost and generated-code quality is not measured.
 
+Details and local performance evidence for the latest tranche are in
+[worker snapshots and verification dependencies](worker-snapshot-verification-improvements.md).
+
 ## Still outstanding from the full plan
 
 - Plugin commands, hooks and other instruction types in unified retrieval; the
   current catalog covers model-invocable skills, dispatchable agents and eligible MCP tools.
-- General-purpose isolated workers with shell/sandbox support, snapshots of dirty
-  parent checkouts, and automatic integration of concurrent patches. Current
-  isolated workers edit files from a clean HEAD and require explicit application.
-- Broader verification dependency tracking and selective test planning; current
-  command evidence and status are scoped to selected file snapshots, not whole-task correctness.
+- General-purpose isolated workers with shell/sandbox support and automatic
+  integration of concurrent patches. Current isolated workers support file edits
+  from clean HEAD or an opt-in dirty snapshot and require explicit application.
+- Automatic verification dependency discovery and broader selective test policies;
+  current evidence and rerun planning cover explicitly declared files/directories,
+  not whole-task correctness or proof that unchanged checks can be skipped.
 - Verified automatic fact extraction and background policy-candidate generation
   from ordinary task outcomes. Run statistics produce review hypotheses only;
   policy candidates still require explicit evaluation evidence, and plans do not

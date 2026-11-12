@@ -1042,6 +1042,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		ProgressLimit:   claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLimit, 0),
 		CycleLimit:      claudesettings.PositiveOr(settings.RuntimeEfficiency.CycleLimit, 0),
 		IsolatedWorkers: settings.Orchestration.IsolatedWorkers != nil && *settings.Orchestration.IsolatedWorkers,
+		SnapshotDirty:   settings.Orchestration.SnapshotDirty != nil && *settings.Orchestration.SnapshotDirty,
 		Limits: &agent.DispatchLimits{
 			Concurrent: claudesettings.PositiveOr(settings.Orchestration.MaxConcurrent, 4),
 			Dispatches: claudesettings.PositiveOr(settings.Orchestration.MaxDispatches, 64),
@@ -1076,6 +1077,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		result := tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars, Model: r.Model, Usage: r.Usage, UsageByModel: r.UsageByModel}
 		if r.Artifact != nil {
 			result.Artifact = &tools.TaskArtifact{ManifestPath: r.Artifact.ManifestPath, BaseCommit: r.Artifact.BaseCommit, PatchPath: r.Artifact.PatchPath, SHA256: r.Artifact.SHA256, Bytes: r.Artifact.Bytes, ChangedFiles: r.Artifact.ChangedFiles}
+			if r.Artifact.Baseline != nil {
+				result.Artifact.Baseline = &tools.TaskBaseline{Tree: r.Artifact.Baseline.Tree, State: r.Artifact.Baseline.State}
+			}
 		}
 		return result, err
 	}

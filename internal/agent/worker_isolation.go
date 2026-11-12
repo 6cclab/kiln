@@ -131,19 +131,22 @@ func boundedWorkerReport(report string) string {
 // WorkerArtifact is a bounded, reviewable patch from an isolated worker.
 // PatchPath is a private temporary file retained until the caller removes it.
 type WorkerArtifact struct {
-	ManifestPath string   `json:"manifestPath,omitempty"`
-	BaseCommit   string   `json:"baseCommit"`
-	PatchPath    string   `json:"patchPath"`
-	SHA256       string   `json:"sha256"`
-	Bytes        int      `json:"bytes"`
-	ChangedFiles []string `json:"changedFiles,omitempty"`
+	ManifestPath string          `json:"manifestPath,omitempty"`
+	BaseCommit   string          `json:"baseCommit"`
+	PatchPath    string          `json:"patchPath"`
+	SHA256       string          `json:"sha256"`
+	Bytes        int             `json:"bytes"`
+	ChangedFiles []string        `json:"changedFiles,omitempty"`
+	Baseline     *WorkerBaseline `json:"baseline,omitempty"`
 }
 
 type workerWorktree struct {
-	repo string
-	path string
-	root string
-	base string
+	repo          string
+	path          string
+	root          string
+	base          string
+	baseline      *WorkerBaseline
+	snapshotFiles []snapshotFile
 }
 
 func gitRun(ctx context.Context, dir string, args ...string) ([]byte, error) {
@@ -220,9 +223,13 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 
 func runGitBounded(cmd *exec.Cmd) ([]byte, error) {
 	buf := &boundedOutput{limit: maxWorkerPatchBytes + 65536}
+	stderr := &boundedOutput{limit: 65536}
 	cmd.Stdout = buf
-	cmd.Stderr = buf
+	cmd.Stderr = stderr
 	err := cmd.Run()
+	if err != nil && stderr.buf.Len() > 0 {
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.buf.String()))
+	}
 	return buf.buf.Bytes(), err
 }
 
@@ -239,6 +246,21 @@ func cleanGitEnvironment() []string {
 }
 
 func cleanHead(ctx context.Context, repo string) (string, error) {
+	head, err := repositoryHead(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	status, err := gitRun(ctx, repo, "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil {
+		return "", err
+	}
+	if len(status) != 0 {
+		return "", fmt.Errorf("isolated workers require a clean parent working tree; existing changes were left untouched")
+	}
+	return head, nil
+}
+
+func repositoryHead(ctx context.Context, repo string) (string, error) {
 	root, err := gitRun(ctx, repo, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
@@ -251,13 +273,6 @@ func cleanHead(ctx context.Context, repo string) (string, error) {
 	if filepath.Clean(resolved) != filepath.Clean(physicalRepo) {
 		return "", fmt.Errorf("isolated workers require the repository root as cwd: %s", resolved)
 	}
-	status, err := gitRun(ctx, repo, "status", "--porcelain=v1", "--untracked-files=all")
-	if err != nil {
-		return "", err
-	}
-	if len(status) != 0 {
-		return "", fmt.Errorf("isolated workers require a clean parent working tree; existing changes were left untouched")
-	}
 	head, err := gitRun(ctx, repo, "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
@@ -266,6 +281,10 @@ func cleanHead(ctx context.Context, repo string) (string, error) {
 }
 
 func newWorkerWorktree(ctx context.Context, env *execenv.Env) (*workerWorktree, *execenv.Env, error) {
+	return newWorkerWorktreeWithSnapshot(ctx, env, false)
+}
+
+func newWorkerWorktreeWithSnapshot(ctx context.Context, env *execenv.Env, snapshotDirty bool) (*workerWorktree, *execenv.Env, error) {
 	if env == nil || env.Cwd == "" {
 		return nil, nil, fmt.Errorf("isolated worker requires a working directory")
 	}
@@ -273,7 +292,16 @@ func newWorkerWorktree(ctx context.Context, env *execenv.Env) (*workerWorktree, 
 	if err != nil {
 		return nil, nil, err
 	}
-	base, err := cleanHead(ctx, repo)
+	var base string
+	var snapshot workerSnapshot
+	if snapshotDirty {
+		base, err = repositoryHead(ctx, repo)
+		if err == nil {
+			snapshot, err = captureWorkerSnapshot(ctx, repo, base)
+		}
+	} else {
+		base, err = cleanHead(ctx, repo)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -285,6 +313,36 @@ func newWorkerWorktree(ctx context.Context, env *execenv.Env) (*workerWorktree, 
 	if _, err := gitRun(ctx, repo, "worktree", "add", "--detach", w.path, base); err != nil {
 		_ = os.RemoveAll(root)
 		return nil, nil, err
+	}
+	if snapshotDirty {
+		w.baseline = &snapshot.baseline
+		w.snapshotFiles = snapshot.files
+		if _, err := gitRun(ctx, w.path, "read-tree", snapshot.baseline.Tree); err != nil {
+			_ = w.close()
+			return nil, nil, err
+		}
+		for _, file := range snapshot.files {
+			path := filepath.Join(w.path, filepath.FromSlash(file.path))
+			if file.deleted {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					_ = w.close()
+					return nil, nil, err
+				}
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				_ = w.close()
+				return nil, nil, err
+			}
+			if err := os.WriteFile(path, file.data, file.mode); err != nil {
+				_ = w.close()
+				return nil, nil, err
+			}
+			if err := os.Chmod(path, file.mode); err != nil {
+				_ = w.close()
+				return nil, nil, err
+			}
+		}
 	}
 	childEnv := *env
 	childEnv.Cwd = w.path
@@ -309,7 +367,38 @@ func (w *workerWorktree) artifact(ctx context.Context) (*WorkerArtifact, error) 
 	if _, err := gitRun(ctx, w.path, "add", "-A"); err != nil {
 		return nil, err
 	}
-	patch, err := gitRun(ctx, w.path, "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", w.base)
+	// Staging can normalize line endings or apply attributes. A captured
+	// parent file that the worker left untouched must retain its raw baseline
+	// blob in the worker index, so it never appears in the exported patch.
+	if w.baseline != nil {
+		var restoreInput bytes.Buffer
+		for _, file := range w.snapshotFiles {
+			if file.deleted {
+				continue
+			}
+			path := filepath.Join(w.path, filepath.FromSlash(file.path))
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != file.mode {
+				continue
+			}
+			data, err := readRegularBounded(path, maxWorkerSnapshotBytes)
+			if err != nil || !bytes.Equal(data, file.data) {
+				continue
+			}
+			restoreInput.WriteString(file.path)
+			restoreInput.WriteByte(0)
+		}
+		if restoreInput.Len() > 0 {
+			if _, err := gitRunInput(ctx, w.path, restoreInput.Bytes(), "--literal-pathspecs", "restore", "--staged", "--source="+w.baseline.Tree, "--pathspec-from-file=-", "--pathspec-file-nul"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	patchBase := w.base
+	if w.baseline != nil {
+		patchBase = w.baseline.Tree
+	}
+	patch, err := gitRun(ctx, w.path, "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", patchBase)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +408,7 @@ func (w *workerWorktree) artifact(ctx context.Context) (*WorkerArtifact, error) 
 	if len(patch) > maxWorkerPatchBytes {
 		return nil, fmt.Errorf("worker patch exceeds %d bytes", maxWorkerPatchBytes)
 	}
-	names, err := gitRun(ctx, w.path, "diff", "--cached", "--name-only", "-z", w.base)
+	names, err := gitRun(ctx, w.path, "diff", "--cached", "--name-only", "-z", patchBase)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +432,7 @@ func (w *workerWorktree) artifact(ctx context.Context) (*WorkerArtifact, error) 
 		return nil, err
 	}
 	sum := sha256.Sum256(patch)
-	artifact := &WorkerArtifact{BaseCommit: w.base, PatchPath: path, SHA256: hex.EncodeToString(sum[:]), Bytes: len(patch), ChangedFiles: changed}
+	artifact := &WorkerArtifact{BaseCommit: w.base, PatchPath: path, SHA256: hex.EncodeToString(sum[:]), Bytes: len(patch), ChangedFiles: changed, Baseline: w.baseline}
 	manifest := filepath.Join(dir, "artifact.json")
 	data, err := json.MarshalIndent(artifact, "", "  ")
 	if err != nil {

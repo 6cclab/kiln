@@ -38,7 +38,7 @@ steps:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `\"status\":\"unchanged\"`) || !strings.Contains(string(raw), "declared file snapshots only") {
+	if !strings.Contains(string(raw), `\"status\":\"unchanged\"`) || !strings.Contains(string(raw), "declared inputs only; no task correctness or safe-to-skip claim") {
 		t.Fatalf("missing bounded status result: %s", raw)
 	}
 }

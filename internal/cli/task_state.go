@@ -138,6 +138,11 @@ func (s *taskState) verificationSnapshot() []tools.VerificationEvidence {
 	for i, proof := range s.proofs {
 		out[i] = proof
 		out[i].Files = append([]tools.VerificationFile(nil), proof.Files...)
+		out[i].Directories = append([]tools.VerificationDirectory(nil), proof.Directories...)
+		for j := range out[i].Directories {
+			out[i].Directories[j].Files = append([]tools.VerificationFile(nil), proof.Directories[j].Files...)
+			out[i].Directories[j].Subdirectories = append([]tools.VerificationSubdirectory(nil), proof.Directories[j].Subdirectories...)
+		}
 	}
 	return out
 }
@@ -276,7 +281,15 @@ func (s *taskState) transform(tokens int) func(context.Context, []msg.Message) (
 			for _, file := range proof.Files {
 				paths = append(paths, file.Path)
 			}
-			line := fmt.Sprintf("Command success on selected file snapshots (%s, call %s, files %s): %s\n", status, proof.CallID, strings.Join(paths, ", "), proof.Command)
+			for _, dir := range proof.Directories {
+				paths = append(paths, dir.Path+"/")
+			}
+			kind := "file snapshots"
+			label := "files"
+			if len(proof.Directories) > 0 {
+				kind, label = "declared input snapshots", "inputs"
+			}
+			line := fmt.Sprintf("Command success on selected %s (%s, call %s, %s %s): %s\n", kind, status, proof.CallID, label, strings.Join(paths, ", "), proof.Command)
 			if len(prefix)+len(text)+len(line)+len(suffix) <= tokens*4 {
 				text += line
 			}

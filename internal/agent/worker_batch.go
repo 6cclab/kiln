@@ -29,6 +29,7 @@ type WorkerBatchInspection struct {
 type preparedWorkerBatch struct {
 	inspection WorkerBatchInspection
 	patch      []byte
+	baseline   *WorkerBaseline
 }
 
 // InspectWorkerArtifactBatch validates manifests and patches against a clean
@@ -73,7 +74,7 @@ func ApplyWorkerArtifactBatch(ctx context.Context, repo string, artifacts []Work
 	if err != nil {
 		return err
 	}
-	head, err := cleanHead(ctx, repo)
+	head, err := batchParentHead(ctx, repo, batch.baseline)
 	if err != nil {
 		return err
 	}
@@ -90,11 +91,15 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 	if len(artifacts) == 0 || len(artifacts) > maxWorkerBatchArtifacts {
 		return preparedWorkerBatch{}, fmt.Errorf("worker batch requires 1 to %d artifacts", maxWorkerBatchArtifacts)
 	}
-	head, err := cleanHead(ctx, repo)
+	var baseline *WorkerBaseline
+	if len(artifacts) > 0 {
+		baseline = artifacts[0].Baseline
+	}
+	head, err := batchParentHead(ctx, repo, baseline)
 	if err != nil {
 		return preparedWorkerBatch{}, err
 	}
-	batch := preparedWorkerBatch{inspection: WorkerBatchInspection{BaseCommit: head, Artifacts: len(artifacts)}}
+	batch := preparedWorkerBatch{inspection: WorkerBatchInspection{BaseCommit: head, Artifacts: len(artifacts)}, baseline: baseline}
 	seen := map[string]int{}
 	for i, artifact := range artifacts {
 		if err := ctx.Err(); err != nil {
@@ -102,6 +107,9 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 		}
 		if artifact.BaseCommit != head {
 			return preparedWorkerBatch{}, fmt.Errorf("worker artifact %d has a different base commit", i+1)
+		}
+		if !sameWorkerBaseline(artifact.Baseline, baseline) {
+			return preparedWorkerBatch{}, fmt.Errorf("worker artifact %d has a different baseline", i+1)
 		}
 		if artifact.PatchPath == "" || artifact.ManifestPath == "" {
 			return preparedWorkerBatch{}, fmt.Errorf("worker artifact %d lacks a retained manifest or patch", i+1)
@@ -112,7 +120,7 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 		if err != nil {
 			return preparedWorkerBatch{}, fmt.Errorf("worker artifact %d manifest: %w", i+1, err)
 		}
-		if loaded.BaseCommit != artifact.BaseCommit || loaded.PatchPath != artifact.PatchPath || loaded.SHA256 != artifact.SHA256 || loaded.Bytes != artifact.Bytes || !samePaths(loaded.ChangedFiles, artifact.ChangedFiles) {
+		if loaded.BaseCommit != artifact.BaseCommit || loaded.PatchPath != artifact.PatchPath || loaded.SHA256 != artifact.SHA256 || loaded.Bytes != artifact.Bytes || !samePaths(loaded.ChangedFiles, artifact.ChangedFiles) || !sameWorkerBaseline(loaded.Baseline, artifact.Baseline) {
 			return preparedWorkerBatch{}, fmt.Errorf("worker artifact %d manifest changed", i+1)
 		}
 		patch, err := readRegularBounded(artifact.PatchPath, maxWorkerPatchBytes)
@@ -157,6 +165,34 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 		return preparedWorkerBatch{}, fmt.Errorf("worker batch conflict: %w", err)
 	}
 	return batch, nil
+}
+
+func sameWorkerBaseline(a, b *WorkerBaseline) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Tree == b.Tree && a.State == b.State
+}
+
+func batchParentHead(ctx context.Context, repo string, baseline *WorkerBaseline) (string, error) {
+	if baseline == nil {
+		return cleanHead(ctx, repo)
+	}
+	head, err := repositoryHead(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if len(baseline.Tree) != len(head) || len(baseline.State) != 64 {
+		return "", fmt.Errorf("invalid worker baseline")
+	}
+	snapshot, err := captureWorkerSnapshot(ctx, repo, head)
+	if err != nil {
+		return "", err
+	}
+	if snapshot.baseline != *baseline {
+		return "", fmt.Errorf("parent changed since worker snapshot")
+	}
+	return head, nil
 }
 
 func workerPatchPaths(ctx context.Context, repo string, patch []byte) ([]string, error) {

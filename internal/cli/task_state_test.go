@@ -246,3 +246,44 @@ func TestVerificationUnknownBashFailureInvalidatesOnlyOlderProofs(t *testing.T) 
 		t.Fatalf("live state lost newer proof: %+v", got)
 	}
 }
+
+func TestVerificationDirectoryProofRestoresOnSelectedBranch(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.Mkdir(filepath.Join(cwd, "src"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "src", "a.go"), []byte("package x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	allow := func(string) bool { return true }
+	base := &tool.Tool{Name: "bash", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}}}`), Execute: func(context.Context, json.RawMessage, tool.Update, tool.Invocation) (tool.Result, error) {
+		return tool.Text("ok"), nil
+	}}
+	result, err := tools.VerificationBashTool(base, allow).Execute(context.Background(), json.RawMessage(`{"command":"go test ./src/...","verificationDirectories":["src"]}`), nil, tool.Invocation{Cwd: cwd, ToolCallID: "branch-proof"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := msg.ToolResultMessage{Role: msg.RoleToolResult, ToolName: "bash", ToolCallID: "branch-proof", Details: result.Details}
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replayed msg.ToolResultMessage
+	if err := json.Unmarshal(encoded, &replayed); err != nil {
+		t.Fatal(err)
+	}
+	state := &taskState{}
+	state.restore([]session.Entry{{Type: session.EntryMessage, Message: replayed}})
+	proofs := state.verificationSnapshot()
+	if len(proofs) != 1 || len(proofs[0].Directories) != 1 || !tools.VerificationFresh(cwd, proofs[0], allow) {
+		t.Fatalf("replayed proof: %+v", proofs)
+	}
+	proofs[0].Directories[0].Files[0].Path = "mutated"
+	if state.verificationSnapshot()[0].Directories[0].Files[0].Path != "src/a.go" {
+		t.Fatal("snapshot shares mutable directory files")
+	}
+	state.restore(nil)
+	if len(state.verificationSnapshot()) != 0 {
+		t.Fatal("proof crossed branch boundary")
+	}
+}

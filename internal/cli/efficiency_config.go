@@ -74,7 +74,7 @@ func EfficiencyConfig(args Args, out, stderr io.Writer) int {
 		"memoryRetrievalTokens":   settings.PositiveOr(s.MemoryRetrievalTokens, 512),
 		"memoryAutoRetrieve":      s.MemoryAutoRetrieve == nil || *s.MemoryAutoRetrieve,
 		"requestBudget":           s.RequestBudget,
-		"orchestration":           map[string]any{"isolatedWorkers": s.Orchestration.IsolatedWorkers != nil && *s.Orchestration.IsolatedWorkers, "maxConcurrent": settings.PositiveOr(s.Orchestration.MaxConcurrent, 4), "maxDispatches": settings.PositiveOr(s.Orchestration.MaxDispatches, 64), "maxDepth": settings.PositiveOr(s.Orchestration.MaxDepth, 2), "timeoutSeconds": settings.PositiveOr(s.Orchestration.TimeoutSeconds, 1800)},
+		"orchestration":           map[string]any{"isolatedWorkers": s.Orchestration.IsolatedWorkers != nil && *s.Orchestration.IsolatedWorkers, "snapshotDirty": s.Orchestration.SnapshotDirty != nil && *s.Orchestration.SnapshotDirty, "maxConcurrent": settings.PositiveOr(s.Orchestration.MaxConcurrent, 4), "maxDispatches": settings.PositiveOr(s.Orchestration.MaxDispatches, 64), "maxDepth": settings.PositiveOr(s.Orchestration.MaxDepth, 2), "timeoutSeconds": settings.PositiveOr(s.Orchestration.TimeoutSeconds, 1800)},
 		"conservativeRouting":     router.Conservative,
 		"learningAutomation":      map[string]any{"enabled": s.LearningAutomation.Enabled != nil && *s.LearningAutomation.Enabled, "maxOutcomes": settings.PositiveOr(s.LearningAutomation.MaxOutcomes, 100), "minSamples": settings.PositiveOr(s.LearningAutomation.MinSamples, 5)},
 		"learningEnabled":         s.LearningEnabled == nil || *s.LearningEnabled,

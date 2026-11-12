@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/andrepato/harness/internal/tool"
@@ -18,6 +20,12 @@ const maxVerificationFiles = 16
 const maxVerificationFileBytes = 32 << 20
 const maxVerificationTotalBytes = 64 << 20
 const maxVerificationCommandBytes = 4096
+const maxVerificationDirectories = 8
+const maxVerificationDirectoryFiles = 512
+const defaultVerificationDirectoryFiles = 128
+const maxVerificationDirectoryBytes = 64 << 20
+
+var errVerificationBounds = errors.New("verification directory exceeds limits")
 
 // VerificationFile binds one permitted project file to its content at command execution.
 type VerificationFile struct {
@@ -26,12 +34,29 @@ type VerificationFile struct {
 	Mode   uint32 `json:"mode"`
 }
 
-// VerificationEvidence records a successful Bash command with unchanged file inputs.
+// VerificationDirectory binds a tree's regular files and directory membership.
+type VerificationDirectory struct {
+	Path           string                     `json:"path"`
+	Mode           uint32                     `json:"mode"`
+	Files          []VerificationFile         `json:"files"`
+	Subdirectories []VerificationSubdirectory `json:"subdirectories"`
+}
+
+// VerificationSubdirectory records the presence and permissions of a nested directory.
+type VerificationSubdirectory struct {
+	Path string `json:"path"`
+	Mode uint32 `json:"mode"`
+}
+
+// VerificationEvidence records a successful Bash command with unchanged declared inputs.
 // It does not claim the command was a meaningful test of those files.
 type VerificationEvidence struct {
-	CallID  string             `json:"callId"`
-	Command string             `json:"command"`
-	Files   []VerificationFile `json:"files"`
+	CallID             string                  `json:"callId"`
+	Command            string                  `json:"command"`
+	Files              []VerificationFile      `json:"files"`
+	Directories        []VerificationDirectory `json:"directories,omitempty"`
+	DirectoryFileLimit int                     `json:"directoryFileLimit,omitempty"`
+	DirectoryByteLimit int64                   `json:"directoryByteLimit,omitempty"`
 }
 
 // VerificationAttempt identifies a Bash result, including failed or unbound
@@ -55,23 +80,49 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		panic("invalid built-in bash properties: " + err.Error())
 	}
 	properties["verificationFiles"] = json.RawMessage(`{"type":"array","maxItems":16,"items":{"type":"string"},"description":"Project files to fingerprint before and after this command. Evidence is recorded only when the command succeeds and files remain unchanged."}`)
+	properties["verificationDirectories"] = json.RawMessage(`{"type":"array","maxItems":8,"items":{"type":"string"},"description":"Project directories to fingerprint recursively, including regular file contents, permissions and membership. .git is excluded. Evidence requires a successful command and unchanged inputs."}`)
+	properties["verificationDirectoryFileLimit"] = json.RawMessage(`{"type":"integer","minimum":1,"maximum":512,"description":"Maximum regular files across all declared files and directories (default 128, hard ceiling 512). Tree entries, including subdirectories, also have a shared hard ceiling of 512. Above limit, evidence is unavailable."}`)
+	properties["verificationDirectoryByteLimit"] = json.RawMessage(`{"type":"integer","minimum":1,"maximum":67108864,"description":"Maximum total bytes across all declared files and directories (default and hard ceiling 67108864). Above limit, evidence is unavailable."}`)
 	schema["properties"], _ = json.Marshal(properties)
 	wrapped.Parameters, _ = json.Marshal(schema)
 	wrapped.Execute = func(ctx context.Context, raw json.RawMessage, update tool.Update, inv tool.Invocation) (tool.Result, error) {
 		var args struct {
-			Command           string   `json:"command"`
-			VerificationFiles []string `json:"verificationFiles"`
+			Command                 string   `json:"command"`
+			VerificationFiles       []string `json:"verificationFiles"`
+			VerificationDirectories []string `json:"verificationDirectories"`
+			DirectoryFileLimit      int      `json:"verificationDirectoryFileLimit"`
+			DirectoryByteLimit      int64    `json:"verificationDirectoryByteLimit"`
 		}
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return base.Execute(ctx, raw, update, inv)
 		}
 		var before []VerificationFile
+		var beforeDirs []VerificationDirectory
 		if len(args.VerificationFiles) > 0 && len(args.VerificationFiles) <= maxVerificationFiles {
 			var err error
 			before, err = fingerprintFiles(ctx, inv.Cwd, args.VerificationFiles, allowRead)
 			if err != nil {
 				before = nil
 			}
+		}
+		fileLimit := effectiveDirectoryFileLimit(args.DirectoryFileLimit)
+		byteLimit := effectiveDirectoryByteLimit(args.DirectoryByteLimit)
+		validLimits := fileLimit > 0 && fileLimit <= maxVerificationDirectoryFiles && byteLimit > 0 && byteLimit <= maxVerificationDirectoryBytes
+		if len(before) > 0 && len(args.VerificationDirectories) > 0 {
+			fileLimit -= len(before)
+			var used int64
+			for _, file := range before {
+				info, statErr := os.Lstat(filepath.Join(inv.Cwd, file.Path))
+				if statErr != nil || !info.Mode().IsRegular() || info.Size() < 0 {
+					fileLimit = 0
+					break
+				}
+				used += info.Size()
+			}
+			byteLimit -= used
+		}
+		if len(args.VerificationDirectories) > 0 && len(args.VerificationDirectories) <= maxVerificationDirectories && (len(args.VerificationFiles) == 0 || len(before) > 0) && validLimits && fileLimit > 0 && byteLimit > 0 {
+			beforeDirs, _ = fingerprintDirectories(ctx, inv.Cwd, args.VerificationDirectories, allowRead, fileLimit, byteLimit)
 		}
 		result, err := base.Execute(ctx, raw, update, inv)
 		if err == nil && args.Command != "" && len(args.Command) <= maxVerificationCommandBytes {
@@ -87,11 +138,22 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 				}
 			}
 		}
-		if err != nil || result.IsError || len(before) == 0 || len(args.Command) > maxVerificationCommandBytes {
+		if err != nil || result.IsError || len(before)+len(beforeDirs) == 0 || len(args.Command) > maxVerificationCommandBytes || (len(args.VerificationFiles) > 0 && len(before) == 0) || (len(args.VerificationDirectories) > 0 && len(beforeDirs) == 0) {
 			return result, err
 		}
-		after, hashErr := fingerprintFiles(ctx, inv.Cwd, args.VerificationFiles, allowRead)
+		var after []VerificationFile
+		var hashErr error
+		if len(before) > 0 {
+			after, hashErr = fingerprintFiles(ctx, inv.Cwd, args.VerificationFiles, allowRead)
+		}
 		if hashErr != nil || !sameFingerprints(before, after) {
+			return result, nil
+		}
+		var afterDirs []VerificationDirectory
+		if len(beforeDirs) > 0 {
+			afterDirs, hashErr = fingerprintDirectories(ctx, inv.Cwd, args.VerificationDirectories, allowRead, fileLimit, byteLimit)
+		}
+		if hashErr != nil || !sameDirectories(beforeDirs, afterDirs) {
 			return result, nil
 		}
 		var details map[string]json.RawMessage
@@ -103,7 +165,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		if details == nil {
 			details = make(map[string]json.RawMessage)
 		}
-		proof, marshalErr := json.Marshal(VerificationEvidence{CallID: inv.ToolCallID, Command: args.Command, Files: before})
+		proof, marshalErr := json.Marshal(VerificationEvidence{CallID: inv.ToolCallID, Command: args.Command, Files: before, Directories: beforeDirs, DirectoryFileLimit: fileLimit, DirectoryByteLimit: byteLimit})
 		if marshalErr != nil {
 			return result, nil
 		}
@@ -130,7 +192,10 @@ func VerificationFromResult(details json.RawMessage) (VerificationEvidence, bool
 	var envelope struct {
 		Evidence VerificationEvidence `json:"taskVerification"`
 	}
-	if json.Unmarshal(details, &envelope) != nil || strings.TrimSpace(envelope.Evidence.Command) == "" || len(envelope.Evidence.Command) > maxVerificationCommandBytes || envelope.Evidence.CallID == "" || len(envelope.Evidence.Files) == 0 || len(envelope.Evidence.Files) > maxVerificationFiles {
+	if json.Unmarshal(details, &envelope) != nil || strings.TrimSpace(envelope.Evidence.Command) == "" || len(envelope.Evidence.Command) > maxVerificationCommandBytes || envelope.Evidence.CallID == "" || len(envelope.Evidence.Files)+len(envelope.Evidence.Directories) == 0 || len(envelope.Evidence.Files) > maxVerificationFiles || len(envelope.Evidence.Directories) > maxVerificationDirectories {
+		return VerificationEvidence{}, false
+	}
+	if !validVerificationDirectories(envelope.Evidence) {
 		return VerificationEvidence{}, false
 	}
 	for _, file := range envelope.Evidence.Files {
@@ -144,19 +209,33 @@ func VerificationFromResult(details json.RawMessage) (VerificationEvidence, bool
 	return envelope.Evidence, true
 }
 
-// VerificationFresh checks that every recorded file still matches its execution snapshot.
+// VerificationFresh checks that every declared input still matches its execution snapshot.
 func VerificationFresh(cwd string, proof VerificationEvidence, allowRead func(string) bool) bool {
 	return VerificationFreshContext(context.Background(), cwd, proof, allowRead)
 }
 
 // VerificationFreshContext rechecks a bounded snapshot with cancellation.
 func VerificationFreshContext(ctx context.Context, cwd string, proof VerificationEvidence, allowRead func(string) bool) bool {
+	if len(proof.Files)+len(proof.Directories) == 0 || len(proof.Files) > maxVerificationFiles || len(proof.Directories) > maxVerificationDirectories || !validVerificationDirectories(proof) || allowRead == nil {
+		return false
+	}
 	paths := make([]string, 0, len(proof.Files))
 	for _, file := range proof.Files {
 		paths = append(paths, file.Path)
 	}
-	current, err := fingerprintFiles(ctx, cwd, paths, allowRead)
-	return err == nil && sameFingerprints(proof.Files, current)
+	var current []VerificationFile
+	var err error
+	if len(paths) > 0 {
+		current, err = fingerprintFiles(ctx, cwd, paths, allowRead)
+	}
+	if err != nil || !sameFingerprints(proof.Files, current) {
+		return false
+	}
+	if len(proof.Directories) == 0 {
+		return true
+	}
+	currentDirs, err := fingerprintDirectories(ctx, cwd, directoryPaths(proof.Directories), allowRead, proof.DirectoryFileLimit, proof.DirectoryByteLimit)
+	return err == nil && sameDirectories(proof.Directories, currentDirs)
 }
 
 func sameFingerprints(a, b []VerificationFile) bool {
@@ -186,7 +265,7 @@ func fingerprintFiles(ctx context.Context, cwd string, paths []string, allowRead
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if filepath.IsAbs(given) || given == "" || len(given) > 4096 {
+		if !validRelativeVerificationPath(given) {
 			return nil, fmt.Errorf("verification path must be relative")
 		}
 		clean := filepath.Clean(given)
@@ -253,6 +332,211 @@ func fingerprintFiles(ctx context.Context, cwd string, paths []string, allowRead
 		}
 		totalBytes += fileBytes
 		out = append(out, VerificationFile{Path: clean, SHA256: hex.EncodeToString(h.Sum(nil)), Mode: uint32(info.Mode().Perm())})
+	}
+	return out, nil
+}
+
+func effectiveDirectoryFileLimit(n int) int {
+	if n == 0 {
+		return defaultVerificationDirectoryFiles
+	}
+	return n
+}
+
+func effectiveDirectoryByteLimit(n int64) int64 {
+	if n == 0 {
+		return maxVerificationDirectoryBytes
+	}
+	return n
+}
+
+func validRelativeVerificationPath(path string) bool {
+	if path == "" || len(path) > 4096 || filepath.IsAbs(path) || filepath.Clean(path) != path || path == "." || path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
+		return false
+	}
+	for _, part := range strings.Split(path, string(filepath.Separator)) {
+		if part == ".git" {
+			return false
+		}
+	}
+	return true
+}
+
+func validVerificationDirectories(proof VerificationEvidence) bool {
+	if len(proof.Directories) == 0 {
+		return true
+	}
+	if proof.DirectoryFileLimit < 1 || proof.DirectoryFileLimit > maxVerificationDirectoryFiles || proof.DirectoryByteLimit < 1 || proof.DirectoryByteLimit > maxVerificationDirectoryBytes {
+		return false
+	}
+	files := 0
+	entries := 0
+	seen := make(map[string]bool)
+	for _, dir := range proof.Directories {
+		if !validRelativeVerificationPath(dir.Path) || seen[dir.Path] || dir.Mode > 0777 {
+			return false
+		}
+		if len(dir.Subdirectories) > maxVerificationDirectoryFiles {
+			return false
+		}
+		seen[dir.Path] = true
+		last := ""
+		for _, sub := range dir.Subdirectories {
+			entries++
+			if !validRelativeVerificationPath(sub.Path) || !strings.HasPrefix(sub.Path, dir.Path+string(filepath.Separator)) || sub.Mode > 0777 || last != "" && sub.Path <= last {
+				return false
+			}
+			last = sub.Path
+		}
+		last = ""
+		for _, file := range dir.Files {
+			entries++
+			if !validRelativeVerificationPath(file.Path) || !strings.HasPrefix(file.Path, dir.Path+string(filepath.Separator)) || file.Mode > 0777 || len(file.SHA256) != 64 || last != "" && file.Path <= last {
+				return false
+			}
+			if _, err := hex.DecodeString(file.SHA256); err != nil {
+				return false
+			}
+			last = file.Path
+			files++
+		}
+	}
+	return files <= proof.DirectoryFileLimit && entries <= maxVerificationDirectoryFiles
+}
+
+func directoryPaths(dirs []VerificationDirectory) []string {
+	out := make([]string, len(dirs))
+	for i, dir := range dirs {
+		out[i] = dir.Path
+	}
+	return out
+}
+
+func sameDirectories(a, b []VerificationDirectory) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Path != b[i].Path || a[i].Mode != b[i].Mode || !slices.Equal(a[i].Files, b[i].Files) || !slices.Equal(a[i].Subdirectories, b[i].Subdirectories) {
+			return false
+		}
+	}
+	return true
+}
+
+func fingerprintDirectories(ctx context.Context, cwd string, paths []string, allowRead func(string) bool, fileLimit int, byteLimit int64) ([]VerificationDirectory, error) {
+	fileLimit = effectiveDirectoryFileLimit(fileLimit)
+	byteLimit = effectiveDirectoryByteLimit(byteLimit)
+	if len(paths) == 0 || len(paths) > maxVerificationDirectories || fileLimit < 1 || fileLimit > maxVerificationDirectoryFiles || byteLimit < 1 || byteLimit > maxVerificationDirectoryBytes || cwd == "" || allowRead == nil {
+		return nil, fmt.Errorf("invalid verification directory set")
+	}
+	root, err := filepath.Abs(cwd)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	out := make([]VerificationDirectory, 0, len(paths))
+	var totalBytes int64
+	fileCount := 0
+	entryCount := 0
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !validRelativeVerificationPath(path) || seen[path] || !allowRead(path) {
+			return nil, fmt.Errorf("verification directory unavailable")
+		}
+		seen[path] = true
+		full := filepath.Join(root, path)
+		for cursor := full; cursor != root; cursor = filepath.Dir(cursor) {
+			info, err := os.Lstat(cursor)
+			if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return nil, fmt.Errorf("verification directory unavailable")
+			}
+		}
+		rootInfo, err := os.Lstat(full)
+		if err != nil {
+			return nil, err
+		}
+		dir := VerificationDirectory{Path: path, Mode: uint32(rootInfo.Mode().Perm()), Files: []VerificationFile{}, Subdirectories: []VerificationSubdirectory{}}
+		var walk func(string) error
+		walk = func(parent string) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			folder, err := os.Open(parent)
+			if err != nil {
+				return err
+			}
+			remaining := maxVerificationDirectoryFiles - entryCount
+			if remaining < 0 {
+				_ = folder.Close()
+				return errVerificationBounds
+			}
+			names, readErr := folder.Readdirnames(remaining + 1)
+			closeErr := folder.Close()
+			if readErr != nil && readErr != io.EOF {
+				return readErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			if len(names) > remaining {
+				return errVerificationBounds
+			}
+			entryCount += len(names)
+			slices.Sort(names)
+			for _, name := range names {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if name == ".git" {
+					continue
+				}
+				walkPath := filepath.Join(parent, name)
+				rel, err := filepath.Rel(root, walkPath)
+				if err != nil || !validRelativeVerificationPath(rel) || !allowRead(rel) {
+					return fmt.Errorf("verification path unavailable")
+				}
+				info, err := os.Lstat(walkPath)
+				if err != nil {
+					return err
+				}
+				if info.IsDir() {
+					dir.Subdirectories = append(dir.Subdirectories, VerificationSubdirectory{Path: rel, Mode: uint32(info.Mode().Perm())})
+					if err := walk(walkPath); err != nil {
+						return err
+					}
+					continue
+				}
+				if !info.Mode().IsRegular() {
+					return fmt.Errorf("verification nonregular file")
+				}
+				fileCount++
+				if fileCount > fileLimit || info.Size() < 0 || info.Size() > maxVerificationFileBytes || totalBytes+info.Size() > byteLimit {
+					return errVerificationBounds
+				}
+				fingerprints, err := fingerprintFiles(ctx, cwd, []string{rel}, allowRead)
+				if err != nil {
+					return err
+				}
+				updated, err := os.Lstat(walkPath)
+				if err != nil || !updated.Mode().IsRegular() || updated.Size() != info.Size() {
+					return fmt.Errorf("verification file changed during fingerprint")
+				}
+				totalBytes += info.Size()
+				dir.Files = append(dir.Files, fingerprints[0])
+			}
+			return nil
+		}
+		err = walk(full)
+		if err != nil {
+			return nil, err
+		}
+		// Bound each directory read, then sort the bounded snapshot deterministically.
+		slices.SortFunc(dir.Files, func(a, b VerificationFile) int { return strings.Compare(a.Path, b.Path) })
+		slices.SortFunc(dir.Subdirectories, func(a, b VerificationSubdirectory) int { return strings.Compare(a.Path, b.Path) })
+		out = append(out, dir)
 	}
 	return out, nil
 }

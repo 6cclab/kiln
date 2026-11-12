@@ -713,3 +713,21 @@ stack to stderr and writes no file.
 `kiln doctor` (`internal/cli/subcommands.go`'s `Doctor`, also `/doctor`
 inside a session) prints model, tier, tool strategy, MCP status, hooks and
 agents on one screen, problems last.
+
+## Declared verification dependencies and dirty worker baselines
+
+With task state enabled, the Bash wrapper in `internal/tools/task_verification.go`
+can record explicitly selected files and recursive directory snapshots. It checks
+read permissions and bounded membership/content snapshots before and after a
+successful command. Session checkpoints retain those proofs on their original
+branch. The `verification_status` tool rechecks current inputs; its optional
+`mode: "plan"` returns prior commands for changed inputs and flags unavailable
+evidence for review. It does not infer test coverage or skip commands.
+
+`orchestration.snapshotDirty` extends opt-in isolated editing workers with a
+captured parent baseline. `internal/agent/worker_snapshot.go` constructs that
+baseline with a private index, preserving the parent's staged/unstaged state.
+Artifacts bind to both HEAD and the captured state and contain only the worker's
+subsequent changes. Single and batch integration share baseline checks and the
+repository apply lock. This remains explicit file-edit isolation; shell/sandbox
+support and automatic patch integration are separate roadmap work.

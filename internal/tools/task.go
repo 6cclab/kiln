@@ -52,12 +52,19 @@ type TaskDispatchResult struct {
 
 // TaskArtifact is the integration handle returned by an isolated worker.
 type TaskArtifact struct {
-	ManifestPath string   `json:"manifestPath,omitempty"`
-	BaseCommit   string   `json:"baseCommit"`
-	PatchPath    string   `json:"patchPath"`
-	SHA256       string   `json:"sha256"`
-	Bytes        int      `json:"bytes"`
-	ChangedFiles []string `json:"changedFiles,omitempty"`
+	ManifestPath string        `json:"manifestPath,omitempty"`
+	BaseCommit   string        `json:"baseCommit"`
+	PatchPath    string        `json:"patchPath"`
+	SHA256       string        `json:"sha256"`
+	Bytes        int           `json:"bytes"`
+	ChangedFiles []string      `json:"changedFiles,omitempty"`
+	Baseline     *TaskBaseline `json:"baseline,omitempty"`
+}
+
+// TaskBaseline carries the captured dirty parent baseline through task results.
+type TaskBaseline struct {
+	Tree  string `json:"tree"`
+	State string `json:"state"`
 }
 
 // TaskRequest mirrors agent.DispatchRequest's shape — what the task tool

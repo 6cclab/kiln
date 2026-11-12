@@ -18,6 +18,7 @@ func efficiencyPointers(s Settings) map[string]any {
 		"orchestration.maxConcurrent": s.Orchestration.MaxConcurrent, "orchestration.maxDispatches": s.Orchestration.MaxDispatches,
 		"orchestration.maxDepth": s.Orchestration.MaxDepth, "orchestration.timeoutSeconds": s.Orchestration.TimeoutSeconds,
 		"orchestration.isolatedWorkers":      s.Orchestration.IsolatedWorkers,
+		"orchestration.snapshotDirty":        s.Orchestration.SnapshotDirty,
 		"runtimeEfficiency.readCache":        s.RuntimeEfficiency.ReadCache,
 		"runtimeEfficiency.readCacheEntries": s.RuntimeEfficiency.ReadCacheEntries,
 		"runtimeEfficiency.readCacheBytes":   s.RuntimeEfficiency.ReadCacheBytes,

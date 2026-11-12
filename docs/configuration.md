@@ -1168,20 +1168,61 @@ work is correct. Disabling `taskStateEnabled` removes this tool and command
 fingerprinting as well as automatic recovery.
 
 With task state enabled, `bash` accepts optional `verificationFiles`, an array
-of project-relative files. After the normal command permission check, Kiln
+of project-relative files, and `verificationDirectories`, an array of directories
+to check recursively. After the normal command permission check, Kiln
 checks read permissions and fingerprints those files immediately before and
 after execution. Only successful commands with unchanged snapshots produce
 evidence. Recovery identifies the command, tool call, selected files, and
-whether their contents still match. This is evidence of command success on
-those selected inputs, not proof that the command tests the whole repository.
+whether their contents still match. Directory snapshots also track membership
+and permissions, so adding or deleting a source file invalidates the earlier
+evidence. Include relevant dependency manifests, configuration and test files
+in the declared inputs. This is evidence of command success on those inputs,
+not proof that the command tests the whole repository.
 Failed commands and denied, missing, symlinked, or oversized inputs produce no
-verification evidence. Limits are 16 files, 32 MiB per file, and 64 MiB total.
+verification evidence. File-only declarations retain their limits of 16 files,
+32 MiB per file, and 64 MiB total. Directory declarations accept up to eight
+roots. `verificationDirectoryFileLimit` defaults to 128 (maximum 512), and
+`verificationDirectoryByteLimit` defaults to 64 MiB (also its maximum).
+When combining file and directory declarations, explicit files count against
+those limits. Directory enumeration also stops at 512 total descendant entries,
+including subdirectories. A declaration exceeding its bounds produces no evidence; it is never partially
+recorded. Git metadata is excluded. These are opt-in tool arguments; existing
+file-only proofs continue to work.
+
+For example, a Bash call can bind a check to its source, tests and dependencies:
+
+```json
+{
+  "command": "go test ./internal/parser",
+  "verificationFiles": ["go.mod", "go.sum"],
+  "verificationDirectories": ["internal/parser"],
+  "verificationDirectoryFileLimit": 128,
+  "verificationDirectoryByteLimit": 8388608
+}
+```
 
 ### Isolated editing workers
 
 Set `orchestration.isolatedWorkers: true` to run delegated edits in detached
-Git worktrees. The default is false. This currently requires a clean checkout
-at the repository root; existing parent changes are never stashed or discarded.
+Git worktrees. The default is false. By default this requires a clean checkout
+at the repository root. To let workers start from uncommitted work, opt in:
+
+```json
+{
+  "orchestration": {
+    "isolatedWorkers": true,
+    "snapshotDirty": true
+  }
+}
+```
+
+`snapshotDirty` defaults to false and only affects isolated workers. It captures
+staged and unstaged changes plus nonignored untracked files, preserving the
+parent's index and working tree. No stash or parent commit is created. The
+snapshot is limited to 1,000 changed/untracked paths and 4 MiB of their contents.
+Ignored build outputs are not copied. Snapshot content is stored as Git objects;
+removing the temporary worktree does not erase those objects from the repository.
+The worker artifact contains only changes made after this captured baseline.
 Workers receive read/edit/write tools restricted to relative, nonsymlink paths
 inside their worktree. The parent's permission rules still apply. Shell tools
 are unavailable in this mode, and a parent OS sandbox or extension tool setup
@@ -1199,12 +1240,15 @@ bin/kiln worker inspect /path/to/artifact.json
 bin/kiln worker apply /path/to/artifact.json
 ```
 
-Application requires the original base commit and a clean parent, verifies the
-patch digest, checks applicability, and serializes Kiln integrations with a
-repository lock. It does not commit. After one patch is applied, subsequent
+Application requires the original base commit and verifies the patch digest
+and applicability under a repository lock. Clean-base artifacts still require a
+clean parent. Snapshot artifacts require the captured working-tree and index
+state to match; edits made since capture are refused, including changes to the
+staged version of a file. Applying changes the working tree and preserves the
+parent's index. It does not commit. After one patch is applied, subsequent
 artifacts need explicit review/rebase; automatic merging of parallel edits is
-not implemented. Git worktree isolation also does not preserve ignored build
-artifacts or untracked parent files. A hard process kill may leave a worktree or
+not implemented. Without `snapshotDirty`, untracked parent files are unsupported.
+Ignored build artifacts are excluded in either mode. A hard process kill may leave a worktree or
 integration lock requiring manual cleanup after confirming no worker is active.
 
 For offline comparisons with another harness, see
@@ -1215,14 +1259,14 @@ launch paid model calls.
 
 With task state enabled, `verification_status` checks up to 16 retained successful
 Bash proofs on the current branch and returns up to eight results within
-`taskStateTokens`. Supply an exact `command` or a list of relative `files` to
-narrow results. It reports `unchanged`, `changed`, or `unavailable`, including
+`taskStateTokens`. Supply an exact `command`, relative `files`, or relative
+`directories` to narrow results. It reports `unchanged`, `changed`, or `unavailable`, including
 which readable dependencies changed. Set `taskVerificationStatus: false` to
 omit the tool while keeping task checkpoints and evidence recording;
 `taskStateEnabled: false` disables both.
 
-Only the command's explicit `verificationFiles` are covered. The tool compares
-fresh content hashes and permission bits, rechecks current read permission,
+Only the command's declared files and directories are covered. The tool compares
+fresh content hashes, permission bits and directory membership, rechecks read permission,
 and redacts command/path details when dependencies cannot be read. It never
 runs or skips a command, proves test coverage, or certifies task completion.
 Later attempts supersede earlier proofs for the same command. A failed Bash
@@ -1231,18 +1275,27 @@ proofs. Branch navigation replaces the retained set with that branch's evidence.
 The prompt still recovers at most three proofs after compaction; status lookup
 uses the bounded snapshot instead of rescanning the transcript on every call.
 
+Use `verification_status` with `{"mode":"plan"}` for a conservative rerun list.
+Changed inputs produce `action: "rerun"` with the exact previously recorded
+command. Unavailable evidence produces `action: "review"`; unreadable dependency
+sets keep command/path details redacted. Unchanged records are omitted from the
+plan, which does **not** mean those checks are safe to skip. No command is run
+or omitted automatically. This is declared-dependency planning, not automatic
+test dependency discovery.
+
 ### Integrating several isolated workers
 
-Workers that started from the same clean commit can be integrated together:
+Workers that started from the same clean commit or the same dirty snapshot
+can be integrated together:
 
 ```sh
 kiln worker inspect-batch first/artifact.json second/artifact.json
 kiln worker apply-batch first/artifact.json second/artifact.json
 ```
 
-Inspection validates the complete set against the current clean checkout and
+Inspection validates the complete set against the current parent baseline and
 prints its base commit, patch bytes and affected files. Application repeats the
-validation under the repository's Kiln apply lock, rechecks the clean base,
+validation under the repository's Kiln apply lock, rechecks that baseline,
 and passes the verified combined bytes to one Git apply. It creates no commit.
 Review the working tree and run verification afterwards.
 
@@ -1251,8 +1304,9 @@ and at most 4 MiB combined. Paths come from Git's parser and must agree with the
 manifests. Duplicate, overlapping, ancestor/descendant and existing hard-link
 aliases are rejected, with conservative case-insensitive path comparison even
 on case-sensitive filesystems. Rename/copy patches, symlinks, submodules and
-unsafe paths are unsupported. Conflicts, altered artifacts or a dirty checkout
-are refused before application.
+unsafe paths are unsupported. Conflicts, altered artifacts or changes since
+the recorded baseline are refused before application. Clean and dirty-baseline
+artifacts cannot be mixed in a batch.
 
 The lock coordinates Kiln processes. It is not a filesystem transaction: crashes,
 cancellation, write failures, or external edits during the final apply can leave

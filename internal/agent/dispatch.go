@@ -81,7 +81,9 @@ type Dispatcher struct {
 	ReadCache *tools.ReadCache
 	// IsolatedWorkers runs each worker in a detached Git worktree. It is opt in.
 	IsolatedWorkers bool
-	Registry        *provider.Registry
+	// SnapshotDirty captures a bounded dirty parent baseline for isolated workers.
+	SnapshotDirty bool
+	Registry      *provider.Registry
 	// Parent is the session doing the dispatching. Its model is the
 	// inheritance default for ResolveModel, and its cwd anchors the
 	// subagent's own session (via Env.Cwd).
@@ -296,7 +298,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		if d.Env != nil && d.Env.Sandbox != nil && d.Env.Sandbox.Active() {
 			return DispatchResult{}, fmt.Errorf("agent: isolated workers require a worktree-aware OS sandbox; the current sandbox is bound to the parent")
 		}
-		worktree, workerEnv, err = newWorkerWorktree(ctx, d.Env)
+		worktree, workerEnv, err = newWorkerWorktreeWithSnapshot(ctx, d.Env, d.SnapshotDirty)
 		if err != nil {
 			return DispatchResult{}, fmt.Errorf("agent: prepare isolated worker: %w", err)
 		}
@@ -377,6 +379,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			CycleLimit:         d.CycleLimit,
 			ReadCache:          d.ReadCache,
 			IsolatedWorkers:    d.IsolatedWorkers,
+			SnapshotDirty:      d.SnapshotDirty,
 			Registry:           d.Registry,
 			Gate:               d.Gate,
 			Agents:             d.Agents,
@@ -653,6 +656,9 @@ func adaptDispatch(dispatch func(context.Context, DispatchRequest) (DispatchResu
 		var artifact *tools.TaskArtifact
 		if r.Artifact != nil {
 			artifact = &tools.TaskArtifact{ManifestPath: r.Artifact.ManifestPath, BaseCommit: r.Artifact.BaseCommit, PatchPath: r.Artifact.PatchPath, SHA256: r.Artifact.SHA256, Bytes: r.Artifact.Bytes, ChangedFiles: r.Artifact.ChangedFiles}
+			if r.Artifact.Baseline != nil {
+				artifact.Baseline = &tools.TaskBaseline{Tree: r.Artifact.Baseline.Tree, State: r.Artifact.Baseline.State}
+			}
 		}
 		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars, Model: r.Model, Usage: r.Usage, UsageByModel: r.UsageByModel, Artifact: artifact}, err
 	}
