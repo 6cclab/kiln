@@ -3,11 +3,12 @@ package settings
 // RuntimeEfficiency controls optional local processing reuse and repeated-error
 // limits. Pointer fields preserve explicit false/zero overrides across scopes.
 type RuntimeEfficiency struct {
-	ReadCache        *bool `json:"readCache,omitempty"`
-	ReadCacheEntries *int  `json:"readCacheEntries,omitempty"`
-	ReadCacheBytes   *int  `json:"readCacheBytes,omitempty"`
-	CycleLimit       *int  `json:"cycleLimit,omitempty"`
-	ProgressLimit    *int  `json:"progressLimit,omitempty"`
+	ReadCache         *bool `json:"readCache,omitempty"`
+	ReadCacheEntries  *int  `json:"readCacheEntries,omitempty"`
+	ReadCacheBytes    *int  `json:"readCacheBytes,omitempty"`
+	CycleLimit        *int  `json:"cycleLimit,omitempty"`
+	ProgressLimit     *int  `json:"progressLimit,omitempty"`
+	ProgressLoopLimit *int  `json:"progressLoopLimit,omitempty"`
 }
 
 func (r *RuntimeEfficiency) merge(next RuntimeEfficiency) {
@@ -35,5 +36,9 @@ func (r *RuntimeEfficiency) merge(next RuntimeEfficiency) {
 	if n := next.CycleLimit; n != nil && (*n == 0 || (*n >= 2 && *n <= 10)) {
 		v := *n
 		r.CycleLimit = &v
+	}
+	if n := next.ProgressLoopLimit; n != nil && (*n == 0 || (*n >= 2 && *n <= 10)) {
+		v := *n
+		r.ProgressLoopLimit = &v
 	}
 }

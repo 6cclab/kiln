@@ -57,6 +57,67 @@ func (l *Lane) newID() string { return uuid.NewString() }
 
 func (l *Lane) now() int64 { return l.h.opts.Now().UnixMilli() }
 
+// completeToolBatch commits an integration outcome and the operation
+// checkpoint together, after all tool results are present on the branch.
+func (l *Lane) completeToolBatch(ctx context.Context, operationID, tip, assistantID string, calls []msg.ToolCall, batch []ToolCallState, recovered bool) (string, error) {
+	fn := l.h.batchComplete()
+	if fn == nil {
+		return tip, nil
+	}
+	if len(calls) != len(batch) {
+		return tip, fmt.Errorf("harness: completed tool batch has mismatched calls")
+	}
+	results := make([]msg.ToolResultMessage, len(calls))
+	for i, state := range batch {
+		if state.Status != "outcome_ready" || state.ResultEntryID == "" {
+			return tip, fmt.Errorf("harness: tool batch result %d is not durable", i+1)
+		}
+		entry, ok := l.h.opts.Storage.GetEntries([]string{state.ResultEntryID})[state.ResultEntryID]
+		if !ok {
+			return tip, fmt.Errorf("harness: tool batch result %d is missing", i+1)
+		}
+		result, ok := entry.Message.(msg.ToolResultMessage)
+		if !ok || result.ToolCallID != calls[i].ID || result.ToolName != calls[i].Name {
+			return tip, fmt.Errorf("harness: tool batch result %d does not match its call", i+1)
+		}
+		results[i] = result
+	}
+	completion, err := fn(ctx, l.h.opts.Storage, operationID, assistantID, calls, results, recovered)
+	if err != nil {
+		return tip, err
+	}
+	stateW, err := session.SetValue(opStateAddr(operationID), OpState{At: AtCheckpoint, Control: OpControl{Status: "running"}, Settings: l.opSettings(), Continuation: &Continuation{Kind: "need_assistant"}, LatestAssistantEntryID: &assistantID})
+	if err != nil {
+		return tip, err
+	}
+	writes := []session.Write{stateW}
+	if completion == nil {
+		_, err := l.h.opts.Storage.Commit(writes)
+		return tip, err
+	}
+	if completion.Status == "" || completion.Text == "" {
+		return tip, fmt.Errorf("harness: empty tool batch completion")
+	}
+	entryID := l.newID()
+	parent := tip
+	notice := session.Entry{ID: entryID, ParentID: &parent, Type: session.EntryMessage, Message: msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(completion.Text)}, KilnHook: "WorkerIntegration", Timestamp: l.now()}}
+	raw, err := json.Marshal(completion)
+	if err != nil {
+		return tip, err
+	}
+	tipW, err := session.SetValue(session.BranchTip(l.name), &entryID)
+	if err != nil {
+		return tip, err
+	}
+	writes = append(writes, session.EntryWrite{Entry: notice}, tipW, session.SetValueRaw(WorkerIntegrationNamespace, assistantID, raw))
+	if _, err := l.h.opts.Storage.Commit(writes); err != nil {
+		return tip, err
+	}
+	l.h.events.Emit(Event{Type: EventEntryAdded, Lane: l.name, EntryID: entryID, ParentID: tip})
+	l.h.events.Emit(Event{Type: EventWorkerIntegration, Lane: l.name, OperationID: operationID, EntryID: entryID, IntegrationStatus: completion.Status, IntegrationText: completion.Text})
+	return entryID, nil
+}
+
 // config reads the lane's current configuration from storage.
 func (l *Lane) config() (session.LaneConfiguration, error) {
 	raw, _, ok := l.h.opts.Storage.GetValue(session.NamespaceLaneConfig, l.name)
@@ -359,6 +420,9 @@ func (l *Lane) Compact(ctx context.Context, custom *string) error {
 // router picks for a direct request.
 func (l *Lane) CompactWith(ctx context.Context, custom *string, summariser *session.ModelRef) error {
 	tip, _ := l.GetTipID()
+	if err := l.validateBranchToolPairs(tip); err != nil {
+		return err
+	}
 	if tip == "" {
 		if _, _, err := l.resolveModel(); err != nil {
 			return err

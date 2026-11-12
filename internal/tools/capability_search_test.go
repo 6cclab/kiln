@@ -107,6 +107,38 @@ func TestCapabilitySearchNoAdmissionWhenResultDoesNotFit(t *testing.T) {
 	}
 }
 
+func TestCapabilitySearchObservedReasonsFollowReturnedBytes(t *testing.T) {
+	all, _ := mcp.PostureByName("all")
+	state := mcp.NewGateState()
+	var got []struct {
+		callID, kind, name, reason string
+		included                   bool
+	}
+	allowance := 2
+	search := CapabilitySearchToolObserved(func() CapabilityCatalog {
+		return CapabilityCatalog{MCP: []mcp.McpTool{{Server: "fixture", Name: "find", QualifiedName: "mcp__fixture__find", Description: "Find records"}}, Scope: all, State: state}
+	}, func() int { return allowance }, nil, func(callID, kind, name, reason string, included bool) {
+		got = append(got, struct {
+			callID, kind, name, reason string
+			included                   bool
+		}{callID, kind, name, reason, included})
+	})
+	args := json.RawMessage(`{"query":"find"}`)
+	if _, err := search.Execute(context.Background(), args, nil, tool.Invocation{ToolCallID: "q1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].reason != "budget-dropped" || got[0].included || state.IsAdmitted("mcp__fixture__find") {
+		t.Fatalf("budget result: %+v", got)
+	}
+	allowance = 128
+	if _, err := search.Execute(context.Background(), args, nil, tool.Invocation{ToolCallID: "q2"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].callID != "q1" || got[1].callID != "q2" || got[1].reason != "search hit" || !got[1].included || !state.IsAdmitted("mcp__fixture__find") {
+		t.Fatalf("search result: %+v", got)
+	}
+}
+
 func TestCapabilitySearchDynamicBudget(t *testing.T) {
 	all, _ := mcp.PostureByName("all")
 	state := mcp.NewGateState()

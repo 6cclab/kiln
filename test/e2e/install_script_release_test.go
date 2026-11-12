@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -15,6 +16,54 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestInstallScript_WindowsReleaseKeepsExeSuffixOnUpdate(t *testing.T) {
+	serveDir := t.TempDir()
+	var archives []string
+	for _, version := range []string{"v9.9.9", "v9.9.10"} {
+		name := fmt.Sprintf("kiln_%s_windows_amd64", version)
+		archive := filepath.Join(serveDir, name+".zip")
+		f, err := os.Create(archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		zw := zip.NewWriter(f)
+		member, err := zw.Create(name + "/kiln.exe")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := member.Write([]byte("MZ" + version)); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		archives = append(archives, archive)
+	}
+	writeChecksums(t, serveDir, archives...)
+	srv := httptest.NewServer(http.FileServer(http.Dir(serveDir)))
+	defer srv.Close()
+
+	dir, tmp := t.TempDir(), t.TempDir()
+	env := []string{"PATH=" + fakeWindowsUname(t), "HOME=" + t.TempDir(), "KILN_RELEASE_BASE=" + srv.URL}
+	for _, version := range []string{"v9.9.9", "v9.9.10"} {
+		out, err := runInstallEnv(t, tmp, env, "--ref", version, "--dir", dir)
+		if err != nil {
+			t.Fatalf("install.sh %s: %v\n%s", version, err, out)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, "kiln.exe"))
+		if err != nil || string(got) != "MZ"+version {
+			t.Fatalf("installed kiln.exe after %s = %q, %v\n%s", version, got, err, out)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "kiln")); !os.IsNotExist(err) {
+			t.Errorf("release install left extensionless kiln: %v", err)
+		}
+	}
+	assertEmptyDir(t, tmp)
+}
 
 // These tests cover install.sh's release path (downloading a prebuilt
 // archive and verifying its checksum) without any network access: a

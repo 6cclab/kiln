@@ -19,7 +19,7 @@ import (
 func Learning(ctx context.Context, args Args, out, stderr io.Writer) int {
 	fail := func(err error) int { writeDiagnostic(stderr, err); return 1 }
 	usage := func() int {
-		writeDiagnostic(stderr, "usage: kiln learning outcomes | suggestions | dismiss <kind> | proposals | dismiss-proposal <id> | forget-outcomes | propose [skill-budget] | queue <source-policy.json> <results.jsonl> [max-estimated-usd] | candidates | plan <candidate-id> <scenario-dir> [fixtures-dir] | discard <candidate-id> | promote-candidate <candidate-id> <baseline.jsonl> <candidate.jsonl> | promote <policy> <baseline.jsonl> <candidate.jsonl> | status | history | rollback <id> | forget")
+		writeDiagnostic(stderr, "usage: kiln learning outcomes | suggestions | dismiss <kind> | proposals | dismiss-proposal <id> | fact-candidates | dismiss-fact <id> | forget-outcomes | propose [skill-budget] | queue <source-policy.json> <results.jsonl> [max-estimated-usd] | candidates | plan <candidate-id> <scenario-dir> [fixtures-dir] | discard <candidate-id> | promote-candidate <candidate-id> <baseline.jsonl> <candidate.jsonl> | promote <policy> <baseline.jsonl> <candidate.jsonl> | status | history | rollback <id> | forget")
 		return 2
 	}
 	if len(args.Positional) == 0 {
@@ -47,10 +47,10 @@ func Learning(ctx context.Context, args Args, out, stderr io.Writer) int {
 		}
 		return 0
 	}
-	if ((action == "queue" || action == "plan") && (len(args.Positional) < 3 || len(args.Positional) > 4)) || ((action == "promote" || action == "promote-candidate") && len(args.Positional) != 4) || ((action == "rollback" || action == "discard" || action == "dismiss" || action == "dismiss-proposal") && len(args.Positional) != 2) || ((action == "status" || action == "history" || action == "forget" || action == "candidates" || action == "outcomes" || action == "suggestions" || action == "proposals" || action == "forget-outcomes") && len(args.Positional) != 1) {
+	if ((action == "queue" || action == "plan") && (len(args.Positional) < 3 || len(args.Positional) > 4)) || ((action == "promote" || action == "promote-candidate") && len(args.Positional) != 4) || ((action == "rollback" || action == "discard" || action == "dismiss" || action == "dismiss-proposal" || action == "dismiss-fact") && len(args.Positional) != 2) || ((action == "status" || action == "history" || action == "forget" || action == "candidates" || action == "outcomes" || action == "suggestions" || action == "proposals" || action == "fact-candidates" || action == "forget-outcomes") && len(args.Positional) != 1) {
 		return usage()
 	}
-	if action != "queue" && action != "candidates" && action != "plan" && action != "discard" && action != "promote-candidate" && action != "promote" && action != "rollback" && action != "status" && action != "history" && action != "forget" && action != "outcomes" && action != "suggestions" && action != "dismiss" && action != "proposals" && action != "dismiss-proposal" && action != "forget-outcomes" {
+	if action != "queue" && action != "candidates" && action != "plan" && action != "discard" && action != "promote-candidate" && action != "promote" && action != "rollback" && action != "status" && action != "history" && action != "forget" && action != "outcomes" && action != "suggestions" && action != "dismiss" && action != "proposals" && action != "dismiss-proposal" && action != "fact-candidates" && action != "dismiss-fact" && action != "forget-outcomes" {
 		return usage()
 	}
 	cwd, err := os.Getwd()
@@ -62,9 +62,9 @@ func Learning(ctx context.Context, args Args, out, stderr io.Writer) int {
 		return fail(err)
 	}
 	path := filepath.Join(home, ".kiln", "memory.db")
-	if _, err := os.Stat(path); os.IsNotExist(err) && (action == "status" || action == "history" || action == "candidates" || action == "outcomes" || action == "suggestions" || action == "proposals" || action == "forget-outcomes") {
+	if _, err := os.Stat(path); os.IsNotExist(err) && (action == "status" || action == "history" || action == "candidates" || action == "outcomes" || action == "suggestions" || action == "proposals" || action == "fact-candidates" || action == "forget-outcomes") {
 		value := "null"
-		if action == "candidates" || action == "outcomes" || action == "suggestions" || action == "proposals" {
+		if action == "candidates" || action == "outcomes" || action == "suggestions" || action == "proposals" || action == "fact-candidates" {
 			value = "[]"
 		}
 		if _, err := fmt.Fprintln(out, value); err != nil {
@@ -79,6 +79,18 @@ func Learning(ctx context.Context, args Args, out, stderr io.Writer) int {
 	defer diag.Close(store)
 	project := memoryScope(cwd)
 	switch action {
+	case "fact-candidates":
+		candidates, err := learning.ListFactCandidates(ctx, store, project, memoryProjectRoot(cwd))
+		if err != nil {
+			return fail(err)
+		}
+		if err := json.NewEncoder(out).Encode(candidates); err != nil {
+			return fail(err)
+		}
+	case "dismiss-fact":
+		if err := learning.DismissFactCandidate(ctx, store, project, args.Positional[1]); err != nil {
+			return fail(err)
+		}
 	case "outcomes":
 		outcomes, err := learning.ListOutcomes(ctx, store, project)
 		if err != nil {

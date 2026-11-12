@@ -14,10 +14,12 @@ import (
 
 // ObservationConfig bounds opt-in local outcome capture and suggestion review.
 type ObservationConfig struct {
-	Enabled                 bool `json:"enabled"`
-	MaxOutcomes             int  `json:"maxOutcomes"`
-	MinSamples              int  `json:"minSamples"`
-	SourceSkillBudgetTokens int  `json:"-"`
+	Enabled                 bool              `json:"enabled"`
+	FactMemoryEnabled       bool              `json:"-"`
+	FactReadAllowed         func(string) bool `json:"-"`
+	MaxOutcomes             int               `json:"maxOutcomes"`
+	MinSamples              int               `json:"minSamples"`
+	SourceSkillBudgetTokens int               `json:"-"`
 }
 
 // NormalizeObservationConfig applies local defaults and enforces hard bounds.
@@ -215,5 +217,11 @@ func ForgetOutcomes(ctx context.Context, store *memory.Store, project string) er
 	if err := store.ForgetScope(ctx, ProposalScope(project)); err != nil {
 		return err
 	}
-	return store.ForgetScope(ctx, proposalDismissalScope(project))
+	if err := store.ForgetScope(ctx, proposalDismissalScope(project)); err != nil {
+		return err
+	}
+	if err := store.ForgetScope(ctx, factScope(project)); err != nil {
+		return err
+	}
+	return store.ForgetScope(ctx, factDismissalScope(project))
 }

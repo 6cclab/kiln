@@ -8,6 +8,7 @@ import (
 
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/claude/agents"
+	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/tool"
 )
 
@@ -220,6 +221,27 @@ func TestTaskToolPersistsStructuredArtifactOnSuccessAndFailure(t *testing.T) {
 			}
 			if details.Artifact.ManifestPath != "/tmp/artifact.json" {
 				t.Fatalf("details = %+v", details)
+			}
+		})
+	}
+}
+
+func TestTaskToolArtifactWordingTracksAutomaticIntegration(t *testing.T) {
+	dispatch := func(context.Context, TaskRequest) (TaskDispatchResult, error) {
+		return TaskDispatchResult{Text: "done", Artifact: &TaskArtifact{ManifestPath: "/tmp/artifact.json", PatchPath: "/tmp/changes.patch", BaseCommit: "abc", SHA256: "123", Bytes: 5, ChangedFiles: []string{"a.txt"}}}, nil
+	}
+	for _, tc := range []struct {
+		name string
+		auto bool
+		want string
+	}{
+		{"default", false, "Apply explicitly after review"},
+		{"automatic", true, "Retained pending the batch integration result"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := execTool(t, TaskTool(dispatch, []agents.Definition{generalPurposeFixture}, nil, budget.TierForWindow(200_000), tc.auto), map[string]any{"subagent_type": "general-purpose", "prompt": "x"})
+			if !strings.Contains(msg.TextOf(result.Content), tc.want) {
+				t.Fatalf("artifact text = %q", msg.TextOf(result.Content))
 			}
 		})
 	}

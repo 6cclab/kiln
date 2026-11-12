@@ -47,7 +47,7 @@ func VerificationStatusTool(cwd string, allowRead func(string) bool, proofs func
 			}
 			// A denied filter must not become an existence or evidence oracle.
 			for _, path := range append(args.Files, args.Directories...) {
-				if !validRelativeVerificationPath(path) || allowRead == nil || !allowRead(path) {
+				if !validRelativeVerificationPath(path) && !validGoExternalVerificationPath(path) || allowRead == nil || !allowRead(path) {
 					return tool.Errorf("verification_status: file filter unavailable"), nil
 				}
 			}
@@ -145,7 +145,7 @@ func verificationFileIntersection(files []VerificationFile, missing []string, di
 	}
 	for _, dir := range dirs {
 		for _, path := range requested {
-			if strings.HasPrefix(path, dir.Path+string(filepath.Separator)) {
+			if dir.Path == "." || strings.HasPrefix(path, dir.Path+string(filepath.Separator)) {
 				return true
 			}
 		}
@@ -163,7 +163,7 @@ func verificationFileIntersection(files []VerificationFile, missing []string, di
 func verificationDirectoryIntersection(dirs []VerificationDirectory, requested []string) bool {
 	for _, dir := range dirs {
 		for _, path := range requested {
-			if dir.Path == path {
+			if dir.Path == path || dir.Path == "." {
 				return true
 			}
 		}
@@ -237,7 +237,7 @@ func checkVerificationProof(ctx context.Context, cwd string, proof VerificationE
 	var currentDirs []VerificationDirectory
 	remainingDirs := make([]string, 0, len(proof.Directories))
 	for _, dir := range proof.Directories {
-		_, statErr := os.Lstat(filepath.Join(cwd, dir.Path))
+		_, statErr := os.Lstat(verificationResolvedPath(cwd, dir.Path))
 		if os.IsNotExist(statErr) {
 			record.Directories = append(record.Directories, dir.Path)
 		} else {
@@ -245,7 +245,7 @@ func checkVerificationProof(ctx context.Context, cwd string, proof VerificationE
 		}
 	}
 	if len(remainingDirs) > 0 {
-		currentDirs, err = fingerprintDirectories(ctx, cwd, remainingDirs, allowRead, proof.DirectoryFileLimit, proof.DirectoryByteLimit)
+		currentDirs, err = fingerprintDirectories(ctx, cwd, remainingDirs, allowRead, proof.DirectoryFileLimit, proof.DirectoryByteLimit, proof.Discovery == goPartialDiscovery)
 	}
 	if err != nil {
 		record.Status, record.Reason = "unavailable", "one or more dependencies cannot be checked"
@@ -285,7 +285,7 @@ func checkVerificationProof(ctx context.Context, cwd string, proof VerificationE
 func verificationScope(records []verificationStatusRecord) string {
 	for _, record := range records {
 		if record.Discovery != "" {
-			return "recorded inputs only; partial Go discovery omits imports, replacements, toolchain and environment; dependency graph incomplete; no task correctness or safe-to-skip claim"
+			return "recorded inputs only; partial Go discovery; unsupported: shell expansions, flags, compound commands, build tags, cgo, toolchain and environment; unreplaced external modules and workspace modules are not traced; no task correctness or safe-to-skip claim"
 		}
 	}
 	return "declared inputs only; no task correctness or safe-to-skip claim"

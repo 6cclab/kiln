@@ -833,6 +833,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		})
 	}
 	skillRecords = commandSkillRecords(skillRecords, append(claudecommands.LoadCommands(cwd), pluginCommands...))
+	selections := newContextSelectionLedger()
+	selections.ExcludeConfiguredSkills(skillRecords, settings.SkillDiscovery.Excluded)
 	skillRecords = discoveryRecords(skillRecords, settings.SkillDiscovery)
 	skillTool := tools.SkillTool(skillRecords)
 
@@ -1039,11 +1041,14 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		readCache = tools.NewReadCache(claudesettings.PositiveOr(settings.RuntimeEfficiency.ReadCacheEntries, 32), claudesettings.PositiveOr(settings.RuntimeEfficiency.ReadCacheBytes, 4<<20))
 	}
 	dispatcher := &agent.Dispatcher{
-		ReadCache:       readCache,
-		ProgressLimit:   claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLimit, 0),
-		CycleLimit:      claudesettings.PositiveOr(settings.RuntimeEfficiency.CycleLimit, 0),
-		IsolatedWorkers: settings.Orchestration.IsolatedWorkers != nil && *settings.Orchestration.IsolatedWorkers,
-		SnapshotDirty:   settings.Orchestration.SnapshotDirty != nil && *settings.Orchestration.SnapshotDirty,
+		ReadCache:         readCache,
+		ProgressLimit:     claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLimit, 0),
+		ProgressLoopLimit: claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLoopLimit, 0),
+		CycleLimit:        claudesettings.PositiveOr(settings.RuntimeEfficiency.CycleLimit, 0),
+		IsolatedWorkers:   settings.Orchestration.IsolatedWorkers != nil && *settings.Orchestration.IsolatedWorkers,
+		IsolatedShell:     settings.Orchestration.IsolatedShell != nil && *settings.Orchestration.IsolatedShell,
+		SnapshotDirty:     settings.Orchestration.SnapshotDirty != nil && *settings.Orchestration.SnapshotDirty,
+		AutoIntegrate:     settings.Orchestration.AutoIntegrate != nil && *settings.Orchestration.AutoIntegrate,
 		Limits: &agent.DispatchLimits{
 			Concurrent: claudesettings.PositiveOr(settings.Orchestration.MaxConcurrent, 4),
 			Dispatches: claudesettings.PositiveOr(settings.Orchestration.MaxDispatches, 64),
@@ -1084,7 +1089,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 		return result, err
 	}
-	taskTool := tools.TaskTool(dispatchFn, agentsList, settings.ModelRoles, resolved.Tier)
+	taskTool := tools.TaskTool(dispatchFn, agentsList, settings.ModelRoles, resolved.Tier, dispatcher.AutoIntegrate)
 
 	// Plan mode is the gate's mode, however it got there (--permission-mode
 	// plan, /plan, Shift+Tab, /permissions); the controller only reads it.
@@ -1163,7 +1168,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	unifiedDiscovery := settings.SkillDiscovery.Unified == nil || *settings.SkillDiscovery.Unified
 	capabilities := capabilityCatalogWithAgents(func() []tools.SkillRecord { return skillRecords }, agentsList, settings.SkillDiscovery.IncludeAgents == nil || *settings.SkillDiscovery.IncludeAgents, mcpSess)
 	if unifiedDiscovery {
-		extraTools = append(extraTools, tools.CapabilitySearchToolDynamic(capabilities, capabilitySearchBudget(settings.SkillDiscovery, mcpSess), onAdmit))
+		extraTools = append(extraTools, tools.CapabilitySearchToolObserved(capabilities, capabilitySearchBudget(settings.SkillDiscovery, mcpSess), onAdmit, selections.RecordSearch))
 		mcpSess.addResident("capability_search")
 	}
 	extraTools = append(extraTools, bgShellTools...)
@@ -1229,7 +1234,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		build:    buildSystemPrompt,
 		mcpIndex: mcpIndexText,
 		taskTool: func(tier budget.Tier) *tool.Tool {
-			return tools.TaskTool(dispatchFn, agentsList, settings.ModelRoles, tier)
+			return tools.TaskTool(dispatchFn, agentsList, settings.ModelRoles, tier, dispatcher.AutoIntegrate)
 		},
 	}
 	systemPrompt := sizing.prompt(resolved.Tier)
@@ -1248,31 +1253,37 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 
 	started, err := agent.Start(ctx, agent.Options{
-		ReadCache:       readCache,
-		ProgressLimit:   claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLimit, 0),
-		CycleLimit:      claudesettings.PositiveOr(settings.RuntimeEfficiency.CycleLimit, 0),
-		Registry:        reg,
-		Resolved:        resolved,
-		Cwd:             cwd,
-		SessionsRoot:    sessionRepo.Root,
-		Resume:          args.Resume,
-		ResumeLatest:    args.ResumeLatest || args.ContinueLatest,
-		SessionID:       args.SessionID,
-		ForkSession:     args.ForkSession,
-		Name:            args.Name,
-		ThinkingLevel:   startEffort,
-		SystemPrompt:    systemPrompt,
-		Env:             env,
-		ExtraTools:      extraTools,
-		ActiveToolNames: mcpSess.activeToolNames(),
-		Routers:         modelRouter.Routers,
+		ReadCache:         readCache,
+		ProgressLimit:     claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLimit, 0),
+		CycleLimit:        claudesettings.PositiveOr(settings.RuntimeEfficiency.CycleLimit, 0),
+		ProgressLoopLimit: claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLoopLimit, 0),
+		Registry:          reg,
+		Resolved:          resolved,
+		Cwd:               cwd,
+		SessionsRoot:      sessionRepo.Root,
+		Resume:            args.Resume,
+		ResumeLatest:      args.ResumeLatest || args.ContinueLatest,
+		SessionID:         args.SessionID,
+		ForkSession:       args.ForkSession,
+		Name:              args.Name,
+		ThinkingLevel:     startEffort,
+		SystemPrompt:      systemPrompt,
+		Env:               env,
+		ExtraTools:        extraTools,
+		ActiveToolNames:   mcpSess.activeToolNames(),
+		Routers:           modelRouter.Routers,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "kiln:", err)
 		return 1
 	}
+	if dispatcher.AutoIntegrate && dispatcher.IsolatedWorkers {
+		started.Harness.SetToolBatchComplete(agent.WorkerBatchCompletion(dispatcher))
+	}
 	observerCleanup, observerErr := attachLearningObserver(ctx, cwd, started, learning.ObservationConfig{
 		Enabled:                 (settings.LearningEnabled == nil || *settings.LearningEnabled) && settings.LearningAutomation.Enabled != nil && *settings.LearningAutomation.Enabled,
+		FactMemoryEnabled:       settings.PersonalMemoryEnabled == nil || *settings.PersonalMemoryEnabled,
+		FactReadAllowed:         taskReadAllowed,
 		MaxOutcomes:             claudesettings.PositiveOr(settings.LearningAutomation.MaxOutcomes, 100),
 		MinSamples:              claudesettings.PositiveOr(settings.LearningAutomation.MinSamples, 5),
 		SourceSkillBudgetTokens: settings.SkillDiscovery.Budget(resolved.Tier.SkillsListingTokens),
@@ -1849,6 +1860,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return stopVerdict(claudehooks.SubagentStop, outcome, notice)
 	}
 
+	runtimeContext := effectiveContextSettings(cwd, args, settings, effortSettingApplies(resolved.Model))
+	runtimeContext.Model = providerID + "/" + modelID
+	runtimeContext.Effort = startEffort
+	runtimeContext.Permission = string(permissionMode)
+	runtimeContext.AutoMemoryDirectory = autoMemory.Dir
 	registry := buildCommandRegistry(registryDeps{
 		Cwd:                cwd,
 		Started:            started,
@@ -1872,6 +1888,25 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		SessionsDir:        sessionRepo.Root,
 		ContextUsed:        contextUsed,
 		FileReadTokens:     getFileReadTokens,
+		ContextSelections: func() []slashcommands.ContextSelection {
+			entries, err := started.Lane.FindEntries(context.Background())
+			if err != nil {
+				return nil
+			}
+			for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
+			return selections.SnapshotForRequest(compaction.ContextMessages(entries), started.Harness.SystemPrompt(), skillRecords, settings.SkillDiscovery.Mode == "catalog")
+		},
+		ContextSettings: func() []slashcommands.ContextSetting {
+			current := runtimeContext
+			ref, err := started.Lane.Model()
+			if err != nil {
+				return current.entries()
+			}
+			effort, _ := started.Lane.ThinkingLevel()
+			return current.effectiveForLane(ref.Provider+"/"+ref.ModelID, effort, string(gate.Mode())).entries()
+		},
 		UsageByModel:       getUsageByModel,
 		RouterCostStats:    getRouterCostStats,
 		RouterAutoDescribe: routerAutoDescribe,
@@ -2004,16 +2039,20 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return started.Lane.Steer(auditFollowUp)
 	})
 
+	started.Harness.Hooks().OnTransformContext(func(_ context.Context, transcript []msg.Message) ([]msg.Message, error) {
+		selections.BeginRequest(transcript)
+		return transcript, nil
+	})
 	if projectMemory != nil && (settings.MemoryAutoRetrieve == nil || *settings.MemoryAutoRetrieve) {
-		started.Harness.Hooks().OnTransformContext(memoryContextForProjectAndGlobal(projectMemory, memoryScope(cwd), memoryProjectRoot(cwd), func() bool {
+		started.Harness.Hooks().OnTransformContext(memoryContextObserved(projectMemory, memoryScope(cwd), memoryProjectRoot(cwd), func() bool {
 			return claudesettings.DecideIn(gate.Permissions(), cwd, "memory_recall", "", gate.Mode()) == claudesettings.Allow
-		}, true, claudesettings.PositiveOr(settings.MemoryRetrievalTokens, 512)))
+		}, true, func(name, reason string, included bool) { selections.Record("memory", name, reason, included) }, claudesettings.PositiveOr(settings.MemoryRetrievalTokens, 512)))
 	}
 	discoveryBudget := func() int { return settings.SkillDiscovery.Budget(started.CurrentTier().SkillsListingTokens) }
 	if unifiedDiscovery {
-		started.Harness.Hooks().OnTransformContext(capabilitySuggestionContext(capabilities, settings.SkillDiscovery, discoveryBudget))
+		started.Harness.Hooks().OnTransformContext(capabilitySuggestionContextObserved(capabilities, settings.SkillDiscovery, discoveryBudget, selections.Record))
 	} else {
-		started.Harness.Hooks().OnTransformContext(skillDiscoveryContext(skillRecords, settings.SkillDiscovery, discoveryBudget))
+		started.Harness.Hooks().OnTransformContext(skillDiscoveryContextObserved(skillRecords, settings.SkillDiscovery, discoveryBudget, func(name, reason string, included bool) { selections.Record("skill", name, reason, included) }))
 	}
 	if settings.TaskStateEnabled == nil || *settings.TaskStateEnabled {
 		state, err := wireTaskState(ctx, started, todos, claudesettings.PositiveOr(settings.TaskStateTokens, 512), cwd, taskReadAllowed)
@@ -2445,7 +2484,10 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 	// run's reply is real output, not something to discard just because it
 	// came from an interrupted operation instead of this call's own
 	// prompt.
-	agent.ResumeIncomplete(ctx, started, notice)
+	if _, err := agent.ResumeIncomplete(ctx, started, notice); err != nil {
+		fmt.Fprintln(stderr, "kiln: unable to resume interrupted operation:", err)
+		return 1
+	}
 
 	// --max-turns (print mode only; the interactive TUI has a human who can
 	// just stop typing, so this cap has no equivalent there). turn.go's

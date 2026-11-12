@@ -53,6 +53,19 @@ func TestSkillTool_InvokeReturnsBaseDirAndBody(t *testing.T) {
 	}
 }
 
+func TestSkillToolObservedExactNameOnlyOnSuccess(t *testing.T) {
+	var called []string
+	tl := SkillToolObserved([]SkillRecord{{Name: "greet", Body: "Hello", Dir: "/d"}}, func(name string) { called = append(called, name) })
+	for _, args := range []string{`{"skill":"unknown"}`, `{"skill":"greet"}`} {
+		if _, err := tl.Execute(context.Background(), json.RawMessage(args), nil, tool.Invocation{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(called) != 1 || called[0] != "greet" {
+		t.Fatalf("exact-name observations: %v", called)
+	}
+}
+
 func TestSkillTool_InvokeAppendsArgs(t *testing.T) {
 	tl := SkillTool([]SkillRecord{{Name: "greet", Description: "says hi", Body: "Hello.", Dir: "/d"}})
 	res, err := tl.Execute(context.Background(), json.RawMessage(`{"skill":"greet","args":"in French"}`), func(tool.Result) {}, tool.Invocation{})

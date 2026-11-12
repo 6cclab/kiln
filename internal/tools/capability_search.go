@@ -200,11 +200,17 @@ func CapabilitySearchTool(catalog CapabilityCatalogFunc, budget int, onAdmit OnA
 // CapabilitySearchToolDynamic reads the current discovery budget per call.
 // MCP matches that actually fit it are admitted using the existing gate state.
 func CapabilitySearchToolDynamic(catalog CapabilityCatalogFunc, budget func() int, onAdmit OnAdmit) *tool.Tool {
+	return CapabilitySearchToolObserved(catalog, budget, onAdmit, nil)
+}
+
+// CapabilitySearchToolObserved reports only search results actually returned
+// to the model, or matched results omitted by the byte allowance.
+func CapabilitySearchToolObserved(catalog CapabilityCatalogFunc, budget func() int, onAdmit OnAdmit, observe func(callID, kind, name, reason string, included bool)) *tool.Tool {
 	return &tool.Tool{
 		Name: "capability_search", Label: "Search capabilities",
 		Description: "Search installed skills, custom commands, dispatchable agents, and available MCP tools together by topic. Returns reasons and exact actions. Matching MCP tools become callable after search; use skill to load instructions or task to dispatch an agent.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"maxResults":{"type":"integer","description":"Maximum matches, up to 10"}},"required":["query"]}`),
-		Execute: func(ctx context.Context, raw json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
+		Execute: func(ctx context.Context, raw json.RawMessage, _ tool.Update, inv tool.Invocation) (tool.Result, error) {
 			if err := ctx.Err(); err != nil {
 				return tool.Result{}, err
 			}
@@ -224,17 +230,29 @@ func CapabilitySearchToolDynamic(catalog CapabilityCatalogFunc, budget func() in
 			}
 			var b strings.Builder
 			var admitted []string
+			type decision struct {
+				hit      CapabilityHit
+				included bool
+			}
+			var decisions []decision
 			for _, h := range hits {
 				line := capabilityLine(h)
 				if b.Len()+len(line) > maxBytes {
+					decisions = append(decisions, decision{hit: h})
 					continue
 				}
 				b.WriteString(line)
+				decisions = append(decisions, decision{hit: h, included: true})
 				if h.Kind == "mcp" && c.State != nil && !c.State.IsAdmitted(h.Name) {
 					admitted = append(admitted, h.Name)
 				}
 			}
 			if b.Len() == 0 {
+				if observe != nil {
+					for _, d := range decisions {
+						observe(inv.ToolCallID, d.hit.Kind, d.hit.Name, "budget-dropped", false)
+					}
+				}
 				message := "No matching capabilities fit the discovery budget or active MCP posture. Try a narrower query or switch posture."
 				if len(message) > maxBytes {
 					message = message[:maxBytes]
@@ -247,6 +265,15 @@ func CapabilitySearchToolDynamic(catalog CapabilityCatalogFunc, budget func() in
 			if len(admitted) > 0 && onAdmit != nil {
 				if err := onAdmit(ctx, admitted); err != nil {
 					return tool.Result{}, fmt.Errorf("capability_search: admitting tools: %w", err)
+				}
+			}
+			if observe != nil {
+				for _, d := range decisions {
+					reason := "budget-dropped"
+					if d.included {
+						reason = "search hit"
+					}
+					observe(inv.ToolCallID, d.hit.Kind, d.hit.Name, reason, d.included)
 				}
 			}
 			return tool.Text(b.String()), nil

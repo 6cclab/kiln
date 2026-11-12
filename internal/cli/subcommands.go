@@ -360,10 +360,19 @@ func Doctor(ctx context.Context, args Args, stdout, stderr io.Writer) int {
 		resolved, err := reg.Resolve(providerID, modelID)
 		if err != nil {
 			lines = append(lines, fmt.Sprintf("tier       unresolvable: %v", err))
+			problems = append(problems, fmt.Sprintf("model %q is unavailable: %v; run kiln models and select an available model with --model", wanted, err))
 		} else {
 			strategy = resolved.Tier.ToolStrategy
 			lines = append(lines, "tier       "+slashcommands.TierSummary(resolved.Tier))
+			if authed, authErr := reg.CheckAuth(ctx, providerID); authErr != nil {
+				problems = append(problems, fmt.Sprintf("model %q cannot be used: provider %q credentials could not be checked; run kiln providers", wanted, providerID))
+			} else if !authed {
+				problems = append(problems, fmt.Sprintf("model %q cannot be used: provider %q is not configured; run kiln login %s or choose an available model with kiln models and --model", wanted, providerID, providerID))
+			}
 		}
+	} else {
+		lines = append(lines, "tier       unresolvable: expected provider/model")
+		problems = append(problems, fmt.Sprintf("model %q is invalid: expected provider/model; run kiln models and select an available model with --model", wanted))
 	}
 
 	if len(settings.ModelRoles) > 0 {

@@ -21,6 +21,10 @@ func memoryContextForProject(store *memory.Store, scope, root string, allowed fu
 // memoryContextForProjectAndGlobal includes user-global preferences only when
 // the chat wiring explicitly opts in. Project records win on matching keys.
 func memoryContextForProjectAndGlobal(store *memory.Store, scope, root string, allowed func() bool, includeGlobal bool, tokens ...int) func(context.Context, []msg.Message) ([]msg.Message, error) {
+	return memoryContextObserved(store, scope, root, allowed, includeGlobal, nil, tokens...)
+}
+
+func memoryContextObserved(store *memory.Store, scope, root string, allowed func() bool, includeGlobal bool, observe func(name, reason string, included bool), tokens ...int) func(context.Context, []msg.Message) ([]msg.Message, error) {
 	budgetBytes := 2048
 	if len(tokens) > 0 && tokens[0] > 0 {
 		budgetBytes = tokens[0] * 4
@@ -63,9 +67,15 @@ func memoryContextForProjectAndGlobal(store *memory.Store, scope, root string, a
 					return transcript, err
 				}
 				if len(text)+len(raw)+1 > budgetBytes {
+					if observe != nil {
+						observe(r.Scope+":"+r.Key, "budget-dropped", false)
+					}
 					continue
 				}
 				text += string(raw) + "\n"
+				if observe != nil {
+					observe(r.Scope+":"+r.Key, "search hit", true)
+				}
 			}
 			if text == "" {
 				return transcript, nil

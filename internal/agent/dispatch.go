@@ -76,11 +76,15 @@ type Dispatcher struct {
 	ProgressLimit int
 	// CycleLimit is inherited by each dispatched agent's harness.
 	CycleLimit int
+	// ProgressLoopLimit is inherited by each dispatched agent's harness.
+	ProgressLoopLimit int
 	// ReadCache, when set, is shared by worker read tools. It is safe for
 	// concurrent workers and always validates fresh file content.
 	ReadCache *tools.ReadCache
 	// IsolatedWorkers runs each worker in a detached Git worktree. It is opt in.
 	IsolatedWorkers bool
+	// IsolatedShell enables mandatory macOS Seatbelt for isolated workers' Bash tool.
+	IsolatedShell bool
 	// SnapshotDirty captures a bounded dirty parent baseline for isolated workers.
 	SnapshotDirty bool
 	// AutoIntegrate permits IntegrateWorkerResults to apply a completed
@@ -300,6 +304,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 
 	workerEnv := d.Env
 	var worktree *workerWorktree
+	if d.IsolatedShell && !d.IsolatedWorkers {
+		return DispatchResult{}, fmt.Errorf("agent: isolated shell requires isolated workers")
+	}
+	if d.IsolatedShell {
+		return DispatchResult{}, fmt.Errorf("agent: isolated shell is unavailable: detached descendants cannot yet be owned safely across process-group changes")
+	}
 	if d.IsolatedWorkers {
 		if d.Env != nil && d.Env.Sandbox != nil && d.Env.Sandbox.Active() {
 			return DispatchResult{}, fmt.Errorf("agent: isolated workers require a worktree-aware OS sandbox; the current sandbox is bound to the parent")
@@ -345,6 +355,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	}
 	allowTask := d.Depth+1 < maxDepth
 	available := append([]string(nil), residentToolNames...)
+	if d.IsolatedWorkers {
+		// File-only workers never offer Bash, even when a definition names it.
+		available = removeToolName(available, "bash")
+	}
 	if allowTask {
 		available = append(available, TaskToolName)
 	}
@@ -360,12 +374,21 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	}
 	// The allowlist is applied to what this harness actually has, not to
 	// what the definition imagined.
-	activeToolNames := AllowedToolNames(def.Tools, available, allowTask)
 	if d.IsolatedWorkers {
-		// Bash can change directory or address absolute paths without a
-		// worktree-aware OS sandbox. File tools are checked below.
-		activeToolNames = removeToolName(activeToolNames, "bash")
+		for _, requested := range def.Tools {
+			found := false
+			for _, name := range available {
+				if strings.EqualFold(requested, name) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return DispatchResult{}, fmt.Errorf("agent: unsupported isolated worker tool %q", requested)
+			}
+		}
 	}
+	activeToolNames := AllowedToolNames(def.Tools, available, allowTask)
 
 	// Depth on the event is the depth of the subagent THIS Dispatch call is
 	// starting, i.e. one past this Dispatcher's own — it lines up with the
@@ -401,8 +424,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			Limits:             d.Limits,
 			ProgressLimit:      d.ProgressLimit,
 			CycleLimit:         d.CycleLimit,
+			ProgressLoopLimit:  d.ProgressLoopLimit,
 			ReadCache:          d.ReadCache,
 			IsolatedWorkers:    d.IsolatedWorkers,
+			IsolatedShell:      d.IsolatedShell,
 			SnapshotDirty:      d.SnapshotDirty,
 			AutoIntegrate:      d.AutoIntegrate,
 			Registry:           d.Registry,
@@ -443,13 +468,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		// process-level dispatcher, or a child Dispatcher this same
 		// function assigns Parent to just below, once this call
 		// succeeds).
-		ParentSessionID: d.Parent.SessionID,
-		ExtraTools:      extraTools,
-		ActiveToolNames: activeToolNames,
-		ProgressLimit:   d.ProgressLimit,
-		CycleLimit:      d.CycleLimit,
-		ReadCache:       d.ReadCache,
-		Routers:         d.Routers,
+		ParentSessionID:   d.Parent.SessionID,
+		ExtraTools:        extraTools,
+		ActiveToolNames:   activeToolNames,
+		ProgressLimit:     d.ProgressLimit,
+		CycleLimit:        d.CycleLimit,
+		ProgressLoopLimit: d.ProgressLoopLimit,
+		ReadCache:         d.ReadCache,
+		Routers:           d.Routers,
 	})
 	if err != nil {
 		return DispatchResult{}, fmt.Errorf("agent: start subagent session for %q: %w", def.Name, err)
@@ -480,7 +506,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			userHistory = func() []msg.Message { return d.UserHistory(ctx) }
 		}
 		started.Harness.Hooks().OnBeforeTool(func(ctx context.Context, call msg.ToolCall) (harness.BeforeToolResult, error) {
-			if worktree != nil && (call.Name == "read" || call.Name == "edit" || call.Name == "write") {
+			if call.Name == "bash" || (worktree != nil && (call.Name == "read" || call.Name == "edit" || call.Name == "write")) {
 				// Their Execute wrappers check the final arguments after hook
 				// rewrites. Task dispatch still goes through the shared gate.
 				return harness.BeforeToolResult{}, nil
@@ -519,6 +545,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	if d.Hooks != nil {
 		d.Hooks.Attach(req.ToolCallID, choice.ModelID, started.Harness)
 	}
+	started.Harness.AddTools(gatedBashTool(workerEnv, d.Gate, started, d.UserHistory, d.IsolatedShell))
 	if worktree != nil {
 		// Execute wrappers see final arguments, including any hook rewrite.
 		// The original gate resolves the same relative paths against the

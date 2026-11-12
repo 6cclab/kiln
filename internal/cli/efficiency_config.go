@@ -20,6 +20,8 @@ func EfficiencyConfig(args Args, out, stderr io.Writer) int {
 	}
 	opts := settings.LoadOptions{Sources: settingsSources(args.SettingSources), Extra: args.Settings, Trusted: folderTrusted(cwd), Headless: true}
 	s := settings.LoadSettings(cwd, opts)
+	requestedModel, _ := requestedModelAndSource(cwd, args, s)
+	runtimeSettings := effectiveContextSettings(cwd, args, s, modelAcceptsEffort(requestedModel))
 	var learned *learning.Active
 	if s.LearningEnabled == nil || *s.LearningEnabled {
 		active, err := compatiblePolicy(context.Background(), cwd, s.ModelRoles)
@@ -57,7 +59,7 @@ func EfficiencyConfig(args Args, out, stderr io.Writer) int {
 	}
 	router := settings.LoadModelRouter(cwd, opts)
 	applyLearnedRouting(&router, learned)
-	sources := s.EfficiencyProvenance()
+	sources := runtimeSettings.Sources
 	for key, source := range s.SkillDiscovery.Sources {
 		sources["skillDiscovery."+key] = source
 	}
@@ -66,6 +68,16 @@ func EfficiencyConfig(args Args, out, stderr io.Writer) int {
 		sources["modelRouter.conservative"] = router.ConservativeSource
 	}
 	report := map[string]any{
+		"contextSettings": map[string]any{
+			"model": runtimeSettings.Model, "effortLevel": runtimeSettings.Effort,
+			"permissionMode":      runtimeSettings.Permission,
+			"autoMemoryDirectory": runtimeSettings.AutoMemoryDirectory,
+		},
+		"configuredSettings": map[string]any{
+			"modelRoles":              s.ModelRoles,
+			"autoMemoryEnabled":       s.AutoMemoryEnabled == nil || *s.AutoMemoryEnabled,
+			"promptSuggestionEnabled": s.PromptSuggestionEnabled != nil && *s.PromptSuggestionEnabled,
+		},
 		"taskVerificationStatus":  s.TaskVerificationStatus == nil || *s.TaskVerificationStatus,
 		"taskStateEnabled":        s.TaskStateEnabled == nil || *s.TaskStateEnabled,
 		"taskStateTokens":         settings.PositiveOr(s.TaskStateTokens, 512),
@@ -74,14 +86,14 @@ func EfficiencyConfig(args Args, out, stderr io.Writer) int {
 		"memoryRetrievalTokens":   settings.PositiveOr(s.MemoryRetrievalTokens, 512),
 		"memoryAutoRetrieve":      s.MemoryAutoRetrieve == nil || *s.MemoryAutoRetrieve,
 		"requestBudget":           s.RequestBudget,
-		"orchestration":           map[string]any{"isolatedWorkers": s.Orchestration.IsolatedWorkers != nil && *s.Orchestration.IsolatedWorkers, "snapshotDirty": s.Orchestration.SnapshotDirty != nil && *s.Orchestration.SnapshotDirty, "maxConcurrent": settings.PositiveOr(s.Orchestration.MaxConcurrent, 4), "maxDispatches": settings.PositiveOr(s.Orchestration.MaxDispatches, 64), "maxDepth": settings.PositiveOr(s.Orchestration.MaxDepth, 2), "timeoutSeconds": settings.PositiveOr(s.Orchestration.TimeoutSeconds, 1800)},
+		"orchestration":           map[string]any{"isolatedWorkers": s.Orchestration.IsolatedWorkers != nil && *s.Orchestration.IsolatedWorkers, "isolatedShell": s.Orchestration.IsolatedShell != nil && *s.Orchestration.IsolatedShell, "snapshotDirty": s.Orchestration.SnapshotDirty != nil && *s.Orchestration.SnapshotDirty, "autoIntegrate": s.Orchestration.AutoIntegrate != nil && *s.Orchestration.AutoIntegrate, "maxConcurrent": settings.PositiveOr(s.Orchestration.MaxConcurrent, 4), "maxDispatches": settings.PositiveOr(s.Orchestration.MaxDispatches, 64), "maxDepth": settings.PositiveOr(s.Orchestration.MaxDepth, 2), "timeoutSeconds": settings.PositiveOr(s.Orchestration.TimeoutSeconds, 1800)},
 		"conservativeRouting":     router.Conservative,
 		"learningAutomation":      map[string]any{"enabled": s.LearningAutomation.Enabled != nil && *s.LearningAutomation.Enabled, "maxOutcomes": settings.PositiveOr(s.LearningAutomation.MaxOutcomes, 100), "minSamples": settings.PositiveOr(s.LearningAutomation.MinSamples, 5)},
 		"learningEnabled":         s.LearningEnabled == nil || *s.LearningEnabled,
 		"compatibleLearnedPolicy": learned,
 		"loadedFrom":              s.LoadedFrom,
 		"sources":                 sources,
-		"runtimeEfficiency":       map[string]any{"readCache": s.RuntimeEfficiency.ReadCache != nil && *s.RuntimeEfficiency.ReadCache, "readCacheEntries": settings.PositiveOr(s.RuntimeEfficiency.ReadCacheEntries, 32), "readCacheBytes": settings.PositiveOr(s.RuntimeEfficiency.ReadCacheBytes, 4<<20), "progressLimit": settings.PositiveOr(s.RuntimeEfficiency.ProgressLimit, 0), "cycleLimit": settings.PositiveOr(s.RuntimeEfficiency.CycleLimit, 0)},
+		"runtimeEfficiency":       map[string]any{"readCache": s.RuntimeEfficiency.ReadCache != nil && *s.RuntimeEfficiency.ReadCache, "readCacheEntries": settings.PositiveOr(s.RuntimeEfficiency.ReadCacheEntries, 32), "readCacheBytes": settings.PositiveOr(s.RuntimeEfficiency.ReadCacheBytes, 4<<20), "progressLimit": settings.PositiveOr(s.RuntimeEfficiency.ProgressLimit, 0), "progressLoopLimit": settings.PositiveOr(s.RuntimeEfficiency.ProgressLoopLimit, 0), "cycleLimit": settings.PositiveOr(s.RuntimeEfficiency.CycleLimit, 0)},
 	}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")

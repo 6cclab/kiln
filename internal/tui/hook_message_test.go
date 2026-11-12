@@ -32,3 +32,17 @@ func TestHookContinuationIsNotAUserTurn(t *testing.T) {
 		t.Errorf("rewind entries = %+v, want only the user's own message", rewind)
 	}
 }
+
+func TestWorkerIntegrationNoticeReplaysAsSystemNote(t *testing.T) {
+	entries := []session.Entry{
+		{ID: "a", Seq: 1, Type: session.EntryMessage, Message: msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("run workers")}}},
+		{ID: "b", Seq: 2, Type: session.EntryMessage, Message: msg.UserMessage{Role: msg.RoleUser, KilnHook: "WorkerIntegration", Content: msg.Blocks{msg.Text("Worker batch was not integrated: overlap at one.txt")}}},
+	}
+	out := strings.Join(RenderTranscriptEntries(entries, 80, false, "/tmp", nil, nil), "\n")
+	if !strings.Contains(out, "Worker batch was not integrated") || !strings.Contains(out, "system") {
+		t.Fatalf("integration outcome missing from replay: %s", out)
+	}
+	if strings.Count(out, "you") != 1 {
+		t.Fatalf("integration notice rendered as user input: %s", out)
+	}
+}

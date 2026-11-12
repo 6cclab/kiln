@@ -132,6 +132,18 @@ func TestRenderGolden_Context(t *testing.T) {
 			{Label: "Conversation", Tokens: 64_000},
 			{Label: "Free", Tokens: 124_000},
 		},
+		Selections: []commands.ContextSelection{
+			{Kind: "skill", Name: "review", Material: "metadata", Included: true, Reason: "pinned"},
+			{Kind: "agent", Name: "scout", Material: "metadata", Included: true, Reason: "suggested by metadata match"},
+			{Kind: "mcp", Name: "mcp__fixture__search", Material: "metadata", Reason: "budget-dropped"},
+			{Kind: "memory", Name: "project:style", Material: "record", Included: true, Reason: "search hit"},
+		},
+		Settings: []commands.ContextSetting{
+			{Name: "model", Value: "kiln-large", Source: "--model"},
+			{Name: "effort", Value: "high", Source: "--effort"},
+			{Name: "permission", Value: "plan", Source: "--permission-mode"},
+			{Name: "auto-memory dir", Value: "default project directory", Source: "default"},
+		},
 	}
 	assertRenderGolden(t, "context", RenderContext(b, 80))
 }

@@ -113,7 +113,9 @@ type registryDeps struct {
 	// AutoMemoryStatus is /context's one-line report of Claude Code's
 	// auto-memory index: whether it loaded, was trimmed, or was skipped,
 	// and why (internal/claude/memory.AutoMemory.StatusLine).
-	AutoMemoryStatus string
+	AutoMemoryStatus  string
+	ContextSelections func() []slashcommands.ContextSelection
+	ContextSettings   func() []slashcommands.ContextSetting
 }
 
 // mcpStatusesOf adapts mcp.ServerStatus onto slashcommands.ServerStatus, the
@@ -186,8 +188,15 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		CurrentModel: func() (string, string) {
 			return started.Model.Provider, started.Model.ID
 		},
-		CurrentTier:    started.CurrentTier,
-		ModelLabel:     func() string { return deps.ModelLabel },
+		CurrentTier: started.CurrentTier,
+		ModelLabel: func() string {
+			if started.Lane != nil {
+				if ref, err := started.Lane.Model(); err == nil {
+					return ref.Provider + "/" + ref.ModelID
+				}
+			}
+			return deps.ModelLabel
+		},
 		ContextUsed:    deps.ContextUsed,
 		FileReadTokens: deps.FileReadTokens,
 		// The tier's SystemPromptTokens is a fixed ceiling, not what this
@@ -226,6 +235,8 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		RouterCostStats:    deps.RouterCostStats,
 		RouterAutoDescribe: deps.RouterAutoDescribe,
 		AutoMemoryStatus:   func() string { return deps.AutoMemoryStatus },
+		ContextSelections:  deps.ContextSelections,
+		ContextSettings:    deps.ContextSettings,
 		SessionElapsed: func() time.Duration {
 			if deps.SessionStartedAt.IsZero() {
 				return 0

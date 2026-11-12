@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestTools_BashTimeout runs a bash call whose timeout (1s) is far
@@ -32,21 +31,24 @@ import (
 // a 1-second timeout reads "Command timed out after 1 second", singular)
 // and that the process is not left running afterward.
 //
-// Proved able to fail: asserting the marker command is STILL running
-// after the run (inverting the pgrep check) turned this red because
-// pgrep found nothing; reverted.
+// The test records its own shell PID and uses a unique command marker.
+// An unrelated control process carries the old shared marker, so a global
+// pgrep would give a false leak while the owned-process check stays precise.
 func TestTools_BashTimeout(t *testing.T) {
 	const marker = "harness-bash-timeout-marker-e2e"
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	ownedMarker := marker + "-" + processMarker(proj)
+	pidFile := filepath.Join(t.TempDir(), "bash.pid")
+	command := fmt.Sprintf("printf '%%s\\n' \"$$\" > %q; exec -a %q sleep 30", pidFile, ownedMarker)
 	script := fmt.Sprintf(`model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "exec -a %s sleep 30", timeout: 1}, id: b1}
+  - tool_call: {name: bash, args: {command: %q, timeout: 1}, id: b1}
   - on_tool_result: b1
     then:
       - text: "done"
-`, marker)
+`, command)
 	addr, _ := startFaux(t, script)
-	home, sessDir := scratchHome(t)
-	proj := scratchProject(t)
 
 	res := runHarness(t, proj, baseEnv(home, sessDir, addr),
 		"-p", "run a slow command with a short timeout",
@@ -67,14 +69,8 @@ steps:
 		t.Errorf("session incorrectly pluralizes a 1-second timeout:\n%s", raw)
 	}
 
-	// Give the OS a brief moment to reap the killed process before
-	// checking for stragglers, matching hooks_test.go's own
-	// TestHooks_Timeout_KillsSleepForever pattern.
-	time.Sleep(200 * time.Millisecond)
-	out, _ := exec.Command("pgrep", "-f", marker).CombinedOutput()
-	if strings.TrimSpace(string(out)) != "" {
-		t.Errorf("%s still running after its bash call should have timed out: pgrep output:\n%s", marker, out)
-	}
+	startGlobalMarkerControl(t, marker)
+	assertTimedOutProcessGone(t, pidFile, ownedMarker)
 }
 
 // TestTools_BackgroundShellRoundTrip starts a command with bash_background

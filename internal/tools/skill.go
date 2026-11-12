@@ -72,6 +72,11 @@ Invoking an unknown or unlisted name returns an error naming what is available; 
 // disable-model-invocation) returns an error result listing what is
 // available, rather than failing the whole turn.
 func SkillTool(records []SkillRecord) *tool.Tool {
+	return SkillToolObserved(records, nil)
+}
+
+// SkillToolObserved reports a successful exact-name body invocation.
+func SkillToolObserved(records []SkillRecord, observe func(name string)) *tool.Tool {
 	byName := make(map[string]SkillRecord, len(records))
 	names := make([]string, 0, len(records))
 	for _, r := range records {
@@ -114,6 +119,9 @@ func SkillTool(records []SkillRecord) *tool.Tool {
 				body = record.Render(a.Args)
 			} else if a.Args != "" {
 				body = body + "\n\n" + a.Args
+			}
+			if observe != nil {
+				observe(a.Skill)
 			}
 			return tool.Text(fmt.Sprintf("Base directory for this skill: %s\n\n%s", record.Dir, body)), nil
 		},

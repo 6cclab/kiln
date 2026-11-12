@@ -120,6 +120,40 @@ func isolatedFileTools(env *execenv.Env, root string, gate *permission.Gate, sta
 	return wrapped
 }
 
+// gatedBashTool checks the final arguments after every before-tool rewrite.
+// A pre-rewrite gate would approve a different command from the one executed.
+func gatedBashTool(env *execenv.Env, gate *permission.Gate, started *Started, userHistory func(context.Context) []msg.Message, requireSandbox bool) *tool.Tool {
+	base := tools.BashTool(env)
+	copyTool := *base
+	copyTool.Execute = func(ctx context.Context, raw json.RawMessage, update tool.Update, inv tool.Invocation) (tool.Result, error) {
+		var args map[string]any
+		if err := json.Unmarshal(raw, &args); err != nil {
+			return tool.Errorf("invalid isolated worker Bash arguments: %s", err), nil
+		}
+		command, _ := args["command"].(string)
+		if requireSandbox && (env.Sandbox == nil || !env.Sandbox.Active() || env.Sandbox.OffersUnsandboxed() || env.Sandbox.ForCommand(command, false) == nil) {
+			return tool.Errorf("isolated worker Bash sandbox is unavailable"), nil
+		}
+		if gate != nil {
+			primary, _ := permission.PrimaryArgOf(args)
+			req := permission.Request{ToolName: "bash", PrimaryArg: primary, Args: args, CallID: inv.ToolCallID, Delegated: true,
+				History: func() []msg.Message { return automode.BranchMessages(ctx, started.Lane) }}
+			if userHistory != nil {
+				req.UserHistory = func() []msg.Message { return userHistory(ctx) }
+			}
+			blocked, err := gate.Check(ctx, req)
+			if err != nil {
+				return tool.Errorf("permission check failed: %s", err), nil
+			}
+			if blocked != nil {
+				return tool.Errorf("%s", blocked.Reason), nil
+			}
+		}
+		return base.Execute(ctx, raw, update, inv)
+	}
+	return &copyTool
+}
+
 const maxWorkerPatchBytes = 1 << 20
 const maxWorkerReportBytes = 8192
 

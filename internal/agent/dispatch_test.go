@@ -677,6 +677,64 @@ func TestDispatchNestedDepthLimit(t *testing.T) {
 	}
 }
 
+func TestDispatchNestedWorkerInheritsProgressLoopLimit(t *testing.T) {
+	const script = `
+model: faux-1
+steps:
+  - tool_call: {name: task, args: {subagent_type: general-purpose, description: nested, prompt: read}, id: nested}
+  - tool_calls:
+      - {name: read, args: {path: repeated.txt}, id: read1}
+      - {name: read, args: {path: repeated.txt}, id: read2}
+  - on_tool_results: [read1, read2]
+    then:
+      - text: inner done
+  - on_tool_result: nested
+    then:
+      - text: outer done
+`
+	d, _, cwd := newParentAndDispatcher(t, script, nil)
+	if err := os.WriteFile(filepath.Join(cwd, "repeated.txt"), []byte("unchanged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d.ProgressLoopLimit = 2
+	result, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "general-purpose", Prompt: "delegate"})
+	if err != nil || result.Text != "outer done" {
+		t.Fatalf("nested dispatch result = %+v, error = %v", result, err)
+	}
+	var notices int
+	err = filepath.WalkDir(d.SessionsRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		notices += strings.Count(string(data), `"progress-loop"`)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notices != 1 {
+		t.Fatalf("nested worker corrective notices = %d, want one", notices)
+	}
+}
+
+func TestDispatchIsolatedWorkerRejectsUnsupportedToolAllowlist(t *testing.T) {
+	for _, requested := range [][]string{{"WebFetch"}, {"Bash"}, {"Read", "WebFetch"}} {
+		t.Run(strings.Join(requested, "+"), func(t *testing.T) {
+			d, _, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - text: unused\n", nil)
+			d.Env = execenv.New(testRepo(t))
+			d.IsolatedWorkers = true
+			d.Agents = []agents.Definition{{Name: "restricted", Tools: requested}}
+			if _, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "restricted", Prompt: "run"}); err == nil || !strings.Contains(err.Error(), "unsupported isolated worker tool") {
+				t.Fatalf("unsupported tool allowlist %v did not fail explicitly: %v", requested, err)
+			}
+		})
+	}
+}
+
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if !strings.Contains(s, sub) {

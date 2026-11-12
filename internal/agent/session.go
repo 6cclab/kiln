@@ -109,6 +109,8 @@ type Options struct {
 	// CycleLimit bounds repeated failed tool-call sequences of length 2-4.
 	// Zero disables cycle detection.
 	CycleLimit int
+	// ProgressLoopLimit bounds successful no-progress loops. Zero disables it.
+	ProgressLoopLimit int
 
 	SystemPrompt string
 
@@ -277,12 +279,13 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 		Compaction:      compactionFromTier(tier),
 		// Every tool result is capped at the tier's share of the window
 		// before it is sent; the tools' own fixed limits are only a first line.
-		ToolOutputTokens: tier.ToolOutputTokens,
-		ProgressLimit:    opts.ProgressLimit,
-		CycleLimit:       opts.CycleLimit,
-		Cwd:              cwd,
-		Now:              now,
-		Routers:          opts.Routers,
+		ToolOutputTokens:  tier.ToolOutputTokens,
+		ProgressLimit:     opts.ProgressLimit,
+		CycleLimit:        opts.CycleLimit,
+		ProgressLoopLimit: opts.ProgressLoopLimit,
+		Cwd:               cwd,
+		Now:               now,
+		Routers:           opts.Routers,
 	})
 	if err != nil {
 		_ = storage.Close()

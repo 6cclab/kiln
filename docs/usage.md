@@ -6,6 +6,10 @@ palette, block layout, glyphs — see `docs/kiln-design.md`.
 
 ## 1. Starting a session
 
+Before the first session, follow [First run](../README.md#first-run) to select
+an available model. A fresh install does not include or start a local model.
+Pass `--model provider/model` or set `HARNESS_MODEL` to make that choice explicit.
+
 ```bash
 kiln                       # new interactive session, new session file
 kiln -c                    # continue the most recent session in this directory
@@ -356,6 +360,15 @@ changes, `heavy` for open-ended work — mapped to a provider/model by
 Concurrent `task` calls in one turn run in parallel. A subagent can dispatch
 subagents of its own, but only one level: at two levels deep the `task` tool
 isn't offered at all. Source: `internal/agent/subagent.go`, `internal/agent/dispatch.go`.
+
+Isolated editing workers can return patch artifacts from their own worktrees.
+By default, inspect and apply those patches explicitly with `kiln worker`.
+With a user-level opt-in to `orchestration.autoIntegrate`, Kiln considers the
+complete tool batch and applies compatible patches together only after every
+tool succeeds. It records the outcome in the session and shows it in the TUI;
+an uncertain apply after a crash requires inspection before any retry. See
+[isolated editing workers](configuration.md#isolated-editing-workers) for the
+settings and limits.
 
 While a dispatch runs, a **subagents panel** appears above the input: each
 row shows the agent's name (amber running, green done, red error), its task

@@ -171,7 +171,7 @@ steps:
 
 const crashMidToolScript = `model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "sleep 5"}, id: b1}
+  - tool_call: {name: bash, args: {command: "printf x >> replay-marker.txt; sleep 5"}, id: b1}
   - text: "resumed done"
 `
 
@@ -193,29 +193,12 @@ func startHarnessBackground(t *testing.T, dir string, env map[string]string, arg
 	return cmd
 }
 
-// TestSession_CrashMidToolThenResume starts a run whose only tool call is
-// `bash sleep 5`, waits for the faux server to have received exactly one
-// request (proving the harness is now inside the tool call, mid-exec, not
-// still deciding what to do) plus a fixed buffer, SIGKILLs the harness
-// process outright, and then runs `--resume <id>` with a fresh prompt.
-//
-// Fixed in internal/cli/chat.go: before either mode's first turn, a
-// pending operation left by a crashed process (laneState.CurrentOperationID
-// still set - harness.Lane.PendingOperation, resume.go) is now completed
-// via harness.Lane.Resume before the new prompt is issued. Resume's own
-// AtTools case re-executes whichever tool calls in the interrupted batch
-// never reached "outcome_ready" (here, the sole `bash sleep 5` call, id
-// b1), commits a real tool_result for it, then drives the loop to the
-// model's follow-up and lets that operation finish before the new prompt
-// ("what happened?") starts a fresh one. Verified live below: the session
-// ends up with exactly ONE tool_result entry for b1's id, and the run
-// still reaches the interrupted turn's own scripted reply ("resumed
-// done") before the new prompt's turn runs.
-//
-// Proved able to fail: asserting the interrupted call's tool_result count
-// is 0 (the old, broken behavior) turned this red with "tool_result
-// entries for b1 = 1, want 0"; reverted to requiring the fixed (one)
-// count.
+// TestSession_CrashMidToolThenResume kills print mode after the shell has
+// appended one marker byte but before its result can be committed. Recovery
+// must report the effect as uncertain, pair the tool call with an error
+// result, and stop before either repeating the append or sending a fresh
+// prompt to the model. The previous test expected automatic replay; that
+// expectation was unsafe for a command whose effect may have happened.
 func TestSession_CrashMidToolThenResume(t *testing.T) {
 	addr, srv := startFaux(t, crashMidToolScript)
 	home, sessDir := scratchHome(t)
@@ -225,17 +208,19 @@ func TestSession_CrashMidToolThenResume(t *testing.T) {
 	cmd := startHarnessBackground(t, proj, env,
 		"-p", "run a slow command", "--output-format", "text", "--permission-mode", "bypassPermissions")
 
+	marker := filepath.Join(proj, "replay-marker.txt")
 	deadline := time.Now().Add(10 * time.Second)
-	for len(srv.Requests()) < 1 {
+	for {
+		body, err := os.ReadFile(marker)
+		if len(srv.Requests()) >= 1 && err == nil && string(body) == "x" {
+			break
+		}
 		if time.Now().After(deadline) {
 			_ = cmd.Process.Kill()
-			t.Fatal("faux never received the first request before the deadline")
+			t.Fatal("seed command never applied its first marker effect")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	// Comfortably inside the 5s `sleep 5` tool call, well before it could
-	// have finished on its own.
-	time.Sleep(500 * time.Millisecond)
 
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatalf("kill harness process: %v", err)
@@ -261,14 +246,29 @@ func TestSession_CrashMidToolThenResume(t *testing.T) {
 	id := sessionHeaderID(t, sess)
 
 	res := runHarness(t, proj, env, "--resume", id, "-p", "what happened?", "--output-format", "text")
-	if res.Code != 0 {
-		t.Fatalf("resume: exit code %d, stderr=%s", res.Code, res.Stderr)
+	if res.Code != 1 || !strings.Contains(res.Stderr, "tool effects could not be confirmed") {
+		t.Fatalf("resume: exit code %d, stderr=%s, want explicit uncertain failure", res.Code, res.Stderr)
 	}
-	if !strings.Contains(res.Stdout, "resumed done") {
-		t.Errorf("stdout = %q, want the resumed turn's reply", res.Stdout)
+	if body, err := os.ReadFile(marker); err != nil || string(body) != "x" {
+		t.Fatalf("marker after resume = %q, err=%v; command was replayed", body, err)
 	}
-
 	if n := toolResultCount(t, sess, "toolu_b1"); n != 1 {
-		t.Errorf("tool_result entries for toolu_b1 after resume = %d, want 1 (see this test's doc comment: --resume must replay the interrupted call exactly once, not abandon it or replay it more than once)", n)
+		t.Fatalf("tool_result entries after resume = %d, want one explicit error", n)
+	}
+	storage, err := jsonl.Open(sess, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	for _, entry := range storage.ScanEntries(session.EntryScan{}) {
+		result, ok := entry.Message.(msg.ToolResultMessage)
+		if ok && result.ToolCallID == "toolu_b1" {
+			if !result.IsError || !strings.Contains(msg.TextOf(result.Content), "effect is unknown") {
+				t.Fatalf("recovered result was not explicitly uncertain: %+v", result)
+			}
+		}
+	}
+	if got := len(srv.Requests()); got != 1 {
+		t.Fatalf("model requests after failed recovery = %d, want one original request", got)
 	}
 }

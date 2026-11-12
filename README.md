@@ -50,20 +50,59 @@ on provider; only the budget tier differs.
 curl -fsSL https://raw.githubusercontent.com/6cclab/kiln/main/scripts/install.sh | sh
 ```
 
-`scripts/install.sh` installs the latest release's binary for your OS/arch (macOS,
-Linux or Windows; amd64 or arm64) to `~/.local/bin`, verifying its checksum first.
+`scripts/install.sh` installs the latest release's binary for macOS or Linux
+(amd64 or arm64), or Windows (amd64, from Git Bash), to `~/.local/bin`, verifying
+its checksum first. On Windows, run the command above in Git Bash; the installed
+file is `kiln.exe`. The installer prints a PATH hint if your shell cannot find it.
 `--ref <vX.Y.Z>` picks a different release; `--ref <branch|commit>` builds that ref
 from source instead, as does `--from-source` or `--source <checkout>` (a local
 checkout, built in place of cloning). `--dir <path>` picks the install directory.
 Go is only needed when building from source (the version go.mod names, or newer);
 git too, unless `--source` is given. Running the script again updates kiln in
-place; a kiln that is already running keeps its old binary.
+place. On Unix, an already running kiln keeps its old binary until restart;
+on Windows, close kiln before updating so the executable can be replaced.
 
 From a checkout:
 
 ```bash
-make build                 # bin/kiln, installed to Go's bin dir (~/go/bin)
+sh scripts/install.sh --source .  # install this checkout, including kiln.exe on Windows
+make build                      # macOS/Linux: bin/kiln, installed to Go's bin dir
 ```
+
+## First run
+
+Choose a model before starting a session. A fresh install does not include one;
+the built-in default (`ollama/qwen3.8:latest`) only works on machines that
+already serve that exact model. To use a local Ollama model, install and start
+Ollama, pull a model suited to your machine, then use the exact ID kiln lists:
+
+```bash
+model_id=your-chosen-model-id # replace with a model ID suitable for your machine
+ollama pull "$model_id"
+kiln models ollama
+kiln --model "ollama/$model_id"
+```
+
+`kiln models` shows each available model's context and usable budget. If you use
+an API key or subscription instead, check `kiln providers`, run
+`kiln login <provider>`, then `kiln models <provider>` and
+`kiln --model <provider>/<model-id-from-list>`. Set `HARNESS_MODEL` to that
+`provider/model` value if you want it to be the default for future sessions.
+`kiln doctor --model <provider/model>` reports an unavailable model under
+problems; it is a diagnostic report and still exits with status 0.
+
+## Update and remove
+
+Run the install command again to update the copy in `~/.local/bin`, or use the
+same `--dir` you chose on installation. To remove that copy, delete
+`~/.local/bin/kiln` (macOS/Linux) or `~/.local/bin/kiln.exe` (Windows Git Bash);
+for a custom `--dir`, delete the file there instead. If you used `make build`,
+remove the binary from Go's bin directory (`go env GOBIN`, or `go env GOPATH` +
+`/bin` when GOBIN is empty). Check `command -v kiln` if multiple copies exist.
+Removing the binary leaves sessions and credentials in `~/.harness` and kiln
+settings and memory in `~/.kiln`; delete those separately only if you no longer
+want the data. Claude Code's `.claude` files and `~/.claude.json` are shared and
+should not be removed as part of uninstalling kiln.
 
 ## Use
 
@@ -78,7 +117,7 @@ kiln login anthropic      # log in with a Claude Pro/Max plan
 kiln doctor               # model, tier, tools, MCP, hooks, agents, logs, problems
 kiln mcp                  # MCP servers and their state
 kiln --debug              # debug-level run log, path announced at startup
-kiln --fullscreen         # alt-screen TUI: scrolling transcript, input pinned at the bottom
+kiln --inline             # native scrollback instead of the default full-screen TUI
 ```
 
 MCP servers connect in the background after the prompt appears: the footer shows
@@ -95,13 +134,14 @@ file; attach that file to a bug report.
 Inside a session: `/` for commands, `@` to reference a file, `!` to run a shell
 command directly, `#` to add a memory. `Ctrl+O` toggles the detailed transcript
 (tool output and reasoning expanded), `Shift+Tab` cycles permission mode, `Esc`
-interrupts, `Ctrl+C` twice exits. `Ctrl+F` toggles full-screen mode (also
-`--fullscreen`): the transcript scrolls inside the terminal with `PgUp`/`PgDn`,
+interrupts, `Ctrl+C` twice exits. `Ctrl+F` toggles full-screen mode
+(`--fullscreen` is accepted for compatibility): the transcript scrolls inside the terminal with `PgUp`/`PgDn`,
 `Shift+Up`/`Shift+Down` or the mouse wheel, new output follows only while you are
-at the bottom, and history re-wraps on resize. Toggling either way redraws the
+at the bottom, and history re-wraps on resize. Full-screen is the default;
+`--inline` uses the terminal's native scrollback. Toggling either way redraws the
 transcript from the session log, so shell (`!`) output and hook notices that are
-not part of the log do not survive the switch. Inline mode stays the default; the
-screen-reader flag always uses inline.
+not part of the log do not survive the switch. The screen-reader flag always
+uses inline.
 
 `@path` inlines the file so the model has it without spending a turn on a read,
 capped at the tier's per-result budget. `@screenshot.png` attaches the image
@@ -170,6 +210,9 @@ A git-tracked or symlinked `<repo>/.kiln/settings.local.json` is held until
 the folder is trusted - only its deny/ask rules apply until then. kiln stores
 its own scoped project observations in `~/.kiln/memory.db`; see
 [configuration](docs/configuration.md) for recall, correction, export and deletion.
+An optional run observer can retain reviewable, source-checked records of
+successful local Go test commands; it respects the user's learning and memory
+opt-outs and does not treat test success as proof of task correctness.
 Claude auto-memory remains read-only; the `/memory` slash command still opens
 Claude Code's `CLAUDE.md` files in your editor.
 
@@ -191,8 +234,8 @@ Claude Code's `CLAUDE.md` files in your editor.
 
 A `PreToolUse` hook may rewrite a command before it runs. Hooks are applied
 **before** the permission gate, so the gate judges what will actually execute
-rather than what the model proposed. A blocking `Stop` hook is reported to you;
-kiln does not re-prompt the model on it.
+rather than what the model proposed. A blocking `Stop` hook keeps the turn going
+and sends its reason to the model as a user message.
 
 ## Safety
 

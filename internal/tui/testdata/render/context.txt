@@ -5,3 +5,15 @@ kiln-large · 76k of 200k tokens
 ■ Tools                                                               4.0k    2%
 ■ Conversation                                                       64.0k   32%
 ■ Free                                                              124.0k   62%
+
+Selection
+in skill metadata review · pinned
+in agent metadata scout · suggested by metadata match
+out mcp metadata mcp__fixture__search · budget-dropped
+in memory record project:style · search hit
+
+Settings
+model kiln-large · --model
+effort high · --effort
+permission plan · --permission-mode
+auto-memory dir default project directory · default

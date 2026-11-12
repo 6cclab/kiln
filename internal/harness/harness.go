@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -51,6 +52,8 @@ type Options struct {
 	// CycleLimit stops after this many identical cycles of failed tool
 	// calls, for cycle lengths two through four. Zero disables detection.
 	CycleLimit int
+	// ProgressLoopLimit bounds successful no-progress loops. Zero disables it.
+	ProgressLoopLimit int
 
 	Retry RetryPolicy
 
@@ -72,12 +75,41 @@ type Options struct {
 // session.Storage. It owns the Events bus and the Hooks registry that every
 // Lane it creates shares.
 type Harness struct {
-	opts   Options
-	events *Events
-	hooks  *Hooks
+	opts              Options
+	events            *Events
+	hooks             *Hooks
+	toolBatchComplete ToolBatchCompleteFunc
 
 	mu    sync.Mutex
 	lanes map[string]*Lane
+}
+
+// ToolBatchCompletion is the durable outcome of one completed assistant tool
+// response. A nil completion means the response had no integration decision.
+type ToolBatchCompletion struct {
+	Status    string   `json:"status"`
+	Text      string   `json:"text"`
+	Artifacts []string `json:"artifacts,omitempty"`
+}
+
+const WorkerIntegrationNamespace = "kiln.worker.integration"
+
+// ToolBatchCompleteFunc runs after every result in an assistant response is
+// committed. It may write a durable intent before an external effect.
+type ToolBatchCompleteFunc func(context.Context, session.Storage, string, string, []msg.ToolCall, []msg.ToolResultMessage, bool) (*ToolBatchCompletion, error)
+
+// SetToolBatchComplete installs the single batch decision handler before a
+// lane starts. Its result is persisted with the branch notice and checkpoint.
+func (h *Harness) SetToolBatchComplete(fn ToolBatchCompleteFunc) {
+	h.mu.Lock()
+	h.toolBatchComplete = fn
+	h.mu.Unlock()
+}
+
+func (h *Harness) batchComplete() ToolBatchCompleteFunc {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.toolBatchComplete
 }
 
 // New validates opts and returns a ready Harness. It does not create any
@@ -91,6 +123,9 @@ func New(opts Options) (*Harness, error) {
 	}
 	if opts.CycleLimit != 0 && (opts.CycleLimit < 2 || opts.CycleLimit > 10) {
 		return nil, fmt.Errorf("harness: Options.CycleLimit must be zero or between 2 and 10")
+	}
+	if opts.ProgressLoopLimit != 0 && (opts.ProgressLoopLimit < 2 || opts.ProgressLoopLimit > 10) {
+		return nil, fmt.Errorf("harness: Options.ProgressLoopLimit must be zero or between 2 and 10")
 	}
 	if opts.Tools == nil {
 		opts.Tools = tool.NewSet()

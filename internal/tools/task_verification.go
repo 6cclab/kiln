@@ -64,8 +64,9 @@ type VerificationEvidence struct {
 // VerificationAttempt identifies a Bash result, including failed or unbound
 // runs, so a later attempt supersedes older evidence for the same command.
 type VerificationAttempt struct {
-	CallID  string `json:"callId"`
-	Command string `json:"command"`
+	CallID               string `json:"callId"`
+	Command              string `json:"command"`
+	DiscoveryUnsupported string `json:"discoveryUnsupported,omitempty"`
 }
 
 // VerificationBashTool wraps a Bash tool without changing its permission gate.
@@ -82,7 +83,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		panic("invalid built-in bash properties: " + err.Error())
 	}
 	properties["verificationFiles"] = json.RawMessage(`{"type":"array","maxItems":16,"items":{"type":"string"},"description":"Project files to fingerprint before and after this command. Evidence is recorded only when the command succeeds and files remain unchanged."}`)
-	properties["verificationDiscover"] = json.RawMessage(`{"type":"string","enum":["go"],"description":"Opt in to a partial bounded input snapshot for one literal go test ./path or go test ./path/... command. Includes selected package tree and Go module/workspace metadata. Imports, replacements, toolchain and environment are not discovered; unchanged evidence never means safe to skip verification. Unsupported or unavailable discovery records no evidence."}`)
+	properties["verificationDiscover"] = json.RawMessage(`{"type":"string","enum":["go"],"description":"Opt in to a partial bounded input snapshot for a literal go test ./path, go test ./path/..., or go test ./... command. Includes in-module imports, local go.mod replacement targets, and Go module/workspace metadata. Shell expansion, flags, compound commands, build tags, cgo, toolchain and environment are unsupported; unchanged evidence never means safe to skip verification. Unsupported or unavailable discovery records no evidence."}`)
 	properties["verificationDirectories"] = json.RawMessage(`{"type":"array","maxItems":8,"items":{"type":"string"},"description":"Project directories to fingerprint recursively, including regular file contents, permissions and membership. .git is excluded. Evidence requires a successful command and unchanged inputs."}`)
 	properties["verificationDirectoryFileLimit"] = json.RawMessage(`{"type":"integer","minimum":1,"maximum":512,"description":"Maximum regular files across all declared files and directories (default 128, hard ceiling 512). Tree entries, including subdirectories, also have a shared hard ceiling of 512. Above limit, evidence is unavailable."}`)
 	properties["verificationDirectoryByteLimit"] = json.RawMessage(`{"type":"integer","minimum":1,"maximum":67108864,"description":"Maximum total bytes across all declared files and directories (default and hard ceiling 67108864). Above limit, evidence is unavailable."}`)
@@ -103,11 +104,15 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		requestedFiles := append([]string(nil), args.VerificationFiles...)
 		requestedDirs := append([]string(nil), args.VerificationDirectories...)
 		var inferred discoveredVerificationInputs
+		var discoveryReason string
 		discoveryValid := args.VerificationDiscover == ""
 		if args.VerificationDiscover == "go" {
 			var discoverErr error
 			inferred, discoverErr = discoverGoVerificationInputs(inv.Cwd, args.Command, allowRead)
 			discoveryValid = discoverErr == nil
+			if discoverErr != nil {
+				discoveryReason = discoverErr.Error()
+			}
 			if discoveryValid {
 				requestedFiles = appendUniqueVerificationPaths(requestedFiles, inferred.files)
 				requestedDirs = appendUniqueVerificationPaths(requestedDirs, inferred.directories)
@@ -120,6 +125,9 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 			before, err = fingerprintFiles(ctx, inv.Cwd, requestedFiles, allowRead)
 			if err != nil {
 				before = nil
+				if args.VerificationDiscover == "go" {
+					discoveryReason = err.Error()
+				}
 			}
 		}
 		fileLimit := effectiveDirectoryFileLimit(args.DirectoryFileLimit)
@@ -139,7 +147,11 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 			byteLimit -= used
 		}
 		if discoveryValid && len(requestedDirs) > 0 && len(requestedDirs) <= maxVerificationDirectories && (len(requestedFiles) == 0 || len(before) > 0) && validLimits && fileLimit > 0 && byteLimit > 0 {
-			beforeDirs, _ = fingerprintDirectories(ctx, inv.Cwd, requestedDirs, allowRead, fileLimit, byteLimit)
+			var err error
+			beforeDirs, err = fingerprintDirectories(ctx, inv.Cwd, requestedDirs, allowRead, fileLimit, byteLimit, args.VerificationDiscover == "go")
+			if err != nil && args.VerificationDiscover == "go" {
+				discoveryReason = err.Error()
+			}
 		}
 		result, err := base.Execute(ctx, raw, update, inv)
 		if err == nil && args.Command != "" && len(args.Command) <= maxVerificationCommandBytes {
@@ -148,7 +160,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 				if details == nil {
 					details = make(map[string]json.RawMessage)
 				}
-				attempt, marshalErr := json.Marshal(VerificationAttempt{CallID: inv.ToolCallID, Command: args.Command})
+				attempt, marshalErr := json.Marshal(VerificationAttempt{CallID: inv.ToolCallID, Command: args.Command, DiscoveryUnsupported: discoveryReason})
 				if marshalErr == nil {
 					details["taskVerificationAttempt"] = attempt
 					result.Details, _ = json.Marshal(details)
@@ -174,7 +186,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		}
 		var afterDirs []VerificationDirectory
 		if len(beforeDirs) > 0 {
-			afterDirs, hashErr = fingerprintDirectories(ctx, inv.Cwd, requestedDirs, allowRead, fileLimit, byteLimit)
+			afterDirs, hashErr = fingerprintDirectories(ctx, inv.Cwd, requestedDirs, allowRead, fileLimit, byteLimit, args.VerificationDiscover == "go")
 		}
 		if hashErr != nil || !sameDirectories(beforeDirs, afterDirs) {
 			return result, nil
@@ -279,7 +291,7 @@ func VerificationFreshContext(ctx context.Context, cwd string, proof Verificatio
 	if len(proof.Directories) == 0 {
 		return true
 	}
-	currentDirs, err := fingerprintDirectories(ctx, cwd, directoryPaths(proof.Directories), allowRead, proof.DirectoryFileLimit, proof.DirectoryByteLimit)
+	currentDirs, err := fingerprintDirectories(ctx, cwd, directoryPaths(proof.Directories), allowRead, proof.DirectoryFileLimit, proof.DirectoryByteLimit, proof.Discovery == goPartialDiscovery)
 	return err == nil && sameDirectories(proof.Directories, currentDirs)
 }
 
@@ -295,7 +307,7 @@ func sameFingerprints(a, b []VerificationFile) bool {
 	return true
 }
 
-func fingerprintFiles(ctx context.Context, cwd string, paths []string, allowRead func(string) bool) ([]VerificationFile, error) {
+func fingerprintFiles(ctx context.Context, cwd string, paths []string, allowRead func(string) bool, external ...bool) ([]VerificationFile, error) {
 	if len(paths) == 0 || len(paths) > maxVerificationFiles || cwd == "" || allowRead == nil {
 		return nil, fmt.Errorf("invalid verification file set")
 	}
@@ -306,30 +318,39 @@ func fingerprintFiles(ctx context.Context, cwd string, paths []string, allowRead
 	out := make([]VerificationFile, 0, len(paths))
 	seen := map[string]bool{}
 	var totalBytes int64
+	allowExternal := len(external) > 0 && external[0]
 	for _, given := range paths {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if !validRelativeVerificationPath(given) {
+		outside := validGoExternalVerificationPath(given)
+		if !validRelativeVerificationPath(given) && !(allowExternal && outside) {
 			return nil, fmt.Errorf("verification path must be relative")
 		}
 		clean := filepath.Clean(given)
-		if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || seen[clean] {
+		if clean == "." || outside && !allowExternal || seen[clean] {
 			return nil, fmt.Errorf("invalid verification path")
 		}
 		seen[clean] = true
 		if !allowRead(clean) {
 			return nil, fmt.Errorf("verification file is not readable")
 		}
-		full := filepath.Join(root, clean)
-		for cursor := full; cursor != root; cursor = filepath.Dir(cursor) {
+		full := verificationResolvedPath(root, clean)
+		stop := root
+		if outside {
+			stop = verificationCommonAncestor(root, full)
+		}
+		if err := verificationWalkAncestors(ctx, full, stop, filepath.Dir, func(cursor string) error {
 			info, err := os.Lstat(cursor)
 			if err != nil || info.Mode()&os.ModeSymlink != 0 {
-				return nil, fmt.Errorf("verification path contains a symlink or is missing")
+				return fmt.Errorf("verification path contains a symlink or is missing")
 			}
 			if cursor == full && !info.Mode().IsRegular() {
-				return nil, fmt.Errorf("verification file is not regular")
+				return fmt.Errorf("verification file is not regular")
 			}
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 		file, err := os.Open(full)
 		if err != nil {
@@ -418,7 +439,7 @@ func validVerificationDirectories(proof VerificationEvidence) bool {
 	entries := 0
 	seen := make(map[string]bool)
 	for _, dir := range proof.Directories {
-		if !validRelativeVerificationPath(dir.Path) || seen[dir.Path] || dir.Mode > 0777 {
+		if !validVerificationDirectoryPath(dir.Path, proof.Discovery) || seen[dir.Path] || dir.Mode > 0777 {
 			return false
 		}
 		if len(dir.Subdirectories) > maxVerificationDirectoryFiles {
@@ -428,7 +449,7 @@ func validVerificationDirectories(proof VerificationEvidence) bool {
 		last := ""
 		for _, sub := range dir.Subdirectories {
 			entries++
-			if !validRelativeVerificationPath(sub.Path) || !strings.HasPrefix(sub.Path, dir.Path+string(filepath.Separator)) || sub.Mode > 0777 || last != "" && sub.Path <= last {
+			if !validVerificationDirectoryChildPath(sub.Path, dir.Path, proof.Discovery) || sub.Mode > 0777 || last != "" && sub.Path <= last {
 				return false
 			}
 			last = sub.Path
@@ -436,7 +457,7 @@ func validVerificationDirectories(proof VerificationEvidence) bool {
 		last = ""
 		for _, file := range dir.Files {
 			entries++
-			if !validRelativeVerificationPath(file.Path) || !strings.HasPrefix(file.Path, dir.Path+string(filepath.Separator)) || file.Mode > 0777 || len(file.SHA256) != 64 || last != "" && file.Path <= last {
+			if !validVerificationDirectoryChildPath(file.Path, dir.Path, proof.Discovery) || file.Mode > 0777 || len(file.SHA256) != 64 || last != "" && file.Path <= last {
 				return false
 			}
 			if _, err := hex.DecodeString(file.SHA256); err != nil {
@@ -447,6 +468,61 @@ func validVerificationDirectories(proof VerificationEvidence) bool {
 		}
 	}
 	return files <= proof.DirectoryFileLimit && entries <= maxVerificationDirectoryFiles
+}
+
+func validVerificationDirectoryPath(path, discovery string) bool {
+	return path == "." || validRelativeVerificationPath(path) || discovery == goPartialDiscovery && validGoExternalVerificationPath(path)
+}
+
+func validVerificationDirectoryChildPath(path, parent, discovery string) bool {
+	if parent == "." {
+		return validRelativeVerificationPath(path)
+	}
+	if !strings.HasPrefix(path, parent+string(filepath.Separator)) {
+		return false
+	}
+	return validRelativeVerificationPath(path) || discovery == goPartialDiscovery && validGoExternalVerificationPath(path)
+}
+
+func verificationCommonAncestor(root, full string) string {
+	for {
+		rel, err := filepath.Rel(root, full)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return root
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			return root
+		}
+		root = parent
+	}
+}
+
+// verificationWalkAncestors stops with unavailable evidence if the target
+// reaches its own volume root before the source's common ancestor. This can
+// happen for absolute local replacements on another Windows drive or share.
+func verificationWalkAncestors(ctx context.Context, full, stop string, parent func(string) string, inspect func(string) error) error {
+	for cursor := full; cursor != stop; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := inspect(cursor); err != nil {
+			return err
+		}
+		next := parent(cursor)
+		if next == cursor {
+			return fmt.Errorf("verification ancestor unavailable across volumes")
+		}
+		cursor = next
+	}
+	return nil
+}
+
+func verificationResolvedPath(root, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(root, path)
 }
 
 func directoryPaths(dirs []VerificationDirectory) []string {
@@ -469,7 +545,7 @@ func sameDirectories(a, b []VerificationDirectory) bool {
 	return true
 }
 
-func fingerprintDirectories(ctx context.Context, cwd string, paths []string, allowRead func(string) bool, fileLimit int, byteLimit int64) ([]VerificationDirectory, error) {
+func fingerprintDirectories(ctx context.Context, cwd string, paths []string, allowRead func(string) bool, fileLimit int, byteLimit int64, external ...bool) ([]VerificationDirectory, error) {
 	fileLimit = effectiveDirectoryFileLimit(fileLimit)
 	byteLimit = effectiveDirectoryByteLimit(byteLimit)
 	if len(paths) == 0 || len(paths) > maxVerificationDirectories || fileLimit < 1 || fileLimit > maxVerificationDirectoryFiles || byteLimit < 1 || byteLimit > maxVerificationDirectoryBytes || cwd == "" || allowRead == nil {
@@ -484,20 +560,33 @@ func fingerprintDirectories(ctx context.Context, cwd string, paths []string, all
 	var totalBytes int64
 	fileCount := 0
 	entryCount := 0
+	allowExternal := len(external) > 0 && external[0]
+	discovery := ""
+	if allowExternal {
+		discovery = goPartialDiscovery
+	}
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if !validRelativeVerificationPath(path) || seen[path] || !allowRead(path) {
+		outside := validGoExternalVerificationPath(path)
+		if !validVerificationDirectoryPath(path, discovery) || seen[path] || !allowRead(path) {
 			return nil, fmt.Errorf("verification directory unavailable")
 		}
 		seen[path] = true
-		full := filepath.Join(root, path)
-		for cursor := full; cursor != root; cursor = filepath.Dir(cursor) {
+		full := verificationResolvedPath(root, path)
+		stop := root
+		if outside {
+			stop = verificationCommonAncestor(root, full)
+		}
+		if err := verificationWalkAncestors(ctx, full, stop, filepath.Dir, func(cursor string) error {
 			info, err := os.Lstat(cursor)
 			if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-				return nil, fmt.Errorf("verification directory unavailable")
+				return fmt.Errorf("verification directory unavailable")
 			}
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 		rootInfo, err := os.Lstat(full)
 		if err != nil {
@@ -540,7 +629,10 @@ func fingerprintDirectories(ctx context.Context, cwd string, paths []string, all
 				}
 				walkPath := filepath.Join(parent, name)
 				rel, err := filepath.Rel(root, walkPath)
-				if err != nil || !validRelativeVerificationPath(rel) || !allowRead(rel) {
+				if filepath.IsAbs(path) {
+					rel, err = walkPath, nil
+				}
+				if err != nil || !validVerificationDirectoryChildPath(rel, path, discovery) || !allowRead(rel) {
 					return fmt.Errorf("verification path unavailable")
 				}
 				info, err := os.Lstat(walkPath)
@@ -561,7 +653,7 @@ func fingerprintDirectories(ctx context.Context, cwd string, paths []string, all
 				if fileCount > fileLimit || info.Size() < 0 || info.Size() > maxVerificationFileBytes || totalBytes+info.Size() > byteLimit {
 					return errVerificationBounds
 				}
-				fingerprints, err := fingerprintFiles(ctx, cwd, []string{rel}, allowRead)
+				fingerprints, err := fingerprintFiles(ctx, cwd, []string{rel}, allowRead, allowExternal)
 				if err != nil {
 					return err
 				}

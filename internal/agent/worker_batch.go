@@ -140,7 +140,8 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 		return preparedWorkerBatch{}, err
 	}
 	batch := preparedWorkerBatch{inspection: WorkerBatchInspection{BaseCommit: head, Artifacts: len(artifacts)}, baseline: baseline}
-	seen := map[string]int{}
+	seen := map[string]bool{}
+	conflicts := map[string]bool{}
 	for i, artifact := range artifacts {
 		if err := ctx.Err(); err != nil {
 			return preparedWorkerBatch{}, err
@@ -185,13 +186,14 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 			if err := workerBatchPathSafe(repo, p); err != nil {
 				return preparedWorkerBatch{}, err
 			}
-			for prior, owner := range seen {
+			for prior := range seen {
 				folded, foldedPrior := strings.ToLower(p), strings.ToLower(prior)
 				if folded == foldedPrior || strings.HasPrefix(folded, foldedPrior+"/") || strings.HasPrefix(foldedPrior, folded+"/") || workerBatchSameFile(repo, p, prior) {
-					return preparedWorkerBatch{}, fmt.Errorf("worker artifacts %d and %d overlap at %q", owner, i+1, p)
+					conflicts[p] = true
+					conflicts[prior] = true
 				}
 			}
-			seen[p] = i + 1
+			seen[p] = true
 			batch.inspection.Files = append(batch.inspection.Files, p)
 		}
 		batch.patch = append(batch.patch, patch...)
@@ -201,6 +203,14 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 	}
 	batch.inspection.Bytes = len(batch.patch)
 	sort.Strings(batch.inspection.Files)
+	if len(conflicts) != 0 {
+		paths := make([]string, 0, len(conflicts))
+		for p := range conflicts {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		return preparedWorkerBatch{}, fmt.Errorf("worker artifacts overlap at: %s", strings.Join(paths, ", "))
+	}
 	if _, err := gitRunInput(ctx, repo, batch.patch, "apply", "--check", "--binary", "-"); err != nil {
 		return preparedWorkerBatch{}, fmt.Errorf("worker batch conflict: %w", err)
 	}

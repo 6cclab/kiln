@@ -24,7 +24,8 @@
 #                    [KILN_REPO, default https://github.com/6cclab/kiln.git]
 #
 # Never uses sudo. The binary is copied next to the target and renamed
-# into place, so a kiln that is already running keeps its old binary. A
+# into place. A running kiln keeps its old binary on Unix; close kiln before
+# updating on Windows, where the OS may lock a running executable. A
 # release's checksum is always verified before it is installed; a mismatch
 # aborts rather than falling back to building from source.
 set -eu
@@ -43,6 +44,13 @@ MODULE=github.com/andrepato/harness
 # tests use it with an explicit --ref. Not meant for everyday use.
 RELEASE_BASE=${KILN_RELEASE_BASE:-}
 RELEASE_API=${KILN_RELEASE_API:-https://api.github.com/repos/6cclab/kiln/releases/latest}
+
+# Git Bash can invoke `kiln` through PATHEXT, but the installed PE file must
+# retain .exe so Windows can find and launch it by that name.
+case $(uname -s) in
+	MINGW* | MSYS* | CYGWIN*) INSTALL_BIN=kiln.exe ;;
+	*) INSTALL_BIN=kiln ;;
+esac
 
 say() { printf 'kiln install: %s\n' "$*"; }
 die() { printf 'kiln install: %s\n' "$*" >&2; exit 1; }
@@ -65,15 +73,17 @@ done
 WORK=$(mktemp -d 2>/dev/null || mktemp -d -t kiln-install)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-# atomic_install BIN VERSION: copies BIN next to $INSTALL_DIR/kiln and
-# renames it into place, so a kiln that is already running (reading its
-# old inode) keeps working, then reports where it landed.
+# atomic_install BIN VERSION: copies BIN next to its target, then renames it
+# into place. On Unix, a running kiln keeps its old inode; Windows may refuse
+# to replace a running executable, in which case the old copy remains.
 atomic_install() {
 	mkdir -p "$INSTALL_DIR" || die "cannot create $INSTALL_DIR"
-	cp "$1" "$INSTALL_DIR/.kiln.tmp.$$"
-	chmod 755 "$INSTALL_DIR/.kiln.tmp.$$"
-	mv -f "$INSTALL_DIR/.kiln.tmp.$$" "$INSTALL_DIR/kiln"
-	say "installed $INSTALL_DIR/kiln ($2)"
+	tmp_bin="$INSTALL_DIR/.kiln.tmp.$$"
+	[ "$INSTALL_BIN" = kiln.exe ] && tmp_bin="$tmp_bin.exe"
+	cp "$1" "$tmp_bin"
+	chmod 755 "$tmp_bin"
+	mv -f "$tmp_bin" "$INSTALL_DIR/$INSTALL_BIN"
+	say "installed $INSTALL_DIR/$INSTALL_BIN ($2)"
 }
 
 # looks_like_version_tag REF: true for vX.Y(.Z...), the shape a release
@@ -267,10 +277,10 @@ build_from_source() {
 
 	version=$(git -C "$src" describe --tags --always --dirty 2>/dev/null || echo dev)
 	say "building kiln $version"
-	(cd "$src" && go build -trimpath -ldflags "-X $MODULE/internal/cli.Version=$version" -o "$WORK/bin/kiln" ./cmd/kiln) ||
+	(cd "$src" && go build -trimpath -ldflags "-X $MODULE/internal/cli.Version=$version" -o "$WORK/bin/$INSTALL_BIN" ./cmd/kiln) ||
 		die "build failed"
 
-	src_bin=$WORK/bin/kiln
+	src_bin=$WORK/bin/$INSTALL_BIN
 	src_version=$version
 }
 
@@ -315,6 +325,6 @@ case ":$PATH:" in
 	printf '    export PATH="%s:$PATH"\n' "$INSTALL_DIR" ;;
 esac
 other=$(command -v kiln 2>/dev/null || true)
-if [ -n "$other" ] && [ "$other" != "$INSTALL_DIR/kiln" ]; then
+if [ -n "$other" ] && [ "$other" != "$INSTALL_DIR/$INSTALL_BIN" ]; then
 	say "note: \`kiln\` on your PATH is currently $other, not the copy just installed"
 fi

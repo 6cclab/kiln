@@ -1,10 +1,20 @@
   [fg=#a39781]faux/faux-1 · 5k of 128k tokens[/]                                                                   
   [fg=#86b4d4]━[/] [fg=#c3a3d6]━━[/] [fg=#9bc46e]━[/] [fg=#3f372c]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/]  
   ■ System prompt                                                                          N     P  
-  [fg=#c3a3d6]■[/] [fg=#ece4d4]Tools[/]                                                                               [fg=#a39781]3.9k[/] [fg=#a39781]   3%[/]  
+  [fg=#c3a3d6]■[/] [fg=#ece4d4]Tools[/]                                                                               [fg=#a39781]4.0k[/] [fg=#a39781]   3%[/]  
   [fg=#e9a64b]■[/] [fg=#ece4d4]Files read[/]                                                                             [fg=#a39781]0[/] [fg=#a39781]   0%[/]  
   ■ Conversation                                                                           N     P  
   [fg=#3f372c]■[/] [fg=#ece4d4]Free[/]                                                                              [fg=#a39781]123.2k[/] [fg=#a39781]  96%[/]  
+                                                                                                    
+  [fg=#a39781]Selection[/]                                                                                         
+  in agent metadata scout · suggested by metadata match                                             
+  in agent result scout · exact-name invocation                                                     
+                                                                                                    
+  [fg=#a39781]Settings[/]                                                                                          
+  model faux/faux-1 · HARNESS_MODEL                                                                 
+  effort model default · default                                                                    
+  permission manual · --permission-mode                                                             
+  auto-memory dir default project directory · default                                               
   [fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────[/]  
   [fg=#e9a64b]›[/]  [fg=#7d7262]describe a task · / for commands · @ to add files[/]                                              
   [fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────[/]  

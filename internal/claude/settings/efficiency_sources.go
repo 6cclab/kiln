@@ -17,13 +17,15 @@ func efficiencyPointers(s Settings) map[string]any {
 		"requestBudget.maxUSD":        s.RequestBudget.MaxUSD,
 		"orchestration.maxConcurrent": s.Orchestration.MaxConcurrent, "orchestration.maxDispatches": s.Orchestration.MaxDispatches,
 		"orchestration.maxDepth": s.Orchestration.MaxDepth, "orchestration.timeoutSeconds": s.Orchestration.TimeoutSeconds,
-		"orchestration.isolatedWorkers":      s.Orchestration.IsolatedWorkers,
-		"orchestration.snapshotDirty":        s.Orchestration.SnapshotDirty,
-		"orchestration.autoIntegrate":        s.Orchestration.AutoIntegrate,
-		"runtimeEfficiency.readCache":        s.RuntimeEfficiency.ReadCache,
-		"runtimeEfficiency.readCacheEntries": s.RuntimeEfficiency.ReadCacheEntries,
-		"runtimeEfficiency.readCacheBytes":   s.RuntimeEfficiency.ReadCacheBytes,
-		"runtimeEfficiency.progressLimit":    s.RuntimeEfficiency.ProgressLimit,
+		"orchestration.isolatedWorkers":       s.Orchestration.IsolatedWorkers,
+		"orchestration.isolatedShell":         s.Orchestration.IsolatedShell,
+		"orchestration.snapshotDirty":         s.Orchestration.SnapshotDirty,
+		"orchestration.autoIntegrate":         s.Orchestration.AutoIntegrate,
+		"runtimeEfficiency.readCache":         s.RuntimeEfficiency.ReadCache,
+		"runtimeEfficiency.readCacheEntries":  s.RuntimeEfficiency.ReadCacheEntries,
+		"runtimeEfficiency.readCacheBytes":    s.RuntimeEfficiency.ReadCacheBytes,
+		"runtimeEfficiency.progressLimit":     s.RuntimeEfficiency.ProgressLimit,
+		"runtimeEfficiency.progressLoopLimit": s.RuntimeEfficiency.ProgressLoopLimit,
 	}
 }
 

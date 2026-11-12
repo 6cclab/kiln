@@ -1074,6 +1074,15 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		b.lastEntryID = ev.EntryID
 		b.synthMu.Unlock()
 
+	case harness.EventWorkerIntegration:
+		if ev.IntegrationReplayed {
+			break
+		} // the persisted entry was replayed with the transcript
+		// The notice has its own durable session entry. Commit the live
+		// system note without recording a second synthetic replay block.
+		b.FreezeBefore()
+		b.Commit(append([]string{""}, RenderNote(ev.IntegrationText, ruleWidth())...))
+
 	case harness.EventMessageStart:
 		// A turn can run several assistant messages back to back, each
 		// separated by its own tool calls (turn.go emits one

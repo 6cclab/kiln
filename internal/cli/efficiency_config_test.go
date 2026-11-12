@@ -32,6 +32,135 @@ func TestEfficiencyConfigDoesNotExposeEnvironment(t *testing.T) {
 	}
 }
 
+func TestEfficiencyConfigReportsWorkerShellAndProgressLoopProvenance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsPath := filepath.Join(home, ".kiln", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"orchestration":{"isolatedWorkers":true,"isolatedShell":true,"autoIntegrate":true},"runtimeEfficiency":{"progressLoopLimit":3}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := EfficiencyConfig(Args{}, &out, &stderr); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	var report struct {
+		Orchestration map[string]any    `json:"orchestration"`
+		Runtime       map[string]any    `json:"runtimeEfficiency"`
+		Sources       map[string]string `json:"sources"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Orchestration["isolatedShell"] != true || report.Orchestration["autoIntegrate"] != true || report.Runtime["progressLoopLimit"] != float64(3) {
+		t.Fatalf("effective controls absent: %s", out.String())
+	}
+	for _, key := range []string{"orchestration.isolatedShell", "orchestration.autoIntegrate", "runtimeEfficiency.progressLoopLimit"} {
+		if got := report.Sources[key]; got != settingsPath {
+			t.Fatalf("%s source = %q, want %q", key, got, settingsPath)
+		}
+	}
+}
+
+func TestEfficiencyConfigReportsOtherSettingSources(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(cwd)
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"model":"faux/faux-1","autoMemoryEnabled":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := EfficiencyConfig(Args{}, &out, &stderr); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	var report struct {
+		Sources    map[string]string `json:"sources"`
+		Settings   map[string]any    `json:"contextSettings"`
+		Configured map[string]any    `json:"configuredSettings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Sources["model"] != path || report.Sources["autoMemoryEnabled"] != path || report.Sources["effortLevel"] != "default" || report.Settings["model"] != "faux/faux-1" || report.Configured["autoMemoryEnabled"] != false {
+		t.Fatal(out.String())
+	}
+}
+
+func TestEfficiencyConfigRuntimeOverridePrecedenceAndRejectedMemoryDir(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(cwd)
+	file := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(`{"model":"faux/faux-1","effortLevel":"low","permissions":{"defaultMode":"acceptEdits"},"autoMemoryDirectory":"/"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	args := Args{Model: "faux/faux-2", Effort: "high", PermissionMode: "plan"}
+	if code := EfficiencyConfig(args, &out, &stderr); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	var report struct {
+		Sources  map[string]string `json:"sources"`
+		Settings map[string]any    `json:"contextSettings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Settings["model"] != "faux/faux-2" || report.Sources["model"] != "--model" || report.Settings["effortLevel"] != "high" || report.Sources["effortLevel"] != "--effort" || report.Settings["permissionMode"] != "plan" || report.Sources["permissions.defaultMode"] != "--permission-mode" {
+		t.Fatal(out.String())
+	}
+	if report.Sources["autoMemoryDirectory"] != "default" || report.Settings["autoMemoryDirectory"] == "/" {
+		t.Fatal(out.String())
+	}
+}
+
+func TestEfficiencyConfigEnvironmentAndUntrustedDirectoryPrecedence(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("HARNESS_MODEL", "faux/faux-2")
+	t.Setenv("HARNESS_PERMISSION_MODE", "dontAsk")
+	t.Chdir(cwd)
+	userFile := filepath.Join(home, ".claude", "settings.json")
+	projectFile := filepath.Join(cwd, ".claude", "settings.json")
+	for file, contents := range map[string]string{
+		userFile:    `{"model":"opus","autoMemoryDirectory":"~/accepted-memory"}`,
+		projectFile: `{"autoMemoryDirectory":"/project-memory"}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out, stderr bytes.Buffer
+	if code := EfficiencyConfig(Args{}, &out, &stderr); code != 0 {
+		t.Fatal(stderr.String())
+	}
+	var report struct {
+		Sources  map[string]string `json:"sources"`
+		Settings map[string]any    `json:"contextSettings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Settings["model"] != "faux/faux-2" || report.Sources["model"] != "HARNESS_MODEL" || report.Settings["permissionMode"] != "dontAsk" || report.Sources["permissions.defaultMode"] != "HARNESS_PERMISSION_MODE" {
+		t.Fatal(out.String())
+	}
+	if report.Settings["autoMemoryDirectory"] != filepath.Join(home, "accepted-memory") || report.Sources["autoMemoryDirectory"] != userFile {
+		t.Fatal(out.String())
+	}
+}
+
 func TestEfficiencyConfigReportsEffectiveLearnedRouting(t *testing.T) {
 	home, cwd := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)

@@ -3,12 +3,16 @@
 package e2e
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +56,143 @@ func hooksTestdataDir(t *testing.T) string {
 func hookScript(t *testing.T, name string) string {
 	t.Helper()
 	return filepath.Join(hooksTestdataDir(t), name)
+}
+
+// A process from another test can share a generic command marker. Keep one
+// owned control alive while checking each timeout test, proving a global pgrep
+// would report a false leak. The test removes the control on every exit path.
+func startGlobalMarkerControl(t *testing.T, marker string) {
+	t.Helper()
+	cmd := exec.Command("/bin/bash", "-c", `exec -a "$1" sleep 30`, "control", marker)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		command, present, err := processCommand(cmd.Process.Pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if present && strings.Contains(command, marker) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("unrelated control %d never started with marker %q", cmd.Process.Pid, marker)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	out, err := exec.Command("pgrep", "-f", marker).CombinedOutput()
+	if err != nil || !strings.Contains("\n"+strings.TrimSpace(string(out))+"\n", "\n"+strconv.Itoa(cmd.Process.Pid)+"\n") {
+		t.Fatalf("global pgrep did not find unrelated control %d: %v, %s", cmd.Process.Pid, err, out)
+	}
+}
+
+func processMarker(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(sum[:8])
+}
+
+// ps exits 1 with no output for an absent PID on macOS and Linux. Any other
+// failure, including a missing ps executable or an empty successful lookup,
+// is unknown and must fail the cleanup assertion.
+func processCommand(pid int) (command string, present bool, err error) {
+	out, runErr := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").CombinedOutput()
+	command = strings.TrimSpace(string(out))
+	if runErr == nil {
+		if command == "" {
+			return "", false, fmt.Errorf("ps returned an empty command for PID %d", pid)
+		}
+		return command, true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(runErr, &exit) && exit.ExitCode() == 1 && command == "" {
+		return "", false, nil
+	}
+	return "", false, fmt.Errorf("ps lookup for PID %d failed: %w: %s", pid, runErr, command)
+}
+
+func assertTimedOutProcessGone(t *testing.T, pidFile, marker string) {
+	t.Helper()
+	if err := timedOutProcessGone(pidFile, marker); err != nil {
+		t.Error(err)
+	}
+}
+
+func timedOutProcessGone(pidFile, marker string) error {
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		return fmt.Errorf("timed-out process did not record its PID: %w", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 {
+		return fmt.Errorf("invalid timed-out process PID %q: %v", raw, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		command, present, err := processCommand(pid)
+		if err != nil {
+			return err
+		}
+		if !present || !strings.Contains(command, marker) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("owned timed-out process %d still running: %s", pid, command)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestTimedOutProcessAssertionDetectsUncleanedOwnedProcess(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "control.pid")
+	marker := "kiln-timeout-control-" + processMarker(filepath.Dir(pidFile))
+	cmd := exec.Command("/bin/bash", "-c", `printf '%s\n' "$$" > "$1"; exec -a "$2" sleep 30`, "control", pidFile, marker)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		command, present, err := processCommand(cmd.Process.Pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if present && strings.Contains(command, marker) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("negative-control process never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := timedOutProcessGone(pidFile, marker); err == nil || !strings.Contains(err.Error(), "still running") {
+		t.Fatalf("uncleaned process escaped the timeout assertion: %v", err)
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if err := timedOutProcessGone(pidFile, marker); err != nil {
+		t.Fatalf("cleaned process still reported as live: %v", err)
+	}
+}
+
+func TestTimedOutProcessAssertionFailsOnUnknownLookup(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "unknown.pid")
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir()) // ps is unavailable; absence cannot be inferred
+	if err := timedOutProcessGone(pidFile, "unrelated-marker"); err == nil || !strings.Contains(err.Error(), "ps lookup") {
+		t.Fatalf("unknown process status was treated as gone: %v", err)
+	}
 }
 
 // writeHookSettings writes a scratch .claude/settings.json under proj
@@ -275,14 +416,21 @@ func TestHooks_SessionStartAndEnd(t *testing.T) {
 	}
 }
 
-// TestHooks_Timeout_KillsSleepForever wires sleep-forever.sh (sleeps 30s)
-// on PreToolUse with a 1-second hook timeout, and checks the run completes
-// within ~5s (the hook is killed rather than awaited) and that no
-// sleep-forever.sh process is left running afterward.
+// TestHooks_Timeout_KillsSleepForever runs a uniquely marked 30-second hook
+// with a 1-second timeout. It checks the run completes promptly and its own
+// recorded process is gone, even while an unrelated process has the old
+// shared fixture name in its command line.
 func TestHooks_Timeout_KillsSleepForever(t *testing.T) {
 	addr, _ := startFaux(t, readCallScript)
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
+	pidFile := filepath.Join(t.TempDir(), "hook.pid")
+	marker := "kiln-hook-timeout-" + processMarker(proj)
+	script := filepath.Join(proj, "hook-timeout.sh")
+	contents := fmt.Sprintf("#!/bin/bash\ncat >/dev/null\nprintf '%%s\\n' \"$$\" > %q\nexec -a %q sleep 30\n", pidFile, marker)
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	settings := map[string]any{
 		"hooks": map[string]any{
@@ -290,7 +438,7 @@ func TestHooks_Timeout_KillsSleepForever(t *testing.T) {
 				{
 					"matcher": "*",
 					"hooks": []map[string]any{
-						{"type": "command", "command": hookScript(t, "sleep-forever.sh"), "timeout": 1},
+						{"type": "command", "command": script, "timeout": 1},
 					},
 				},
 			},
@@ -320,11 +468,6 @@ func TestHooks_Timeout_KillsSleepForever(t *testing.T) {
 	}
 	_ = res // exit code is not asserted here; the timeout behavior is.
 
-	// Give the OS a brief moment to reap the killed process's entry before
-	// checking for stragglers.
-	time.Sleep(200 * time.Millisecond)
-	out, _ := exec.Command("pgrep", "-f", "sleep-forever.sh").CombinedOutput()
-	if strings.TrimSpace(string(out)) != "" {
-		t.Errorf("sleep-forever.sh still running after the hook should have been killed: pgrep output:\n%s", out)
-	}
+	startGlobalMarkerControl(t, "sleep-forever.sh")
+	assertTimedOutProcessGone(t, pidFile, marker)
 }

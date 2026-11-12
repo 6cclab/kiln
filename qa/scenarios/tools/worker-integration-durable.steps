@@ -1,0 +1,16 @@
+# The visible integration decision must survive in the session and checkout.
+@faux testdata/faux/qa/worker-integration-durable.yaml
+@env HARNESS_FAUX_EXTRA_MODELS=faux-3
+@setup mkdir -p {HOME}/.kiln
+@setup printf '%s\n' '{"orchestration":{"isolatedWorkers":true,"autoIntegrate":true},"modelRoles":{"fast":"faux/faux-2","heavy":"faux/faux-3"}}' > {HOME}/.kiln/settings.json
+@args --permission-mode bypassPermissions
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SEND run two workers
+WAITFOR /integrated 2 patches/ 90
+SHOT integrated-patches
+EXPECT /integrated 2 patches/
+RUN test "$(cat one.txt)" = first && test "$(cat two.txt)" = second
+RUN grep -Rq '"kilnHook":"WorkerIntegration"' {HOME}/.harness/sessions && grep -Rq 'integrated 2 patches' {HOME}/.harness/sessions
+EXPECT_NOT /panic|goroutine/

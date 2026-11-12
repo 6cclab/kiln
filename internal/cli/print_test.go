@@ -191,6 +191,38 @@ func TestFormatPrintResultText(t *testing.T) {
 	}
 }
 
+func TestCollectorWorkerIntegrationVisibleWithoutModelNarration(t *testing.T) {
+	events := harness.NewEvents()
+	collector := NewCollector(events)
+	defer collector.Unsubscribe()
+	var streamed []StreamEvent
+	collector.Stream = func(ev StreamEvent) { streamed = append(streamed, ev) }
+	events.Emit(harness.Event{Type: harness.EventWorkerIntegration, IntegrationStatus: "conflict", IntegrationText: "Worker batch was not integrated: overlap at one.txt"})
+	result := collector.Finish(true, session.SessionStats{}, "")
+	if got := FormatPrintResult(result, "text"); !strings.Contains(got, "overlap at one.txt") {
+		t.Fatalf("text result hid integration outcome: %q", got)
+	}
+	if got := FormatPrintResult(result, "json"); !strings.Contains(got, `"integrations"`) || !strings.Contains(got, "overlap at one.txt") {
+		t.Fatalf("json result hid integration outcome: %q", got)
+	}
+	var saw bool
+	for _, event := range streamed {
+		if event.Type == "worker_integration" {
+			data, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), `"status":"conflict"`) {
+				t.Fatalf("stream event = %s", data)
+			}
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatal("stream-json lacked independent integration event")
+	}
+}
+
 func TestFormatPrintResultJSON(t *testing.T) {
 	arg := "echo hi"
 	r := PrintResult{
