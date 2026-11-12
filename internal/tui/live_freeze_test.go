@@ -25,7 +25,7 @@ func newFreezeTestModel(t *testing.T) (Model, *Bridge, *fakeSink) {
 // particular block eventually shows up.
 func waitForNPrinted(t *testing.T, f *fakeSink, n int) []string {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if printed, _ := f.snapshot(); len(printed) >= n {
 			return printed

@@ -44,11 +44,9 @@ func TestBashBackgroundReturnsShellIDImmediately(t *testing.T) {
 	toolSet := tools.BackgroundShellTools(shells, env)
 	bg := mustTool(t, toolSet, "bash_background")
 
-	started := time.Now()
-	result := runTool(t, bg, map[string]any{"command": "sleep 5"})
-	if time.Since(started) > 500*time.Millisecond {
-		t.Fatalf("bash_background blocked for %s", time.Since(started))
-	}
+	// The command outlives the test, so the call returning at all (rather
+	// than after the command) is the proof; no elapsed-time bound is needed.
+	result := runTool(t, bg, map[string]any{"command": "sleep 120"})
 	if result.IsError {
 		t.Fatalf("unexpected error: %+v", result)
 	}
@@ -79,13 +77,14 @@ func TestBashOutputReadsIncrementallyAndReportsMissed(t *testing.T) {
 	startResult := runTool(t, bg, map[string]any{"command": "for i in 1 2 3; do echo n$i; sleep 0.2; done"})
 	id := shellIDFrom(t, text(startResult))
 
-	time.Sleep(700 * time.Millisecond)
-	first := runTool(t, out, map[string]any{"id": id})
+	// Read until the first line has arrived; that read consumes it.
+	var first tool.Result
+	waitUntil(t, "n1 in the output", func() bool {
+		first = runTool(t, out, map[string]any{"id": id})
+		return strings.Contains(text(first), "n1")
+	})
 	if first.IsError {
 		t.Fatalf("unexpected error: %+v", first)
-	}
-	if !strings.Contains(text(first), "n1") {
-		t.Fatalf("first read missing n1: %q", text(first))
 	}
 
 	second := runTool(t, out, map[string]any{"id": id})
@@ -115,8 +114,7 @@ func TestKillShellVerbDistinguishesRunningFromFinished(t *testing.T) {
 	bg := mustTool(t, toolSet, "bash_background")
 	kill := mustTool(t, toolSet, "kill_shell")
 
-	running := shellIDFrom(t, text(runTool(t, bg, map[string]any{"command": "sleep 5"})))
-	time.Sleep(200 * time.Millisecond)
+	running := shellIDFrom(t, text(runTool(t, bg, map[string]any{"command": "sleep 120"})))
 	killedResult := runTool(t, kill, map[string]any{"id": running})
 	if !strings.HasPrefix(text(killedResult), "Killed ") {
 		t.Fatalf("got %q, want it to start with \"Killed \"", text(killedResult))
@@ -126,7 +124,8 @@ func TestKillShellVerbDistinguishesRunningFromFinished(t *testing.T) {
 	}
 
 	finished := shellIDFrom(t, text(runTool(t, bg, map[string]any{"command": "echo done"})))
-	time.Sleep(500 * time.Millisecond)
+	out := mustTool(t, toolSet, "bash_output")
+	runTool(t, out, map[string]any{"id": finished, "block": true})
 	finishedResult := runTool(t, kill, map[string]any{"id": finished})
 	if !strings.HasPrefix(text(finishedResult), "Already finished:") {
 		t.Fatalf("got %q, want it to start with \"Already finished:\"", text(finishedResult))
@@ -158,21 +157,25 @@ func TestKillShellLeavesNoProcessBehind(t *testing.T) {
 	command := "sleep 30" + marker
 	id := shellIDFrom(t, text(runTool(t, bg, map[string]any{"command": command})))
 
-	time.Sleep(300 * time.Millisecond)
-	if !processMatches(command) {
-		t.Fatalf("process for %q never started", command)
-	}
+	waitUntil(t, "process "+command+" to start", func() bool { return processMatches(command) })
 
 	runTool(t, kill, map[string]any{"id": id})
 
-	deadline := time.Now().Add(3 * time.Second)
+	waitUntil(t, "process "+command+" to die after kill_shell", func() bool { return !processMatches(command) })
+}
+
+// waitUntil polls cond until it holds. The deadline only bounds a hang: the
+// poll returns as soon as cond is true.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if !processMatches(command) {
+		if cond() {
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("process for %q survived kill_shell", command)
+	t.Fatalf("timed out waiting for %s", what)
 }
 
 func processMatches(pattern string) bool {

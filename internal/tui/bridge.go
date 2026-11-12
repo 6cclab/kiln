@@ -958,6 +958,9 @@ type turnState struct {
 	// flushes the final state regardless of the throttle (see
 	// handleStreamEvent and the EventMessageEnd case above it).
 	lastStreamSend time.Time
+	// now is the clock the throttle reads (nil means time.Now); a test
+	// injects one so the throttle window is stepped, not waited for.
+	now func() time.Time
 }
 
 // streamThrottle bounds how often the live streaming caret (stream.go)
@@ -1597,6 +1600,9 @@ func (b *Bridge) handleStreamEvent(se *msg.StreamEvent, ts *turnState) {
 		})
 		b.Send(MsgTokens{Tokens: tokens})
 		now := time.Now()
+		if ts.now != nil {
+			now = ts.now()
+		}
 		if now.Sub(ts.lastStreamSend) >= streamThrottle {
 			ts.lastStreamSend = now
 			b.Send(MsgStreamText{Text: ts.streamed.String()})

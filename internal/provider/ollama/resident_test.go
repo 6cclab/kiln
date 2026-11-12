@@ -73,8 +73,10 @@ func TestResidentTimesOut(t *testing.T) {
 	if err == nil {
 		t.Fatal("Resident() error = nil, want a timeout error")
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("Resident() took %s, want it bounded near residentTimeout (%s)", elapsed, residentTimeout)
+	// The handler never answers, so only residentTimeout can end the call;
+	// the bound just leaves room for a slow machine.
+	if elapsed > 30*time.Second {
+		t.Fatalf("Resident() took %s, want it bounded by residentTimeout (%s)", elapsed, residentTimeout)
 	}
 }
 

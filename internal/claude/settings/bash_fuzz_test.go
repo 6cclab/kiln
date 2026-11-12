@@ -168,13 +168,15 @@ func runStubbed(t *testing.T, bash, dir, bin, log, script string) []string {
 	cmd.Dir = dir
 	cmd.Env = []string{"PATH=" + bin, "HOME=" + dir, "KILN_FUZZ_LOG=" + log}
 	cmd.Stdin = strings.NewReader("")
+	ownProcessGroup(cmd)
 	_ = cmd.Run()
 	if ctx.Err() != nil {
 		t.Fatalf("bash timed out on:\n%s", script)
 	}
 	if strings.Contains(script, "<(") || strings.Contains(script, ">(") {
-		// A process substitution is not waited for; give it a moment.
-		time.Sleep(20 * time.Millisecond)
+		// A process substitution is not waited for: wait until the last
+		// process it started has exited and logged.
+		waitProcessGroupGone(t, cmd)
 	}
 	files, _ := filepath.Glob(log + ".*")
 	var out []string

@@ -16,7 +16,7 @@ import (
 // land on the bridge's own committer goroutine, not the caller's.
 func waitForOneSent(t *testing.T, f *fakeSink) any {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, sent := f.snapshot(); len(sent) >= 1 {
 			return sent[0]
@@ -364,7 +364,7 @@ func TestBridge_CommitCommandResult_NoElbowGlyph(t *testing.T) {
 
 	b.CommitCommandResult("status", []string{"model     faux/faux-1", "auth      configured"})
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var printed []string
 	for time.Now().Before(deadline) {
 		if printed, _ = f.snapshot(); len(printed) >= 1 {
@@ -465,7 +465,7 @@ func TestHookNotice_RewriteStaysOutOfTranscript(t *testing.T) {
 		t.Fatalf("rewrite notice committed: printed=%v sent=%v", printed, sent)
 	}
 	b.HookNotice("lint hook: 2 warnings")
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		if printed, sent := f.snapshot(); len(printed)+len(sent) > 0 {
 			return

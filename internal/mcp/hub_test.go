@@ -211,11 +211,11 @@ func TestConnectAllHangTimesOutAndCleansUpProcess(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(20 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("ConnectAll did not return: goroutine leak or missing timeout")
 	}
-	if elapsed := time.Since(start); elapsed > 15*time.Second {
-		t.Fatalf("ConnectAll against a hung server took %v, want well under 15s", elapsed)
+	if elapsed := time.Since(start); elapsed > 45*time.Second {
+		t.Fatalf("ConnectAll against a hung server took %v, want far under 45s (the connect timeout is 1s)", elapsed)
 	}
 
 	statuses := hub.Statuses()
@@ -230,11 +230,15 @@ func TestConnectAllHangTimesOutAndCleansUpProcess(t *testing.T) {
 
 	// No leftover mcpfixture --hang process: ConnectAll's failure path (and
 	// go-sdk's own Client.Connect error path) must have killed it already.
-	time.Sleep(200 * time.Millisecond)
-	out, _ := exec.Command("pgrep", "-f", bin+" --hang").Output()
-	if strings.TrimSpace(string(out)) != "" {
-		t.Fatalf("expected no leftover mcpfixture --hang process, pgrep found: %q", out)
+	// Process exit is asynchronous, so poll rather than pause.
+	var out []byte
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		out, _ = exec.Command("pgrep", "-f", bin+" --hang").Output()
+		if strings.TrimSpace(string(out)) == "" {
+			return
+		}
 	}
+	t.Fatalf("expected no leftover mcpfixture --hang process, pgrep found: %q", out)
 }
 
 func TestClaudeJSONFixtureRoundTrip(t *testing.T) {

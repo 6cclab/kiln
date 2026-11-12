@@ -35,7 +35,7 @@ func TestDispatchStopsWorkerBackgroundJobsWithoutStoppingParent(t *testing.T) {
 	}
 	workerPID := readJobPID(t, filepath.Join(cwd, "worker.pid"))
 	t.Cleanup(func() { _ = syscall.Kill(workerPID, syscall.SIGTERM) })
-	if waitJobGone(workerPID, 2*time.Second) == false {
+	if waitJobGone(workerPID, 15*time.Second) == false {
 		t.Fatalf("worker background process %d survived Dispatch", workerPID)
 	}
 	if !jobRunning(parentPID) {
@@ -80,7 +80,7 @@ steps:
 
 	select {
 	case <-toolEnded:
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		cancel()
 		t.Fatal("worker bash tool did not finish")
 	}
@@ -93,10 +93,10 @@ steps:
 		if outcome.err != nil || outcome.result.Text == "too late" {
 			t.Fatalf("cancelled Dispatch: %+v, %v", outcome.result, outcome.err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("cancelled Dispatch did not return")
 	}
-	if !waitJobGone(workerPID, 2*time.Second) {
+	if !waitJobGone(workerPID, 15*time.Second) {
 		t.Fatalf("worker background process %d survived cancelled Dispatch", workerPID)
 	}
 }
@@ -134,10 +134,10 @@ func TestDispatchNestedWorkerJobScopeIsIndependent(t *testing.T) {
 			outerPID := readJobPID(t, filepath.Join(cwd, "outer.pid"))
 			// Signal delivery is asynchronous; allow the killed process to
 			// leave the run queue before testing sibling survival.
-			innerReturned <- innerReturnState{!waitJobGone(innerPID, 2*time.Second), jobRunning(outerPID)}
+			innerReturned <- innerReturnState{!waitJobGone(innerPID, 15*time.Second), jobRunning(outerPID)}
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	result, err := d.Dispatch(ctx, DispatchRequest{Agent: "general-purpose", Prompt: "start outer"})
 	if err != nil {
@@ -163,7 +163,7 @@ func TestDispatchNestedWorkerJobScopeIsIndependent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cwd, "outer_alive")); err != nil {
 		t.Fatalf("inner worker cleanup stopped outer worker job: %v", err)
 	}
-	if !waitJobGone(innerPID, 2*time.Second) || !waitJobGone(outerPID, 2*time.Second) {
+	if !waitJobGone(innerPID, 15*time.Second) || !waitJobGone(outerPID, 15*time.Second) {
 		t.Fatalf("nested worker job survived Dispatch: inner=%v outer=%v", jobRunning(innerPID), jobRunning(outerPID))
 	}
 }

@@ -27,7 +27,7 @@ func recvChoice(t interface {
 	select {
 	case c := <-reply:
 		return c
-	case <-time.After(time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatalf("reply channel never received a value: Ctrl+C left the caller blocked")
 		return PromptChoice{}
 	}
@@ -40,7 +40,7 @@ func recvPlan(t interface {
 	select {
 	case r := <-reply:
 		return r
-	case <-time.After(time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatalf("plan reply channel never received a value: Ctrl+C left the caller blocked")
 		return PlanReply{}
 	}
@@ -53,7 +53,7 @@ func recvAskUser(t interface {
 	select {
 	case r := <-reply:
 		return r
-	case <-time.After(time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatalf("question reply channel never received a value: Ctrl+C left the caller blocked")
 		return AskUserReply{}
 	}

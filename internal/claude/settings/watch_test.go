@@ -24,8 +24,9 @@ func TestWatchFilesReportsSettledChanges(t *testing.T) {
 	var got [][]string
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	baseline := make(chan struct{})
 	go func() {
-		WatchFiles(ctx, []string{a, b}, 10*time.Millisecond, func(changed []string) {
+		WatchFilesReady(ctx, []string{a, b}, 10*time.Millisecond, func() { close(baseline) }, func(changed []string) {
 			mu.Lock()
 			got = append(got, changed)
 			mu.Unlock()
@@ -39,7 +40,7 @@ func TestWatchFilesReportsSettledChanges(t *testing.T) {
 	}
 	waitFor := func(n int) [][]string {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
+		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {
 			if c := calls(); len(c) >= n {
 				return c
@@ -50,7 +51,7 @@ func TestWatchFilesReportsSettledChanges(t *testing.T) {
 		return nil
 	}
 
-	time.Sleep(60 * time.Millisecond)
+	<-baseline
 	if c := calls(); len(c) != 0 {
 		t.Fatalf("reported the starting state: %v", c)
 	}
@@ -75,7 +76,7 @@ func TestWatchFilesReportsSettledChanges(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("WatchFiles did not return after cancel")
 	}
 }

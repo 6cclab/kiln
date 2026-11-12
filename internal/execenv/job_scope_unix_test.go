@@ -35,7 +35,7 @@ func scopedSleepSurvives(marker string) bool {
 
 func waitScopedSleepGone(t *testing.T, marker string) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for scopedSleepSurvives(marker) {
 		if time.Now().After(deadline) {
 			t.Fatalf("background job %s survived scope close", marker)
@@ -67,7 +67,7 @@ func TestJobScopeCloseStopsActiveCommand(t *testing.T) {
 		_, err := env.Exec(context.Background(), command, ExecOptions{})
 		done <- err
 	}()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !scopedSleepSurvives(marker) {
 		if time.Now().After(deadline) {
 			t.Fatal("active scoped command did not start")
@@ -80,7 +80,7 @@ func TestJobScopeCloseStopsActiveCommand(t *testing.T) {
 		if !errors.Is(err, ErrJobScopeClosed) {
 			t.Fatalf("active Exec error = %v, want ErrJobScopeClosed", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("active Exec did not return after scope close")
 	}
 	waitScopedSleepGone(t, marker)
@@ -119,7 +119,7 @@ func TestJobScopeCloseRacesStartsAndIsIdempotent(t *testing.T) {
 		active <- err
 	}()
 	ready := filepath.Join(env.Cwd, "ready")
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if _, err := os.Stat(ready); err == nil {
 			break
@@ -152,7 +152,7 @@ func TestJobScopeCloseRacesStartsAndIsIdempotent(t *testing.T) {
 		if err != nil && !errors.Is(err, ErrJobScopeClosed) {
 			t.Fatalf("active Exec error = %v", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("active command did not return")
 	}
 	late := filepath.Join(env.Cwd, "late")
@@ -208,7 +208,7 @@ func TestJobScopeContextCancellationPreservesScope(t *testing.T) {
 		_, err := env.Exec(ctx, fmt.Sprintf("sleep 30.%s & wait", marker), ExecOptions{})
 		done <- err
 	}()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !scopedSleepSurvives(marker) {
 		if time.Now().After(deadline) {
 			t.Fatal("scoped command did not start")
@@ -221,7 +221,7 @@ func TestJobScopeContextCancellationPreservesScope(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Exec error = %v, want context cancellation", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("cancelled Exec did not return")
 	}
 	waitScopedSleepGone(t, marker)

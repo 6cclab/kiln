@@ -53,7 +53,7 @@ func TestFetchAuthCode(t *testing.T) {
 		go func() {
 			var resp *http.Response
 			var err error
-			for i := 0; i < 50; i++ { // wait for the listener
+			for i := 0; i < 3000; i++ { // wait for the listener
 				resp, err = http.Get("http://127.0.0.1:" + "45931" + "/callback?code=abc&state=xyz&iss=https://idp")
 				if err == nil {
 					resp.Body.Close()
@@ -84,7 +84,7 @@ func TestFetchAuthCode_ErrorRedirect(t *testing.T) {
 	orig := openBrowser
 	openBrowser = func(string) {
 		go func() {
-			for i := 0; i < 50; i++ {
+			for i := 0; i < 3000; i++ {
 				if r, err := http.Get("http://127.0.0.1:45932/callback?error=access_denied"); err == nil {
 					r.Body.Close()
 					return

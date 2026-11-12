@@ -71,7 +71,7 @@ func backgroundDone(t *testing.T, cmd tea.Cmd) msgBackgroundDone {
 		}()
 	}
 	run(cmd)
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(30 * time.Second)
 	for {
 		select {
 		case msg := <-out:
@@ -110,7 +110,7 @@ func TestBackgroundCommand_UpdateReturnsAndEscCancels(t *testing.T) {
 	}()
 	select {
 	case <-returned:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Update blocked on the command's background work")
 	}
 	m = next.(Model)

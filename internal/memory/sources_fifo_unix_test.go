@@ -25,7 +25,7 @@ func TestMemorySourcesRejectFIFO(t *testing.T) {
 	}
 	for _, operation := range []string{"capture", "current", "current-worktree"} {
 		t.Run(operation, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMemorySourceFIFOProbe$")
 			cmd.Env = append(os.Environ(), "KILN_MEMORY_FIFO_PROBE="+operation, "KILN_MEMORY_FIFO_ROOT="+root)

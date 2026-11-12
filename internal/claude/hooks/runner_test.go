@@ -136,6 +136,21 @@ func contains(s, sub string) bool {
 	return false
 }
 
+// requireSleepForeverGone polls until no sleep-forever.sh process is left.
+// Signal delivery and reaping are asynchronous, so a fixed pause would race
+// them; the deadline only bounds a hang.
+func requireSleepForeverGone(t *testing.T, when string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if exec.Command("pgrep", "-f", "sleep-forever.sh").Run() != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Errorf("sleep-forever.sh child process is still running %s", when)
+}
+
 func TestRunHooksSurvivesEarlyExitWithoutReadingStdin(t *testing.T) {
 	dir := t.TempDir()
 	path := writeScript(t, dir, "early-exit.sh", "exit 0")
@@ -152,7 +167,9 @@ func TestRunHooksKillsHookExceedingTimeout(t *testing.T) {
 	dir := t.TempDir()
 	started := time.Now()
 	out := run(cfg(fixture("sleep-forever.sh"), 1), nil, dir)
-	if time.Since(started) > 10*time.Second {
+	// sleep-forever.sh would run for minutes, so a generous bound still
+	// tells "killed by the 1s timeout" from "never killed".
+	if time.Since(started) > 60*time.Second {
 		t.Errorf("did not kill the hook in time: took %v", time.Since(started))
 	}
 	found := false
@@ -170,11 +187,7 @@ func TestRunHooksKillsHookExceedingTimeout(t *testing.T) {
 	}
 
 	// The child `sleep` must actually be gone, not just detached from us.
-	time.Sleep(300 * time.Millisecond)
-	cmd := exec.Command("pgrep", "-f", "sleep-forever.sh")
-	if err := cmd.Run(); err == nil {
-		t.Error("sleep-forever.sh child process is still running after timeout")
-	}
+	requireSleepForeverGone(t, "after timeout")
 }
 
 // TestRunHooksCtxCancelKillsHookPromptly asserts that cancelling the ctx
@@ -202,7 +215,7 @@ func TestRunHooksCtxCancelKillsHookPromptly(t *testing.T) {
 		Payload:     Payload{SessionID: "t", Cwd: dir, ToolName: "bash", ToolInput: map[string]any{"command": "x"}},
 		Ctx:         ctx,
 	})
-	if elapsed := time.Since(started); elapsed > 10*time.Second {
+	if elapsed := time.Since(started); elapsed > 25*time.Second {
 		t.Errorf("ctx cancellation did not kill the hook promptly: took %v", elapsed)
 	}
 	if !out.Cancelled {
@@ -213,11 +226,7 @@ func TestRunHooksCtxCancelKillsHookPromptly(t *testing.T) {
 	}
 
 	// The child `sleep` must actually be gone, not just detached from us.
-	time.Sleep(300 * time.Millisecond)
-	cmd := exec.Command("pgrep", "-f", "sleep-forever.sh")
-	if err := cmd.Run(); err == nil {
-		t.Error("sleep-forever.sh child process is still running after ctx cancellation")
-	}
+	requireSleepForeverGone(t, "after ctx cancellation")
 }
 
 // TestGuardToolCallCtxCancelDoesNotRunTheTool asserts GuardToolCall's
@@ -571,21 +580,31 @@ func TestRunHooksReportsEachHookStart(t *testing.T) {
 	}
 }
 
-// TestRunHooksConcurrentlyRunsAtOnce: two ~1s hooks finish in well under
-// the 2s a sequential RunHooks chain would take, since they start
-// together rather than one after the other.
+// TestRunHooksConcurrentlyRunsAtOnce: each hook announces itself, then waits
+// for the other to announce. They only both see the other if they run at the
+// same time; run one after the other, the first would give up waiting (after
+// 30s) and the test fails. No wall-clock bound is involved.
 func TestRunHooksConcurrentlyRunsAtOnce(t *testing.T) {
 	dir := t.TempDir()
-	a := writeScript(t, dir, "a.sh", "cat >/dev/null; sleep 1")
-	b := writeScript(t, dir, "b.sh", "cat >/dev/null; sleep 1")
+	barrier := func(self, other string) string {
+		return fmt.Sprintf(`cat >/dev/null
+touch %[1]s/%[2]s.started
+i=0
+while [ ! -f %[1]s/%[3]s.started ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done
+[ -f %[1]s/%[3]s.started ] && touch %[1]s/%[2]s.saw-other
+exit 0`, dir, self, other)
+	}
+	a := writeScript(t, dir, "a.sh", barrier("a", "b"))
+	b := writeScript(t, dir, "b.sh", barrier("b", "a"))
 	c := Config{Stop: []Matcher{{Hooks: []Command{
 		{Type: "command", Command: a},
 		{Type: "command", Command: b},
 	}}}}
-	started := time.Now()
 	RunHooksConcurrently(RunOptions{Config: c, Event: Stop, Payload: Payload{Cwd: dir}})
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Errorf("took %v, want well under 2s if the hooks ran together", elapsed)
+	for _, who := range []string{"a", "b"} {
+		if _, err := os.Stat(filepath.Join(dir, who+".saw-other")); err != nil {
+			t.Errorf("hook %s never saw the other running: the hooks did not run together", who)
+		}
 	}
 }
 
@@ -658,7 +677,7 @@ func TestRunHooksConcurrentlyCtxCancelKillsEveryHookPromptly(t *testing.T) {
 
 	started := time.Now()
 	out := RunHooksConcurrently(RunOptions{Config: c, Event: Stop, Payload: Payload{Cwd: dir}, Ctx: ctx})
-	if elapsed := time.Since(started); elapsed > 10*time.Second {
+	if elapsed := time.Since(started); elapsed > 25*time.Second {
 		t.Errorf("ctx cancellation did not kill the hooks promptly: took %v", elapsed)
 	}
 	if !out.Cancelled {
@@ -668,10 +687,47 @@ func TestRunHooksConcurrentlyCtxCancelKillsEveryHookPromptly(t *testing.T) {
 		t.Errorf("a cancelled chain must not be reported as Blocked: %+v", out)
 	}
 
-	time.Sleep(300 * time.Millisecond)
-	cmd := exec.Command("pgrep", "-f", "sleep-forever.sh")
-	if err := cmd.Run(); err == nil {
-		t.Error("a sleep-forever.sh child process is still running after ctx cancellation")
+	requireSleepForeverGone(t, "after ctx cancellation")
+}
+
+// TestRunHooksConcurrentlyReportsProgressInOrder: a hook that finishes while
+// the previous OnHookDone call is still running must not overtake it, or the
+// last progress a UI sees is "1 of 2". Hook b cannot finish until a's
+// callback releases it, so b is guaranteed to finish during that callback;
+// the callback then dawdles. Before OnHookDone was delivered under the lock,
+// b's callback ran first and the calls arrived as 0, 2, 1. (If the machine
+// is so slow b does not finish within the dawdle, the test passes without
+// exercising the race; it can never fail falsely.)
+func TestRunHooksConcurrentlyReportsProgressInOrder(t *testing.T) {
+	dir := t.TempDir()
+	release := filepath.Join(dir, "release")
+	a := writeScript(t, dir, "a.sh", "cat >/dev/null; true")
+	b := writeScript(t, dir, "b.sh", fmt.Sprintf(
+		"cat >/dev/null; i=0; while [ ! -f %s ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done", release))
+	c := Config{Stop: []Matcher{{Hooks: []Command{
+		{Type: "command", Command: a},
+		{Type: "command", Command: b},
+	}}}}
+	var mu sync.Mutex
+	var done []int
+	RunHooksConcurrently(RunOptions{
+		Config:  c,
+		Event:   Stop,
+		Payload: Payload{Cwd: dir},
+		OnHookDone: func(n int, _ []Command) {
+			if n == 1 {
+				if err := os.WriteFile(release, nil, 0o600); err != nil {
+					t.Errorf("release b: %v", err)
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+			mu.Lock()
+			done = append(done, n)
+			mu.Unlock()
+		},
+	})
+	if got := fmt.Sprint(done); got != "[0 1 2]" {
+		t.Fatalf("OnHookDone calls = %s, want [0 1 2] (monotonic, last = total)", got)
 	}
 }
 

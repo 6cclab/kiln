@@ -19,18 +19,43 @@ import (
 // wrong, and a mock would encode the same misunderstanding as the code,
 // mirroring test/background-shell.test.ts's own reasoning.
 
-func settle(d time.Duration) { time.Sleep(d) }
+// testWait is how long a test waits for an event it expects. It only bounds a
+// hang: every wait returns the moment its condition holds, so a slow machine
+// costs time, never a failure.
+const testWait = 30 * time.Second
+
+// waitFinished blocks until shell id's command has exited and its output is
+// fully absorbed.
+func waitFinished(t *testing.T, shells *BackgroundShells, id string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), testWait)
+	defer cancel()
+	if finished, ok := shells.Wait(ctx, id); !ok || !finished {
+		t.Fatalf("shell %s did not finish (known=%v)", id, ok)
+	}
+}
+
+// waitFor polls cond until it holds, failing after testWait.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(testWait)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
 
 func TestStartReturnsImmediately(t *testing.T) {
 	env := execenv.New(t.TempDir())
 	shells := NewBackgroundShells()
-	started := time.Now()
-	shell, err := shells.Start(context.Background(), "sleep 5", env)
+	// The command outlives the test, so Start returning at all (rather than
+	// after the command) is the proof; no elapsed-time bound is needed.
+	shell, err := shells.Start(context.Background(), "sleep 120", env)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
-	}
-	if time.Since(started) > 500*time.Millisecond {
-		t.Fatalf("Start blocked for %s", time.Since(started))
 	}
 	if shell.Status != ShellRunning {
 		t.Fatalf("status = %q, want running", shell.Status)
@@ -63,7 +88,7 @@ func TestRunningCountAndOnChange(t *testing.T) {
 	}
 
 	// The quick shell exits on its own; the long one keeps running.
-	settle(600 * time.Millisecond)
+	waitFinished(t, shells, quick.ID)
 	if got := shells.Running(); got != 1 {
 		t.Fatalf("Running() after one exit = %d, want 1", got)
 	}
@@ -98,13 +123,19 @@ func TestReadIncrementallyNeverRepeats(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	settle(600 * time.Millisecond)
-	first, _, _, ok := shells.Read(shell.ID)
-	if !ok || len(first) == 0 {
-		t.Fatalf("no output on the first read: %v ok=%v", first, ok)
-	}
+	// First read: whatever has arrived once there is anything. Second read:
+	// everything else, after the shell has finished.
+	var first []string
+	waitFor(t, "first output", func() bool {
+		lines, _, _, ok := shells.Read(shell.ID)
+		if !ok {
+			t.Fatal("Read: not found")
+		}
+		first = append(first, lines...)
+		return len(first) > 0
+	})
 
-	settle(700 * time.Millisecond)
+	waitFinished(t, shells, shell.ID)
 	second, _, _, _ := shells.Read(shell.ID)
 	seen := map[string]bool{}
 	for _, l := range first {
@@ -135,7 +166,7 @@ func TestRecordsExitCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	settle(600 * time.Millisecond)
+	waitFinished(t, shells, shell.ID)
 	after, ok := shells.Get(shell.ID)
 	if !ok {
 		t.Fatal("Get: not found")
@@ -155,7 +186,6 @@ func TestKillsAProcessThatWouldRunForever(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	settle(500 * time.Millisecond)
 	running, _ := shells.Get(shell.ID)
 	if running.Status != ShellRunning {
 		t.Fatalf("status = %q, want running", running.Status)
@@ -167,8 +197,11 @@ func TestKillsAProcessThatWouldRunForever(t *testing.T) {
 		t.Fatalf("status = %q, want killed", killed.Status)
 	}
 
+	// Once Exec has returned the process is gone and its output absorbed:
+	// drain it, then check nothing more shows up.
+	waitFinished(t, shells, shell.ID)
 	shells.Read(shell.ID)
-	settle(600 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond) // negative wait: slow only passes vacuously
 	lines, _, _, _ := shells.Read(shell.ID)
 	if len(lines) != 0 {
 		t.Fatalf("output kept arriving after the kill: %v", lines)
@@ -182,7 +215,7 @@ func TestLeavesAnAlreadyExitedShellAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	settle(500 * time.Millisecond)
+	waitFinished(t, shells, shell.ID)
 	after, ok := shells.Kill(shell.ID)
 	if !ok {
 		t.Fatal("Kill: not found")
@@ -205,7 +238,6 @@ func TestKillAllStopsEverythingRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	settle(300 * time.Millisecond)
 	shells.KillAll()
 
 	as, _ := shells.Get(a.ID)
@@ -243,7 +275,7 @@ func TestRenderShellListShowsRunningAndFinished(t *testing.T) {
 	if _, err := shells.Start(context.Background(), "echo one", env); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	settle(400 * time.Millisecond)
+	waitFinished(t, shells, "bash_1")
 	out := RenderShellList(shells.List())
 	if !strings.Contains(out, "echo one") {
 		t.Fatalf("missing command in %q", out)
@@ -263,13 +295,7 @@ func TestBufferHoldsLast500LinesOf1000(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if s, ok := shells.Get(shell.ID); ok && s.Status != ShellRunning {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitFinished(t, shells, shell.ID)
 
 	lines, _, snap, ok := shells.Read(shell.ID)
 	if !ok {
@@ -298,7 +324,7 @@ func TestIncrementalReadsReturnDisjointSlices(t *testing.T) {
 	}
 
 	seen := map[string]bool{}
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(testWait)
 	for time.Now().Before(deadline) {
 		lines, _, snap, ok := shells.Read(shell.ID)
 		if !ok {
@@ -327,7 +353,7 @@ func TestReaderWhoWaitsUntilEvictionGetsMissed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	settle(400 * time.Millisecond)
+	waitFinished(t, shells, shell.ID)
 	// Advance the cursor past the one line this shell has produced so far.
 	if _, _, _, ok := shells.Read(shell.ID); !ok {
 		t.Fatal("Read: not found")
@@ -337,13 +363,7 @@ func TestReaderWhoWaitsUntilEvictionGetsMissed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if s, ok := shells.Get(second.ID); ok && s.Status != ShellRunning {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitFinished(t, shells, second.ID)
 
 	// second's cursor is still 0: it never read anything, and 1000 lines
 	// flowed through a 500-line buffer, so everything before the retained
@@ -366,21 +386,11 @@ func TestKillLeavesNoProcessBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	settle(300 * time.Millisecond)
-	if !processMatching(command) {
-		t.Fatalf("process for %q never started", command)
-	}
+	waitFor(t, "process "+command+" to start", func() bool { return processMatching(command) })
 
 	shells.Kill(shell.ID)
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if !processMatching(command) {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("process for %q survived Kill", command)
+	waitFor(t, "process "+command+" to die after Kill", func() bool { return !processMatching(command) })
 }
 
 func processMatching(pattern string) bool {
@@ -400,13 +410,7 @@ func TestSlideAcrossExecEnvCaptureWindow(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		if s, ok := shells.Get(shell.ID); ok && s.Status != ShellRunning {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitFinished(t, shells, shell.ID)
 
 	lines, _, snap, ok := shells.Read(shell.ID)
 	if !ok {

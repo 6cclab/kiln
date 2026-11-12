@@ -90,7 +90,12 @@ func (r settingsReloader) load(what string) (claudesettings.Settings, bool) {
 
 // watch reloads on every change until ctx is done.
 func (r settingsReloader) watch(ctx context.Context, interval time.Duration) {
-	claudesettings.WatchFiles(ctx, claudesettings.SettingsFiles(r.cwd, r.opts), interval, r.reload)
+	r.watchReady(ctx, interval, nil)
+}
+
+// watchReady is watch that calls ready once the watcher has its baseline.
+func (r settingsReloader) watchReady(ctx context.Context, interval time.Duration, ready func()) {
+	claudesettings.WatchFilesReady(ctx, claudesettings.SettingsFiles(r.cwd, r.opts), interval, ready, r.reload)
 }
 
 // shortPaths names files relative to cwd when under it, and with ~ for

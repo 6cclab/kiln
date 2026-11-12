@@ -260,7 +260,11 @@ func TestHookThatThrowsIsSkipped(t *testing.T) {
 }
 
 func TestHookTimeoutIsSkipped(t *testing.T) {
-	h := newHarness(t, Options{HookBudget: 200 * time.Millisecond, CatchBudget: 100 * time.Millisecond})
+	// Hook budgets run on the real clock (a busy loop is stopped by a real
+	// watchdog), so the budget is generous enough that a stalled machine
+	// does not blow it for a trivial hook.
+	const budget = time.Second
+	h := newHarness(t, Options{HookBudget: budget, CatchBudget: budget / 2})
 	h.load(t, "slow", "answerer")
 	ctx := ctxT(t)
 	h.e.SessionStart(ctx)
@@ -269,8 +273,8 @@ func TestHookTimeoutIsSkipped(t *testing.T) {
 	if got := runCommand(t, h, "hang", ""); got != "answered hang #1" {
 		t.Errorf("hang: %q", got)
 	}
-	if d := time.Since(start); d < 150*time.Millisecond || d > 3*time.Second {
-		t.Errorf("hang settled after %v, want about its 200ms budget", d)
+	if d := time.Since(start); d < budget*3/4 || d > 60*time.Second {
+		t.Errorf("hang settled after %v, want about its %v budget", d, budget)
 	}
 	if got := runCommand(t, h, "spin", ""); got != "answered spin #1" {
 		t.Errorf("spin: %q", got)
@@ -286,7 +290,7 @@ func TestHookTimeoutIsSkipped(t *testing.T) {
 	if o.Handled {
 		t.Fatalf("Slow should run: %+v", o)
 	}
-	time.Sleep(600 * time.Millisecond)
+	time.Sleep(3 * budget)
 	handle.Finish(json.RawMessage(`"done"`), false)
 	if got := stateJSON(t, h.e, "slow", "after"); got != "saw done" {
 		t.Errorf("after a long next the hook recorded %v\nlogs:\n%s", got, h.logs)

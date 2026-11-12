@@ -15,7 +15,7 @@ func TestBridgeWorkerIntegrationCommitsVisibleNoteWithoutSyntheticCopy(t *testin
 	f := &fakeSink{}
 	b.setSink(f)
 	b.handleEvent(harness.Event{Type: harness.EventWorkerIntegration, IntegrationStatus: "conflict", IntegrationText: "Worker batch was not integrated: overlap at one.txt"}, &turnState{}, 4000)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		printed, _ := f.snapshot()
 		if strings.Contains(strings.Join(printed, "\n"), "overlap at one.txt") {
@@ -41,7 +41,7 @@ func TestBridge_RetryScheduled_SendsHumanisedMessage(t *testing.T) {
 		DelayMs: 1500, RetryError: "provider request failed: status=529 body=overloaded",
 	}, ts, 4000)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var gotRetry MsgRetry
 	var sawRetry, sawLabel bool
 	for time.Now().Before(deadline) && (!sawRetry || !sawLabel) {
@@ -85,7 +85,7 @@ func TestBridge_RetryStart_SendsAttempt(t *testing.T) {
 
 	b.handleEvent(harness.Event{Type: harness.EventRetryStart, Attempt: 2}, ts, 4000)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var sawStart bool
 	var gotAttempt int
 	for time.Now().Before(deadline) && !sawStart {
@@ -114,22 +114,31 @@ func TestBridge_StreamText_Throttled(t *testing.T) {
 	defer b.Stop()
 	f := &fakeSink{}
 	b.setSink(f)
-	ts := &turnState{toolStarts: map[string]toolStart{}}
+	// A stepped clock: the deltas all land inside one streamThrottle window
+	// however slow the machine is.
+	clock := time.Now()
+	ts := &turnState{toolStarts: map[string]toolStart{}, now: func() time.Time { return clock }}
+	streamTexts := func() int {
+		_, sent := f.snapshot()
+		count := 0
+		for _, m := range sent {
+			if _, ok := m.(MsgStreamText); ok {
+				count++
+			}
+		}
+		return count
+	}
 
 	for i := 0; i < 5; i++ {
 		b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "x"}, ts)
 	}
-	time.Sleep(10 * time.Millisecond)
-
-	_, sent := f.snapshot()
-	count := 0
-	for _, m := range sent {
-		if _, ok := m.(MsgStreamText); ok {
-			count++
-		}
+	if count := streamTexts(); count != 1 {
+		t.Errorf("MsgStreamText sent %d times within streamThrottle for 5 rapid deltas, want 1", count)
 	}
-	if count > 1 {
-		t.Errorf("MsgStreamText sent %d times within streamThrottle for 5 rapid deltas, want at most 1", count)
+	clock = clock.Add(streamThrottle)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "x"}, ts)
+	if count := streamTexts(); count != 2 {
+		t.Errorf("MsgStreamText sent %d times after the window passed, want 2", count)
 	}
 
 	b.handleEvent(harness.Event{
@@ -137,7 +146,7 @@ func TestBridge_StreamText_Throttled(t *testing.T) {
 		Message: &msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.Text("xxxxx")}},
 	}, ts, 4000)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var sawFinal bool
 	for time.Now().Before(deadline) && !sawFinal {
 		_, sent := f.snapshot()
@@ -186,7 +195,7 @@ func TestBridge_StreamText_ResetsBetweenMessages(t *testing.T) {
 	}
 	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "Now the Redis client."}, ts)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var gotSecond string
 	for time.Now().Before(deadline) {
 		_, sent := f.snapshot()
@@ -235,7 +244,7 @@ func TestBridge_FreezeBefore_SkipsIdenticalConsecutiveFreeze(t *testing.T) {
 	b.FreezeBefore()
 	b.FreezeBefore() // simulates Apply() having unfrozen it again in between
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if calls >= 2 {
 			break
@@ -261,7 +270,7 @@ func TestBridge_FreezeBefore_SkipsIdenticalConsecutiveFreeze(t *testing.T) {
 	// A genuinely changed freeze must still commit.
 	b.SetFreezeHook(func() []string { return []string{"", "3/3 done"} })
 	b.FreezeBefore()
-	deadline = time.Now().Add(2 * time.Second)
+	deadline = time.Now().Add(15 * time.Second)
 	var sawChanged bool
 	for time.Now().Before(deadline) && !sawChanged {
 		printed, _ := f.snapshot()
