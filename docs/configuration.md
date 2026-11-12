@@ -1238,7 +1238,7 @@ selected package directory and root module/workspace metadata automatically:
 
 Only one unquoted, literal `go test ./path` or `go test ./path/...` invocation
 is accepted, without flags, assignments, redirections or other shell commands.
-Whole-repository `./...` discovery is not supported. The working directory must
+`go test ./...` at the module root is also accepted. The working directory must
 contain a readable regular `go.mod`. Existing `go.sum`, `go.work` and
 `go.work.sum` are included; initially absent optional metadata is tracked so
 creating it later invalidates the evidence. Explicit files/directories can be
@@ -1247,10 +1247,17 @@ unavailable inputs produce no evidence, while the requested command still runs
 through its normal permission checks.
 
 Discovery adds no subprocess or model call. It is a partial snapshot, recorded
-as `go-partial-v1`, not a dependency graph: imported packages outside the selected
-tree, replacements, toolchain, environment and ancestor workspace files are not
-discovered. Status and recovery preserve that limitation. Unchanged snapshots
-never establish that a check can safely be skipped.
+as `go-partial-v2` (older `go-partial-v1` records stay readable and compare no
+environment), not a dependency graph. It traces imports into the root module,
+`go.work` `use`d modules and local `replace` targets; reads every Go file in each
+scanned directory regardless of build constraints and cgo; snapshots each
+directory whole, so cgo sources, `//go:embed` targets and other files are
+included; and records the values of `GOFLAGS`, `GOOS`, `GOARCH`, `CGO_ENABLED`,
+`GOEXPERIMENT`, `GOTOOLCHAIN` and `GOWORK` from kiln's process environment. The
+module cache, the `go` binary, other environment variables, `go env -w` files
+and ancestor workspace files are not read. Status and recovery preserve that
+limitation. Unchanged snapshots never establish that a check can safely be
+skipped. See `docs/efficiency/verify-discovery.md`.
 
 For example, a Bash call can bind a check to its source, tests and dependencies:
 

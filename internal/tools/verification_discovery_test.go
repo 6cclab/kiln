@@ -73,7 +73,7 @@ func TestGoVerificationDiscovery(t *testing.T) {
 			if tc.name == "root" {
 				wantDir = "."
 			}
-			if proof.Discovery != "go-partial-v1" || len(proof.Directories) != 1 || proof.Directories[0].Path != wantDir || len(proof.Files) != 4 {
+			if proof.Discovery != goPartialDiscovery || len(proof.Directories) != 1 || proof.Directories[0].Path != wantDir || len(proof.Files) != 4 {
 				t.Fatalf("unexpected discovery: %+v", proof)
 			}
 			if !VerificationFresh(cwd, proof, allow) {

@@ -29,6 +29,7 @@ type verificationStatusRecord struct {
 	Reason      string   `json:"reason"`
 	Files       []string `json:"files,omitempty"`
 	Directories []string `json:"directories,omitempty"`
+	Env         []string `json:"env,omitempty"`
 	Action      string   `json:"action,omitempty"`
 }
 
@@ -245,7 +246,7 @@ func checkVerificationProof(ctx context.Context, cwd string, proof VerificationE
 		}
 	}
 	if len(remainingDirs) > 0 {
-		currentDirs, err = fingerprintDirectories(ctx, cwd, remainingDirs, allowRead, proof.DirectoryFileLimit, proof.DirectoryByteLimit, proof.Discovery == goPartialDiscovery)
+		currentDirs, err = fingerprintDirectories(ctx, cwd, remainingDirs, allowRead, proof.DirectoryFileLimit, proof.DirectoryByteLimit, isGoPartialDiscovery(proof.Discovery))
 	}
 	if err != nil {
 		record.Status, record.Reason = "unavailable", "one or more dependencies cannot be checked"
@@ -263,7 +264,8 @@ func checkVerificationProof(ctx context.Context, cwd string, proof VerificationE
 			record.Command = record.Command[:len(record.Command)-1]
 		}
 	}
-	if sameFingerprints(proof.Files, current) && sameDirectories(proof.Directories, currentDirs) {
+	record.Env = changedGoVerificationEnv(proof)
+	if sameFingerprints(proof.Files, current) && sameDirectories(proof.Directories, currentDirs) && len(record.Env) == 0 {
 		record.Status, record.Reason = "unchanged", "declared input bytes, permissions and membership match the successful command snapshot"
 		return record
 	}
@@ -285,7 +287,7 @@ func checkVerificationProof(ctx context.Context, cwd string, proof VerificationE
 func verificationScope(records []verificationStatusRecord) string {
 	for _, record := range records {
 		if record.Discovery != "" {
-			return "recorded inputs only; partial Go discovery; unsupported: shell expansions, flags, compound commands, build tags, cgo, toolchain and environment; unreplaced external modules and workspace modules are not traced; no task correctness or safe-to-skip claim"
+			return "recorded inputs only; partial Go discovery; build constraints, cgo files and embeds are covered by whole-directory snapshots; module metadata, go.sum and listed environment values are recorded; unsupported: shell expansions, flags, compound commands; module cache contents, the go binary and other environment are not read; no task correctness or safe-to-skip claim"
 		}
 	}
 	return "declared inputs only; no task correctness or safe-to-skip claim"
