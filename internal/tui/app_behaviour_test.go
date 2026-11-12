@@ -62,20 +62,23 @@ func newTestModelWithBridge(t *testing.T) (Model, *fakeSink) {
 
 // waitForPrinted polls f.snapshot() until at least one Println'd block
 // contains want, or fails after a short deadline (Bridge.Commit lands on
-// its own committer goroutine, not the caller's).
+// its own committer goroutine, not the caller's). A rendered block can wrap
+// a phrase across rows, so compare its words within that block.
 func waitForPrinted(t *testing.T, f *fakeSink, want string) string {
 	t.Helper()
+	wantWords := strings.Join(strings.Fields(want), " ")
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		printed, _ := f.snapshot()
 		for _, p := range printed {
-			if strings.Contains(p, want) {
+			if strings.Contains(strings.Join(strings.Fields(p), " "), wantWords) {
 				return p
 			}
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for a committed block containing %q", want)
+	printed, _ := f.snapshot()
+	t.Fatalf("timed out waiting for a committed block containing %q; printed blocks: %q", want, printed)
 	return ""
 }
 

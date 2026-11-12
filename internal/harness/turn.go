@@ -67,6 +67,9 @@ func (l *Lane) PromptAs(ctx context.Context, text, typed string, images []msg.Im
 	}()
 
 	tip, _ := l.GetTipID()
+	if err := l.validateBranchToolPairs(tip); err != nil {
+		return RunResult{}, err
+	}
 	// A Steer call between the previous operation ending and this one
 	// starting (the between-turns case TestSteerDelivery exercises) left
 	// its entry parked in the inbox, off the branch. Drain it here, before
@@ -175,11 +178,15 @@ func (l *Lane) opSettings() OpSettings {
 // (tools -> checkpoint)* -> completion. tip is the branch tip as of the
 // start of this iteration.
 func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
+	if err := l.validateBranchToolPairs(tip); err != nil {
+		return l.finishFailed(operationID, tip, err)
+	}
 	l.invokeBeforeDrive(ctx)
 	progress := progressTracker{
 		same:  progressGuard{limit: l.h.opts.ProgressLimit},
 		cycle: cycleGuard{limit: l.h.opts.CycleLimit},
 	}
+	loop := progressLoopGuard{limit: l.h.opts.ProgressLoopLimit, cwd: l.h.opts.Cwd}
 	firstIteration := true
 	// compactNext: check the compaction threshold before the next request,
 	// which is an operation's first and every one after a tool step.
@@ -194,6 +201,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	// stopHookActive: an OnBeforeStop handler has already continued this
 	// operation (StopInfo.StopHookActive).
 	stopHookActive := false
+driveLoop:
 	for {
 		if err := ctx.Err(); err != nil {
 			return l.finishAborted(operationID, tip)
@@ -274,15 +282,24 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		if err != nil {
 			return l.finishFailed(operationID, tip, err)
 		}
+		var latestIntegrationAssistantID *string
+		if l.h.batchComplete() != nil {
+			if raw, _, ok := l.h.opts.Storage.GetValue(session.NamespaceOpState, operationID); ok {
+				var previous OpState
+				if json.Unmarshal(raw, &previous) == nil {
+					latestIntegrationAssistantID = previous.LatestAssistantEntryID
+				}
+			}
+		}
 		if err := l.commitOpStateWith(operationID, OpState{At: AtAssistantReady, Control: OpControl{Status: "running"},
-			Settings: l.opSettings(), Continuation: &Continuation{Kind: "need_assistant"}}, append([]session.Write{laneStateWrite}, stateWrites...)...); err != nil {
+			Settings: l.opSettings(), Continuation: &Continuation{Kind: "need_assistant"}, LatestAssistantEntryID: latestIntegrationAssistantID}, append([]session.Write{laneStateWrite}, stateWrites...)...); err != nil {
 			return RunResult{Status: StatusFailed, TipID: tip, Error: err}
 		}
 		tip = stateTip
 
 		responseEntryID := l.newID()
 		if err := l.commitOpState(operationID, OpState{At: AtAssistantEffectPending, Control: OpControl{Status: "running"},
-			Settings: l.opSettings(), ResponseEntryID: &responseEntryID}); err != nil {
+			Settings: l.opSettings(), ResponseEntryID: &responseEntryID, LatestAssistantEntryID: latestIntegrationAssistantID}); err != nil {
 			return RunResult{Status: StatusFailed, TipID: tip, Error: err}
 		}
 
@@ -438,6 +455,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 			}
 			var runErr error
 			var effectiveArgs []map[string]any
+			before := loop.before(toolCalls[i])
 			if j-i >= 2 {
 				tip, effectiveArgs, runErr = l.executeConcurrentRun(ctx, operationID, tip, responseEntryID, toolCalls, batch, i, j)
 			} else {
@@ -446,12 +464,18 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 				effectiveArgs = []map[string]any{effective}
 			}
 			if runErr != nil {
+				if l.h.batchComplete() != nil {
+					// A failed tool commit can leave only part of this response
+					// durable. Keep it pending for recovery to make the batch
+					// decision; clearing the operation would lose its artifacts.
+					return RunResult{Status: StatusFailed, TipID: tip, Error: runErr}
+				}
 				if ctx.Err() != nil {
 					return l.finishAborted(operationID, tip)
 				}
 				return l.finishFailed(operationID, tip, runErr)
 			}
-			for k := i; progress.enabled() && k < j; k++ {
+			for k := i; (progress.enabled() || loop.enabled()) && k < j; k++ {
 				entryID := batch[k].ResultEntryID
 				entry, ok := l.h.opts.Storage.GetEntries([]string{entryID})[entryID]
 				if !ok {
@@ -468,13 +492,65 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 						var skipErr error
 						tip, skipErr = l.skipToolAfterProgressLimit(ctx, operationID, tip, responseEntryID, toolCalls[skipped], skipped, batch)
 						if skipErr != nil {
+							if l.h.batchComplete() != nil {
+								return RunResult{Status: StatusFailed, TipID: tip, Error: skipErr}
+							}
 							return l.finishFailed(operationID, tip, skipErr)
+						}
+					}
+					if l.h.batchComplete() != nil {
+						var completeErr error
+						tip, completeErr = l.completeToolBatch(ctx, operationID, tip, responseEntryID, toolCalls, batch, false)
+						if completeErr != nil {
+							return RunResult{Status: StatusFailed, TipID: tip, Error: completeErr}
 						}
 					}
 					return l.finishFailed(operationID, tip, err)
 				}
+				observation := loop.observe(call, result, before)
+				if observation.Notice != "" || observation.Err != nil {
+					for skipped := j; skipped < len(toolCalls); skipped++ {
+						var skipErr error
+						tip, skipErr = l.skipToolAfterProgressLimit(ctx, operationID, tip, responseEntryID, toolCalls[skipped], skipped, batch)
+						if skipErr != nil {
+							if l.h.batchComplete() != nil {
+								// A partial batch still needs recovery to make its
+								// integration decision after the missing result is paired.
+								return RunResult{Status: StatusFailed, TipID: tip, Error: skipErr}
+							}
+							return l.finishFailed(operationID, tip, skipErr)
+						}
+					}
+					if l.h.batchComplete() != nil {
+						var completeErr error
+						tip, completeErr = l.completeToolBatch(ctx, operationID, tip, responseEntryID, toolCalls, batch, false)
+						if completeErr != nil {
+							// The callback may have committed an intent. Preserve
+							// this operation so recovery can resolve it once.
+							return RunResult{Status: StatusFailed, TipID: tip, Error: completeErr}
+						}
+					}
+					if observation.Err != nil {
+						return l.finishFailed(operationID, tip, observation.Err)
+					}
+					var noticeErr error
+					tip, noticeErr = l.commitStopContinuation(tip, StopVerdict{Message: observation.Notice, Source: "progress-loop"})
+					if noticeErr != nil {
+						return l.finishFailed(operationID, tip, noticeErr)
+					}
+					continue driveLoop
+				}
 			}
 			i = j
+		}
+		if l.h.batchComplete() != nil {
+			var completeErr error
+			tip, completeErr = l.completeToolBatch(ctx, operationID, tip, responseEntryID, toolCalls, batch, false)
+			if completeErr != nil {
+				// Keep the operation pending. An intent may already be durable,
+				// so recovery must resolve it without repeating the effect.
+				return RunResult{Status: StatusFailed, TipID: tip, Error: completeErr}
+			}
 		}
 		l.h.events.Emit(Event{Type: EventTurnEnd, Lane: l.name, OperationID: operationID})
 		// The next iteration routes, then checks the compaction threshold
@@ -849,7 +925,7 @@ func (l *Lane) skipToolAfterProgressLimit(ctx context.Context, operationID, tip,
 	result := msg.ToolResultMessage{
 		Role: msg.RoleToolResult, ToolCallID: call.ID, ToolName: call.Name,
 		Timestamp: l.now(), IsError: true,
-		Content: msg.Blocks{msg.Text("The call did not run because this operation reached its repeated-failure limit.")},
+		Content: msg.Blocks{msg.Text("The call did not run because this operation reached its progress guard limit.")},
 	}
 	return l.commitToolResult(ctx, operationID, tip, assistantEntryID, call, sourceIndex, result, "", batch, false)
 }
@@ -1060,10 +1136,10 @@ func (h *Harness) CheckToolArgs(name string, args map[string]any) error {
 
 // commitToolResult writes a tool call's remaining two transactions: the
 // pending.entry set / pending.tool_output delete / op.state="outcome_ready"
-// commit, then the toolResult entry + branch tip + op.state=checkpoint
-// commit. Both commits carry the whole-batch []ToolCallState snapshot with
-// this call's entry updated. It emits entry_added, runs after_tool, emits
-// tool_end, and returns the branch's new tip (the toolResult entry's id).
+// commit, then the toolResult entry + branch tip + op.state commit. The
+// second commit keeps a tools batch until all calls have results; only the
+// final result advances to checkpoint. It emits entry_added, runs after_tool,
+// emits tool_end, and returns the branch's new tip (the toolResult entry's id).
 func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, toolResultMsg msg.ToolResultMessage, permOutcome string, batch []ToolCallState, runHooks bool) (string, error) {
 	resultEntryID := batch[sourceIndex].ResultEntryID
 
@@ -1087,7 +1163,14 @@ func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistant
 	if _, err := l.h.opts.Storage.Commit([]session.Write{pendingW, toolOutputDel, stateW2}); err != nil {
 		return tip, err
 	}
+	return l.commitReadyToolResult(ctx, operationID, tip, assistantEntryID, call, sourceIndex, toolResultMsg, permOutcome, batch, runHooks)
+}
 
+// commitReadyToolResult publishes an already durable outcome. Resume uses it
+// for outcome_ready calls so an effect is never repeated just to recover its
+// result entry.
+func (l *Lane) commitReadyToolResult(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, toolResultMsg msg.ToolResultMessage, permOutcome string, batch []ToolCallState, runHooks bool) (string, error) {
+	resultEntryID := batch[sourceIndex].ResultEntryID
 	parentTip := tip
 	resultEntry := session.Entry{ID: resultEntryID, ParentID: &parentTip, Type: session.EntryMessage, Message: toolResultMsg}
 	pendingDel := session.DeleteValue(session.PendingEntry(resultEntryID))
@@ -1096,8 +1179,20 @@ func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistant
 		return tip, err
 	}
 	argsDel := session.DeleteValue(session.OperationToolArgs(operationID, assistantEntryID, sourceIndex))
-	stateW3, err := session.SetValue(opStateAddr(operationID), OpState{At: AtCheckpoint, Control: OpControl{Status: "running"}, Settings: l.opSettings(),
-		Continuation: &Continuation{Kind: "need_assistant"}, LatestAssistantEntryID: &assistantEntryID})
+	allReady := true
+	for _, callState := range batch {
+		if callState.Status != "outcome_ready" {
+			allReady = false
+			break
+		}
+	}
+	state := OpState{At: AtTools, Control: OpControl{Status: "running"}, Settings: l.opSettings(),
+		Batch: &Batch{AssistantEntryID: assistantEntryID, TurnID: assistantEntryID, Calls: batch}}
+	if allReady && l.h.batchComplete() == nil {
+		state = OpState{At: AtCheckpoint, Control: OpControl{Status: "running"}, Settings: l.opSettings(),
+			Continuation: &Continuation{Kind: "need_assistant"}, LatestAssistantEntryID: &assistantEntryID}
+	}
+	stateW3, err := session.SetValue(opStateAddr(operationID), state)
 	if err != nil {
 		return tip, err
 	}
@@ -1132,11 +1227,9 @@ func (l *Lane) commitToolResult(ctx context.Context, operationID, tip, assistant
 	}
 	l.h.events.Emit(Event{Type: EventToolEnd, Lane: l.name, OperationID: operationID, ToolCallID: call.ID, ToolName: call.Name, ToolArgs: call.Arguments, ToolResult: &toolResultMsg, PermissionOutcome: permOutcome})
 
-	// The toolResult commit above already carries op.state=checkpoint as
-	// its last item (matching the reference session's line 35); the
-	// drive() loop's next iteration writes assistant.ready and
-	// assistant.effect_pending itself (lines 36-37) without a redundant
-	// standalone checkpoint in between.
+	// The last tool result already carries op.state=checkpoint as its last
+	// item (matching the reference session's line 35). Intermediate results
+	// keep the batch durably at tools so a crash cannot lose later calls.
 	return resultEntryID, nil
 }
 

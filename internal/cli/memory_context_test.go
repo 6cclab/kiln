@@ -47,6 +47,50 @@ func TestMemoryContextHonorsPermissionsAndPreservesTranscript(t *testing.T) {
 	}
 }
 
+func TestMemoryContextObservedSearchHitAndBudgetDrop(t *testing.T) {
+	store, err := memory.Open(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx := context.Background()
+	for key, value := range map[string]string{"short": "test preference", "large": strings.Repeat("test evidence ", 100)} {
+		if _, err := store.Put(ctx, memory.Record{Scope: "here", Key: key, Kind: "preference", Text: value, Evidence: "user"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var observed []struct {
+		name, reason string
+		included     bool
+	}
+	transform := memoryContextObserved(store, "here", "", func() bool { return true }, false, func(name, reason string, included bool) {
+		observed = append(observed, struct {
+			name, reason string
+			included     bool
+		}{name, reason, included})
+	}, 128)
+	input := []msg.Message{msg.UserMessage{Content: msg.Blocks{msg.Text("test")}}}
+	if _, err := transform(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	var hit, dropped bool
+	for _, d := range observed {
+		if d.reason == "search hit" && d.included {
+			hit = true
+		}
+		if d.reason == "budget-dropped" && !d.included {
+			dropped = true
+		}
+	}
+	if !hit || !dropped {
+		t.Fatalf("memory decisions: %+v", observed)
+	}
+}
+
 func TestMemoryContextBudgetIncludesFraming(t *testing.T) {
 	store, err := memory.Open(filepath.Join(t.TempDir(), "memory.db"))
 	if err != nil {

@@ -1,0 +1,10 @@
+model: faux-1
+steps:
+  - tool_call:
+      name: bash
+      id: recovery-marker
+      args:
+        command: "printf x >> resume-effect.txt; while [ ! -e release-tool ]; do sleep 0.1; done"
+  - on_tool_result: recovery-marker
+    then:
+      - text: "The tool completed before the crash."

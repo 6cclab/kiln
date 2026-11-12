@@ -34,6 +34,40 @@ jobs:
       - name: make e2e
         run: make e2e
 
+  install-smoke:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+
+      - name: source installer, update and CLI smoke
+        shell: bash
+        run: |
+          set -eu
+          scratch="$RUNNER_TEMP"
+          suffix=
+          if [ "$RUNNER_OS" = Windows ]; then
+            scratch=$(cygpath -u "$RUNNER_TEMP")
+            suffix=.exe
+          fi
+          export HOME="$scratch/kiln-smoke-home"
+          export TMPDIR="$HOME/tmp"
+          mkdir -p "$TMPDIR"
+          if [ "$RUNNER_OS" = macOS ]; then
+            go test -tags e2e ./test/e2e -run '^TestInstallScript_' -count=1 -timeout 5m
+          fi
+          sh scripts/install.sh --source . --dir "$HOME/bin"
+          sh scripts/install.sh --source . --dir "$HOME/bin"
+          cd "$HOME"
+          "$HOME/bin/kiln$suffix" --version
+          "$HOME/bin/kiln$suffix" providers
+
   race:
     runs-on: ubuntu-latest
     steps:
@@ -90,8 +124,7 @@ jobs:
   # linux/amd64); it exists to catch a GOOS-specific compile break (like
   # the one fixed alongside this job: syscall.Kill/Setpgid are Unix-only)
   # before it reaches a release build. go vet actually runs the analyzers,
-  # which `go build` does not, so windows (the one GOOS this repo cannot
-  # test on any runner here) gets that extra check; the others get build
+  # which `go build` does not, so windows gets that extra check; the others get build
   # only, since their analyzers run natively in the check/race jobs.
   cross-compile:
     runs-on: ubuntu-latest

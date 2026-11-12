@@ -67,6 +67,9 @@ const (
 	// picked for one request (kiln's own; pi shows it in its footer):
 	// RouteReason, RouteVirtual, RouteModel and RouteThinkingLevel.
 	EventRoute EventType = "route"
+	// EventWorkerIntegration reports the committed outcome of an isolated
+	// worker patch batch, independent of the model's final narration.
+	EventWorkerIntegration EventType = "worker_integration"
 )
 
 // ConfigProperty names the field config_update reports as having changed.
@@ -112,10 +115,13 @@ type Event struct {
 	Message *msg.AssistantMessage
 
 	// tool_start/tool_update/tool_end
-	ToolCallID string
-	ToolName   string
-	ToolArgs   map[string]any
-	ToolResult *msg.ToolResultMessage
+	ToolCallID          string
+	ToolName            string
+	ToolArgs            map[string]any
+	ToolResult          *msg.ToolResultMessage
+	IntegrationStatus   string
+	IntegrationText     string
+	IntegrationReplayed bool
 	// PermissionOutcome is set on tool_end only (not tool_start: the gate
 	// has not run yet when tool_start fires — see beginTool in turn.go),
 	// mirroring permission.Outcome as a plain string: "approved",

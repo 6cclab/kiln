@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,7 @@ import (
 type outcomeObserver struct {
 	store      *memory.Store
 	project    string
+	root       string
 	config     learning.ObservationConfig
 	sessionID  string
 	binaryHash string
@@ -31,6 +33,18 @@ type runAggregate struct {
 	models        map[string]bool
 	modelOverflow bool
 	outcome       learning.Outcome
+	proofs        map[string]tools.VerificationEvidence
+	proofBytes    int
+}
+
+const maxCollectedFactProofs = 16
+const maxCollectedFactProofBytes = 64 << 10
+const maxCollectedFactProofBytesEach = 8 << 10
+
+func collectedProofSize(proof tools.VerificationEvidence) int {
+	raw, _ := json.Marshal(proof)
+	key, _ := json.Marshal(proof.Command)
+	return len(raw) + len(key) + 2
 }
 
 func toolFailureCategory(name string, o *learning.Outcome) {
@@ -73,11 +87,40 @@ func (o *outcomeObserver) observe(ctx context.Context, ev harness.Event) {
 		if ev.OperationID == "" {
 			return
 		}
-		o.current = &runAggregate{operationID: ev.OperationID, started: time.Now(), models: map[string]bool{}, outcome: learning.Outcome{ID: learning.HashIdentity(o.sessionID + "\x00" + ev.OperationID), ModelHash: learning.HashIdentity(""), BinaryHash: o.binaryHash, UsageScope: "main-lane model responses; worker and side usage excluded"}}
+		run := &runAggregate{operationID: ev.OperationID, started: time.Now(), models: map[string]bool{}, outcome: learning.Outcome{ID: learning.HashIdentity(o.sessionID + "\x00" + ev.OperationID), ModelHash: learning.HashIdentity(""), BinaryHash: o.binaryHash, SkillBudgetTokens: o.config.SourceSkillBudgetTokens, UsageScope: "main-lane model responses; worker and side usage excluded"}}
+		if o.config.FactMemoryEnabled && o.root != "" {
+			run.proofs = make(map[string]tools.VerificationEvidence)
+		}
+		o.current = run
 	case harness.EventToolEnd:
 		r := o.current
 		if r == nil || r.operationID != ev.OperationID || ev.ToolResult == nil {
 			return
+		}
+		if r.proofs != nil && (ev.ToolName == "bash" || ev.ToolName == "Bash") {
+			attempt, attempted := tools.VerificationAttemptFromResult(ev.ToolResult.Details)
+			if ev.ToolResult.IsError && (!attempted || attempt.CallID != ev.ToolCallID) {
+				clear(r.proofs)
+				r.proofBytes = 0
+			}
+			if attempted && attempt.CallID == ev.ToolCallID {
+				if previous, ok := r.proofs[attempt.Command]; ok {
+					r.proofBytes -= collectedProofSize(previous)
+				}
+				delete(r.proofs, attempt.Command)
+			}
+			if verifiedCommand(ev) {
+				proof, _ := tools.VerificationFromResult(ev.ToolResult.Details)
+				if previous, ok := r.proofs[proof.Command]; ok {
+					r.proofBytes -= collectedProofSize(previous)
+					delete(r.proofs, proof.Command)
+				}
+				size := collectedProofSize(proof)
+				if (!attempted || attempt.Command == proof.Command) && size <= maxCollectedFactProofBytesEach && len(r.proofs) < maxCollectedFactProofs && r.proofBytes+size <= maxCollectedFactProofBytes {
+					r.proofs[proof.Command] = proof
+					r.proofBytes += size
+				}
+			}
 		}
 		if ev.ToolResult.IsError {
 			r.outcome.ToolFailure++
@@ -134,8 +177,19 @@ func (o *outcomeObserver) observe(ctx context.Context, ev harness.Event) {
 		}
 		boundedCtx, cancel := context.WithTimeout(writeCtx, 5*time.Second)
 		defer cancel()
-		if err := learning.RecordOutcome(boundedCtx, o.store, o.project, r.outcome, o.config.MaxOutcomes); err != nil {
+		if err := learning.RecordOutcomeAndPropose(boundedCtx, o.store, o.project, r.outcome, o.config); err != nil {
 			diag.L().Warn("learning outcome unavailable", "error", err)
+			return
+		}
+		if o.root != "" && o.config.FactMemoryEnabled && r.outcome.Status == "completed" {
+			proofs := make([]tools.VerificationEvidence, 0, len(r.proofs))
+			for _, proof := range r.proofs {
+				proofs = append(proofs, proof)
+			}
+			sort.Slice(proofs, func(i, j int) bool { return proofs[i].Command < proofs[j].Command })
+			if err := learning.RecordFactCandidates(boundedCtx, o.store, o.project, o.root, r.outcome, proofs, o.config); err != nil {
+				diag.L().Warn("learning fact candidates unavailable", "error", err)
+			}
 		}
 	}
 }
@@ -167,7 +221,11 @@ func attachLearningObserver(ctx context.Context, cwd string, started *agent.Star
 	if err != nil {
 		return nil, err
 	}
-	observer := &outcomeObserver{store: store, project: memoryScope(cwd), config: cfg, sessionID: started.SessionID, binaryHash: binaryHash}
+	root := memoryProjectRoot(cwd)
+	if cwd != root {
+		root = ""
+	}
+	observer := &outcomeObserver{store: store, project: memoryScope(cwd), root: root, config: cfg, sessionID: started.SessionID, binaryHash: binaryHash}
 	events := started.Harness.Events()
 	kinds := []harness.EventType{harness.EventRunStart, harness.EventRunResume, harness.EventToolEnd, harness.EventUsage, harness.EventRunEnd}
 	unsubs := make([]func(), 0, len(kinds))

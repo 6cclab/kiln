@@ -128,6 +128,65 @@ func TestDoctor_Runs(t *testing.T) {
 			t.Errorf("doctor output missing %q line:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "  - model \"faux/faux-1\"") {
+		t.Fatalf("doctor rejected available local provider:\n%s", out)
+	}
+}
+
+func TestDoctor_UnresolvableModelIsAProblem(t *testing.T) {
+	scratchProject(t)
+	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
+	for _, model := range []string{"", "missing/model", "invalid"} {
+		t.Run(model, func(t *testing.T) {
+			args := baseArgs()
+			args.Model = model
+			var stdout, stderr bytes.Buffer
+			if code := Doctor(context.Background(), args, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+			}
+			out := stdout.String()
+			if !strings.Contains(out, "tier       unresolvable:") || !strings.Contains(out, "model ") || strings.Contains(out, "No problems found.") {
+				t.Fatalf("doctor did not report an unusable model as a problem:\n%s", out)
+			}
+			if !strings.Contains(out, "  - model ") {
+				t.Fatalf("doctor problem list omits unusable model:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestDoctor_SelectedCatalogModelRequiresProviderAuth(t *testing.T) {
+	scratchProject(t)
+	t.Setenv("OLLAMA_HOST", "http://127.0.0.1:1")
+	for _, key := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+		t.Setenv(key, "")
+	}
+	args := baseArgs()
+	args.Model = "anthropic/claude-haiku-4-5"
+	check := func(wantProblem bool) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if code := Doctor(context.Background(), args, &stdout, &stderr); code != 0 {
+			t.Fatalf("exit code = %d, stderr=%s", code, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "tier       ") || strings.Contains(out, "tier       unresolvable:") {
+			t.Fatalf("catalog model did not resolve:\n%s", out)
+		}
+		if wantProblem {
+			if !strings.Contains(out, "  - model \"anthropic/claude-haiku-4-5\"") || !strings.Contains(out, "kiln login anthropic") || strings.Contains(out, "No problems found.") {
+				t.Fatalf("doctor falsely approved unauthenticated catalog model:\n%s", out)
+			}
+		} else if !strings.Contains(out, "No problems found.") {
+			t.Fatalf("doctor rejected authenticated catalog model:\n%s", out)
+		}
+		if strings.Contains(out, "test-only-key") {
+			t.Fatalf("doctor printed a credential:\n%s", out)
+		}
+	}
+	check(true)
+	t.Setenv("ANTHROPIC_API_KEY", "test-only-key")
+	check(false)
 }
 
 // TestDoctor_BypassPermissionsIsAProblem checks /doctor's problem list

@@ -100,6 +100,39 @@ func TestCapabilitySuggestionsPinsBoundsAndDoNotAdmit(t *testing.T) {
 	}
 }
 
+func TestCapabilitySuggestionObservedReasons(t *testing.T) {
+	all, _ := mcp.PostureByName("all")
+	catalog := func() tools.CapabilityCatalog {
+		return tools.CapabilityCatalog{
+			Skills: []tools.SkillRecord{{Name: "pinned", Description: "General guidance"}, {Name: "database", Description: "Database guidance"}},
+			Agents: []agents.Definition{{Name: "db-agent", Description: "Database review"}}, Scope: all,
+		}
+	}
+	input := []msg.Message{msg.UserMessage{Content: msg.Blocks{msg.Text("database")}}}
+	ledger := newContextSelectionLedger()
+	ledger.BeginRequest(input)
+	_, err := capabilitySuggestionContextObserved(catalog, claudesettings.SkillDiscovery{Pinned: []string{"pinned"}}, func() int { return 128 }, ledger.Record)(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ledger.SnapshotForRequest(input, "", nil, false)
+	for _, want := range []struct{ kind, name, reason string }{
+		{"skill", "pinned", "pinned"},
+		{"skill", "database", "suggested by metadata match"},
+		{"agent", "db-agent", "suggested by metadata match"},
+	} {
+		found := false
+		for _, item := range got {
+			if item.Kind == want.kind && item.Name == want.name && item.Reason == want.reason && item.Included {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing %+v: %+v", want, got)
+		}
+	}
+}
+
 func TestCapabilitySuggestionsAgentCollisionAndDisabled(t *testing.T) {
 	all, _ := mcp.PostureByName("all")
 	s := &mcpSession{posture: all, state: mcp.NewGateState()}

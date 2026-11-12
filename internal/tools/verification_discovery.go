@@ -16,9 +16,8 @@ type discoveredVerificationInputs struct {
 }
 
 // discoverGoVerificationInputs recognizes only one literal local go test
-// package command. The resulting set is deliberately partial: imports,
-// replacements, toolchain, environment, and files outside the selected tree
-// are not discovered.
+// package command. The resulting set is deliberately partial; unsupported
+// build selection and execution inputs are described by verificationScope.
 func discoverGoVerificationInputs(cwd, command string, allowRead func(string) bool) (discoveredVerificationInputs, error) {
 	var out discoveredVerificationInputs
 	if cwd == "" || allowRead == nil || len(command) > maxVerificationCommandBytes {
@@ -26,34 +25,37 @@ func discoverGoVerificationInputs(cwd, command string, allowRead func(string) bo
 	}
 	parsed, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 	if err != nil || len(parsed.Stmts) != 1 {
-		return out, fmt.Errorf("unsupported verification command")
+		return out, fmt.Errorf("compound commands or shell syntax unsupported")
 	}
 	stmt := parsed.Stmts[0]
 	call, ok := stmt.Cmd.(*syntax.CallExpr)
 	if !ok || stmt.Background || stmt.Coprocess || stmt.Negated || stmt.Disown || len(stmt.Redirs) != 0 || len(call.Assigns) != 0 || len(call.Args) != 3 {
-		return out, fmt.Errorf("unsupported verification command")
+		return out, fmt.Errorf("compound commands, redirects or assignments unsupported")
 	}
 	words := make([]string, 3)
 	for i, word := range call.Args {
 		if len(word.Parts) != 1 {
-			return out, fmt.Errorf("nonliteral verification command")
+			return out, fmt.Errorf("shell expansions or quoting unsupported")
 		}
 		lit, ok := word.Parts[0].(*syntax.Lit)
 		if !ok {
-			return out, fmt.Errorf("nonliteral verification command")
+			return out, fmt.Errorf("shell expansions or quoting unsupported")
 		}
 		words[i] = lit.Value
 	}
 	if words[0] != "go" || words[1] != "test" || !strings.HasPrefix(words[2], "./") {
-		return out, fmt.Errorf("unsupported verification command")
+		return out, fmt.Errorf("flags or unsupported verification command")
 	}
 	path := strings.TrimSuffix(strings.TrimPrefix(words[2], "./"), "/...")
-	if path == "" || path == "." || strings.Contains(path, "...") || !validRelativeVerificationPath(path) {
+	if words[2] == "./..." {
+		path = "."
+	}
+	if path == "" || strings.Contains(path, "...") || path != "." && !validRelativeVerificationPath(path) {
 		return out, fmt.Errorf("unsupported verification package path")
 	}
 	// No shell metacharacters or Go package patterns are admitted. The source
 	// spelling must be canonical so the directory snapshotted is the one run.
-	if words[2] != "./"+path && words[2] != "./"+path+"/..." {
+	if path != "." && words[2] != "./"+path && words[2] != "./"+path+"/..." || path == "." && words[2] != "./..." {
 		return out, fmt.Errorf("unsupported verification package path")
 	}
 	for _, c := range path {
@@ -76,6 +78,11 @@ func discoverGoVerificationInputs(cwd, command string, allowRead func(string) bo
 		}
 		out.files = append(out.files, name)
 	}
+	more, err := discoverGoLocalDependencies(cwd, path, strings.HasSuffix(words[2], "/..."), allowRead)
+	if err != nil {
+		return discoveredVerificationInputs{}, err
+	}
+	out.directories = appendUniqueVerificationPaths(out.directories, more)
 	return out, nil
 }
 

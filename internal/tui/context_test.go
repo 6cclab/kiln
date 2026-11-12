@@ -110,6 +110,29 @@ func TestRenderContext_FilesReadSegmentRenders(t *testing.T) {
 	}
 }
 
+func TestRenderContextSelectionReasons(t *testing.T) {
+	b := commands.ContextBreakdown{Window: 100, Segments: []commands.ContextSegment{{Label: "Free", Tokens: 100}}, Selections: []commands.ContextSelection{
+		{Kind: "skill", Name: "review", Material: "body", Included: true, Reason: "exact-name invocation"},
+		{Kind: "mcp", Name: "mcp__fixture__search", Reason: "excluded"},
+	}}
+	plain := ansi.Strip(strings.Join(RenderContext(b, 80), "\n"))
+	for _, want := range []string{"Selection", "in skill body review · exact-name invocation", "out mcp metadata mcp__fixture__search · excluded"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("missing %q in:\n%s", want, plain)
+		}
+	}
+}
+
+func TestRenderContextSettingSources(t *testing.T) {
+	b := commands.ContextBreakdown{Window: 100, Segments: []commands.ContextSegment{{Label: "Free", Tokens: 100}}, Settings: []commands.ContextSetting{{Name: "model", Value: "faux/faux-2", Source: "--model"}, {Name: "permission", Value: "plan", Source: "--permission-mode"}}}
+	plain := ansi.Strip(strings.Join(RenderContext(b, 80), "\n"))
+	for _, want := range []string{"Settings", "model faux/faux-2 · --model", "permission plan · --permission-mode"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("missing %q from %s", want, plain)
+		}
+	}
+}
+
 // TestRenderContextBar_EachNonEmptySegmentAtLeastOneCell covers a segment
 // too small to earn a proportional cell (e.g. 1 of 128000 tokens at width
 // 40) still rendering at least one cell, so it is never silently invisible.

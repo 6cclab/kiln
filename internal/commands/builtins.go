@@ -113,6 +113,10 @@ type BuiltinDeps struct {
 	// loaded, was trimmed, or was skipped, and why. "" (or a nil func)
 	// omits the line.
 	AutoMemoryStatus func() string
+	// ContextSelections returns decisions captured while assembling the most
+	// recent request and explicit discovery results.
+	ContextSelections func() []ContextSelection
+	ContextSettings   func() []ContextSetting
 
 	// OnClear starts the conversation over: the model sees no earlier
 	// turns afterwards.
@@ -242,7 +246,7 @@ func buildContextBreakdown(deps BuiltinDeps, t budget.Tier) *ContextBreakdown {
 		free = 0
 	}
 
-	return &ContextBreakdown{
+	breakdown := &ContextBreakdown{
 		ModelLabel: label,
 		// The header reports system+tools+filesRead+conversation, not the
 		// raw ContextUsed figure: they can otherwise disagree whenever a
@@ -259,6 +263,13 @@ func buildContextBreakdown(deps BuiltinDeps, t budget.Tier) *ContextBreakdown {
 			{Label: "Free", Tokens: free},
 		},
 	}
+	if deps.ContextSelections != nil {
+		breakdown.Selections = deps.ContextSelections()
+	}
+	if deps.ContextSettings != nil {
+		breakdown.Settings = deps.ContextSettings()
+	}
+	return breakdown
 }
 
 // clampRange clamps v to [lo, hi], treating a hi below lo as lo (an
@@ -485,7 +496,18 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 						out = append(out, fmt.Sprintf("auto-memory   %s", status))
 					}
 				}
-				return Result{Output: out, Context: buildContextBreakdown(deps, t)}, nil
+				breakdown := buildContextBreakdown(deps, t)
+				for _, entry := range breakdown.Selections {
+					state := "out"
+					if entry.Included {
+						state = "in"
+					}
+					out = append(out, fmt.Sprintf("%s %s %s %s · %s", state, entry.Kind, entry.Material, entry.Name, entry.Reason))
+				}
+				for _, entry := range breakdown.Settings {
+					out = append(out, fmt.Sprintf("%s %s · %s", entry.Name, entry.Value, entry.Source))
+				}
+				return Result{Output: out, Context: breakdown}, nil
 			},
 		},
 		{

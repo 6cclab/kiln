@@ -61,6 +61,48 @@ func TestMemoryScopeCorrectionExpiryForget(t *testing.T) {
 	}
 }
 
+func TestAutomaticFactMetadataMigratesOnceAndForgetCleansIt(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "memory.db")
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := CaptureSources(root, []string{"main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := Record{Scope: "project", Key: "verified-command:legacy", Kind: "procedure", Text: "Observed successful verification command: go test ./...", Evidence: "Successful Bash command in opted-in outcome legacy; call legacy", Sources: sources, Expires: time.Now().Add(time.Hour).Unix()}
+	if stored, err := s.PutIfAbsent(ctx, record); err != nil || !stored {
+		t.Fatalf("initial fact: %v %v", stored, err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM memory_automatic_facts; PRAGMA user_version=1;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM memory_automatic_facts WHERE scope='project'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("legacy marker migration: %d %v", n, err)
+	}
+	if err := s.Forget(ctx, "project", record.Key); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM memory_automatic_facts WHERE scope='project'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("forgotten metadata retained: %d %v", n, err)
+	}
+}
+
 func TestRestoreCannotCrossScopes(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "memory.db"))
 	if err != nil {

@@ -10,7 +10,7 @@ import (
 	"github.com/andrepato/harness/internal/tools"
 )
 
-const discoveryPointer = "Installed skills and MCP tools are available through capability_search. Search by topic when specialized instructions or tools would help, then invoke a skill by exact name or call an enabled MCP tool. Relevant suggestions may accompany the user request.\n"
+const discoveryPointer = "Installed skills, custom commands, agents, and MCP tools are available through capability_search. Search by topic when specialized instructions or tools would help, then invoke a skill or command by exact name, dispatch an agent, or call an enabled MCP tool. Relevant suggestions may accompany the user request.\n"
 
 const legacyDiscoveryPointer = "Installed skills are available through skill_search. Search by topic when specialized instructions would help, then invoke skill by exact name. Relevant suggestions may accompany the user request.\n"
 
@@ -59,6 +59,10 @@ func discoveryIndex(list []skills.Skill, config claudesettings.SkillDiscovery, t
 // Suggestions are derived from the latest user request, not tool output or
 // other runtime context. Append them without rewriting the conversation.
 func skillDiscoveryContext(records []tools.SkillRecord, config claudesettings.SkillDiscovery, budget func() int) func(context.Context, []msg.Message) ([]msg.Message, error) {
+	return skillDiscoveryContextObserved(records, config, budget, nil)
+}
+
+func skillDiscoveryContextObserved(records []tools.SkillRecord, config claudesettings.SkillDiscovery, budget func() int, observe func(name, reason string, included bool)) func(context.Context, []msg.Message) ([]msg.Message, error) {
 	return func(_ context.Context, transcript []msg.Message) ([]msg.Message, error) {
 		if config.Mode == "search" || config.Mode == "catalog" {
 			return transcript, nil
@@ -93,6 +97,13 @@ func skillDiscoveryContext(records []tools.SkillRecord, config claudesettings.Sk
 			for _, r := range pinned {
 				line := tools.SkillSearchText([]tools.SkillRecord{r}, "", remaining)
 				text += line
+				if observe != nil {
+					if line != "" {
+						observe(r.Name, "pinned", true)
+					} else {
+						observe(r.Name, "budget-dropped", false)
+					}
+				}
 				remaining -= (len(line) + 3) / 4
 				for j := 0; j < len(rest); j++ {
 					if rest[j].Name == r.Name {
@@ -101,7 +112,19 @@ func skillDiscoveryContext(records []tools.SkillRecord, config claudesettings.Sk
 					}
 				}
 			}
-			text += tools.SkillSearchText(rest, query, remaining)
+			ranked := tools.SearchSkills(rest, query, 20)
+			matched := tools.SkillSearchText(rest, query, remaining)
+			if observe != nil {
+				for _, r := range ranked {
+					included := strings.Contains("\n"+matched, "\n"+r.Name+": ")
+					reason := "budget-dropped"
+					if included {
+						reason = "suggested by metadata match"
+					}
+					observe(r.Name, reason, included)
+				}
+			}
+			text += matched
 			if text == "" {
 				return transcript, nil
 			}

@@ -41,7 +41,7 @@ func TestGoVerificationDiscovery(t *testing.T) {
 		{"assignment", "X=1 go test ./pkg", false},
 		{"substitution", "go test ./$(echo pkg)", false},
 		{"flag", "go test -run Test ./pkg", false},
-		{"root", "go test ./...", false},
+		{"root", "go test ./...", true},
 		{"redirect", "go test ./pkg >out", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -60,10 +60,20 @@ func TestGoVerificationDiscovery(t *testing.T) {
 			if _, ok := VerificationAttemptFromResult(result.Details); !ok {
 				t.Fatal("missing attempt")
 			}
+			if !tc.proof {
+				attempt, _ := VerificationAttemptFromResult(result.Details)
+				if attempt.DiscoveryUnsupported == "" {
+					t.Fatal("unsupported discovery reason missing")
+				}
+			}
 			if !ok {
 				return
 			}
-			if proof.Discovery != "go-partial-v1" || len(proof.Directories) != 1 || proof.Directories[0].Path != "pkg" || len(proof.Files) != 4 {
+			wantDir := "pkg"
+			if tc.name == "root" {
+				wantDir = "."
+			}
+			if proof.Discovery != "go-partial-v1" || len(proof.Directories) != 1 || proof.Directories[0].Path != wantDir || len(proof.Files) != 4 {
 				t.Fatalf("unexpected discovery: %+v", proof)
 			}
 			if !VerificationFresh(cwd, proof, allow) {
@@ -124,8 +134,8 @@ func TestGoVerificationDiscoveryMissingMetadataChangesStatus(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(cwd, "pkg"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"go.mod", "pkg/a.go"} {
-		if err := os.WriteFile(filepath.Join(cwd, path), []byte("x"), 0600); err != nil {
+	for path, body := range map[string]string{"go.mod": "module example.com/test\n", "pkg/a.go": "package pkg\n"} {
+		if err := os.WriteFile(filepath.Join(cwd, path), []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -164,8 +174,8 @@ func TestGoVerificationDiscoveryRejectsMetadataCreatedDuringCommand(t *testing.T
 	if err := os.Mkdir(filepath.Join(cwd, "pkg"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"go.mod", "pkg/a.go"} {
-		if err := os.WriteFile(filepath.Join(cwd, path), []byte("x"), 0600); err != nil {
+	for path, body := range map[string]string{"go.mod": "module example.com/test\n", "pkg/a.go": "package pkg\n"} {
+		if err := os.WriteFile(filepath.Join(cwd, path), []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}

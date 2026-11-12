@@ -1,0 +1,32 @@
+# A prior print run invokes the skill, then the TUI resumes it. The next
+# request still carries the committed body, while compaction replaces it with
+# a summary; catalog metadata remains in the active system prompt throughout.
+@faux testdata/faux/qa/commands-context-reasons.yaml
+@size 120x30
+@setup mkdir -p .claude/skills/review
+@setup printf '%s\n' '---' 'name: review' 'description: Review code' '---' 'SECRET REVIEW BODY' > .claude/skills/review/SKILL.md
+@setup printf '{"skillDiscovery":{"mode":"catalog"}}\n' > .claude/settings.json
+@setup printf 'PROJECT INSTRUCTION MARKER\n' > CLAUDE.md
+@pre -p "review this"
+@args --continue
+
+WAITFOR /First turn done\./ 20
+SEND second turn
+WAITFOR /Second turn done\./ 20
+SEND /context
+WAITFOR /in skill body review · exact-name invocation/ 20
+EXPECT /in skill metadata review · catalog listing/
+EXPECT /Claude instructions/
+SHOT before-compaction
+RUN python3 -c 'import json,pathlib,urllib.request; a=pathlib.Path("{PROJ}/../faux.log").read_text().splitlines()[0]; r=json.load(urllib.request.urlopen("http://"+a+"/_faux/requests")); assert "SECRET REVIEW BODY" in json.dumps(r[-1]["messages"]); assert "<name>review</name>" in r[-1]["system"]'
+SEND /compact
+WAITFOR /Context compacted/ 20
+SEND third turn
+WAITFOR /Third turn done\./ 20
+RESIZE 120 20
+SEND /context
+WAITFOR /in skill metadata review · catalog listing/ 20
+EXPECT_NOT /in skill body review · exact-name invocation/
+SHOT after-compaction
+RUN python3 -c 'import json,pathlib,urllib.request; a=pathlib.Path("{PROJ}/../faux.log").read_text().splitlines()[0]; r=json.load(urllib.request.urlopen("http://"+a+"/_faux/requests")); assert "SECRET REVIEW BODY" not in json.dumps(r[-1]["messages"]); assert "<name>review</name>" in r[-1]["system"]'
+EXPECT_NOT /panic|goroutine/

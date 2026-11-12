@@ -867,7 +867,33 @@ recall remains project-scoped; the global export command provides full inspectio
 
 Disabling memory does not delete it; management commands remain available.
 Forgetting removes database rows and search entries, not external backups or
-copies previously exported. Automatic extraction of verified facts is not yet implemented. For file-dependent observations, `kiln memory remember <key> <text> [source-files...]` captures source fingerprints; recall checks them against the current worktree and excludes stale records. Model-written observations without source fingerprints remain provisional.
+copies previously exported. For file-dependent observations,
+`kiln memory remember <key> <text> [source-files...]` captures source
+fingerprints; recall checks them against the current worktree and excludes
+stale records. Model-written observations without source fingerprints remain
+provisional.
+
+With the user's `learningAutomation.enabled` opt-in, `learningEnabled` and
+`personalMemoryEnabled` both enabled, and kiln launched at the project root,
+a completed run can turn a successful literal local `go test` command into a
+reviewable fact candidate. Promotion stores only the narrow procedure
+“Observed successful verification command: …” when one to eight declared
+regular-file dependencies are fresh, readable under the current permission
+rules, and at most 1 MiB each. Directory or missing-file dependencies,
+oversized proof data, changed inputs, and denied Read permission leave a
+review-only candidate with a reason. A successful test is an observation, not
+proof that the command is sufficient or the task is correct. The extractor
+makes no model call and does not write Claude memory files.
+
+Use `kiln learning fact-candidates` to inspect candidates and
+`kiln learning dismiss-fact <id>` to remove one. Dismissal does not erase an
+already stored memory record; use `kiln memory forget <key>` for that. Derived
+records expire after 30 days and are rechecked against source bytes and file
+modes on retrieval. User corrections retain their history. A user memory or
+learning opt-out takes precedence over project settings; a memory opt-out
+keeps opted-in aggregate counts but stores no raw verification proofs or
+candidates. See [verified fact extraction](efficiency/fact-extraction.md) for
+eligibility, bounds and remaining limits.
 
 ### Subagent limits and conservative routing
 
@@ -917,7 +943,8 @@ session overrides to this report as it does to a running session.
     "readCacheEntries": 32,
     "readCacheBytes": 4194304,
     "progressLimit": 0,
-    "cycleLimit": 0
+    "cycleLimit": 0,
+    "progressLoopLimit": 0
   }
 }
 ```
@@ -944,6 +971,19 @@ error results, ignoring per-call bookkeeping. Successful calls clear the cycle
 history. The guard retains at most 40 hashes per operation, reaches nested
 workers, and pairs remaining skipped calls with explicit error results so the
 next prompt has a valid transcript. Successful polling does not trigger it.
+
+`progressLoopLimit` accepts 2–10 repetitions, or zero (default) to disable.
+It detects unchanged successful reads, repeated short read-only sequences
+including conservatively parsed Bash commands such as `pwd` and `git status`,
+and small regular files restored to an earlier state by edits. Bash sequence
+checks compare bounded worktree file snapshots and tool outputs. An unreadable,
+linked, or oversized tree is treated as unknown and cannot trigger a notice;
+effectful Bash commands are excluded because external effects cannot be
+observed reliably. One corrective notice is sent; continued repetition of
+that pattern fails the operation.
+It applies to nested workers. A repository setting cannot enable it when the
+user left it off, or raise a user-selected limit. The guard does not prove
+that an unfamiliar tool or external task state made progress.
 
 ### Shared model request budgets
 
@@ -1262,9 +1302,20 @@ removing the temporary worktree does not erase those objects from the repository
 The worker artifact contains only changes made after this captured baseline.
 Workers receive read/edit/write tools restricted to relative, nonsymlink paths
 inside their worktree. The parent's permission rules still apply. Shell tools
-are unavailable in this mode, and a parent OS sandbox or extension tool setup
-that cannot be rebound safely is refused. This is constrained editing isolation,
-not a general-purpose OS sandbox.
+are unavailable by default. A parent OS sandbox or extension tool setup that
+cannot be rebound safely is refused in this file-only mode.
+
+`orchestration.isolatedShell` is reserved for a future shell-capable isolated
+worker. It defaults to false, requires `isolatedWorkers`, and currently refuses
+activation on macOS, Linux and Windows before starting a child. macOS Seatbelt
+can confine shell writes, network and sockets, but the current process-group
+owner cannot stop a descendant that calls `setsid()` and leaves its group.
+Cleanup of the worktree while that process runs is unsafe. The tested Seatbelt
+profile remains a foundation, not an active product shell mode. File-only
+isolated workers still work on macOS and Linux. An isolated worker with a
+nonempty `tools` allowlist naming an unsupported tool now fails explicitly;
+the allowlist is never widened to grant Bash. Parent MCP and other host-executing
+extension tools remain unavailable in isolated workers.
 
 On macOS and Linux, isolated file operations pin an open directory and traverse
 components relative to directory descriptors without following symlinks. Reads
@@ -1290,8 +1341,9 @@ clean parent. Snapshot artifacts require the captured working-tree and index
 state to match; edits made since capture are refused, including changes to the
 staged version of a file. Applying changes the working tree and preserves the
 parent's index. It does not commit. After one patch is applied, subsequent
-artifacts need explicit review/rebase; automatic merging of parallel edits is
-not implemented. Without `snapshotDirty`, untracked parent files are unsupported.
+artifacts need explicit review/rebase; use the batch command below to apply
+disjoint artifacts from one shared baseline together. Without `snapshotDirty`,
+untracked parent files are unsupported.
 Ignored build artifacts are excluded in either mode. A hard process kill may leave a worktree or
 integration lock requiring manual cleanup after confirming no worker is active.
 
@@ -1354,5 +1406,22 @@ artifacts cannot be mixed in a batch.
 
 The lock coordinates Kiln processes. It is not a filesystem transaction: crashes,
 cancellation, write failures, or external edits during the final apply can leave
-partial state. Inspect the working tree before retrying such a failure. Batch
-integration remains an explicit command; workers do not apply their own patches.
+partial state. Inspect the working tree before retrying such a failure. Manual
+batch integration remains available.
+
+Automatic integration is off by default. To enable it, set both
+`orchestration.isolatedWorkers` and `orchestration.autoIntegrate` to `true` in
+your own user settings or an explicit `--settings` file. Project settings
+cannot enable it. Kiln waits for every tool result in the assistant's batch,
+including ordinary tools after a worker call, then validates all worker
+artifacts together against the current parent baseline. Any failed worker,
+failed ordinary tool, overlap, or moved baseline prevents the whole apply.
+The decision and retained artifact paths are written to the session and shown
+in the TUI and print output; they also enter the next model request.
+
+Before applying, Kiln records an integration intent. If it restarts with that
+intent but no committed outcome, it reports that the apply may have occurred
+and does not retry automatically. A recovered batch without an intent also
+requires explicit review. Inspect the working tree and retained manifests
+before choosing a manual apply or repair. Automatic integration creates no
+commit and does not run verification for the combined patch.

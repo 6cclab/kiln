@@ -1,0 +1,18 @@
+# Crash a print run after its shell marker effect, then resume that session.
+# The first command is deliberately not replayed; the user can start a fresh turn.
+@faux testdata/faux/qa/recovery-uncertain-continue.yaml
+@setup sh {ROOT}/testdata/faux/qa/recovery-uncertain-seed.sh {ROOT} {PROJ} {HOME}
+@args --continue
+@size 120x40
+
+WAITFOR /describe a task/ 20
+WAITFOR /effect is unknown/ 20
+SHOT uncertain-outcome
+EXPECT /effect is unknown/
+EXPECT_NOT /Allow kiln to run this command/
+RUN test "$(cat resume-effect.txt)" = x
+SEND what happened?
+WAITFOR /Fresh turn after uncertain recovery/ 20
+SHOT fresh-turn
+RUN test "$(cat resume-effect.txt)" = x
+EXPECT_NOT /panic|goroutine/

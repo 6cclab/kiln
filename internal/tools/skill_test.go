@@ -53,6 +53,19 @@ func TestSkillTool_InvokeReturnsBaseDirAndBody(t *testing.T) {
 	}
 }
 
+func TestSkillToolObservedExactNameOnlyOnSuccess(t *testing.T) {
+	var called []string
+	tl := SkillToolObserved([]SkillRecord{{Name: "greet", Body: "Hello", Dir: "/d"}}, func(name string) { called = append(called, name) })
+	for _, args := range []string{`{"skill":"unknown"}`, `{"skill":"greet"}`} {
+		if _, err := tl.Execute(context.Background(), json.RawMessage(args), nil, tool.Invocation{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(called) != 1 || called[0] != "greet" {
+		t.Fatalf("exact-name observations: %v", called)
+	}
+}
+
 func TestSkillTool_InvokeAppendsArgs(t *testing.T) {
 	tl := SkillTool([]SkillRecord{{Name: "greet", Description: "says hi", Body: "Hello.", Dir: "/d"}})
 	res, err := tl.Execute(context.Background(), json.RawMessage(`{"skill":"greet","args":"in French"}`), func(tool.Result) {}, tool.Invocation{})
@@ -62,6 +75,19 @@ func TestSkillTool_InvokeAppendsArgs(t *testing.T) {
 	got := msg.TextOf(res.Content)
 	if !strings.HasSuffix(got, "Hello.\n\nin French") {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestSkillTool_CommandRendererUsesPlaceholders(t *testing.T) {
+	tl := SkillTool([]SkillRecord{{Name: "frontend:component", Dir: "/repo/.claude/commands/frontend", Render: func(args string) string {
+		return "Build " + strings.Fields(args)[0]
+	}}})
+	res, err := tl.Execute(context.Background(), json.RawMessage(`{"skill":"frontend:component","args":"button large"}`), nil, tool.Invocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := msg.TextOf(res.Content); got != "Base directory for this skill: /repo/.claude/commands/frontend\n\nBuild button" {
+		t.Fatalf("rendered command: %q", got)
 	}
 }
 

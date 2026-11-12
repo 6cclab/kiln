@@ -69,7 +69,9 @@ type Settings struct {
 	LearningAutomation LearningAutomation
 	RuntimeEfficiency  RuntimeEfficiency
 	// EfficiencySources records the last accepted explicit source per efficiency field.
-	EfficiencySources      map[string]string
+	EfficiencySources map[string]string
+	// Sources records accepted settings outside the efficiency controls.
+	Sources                map[string]string
 	TaskVerificationStatus *bool
 	TaskStateEnabled       *bool
 	TaskStateTokens        *int
@@ -468,12 +470,28 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 				if repoScopedMode(f, m) {
 					merged.Permissions.DefaultMode = ""
 					merged.IgnoredModes = append(merged.IgnoredModes, f.Path)
+					delete(merged.Sources, "permissions.defaultMode")
+				} else {
+					merged.recordSource("permissions.defaultMode", f.Path)
 				}
 			}
 		}
 		beforeEfficiency := efficiencyPointers(merged)
 		trustedEfficiencySource := f.cli || f.Scope == paths.ScopeUser
+		// Automatic parent writes require a persistent user-scope setting.
+		// Even an explicitly loaded repository file is not user scope.
+		if f.Scope != paths.ScopeUser && raw.Orchestration.AutoIntegrate != nil && *raw.Orchestration.AutoIntegrate {
+			raw.Orchestration.AutoIntegrate = nil
+		}
 		if !trustedEfficiencySource {
+			// A repository may tighten an enabled guard, but cannot turn on
+			// progress-loop detection after the user left it off.
+			if n := raw.RuntimeEfficiency.ProgressLoopLimit; n != nil && *n > 0 {
+				current := merged.RuntimeEfficiency.ProgressLoopLimit
+				if current == nil || *current == 0 || *n > *current {
+					raw.RuntimeEfficiency.ProgressLoopLimit = nil
+				}
+			}
 			// Repository settings can turn off local learning and memory,
 			// but cannot undo a user's opt-out or enable opt-in capture.
 			if raw.LearningAutomation.Enabled != nil && *raw.LearningAutomation.Enabled {
@@ -531,9 +549,11 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		merged.recordEfficiencySources(beforeEfficiency, raw, f.Path)
 		if raw.Model != "" {
 			merged.Model = raw.Model
+			merged.recordSource("model", f.Path)
 		}
 		if raw.EffortLevel != "" {
 			merged.EffortLevel = raw.EffortLevel
+			merged.recordSource("effortLevel", f.Path)
 		}
 		if raw.ModelRoles != nil {
 			if merged.ModelRoles == nil {
@@ -542,11 +562,13 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 			for k, v := range raw.ModelRoles {
 				if v != "" {
 					merged.ModelRoles[k] = v
+					merged.recordSource("modelRoles."+k, f.Path)
 				}
 			}
 		}
 		if raw.StatusLine != nil && raw.StatusLine.Command != "" {
 			merged.StatusLine = raw.StatusLine
+			merged.recordSource("statusLine", f.Path)
 		}
 		if raw.Env != nil {
 			if merged.Env == nil {
@@ -558,12 +580,15 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		}
 		if raw.AutoMemoryEnabled != nil {
 			merged.AutoMemoryEnabled = raw.AutoMemoryEnabled
+			merged.recordSource("autoMemoryEnabled", f.Path)
 		}
 		if raw.PromptSuggestionEnabled != nil {
 			merged.PromptSuggestionEnabled = raw.PromptSuggestionEnabled
+			merged.recordSource("promptSuggestionEnabled", f.Path)
 		}
 		if raw.AutoMemoryDirectory != "" {
 			merged.AutoMemoryDirectory = raw.AutoMemoryDirectory
+			merged.recordSource("autoMemoryDirectory", f.Path)
 		}
 	}
 

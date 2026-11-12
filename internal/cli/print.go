@@ -46,7 +46,8 @@ import (
 //	 "total_cost_usd":..,"duration_ms":..,"num_turns":..,
 //	 "num_tool_calls":..,"reason":..?}
 type StreamEvent struct {
-	Type string
+	Type   string
+	Status string
 
 	// tool_start
 	Name string
@@ -104,6 +105,12 @@ func (e StreamEvent) MarshalJSON() ([]byte, error) {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		}{Type: e.Type, Text: e.Text})
+	case "worker_integration":
+		return json.Marshal(struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+			Text   string `json:"text"`
+		}{Type: e.Type, Status: e.Status, Text: e.Text})
 	case "result":
 		blocked := e.Blocked
 		if blocked == nil {
@@ -170,10 +177,11 @@ type toolCall struct {
 // print.ts's PrintResult, enriched (P1) with the usage/cost/duration/turn
 // accounting Claude Code's own result carries.
 type PrintResult struct {
-	Text      string
-	ToolCalls []toolCall
-	Blocked   []string
-	OK        bool
+	Text         string
+	Integrations []IntegrationNotice
+	ToolCalls    []toolCall
+	Blocked      []string
+	OK           bool
 
 	// Usage and CostUSD are the run's aggregate token/cost totals, copied
 	// from session.SessionStats (session.State.GetStats(), reachable via
@@ -193,6 +201,11 @@ type PrintResult struct {
 	Reason string
 }
 
+type IntegrationNotice struct {
+	Status string `json:"status"`
+	Text   string `json:"text"`
+}
+
 // Collector subscribes to a harness.Events bus and accumulates a
 // PrintResult as the run progresses, optionally streaming each event to a
 // writer as NDJSON (`--output-format stream-json`).
@@ -205,11 +218,12 @@ type Collector struct {
 	// `opts.gate?.getBlocked() ?? []`.
 	GetBlocked func() []string
 
-	text      strings.Builder
-	toolCalls []toolCall
-	unsubs    []func()
-	startedAt time.Time
-	turns     int
+	text         strings.Builder
+	integrations []IntegrationNotice
+	toolCalls    []toolCall
+	unsubs       []func()
+	startedAt    time.Time
+	turns        int
 }
 
 // NewCollector builds a Collector and subscribes it to events. Call
@@ -221,6 +235,7 @@ func NewCollector(events *harness.Events) *Collector {
 	c.unsubs = append(c.unsubs,
 		events.On(harness.EventToolStart, c.onToolStart),
 		events.On(harness.EventToolEnd, c.onToolEnd),
+		events.On(harness.EventWorkerIntegration, c.onWorkerIntegration),
 		events.On(harness.EventMessageUpdate, c.onMessageUpdate),
 		events.On(harness.EventTurnEnd, c.onTurnEnd),
 	)
@@ -271,6 +286,16 @@ func (c *Collector) onToolEnd(ev harness.Event) {
 	}
 }
 
+func (c *Collector) onWorkerIntegration(ev harness.Event) {
+	if ev.IntegrationText == "" {
+		return
+	}
+	c.integrations = append(c.integrations, IntegrationNotice{Status: ev.IntegrationStatus, Text: ev.IntegrationText})
+	if c.Stream != nil {
+		c.Stream(StreamEvent{Type: "worker_integration", Status: ev.IntegrationStatus, Text: ev.IntegrationText})
+	}
+}
+
 // onMessageUpdate reacts to the "done" sub-event of an assistant response
 // stream, which is where the Go harness carries the final AssistantMessage
 // (see the package doc for why this substitutes for message_end).
@@ -305,8 +330,14 @@ func (c *Collector) Finish(ok bool, stats session.SessionStats, reason string) P
 		blocked = c.GetBlocked()
 	}
 	text := strings.TrimSpace(c.text.String())
+	for _, notice := range c.integrations {
+		if text != "" {
+			text += "\n"
+		}
+		text += notice.Text
+	}
 	result := PrintResult{
-		Text: text, ToolCalls: c.toolCalls, Blocked: blocked, OK: ok,
+		Text: text, Integrations: append([]IntegrationNotice(nil), c.integrations...), ToolCalls: c.toolCalls, Blocked: blocked, OK: ok,
 		Usage: stats.Usage, CostUSD: stats.Usage.Cost.Total,
 		DurationMS:   time.Since(c.startedAt).Milliseconds(),
 		Turns:        c.turns,
@@ -324,16 +355,17 @@ func (c *Collector) Finish(ok bool, stats session.SessionStats, reason string) P
 // extended (P1) with the same usage/cost/duration/turn fields the "result"
 // stream event carries.
 type printJSON struct {
-	OK           bool       `json:"ok"`
-	Text         string     `json:"text"`
-	ToolCalls    []toolCall `json:"toolCalls"`
-	Blocked      []string   `json:"blocked"`
-	Usage        usageJSON  `json:"usage"`
-	TotalCostUSD float64    `json:"total_cost_usd"`
-	DurationMS   int64      `json:"duration_ms"`
-	NumTurns     int        `json:"num_turns"`
-	NumToolCalls int        `json:"num_tool_calls"`
-	Reason       string     `json:"reason,omitempty"`
+	OK           bool                `json:"ok"`
+	Text         string              `json:"text"`
+	Integrations []IntegrationNotice `json:"integrations,omitempty"`
+	ToolCalls    []toolCall          `json:"toolCalls"`
+	Blocked      []string            `json:"blocked"`
+	Usage        usageJSON           `json:"usage"`
+	TotalCostUSD float64             `json:"total_cost_usd"`
+	DurationMS   int64               `json:"duration_ms"`
+	NumTurns     int                 `json:"num_turns"`
+	NumToolCalls int                 `json:"num_tool_calls"`
+	Reason       string              `json:"reason,omitempty"`
 }
 
 // FormatPrintResult renders r for the given output format. "stream-json"
@@ -352,7 +384,7 @@ func FormatPrintResult(r PrintResult, format string) string {
 			blocked = []string{}
 		}
 		b, err := json.MarshalIndent(printJSON{
-			OK: r.OK, Text: r.Text, ToolCalls: toolCalls, Blocked: blocked,
+			OK: r.OK, Text: r.Text, Integrations: r.Integrations, ToolCalls: toolCalls, Blocked: blocked,
 			Usage: usageJSONOf(r.Usage), TotalCostUSD: r.CostUSD, DurationMS: r.DurationMS,
 			NumTurns: r.Turns, NumToolCalls: r.NumToolCalls, Reason: r.Reason,
 		}, "", "  ")

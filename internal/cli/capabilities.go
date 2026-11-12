@@ -53,6 +53,10 @@ func capabilitySearchBudget(config claudesettings.SkillDiscovery, session *mcpSe
 // capabilitySuggestionContext appends bounded metadata matches for the latest
 // user request. It does not admit MCP tools; explicit capability_search does.
 func capabilitySuggestionContext(catalog tools.CapabilityCatalogFunc, config claudesettings.SkillDiscovery, budget func() int) func(context.Context, []msg.Message) ([]msg.Message, error) {
+	return capabilitySuggestionContextObserved(catalog, config, budget, nil)
+}
+
+func capabilitySuggestionContextObserved(catalog tools.CapabilityCatalogFunc, config claudesettings.SkillDiscovery, budget func() int, observe func(kind, name, reason string, included bool)) func(context.Context, []msg.Message) ([]msg.Message, error) {
 	return func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error) {
 		if config.Mode == "search" || config.Mode == "catalog" {
 			return transcript, nil
@@ -92,6 +96,11 @@ func capabilitySuggestionContext(catalog tools.CapabilityCatalogFunc, config cla
 					line := tools.CapabilitySuggestionLine(tools.CapabilityHit{Kind: "skill", Name: s.Name, Description: s.Description, Action: tools.SkillCapabilityAction(s.Name), Reason: "pinned"})
 					if b.Len()+len(line) <= maxBytes {
 						b.WriteString(line)
+						if observe != nil {
+							observe("skill", s.Name, "pinned", true)
+						}
+					} else if observe != nil {
+						observe("skill", s.Name, "budget-dropped", false)
 					}
 					seen[key] = true
 				}
@@ -103,6 +112,11 @@ func capabilitySuggestionContext(catalog tools.CapabilityCatalogFunc, config cla
 				line := tools.CapabilitySuggestionLine(h)
 				if b.Len()+len(line) <= maxBytes {
 					b.WriteString(line)
+					if observe != nil {
+						observe(h.Kind, h.Name, "suggested by metadata match", true)
+					}
+				} else if observe != nil {
+					observe(h.Kind, h.Name, "budget-dropped", false)
 				}
 			}
 			if b.Len() == 0 {

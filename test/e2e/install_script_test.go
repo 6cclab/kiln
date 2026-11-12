@@ -50,6 +50,51 @@ func assertEmptyDir(t *testing.T, dir string) {
 	}
 }
 
+// fakeWindowsUname makes the installer select its Git Bash Windows path on
+// any test host. The rest of PATH still contains the host's build tools.
+func fakeWindowsUname(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "uname")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\ncase $1 in\n  -s) echo MINGW64_NT ;;\n  -m) echo x86_64 ;;\nesac\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir + string(os.PathListSeparator) + os.Getenv("PATH")
+}
+
+// goCacheEnv preserves the test runner's Go caches when the installer gets
+// its own scratch HOME. Module downloads are read-only, so placing them under
+// that HOME would make t.TempDir's cleanup fail.
+func goCacheEnv(t *testing.T) []string {
+	t.Helper()
+	out, err := exec.Command("go", "env", "GOCACHE", "GOMODCACHE").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go env GOCACHE GOMODCACHE: %v\n%s", err, out)
+	}
+	paths := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(paths) != 2 || paths[0] == "" || paths[1] == "" {
+		t.Fatalf("go env returned unexpected cache paths: %q", out)
+	}
+	return []string{"GOCACHE=" + paths[0], "GOMODCACHE=" + paths[1]}
+}
+
+func TestInstallScript_WindowsSourceKeepsExeSuffix(t *testing.T) {
+	dir, tmp := t.TempDir(), t.TempDir()
+	env := append([]string{"PATH=" + fakeWindowsUname(t), "HOME=" + t.TempDir()}, goCacheEnv(t)...)
+	out, err := runInstallEnv(t, tmp,
+		env,
+		"--source", repoRootDir(t), "--dir", dir)
+	if err != nil {
+		t.Fatalf("install.sh: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "kiln.exe")); err != nil {
+		t.Fatalf("source install did not produce kiln.exe: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "kiln")); !os.IsNotExist(err) {
+		t.Errorf("source install left extensionless kiln: %v", err)
+	}
+}
+
 // TestInstallScript_FromLocalSource builds this checkout with --source and
 // installs a working binary, leaving no temp files behind.
 func TestInstallScript_FromLocalSource(t *testing.T) {

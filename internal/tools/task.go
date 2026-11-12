@@ -96,7 +96,8 @@ type taskArgs struct {
 // embedded in the tool description, budgeted against tier); roles is
 // settings.json's modelRoles map (nil or empty omits the `model` argument
 // entirely, see taskParameters); dispatch actually runs one.
-func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, roles map[string]string, tier budget.Tier) *tool.Tool {
+func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, roles map[string]string, tier budget.Tier, autoIntegrate ...bool) *tool.Tool {
+	automatic := len(autoIntegrate) > 0 && autoIntegrate[0]
 	names := make([]string, len(defs))
 	for i, a := range defs {
 		names[i] = a.Name
@@ -156,10 +157,10 @@ func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, roles map[str
 				// A failed subagent is a failed tool call, not a failed
 				// session. The parent can retry, dispatch elsewhere, or do
 				// the work itself.
-				out := tool.Text(fmt.Sprintf("Subagent %q failed: %s%s", wanted, err.Error(), taskArtifactText(result.Artifact)))
+				out := tool.Text(fmt.Sprintf("Subagent %q failed: %s%s", wanted, err.Error(), taskArtifactText(result.Artifact, automatic)))
 				out.Usage = &result.Usage
 				out.UsageByModel = result.UsageByModel
-				if details, encodeErr := taskArtifactDetails(result.Artifact); encodeErr == nil {
+				if details, encodeErr := taskArtifactDetails(result.Artifact, automatic, true); encodeErr == nil {
 					out.Details = details
 				}
 				return out, nil
@@ -168,11 +169,11 @@ func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, roles map[str
 			if text == "" {
 				text = "(the subagent returned nothing)"
 			}
-			text += taskArtifactText(result.Artifact)
+			text += taskArtifactText(result.Artifact, automatic)
 			out := tool.Text(text)
 			out.Usage = &result.Usage
 			out.UsageByModel = result.UsageByModel
-			if details, encodeErr := taskArtifactDetails(result.Artifact); encodeErr == nil {
+			if details, encodeErr := taskArtifactDetails(result.Artifact, automatic, false); encodeErr == nil {
 				out.Details = details
 			}
 			return out, nil
@@ -180,7 +181,21 @@ func TaskTool(dispatch TaskDispatchFunc, defs []agents.Definition, roles map[str
 	}
 }
 
-func taskArtifactDetails(a *TaskArtifact) (json.RawMessage, error) {
+func taskArtifactDetails(a *TaskArtifact, flags ...bool) (json.RawMessage, error) {
+	var automatic, failed bool
+	if len(flags) > 0 {
+		automatic = flags[0]
+	}
+	if len(flags) > 1 {
+		failed = flags[1]
+	}
+	if automatic {
+		return json.Marshal(struct {
+			Dispatched bool          `json:"dispatched"`
+			Failed     bool          `json:"dispatchFailed"`
+			Artifact   *TaskArtifact `json:"artifact,omitempty"`
+		}{Dispatched: true, Failed: failed, Artifact: a})
+	}
 	if a == nil {
 		return nil, nil
 	}
@@ -189,9 +204,12 @@ func taskArtifactDetails(a *TaskArtifact) (json.RawMessage, error) {
 	}{Artifact: a})
 }
 
-func taskArtifactText(a *TaskArtifact) string {
+func taskArtifactText(a *TaskArtifact, automatic bool) string {
 	if a == nil {
 		return ""
+	}
+	if automatic {
+		return fmt.Sprintf("\n\nWorker patch manifest: %s (%d bytes; %d files; base %s; SHA256 %s). Retained pending the batch integration result.", a.ManifestPath, a.Bytes, len(a.ChangedFiles), a.BaseCommit, a.SHA256)
 	}
 	return fmt.Sprintf("\n\nWorker patch manifest: %s (%d bytes; %d files; base %s; SHA256 %s). Apply explicitly after review.", a.ManifestPath, a.Bytes, len(a.ChangedFiles), a.BaseCommit, a.SHA256)
 }

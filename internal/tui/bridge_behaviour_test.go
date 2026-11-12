@@ -9,6 +9,26 @@ import (
 	"github.com/andrepato/harness/internal/msg"
 )
 
+func TestBridgeWorkerIntegrationCommitsVisibleNoteWithoutSyntheticCopy(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	b.handleEvent(harness.Event{Type: harness.EventWorkerIntegration, IntegrationStatus: "conflict", IntegrationText: "Worker batch was not integrated: overlap at one.txt"}, &turnState{}, 4000)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		printed, _ := f.snapshot()
+		if strings.Contains(strings.Join(printed, "\n"), "overlap at one.txt") {
+			if len(b.Synthetics()) != 0 {
+				t.Fatal("durable notice also recorded as synthetic")
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("worker integration outcome was not shown")
+}
+
 func TestBridge_RetryScheduled_SendsHumanisedMessage(t *testing.T) {
 	b := NewBridge("/tmp")
 	defer b.Stop()

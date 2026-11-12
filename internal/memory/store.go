@@ -54,15 +54,36 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		diag.Close(db)
+		return nil, err
+	}
 	_, err = db.Exec(`PRAGMA busy_timeout=5000;
  CREATE TABLE IF NOT EXISTS memories(id INTEGER PRIMARY KEY, scope TEXT NOT NULL, key TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL, evidence TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL DEFAULT 0, supersedes INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1);
  CREATE TABLE IF NOT EXISTS memory_sources(memory_id INTEGER PRIMARY KEY, sources TEXT NOT NULL);
  CREATE UNIQUE INDEX IF NOT EXISTS memory_current ON memories(scope,key) WHERE active=1;
  CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5(text, evidence);
- PRAGMA user_version=1;`)
+ CREATE TABLE IF NOT EXISTS memory_automatic_facts(memory_id INTEGER PRIMARY KEY, scope TEXT NOT NULL, command TEXT NOT NULL);
+ CREATE INDEX IF NOT EXISTS memory_automatic_facts_scope ON memory_automatic_facts(scope,command);`)
 	if err != nil {
 		diag.Close(db)
 		return nil, err
+	}
+	if version < 2 {
+		// Version 1 wrote automatic facts without a provenance table. Import only
+		// that release's exact marker and source-bearing shape once; future Put
+		// corrections are never inferred to be automatic from their text.
+		if _, err := db.Exec(`INSERT OR IGNORE INTO memory_automatic_facts(memory_id,scope,command)
+ SELECT m.id,m.scope,substr(m.text,length('Observed successful verification command: ')+1)
+ FROM memories m WHERE m.key LIKE 'verified-command:%' AND m.kind='procedure'
+ AND m.text LIKE 'Observed successful verification command: %'
+ AND m.evidence LIKE 'Successful Bash command in opted-in outcome %'
+ AND EXISTS(SELECT 1 FROM memory_sources s WHERE s.memory_id=m.id);
+ PRAGMA user_version=2;`); err != nil {
+			diag.Close(db)
+			return nil, err
+		}
 	}
 	return &Store{db}, nil
 }
@@ -121,6 +142,164 @@ func (s *Store) Put(ctx context.Context, r Record) (int64, error) {
 		}
 	}
 	return id, tx.Commit()
+}
+
+// PutIfAbsent records a derived fact once. A user correction or current fact
+// is never overwritten. An expired derived fact can be refreshed with lineage.
+// Only automatic fact rows without a user correction descendant are pruned.
+func (s *Store) PutIfAbsent(ctx context.Context, r Record) (bool, error) {
+	if r.Kind != "procedure" || r.Scope == "" || r.Scope == GlobalPreferencesScope || !strings.HasPrefix(r.Key, "verified-command:") || !strings.HasPrefix(r.Text, "Observed successful verification command: ") || !strings.HasPrefix(r.Evidence, "Successful Bash command in opted-in outcome ") || len(r.Key) > 256 || len(r.Text) > 8192 || len(r.Evidence) > 2048 || len(r.Sources) == 0 {
+		return false, errors.New("invalid attributed procedure")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer rollback(tx)
+	var previous, expiry int64
+	var oldAutomatic bool
+	err = tx.QueryRowContext(ctx, `SELECT m.id,m.expires,EXISTS(SELECT 1 FROM memory_automatic_facts f WHERE f.memory_id=m.id) FROM memories m WHERE m.scope=? AND m.key=? AND m.active=1`, r.Scope, r.Key).Scan(&previous, &expiry, &oldAutomatic)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if err == nil {
+		if expiry == 0 || expiry > time.Now().Unix() || !oldAutomatic {
+			return false, nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE memories SET active=0 WHERE id=?`, previous); err != nil {
+			return false, err
+		}
+	}
+	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO memories(scope,key,kind,text,evidence,created,expires,supersedes) VALUES(?,?,?,?,?,?,?,?)`, r.Scope, r.Key, r.Kind, r.Text, r.Evidence, time.Now().Unix(), r.Expires, previous)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_search(rowid,text,evidence) VALUES(?,?,?)`, id, r.Key+"\n"+r.Text, r.Evidence); err != nil {
+		return false, err
+	}
+	raw, err := json.Marshal(r.Sources)
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_sources(memory_id,sources) VALUES(?,?)`, id, string(raw)); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_automatic_facts(memory_id,scope,command) VALUES(?,?,?)`, id, r.Scope, strings.TrimPrefix(r.Text, "Observed successful verification command: ")); err != nil {
+		return false, err
+	}
+	if err := pruneDerivedFacts(ctx, tx, r.Scope); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+const maxDerivedFactsPerCommand = 8
+const maxDerivedFactsPerProject = 100
+
+type derivedFactRow struct {
+	id, supersedes int64
+	group          string
+	derived        bool
+}
+
+// pruneDerivedFacts bounds only rows emitted by fact extraction. Explicit
+// corrections and their automatic ancestors remain intact for history/restore.
+func pruneDerivedFacts(ctx context.Context, tx *sql.Tx, scope string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT m.id,m.supersedes,COALESCE(f.command,''),f.memory_id IS NOT NULL FROM memories m LEFT JOIN memory_automatic_facts f ON f.memory_id=m.id WHERE m.scope=? AND m.key LIKE 'verified-command:%' ORDER BY m.id DESC`, scope)
+	if err != nil {
+		return err
+	}
+	ordered := make([]derivedFactRow, 0)
+	byID := make(map[int64]derivedFactRow)
+	for rows.Next() {
+		var row derivedFactRow
+		if err := rows.Scan(&row.id, &row.supersedes, &row.group, &row.derived); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		ordered = append(ordered, row)
+		byID[row.id] = row
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	protected := make(map[int64]bool)
+	for _, row := range ordered {
+		if row.derived {
+			continue
+		}
+		for parent := row.supersedes; parent != 0 && !protected[parent]; {
+			protected[parent] = true
+			ancestor, ok := byID[parent]
+			if !ok {
+				break
+			}
+			parent = ancestor.supersedes
+		}
+	}
+	removed := make(map[int64]bool)
+	groupCounts := make(map[string]int)
+	kept := make([]derivedFactRow, 0, len(ordered))
+	for _, row := range ordered {
+		if !row.derived || protected[row.id] {
+			continue
+		}
+		groupCounts[row.group]++
+		if groupCounts[row.group] > maxDerivedFactsPerCommand {
+			removed[row.id] = true
+		} else {
+			kept = append(kept, row)
+		}
+	}
+	for i, row := range kept {
+		if i >= maxDerivedFactsPerProject {
+			removed[row.id] = true
+		}
+	}
+	for _, row := range ordered {
+		if !removed[row.id] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE memories SET supersedes=0 WHERE scope=? AND supersedes=?`, scope, row.id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_search WHERE rowid=?`, row.id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_sources WHERE memory_id=?`, row.id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_automatic_facts WHERE memory_id=?`, row.id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memories WHERE scope=? AND id=?`, scope, row.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DerivedFactStored checks only metadata. Review commands do not reopen source
+// files or claim that a previously stored fact remains source-current.
+func (s *Store) DerivedFactStored(ctx context.Context, scope, key, outcomeID string) (bool, error) {
+	var present bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM memories WHERE scope=? AND key=? AND active=1 AND expires>? AND evidence LIKE ?)`, scope, key, time.Now().Unix(), "Successful Bash command in opted-in outcome "+outcomeID+";%").Scan(&present)
+	return present, err
 }
 
 // Current returns the current record for one key, honoring expiry and source freshness.
@@ -249,6 +428,9 @@ func (s *Store) Forget(ctx context.Context, scope, key string) error {
 	if _, err = tx.ExecContext(ctx, `DELETE FROM memory_sources WHERE memory_id IN (SELECT id FROM memories WHERE scope=? AND key=?)`, scope, key); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM memory_automatic_facts WHERE memory_id IN (SELECT id FROM memories WHERE scope=? AND key=?)`, scope, key); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM memories WHERE scope=? AND key=?`, scope, key); err != nil {
 		return err
 	}
@@ -271,6 +453,9 @@ func (s *Store) ForgetScope(ctx context.Context, scope string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM memory_sources WHERE memory_id IN (SELECT id FROM memories WHERE scope=?)`, scope); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM memory_automatic_facts WHERE scope=?`, scope); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM memories WHERE scope=?`, scope); err != nil {
 		return err
 	}
@@ -280,7 +465,21 @@ func (s *Store) ForgetScope(ctx context.Context, scope string) error {
 // PutUniquePruned atomically inserts a new key once and retains only the
 // newest limit records in its scope. It never creates correction history.
 func (s *Store) PutUniquePruned(ctx context.Context, r Record, limit int) (bool, error) {
-	validScope := (strings.HasPrefix(r.Scope, "outcome:") && r.Kind == "observation") || (strings.HasPrefix(r.Scope, "outcome-dismissed:") && r.Kind == "procedure")
+	return s.putRetained(ctx, r, limit, false)
+}
+
+// PutProposalPruned refreshes a bounded active review proposal in place. A
+// dismissal marker suppresses it inside the same transaction, so a concurrent
+// dismissal cannot leave the proposal visible again.
+func (s *Store) PutProposalPruned(ctx context.Context, r Record, limit int) (bool, error) {
+	if !strings.HasPrefix(r.Scope, "outcome-proposal:") {
+		return false, errors.New("invalid proposal scope")
+	}
+	return s.putRetained(ctx, r, limit, true)
+}
+
+func (s *Store) putRetained(ctx context.Context, r Record, limit int, replaceProposal bool) (bool, error) {
+	validScope := (strings.HasPrefix(r.Scope, "outcome:") && r.Kind == "observation") || ((strings.HasPrefix(r.Scope, "outcome-dismissed:") || strings.HasPrefix(r.Scope, "outcome-proposal:") || strings.HasPrefix(r.Scope, "outcome-proposal-dismissed:") || strings.HasPrefix(r.Scope, "outcome-fact:") || strings.HasPrefix(r.Scope, "outcome-fact-dismissed:")) && r.Kind == "procedure")
 	if !validScope || strings.TrimSpace(r.Key) == "" || strings.TrimSpace(r.Text) == "" || strings.TrimSpace(r.Evidence) == "" || len(r.Key) > 256 || len(r.Text) > 8192 || len(r.Evidence) > 2048 || limit < 1 || limit > 1000 || len(r.Sources) != 0 {
 		return false, errors.New("invalid unique retained record")
 	}
@@ -289,7 +488,17 @@ func (s *Store) PutUniquePruned(ctx context.Context, r Record, limit int) (bool,
 		return false, err
 	}
 	defer rollback(tx)
-	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO memories(scope,key,kind,text,evidence,created,expires,supersedes) VALUES(?,?,?,?,?,?,0,0)`, r.Scope, r.Key, r.Kind, r.Text, r.Evidence, time.Now().Unix())
+	if replaceProposal {
+		dismissalScope := "outcome-proposal-dismissed:" + strings.TrimPrefix(r.Scope, "outcome-proposal:")
+		var dismissed bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM memories WHERE scope=? AND key=? AND active=1)`, dismissalScope, r.Key).Scan(&dismissed); err != nil {
+			return false, err
+		}
+		if dismissed {
+			return false, nil
+		}
+	}
+	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO memories(scope,key,kind,text,evidence,created,expires,supersedes) VALUES(?,?,?,?,?,?,?,0)`, r.Scope, r.Key, r.Kind, r.Text, r.Evidence, time.Now().Unix(), r.Expires)
 	if err != nil {
 		return false, err
 	}
@@ -304,6 +513,24 @@ func (s *Store) PutUniquePruned(ctx context.Context, r Record, limit int) (bool,
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO memory_search(rowid,text,evidence) VALUES(?,?,?)`, id, r.Key+"\n"+r.Text, r.Evidence); err != nil {
 			return false, err
+		}
+	} else if replaceProposal {
+		var id int64
+		var oldText, oldEvidence string
+		if err := tx.QueryRowContext(ctx, `SELECT id,text,evidence FROM memories WHERE scope=? AND key=? AND active=1`, r.Scope, r.Key).Scan(&id, &oldText, &oldEvidence); err != nil {
+			return false, err
+		}
+		if oldText != r.Text || oldEvidence != r.Evidence {
+			if _, err := tx.ExecContext(ctx, `UPDATE memories SET text=?,evidence=?,created=? WHERE id=?`, r.Text, r.Evidence, time.Now().Unix(), id); err != nil {
+				return false, err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM memory_search WHERE rowid=?`, id); err != nil {
+				return false, err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO memory_search(rowid,text,evidence) VALUES(?,?,?)`, id, r.Key+"\n"+r.Text, r.Evidence); err != nil {
+				return false, err
+			}
+			affected = 1
 		}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM memories WHERE scope=? ORDER BY id DESC LIMIT -1 OFFSET ?`, r.Scope, limit)
@@ -341,7 +568,7 @@ func (s *Store) PutUniquePruned(ctx context.Context, r Record, limit int) (bool,
 // Recent returns up to limit current outcome records, newest first. Outcome
 // records cannot have file sources, so this narrow reader omits that table.
 func (s *Store) Recent(ctx context.Context, scope string, limit int) ([]Record, error) {
-	if !strings.HasPrefix(scope, "outcome:") || limit < 1 || limit > 1000 {
+	if !(strings.HasPrefix(scope, "outcome:") || strings.HasPrefix(scope, "outcome-proposal:") || strings.HasPrefix(scope, "outcome-fact:")) || limit < 1 || limit > 1000 {
 		return nil, errors.New("invalid recent-record query")
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,scope,key,kind,text,evidence,created,expires,supersedes FROM memories WHERE scope=? AND active=1 AND (expires=0 OR expires>?) ORDER BY id DESC LIMIT ?`, scope, time.Now().Unix(), limit)

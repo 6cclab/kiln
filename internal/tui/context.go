@@ -68,6 +68,32 @@ func RenderContext(b commands.ContextBreakdown, width int) []string {
 		}
 		lines = append(lines, row+strings.Repeat(" ", pad)+right)
 	}
+	if len(b.Selections) > 0 {
+		lines = append(lines, "", Muted("Selection"))
+		for _, sel := range b.Selections {
+			state := "out"
+			if sel.Included {
+				state = "in"
+			}
+			material := sel.Material
+			if material == "" {
+				material = "metadata"
+			}
+			prefix := fmt.Sprintf("%s %s %s ", state, sel.Kind, material)
+			suffix := " · " + sel.Reason
+			nameWidth := width - VisibleWidth(prefix) - VisibleWidth(suffix)
+			if nameWidth < 1 {
+				nameWidth = 1
+			}
+			lines = append(lines, FitStatus(prefix+FitStatus(sel.Name, nameWidth)+suffix, width))
+		}
+	}
+	if len(b.Settings) > 0 {
+		lines = append(lines, "", Muted("Settings"))
+		for _, setting := range b.Settings {
+			lines = append(lines, FitLines([]string{fmt.Sprintf("%s %s · %s", setting.Name, setting.Value, setting.Source)}, width, "  ")...)
+		}
+	}
 	return lines
 }
 

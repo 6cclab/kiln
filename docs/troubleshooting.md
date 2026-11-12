@@ -20,6 +20,14 @@ visual (see "Reporting a bug").
 
 ## Startup and models
 
+- **`kiln doctor` lists `model ... is unavailable` or `model ... is invalid` under
+  problems.** Doctor now includes a model it cannot resolve in its problem
+  list, even though it keeps its report-only exit status of 0. A new install
+  does not provide the built-in default `ollama/qwen3.8:latest`. Run
+  `kiln models` to see available choices, install or log in to a provider if
+  the list is empty, and start with `kiln --model provider/model` using an
+  exact listed ID. See the README's [First run](../README.md#first-run).
+
 - **`kiln: invalid model %q: expected provider/model`** (`internal/cli/chat.go`).
   `--model`, settings.json's `model` (only honored with a `/` in it),
   `HARNESS_MODEL`, or the default resolved to something not `provider/model`

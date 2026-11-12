@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/andrepato/harness/internal/execenv"
+	"github.com/andrepato/harness/internal/harness"
 )
 
 func batchArtifact(t *testing.T, repo, name, content string) WorkerArtifact {
@@ -68,6 +69,59 @@ func TestWorkerBatchAppliesIndependentPatches(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(repo, name)); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestIntegrateWorkerResultsOptInAndWholeBatch(t *testing.T) {
+	repo := testRepo(t)
+	a := batchArtifact(t, repo, "one.txt", "one\n")
+	b := batchArtifact(t, repo, "two.txt", "two\n")
+	d := &Dispatcher{IsolatedWorkers: true, Env: execenv.New(repo)}
+	results := []DispatchResult{{Status: harness.StatusCompleted, Artifact: &a}, {Status: harness.StatusCompleted}, {Status: harness.StatusCompleted, Artifact: &b}}
+	if _, err := d.IntegrateWorkerResults(context.Background(), results); err == nil {
+		t.Fatal("integration accepted without opt in")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "one.txt")); !os.IsNotExist(err) {
+		t.Fatal("disabled integration changed parent")
+	}
+	d.AutoIntegrate = true
+	inspection, err := d.IntegrateWorkerResults(context.Background(), results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Artifacts != 2 || len(inspection.Files) != 2 {
+		t.Fatalf("inspection = %+v", inspection)
+	}
+	for _, name := range []string{"one.txt", "two.txt"} {
+		if _, err := os.Stat(filepath.Join(repo, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestIntegrateWorkerResultsRefusesConflictWithoutPartialApply(t *testing.T) {
+	repo := testRepo(t)
+	a := batchArtifact(t, repo, "one.txt", "one\n")
+	b := batchArtifact(t, repo, "one.txt", "two\n")
+	d := &Dispatcher{IsolatedWorkers: true, AutoIntegrate: true, Env: execenv.New(repo)}
+	if _, err := d.IntegrateWorkerResults(context.Background(), []DispatchResult{{Status: harness.StatusCompleted, Artifact: &a}, {Status: harness.StatusCompleted, Artifact: &b}}); err == nil || !strings.Contains(err.Error(), "overlap") {
+		t.Fatalf("overlap error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "one.txt")); !os.IsNotExist(err) {
+		t.Fatal("conflicting integration changed parent")
+	}
+}
+
+func TestIntegrateWorkerResultsRejectsFailedWorkerBeforeApply(t *testing.T) {
+	repo := testRepo(t)
+	a := batchArtifact(t, repo, "one.txt", "one\n")
+	d := &Dispatcher{IsolatedWorkers: true, AutoIntegrate: true, Env: execenv.New(repo)}
+	results := []DispatchResult{{Status: harness.StatusCompleted, Artifact: &a}, {Status: harness.StatusFailed}}
+	if _, err := d.IntegrateWorkerResults(context.Background(), results); err == nil || !strings.Contains(err.Error(), "not completed") {
+		t.Fatalf("failed worker error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "one.txt")); !os.IsNotExist(err) {
+		t.Fatal("failed worker batch changed parent")
 	}
 }
 

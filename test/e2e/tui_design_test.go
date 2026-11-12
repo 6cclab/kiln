@@ -497,7 +497,11 @@ func designSortSubagentPanel(rows []string, styles [][]screen.CellStyle) ([]stri
 // includes the two-scout live or committed panel.
 func assertDesignGoldenTailSorted(t *testing.T, s *screen.Screen, name, anchor string) {
 	t.Helper()
-	rows := s.Rows()
+	assertDesignGoldenTailRowsSorted(t, s.Rows(), name, anchor)
+}
+
+func assertDesignGoldenTailRowsSorted(t *testing.T, rows []string, name, anchor string) {
+	t.Helper()
 	start := 0
 	for i, r := range rows {
 		if strings.Contains(r, anchor) {
@@ -520,8 +524,11 @@ func assertDesignGoldenTailSorted(t *testing.T, s *screen.Screen, name, anchor s
 // comment in tui_test.go for the encoding this mirrors.
 func assertDesignGoldenStylesSorted(t *testing.T, s *screen.Screen, name, anchor string) {
 	t.Helper()
-	rows := s.Viewport()
-	styles := s.Styles()
+	assertDesignGoldenStylesRowsSorted(t, s.Viewport(), s.Styles(), name, anchor)
+}
+
+func assertDesignGoldenStylesRowsSorted(t *testing.T, rows []string, styles [][]screen.CellStyle, name, anchor string) {
+	t.Helper()
 
 	start := 0
 	for i, r := range rows {
@@ -582,8 +589,29 @@ func TestTUI_Design_Agents(t *testing.T) {
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "manual")
 	waitReady(t, s)
 	driveDesignTo(t, s, "agents")
-	assertDesignGoldenTailSorted(t, s, "design-agents", designAgentsAnchor)
-	assertDesignGoldenStylesSorted(t, s, "design-agents", designAgentsAnchor)
+	// The panel anchor can remain painted while Bubble Tea clears and
+	// repaints the editor and status rows in later PTY reads. Capture one
+	// complete emulator frame and use that same sample for both goldens.
+	frame, err := s.WaitForFrame(func(frame screen.Frame) bool {
+		view := strings.Join(frame.Rows, "\n")
+		return strings.Contains(view, designAgentsAnchor) &&
+			strings.Contains(view, "queue a follow-up, or esc to stop") &&
+			strings.Contains(view, "● ask before edits") &&
+			strings.Contains(view, "faux/faux-1") &&
+			strings.Contains(view, "ctx ─")
+	}, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := make([]string, len(frame.Rows))
+	for i, row := range frame.Rows {
+		rows[i] = strings.TrimRight(row, " ")
+	}
+	for len(rows) > 0 && rows[len(rows)-1] == "" {
+		rows = rows[:len(rows)-1]
+	}
+	assertDesignGoldenTailRowsSorted(t, rows, "design-agents", designAgentsAnchor)
+	assertDesignGoldenStylesRowsSorted(t, frame.Rows, frame.Styles, "design-agents", designAgentsAnchor)
 }
 
 // --- streaming ---------------------------------------------------------

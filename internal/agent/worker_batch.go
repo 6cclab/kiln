@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/diag"
+	"github.com/andrepato/harness/internal/harness"
 )
 
 const maxWorkerBatchArtifacts = 16
@@ -30,6 +31,45 @@ type preparedWorkerBatch struct {
 	inspection WorkerBatchInspection
 	patch      []byte
 	baseline   *WorkerBaseline
+}
+
+// IntegrateWorkerResults applies one completed group of isolated dispatch
+// results when automatic integration is enabled. The caller must wait for
+// every dispatch in the group and pass only successful results. A nil artifact
+// means that worker made no file changes. The batch validator rejects
+// overlapping patches, stale parent state, and changed artifact files before
+// the single apply. Calling this once per worker would make sibling patches
+// stale, so the caller must invoke it once for the whole group.
+func (d *Dispatcher) IntegrateWorkerResults(ctx context.Context, results []DispatchResult) (WorkerBatchInspection, error) {
+	if d == nil || !d.IsolatedWorkers || !d.AutoIntegrate || d.Env == nil || d.Env.Cwd == "" {
+		return WorkerBatchInspection{}, fmt.Errorf("automatic worker integration is not enabled")
+	}
+	if err := ctx.Err(); err != nil {
+		return WorkerBatchInspection{}, err
+	}
+	if len(results) == 0 || len(results) > maxWorkerBatchArtifacts {
+		return WorkerBatchInspection{}, fmt.Errorf("worker result batch requires 1 to %d results", maxWorkerBatchArtifacts)
+	}
+	artifacts := make([]WorkerArtifact, 0, len(results))
+	for i, result := range results {
+		if result.Status != harness.StatusCompleted {
+			return WorkerBatchInspection{}, fmt.Errorf("worker result %d is not completed", i+1)
+		}
+		if result.Artifact != nil {
+			artifacts = append(artifacts, *result.Artifact)
+		}
+	}
+	if len(artifacts) == 0 {
+		return WorkerBatchInspection{}, nil
+	}
+	inspection, err := InspectWorkerArtifactBatch(ctx, d.Env.Cwd, artifacts)
+	if err != nil {
+		return WorkerBatchInspection{}, err
+	}
+	if err := ApplyWorkerArtifactBatch(ctx, d.Env.Cwd, artifacts); err != nil {
+		return WorkerBatchInspection{}, err
+	}
+	return inspection, nil
 }
 
 // InspectWorkerArtifactBatch validates manifests and patches against a clean
@@ -100,7 +140,8 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 		return preparedWorkerBatch{}, err
 	}
 	batch := preparedWorkerBatch{inspection: WorkerBatchInspection{BaseCommit: head, Artifacts: len(artifacts)}, baseline: baseline}
-	seen := map[string]int{}
+	seen := map[string]bool{}
+	conflicts := map[string]bool{}
 	for i, artifact := range artifacts {
 		if err := ctx.Err(); err != nil {
 			return preparedWorkerBatch{}, err
@@ -145,13 +186,14 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 			if err := workerBatchPathSafe(repo, p); err != nil {
 				return preparedWorkerBatch{}, err
 			}
-			for prior, owner := range seen {
+			for prior := range seen {
 				folded, foldedPrior := strings.ToLower(p), strings.ToLower(prior)
 				if folded == foldedPrior || strings.HasPrefix(folded, foldedPrior+"/") || strings.HasPrefix(foldedPrior, folded+"/") || workerBatchSameFile(repo, p, prior) {
-					return preparedWorkerBatch{}, fmt.Errorf("worker artifacts %d and %d overlap at %q", owner, i+1, p)
+					conflicts[p] = true
+					conflicts[prior] = true
 				}
 			}
-			seen[p] = i + 1
+			seen[p] = true
 			batch.inspection.Files = append(batch.inspection.Files, p)
 		}
 		batch.patch = append(batch.patch, patch...)
@@ -161,6 +203,14 @@ func prepareWorkerBatch(ctx context.Context, repo string, artifacts []WorkerArti
 	}
 	batch.inspection.Bytes = len(batch.patch)
 	sort.Strings(batch.inspection.Files)
+	if len(conflicts) != 0 {
+		paths := make([]string, 0, len(conflicts))
+		for p := range conflicts {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		return preparedWorkerBatch{}, fmt.Errorf("worker artifacts overlap at: %s", strings.Join(paths, ", "))
+	}
 	if _, err := gitRunInput(ctx, repo, batch.patch, "apply", "--check", "--binary", "-"); err != nil {
 		return preparedWorkerBatch{}, fmt.Errorf("worker batch conflict: %w", err)
 	}

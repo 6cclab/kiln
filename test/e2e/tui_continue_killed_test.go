@@ -18,17 +18,19 @@ import (
 // continue-hangs-after-killed-print-run: a `kiln -p` run is SIGKILLed while
 // a bash tool call is in flight (so the session is left with an incomplete
 // operation — a tool_use persisted with no outcome), then `kiln --continue`
-// opens the TUI against the same session. It must resume the interrupted
-// operation (agent.ResumeIncomplete -> Lane.Resume re-runs the tool, gets
-// the model's follow-up) and reach the idle prompt, not hang.
+// opens the TUI against the same session. It must show the uncertain
+// outcome without replaying the tool, reach an idle prompt, and accept a
+// new user turn rather than hanging.
 func TestTUI_Continue_AfterKilledPrintRun(t *testing.T) {
-	addr, _ := startFaux(t, loadFauxScript(t, "kill-midtool"))
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
+	script := strings.Replace(loadFauxScript(t, "kill-midtool"), "sleep 1 && echo done", "printf x >> resume-effect.txt; sleep 5", 1)
+	addr, srv := startFaux(t, script)
 	env := baseEnv(home, sessDir, addr)
+	marker := filepath.Join(proj, "resume-effect.txt")
 
 	// Seed: run `kiln -p` with bypassPermissions so the bash tool actually
-	// executes (sleep 3), then SIGKILL it once the tool is in flight, leaving
+	// executes, then SIGKILL it once the tool is in flight, leaving
 	// the operation incomplete.
 	cmd := exec.Command(harnessBin, "-p", "run the sleep command",
 		"--permission-mode", "bypassPermissions", "--output-format", "text")
@@ -43,11 +45,23 @@ func TestTUI_Continue_AfterKilledPrintRun(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
-	// Wait until the bash tool's args are persisted (it is executing the
-	// sleep), then kill. Fail if we never see it in flight.
+	// Wait until the bash tool's args are persisted and its first effect has
+	// happened, then kill while it is sleeping.
 	if !waitForToolInFlight(t, sessDir, proj, 10*time.Second) {
 		_ = cmd.Process.Kill()
 		t.Fatal("seed run never reached an in-flight tool call")
+	}
+	markerDeadline := time.Now().Add(5 * time.Second)
+	for {
+		body, err := os.ReadFile(marker)
+		if err == nil && string(body) == "x" {
+			break
+		}
+		if time.Now().After(markerDeadline) {
+			_ = cmd.Process.Kill()
+			t.Fatal("seed command never applied its first marker effect")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	_ = cmd.Process.Signal(syscall.SIGKILL)
 	select {
@@ -62,27 +76,31 @@ func TestTUI_Continue_AfterKilledPrintRun(t *testing.T) {
 		t.Fatal("precondition failed: killed seed left no incomplete operation")
 	}
 
-	// Continue in the TUI. Before the fix this hung on a blank screen:
-	// resume ran synchronously before program.Run() and its first tool
-	// event blocked on tea.Program.Send forever. Now resume runs as a tea.Cmd
-	// once the loop is live, so the app paints and drives the resumed op
-	// through the real UI — including, in the default (manual) mode, the
-	// permission prompt for the re-executed bash command.
+	// Continue in the TUI. The old implementation waited for a permission
+	// prompt to re-execute the command; recovery now reports uncertainty
+	// and returns to the editor without replaying an already-applied effect.
 	s := startTUI(t, 120, 40, proj, home, sessDir, addr, "--continue")
 	waitReady(t, s)
-
-	// The resumed op re-runs the interrupted `sleep` tool, which asks for
-	// permission through the live UI (the deadlock never let this appear).
-	if err := s.WaitFor("Allow kiln to run this command", 5*time.Second); err != nil {
-		t.Fatalf("resumed op never reached the permission prompt: %v\n%s", err, strings.Join(s.Rows(), "\n"))
+	if err := s.WaitFor("effect is unknown", 5*time.Second); err != nil {
+		t.Fatalf("resumed op never showed the uncertain effect: %v\n%s", err, strings.Join(s.Rows(), "\n"))
 	}
-	s.Send("1") // approve
-
-	// After approval it completes the interrupted op and shows the follow-up.
 	waitTurnSettled(t, s)
+	if body, err := os.ReadFile(marker); err != nil || string(body) != "x" {
+		t.Fatalf("marker after resume = %q, err=%v; command was replayed", body, err)
+	}
+	if got := len(srv.Requests()); got != 1 {
+		t.Fatalf("model requests after uncertain recovery = %d, want one original request", got)
+	}
 	joined := strings.Join(s.Rows(), "\n")
-	if !strings.Contains(joined, "finished after resume") {
-		t.Errorf("resumed session did not complete the interrupted op (no follow-up reply):\n%s", joined)
+	if strings.Contains(joined, "Allow kiln to run this command") {
+		t.Fatalf("recovery asked to replay uncertain command:\n%s", joined)
+	}
+	// The paired error result is now on the branch; the user can issue a
+	// fresh turn without leaving a dangling tool call in the transcript.
+	s.Send("what happened?")
+	s.SendKey("enter")
+	if err := s.WaitFor("finished after resume", 5*time.Second); err != nil {
+		t.Fatalf("new prompt did not receive a model reply: %v\n%s", err, strings.Join(s.Rows(), "\n"))
 	}
 }
 

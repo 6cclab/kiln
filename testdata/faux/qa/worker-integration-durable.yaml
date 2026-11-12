@@ -1,0 +1,18 @@
+models:
+  faux-1:
+    - tool_calls:
+        - {name: task, args: {subagent_type: "general-purpose", description: "first", prompt: "write first", model: "fast"}, id: tc1}
+        - {name: task, args: {subagent_type: "general-purpose", description: "second", prompt: "write second", model: "heavy"}, id: tc2}
+    - on_tool_results: [tc1, tc2]
+      then:
+        - text: "Parent turn complete."
+  faux-2:
+    - tool_call: {name: write, args: {path: "one.txt", content: "first\n"}, id: w1}
+    - on_tool_result: w1
+      then:
+        - text: "First worker complete."
+  faux-3:
+    - tool_call: {name: write, args: {path: "two.txt", content: "second\n"}, id: w2}
+    - on_tool_result: w2
+      then:
+        - text: "Second worker complete."

@@ -1,0 +1,13 @@
+model: faux-1
+steps:
+  - tool_call: {name: skill, args: {skill: review}, id: skill-1}
+  - on_tool_result: skill-1
+    then:
+      - text: "First turn done."
+        end_turn: true
+  - text: "Second turn done."
+    end_turn: true
+  - text: "First task summarized."
+    end_turn: true
+  - text: "Third turn done."
+    end_turn: true

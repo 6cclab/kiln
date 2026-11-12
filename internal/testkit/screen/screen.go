@@ -37,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
@@ -482,6 +483,38 @@ func (s *Screen) WaitFor(pattern any, timeout time.Duration) error {
 	}
 }
 
+// Frame is one atomic copy of the visible text and its corresponding styles.
+// CapturedAt identifies the emulator sample, not a complete application paint.
+type Frame struct {
+	Rows       []string
+	Styles     [][]CellStyle
+	CapturedAt time.Time
+}
+
+// WaitForFrame samples text and styles together until a caller-defined
+// complete-frame predicate holds. A PTY read can end midway through a paint;
+// callers should include every required live row in the predicate.
+func (s *Screen) WaitForFrame(complete func(Frame) bool, timeout time.Duration) (Frame, error) {
+	if timeout <= 0 {
+		timeout = s.timeout
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		frame := s.Snapshot()
+		if complete(frame) {
+			return frame, nil
+		}
+		if time.Now().After(deadline) {
+			record := ""
+			if s.recordFile != nil {
+				record = s.recordFile.Name()
+			}
+			return Frame{}, fmt.Errorf("screen.WaitForFrame: no complete frame before %s; last sample %s, PTY record %q\n%s", timeout, frame.CapturedAt.Format(time.RFC3339Nano), record, dumpRows(frame.Rows, s.cols))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // WaitQuiet blocks until the viewport has not changed for quiet, or returns
 // an error once timeout elapses. Use it after an action whose effect lands
 // in more than one paint separated by a delay, such as a resize: kiln
@@ -633,6 +666,44 @@ func (s *Screen) Viewport() []string {
 	s.emuMu.Unlock()
 	s.checkWidth(rows)
 	return rows
+}
+
+// Snapshot copies visible text and styles under one emulator lock, so the
+// paired rows cannot straddle two PTY reads or application paint fragments.
+func (s *Screen) Snapshot() Frame {
+	s.emuMu.Lock()
+	frame := Frame{Rows: make([]string, s.rows), Styles: make([][]CellStyle, s.rows)}
+	for y := 0; y < s.rows; y++ {
+		frame.Rows[y] = s.cellRowString(y)
+		styles := make([]CellStyle, s.cols)
+		var previous CellStyle
+		for x := 0; x < s.cols; x++ {
+			cell := s.emu.CellAt(x, y)
+			if cell == nil {
+				continue
+			}
+			if cell.Width == 0 {
+				styles[x] = previous
+				continue
+			}
+			style := CellStyle{
+				Fg:        hexColor(cell.Style.Fg),
+				Bg:        hexColor(cell.Style.Bg),
+				Bold:      cell.Style.Attrs&uv.AttrBold != 0,
+				Dim:       cell.Style.Attrs&uv.AttrFaint != 0,
+				Italic:    cell.Style.Attrs&uv.AttrItalic != 0,
+				Underline: cell.Style.Underline != uv.UnderlineNone,
+				Reverse:   cell.Style.Attrs&uv.AttrReverse != 0,
+			}
+			styles[x] = style
+			previous = style
+		}
+		frame.Styles[y] = styles
+	}
+	frame.CapturedAt = time.Now()
+	s.emuMu.Unlock()
+	s.checkWidth(frame.Rows)
+	return frame
 }
 
 // Rows returns the visible rows with trailing blank rows and trailing

@@ -191,6 +191,21 @@ type ContextBreakdown struct {
 	Used       int
 	Window     int
 	Segments   []ContextSegment
+	Selections []ContextSelection
+	Settings   []ContextSetting
+}
+
+// ContextSetting is one effective runtime value and its accepted source.
+type ContextSetting struct{ Name, Value, Source string }
+
+// ContextSelection is an observed request decision. Included describes the
+// current request; a search hit may instead be available for the next one.
+type ContextSelection struct {
+	Kind     string
+	Name     string
+	Material string
+	Included bool
+	Reason   string
 }
 
 // ContextSegment is one source of context-window usage: system prompt,
