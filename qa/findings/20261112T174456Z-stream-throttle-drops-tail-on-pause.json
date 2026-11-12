@@ -13,6 +13,13 @@
  "evidence": [
   "TestBridge_StreamText_TrailingFlush fails without the trailing flush: armed 0 flushes, only 'The limi' sent."
  ],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/bridge.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestBridge_StreamText_TrailingFlush,TestBridge_StreamText_StaleTrailingFlushDropped,TestStreamTextAfterTurnEndIgnored",
+  "updated_at": "2026-11-12T18:07:59Z"
+ }
 }

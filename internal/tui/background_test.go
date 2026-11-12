@@ -198,3 +198,91 @@ func TestBackgroundCommand_CommandsLikeMidTurn(t *testing.T) {
 		t.Errorf("busy = %v, deferred = %v: want the follow-up sent as a turn", m.busy, m.deferredCmds)
 	}
 }
+
+// TestTrustedSessionStart_PromptWaitsForContext: the SessionStart hooks
+// that waited for the trust dialog run as a background operation once the
+// folder is trusted. A line submitted before they finish queues, and goes
+// out with their context once they do. Before, they ran on a goroutine of
+// their own, and a prompt sent first went without it.
+func TestTrustedSessionStart_PromptWaitsForContext(t *testing.T) {
+	release := make(chan struct{})
+	m := NewModel(Config{
+		Cwd: "/tmp", ModelLabel: "faux/faux-1", InitialMode: "manual", StartedAt: time.Unix(0, 0),
+		TrustedSessionStart: func(context.Context) []string {
+			<-release
+			return []string{"CONTEXT-FROM-SESSION-START"}
+		},
+	})
+	m.width, m.height = 100, 30
+	next, cmd := m.Update(MsgTrustAnswered{Trusted: true})
+	m = next.(Model)
+	if m.background == nil {
+		t.Fatal("SessionStart is not running as a background operation")
+	}
+	next, _ = m.handleSubmit("go")
+	m = next.(Model)
+	if m.busy || len(m.queued) != 1 {
+		t.Fatalf("the prompt did not wait for SessionStart: busy=%v queued=%v", m.busy, m.queued)
+	}
+	close(release)
+	next, _ = m.Update(backgroundDone(t, cmd))
+	m = next.(Model)
+	if !m.busy || len(m.queued) != 0 {
+		t.Fatalf("the queued prompt was not sent: busy=%v queued=%v", m.busy, m.queued)
+	}
+	if len(m.startupContext) != 0 {
+		t.Errorf("the prompt went out without the SessionStart context: %v left over", m.startupContext)
+	}
+}
+
+// TestTrustedSessionStart_ContextKeptForNextPrompt: with nothing queued,
+// the SessionStart context waits for the next prompt.
+func TestTrustedSessionStart_ContextKeptForNextPrompt(t *testing.T) {
+	m := NewModel(Config{
+		Cwd: "/tmp", ModelLabel: "faux/faux-1", InitialMode: "manual", StartedAt: time.Unix(0, 0),
+		TrustedSessionStart: func(context.Context) []string { return []string{"CONTEXT-FROM-SESSION-START"} },
+	})
+	m.width, m.height = 100, 30
+	next, cmd := m.Update(MsgTrustAnswered{Trusted: true})
+	m = next.(Model)
+	next, _ = m.Update(backgroundDone(t, cmd))
+	m = next.(Model)
+	if m.background != nil || m.busy {
+		t.Fatalf("still busy after SessionStart: background=%v busy=%v", m.background != nil, m.busy)
+	}
+	if len(m.startupContext) != 1 || m.startupContext[0] != "CONTEXT-FROM-SESSION-START" {
+		t.Errorf("startupContext = %v", m.startupContext)
+	}
+}
+
+// TestTrustedSessionStart_EscStopsHooks: Esc while the SessionStart hooks
+// run cancels their context (which stops them), and a prompt queued
+// meanwhile goes back into the input, as Esc during /compact does.
+func TestTrustedSessionStart_EscStopsHooks(t *testing.T) {
+	m := NewModel(Config{
+		Cwd: "/tmp", ModelLabel: "faux/faux-1", InitialMode: "manual", StartedAt: time.Unix(0, 0),
+		TrustedSessionStart: func(ctx context.Context) []string {
+			<-ctx.Done()
+			return nil
+		},
+	})
+	m.width, m.height = 100, 30
+	next, cmd := m.Update(MsgTrustAnswered{Trusted: true})
+	m = next.(Model)
+	next, _ = m.handleSubmit("go")
+	m = next.(Model)
+	next, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = next.(Model)
+	done := backgroundDone(t, cmd)
+	if !done.cancelled {
+		t.Fatal("Esc did not cancel the SessionStart hooks")
+	}
+	next, _ = m.Update(done)
+	m = next.(Model)
+	if m.background != nil || m.busy {
+		t.Errorf("still busy after the cancellation: background=%v busy=%v", m.background != nil, m.busy)
+	}
+	if got := m.editor.Value(); got != "go" {
+		t.Errorf("input = %q, want the queued prompt back", got)
+	}
+}

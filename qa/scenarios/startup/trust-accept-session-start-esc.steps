@@ -1,0 +1,23 @@
+# Esc while the SessionStart hooks that waited for the trust dialog run
+# stops them, as it stops /compact (internal/tui/background.go): the hook
+# process is killed, the busy line clears, and a prompt queued meanwhile
+# goes back into the input.
+@faux testdata/faux/hello.yaml
+@untrusted
+@setup printf 'touch hook-started\nexec sleep 7331\n' > start.sh
+@setup mkdir -p .claude && printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"sh start.sh"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /Accessing workspace/ 20
+KEY 2
+WAITFOR /Running session start hooks/ 20
+RUN i=0; until pgrep -f 'sleep 733[1]' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
+TYPE keep this
+KEY enter
+WAITFOR /queued/ 20
+KEY escape
+WAITFOR /Session start hooks cancelled\. Your queued message is back in the input\./ 20
+SHOT hooks-cancelled
+EXPECT_NOT /Running session start hooks/
+EXPECT /keep this/
+RUN i=0; while pgrep -f 'sleep 733[1]' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
+EXPECT_NOT /panic|goroutine/

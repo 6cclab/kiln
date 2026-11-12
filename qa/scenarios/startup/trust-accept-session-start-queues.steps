@@ -1,0 +1,25 @@
+# Accepting the trust dialog runs the project's SessionStart hooks, which
+# waited for it, as a background operation (internal/tui/background.go's
+# startTrustedSessionStart): the busy line says so, and a prompt typed
+# meanwhile queues until their context is in, then goes out with it. The
+# hook waits for a release file, so the prompt always lands while it runs.
+@faux testdata/faux/hello.yaml
+@untrusted
+@setup printf 'touch hook-started\nwhile [ ! -e release-hook ]; do sleep 0.1; done\necho CONTEXT-FROM-SESSION-START\n' > start.sh
+@setup mkdir -p .claude && printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"sh start.sh"}]}]}}\n' > .claude/settings.json
+
+WAITFOR /Accessing workspace/ 20
+KEY 2
+WAITFOR /Running session start hooks/ 20
+SHOT session-start-running
+TYPE hello
+KEY enter
+WAITFOR /queued/ 20
+SHOT prompt-queued
+EXPECT /Running session start hooks/
+EXPECT_NOT /Hello from faux\./
+RUN touch release-hook
+WAITFOR /Hello from faux\./ 20
+SHOT prompt-sent-after-hooks
+EXPECT_NOT /Running session start hooks/
+EXPECT_NOT /panic|goroutine/

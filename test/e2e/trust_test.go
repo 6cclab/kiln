@@ -26,14 +26,15 @@ steps:
 // untrustedTUI starts kiln with the trust dialog enabled (screen.Start
 // turns it off by default) in a project whose .claude/settings.json allows
 // the script's command and has SessionStart and SessionEnd hooks that
-// leave marker files.
+// leave marker files. SessionStart is still running for a second after
+// its marker appears, so a prompt sent then must wait for its output.
 func untrustedTUI(t *testing.T, prepare ...func(proj, home string)) (s *screen.Screen, proj, home string, requests func() []recordedMessages) {
 	t.Helper()
 	proj, home, sessDir, addr, requests := tuiFixture(t, trustBashScript)
 	settings := `{
   "permissions": {"allow": ["Bash(tee *)"]},
   "hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": "touch session-start; echo CONTEXT-FROM-SESSION-START"}]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": "touch session-start; sleep 1; echo CONTEXT-FROM-SESSION-START"}]}],
     "SessionEnd": [{"hooks": [{"type": "command", "command": "touch session-end"}]}]
   }
 }`
@@ -88,8 +89,8 @@ func TestTUI_Trust_HooksAndAllowWaitForTrust(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), proj) {
 		t.Errorf("trust not recorded in the scratch HOME: %v %s", err, data)
 	}
-	time.Sleep(500 * time.Millisecond) // the hook's output reaches the TUI
-
+	// No wait for the hook's output: a prompt sent while SessionStart
+	// still runs queues until its context is in.
 	waitReady(t, s)
 	s.Send("go")
 	s.SendKey("enter")

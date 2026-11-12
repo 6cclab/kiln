@@ -2147,12 +2147,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// SessionStart fires once, before the first turn. Its stdout becomes
 	// context for that first prompt only (see the <hook-context> wrapping
 	// below).
-	runSessionStart := func() claudehooks.Outcome {
+	runSessionStart := func(ctx context.Context) claudehooks.Outcome {
 		phase("hooks SessionStart start")
 		defer phase("hooks SessionStart end")
 		return claudehooks.RunHooks(claudehooks.RunOptions{
 			Config: hooks.get(),
 			Event:  claudehooks.SessionStart,
+			Ctx:    ctx,
 			Payload: claudehooks.Payload{
 				SessionID:      sessionID,
 				TranscriptPath: transcriptPath,
@@ -2163,7 +2164,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	}
 	// Before trust no hook is active, so this runs none; the session
 	// starts for hooks once the dialog is accepted (TrustAccepted).
-	sessionStart := runSessionStart()
+	sessionStart := runSessionStart(context.Background())
 
 	if !args.Print {
 		// phase 7: the interactive TUI. Everything above (registry,
@@ -2266,11 +2267,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				}
 			},
 			// SessionStart for a session whose hooks waited for trust.
-			TrustedSessionStart: func() []string {
+			TrustedSessionStart: func(ctx context.Context) []string {
 				if trustedAtStart {
 					return nil
 				}
-				return runSessionStart().Context
+				return runSessionStart(ctx).Context
 			},
 			ConnectPendingMCP: func(progress func(mcpgate.ServerStatus)) []mcpgate.ServerStatus {
 				hub.OnServer = progress

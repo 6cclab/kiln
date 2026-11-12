@@ -130,11 +130,18 @@ type Config struct {
 	// NeedsTrust opens the folder-trust dialog before the first prompt
 	// (docs/claude-code-reference.md §5, dialog-trust.txt). OnTrust receives
 	// the answer; "No, exit" quits the program.
-	NeedsTrust     bool
-	OnTrust        func(trusted bool)
-	SessionID      string
-	TranscriptPath string
-	Version        string
+	NeedsTrust bool
+	OnTrust    func(trusted bool)
+	// TrustedSessionStart runs the SessionStart hooks that waited for the
+	// trust dialog and returns their context lines. It runs once the
+	// folder is trusted, as a background operation: a prompt typed
+	// meanwhile queues and goes out with that context, as the first prompt
+	// in an already-trusted folder does (Config.StartupContext). Esc
+	// cancels ctx, which stops the hooks.
+	TrustedSessionStart func(ctx context.Context) []string
+	SessionID           string
+	TranscriptPath      string
+	Version             string
 	// IsResume is set when this run resumed an existing session
 	// (--resume/--continue): NewModel's first WindowSizeMsg handler
 	// replays Lane's prior entries into the transcript, right after the
@@ -608,11 +615,6 @@ type msgCommitBanner struct{}
 // MsgTrustAnswered carries the trust dialog's answer; "No, exit" quits.
 type MsgTrustAnswered struct{ Trusted bool }
 
-// MsgStartupContext adds SessionStart hook output that arrived after the
-// TUI started (the hooks waited for the trust dialog): it goes to the next
-// prompt, as Config.StartupContext does to the first.
-type MsgStartupContext struct{ Lines []string }
-
 // msgTurnResult carries what a turn cost, once lane.Prompt returns, so
 // Update can commit the turn summary/error and clear busy state. Built by
 // the goroutine app.go's handleSubmit spawns, not by the bridge, since
@@ -1006,10 +1008,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		if !msg.Trusted {
 			return m, tea.Quit
 		}
-		return m, nil
-
-	case MsgStartupContext:
-		m.startupContext = append(m.startupContext, msg.Lines...)
+		if run := m.cfg.TrustedSessionStart; run != nil && m.background == nil && !m.busy {
+			return m.startTrustedSessionStart(run)
+		}
 		return m, nil
 
 	case MsgClearAndReplay:
