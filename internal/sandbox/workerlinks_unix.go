@@ -1,3 +1,5 @@
+//go:build darwin || linux
+
 package sandbox
 
 import (
@@ -9,7 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Seatbelt evaluates paths, not inodes. A hardlink already in the child
+// Seatbelt evaluates paths, not inodes, and on Linux an inode shared with the
+// parent checkout is the same file wherever it is mounted. A hardlink already in the child
 // could reveal a denied file or mutate a parent file under a child name.
 // Check at command preparation as well as worktree creation because files
 // can be added between commands by the supervising process.

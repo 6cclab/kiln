@@ -392,6 +392,17 @@ func (m *Manager) plan(cwd string) (Plan, *Proxy, error) {
 			p.DenyWrite = append(p.DenyWrite, Rule{Path: g})
 		}
 		p.DenyWriteLiteral = append(p.DenyWriteLiteral, filepath.Join(m.worker.child, ".git"))
+		if m.opts.GOOS == "linux" {
+			// The worker sees only the system directories, its worktree and
+			// temp, and its Git metadata read-only (bwrap.go privateRootArgs).
+			p.PrivateRoot = true
+			p.ReadOnlyMounts = m.worker.gitDirs
+			socks, err := workerHiddenSockets(m.worker.gitDirs)
+			if err != nil {
+				return Plan{}, nil, err
+			}
+			p.HiddenSockets = dedupe(append(p.HiddenSockets, socks...))
+		}
 	}
 	if !m.cfg.FilesystemDisabled && ensureCacheRoot(tmp) {
 		for k, v := range cacheEnv(tmp, userSetEnv(m.cfg.SettingsEnv)) {

@@ -13,14 +13,21 @@ import (
 	"github.com/andrepato/harness/internal/tool"
 )
 
-func TestWorkerShellActivationRejectsLinuxAndWindows(t *testing.T) {
-	for _, goos := range []string{"linux", "windows"} {
-		t.Run(goos, func(t *testing.T) {
-			cleanup, err := enableWorkerShellForOS(execenv.New("/child"), execenv.New("/parent"), "/child", goos)
-			if err == nil || !strings.Contains(err.Error(), "requires macOS Seatbelt") || cleanup != nil {
-				t.Fatalf("activation cleanup present = %t, error = %v; want explicit platform error", cleanup != nil, err)
-			}
-		})
+func TestWorkerShellActivationRejectsWindows(t *testing.T) {
+	cleanup, err := enableWorkerShellForOS(execenv.New("/child"), execenv.New("/parent"), "/child", "windows")
+	if err == nil || !strings.Contains(err.Error(), "requires macOS Seatbelt or Linux bubblewrap") || cleanup != nil {
+		t.Fatalf("activation cleanup present = %t, error = %v; want explicit platform error", cleanup != nil, err)
+	}
+}
+
+func TestIsolatedShellSupport(t *testing.T) {
+	if err := isolatedShellSupport("linux"); err != nil {
+		t.Errorf("linux refused: %v", err)
+	}
+	for goos, want := range map[string]string{"darwin": "setsid()", "windows": "no worktree-aware command sandbox", "freebsd": "no worktree-aware command sandbox"} {
+		if err := isolatedShellSupport(goos); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want refusal mentioning %q", goos, err, want)
+		}
 	}
 }
 
@@ -30,13 +37,15 @@ func TestWorkerShellActivationRequiresConfinedFilesAndJobScope(t *testing.T) {
 	}
 }
 
-func TestWorkerShellActivationCannotSpoofDarwin(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("requires a non-macOS host")
-	}
-	cleanup, err := enableWorkerShellForOS(execenv.New("/child"), execenv.New("/parent"), "/child", "darwin")
-	if cleanup != nil || err == nil || !strings.Contains(err.Error(), "requires macOS Seatbelt") {
-		t.Fatalf("spoofed platform activated worker shell: cleanup=%t error=%v", cleanup != nil, err)
+func TestWorkerShellActivationCannotSpoofPlatform(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		if goos == runtime.GOOS {
+			continue
+		}
+		cleanup, err := enableWorkerShellForOS(execenv.New("/child"), execenv.New("/parent"), "/child", goos)
+		if cleanup != nil || err == nil || !strings.Contains(err.Error(), "requires macOS Seatbelt or Linux bubblewrap") {
+			t.Errorf("spoofed %s activated worker shell: cleanup=%t error=%v", goos, cleanup != nil, err)
+		}
 	}
 }
 
@@ -96,13 +105,16 @@ func TestDispatchIsolatedShellRequiresIsolatedWorkers(t *testing.T) {
 }
 
 func TestDispatchIsolatedShellRefusesBeforeStartingWorker(t *testing.T) {
+	if isolatedShellSupport(runtime.GOOS) == nil {
+		t.Skip("isolated shell is supported here; see worker_shell_linux_test.go")
+	}
 	d, _, _ := newParentAndDispatcher(t, "model: faux-1\nsteps:\n  - tool_call: {name: bash, args: {command: 'printf escaped > marker'}, id: tc1}\n", nil)
 	repo := testRepo(t)
 	d.Env = execenv.New(repo)
 	d.IsolatedWorkers = true
 	d.IsolatedShell = true
 	result, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "general-purpose", Prompt: "run bash"})
-	if err == nil || !strings.Contains(err.Error(), "detached descendants cannot yet be owned safely") {
+	if err == nil || !strings.Contains(err.Error(), "isolated shell is unavailable on") {
 		t.Fatalf("unsafe isolated shell returned result=%+v error=%v", result, err)
 	}
 	if _, err := os.Stat(filepath.Join(repo, "marker")); !os.IsNotExist(err) {

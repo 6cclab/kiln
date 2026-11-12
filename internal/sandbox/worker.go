@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,11 +23,14 @@ type workerScope struct {
 // the worker's checkout. The caller must use the returned manager for every
 // worker shell command, must reject an unsandboxed command request, and must
 // Close it when the worker exits. An unavailable mechanism is an error.
-// Worker profiles currently require macOS Seatbelt; Linux's bubblewrap
-// profile cannot deny arbitrary visible Unix sockets.
+// Worker profiles run under macOS Seatbelt or Linux bubblewrap. On Linux the
+// command gets a private root (Plan.PrivateRoot) rather than the host's "/",
+// so host path-based Unix sockets do not exist for it, and a PID namespace
+// that ends every descendant, setsid() ones included, when the command or its
+// bwrap is killed.
 func NewWorker(parent Config, opts Options, parentRoot, worktreeRoot string) (*Manager, error) {
-	if runtime.GOOS != "darwin" || (opts.GOOS != "" && opts.GOOS != "darwin") {
-		return nil, fmt.Errorf("sandbox: worker isolation requires macOS Seatbelt")
+	if (runtime.GOOS != "darwin" && runtime.GOOS != "linux") || (opts.GOOS != "" && opts.GOOS != runtime.GOOS) {
+		return nil, fmt.Errorf("sandbox: worker isolation requires macOS Seatbelt or Linux bubblewrap")
 	}
 	if parent.FilesystemDisabled {
 		return nil, fmt.Errorf("sandbox: worker isolation requires filesystem restrictions")
@@ -145,4 +149,39 @@ func inheritedRules(rules []Rule, parentRoot, child string) []Rule {
 		}
 	}
 	return out
+}
+
+// workerHiddenSockets lists the Unix sockets inside the host paths a Linux
+// worker still sees that are not its own: /etc and the worktree's Git
+// metadata (git's fsmonitor daemon listens inside a git directory). Objects
+// are skipped: git stores no sockets there and the tree is large. A tree too
+// large to scan is an error, so the worker fails closed.
+func workerHiddenSockets(gitDirs []string) ([]string, error) {
+	const limit = 50000
+	var out []string
+	for _, root := range append([]string{"/etc"}, gitDirs...) {
+		n := 0
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if d != nil && d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if n++; n > limit {
+				return fmt.Errorf("sandbox: %s has more than %d entries to scan for Unix sockets", root, limit)
+			}
+			switch {
+			case d.Type()&fs.ModeSocket != 0:
+				out = append(out, path)
+			case d.IsDir() && d.Name() == "objects":
+				return fs.SkipDir
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }

@@ -36,6 +36,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -308,7 +309,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		return DispatchResult{}, fmt.Errorf("agent: isolated shell requires isolated workers")
 	}
 	if d.IsolatedShell {
-		return DispatchResult{}, fmt.Errorf("agent: isolated shell is unavailable: detached descendants cannot yet be owned safely across process-group changes")
+		if err := isolatedShellSupport(runtime.GOOS); err != nil {
+			return DispatchResult{}, fmt.Errorf("agent: %w", err)
+		}
 	}
 	if d.IsolatedWorkers {
 		if d.Env != nil && d.Env.Sandbox != nil && d.Env.Sandbox.Active() {
@@ -341,7 +344,22 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		}()
 	}
 	workerEnv.JobScope = execenv.NewJobScope()
-	defer workerEnv.JobScope.Close()
+	// The shell sandbox is released after the job scope has stopped the
+	// worker's commands and before the worktree is removed (defers run in
+	// reverse order, and the worktree's was registered earlier).
+	var shellCleanup func()
+	defer func() {
+		workerEnv.JobScope.Close()
+		if shellCleanup != nil {
+			shellCleanup()
+		}
+	}()
+	if d.IsolatedShell {
+		shellCleanup, err = enableWorkerShellForOS(workerEnv, d.Env, worktree.path, runtime.GOOS)
+		if err != nil {
+			return DispatchResult{}, fmt.Errorf("agent: isolated shell: %w", err)
+		}
+	}
 
 	// allowTask gates both this subagent's own `task` tool (built below)
 	// and, through AllowedToolNames, whether "task" can even survive an
@@ -355,7 +373,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	}
 	allowTask := d.Depth+1 < maxDepth
 	available := append([]string(nil), residentToolNames...)
-	if d.IsolatedWorkers {
+	if d.IsolatedWorkers && !d.IsolatedShell {
 		// File-only workers never offer Bash, even when a definition names it.
 		available = removeToolName(available, "bash")
 	}

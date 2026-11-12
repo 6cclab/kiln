@@ -42,17 +42,14 @@ func TestWorkerConfigMandatoryAndRebased(t *testing.T) {
 }
 
 func TestWorkerRejectsUnsupportedPlatform(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("worker Seatbelt supported on macOS")
-	}
-	if _, err := NewWorker(Config{}, Options{}, "/parent", "/child"); err == nil {
+	if _, err := NewWorker(Config{}, Options{GOOS: "windows"}, "/parent", "/child"); err == nil {
 		t.Fatal("worker factory accepted a platform without supported isolation")
 	}
 }
 
 func TestWorkerPlanExcludesSharedRoots(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("worker plan requires macOS Seatbelt")
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("worker plan requires macOS Seatbelt or Linux bubblewrap")
 	}
 	base := t.TempDir()
 	parent, child, tmp := filepath.Join(base, "parent"), filepath.Join(base, "child"), filepath.Join(base, "tmp")

@@ -32,9 +32,18 @@ type bwrapBridge struct {
 // no port is reachable.
 func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridge) ([]string, error) {
 	a := []string{bwrap, "--new-session", "--die-with-parent", "--unshare-pid", "--unshare-net"}
-	if !p.FilesystemDisabled {
+	visible := func(string) bool { return true }
+	switch {
+	case p.PrivateRoot:
+		if p.FilesystemDisabled {
+			return nil, fmt.Errorf("sandbox: a private root needs filesystem restrictions")
+		}
+		var mounts []string
+		a, mounts = privateRootArgs(a, p)
+		visible = func(path string) bool { return underAny(path, mounts) }
+	case !p.FilesystemDisabled:
 		a = append(a, "--ro-bind", "/", "/")
-	} else {
+	default:
 		a = append(a, "--bind", "/", "/")
 	}
 	a = append(a, "--dev", "/dev")
@@ -51,6 +60,12 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 				a = append(a, "--bind", r, r)
 			}
 		}
+		for _, r := range p.ReadOnlyMounts {
+			r = realPath(r)
+			if exists(r) {
+				a = append(a, "--ro-bind", r, r)
+			}
+		}
 		// A mount point cannot be renamed or removed: binding each held
 		// directory onto itself keeps it in place while it stays writable.
 		for _, l := range sortedByDepth(p.DenyWriteLiteral) {
@@ -65,7 +80,7 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 				continue
 			}
 			for _, s := range spellings(d.Path) {
-				if exists(s) {
+				if exists(s) && visible(realPath(s)) {
 					ro = append(ro, realPath(s))
 				}
 			}
@@ -83,7 +98,7 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 				continue
 			}
 			path := realPath(r.rule.Path)
-			if !exists(path) {
+			if !exists(path) || !visible(path) {
 				continue
 			}
 			switch {
@@ -96,12 +111,19 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 				a = append(a, "--ro-bind", "/dev/null", path)
 			}
 		}
-		a = hideSockets(a, p.HiddenSockets)
+		a = hideSockets(a, p.HiddenSockets, visible)
 		for _, path := range remount {
 			a = append(a, "--remount-ro", path)
 		}
+		if p.PrivateRoot {
+			// The root is bwrap's own tmpfs: without this, a worker could
+			// create files and directories on it (memory-backed, and lost
+			// with the command) wherever it is not a mount point. The
+			// writable roots are separate mounts and stay writable.
+			a = append(a, "--remount-ro", "/")
+		}
 	} else {
-		a = hideSockets(a, p.HiddenSockets)
+		a = hideSockets(a, p.HiddenSockets, visible)
 	}
 
 	for _, br := range bridges {
@@ -143,10 +165,10 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 // hideSockets binds /dev/null over each listed socket that exists, after
 // the writable roots are mounted (a root bound over a socket's directory
 // would otherwise bring it back). A connect to it then fails.
-func hideSockets(a []string, socks []string) []string {
+func hideSockets(a []string, socks []string, visible func(string) bool) []string {
 	var real []string
 	for _, s := range socks {
-		if exists(s) {
+		if exists(s) && visible(realPath(s)) {
 			real = append(real, realPath(s))
 		}
 	}
@@ -188,4 +210,40 @@ func sortedByDepth(in []string) []string {
 		return strings.Count(filepath.Clean(out[i]), "/") < strings.Count(filepath.Clean(out[j]), "/")
 	})
 	return out
+}
+
+// workerSystemDirs are the host directories an isolated worker's private
+// root shows read-only: the toolchain and its configuration. They hold
+// package-managed files, not runtime state; /run, /var, /tmp, /mnt, /home and
+// /opt are left out because that is where path-based Unix sockets live.
+// /etc is scanned for sockets (workerHiddenSockets).
+var workerSystemDirs = []string{"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc"}
+
+// privateRootArgs mounts the worker's private root (Plan.PrivateRoot) and
+// returns the host paths now visible. The root itself is bwrap's empty
+// tmpfs: nothing outside these mounts exists in the command's namespace.
+func privateRootArgs(a []string, p Plan) ([]string, []string) {
+	var mounts []string
+	for _, d := range workerSystemDirs {
+		fi, err := os.Lstat(d)
+		switch {
+		case err != nil:
+		case fi.Mode()&os.ModeSymlink != 0:
+			// /bin -> usr/bin and the like: recreate the link; its target
+			// is inside a directory mounted here.
+			if t, err := os.Readlink(d); err == nil {
+				a = append(a, "--symlink", t, d)
+			}
+		case fi.IsDir():
+			a = append(a, "--ro-bind", d, d)
+			mounts = append(mounts, d)
+		}
+	}
+	for _, r := range p.WriteRoots {
+		mounts = append(mounts, realPath(r))
+	}
+	for _, r := range p.ReadOnlyMounts {
+		mounts = append(mounts, realPath(r))
+	}
+	return a, mounts
 }
