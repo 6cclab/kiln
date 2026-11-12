@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/diag"
+	"github.com/andrepato/harness/internal/harness"
 )
 
 const maxWorkerBatchArtifacts = 16
@@ -30,6 +31,45 @@ type preparedWorkerBatch struct {
 	inspection WorkerBatchInspection
 	patch      []byte
 	baseline   *WorkerBaseline
+}
+
+// IntegrateWorkerResults applies one completed group of isolated dispatch
+// results when automatic integration is enabled. The caller must wait for
+// every dispatch in the group and pass only successful results. A nil artifact
+// means that worker made no file changes. The batch validator rejects
+// overlapping patches, stale parent state, and changed artifact files before
+// the single apply. Calling this once per worker would make sibling patches
+// stale, so the caller must invoke it once for the whole group.
+func (d *Dispatcher) IntegrateWorkerResults(ctx context.Context, results []DispatchResult) (WorkerBatchInspection, error) {
+	if d == nil || !d.IsolatedWorkers || !d.AutoIntegrate || d.Env == nil || d.Env.Cwd == "" {
+		return WorkerBatchInspection{}, fmt.Errorf("automatic worker integration is not enabled")
+	}
+	if err := ctx.Err(); err != nil {
+		return WorkerBatchInspection{}, err
+	}
+	if len(results) == 0 || len(results) > maxWorkerBatchArtifacts {
+		return WorkerBatchInspection{}, fmt.Errorf("worker result batch requires 1 to %d results", maxWorkerBatchArtifacts)
+	}
+	artifacts := make([]WorkerArtifact, 0, len(results))
+	for i, result := range results {
+		if result.Status != harness.StatusCompleted {
+			return WorkerBatchInspection{}, fmt.Errorf("worker result %d is not completed", i+1)
+		}
+		if result.Artifact != nil {
+			artifacts = append(artifacts, *result.Artifact)
+		}
+	}
+	if len(artifacts) == 0 {
+		return WorkerBatchInspection{}, nil
+	}
+	inspection, err := InspectWorkerArtifactBatch(ctx, d.Env.Cwd, artifacts)
+	if err != nil {
+		return WorkerBatchInspection{}, err
+	}
+	if err := ApplyWorkerArtifactBatch(ctx, d.Env.Cwd, artifacts); err != nil {
+		return WorkerBatchInspection{}, err
+	}
+	return inspection, nil
 }
 
 // InspectWorkerArtifactBatch validates manifests and patches against a clean

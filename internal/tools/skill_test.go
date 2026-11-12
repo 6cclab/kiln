@@ -65,6 +65,19 @@ func TestSkillTool_InvokeAppendsArgs(t *testing.T) {
 	}
 }
 
+func TestSkillTool_CommandRendererUsesPlaceholders(t *testing.T) {
+	tl := SkillTool([]SkillRecord{{Name: "frontend:component", Dir: "/repo/.claude/commands/frontend", Render: func(args string) string {
+		return "Build " + strings.Fields(args)[0]
+	}}})
+	res, err := tl.Execute(context.Background(), json.RawMessage(`{"skill":"frontend:component","args":"button large"}`), nil, tool.Invocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := msg.TextOf(res.Content); got != "Base directory for this skill: /repo/.claude/commands/frontend\n\nBuild button" {
+		t.Fatalf("rendered command: %q", got)
+	}
+}
+
 func TestSkillTool_UnknownSkillListsAvailable(t *testing.T) {
 	tl := SkillTool([]SkillRecord{
 		{Name: "greet", Description: "says hi", Body: "Hello.", Dir: "/d"},

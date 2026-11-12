@@ -13,8 +13,10 @@ import (
 	"github.com/andrepato/harness/internal/tool"
 )
 
-// CapabilityCatalog is a snapshot of model-invocable skills, dispatchable
-// agents, and connected MCP tools. Callers filter unavailable entries first.
+// CapabilityCatalog is a snapshot of model-invocable skills and custom
+// commands, dispatchable agents, and connected MCP tools. Callers filter
+// unavailable entries first. Custom commands use skill records because Claude
+// Code treats legacy commands as skills.
 type CapabilityCatalog struct {
 	Skills []SkillRecord
 	Agents []agents.Definition
@@ -110,7 +112,16 @@ func SearchCapabilities(c CapabilityCatalog, query string, limit int) []Capabili
 	}
 	terms := capabilityTerms(query)
 	var hits []CapabilityHit
-	for _, s := range c.Skills {
+	// The skill tool resolves the last record with a qualified name. Search
+	// must describe that same record when catalogs contain duplicates.
+	lastSkills := make(map[string]int, len(c.Skills))
+	for i, s := range c.Skills {
+		lastSkills[s.Name] = i
+	}
+	for i, s := range c.Skills {
+		if lastSkills[s.Name] != i {
+			continue
+		}
 		score, reason := capabilityScore(s.Name, s.Description, terms)
 		if len(terms) > 0 && score == 0 {
 			continue
@@ -191,7 +202,7 @@ func CapabilitySearchTool(catalog CapabilityCatalogFunc, budget int, onAdmit OnA
 func CapabilitySearchToolDynamic(catalog CapabilityCatalogFunc, budget func() int, onAdmit OnAdmit) *tool.Tool {
 	return &tool.Tool{
 		Name: "capability_search", Label: "Search capabilities",
-		Description: "Search installed skills, dispatchable agents, and available MCP tools together by topic. Returns reasons and exact actions. Matching MCP tools become callable after search; use skill to load instructions or task to dispatch an agent.",
+		Description: "Search installed skills, custom commands, dispatchable agents, and available MCP tools together by topic. Returns reasons and exact actions. Matching MCP tools become callable after search; use skill to load instructions or task to dispatch an agent.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"maxResults":{"type":"integer","description":"Maximum matches, up to 10"}},"required":["query"]}`),
 		Execute: func(ctx context.Context, raw json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
 			if err := ctx.Err(); err != nil {

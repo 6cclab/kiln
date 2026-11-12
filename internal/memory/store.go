@@ -280,7 +280,7 @@ func (s *Store) ForgetScope(ctx context.Context, scope string) error {
 // PutUniquePruned atomically inserts a new key once and retains only the
 // newest limit records in its scope. It never creates correction history.
 func (s *Store) PutUniquePruned(ctx context.Context, r Record, limit int) (bool, error) {
-	validScope := (strings.HasPrefix(r.Scope, "outcome:") && r.Kind == "observation") || (strings.HasPrefix(r.Scope, "outcome-dismissed:") && r.Kind == "procedure")
+	validScope := (strings.HasPrefix(r.Scope, "outcome:") && r.Kind == "observation") || ((strings.HasPrefix(r.Scope, "outcome-dismissed:") || strings.HasPrefix(r.Scope, "outcome-proposal:") || strings.HasPrefix(r.Scope, "outcome-proposal-dismissed:")) && r.Kind == "procedure")
 	if !validScope || strings.TrimSpace(r.Key) == "" || strings.TrimSpace(r.Text) == "" || strings.TrimSpace(r.Evidence) == "" || len(r.Key) > 256 || len(r.Text) > 8192 || len(r.Evidence) > 2048 || limit < 1 || limit > 1000 || len(r.Sources) != 0 {
 		return false, errors.New("invalid unique retained record")
 	}
@@ -341,7 +341,7 @@ func (s *Store) PutUniquePruned(ctx context.Context, r Record, limit int) (bool,
 // Recent returns up to limit current outcome records, newest first. Outcome
 // records cannot have file sources, so this narrow reader omits that table.
 func (s *Store) Recent(ctx context.Context, scope string, limit int) ([]Record, error) {
-	if !strings.HasPrefix(scope, "outcome:") || limit < 1 || limit > 1000 {
+	if !(strings.HasPrefix(scope, "outcome:") || strings.HasPrefix(scope, "outcome-proposal:")) || limit < 1 || limit > 1000 {
 		return nil, errors.New("invalid recent-record query")
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,scope,key,kind,text,evidence,created,expires,supersedes FROM memories WHERE scope=? AND active=1 AND (expires=0 OR expires>?) ORDER BY id DESC LIMIT ?`, scope, time.Now().Unix(), limit)

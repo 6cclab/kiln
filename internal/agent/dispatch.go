@@ -83,6 +83,9 @@ type Dispatcher struct {
 	IsolatedWorkers bool
 	// SnapshotDirty captures a bounded dirty parent baseline for isolated workers.
 	SnapshotDirty bool
+	// AutoIntegrate permits IntegrateWorkerResults to apply a completed
+	// dispatch batch. The caller must invoke it once after all results arrive.
+	AutoIntegrate bool
 	Registry      *provider.Registry
 	// Parent is the session doing the dispatching. Its model is the
 	// inheritance default for ResolveModel, and its cwd anchors the
@@ -192,7 +195,10 @@ type DispatchRequest struct {
 type DispatchResult struct {
 	UsageByModel map[string]msg.Usage `json:"usageByModel,omitempty"`
 	Artifact     *WorkerArtifact      `json:"artifact,omitempty"`
-	Text         string
+	// Status is completed only when the worker run finished successfully.
+	// Early refusals leave it empty; integration rejects those results.
+	Status string
+	Text   string
 	// ToolCalls is reported to the user, never to the model.
 	ToolCalls int
 	Chars     int
@@ -398,6 +404,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			ReadCache:          d.ReadCache,
 			IsolatedWorkers:    d.IsolatedWorkers,
 			SnapshotDirty:      d.SnapshotDirty,
+			AutoIntegrate:      d.AutoIntegrate,
 			Registry:           d.Registry,
 			Gate:               d.Gate,
 			Agents:             d.Agents,
@@ -621,7 +628,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		if d.OnEvent != nil {
 			d.OnEvent(SubagentEvent{Kind: SubagentEventError, Agent: def.Name, ID: req.ToolCallID, Message: err.Error(), Depth: depth})
 		}
-		return DispatchResult{Text: text, ToolCalls: toolCalls, Chars: len(text), Artifact: artifact, Usage: started.Harness.Stats().Usage, UsageByModel: started.Harness.UsageByModel(resolved.Model.Provider + "/" + resolved.Model.ID)}, err
+		return DispatchResult{Status: harness.StatusFailed, Text: text, ToolCalls: toolCalls, Chars: len(text), Artifact: artifact, Usage: started.Harness.Stats().Usage, UsageByModel: started.Harness.UsageByModel(resolved.Model.Provider + "/" + resolved.Model.ID)}, err
 	}
 
 	modelLabel := choice.ProviderID + "/" + choice.ModelID
@@ -640,7 +647,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		if text == "" {
 			text = fmt.Sprintf("The subagent failed: %s", message)
 		}
-		return DispatchResult{Text: text, ToolCalls: toolCalls, Chars: len(text), Model: modelLabel, Usage: usage, UsageByModel: started.Harness.UsageByModel(modelLabel), Artifact: artifact}, nil
+		return DispatchResult{Status: result.Status, Text: text, ToolCalls: toolCalls, Chars: len(text), Model: modelLabel, Usage: usage, UsageByModel: started.Harness.UsageByModel(modelLabel), Artifact: artifact}, nil
 	}
 
 	if d.OnEvent != nil {
@@ -656,7 +663,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			Text:      text,
 		})
 	}
-	return DispatchResult{Text: text, ToolCalls: toolCalls, Chars: len(text), Model: modelLabel, Usage: usage, UsageByModel: started.Harness.UsageByModel(modelLabel), Artifact: artifact}, nil
+	return DispatchResult{Status: harness.StatusCompleted, Text: text, ToolCalls: toolCalls, Chars: len(text), Model: modelLabel, Usage: usage, UsageByModel: started.Harness.UsageByModel(modelLabel), Artifact: artifact}, nil
 }
 
 // adaptDispatch bridges a *Dispatcher.Dispatch method value to
