@@ -1,7 +1,7 @@
   faux/faux-1 · 5k of 128k tokens
   ━ ━━ ━ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ■ System prompt                                                                          N     P
-  ■ Tools                                                                               4.0k    3%
+  ■ Tools                                                                               4.1k    3%
   ■ Files read                                                                             0    0%
   ■ Conversation                                                                           N     P
   ■ Free                                                                              123.2k   96%

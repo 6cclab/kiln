@@ -1236,7 +1236,12 @@ evidence. Include relevant dependency manifests, configuration and test files
 in the declared inputs. This is evidence of command success on those inputs,
 not proof that the command tests the whole repository.
 Failed commands and denied, missing, symlinked, or oversized inputs produce no
-verification evidence. File-only declarations retain their limits of 16 files,
+verification evidence. Neither does a command whose exit status can hide a
+failed check: only a single command or an `&&` chain qualifies. Kiln's shell
+does not set `pipefail`, so `go test ./... | tail` exits 0 when tests fail; a
+pipeline, `||`, `;` or a second line, `&`, `!`, or a compound command records the
+attempt with `exitStatusUnreliable` naming the construct, and no evidence. The
+text inside a nested `sh -c` string is not inspected. File-only declarations retain their limits of 16 files,
 32 MiB per file, and 64 MiB total. Directory declarations accept up to eight
 roots. `verificationDirectoryFileLimit` defaults to 128 (maximum 512), and
 `verificationDirectoryByteLimit` defaults to 64 MiB (also its maximum).
