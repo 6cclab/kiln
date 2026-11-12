@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"sync"
 
 	slashcommands "github.com/andrepato/harness/internal/commands"
+	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/tools"
 )
@@ -345,4 +347,23 @@ func toPersisted(e slashcommands.ContextSelection) persistedSelection {
 
 func fromPersisted(p persistedSelection) slashcommands.ContextSelection {
 	return selection(p.Kind, p.Material, p.Name, p.Reason, p.Included)
+}
+
+// selectionRecorder returns an OnBeforeRequest hook that stores the ledger's
+// record through store, skipping unchanged records. A failed store is logged,
+// not returned: /context bookkeeping must never fail the model request.
+func selectionRecorder(selections *contextSelectionLedger, store func(json.RawMessage) error) func(context.Context) error {
+	var last string
+	return func(context.Context) error {
+		raw := selections.Marshal()
+		if raw == nil || string(raw) == last {
+			return nil
+		}
+		if err := store(raw); err != nil {
+			diag.L().Warn("context selection record not saved", "error", err)
+			return nil
+		}
+		last = string(raw)
+		return nil
+	}
 }

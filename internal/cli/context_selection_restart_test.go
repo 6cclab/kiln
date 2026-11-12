@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,5 +163,31 @@ func TestContextSelectionRecordHoldsNoContentAndIsBounded(t *testing.T) {
 		if l.requestUser != "" || len(l.transient) != 0 {
 			t.Errorf("Restore(%q) loaded state", bad)
 		}
+	}
+}
+
+// A failed save of the /context record must not fail the model request, and
+// the record is retried on the next request rather than marked as saved.
+func TestContextSelectionRecorderSaveFailureDoesNotFailRequest(t *testing.T) {
+	ledger := newContextSelectionLedger()
+	ledger.BeginRequest(testTypedTranscript("prompt"))
+	ledger.Record("memory", "scope:key", "search hit", true)
+	saves, fail := 0, true
+	hook := selectionRecorder(ledger, func(json.RawMessage) error {
+		saves++
+		if fail {
+			return errors.New("disk full")
+		}
+		return nil
+	})
+	if err := hook(context.Background()); err != nil {
+		t.Fatalf("save failure failed the request: %v", err)
+	}
+	fail = false
+	if err := hook(context.Background()); err != nil || saves != 2 {
+		t.Fatalf("record not retried after a failed save: saves=%d err=%v", saves, err)
+	}
+	if err := hook(context.Background()); err != nil || saves != 2 {
+		t.Fatalf("unchanged record rewritten: saves=%d err=%v", saves, err)
 	}
 }

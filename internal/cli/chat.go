@@ -2051,19 +2051,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return transcript, nil
 	})
 	// Commit this request's decisions once the context transforms have run
-	// and the request is about to be sent; unchanged records are not rewritten.
-	var lastSelectionRecord string
-	started.Harness.Hooks().OnBeforeRequest(func(context.Context) error {
-		raw := selections.Marshal()
-		if raw == nil || string(raw) == lastSelectionRecord {
-			return nil
-		}
-		if err := started.Lane.SetSessionValue(ContextSelectionNamespace, contextSelectionKey, raw); err != nil {
-			return err
-		}
-		lastSelectionRecord = string(raw)
-		return nil
-	})
+	// and the request is about to be sent.
+	started.Harness.Hooks().OnBeforeRequest(selectionRecorder(selections, func(raw json.RawMessage) error {
+		return started.Lane.SetSessionValue(ContextSelectionNamespace, contextSelectionKey, raw)
+	}))
 	if projectMemory != nil && (settings.MemoryAutoRetrieve == nil || *settings.MemoryAutoRetrieve) {
 		started.Harness.Hooks().OnTransformContext(memoryContextObserved(projectMemory, memoryScope(cwd), memoryProjectRoot(cwd), func() bool {
 			return claudesettings.DecideIn(gate.Permissions(), cwd, "memory_recall", "", gate.Mode()) == claudesettings.Allow
