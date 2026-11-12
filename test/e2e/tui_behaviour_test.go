@@ -273,10 +273,14 @@ func TestTUI_SystemNoteBlock_ReflowsOnResize(t *testing.T) {
 	}
 	waitTurnSettled(t, s)
 
+	// The last "system" rule is the redrawn one. A redraw shorter than the
+	// screen leaves pre-resize rows above it (the compact banner a narrow
+	// window now gets is 3 rows, not 9), and the first match was one of those.
 	systemRuleRow := func() string {
-		for _, r := range s.Rows() {
-			if strings.HasPrefix(strings.TrimSpace(r), "system ") {
-				return r
+		rows := s.Rows()
+		for i := len(rows) - 1; i >= 0; i-- {
+			if strings.HasPrefix(strings.TrimSpace(rows[i]), "system ") {
+				return rows[i]
 			}
 		}
 		return ""
