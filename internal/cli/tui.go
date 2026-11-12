@@ -26,6 +26,7 @@ import (
 	term "github.com/charmbracelet/x/term"
 
 	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/auth"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
@@ -126,6 +127,8 @@ type InteractiveDeps struct {
 	// SetHookActivity rebinds what a running Stop hook chain reports for
 	// the busy row (Bridge.HookActivity).
 	SetHookActivity func(func(string))
+	// SetLoginUI hands /login and /logout the TUI's prompt surface.
+	SetLoginUI func(auth.Interaction)
 	// StartupNotes are warnings found while starting (a model role that
 	// does not resolve, memory over budget). Printed to stderr they sat
 	// behind the fullscreen TUI until exit; they show as system notes
@@ -205,6 +208,10 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	}
 	if deps.SetHookNotice != nil {
 		deps.SetHookNotice(bridge.HookNotice)
+	}
+	if deps.SetLoginUI != nil {
+		deps.SetLoginUI(tui.NewAuthInteraction(bridge))
+		defer deps.SetLoginUI(nil)
 	}
 	// ask_user_question has no chat.go wiring analogous to SetPlanApprover
 	// (see internal/tools/askuser.go's doc comment: chat.go is being

@@ -104,10 +104,18 @@ plus every user-invocable skill in `~/.claude/skills`, which appear in the same
 palette as Claude Code puts them in.
 
 `/statusline` and `/vim` are honest no-ops: they say what is not implemented
-rather than appearing to work. `/login` and `/logout` report status and point at
-the CLI subcommand — the OAuth flow opens a browser and binds a local port, so
-it must not start mid-turn. `/usage` reports the context budget, since no plan
-limit applies to a self-hosted model.
+rather than appearing to work. `/login [provider]` and `/logout <provider>` run
+inside the session, as Claude Code's `/login` runs its login flow in its own TUI:
+`/login` asks which provider (or takes one as an argument), then runs the same
+flow as `kiln login` — an API key in a masked field, or the OAuth browser/device
+flow with its URL printed in the transcript — as a background command, so Esc
+cancels it. The new credential is used by the running session at once (the
+registry reads the credential store per request). Divergences: Claude Code logs
+in to one Anthropic account, kiln to any of ~44 providers, so `/logout` names a
+provider; in print mode (`-p`) there is nobody to prompt and both keep the old
+text pointing at `kiln login`/`kiln logout`. The login behaviour of Claude Code
+here is from memory, not read from its source this session. `/usage` reports the
+context budget, since no plan limit applies to a self-hosted model.
 
 `/plugin` reports that marketplaces are not supported and names what this
 kiln extends with instead (skills, agents, commands, MCP, hooks, mod modules).
@@ -117,8 +125,8 @@ savvy-progress use, listed in `configuration.md` "Mods". Divergences: no
 per-agent transcript view (`$.ui.view` refuses), no terminal images (`Image`
 shows its alt text), no `$.fs`/`$.process`/`$.http`/`$.model`/`$.store`.
 
-**Adapt:** `/login` `/logout` already exist in kiln's CLI and should also
-be slash commands. `/usage` becomes budget/tier reporting rather than plan
+**Adapt:** `/login` `/logout` are slash commands over kiln's CLI login flow
+(above). `/usage` becomes budget/tier reporting rather than plan
 limits. `/fast` has no meaning here; `/effort` (§9) replaces it.
 
 **Out of scope** — Anthropic-account or Anthropic-infrastructure specific:
