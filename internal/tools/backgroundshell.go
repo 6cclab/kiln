@@ -79,6 +79,10 @@ type ShellManager interface {
 	// Read returns everything new since the caller's last read, advancing
 	// the cursor. ok is false for an unknown id.
 	Read(id string) (lines []string, missed int, shell Shell, ok bool)
+	// Wait blocks until the shell finishes or ctx ends. finished reports
+	// whether it finished (so its output is complete); ok is false for an
+	// unknown id.
+	Wait(ctx context.Context, id string) (finished, ok bool)
 	// Kill stops a running shell (a no-op status-wise if it already
 	// finished). ok is false for an unknown id.
 	Kill(id string) (Shell, bool)
@@ -126,18 +130,52 @@ var shellIDParameters = json.RawMessage(`{
 	"required": ["id"]
 }`)
 
-// BashOutputTool builds bash_output, mirroring createBashOutputTool.
+// Defaults and bounds for bash_output's block timeout, in milliseconds; they
+// match Claude Code's TaskOutput.
+const (
+	defaultBashOutputTimeoutMS = 30000
+	maxBashOutputTimeoutMS     = 600000
+)
+
+var bashOutputParameters = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"id": {"type": "string", "description": "The shell id, e.g. bash_1."},
+		"block": {"type": "boolean", "description": "Wait for the shell to finish before reading (default false)."},
+		"timeout": {"type": "number", "description": "With block, the most milliseconds to wait (default 30000, max 600000)."}
+	},
+	"required": ["id"]
+}`)
+
+// BashOutputTool builds bash_output, mirroring createBashOutputTool. With
+// block it first waits for the shell to finish, mirroring Claude Code's
+// TaskOutput, so a caller never has to guess how long a command takes.
 func BashOutputTool(shells ShellManager) *tool.Tool {
 	return &tool.Tool{
 		Name:  "bash_output",
 		Label: "Read background shell",
 		Description: "Read new output from a background shell started with run_in_background. " +
-			"Returns only what has appeared since your last read, so polling is cheap.",
-		Parameters: shellIDParameters,
-		Execute: func(_ context.Context, args json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
-			id, err := idParam(args)
-			if err != nil {
+			"Returns only what has appeared since your last read, so polling is cheap. " +
+			"Set block to wait until the shell finishes instead of polling.",
+		Parameters: bashOutputParameters,
+		Execute: func(ctx context.Context, args json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
+			var in struct {
+				ID      string   `json:"id"`
+				Block   bool     `json:"block"`
+				Timeout *float64 `json:"timeout"`
+			}
+			if err := json.Unmarshal(args, &in); err != nil {
 				return tool.Errorf("invalid arguments: %s", err), nil
+			}
+			id := strings.TrimSpace(in.ID)
+			if in.Block {
+				timeout := float64(defaultBashOutputTimeoutMS)
+				if in.Timeout != nil {
+					timeout = min(max(*in.Timeout, 0), maxBashOutputTimeoutMS)
+				}
+				waitCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Millisecond)
+				shells.Wait(waitCtx, id)
+				cancel()
 			}
 			lines, missed, shell, ok := shells.Read(id)
 			if !ok {

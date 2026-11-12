@@ -205,3 +205,47 @@ func shellIDFrom(t *testing.T, s string) string {
 	t.Fatalf("unexpected bash_background text: %q", s)
 	return ""
 }
+
+// TestBashOutputBlockWaitsForCompleteOutput: with block, bash_output returns
+// only once the shell has finished, so its output is complete however slow
+// the machine is. Without block, a read right after start can miss it, which
+// made an e2e test that slept a fixed 300ms flaky.
+func TestBashOutputBlockWaitsForCompleteOutput(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	shells := agent.NewBackgroundShells()
+	toolSet := tools.BackgroundShellTools(shells, env)
+	bg := mustTool(t, toolSet, "bash_background")
+	out := mustTool(t, toolSet, "bash_output")
+
+	runTool(t, bg, map[string]any{"command": "sleep 0.2; echo first-$((20+3)); echo second-$((40+2))"})
+	got := text(runTool(t, out, map[string]any{"id": "bash_1", "block": true}))
+	if !strings.Contains(got, "first-23\nsecond-42") || !strings.Contains(got, "exited (exit 0)") {
+		t.Fatalf("blocking read did not return the finished shell's full output:\n%s", got)
+	}
+}
+
+// TestBashOutputBlockStopsAtTimeout: the timeout bounds the wait, and a shell
+// still running is reported as running rather than waited for forever.
+func TestBashOutputBlockStopsAtTimeout(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	shells := agent.NewBackgroundShells()
+	toolSet := tools.BackgroundShellTools(shells, env)
+	bg := mustTool(t, toolSet, "bash_background")
+	out := mustTool(t, toolSet, "bash_output")
+
+	runTool(t, bg, map[string]any{"command": "sleep 30"})
+	defer shells.Kill("bash_1")
+	got := text(runTool(t, out, map[string]any{"id": "bash_1", "block": true, "timeout": 10}))
+	if !strings.Contains(got, "bash_1  running") {
+		t.Fatalf("timed-out blocking read should report the shell running:\n%s", got)
+	}
+}
+
+func TestBashOutputBlockUnknownShell(t *testing.T) {
+	shells := agent.NewBackgroundShells()
+	out := mustTool(t, tools.BackgroundShellTools(shells, execenv.New(t.TempDir())), "bash_output")
+	got := text(runTool(t, out, map[string]any{"id": "bash_9", "block": true}))
+	if !strings.Contains(got, `No shell "bash_9"`) {
+		t.Fatalf("unknown id: %s", got)
+	}
+}

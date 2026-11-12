@@ -515,7 +515,9 @@ unreliable in any repo that has one.
 ## Background shells
 
 `bash_background` starts a command and returns a shell id immediately;
-`bash_output` reads what is new since the last read; `kill_shell` stops it;
+`bash_output` reads what is new since the last read, and with `block: true`
+first waits for the shell to finish (`timeout` in ms, default 30000, max 600000,
+as Claude Code's TaskOutput); `kill_shell` stops it;
 `/bashes` lists them. Everything still running is killed on exit.
 
 A separate tool rather than a `run_in_background` flag on `bash`: pi's bash tool
