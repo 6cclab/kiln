@@ -196,11 +196,12 @@ type Model struct {
 	// (stream.go's RenderStreamLive), cleared once the full markdown block
 	// commits (msgCommitMarkdown) or the turn ends.
 	streamText string
-	// streamWrap holds streamText's wrapped rows between frames, so a
-	// frame wraps only what the last delta added (streamwrap.go). Shared
-	// by every copy of the Model; nil in a Model not built by NewModel,
-	// which then re-wraps on every frame.
-	streamWrap *streamWrapCache
+	// streamWrap holds the rendered rows of streamText's finished markdown
+	// blocks between frames, so a frame renders only the block still
+	// arriving (streammd.go). Shared by every copy of the Model; nil in a
+	// Model not built by NewModel, which then renders the whole reply on
+	// every frame.
+	streamWrap *streamMarkdown
 	// labelBeforePrompt is the busy label a permission, plan or question
 	// prompt replaced ("Running bash"), restored once the prompt is
 	// answered (restoreLabelAfterPrompt).
@@ -492,7 +493,7 @@ func NewModel(cfg Config) Model {
 		prompt:         NewPromptState(cfg.Cwd),
 		subagents:      NewSubagentPanelState(),
 		plan:           &planLiveState{},
-		streamWrap:     &streamWrapCache{},
+		streamWrap:     &streamMarkdown{},
 		liveWidth:      &atomic.Int32{},
 		startupContext: append([]string(nil), cfg.StartupContext...),
 		fullscreen:     cfg.Fullscreen && !cfg.Plain,
