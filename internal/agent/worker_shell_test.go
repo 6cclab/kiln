@@ -146,3 +146,45 @@ func TestReleaseWorkerWorktreeKeepsWorktreeWhenShellNotStopped(t *testing.T) {
 		t.Fatalf("worktree not removed after confirmed stop: %v", statErr)
 	}
 }
+
+// Activation fails closed, leaving no sandbox and no cleanup, when the parent's
+// sandbox is not kiln's own or the worker sandbox cannot be built (here the
+// worker directory is not a linked Git worktree).
+func TestWorkerShellActivationFailsClosed(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("worker shell activation is refused earlier on " + runtime.GOOS)
+	}
+	for _, tc := range []struct {
+		name, want string
+		sandbox    execenv.Sandbox
+	}{
+		{"unknown parent sandbox", "unknown parent sandbox", foreignSandbox{}},
+		{"worker sandbox unavailable", "prepare isolated worker shell sandbox", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parentRoot, child := t.TempDir(), t.TempDir()
+			workerEnv, err := execenv.New(child).CloneForConfinedFiles(child)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = workerEnv.CloseConfinedFiles() })
+			workerEnv.JobScope = execenv.NewJobScope()
+			t.Cleanup(workerEnv.JobScope.Close)
+			parentEnv := execenv.New(parentRoot)
+			parentEnv.Sandbox = tc.sandbox
+			cleanup, err := enableWorkerShellForOS(workerEnv, parentEnv, child, runtime.GOOS)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || cleanup != nil {
+				t.Fatalf("cleanup present = %t, error = %v; want a refusal mentioning %q", cleanup != nil, err, tc.want)
+			}
+			if workerEnv.Sandbox != nil {
+				t.Fatal("refused activation left a sandbox on the worker")
+			}
+		})
+	}
+}
+
+type foreignSandbox struct{}
+
+func (foreignSandbox) Active() bool                                   { return true }
+func (foreignSandbox) ForCommand(string, bool) execenv.CommandSandbox { return nil }
+func (foreignSandbox) OffersUnsandboxed() bool                        { return false }
