@@ -45,6 +45,12 @@ type Options struct {
 	// zero value) means unlimited: tool results are committed as-is,
 	// same as before this field existed.
 	ToolOutputTokens int
+	// ProgressLimit stops an operation after this many consecutive identical
+	// failed tool calls. Zero disables the guard.
+	ProgressLimit int
+	// CycleLimit stops after this many identical cycles of failed tool
+	// calls, for cycle lengths two through four. Zero disables detection.
+	CycleLimit int
 
 	Retry RetryPolicy
 
@@ -82,6 +88,9 @@ func New(opts Options) (*Harness, error) {
 	}
 	if opts.Registry == nil {
 		return nil, fmt.Errorf("harness: Options.Registry is required")
+	}
+	if opts.CycleLimit != 0 && (opts.CycleLimit < 2 || opts.CycleLimit > 10) {
+		return nil, fmt.Errorf("harness: Options.CycleLimit must be zero or between 2 and 10")
 	}
 	if opts.Tools == nil {
 		opts.Tools = tool.NewSet()
@@ -222,7 +231,7 @@ func (h *Harness) Stats() session.SessionStats { return h.opts.Storage.GetStats(
 // until its own first request.
 func (h *Harness) LastUsage() *msg.Usage {
 	for _, r := range h.opts.Storage.ScanUsage(session.UsageScan{Order: "desc"}) {
-		if !r.Adjustment {
+		if !r.Adjustment && sideUsageSource(r.Details) == "" {
 			u := r.Usage
 			return &u
 		}

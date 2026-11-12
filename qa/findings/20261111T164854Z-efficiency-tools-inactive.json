@@ -1,0 +1,27 @@
+{
+ "id": "20261111T164854Z-efficiency-tools-inactive",
+ "found_at": "2026-11-11T16:48:54Z",
+ "scenario": "TestEfficiencyToolsAreOfferedAndExecutable",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Skill discovery and memory tools were not offered to models",
+ "observed": "Tools were registered but omitted from the active resident tool list sent to models, so requests could not invoke them.",
+ "expected": "Registered discovery and enabled personal memory tools remain active across MCP regating; disabled memory tools remain absent.",
+ "design_ref": null,
+ "evidence": [
+  "test/e2e/efficiency_tools_test.go"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/chat.go"
+  ],
+  "regression_test": "TestEfficiencyToolsAreOfferedAndExecutable",
+  "after_evidence": [
+   "/tmp/kiln-agent-integration-tools.log"
+  ],
+  "updated_at": "2026-11-11T16:48:54Z"
+ }
+}

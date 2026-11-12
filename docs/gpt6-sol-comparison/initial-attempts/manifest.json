@@ -1,0 +1,65 @@
+{
+  "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+  "binaries": {
+    "codex": "ebabe5f0d79145a9e61274ce9ecf7c02c9021b7b04bfa59b7e61ad4461c32b0b",
+    "codex-code-mode-host": "ab573dc5cbb3d378e82bf4d568ad606b071ff2a284808fc206fddbe1ae677405",
+    "kiln": "7270660c2375252bac3b31d5d5d7ccdc3fe1104eb7552c926d08c3238dba7499"
+  },
+  "caveats": [
+    "ChatGPT-authenticated usage; catalog-equivalent cost, not an invoice.",
+    "Codex watchdog is external and approximate; unknown failures retain reservation.",
+    "Native delegation allowed with one concurrent worker; GPT-6-Sol worker default.",
+    "No personal memory, user plugins, or skills copied.",
+    "Model runs have baseline-only shallow repositories, excluding later solutions."
+  ],
+  "codex_outstanding_headroom_usd": 11.456,
+  "codex_version": "codex-cli 0.167.1",
+  "common_runner_sha256": "8a862a1fbccb8097a1ad8cf8d70649bc41270cd226e3d3bc8b07807f860c57e6",
+  "context_window": 272000,
+  "effort": "high",
+  "go_build_cache": "/Users/andrepato/Library/Caches/go-build",
+  "go_module_cache": "/Users/andrepato/go/pkg/mod",
+  "harness_revision": "d4d870d1365de02b6066e2036171d98ec61564ba",
+  "hidden_acceptance_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+  "judge_model": "gpt-6-sol",
+  "judges": 3,
+  "max_run_reservation_usd": 14.0,
+  "model": "gpt-6-sol",
+  "price_source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+  "pricing": {
+    "cache_write": 2.5,
+    "cached_input": 0.2,
+    "input": 2,
+    "long_cache_write": 5,
+    "long_cached_input": 0.4,
+    "long_input": 4,
+    "long_output": 15,
+    "long_threshold": 272000,
+    "output": 10,
+    "unit": "USD per million tokens"
+  },
+  "prior_reported_usd": 33.85363025,
+  "rubric_sha256": "5381d51e074f22e3eb2b059bb40beb31b24e10a1edc7d407f4a73bf3d0fc9321",
+  "runner_sha256": "05be185de924524a694922dcd57ac3467811c0b40234bb20fddad670f58deaf2",
+  "schedule": [
+    [
+      1,
+      "codex"
+    ],
+    [
+      1,
+      "kiln"
+    ],
+    [
+      2,
+      "kiln"
+    ],
+    [
+      2,
+      "codex"
+    ]
+  ],
+  "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+  "total_cap_usd": 50.0,
+  "wall_cap_seconds": 1200
+}

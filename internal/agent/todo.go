@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/andrepato/harness/internal/tools"
@@ -41,17 +42,17 @@ func NewTodoStore() *TodoStore { return &TodoStore{} }
 func (s *TodoStore) Get() []TodoItem {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.items
+	return slices.Clone(s.items)
 }
 
 // Set replaces the whole list and notifies every listener.
 func (s *TodoStore) Set(items []TodoItem) {
 	s.mu.Lock()
-	s.items = items
+	s.items = slices.Clone(items)
 	listeners := append([]func([]TodoItem){}, s.listeners...)
 	s.mu.Unlock()
 	for _, l := range listeners {
-		l(items)
+		l(slices.Clone(items))
 	}
 }
 

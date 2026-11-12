@@ -1,5 +1,5 @@
 // Package memory ports harness/src/claude/memory.ts: loading CLAUDE.md
-// memory across the user/project scopes plus .claude/rules/*.md,
+// memory across the user/project scopes plus .claude/rules/**/*.md,
 // resolving @path imports (cycle- and depth-guarded), and applying a
 // token budget that drops the least specific content first. kiln reads
 // these files but never writes any of them - there is no kiln-authored

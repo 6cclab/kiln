@@ -1,0 +1,23 @@
+{
+ "id": "20261111T174706Z-learning-outcome-duplicate-samples",
+ "found_at": "2026-11-11T17:47:06Z",
+ "scenario": "learning/concurrent-outcome-capture",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Concurrent outcome capture creates duplicate samples",
+ "observed": "Separate lookup, insertion and pruning let concurrent store connections create correction history for the same operation, inflating the sample count.",
+ "expected": "One atomic insert-once transaction enforces retention and preserves one sample per retained operation.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/memory/store.go",
+   "internal/learning/outcomes.go"
+  ],
+  "regression_test": "TestConcurrentOutcomeInsertAcrossStoreConnections",
+  "updated_at": "2026-11-11T17:47:13Z"
+ }
+}

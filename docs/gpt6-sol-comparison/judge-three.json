@@ -1,0 +1,98 @@
+{
+  "reviewer": "judge-three",
+  "rubric_range": [
+    0,
+    4
+  ],
+  "candidates": {
+    "candidate-01": {
+      "scores": {
+        "correctness_robustness": 3,
+        "security_privacy": 4,
+        "design_maintainability": 3,
+        "test_quality": 3,
+        "scope_usability": 3
+      },
+      "readiness": "minor revisions",
+      "findings": [
+        {
+          "severity": "high",
+          "type": "contract",
+          "path": "internal/memory/import.go",
+          "line": 67,
+          "trigger": "project import of source-free fact with input scope user:preferences",
+          "consequence": "input scope determines acceptance; import rejected",
+          "reproduced": true,
+          "evidence": [
+            "hidden project_scope_isolation failed",
+            "hidden replace_lineage failed"
+          ]
+        },
+        {
+          "severity": "medium",
+          "type": "test portability",
+          "path": "internal/memory/import_test.go",
+          "line": 149,
+          "trigger": "t.TempDir path spelled /tmp while canonical destination is /private/tmp",
+          "consequence": "unit/race test assertions fail despite correct runtime binding",
+          "reproduced": true,
+          "evidence": [
+            "original unit/race failed",
+            "canonical TMPDIR focused reruns passed"
+          ]
+        }
+      ],
+      "hidden_acceptance": {
+        "passed": 27,
+        "total": 29
+      },
+      "fifo_probe": "passed"
+    },
+    "candidate-02": {
+      "scores": {
+        "correctness_robustness": 3,
+        "security_privacy": 2,
+        "design_maintainability": 3,
+        "test_quality": 3,
+        "scope_usability": 4
+      },
+      "readiness": "minor revisions",
+      "findings": [
+        {
+          "severity": "high",
+          "type": "contract and security",
+          "path": "internal/memory/import.go",
+          "line": 203,
+          "trigger": "destination source is a named pipe",
+          "consequence": "CLI blocks before nonregular-file rejection",
+          "reproduced": true,
+          "evidence": [
+            "independent 2s timeout",
+            "supplemental 3s timeout"
+          ]
+        },
+        {
+          "severity": "medium",
+          "type": "test portability",
+          "path": "internal/memory/import_test.go",
+          "line": 197,
+          "trigger": "t.TempDir path spelled /tmp while canonical destination is /private/tmp",
+          "consequence": "unit/race test assertion fails despite correct runtime binding",
+          "reproduced": true,
+          "evidence": [
+            "original unit/race failed",
+            "canonical TMPDIR focused reruns passed"
+          ]
+        }
+      ],
+      "hidden_acceptance": {
+        "passed": 29,
+        "total": 29
+      },
+      "fifo_probe": "failed"
+    }
+  },
+  "comparison": "Candidate-02 has better destination-scope fidelity; candidate-01 has safer nonregular-source handling. Neither is ready without minor revisions.",
+  "uncertainty": "Origin-global row inconsistent with original global policy is adversarial, but explicit imported-scope instruction and hidden checks support acceptance into project. Concurrent filesystem mutation semantics are unspecified.",
+  "baseline_tui_failure": "Unchanged broad-unit TUI timeout reproduced on baseline; not attributed to either patch."
+}

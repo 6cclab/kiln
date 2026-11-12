@@ -1,0 +1,31 @@
+{
+  "purpose": "Repeat unchanged real-work task using fixed Kiln executable; no candidate repairs or extra feedback.",
+  "task_baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+  "kiln_revision": "d4d870d1365de02b6066e2036171d98ec61564ba",
+  "judges": 3,
+  "judge_model": "gpt-6-sol",
+  "review_orders": [
+    [
+      1,
+      2,
+      3,
+      4
+    ],
+    [
+      4,
+      3,
+      2,
+      1
+    ],
+    [
+      2,
+      4,
+      1,
+      3
+    ]
+  ],
+  "prior_reported_usd": 17.7736685,
+  "total_authorized_usd": 50,
+  "supplemental_probes": "All four previously published supplemental probes applied uniformly; reported separately from frozen 29-case acceptance suite.",
+  "caveat": "Source FIFO repair is absent from candidate baseline intentionally: this tests generation from the original task, not the repaired memory runtime itself. Agent judge billing unavailable and separate from external comparison ledger."
+}

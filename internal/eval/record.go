@@ -48,6 +48,10 @@ type ArtifactPaths struct {
 // Record is one scenario x model x repeat run, as written to a results
 // JSONL file (one Record per line).
 type Record struct {
+	PolicyHash  string `json:"policy_hash,omitempty"`
+	FixtureHash string `json:"fixture_hash,omitempty"`
+	DatasetHash string `json:"dataset_hash,omitempty"`
+	BinaryHash  string `json:"binary_hash,omitempty"`
 	RunID       string `json:"run_id"`
 	Timestamp   string `json:"timestamp"`
 	KilnVersion string `json:"kiln_version"`

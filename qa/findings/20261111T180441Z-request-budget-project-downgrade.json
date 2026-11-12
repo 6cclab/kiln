@@ -1,0 +1,24 @@
+{
+ "id": "20261111T180441Z-request-budget-project-downgrade",
+ "found_at": "2026-11-11T18:04:41Z",
+ "scenario": "settings/request-budget-trust",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Project settings can disable user request budget",
+ "observed": "Project .claude/settings.json overrides inherited user maxUSD/maxCalls with zero and can add freeModels exemptions before folder trust.",
+ "expected": "Project and local settings may tighten inherited request ceilings and remove free-model exemptions; only user or explicit CLI settings may relax them.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/claude/settings/request_budget.go",
+   "internal/claude/settings/settings.go"
+  ],
+  "regression_test": "TestProjectCannotRelaxUserRequestBudget",
+  "note": "Untrusted project budget overrides are monotone; explicit user/CLI overrides remain available.",
+  "updated_at": "2026-11-11T18:05:40Z"
+ }
+}

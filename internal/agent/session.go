@@ -100,6 +100,15 @@ type Options struct {
 	// the resident tools' names (bash, read, edit, write) — ExtraTools are
 	// registered but not activated unless named here explicitly.
 	ActiveToolNames []string
+	// ReadCache is optional formatted text reuse for resident whole-file reads.
+	// Each call still performs its own permission gate and filesystem read.
+	ReadCache *tools.ReadCache
+	// ProgressLimit bounds consecutive identical failed tool calls per run.
+	// Zero disables the guard.
+	ProgressLimit int
+	// CycleLimit bounds repeated failed tool-call sequences of length 2-4.
+	// Zero disables cycle detection.
+	CycleLimit int
 
 	SystemPrompt string
 
@@ -236,6 +245,9 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 	}
 
 	builtins := tools.Builtins(env)
+	if opts.ReadCache != nil {
+		builtins.Add(tools.ReadToolWithCache(env, opts.ReadCache))
+	}
 	residentNames := builtins.Names()
 	toolSet := builtins
 	for _, t := range opts.ExtraTools {
@@ -266,6 +278,8 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 		// Every tool result is capped at the tier's share of the window
 		// before it is sent; the tools' own fixed limits are only a first line.
 		ToolOutputTokens: tier.ToolOutputTokens,
+		ProgressLimit:    opts.ProgressLimit,
+		CycleLimit:       opts.CycleLimit,
 		Cwd:              cwd,
 		Now:              now,
 		Routers:          opts.Routers,

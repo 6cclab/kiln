@@ -39,6 +39,7 @@ var CheckTypes = map[string]bool{
 	"turns":                true,
 	"subagent_used":        true,
 	"system_prompt_tokens": true,
+	"request_tokens":       true,
 }
 
 // Caps bounds how far a scenario run is allowed to go before it is

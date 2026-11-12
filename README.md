@@ -167,16 +167,17 @@ of its own, so a server either tool adds is one set, usable by both.
 | `~/.kiln/settings.json` | `/model`'s default | `~/.claude/settings.json` |
 
 A git-tracked or symlinked `<repo>/.kiln/settings.local.json` is held until
-the folder is trusted - only its deny/ask rules apply until then. kiln has
-no writable memory or auto-memory store of its own (open item - see
-`docs/claude-code-parity.md`'s divergence #7); `/memory` only opens Claude
-Code's own `CLAUDE.md` files in your editor.
+the folder is trusted - only its deny/ask rules apply until then. kiln stores
+its own scoped project observations in `~/.kiln/memory.db`; see
+[configuration](docs/configuration.md) for recall, correction, export and deletion.
+Claude auto-memory remains read-only; the `/memory` slash command still opens
+Claude Code's `CLAUDE.md` files in your editor.
 
 | Asset read (never written) | Behavior |
 |---|---|
 | `~/.claude/skills`, `.claude/skills` | loaded, user-invocable ones become slash commands |
 | `.claude/commands/*.md` | slash commands; nested dirs become `namespace:command` |
-| `CLAUDE.md`, `@imports`, `.claude/rules/*.md` | system prompt, budgeted against the tier |
+| `CLAUDE.md`, `@imports`, `.claude/rules/**/*.md` | system prompt, budgeted against the tier |
 | `.claude/settings.json` | permissions, merged `user` → `project` → `local` |
 | `~/.claude/projects/<project>/memory/MEMORY.md` | Claude Code's auto memory, read-only |
 | `.claude/agents/*.md` | subagents, dispatched with the `task` tool |
@@ -236,6 +237,10 @@ Live runs (real providers, real network) are opt-in: `kiln eval run` refuses
 any non-faux model unless `KILN_EVAL_LIVE=1` is set, so `make eval` never
 leaves the faux provider. `make eval-live MODELS=ollama/qwen3.8` runs the
 suite against real models instead.
+
+The [GPT-6-Sol Kiln/Codex comparison](docs/gpt6-sol-comparison-report.md)
+records a parallel same-model task, adversarial checks, and three blinded code
+reviews. Both patches need fixes; Codex was faster and cheaper on this pair.
 
 ## Development
 

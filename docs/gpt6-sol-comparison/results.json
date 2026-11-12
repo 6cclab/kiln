@@ -1,0 +1,1243 @@
+{
+  "baseline_control": {
+    "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+    "commands": [
+      {
+        "command": [
+          "go",
+          "test",
+          "./...",
+          "-count=1"
+        ],
+        "duration_ms": 31306,
+        "exit_code": 1,
+        "name": "unit",
+        "state": "completed",
+        "stderr": "unit.stderr.txt",
+        "stdout": "unit.stdout.txt"
+      }
+    ]
+  },
+  "baseline_control_note": "Reused earlier unmodified same-baseline control with the same grader environment. The TUI failure remains pre-existing; new candidate path-spelling failures are separate.",
+  "candidates": {
+    "candidate-01": {
+      "arm": "codex",
+      "attempt": {
+        "arm": "codex",
+        "binary_sha256": "ebabe5f0d79145a9e61274ce9ecf7c02c9021b7b04bfa59b7e61ad4461c32b0b",
+        "cost_basis": "catalog-equivalent from per-session token counters",
+        "exit_code": 0,
+        "patch_bytes": 31247,
+        "patch_sha256": "06c3b85f37c9c76eda01543d1f2f0e17d1ae3f012c1641af3c186b7391ca5b62",
+        "repeat": 1,
+        "reported_cost_usd": 1.2811595999999994,
+        "reservation_usd": 5.951258,
+        "status": "completed",
+        "stop_reason": null,
+        "task_sha256": "13438f4879cbabe7427e5034143a3b9732d62afa4e70050c0e16b85e9862b7ee",
+        "wall_ms": 689587
+      },
+      "canonical_tmp_reruns": [
+        {
+          "command": [
+            "go",
+            "test",
+            "./internal/memory",
+            "./internal/cli",
+            "-count=1"
+          ],
+          "duration_ms": 3681,
+          "exit_code": 0,
+          "name": "canonical-tmp-memory-cli",
+          "state": "completed",
+          "stderr": "canonical-tmp-memory-cli.stderr.txt",
+          "stdout": "canonical-tmp-memory-cli.stdout.txt"
+        },
+        {
+          "command": [
+            "go",
+            "test",
+            "-race",
+            "./internal/memory",
+            "./internal/cli",
+            "-count=1"
+          ],
+          "duration_ms": 7585,
+          "exit_code": 0,
+          "name": "canonical-tmp-race-memory-cli",
+          "state": "completed",
+          "stderr": "canonical-tmp-race-memory-cli.stderr.txt",
+          "stdout": "canonical-tmp-race-memory-cli.stdout.txt"
+        }
+      ],
+      "fidelity": [
+        {
+          "diagnostic": "memory import failed: memory import contains trailing JSON\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_array_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "memory import failed: memory import contains trailing JSON\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_object_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "memory import failed: memory import contains trailing JSON\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_json_value",
+          "status": "passed",
+          "stdout": ""
+        }
+      ],
+      "grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-01",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 95,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "gofmt.stderr.txt",
+            "stdout": "gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "/private/tmp/kgs-bin/candidate-01/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 3050,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "build.stderr.txt",
+            "stdout": "build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1440,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "vet.stderr.txt",
+            "stdout": "vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 6073,
+            "exit_code": 0,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "staticcheck.stderr.txt",
+            "stdout": "staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 27603,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "unit.stderr.txt",
+            "stdout": "unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 501,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "vet-e2e.stderr.txt",
+            "stdout": "vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 10074,
+            "exit_code": 1,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "race-memory-cli.stderr.txt",
+            "stdout": "race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 4442,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "e2e-memory.stderr.txt",
+            "stdout": "e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "/Users/andrepato/projects/harness-kiln/eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "/private/tmp/kgs-bin/candidate-01/kiln"
+            ],
+            "duration_ms": 4980,
+            "exit_code": 1,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "hidden-acceptance.stderr.txt",
+            "stdout": "hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "patch_applied": true,
+        "patch_bytes": 31247,
+        "patch_sha256": "06c3b85f37c9c76eda01543d1f2f0e17d1ae3f012c1641af3c186b7391ca5b62",
+        "status_after_sha256": "988f408a1a7855a0cbf0bd1f6d2f8dfbec7e9197ff0679ce2ca4359ff10c5a61",
+        "status_before_sha256": "988f408a1a7855a0cbf0bd1f6d2f8dfbec7e9197ff0679ce2ca4359ff10c5a61",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "06c3b85f37c9c76eda01543d1f2f0e17d1ae3f012c1641af3c186b7391ca5b62",
+        "tracked_diff_before_sha256": "06c3b85f37c9c76eda01543d1f2f0e17d1ae3f012c1641af3c186b7391ca5b62",
+        "tracked_source_unchanged_by_grading": true
+      },
+      "hidden": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.321
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.251
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.126
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.125
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.096
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.283
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.16
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.223
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.16
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.224
+        },
+        {
+          "case": "project_scope_isolation",
+          "error": "AssertionError: command failed: ('import', PosixPath('/tmp/kg01t-o13biiz9/kiln-import-accept-cxmdmzp7/input.json')): memory import failed: memory import has invalid global record\n",
+          "passed": false,
+          "seconds": 0.074
+        },
+        {
+          "case": "replace_lineage",
+          "error": "AssertionError: command failed: ('import', PosixPath('/tmp/kg01t-o13biiz9/kiln-import-accept-o9qx8g2p/input.json'), '--on-conflict', 'replace'): memory import failed: memory import has invalid global record\n",
+          "passed": false,
+          "seconds": 0.13
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.098
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.131
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.097
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.137
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.157
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.193
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.162
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.264
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.147
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.097
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.161
+        }
+      ],
+      "source_integrity_after_all_checks": {
+        "diff_sha256": "06c3b85f37c9c76eda01543d1f2f0e17d1ae3f012c1641af3c186b7391ca5b62",
+        "patch_sha256": "06c3b85f37c9c76eda01543d1f2f0e17d1ae3f012c1641af3c186b7391ca5b62"
+      },
+      "supplemental": [
+        {
+          "diagnostic": "memory import failed: memory import has invalid or stale source file\n",
+          "exit_code": 1,
+          "probe": "fifo_source_rejected_without_blocking",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "existing_memory_help_preserved",
+          "status": "passed"
+        }
+      ],
+      "terminal_usage": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 3589888,
+        "input_tokens": 3724899,
+        "output_tokens": 29316,
+        "reasoning_output_tokens": 12901
+      },
+      "usage": {
+        "estimated_cost_usd": 1.2811595999999994,
+        "models": [
+          "gpt-6-sol"
+        ],
+        "observed_requests": 66,
+        "sessions": [
+          {
+            "estimated_cost_usd": 1.2811595999999994,
+            "requests": 66,
+            "session": "rollout-2026-11-11T17-06-06-01a1cca5-96e6-79a0-b724-825f61f77c34.jsonl",
+            "total": {
+              "cache_write_input_tokens": 0,
+              "cached_input_tokens": 3589888,
+              "input_tokens": 3724899,
+              "output_tokens": 29316,
+              "reasoning_output_tokens": 12901,
+              "total_tokens": 3754215
+            }
+          }
+        ]
+      }
+    },
+    "candidate-02": {
+      "arm": "kiln",
+      "attempt": {
+        "arm": "kiln",
+        "binary_sha256": "7270660c2375252bac3b31d5d5d7ccdc3fe1104eb7552c926d08c3238dba7499",
+        "cost_basis": "Kiln catalog cost",
+        "exit_code": 0,
+        "patch_bytes": 34863,
+        "patch_sha256": "476981592e910c62a27d820d0d06806c377107260d14d364a0330d00cfe4bb0e",
+        "repeat": 1,
+        "reported_cost_usd": 2.2215556,
+        "reservation_usd": 5.951258,
+        "status": "completed",
+        "stop_reason": null,
+        "task_sha256": "13438f4879cbabe7427e5034143a3b9732d62afa4e70050c0e16b85e9862b7ee",
+        "wall_ms": 800128
+      },
+      "canonical_tmp_reruns": [
+        [
+          {
+            "command": [
+              "go",
+              "test",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 3388,
+            "exit_code": 0,
+            "name": "canonical-tmp-memory-cli",
+            "state": "completed",
+            "stderr": "canonical-tmp-memory-cli.stderr.txt",
+            "stdout": "canonical-tmp-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 7350,
+            "exit_code": 0,
+            "name": "canonical-tmp-race-memory-cli",
+            "state": "completed",
+            "stderr": "canonical-tmp-race-memory-cli.stderr.txt",
+            "stdout": "canonical-tmp-race-memory-cli.stdout.txt"
+          }
+        ]
+      ],
+      "fidelity": [
+        {
+          "diagnostic": "memory import has trailing JSON\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_array_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "memory import has trailing JSON\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_object_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "memory import has trailing JSON\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_json_value",
+          "status": "passed",
+          "stdout": ""
+        }
+      ],
+      "grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-02",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 127,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "gofmt.stderr.txt",
+            "stdout": "gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "/private/tmp/kgs-bin/candidate-02/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 2484,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "build.stderr.txt",
+            "stdout": "build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1388,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "vet.stderr.txt",
+            "stdout": "vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 7098,
+            "exit_code": 0,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "staticcheck.stderr.txt",
+            "stdout": "staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 26927,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "unit.stderr.txt",
+            "stdout": "unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 503,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "vet-e2e.stderr.txt",
+            "stdout": "vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 11276,
+            "exit_code": 1,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "race-memory-cli.stderr.txt",
+            "stdout": "race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 4433,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "e2e-memory.stderr.txt",
+            "stdout": "e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "/Users/andrepato/projects/harness-kiln/eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "/private/tmp/kgs-bin/candidate-02/kiln"
+            ],
+            "duration_ms": 5353,
+            "exit_code": 0,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "hidden-acceptance.stderr.txt",
+            "stdout": "hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "patch_applied": true,
+        "patch_bytes": 34863,
+        "patch_sha256": "476981592e910c62a27d820d0d06806c377107260d14d364a0330d00cfe4bb0e",
+        "status_after_sha256": "a54bd9ba0fe6adb93f1000873c16b80d04f478c870587d3989ae6dda8aa97833",
+        "status_before_sha256": "a54bd9ba0fe6adb93f1000873c16b80d04f478c870587d3989ae6dda8aa97833",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "476981592e910c62a27d820d0d06806c377107260d14d364a0330d00cfe4bb0e",
+        "tracked_diff_before_sha256": "476981592e910c62a27d820d0d06806c377107260d14d364a0330d00cfe4bb0e",
+        "tracked_source_unchanged_by_grading": true
+      },
+      "hidden": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.374
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.244
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.093
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.124
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.125
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.155
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.281
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.196
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.198
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.221
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.161
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.225
+        },
+        {
+          "case": "project_scope_isolation",
+          "passed": true,
+          "seconds": 0.179
+        },
+        {
+          "case": "replace_lineage",
+          "passed": true,
+          "seconds": 0.239
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.129
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.132
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.097
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.135
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.164
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.197
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.164
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.227
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.13
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.099
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.177
+        }
+      ],
+      "session_audit": [
+        {
+          "apis": [
+            "openai-codex-responses"
+          ],
+          "committed_cost_usd": 2.2215556,
+          "models": [
+            "gpt-6-sol"
+          ],
+          "sha256": "6d9045b8262b7ad7330e60d3581374f196d35ed673cf4f657c39363091c0df7c",
+          "usage_records": 43
+        }
+      ],
+      "source_integrity_after_all_checks": {
+        "diff_sha256": "476981592e910c62a27d820d0d06806c377107260d14d364a0330d00cfe4bb0e",
+        "patch_sha256": "476981592e910c62a27d820d0d06806c377107260d14d364a0330d00cfe4bb0e"
+      },
+      "supplemental": [
+        {
+          "probe": "fifo_source_rejected_without_blocking",
+          "reason": "did not return within 3s; process terminated",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "existing_memory_help_preserved",
+          "status": "passed"
+        }
+      ],
+      "usage": {
+        "num_tool_calls": 43,
+        "num_turns": 43,
+        "total_cost_usd": 2.2215556,
+        "usage": {
+          "cache_read": 1314688,
+          "cache_write": 0,
+          "input": 880114,
+          "output": 19839
+        }
+      }
+    }
+  },
+  "cost_ledger": {
+    "controlled_pair_usd": 3.502715199999999,
+    "cumulative_usd": 41.60019785,
+    "initial_gpt_attempts_usd": 4.2438524,
+    "judge_billing": "Unavailable; excluded from external-model catalog ledger, same convention as previous cohorts.",
+    "prior_before_gpt_usd": 33.85363025,
+    "total_cap_usd": 50
+  },
+  "judges": {
+    "one": {
+      "baseline_note": "The broad-unit TUI timeout was reproduced on baseline and is not attributed to either patch.",
+      "candidates": {
+        "candidate-01": {
+          "findings": [
+            {
+              "evidence": "reproduced with built CLI; hidden project_scope_isolation and replace_lineage failed",
+              "expected": "validate global-only restriction against explicit destination scope",
+              "line": 67,
+              "observed": "whole batch rejected as invalid global record",
+              "path": "internal/memory/import.go",
+              "severity": "moderate",
+              "trigger": "project import of otherwise valid fact or source-bearing row whose input scope is user:preferences",
+              "type": "contract violation"
+            },
+            {
+              "evidence": "original unit/race failed; canonical TMPDIR targeted tests passed",
+              "expected": "canonical path comparison",
+              "line": 149,
+              "observed": "literal path equality fails in submitted tests",
+              "path": "internal/memory/import_test.go",
+              "severity": "minor",
+              "trigger": "macOS /tmp resolves to /private/tmp",
+              "type": "test portability"
+            }
+          ],
+          "objective_evidence": {
+            "build": "passed",
+            "canonical_tmp_targeted_unit": "passed",
+            "fifo_probe": "passed",
+            "gofmt": "passed",
+            "hidden_passed": 27,
+            "hidden_total": 29,
+            "memory_e2e": "passed",
+            "staticcheck": "passed",
+            "vet": "passed"
+          },
+          "readiness": "minor revisions",
+          "scores": {
+            "correctness_robustness": 3,
+            "design_maintainability": 3,
+            "scope_usability": 3,
+            "security_privacy": 4,
+            "test_quality": 3
+          }
+        },
+        "candidate-02": {
+          "findings": [
+            {
+              "evidence": "independent FIFO probe timed out after three seconds; sourceDigest at internal/memory/sources.go:30-39",
+              "expected": "reject nonregular source promptly",
+              "line": 203,
+              "observed": "sourceDigest calls os.Open before file-type check and import hangs",
+              "path": "internal/memory/import.go",
+              "severity": "high",
+              "trigger": "source path rebounds to a destination FIFO with no writer",
+              "type": "contract and availability blocker"
+            },
+            {
+              "evidence": "original unit/race failed; canonical TMPDIR targeted unit/race passed",
+              "expected": "canonical path comparison",
+              "line": 197,
+              "observed": "literal canonical-path equality fails",
+              "path": "internal/memory/import_test.go",
+              "severity": "minor",
+              "trigger": "macOS /tmp resolves to /private/tmp",
+              "type": "test portability"
+            }
+          ],
+          "objective_evidence": {
+            "build": "passed",
+            "canonical_tmp_targeted_race": "passed",
+            "canonical_tmp_targeted_unit": "passed",
+            "fifo_probe": "failed_timeout",
+            "gofmt": "passed",
+            "hidden_passed": 29,
+            "hidden_total": 29,
+            "memory_e2e": "passed",
+            "staticcheck": "passed",
+            "vet": "passed"
+          },
+          "readiness": "major revisions",
+          "scores": {
+            "correctness_robustness": 2,
+            "design_maintainability": 3,
+            "scope_usability": 3,
+            "security_privacy": 2,
+            "test_quality": 2
+          }
+        }
+      },
+      "comparison": "Candidate 02 handles imported scope correctly but can hang on a FIFO; candidate 01 safely rejects FIFO but rejects some project imports based on untrusted input scope. Favor candidate 01 as the safer base, with neither ready unchanged.",
+      "reviewer": "independent GPT-6-Sol judge one",
+      "uncertainty": "The input-scope rejection depends on interpreting global-only validation against the destination, as supported by the task text. Ordinary global Put cannot produce the failing input row."
+    },
+    "three": {
+      "baseline_tui_failure": "Unchanged broad-unit TUI timeout reproduced on baseline; not attributed to either patch.",
+      "candidates": {
+        "candidate-01": {
+          "fifo_probe": "passed",
+          "findings": [
+            {
+              "consequence": "input scope determines acceptance; import rejected",
+              "evidence": [
+                "hidden project_scope_isolation failed",
+                "hidden replace_lineage failed"
+              ],
+              "line": 67,
+              "path": "internal/memory/import.go",
+              "reproduced": true,
+              "severity": "high",
+              "trigger": "project import of source-free fact with input scope user:preferences",
+              "type": "contract"
+            },
+            {
+              "consequence": "unit/race test assertions fail despite correct runtime binding",
+              "evidence": [
+                "original unit/race failed",
+                "canonical TMPDIR focused reruns passed"
+              ],
+              "line": 149,
+              "path": "internal/memory/import_test.go",
+              "reproduced": true,
+              "severity": "medium",
+              "trigger": "t.TempDir path spelled /tmp while canonical destination is /private/tmp",
+              "type": "test portability"
+            }
+          ],
+          "hidden_acceptance": {
+            "passed": 27,
+            "total": 29
+          },
+          "readiness": "minor revisions",
+          "scores": {
+            "correctness_robustness": 3,
+            "design_maintainability": 3,
+            "scope_usability": 3,
+            "security_privacy": 4,
+            "test_quality": 3
+          }
+        },
+        "candidate-02": {
+          "fifo_probe": "failed",
+          "findings": [
+            {
+              "consequence": "CLI blocks before nonregular-file rejection",
+              "evidence": [
+                "independent 2s timeout",
+                "supplemental 3s timeout"
+              ],
+              "line": 203,
+              "path": "internal/memory/import.go",
+              "reproduced": true,
+              "severity": "high",
+              "trigger": "destination source is a named pipe",
+              "type": "contract and security"
+            },
+            {
+              "consequence": "unit/race test assertion fails despite correct runtime binding",
+              "evidence": [
+                "original unit/race failed",
+                "canonical TMPDIR focused reruns passed"
+              ],
+              "line": 197,
+              "path": "internal/memory/import_test.go",
+              "reproduced": true,
+              "severity": "medium",
+              "trigger": "t.TempDir path spelled /tmp while canonical destination is /private/tmp",
+              "type": "test portability"
+            }
+          ],
+          "hidden_acceptance": {
+            "passed": 29,
+            "total": 29
+          },
+          "readiness": "minor revisions",
+          "scores": {
+            "correctness_robustness": 3,
+            "design_maintainability": 3,
+            "scope_usability": 4,
+            "security_privacy": 2,
+            "test_quality": 3
+          }
+        }
+      },
+      "comparison": "Candidate-02 has better destination-scope fidelity; candidate-01 has safer nonregular-source handling. Neither is ready without minor revisions.",
+      "reviewer": "judge-three",
+      "rubric_range": [
+        0,
+        4
+      ],
+      "uncertainty": "Origin-global row inconsistent with original global policy is adversarial, but explicit imported-scope instruction and hidden checks support acceptance into project. Concurrent filesystem mutation semantics are unspecified."
+    },
+    "two": {
+      "candidates": {
+        "candidate-01": {
+          "documentation": "Covers history collapse, scope, source validation, conflict policies and dry-run.",
+          "findings": [
+            {
+              "expected": "Destination project scope governs import; do not use untrusted input scope as destination identity.",
+              "line": 67,
+              "observed": "Rejected as invalid global record; hidden project_scope_isolation and replace_lineage fail.",
+              "path": "internal/memory/import.go",
+              "reproduced": true,
+              "severity": "moderate",
+              "trigger": "Project import of valid fact record whose input scope string is user:preferences.",
+              "type": "contract violation"
+            },
+            {
+              "expected": "Canonical/path-equivalent comparison; targeted unit and race tests pass with canonical TMPDIR.",
+              "line": 150,
+              "observed": "Root assertion fails; analogous internal/cli/memory_import_test.go:89 fails.",
+              "path": "internal/memory/import_test.go",
+              "reproduced": true,
+              "severity": "minor",
+              "trigger": "TMPDIR uses /tmp alias for /private/tmp on macOS.",
+              "type": "test portability"
+            }
+          ],
+          "hidden_acceptance": {
+            "passed": 27,
+            "total": 29
+          },
+          "readiness": "minor revisions",
+          "scores": {
+            "correctness_robustness": 2,
+            "design_maintainability": 3,
+            "scope_usability": 3,
+            "security_privacy": 3,
+            "test_quality": 2
+          },
+          "submitted_tests": "Broad adversarial and rollback coverage, including nonregular source; misses input-scope edge and has nonportable temp-path assertions.",
+          "transaction_cancellation": "One transaction for conflict analysis and writes with rollback and cancellation checks; source guard rejects FIFO before opening."
+        },
+        "candidate-02": {
+          "documentation": "Detailed import, source, conflict, and dry-run guidance in docs/configuration.md.",
+          "findings": [
+            {
+              "expected": "Reject nonregular source promptly, including historical records and dry runs.",
+              "line": 203,
+              "observed": "CLI blocks opening FIFO (2s local, 3s supplemental timeout).",
+              "path": "internal/memory/import.go",
+              "related_line": 30,
+              "related_path": "internal/memory/sources.go",
+              "reproduced": true,
+              "severity": "major",
+              "trigger": "Destination source path is a FIFO; valid-shape source-bound import.",
+              "type": "contract violation"
+            },
+            {
+              "expected": "Path-equivalent roots compare equal; canonical-temp targeted unit and race runs pass.",
+              "line": 198,
+              "observed": "Test compares canonical stored path to noncanonical temp path and fails.",
+              "path": "internal/memory/import_test.go",
+              "reproduced": true,
+              "severity": "minor",
+              "trigger": "TMPDIR uses /tmp alias for /private/tmp on macOS.",
+              "type": "test portability"
+            }
+          ],
+          "hidden_acceptance": {
+            "passed": 29,
+            "total": 29
+          },
+          "readiness": "major revisions",
+          "scores": {
+            "correctness_robustness": 2,
+            "design_maintainability": 3,
+            "scope_usability": 4,
+            "security_privacy": 2,
+            "test_quality": 2
+          },
+          "submitted_tests": "Broad history, scope, source, conflict, rollback, dry-run and cancellation coverage; misses FIFO and has literal temp-path comparison.",
+          "transaction_cancellation": "Single transaction for conflict analysis and writes; explicit cancellation checks, but blocked FIFO open is outside transaction and cannot respond to context cancellation."
+        }
+      },
+      "comparison": "Candidate-02 passes all 29 hidden acceptance cases but has a reproduced FIFO hang and cannot be accepted as submitted. Candidate-01 rejects FIFO promptly but fails two project-scope cases by relying on untrusted input scope. Both have test portability defects. No general model or harness claim follows.",
+      "evidence_notes": "Both build, gofmt, vet, staticcheck, memory e2e, and canonical-temp targeted unit/race checks pass. Original unit/race failures from /tmp alias are retained as test-portability evidence.",
+      "review_order": [
+        "candidate-02",
+        "candidate-01"
+      ],
+      "reviewer": "judge-two",
+      "uncertainty": "A maintainer should confirm the intended acceptance of internally contradictory input scope strings; the task instruction and hidden cases favor acceptance into the selected destination scope. Unchanged TUI unit failure was reproduced on baseline and is excluded from candidate defect scores."
+    }
+  },
+  "protocol": {
+    "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+    "binaries": {
+      "codex": "ebabe5f0d79145a9e61274ce9ecf7c02c9021b7b04bfa59b7e61ad4461c32b0b",
+      "codex-code-mode-host": "ab573dc5cbb3d378e82bf4d568ad606b071ff2a284808fc206fddbe1ae677405",
+      "kiln": "7270660c2375252bac3b31d5d5d7ccdc3fe1104eb7552c926d08c3238dba7499"
+    },
+    "caveats": [
+      "ChatGPT-authenticated usage; catalog-equivalent cost, not an invoice.",
+      "Codex watchdog is external and approximate; unknown failures retain reservation.",
+      "Single-agent control in both harnesses; no orchestration conclusion.",
+      "No personal memory, user plugins, or skills copied.",
+      "Model runs have baseline-only shallow repositories, excluding later solutions."
+    ],
+    "codex_outstanding_headroom_usd": 3.28,
+    "codex_version": "codex-cli 0.167.1",
+    "common_runner_sha256": "8a862a1fbccb8097a1ad8cf8d70649bc41270cd226e3d3bc8b07807f860c57e6",
+    "context_window": 272000,
+    "effort": "high",
+    "go_build_cache": "/Users/andrepato/Library/Caches/go-build",
+    "go_module_cache": "/Users/andrepato/go/pkg/mod",
+    "harness_revision": "d4d870d1365de02b6066e2036171d98ec61564ba",
+    "hidden_acceptance_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+    "judge_model": "gpt-6-sol",
+    "judges": 3,
+    "max_run_reservation_usd": 5.951258,
+    "model": "gpt-6-sol",
+    "price_source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+    "pricing": {
+      "cache_write": 2.5,
+      "cached_input": 0.2,
+      "input": 2,
+      "long_cache_write": 5,
+      "long_cached_input": 0.4,
+      "long_input": 4,
+      "long_output": 15,
+      "long_threshold": 272000,
+      "output": 10,
+      "unit": "USD per million tokens"
+    },
+    "prior_reported_usd": 38.09748265,
+    "rubric_sha256": "5381d51e074f22e3eb2b059bb40beb31b24e10a1edc7d407f4a73bf3d0fc9321",
+    "runner_sha256": "18cb1e87a0f0e905cc680936faba0a0ff36a4288af1202385be6e68f3f00c5cf",
+    "schedule": [
+      [
+        1,
+        "codex"
+      ],
+      [
+        1,
+        "kiln"
+      ]
+    ],
+    "task_sha256": "13438f4879cbabe7427e5034143a3b9732d62afa4e70050c0e16b85e9862b7ee",
+    "total_cap_usd": 50.0,
+    "wall_cap_seconds": 1200
+  },
+  "root_adjudication": {
+    "codex": "Not ready: imported input scope overvalidation and new test path-portability defects.",
+    "judge_disagreement": "All call Codex minor revisions; judges one/two call Kiln major revisions, judge three minor revisions. All require fixes before merge.",
+    "kiln": "Not ready: FIFO source blocks required rejection; new test path-portability defect.",
+    "repository_validation": "Go 1.26.6 make check passed; three accounting unit tests passed. No Go or UI implementation changes in this report commit."
+  },
+  "tooling_sha256": {
+    "grade_gpt6_comparison.py": "7906c032c928135c37277fe5198e7a5a408a84388be5933f5b5e0390a88ada06",
+    "parallel_gpt6_comparison.py": "622b009600dc4d6fb1f4aad28640dc4bc45213b9c80b533e5672bc2c31b365d2",
+    "run_gpt6_comparison.py": "05be185de924524a694922dcd57ac3467811c0b40234bb20fddad670f58deaf2",
+    "run_gpt6_controlled.py": "18cb1e87a0f0e905cc680936faba0a0ff36a4288af1202385be6e68f3f00c5cf",
+    "test_gpt6_accounting.py": "c0131a11a8fa2d401897f187361f164b633a7e1bad07e9427ad5da104e90579d"
+  }
+}

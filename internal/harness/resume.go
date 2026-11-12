@@ -127,7 +127,7 @@ func (l *Lane) Resume(ctx context.Context) (RunResult, error) {
 					continue
 				}
 				var runErr error
-				tip, runErr = l.executeOneTool(runCtx, operationID, tip, opState.Batch.AssistantEntryID, toolCalls[i], call.SourceIndex, opState.Batch.Calls)
+				tip, _, runErr = l.executeOneTool(runCtx, operationID, tip, opState.Batch.AssistantEntryID, toolCalls[i], call.SourceIndex, opState.Batch.Calls)
 				if runErr != nil {
 					return l.finishFailed(operationID, tip, runErr), runErr
 				}

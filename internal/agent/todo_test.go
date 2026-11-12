@@ -31,3 +31,16 @@ func TestTodoStoreSummary(t *testing.T) {
 		t.Fatalf("got %q", store.Summary())
 	}
 }
+
+func TestTodoStoreOwnsSnapshots(t *testing.T) {
+	store := NewTodoStore()
+	store.OnChange(func(items []TodoItem) { items[0].Content = "listener mutation" })
+	items := []TodoItem{{Content: "saved", Status: TodoPending}}
+	store.Set(items)
+	items[0].Content = "caller mutation"
+	got := store.Get()
+	got[0].Content = "snapshot mutation"
+	if store.Get()[0].Content != "saved" {
+		t.Fatal("shared mutable todo slice")
+	}
+}

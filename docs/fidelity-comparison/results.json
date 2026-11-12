@@ -1,0 +1,1827 @@
+{
+  "schema_version": 1,
+  "experiment": "post-fidelity-memory-import",
+  "manifest": {
+    "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+    "claude_sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd",
+    "claude_version": "2.1.319 (Claude Code)",
+    "effort": "high",
+    "go_cache_note": "Shared warmed host Go caches; write protection is not filesystem-enforced.",
+    "harness_revision": "d4d870d1365de02b6066e2036171d98ec61564ba",
+    "hidden_acceptance_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+    "kiln_sha256": "7270660c2375252bac3b31d5d5d7ccdc3fe1104eb7552c926d08c3238dba7499",
+    "model": "claude-opus-4-8",
+    "prior_reported_usd": 17.7736685,
+    "reviewer_instructions_sha256": "34a5cb8d1661bfcbc6e8ea4c181c299e99f589ee50fde84af855e3fcb30785cc",
+    "rubric_sha256": "5381d51e074f22e3eb2b059bb40beb31b24e10a1edc7d407f4a73bf3d0fc9321",
+    "runner_sha256": "465d750efdc9722c871dd76ac2dfd57d45c3bf4c6d0082d598cef44d524284cd",
+    "schedule": [
+      [
+        1,
+        "claude"
+      ],
+      [
+        1,
+        "kiln"
+      ],
+      [
+        2,
+        "kiln"
+      ],
+      [
+        2,
+        "claude"
+      ]
+    ],
+    "seed": "memory-import-40e9464-opus48-20261111-0",
+    "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+    "total_cap_usd": 50.0,
+    "turn_cap": 80,
+    "wall_cap_seconds": 1200
+  },
+  "protocol": {
+    "purpose": "Repeat unchanged real-work task using fixed Kiln executable; no candidate repairs or extra feedback.",
+    "task_baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+    "kiln_revision": "d4d870d1365de02b6066e2036171d98ec61564ba",
+    "judges": 3,
+    "judge_model": "gpt-6-sol",
+    "review_orders": [
+      [
+        1,
+        2,
+        3,
+        4
+      ],
+      [
+        4,
+        3,
+        2,
+        1
+      ],
+      [
+        2,
+        4,
+        1,
+        3
+      ]
+    ],
+    "prior_reported_usd": 17.7736685,
+    "total_authorized_usd": 50,
+    "supplemental_probes": "All four previously published supplemental probes applied uniformly; reported separately from frozen 29-case acceptance suite.",
+    "caveat": "Source FIFO repair is absent from candidate baseline intentionally: this tests generation from the original task, not the repaired memory runtime itself. Agent judge billing unavailable and separate from external comparison ledger."
+  },
+  "candidates": [
+    {
+      "candidate": "candidate-01",
+      "arm": "claude",
+      "repeat": 1,
+      "attempt": {
+        "arm": "claude",
+        "binary_sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd",
+        "exit_code": 0,
+        "patch_bytes": 40304,
+        "repeat": 1,
+        "reported_cost_usd": 4.465323500000001,
+        "reservation_usd": 8.0,
+        "settings_sha256": "2fafedf25637be6de67f9707603fdc64374f750b561e62d413af0f96762e0fc5",
+        "status": "completed",
+        "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+        "wall_ms": 1001080
+      },
+      "patch_sha256": "8a6722e90be5dc46ee575812a036b4acbcf78ccd65df383d71de909195b1e5c4",
+      "patch_artifact": "candidate-01.patch",
+      "objective_grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-01",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 93,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "gofmt.stderr.txt",
+            "stdout": "gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "<candidate-binaries>/candidate-01/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 2918,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "build.stderr.txt",
+            "stdout": "build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1352,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "vet.stderr.txt",
+            "stdout": "vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 5532,
+            "exit_code": 0,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "staticcheck.stderr.txt",
+            "stdout": "staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 26415,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "unit.stderr.txt",
+            "stdout": "unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 648,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "vet-e2e.stderr.txt",
+            "stdout": "vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 11321,
+            "exit_code": 0,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "race-memory-cli.stderr.txt",
+            "stdout": "race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 4280,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "e2e-memory.stderr.txt",
+            "stdout": "e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "<repository>/eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "<candidate-binaries>/candidate-01/kiln"
+            ],
+            "duration_ms": 5540,
+            "exit_code": 0,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "hidden-acceptance.stderr.txt",
+            "stdout": "hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "patch_applied": true,
+        "patch_bytes": 40304,
+        "patch_sha256": "8a6722e90be5dc46ee575812a036b4acbcf78ccd65df383d71de909195b1e5c4",
+        "status_after_sha256": "988f408a1a7855a0cbf0bd1f6d2f8dfbec7e9197ff0679ce2ca4359ff10c5a61",
+        "status_before_sha256": "988f408a1a7855a0cbf0bd1f6d2f8dfbec7e9197ff0679ce2ca4359ff10c5a61",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "8a6722e90be5dc46ee575812a036b4acbcf78ccd65df383d71de909195b1e5c4",
+        "tracked_diff_before_sha256": "8a6722e90be5dc46ee575812a036b4acbcf78ccd65df383d71de909195b1e5c4",
+        "tracked_source_unchanged_by_grading": true
+      },
+      "hidden_acceptance": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.845
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.254
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.121
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.119
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.096
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.285
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.157
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.158
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.221
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.216
+        },
+        {
+          "case": "project_scope_isolation",
+          "passed": true,
+          "seconds": 0.168
+        },
+        {
+          "case": "replace_lineage",
+          "passed": true,
+          "seconds": 0.224
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.099
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.13
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.098
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.131
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.155
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.187
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.152
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.219
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.121
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.092
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.153
+        }
+      ],
+      "supplemental_probes": [
+        {
+          "probe": "fifo_source_rejected_without_blocking",
+          "reason": "did not return within 3s; process terminated",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "existing_memory_help_preserved",
+          "status": "passed"
+        }
+      ],
+      "fidelity_probes": [
+        {
+          "diagnostic": "kiln: import file has trailing data after the JSON array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_array_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "kiln: import file has trailing data after the JSON array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_object_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "kiln: import file has trailing data after the JSON array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_json_value",
+          "status": "passed",
+          "stdout": ""
+        }
+      ],
+      "reported_cost_usd": 4.465323500000001,
+      "model_usage": {
+        "claude-opus-4-8": {
+          "inputTokens": 92,
+          "outputTokens": 59553,
+          "cacheReadInputTokens": 3757557,
+          "cacheCreationInputTokens": 109726,
+          "webSearchRequests": 0,
+          "costUSD": 4.465323500000001,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000,
+          "thinkingTokens": 32241,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 109726,
+          "canonicalModel": "claude-opus-4-8",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "subagent_stats": {
+        "spawned": 0,
+        "requested": {
+          "background": 0,
+          "foreground": 0,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 0,
+        "spawned_by_subagents": 0,
+        "completed": 0,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {}
+      },
+      "result_events": [
+        {
+          "subtype": "success",
+          "is_error": false,
+          "result_index": 0,
+          "total_cost_usd": 4.465323500000001,
+          "terminal_reason": "completed",
+          "num_turns": 47
+        }
+      ],
+      "observed_tool_names": [
+        "Bash",
+        "Edit",
+        "Read",
+        "Write"
+      ],
+      "process_status": "completed",
+      "post_review_integrity": "patch, tracked source, and status unchanged"
+    },
+    {
+      "candidate": "candidate-02",
+      "arm": "claude",
+      "repeat": 2,
+      "attempt": {
+        "arm": "claude",
+        "binary_sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd",
+        "exit_code": 0,
+        "patch_bytes": 36671,
+        "repeat": 2,
+        "reservation_usd": 8.0,
+        "settings_sha256": "2fafedf25637be6de67f9707603fdc64374f750b561e62d413af0f96762e0fc5",
+        "status": "exited",
+        "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+        "wall_ms": 1067240
+      },
+      "patch_sha256": "2b1eb22c6613968c2a5f5aef17354caafdb54cbb6857e17bbfdfbdea0190bf44",
+      "patch_artifact": "candidate-02.patch",
+      "objective_grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-02",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 93,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "gofmt.stderr.txt",
+            "stdout": "gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "<candidate-binaries>/candidate-02/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 2308,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "build.stderr.txt",
+            "stdout": "build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1373,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "vet.stderr.txt",
+            "stdout": "vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 5528,
+            "exit_code": 0,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "staticcheck.stderr.txt",
+            "stdout": "staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 31391,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "unit.stderr.txt",
+            "stdout": "unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 459,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "vet-e2e.stderr.txt",
+            "stdout": "vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 10790,
+            "exit_code": 0,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "race-memory-cli.stderr.txt",
+            "stdout": "race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 3972,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "e2e-memory.stderr.txt",
+            "stdout": "e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "<repository>/eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "<candidate-binaries>/candidate-02/kiln"
+            ],
+            "duration_ms": 4887,
+            "exit_code": 0,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "hidden-acceptance.stderr.txt",
+            "stdout": "hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "patch_applied": true,
+        "patch_bytes": 36671,
+        "patch_sha256": "2b1eb22c6613968c2a5f5aef17354caafdb54cbb6857e17bbfdfbdea0190bf44",
+        "status_after_sha256": "993f35aea6946674db8e55fb3361d67a50ec1ec85404d6d66c63051a36e38aaf",
+        "status_before_sha256": "993f35aea6946674db8e55fb3361d67a50ec1ec85404d6d66c63051a36e38aaf",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "2b1eb22c6613968c2a5f5aef17354caafdb54cbb6857e17bbfdfbdea0190bf44",
+        "tracked_diff_before_sha256": "2b1eb22c6613968c2a5f5aef17354caafdb54cbb6857e17bbfdfbdea0190bf44",
+        "tracked_source_unchanged_by_grading": true
+      },
+      "hidden_acceptance": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.325
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.249
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.092
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.123
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.121
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.15
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.092
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.275
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.151
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.151
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.212
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.152
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.213
+        },
+        {
+          "case": "project_scope_isolation",
+          "passed": true,
+          "seconds": 0.16
+        },
+        {
+          "case": "replace_lineage",
+          "passed": true,
+          "seconds": 0.211
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.092
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.124
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.093
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.126
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.162
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.196
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.157
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.214
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.122
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.153
+        }
+      ],
+      "supplemental_probes": [
+        {
+          "probe": "fifo_source_rejected_without_blocking",
+          "reason": "did not return within 3s; process terminated",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "constraint failed: review probe observed INSERT (1811)\n",
+          "exit_code": 1,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "usage: kiln memory [global] export | import <file> [--dry-run] [--on-conflict error|skip|replace] | forget <key> | restore <id> | remember <key> <text> [source-files...]\n",
+          "exit_code": 2,
+          "probe": "existing_memory_help_preserved",
+          "status": "failed"
+        }
+      ],
+      "fidelity_probes": [
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "reject_trailing_array_close",
+          "status": "failed",
+          "stdout": "{\"inserted\":0,\"replaced\":0,\"skipped\":0,\"dry_run\":false}\n"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "reject_trailing_object_close",
+          "status": "failed",
+          "stdout": "{\"inserted\":0,\"replaced\":0,\"skipped\":0,\"dry_run\":false}\n"
+        },
+        {
+          "diagnostic": "import input has trailing data after the JSON array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_json_value",
+          "status": "passed",
+          "stdout": ""
+        }
+      ],
+      "reported_cost_usd": 5.137207,
+      "model_usage": {
+        "claude-opus-4-8": {
+          "inputTokens": 108,
+          "outputTokens": 70476,
+          "cacheReadInputTokens": 4031259,
+          "cacheCreationInputTokens": 149017,
+          "webSearchRequests": 0,
+          "costUSD": 5.137207,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000,
+          "thinkingTokens": 36792,
+          "cacheCreationEphemeral5mInputTokens": 34942,
+          "cacheCreationEphemeral1hInputTokens": 114075,
+          "canonicalModel": "claude-opus-4-8",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "subagent_stats": {
+        "spawned": 1,
+        "requested": {
+          "background": 0,
+          "foreground": 1,
+          "unset": 0
+        },
+        "started_in_background": 0,
+        "max_depth": 1,
+        "spawned_by_subagents": 0,
+        "completed": 1,
+        "failed": 0,
+        "killed": {
+          "parent": 0,
+          "user": 0,
+          "system": 0
+        },
+        "refused": {
+          "depth_limit": 0,
+          "concurrency_limit": 0,
+          "budget": 0
+        },
+        "by_type": {
+          "Explore": 1
+        }
+      },
+      "result_events": [
+        {
+          "subtype": "success",
+          "is_error": false,
+          "result_index": 0,
+          "total_cost_usd": 4.962802,
+          "terminal_reason": "completed",
+          "num_turns": 43
+        },
+        {
+          "subtype": "success",
+          "is_error": false,
+          "result_index": 1,
+          "total_cost_usd": 5.137207,
+          "terminal_reason": "completed",
+          "num_turns": 2
+        }
+      ],
+      "observed_tool_names": [
+        "Agent",
+        "Bash",
+        "Edit",
+        "Read",
+        "ToolSearch",
+        "Write"
+      ],
+      "process_status": "completed",
+      "accounting_audit": {
+        "runner_status": "stopped_parser_error",
+        "process_status": "completed",
+        "process_exit_code": 0,
+        "reason": "Two cumulative successful result events in one session; runner expected exactly one. No paid retry or patch changes.",
+        "result_events": [
+          {
+            "subtype": "success",
+            "is_error": false,
+            "result_index": 0,
+            "total_cost_usd": 4.962802,
+            "terminal_reason": "completed",
+            "num_turns": 43
+          },
+          {
+            "subtype": "success",
+            "is_error": false,
+            "result_index": 1,
+            "total_cost_usd": 5.137207,
+            "terminal_reason": "completed",
+            "num_turns": 2
+          }
+        ],
+        "reported_cost_usd": 5.137207,
+        "cost_method": "Use final cumulative result, do not sum intermediate totals.",
+        "stdout_sha256": "ca57e170f38d983a34fba5c0f35a5bbb6ea3a5edf2a6993ee9bb7147ea7eeedc",
+        "patch_sha256": "2b1eb22c6613968c2a5f5aef17354caafdb54cbb6857e17bbfdfbdea0190bf44"
+      },
+      "post_review_integrity": "patch, tracked source, and status unchanged"
+    },
+    {
+      "candidate": "candidate-03",
+      "arm": "kiln",
+      "repeat": 1,
+      "attempt": {
+        "arm": "kiln",
+        "binary_sha256": "7270660c2375252bac3b31d5d5d7ccdc3fe1104eb7552c926d08c3238dba7499",
+        "exit_code": 0,
+        "patch_bytes": 35282,
+        "repeat": 1,
+        "reported_cost_usd": 3.3697157500000006,
+        "reservation_usd": 27.761008,
+        "settings_sha256": "807b3dd6fd83ede8e4f7b9572f24a8af817b7b0249348bba930797d31d753b39",
+        "status": "completed",
+        "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+        "wall_ms": 613180
+      },
+      "patch_sha256": "e44c4379dc2854c16d50652606dfd1c1b44873374d16c1f10e00975f9511c157",
+      "patch_artifact": "candidate-03.patch",
+      "objective_grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-03",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 91,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "gofmt.stderr.txt",
+            "stdout": "gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "<candidate-binaries>/candidate-03/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 2247,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "build.stderr.txt",
+            "stdout": "build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1290,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "vet.stderr.txt",
+            "stdout": "vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 5574,
+            "exit_code": 0,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "staticcheck.stderr.txt",
+            "stdout": "staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 25891,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "unit.stderr.txt",
+            "stdout": "unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 462,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "vet-e2e.stderr.txt",
+            "stdout": "vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 10621,
+            "exit_code": 0,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "race-memory-cli.stderr.txt",
+            "stdout": "race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 4006,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "e2e-memory.stderr.txt",
+            "stdout": "e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "<repository>/eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "<candidate-binaries>/candidate-03/kiln"
+            ],
+            "duration_ms": 5173,
+            "exit_code": 0,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "hidden-acceptance.stderr.txt",
+            "stdout": "hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "patch_applied": true,
+        "patch_bytes": 35282,
+        "patch_sha256": "e44c4379dc2854c16d50652606dfd1c1b44873374d16c1f10e00975f9511c157",
+        "status_after_sha256": "fb7e6cd605a3fb8ff541f2b2b59676a714680a625ee54f401d3e080e533766e9",
+        "status_before_sha256": "fb7e6cd605a3fb8ff541f2b2b59676a714680a625ee54f401d3e080e533766e9",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "e44c4379dc2854c16d50652606dfd1c1b44873374d16c1f10e00975f9511c157",
+        "tracked_diff_before_sha256": "e44c4379dc2854c16d50652606dfd1c1b44873374d16c1f10e00975f9511c157",
+        "tracked_source_unchanged_by_grading": true
+      },
+      "hidden_acceptance": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.706
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.252
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.093
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.092
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.122
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.119
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.15
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.267
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.148
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.147
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.208
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.151
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.207
+        },
+        {
+          "case": "project_scope_isolation",
+          "passed": true,
+          "seconds": 0.158
+        },
+        {
+          "case": "replace_lineage",
+          "passed": true,
+          "seconds": 0.209
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.12
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.124
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.151
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.179
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.149
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.207
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.121
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.092
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.09
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.154
+        }
+      ],
+      "supplemental_probes": [
+        {
+          "probe": "fifo_source_rejected_without_blocking",
+          "reason": "did not return within 3s; process terminated",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "kiln memory import: constraint failed: review probe observed INSERT (1811)\n",
+          "exit_code": 1,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "existing_memory_help_preserved",
+          "status": "passed"
+        }
+      ],
+      "fidelity_probes": [
+        {
+          "diagnostic": "kiln memory import: trailing data after the import array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_array_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "kiln memory import: trailing data after the import array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_object_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "kiln memory import: trailing data after the import array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_json_value",
+          "status": "passed",
+          "stdout": ""
+        }
+      ],
+      "reported_cost_usd": 3.3697157500000006,
+      "usage": {
+        "input": 110,
+        "output": 48038,
+        "cache_read": 3226169,
+        "cache_write": 88821
+      },
+      "run_summary": {
+        "arm": "kiln",
+        "binary_sha256": "7270660c2375252bac3b31d5d5d7ccdc3fe1104eb7552c926d08c3238dba7499",
+        "exit_code": 0,
+        "observed_routes": [
+          "anthropic/claude-opus-4-8",
+          "faux-1",
+          "faux/faux-1"
+        ],
+        "patch_bytes": 35282,
+        "repeat": 1,
+        "reported_cost_usd": 3.3697157500000006,
+        "settings_sha256": "807b3dd6fd83ede8e4f7b9572f24a8af817b7b0249348bba930797d31d753b39",
+        "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+        "tool_calls": 67,
+        "turns": 55,
+        "wall_ms": 613180
+      },
+      "process_status": "completed",
+      "post_review_integrity": "patch, tracked source, and status unchanged"
+    },
+    {
+      "candidate": "candidate-04",
+      "arm": "kiln",
+      "repeat": 2,
+      "attempt": {
+        "arm": "kiln",
+        "binary_sha256": "7270660c2375252bac3b31d5d5d7ccdc3fe1104eb7552c926d08c3238dba7499",
+        "exit_code": 0,
+        "patch_bytes": 39361,
+        "repeat": 2,
+        "reported_cost_usd": 3.1077154999999994,
+        "reservation_usd": 24.39129225,
+        "settings_sha256": "3963352eeed670e6a23c31cda9071729ae93f9b3af57989a9166e3450980f222",
+        "status": "completed",
+        "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+        "wall_ms": 571945
+      },
+      "patch_sha256": "15f465a78c8c632a4e6e6d663944e62cd4c98b57542ab14c56363e540780d5ca",
+      "patch_artifact": "candidate-04.patch",
+      "objective_grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-04",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 97,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "gofmt.stderr.txt",
+            "stdout": "gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "<candidate-binaries>/candidate-04/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 2256,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "build.stderr.txt",
+            "stdout": "build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1299,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "vet.stderr.txt",
+            "stdout": "vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 5533,
+            "exit_code": 0,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "staticcheck.stderr.txt",
+            "stdout": "staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 25823,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "unit.stderr.txt",
+            "stdout": "unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 452,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "vet-e2e.stderr.txt",
+            "stdout": "vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 10650,
+            "exit_code": 0,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "race-memory-cli.stderr.txt",
+            "stdout": "race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 3937,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "e2e-memory.stderr.txt",
+            "stdout": "e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "<repository>/eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "<candidate-binaries>/candidate-04/kiln"
+            ],
+            "duration_ms": 4763,
+            "exit_code": 0,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "hidden-acceptance.stderr.txt",
+            "stdout": "hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "patch_applied": true,
+        "patch_bytes": 39361,
+        "patch_sha256": "15f465a78c8c632a4e6e6d663944e62cd4c98b57542ab14c56363e540780d5ca",
+        "status_after_sha256": "6ac8aa104634abf79b005659f0ecfa96802fa01bdfba8aa3050797a98a89fd43",
+        "status_before_sha256": "6ac8aa104634abf79b005659f0ecfa96802fa01bdfba8aa3050797a98a89fd43",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "15f465a78c8c632a4e6e6d663944e62cd4c98b57542ab14c56363e540780d5ca",
+        "tracked_diff_before_sha256": "15f465a78c8c632a4e6e6d663944e62cd4c98b57542ab14c56363e540780d5ca",
+        "tracked_source_unchanged_by_grading": true
+      },
+      "hidden_acceptance": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.32
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.239
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.09
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.118
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.12
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.152
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.271
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.155
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.153
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.208
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.149
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.205
+        },
+        {
+          "case": "project_scope_isolation",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "replace_lineage",
+          "passed": true,
+          "seconds": 0.208
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.118
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.09
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.123
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.148
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.179
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.152
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.212
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.12
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.091
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.093
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.15
+        }
+      ],
+      "supplemental_probes": [
+        {
+          "probe": "fifo_source_rejected_without_blocking",
+          "reason": "did not return within 3s; process terminated",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "existing_memory_help_preserved",
+          "status": "passed"
+        }
+      ],
+      "fidelity_probes": [
+        {
+          "diagnostic": "trailing content after import JSON array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_array_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "trailing content after import JSON array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_object_close",
+          "status": "passed",
+          "stdout": ""
+        },
+        {
+          "diagnostic": "trailing content after import JSON array\n",
+          "exit_code": 1,
+          "probe": "reject_trailing_json_value",
+          "status": "passed",
+          "stdout": ""
+        }
+      ],
+      "reported_cost_usd": 3.1077154999999994,
+      "usage": {
+        "input": 108,
+        "output": 45091,
+        "cache_read": 2984251,
+        "cache_write": 78044
+      },
+      "run_summary": {
+        "arm": "kiln",
+        "binary_sha256": "7270660c2375252bac3b31d5d5d7ccdc3fe1104eb7552c926d08c3238dba7499",
+        "exit_code": 0,
+        "observed_routes": [
+          "anthropic/claude-opus-4-8",
+          "faux-1",
+          "faux/faux-1"
+        ],
+        "patch_bytes": 39361,
+        "repeat": 2,
+        "reported_cost_usd": 3.1077154999999994,
+        "settings_sha256": "3963352eeed670e6a23c31cda9071729ae93f9b3af57989a9166e3450980f222",
+        "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+        "tool_calls": 59,
+        "turns": 54,
+        "wall_ms": 571945
+      },
+      "process_status": "completed",
+      "post_review_integrity": "patch, tracked source, and status unchanged"
+    }
+  ],
+  "costs": {
+    "prior_reported_usd": 17.7736685,
+    "followup_reported_usd": 16.079961750000002,
+    "total_reported_usd": 33.85363025,
+    "authorized_total_usd": 50,
+    "judge_usage": "Three GPT-6-Sol agent judges; provider billing unavailable, excluded from external Opus comparison ledger.",
+    "basis": "Provider/catalog reports, not invoices. Final Claude repeat 2 cumulative result counted once."
+  },
+  "baseline_control": {
+    "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+    "commands": [
+      {
+        "command": [
+          "go",
+          "test",
+          "./...",
+          "-count=1"
+        ],
+        "duration_ms": 31306,
+        "exit_code": 1,
+        "name": "unit",
+        "state": "completed",
+        "stderr": "unit.stderr.txt",
+        "stdout": "unit.stdout.txt"
+      }
+    ]
+  },
+  "grading_classification": {
+    "full_unit": "failed/inconclusive under grading environment; identical unchanged TUI test failure on baseline and all candidates",
+    "test": "TestHandleSubmit_LeadingPathIsNotACommand",
+    "infrastructure": "Cached canonical staticcheck version v0.8.2 and short private temporary paths used uniformly from first pass."
+  },
+  "root_adjudication": {
+    "readiness": "major revisions for every candidate",
+    "accepted_findings": {
+      "all": "FIFO source hangs",
+      "candidate-02": [
+        "dry-run attempts writes",
+        "malformed trailing delimiters accepted",
+        "existing memory help regresses"
+      ],
+      "candidate-03": [
+        "dry-run attempts writes"
+      ]
+    },
+    "candidate_patches_merged": false,
+    "causal_limit": "Same original task baseline, fixed harness executable. FIFO runtime fix in d4d870d is intentionally absent from original candidate source; this measures generated solutions, not that runtime fix. Two attempts per arm cannot isolate the effect of fidelity fixes.",
+    "reviewer_disagreement": "Judges one and three classify candidates 01 and 04 as minor revisions; judge two uses major revisions. All agree FIFO rejection must be fixed before merge. Root treats explicit contract violations as blockers and records major revisions for all.",
+    "unconfirmed_concerns": "Credential-like keys in conflict errors are hypothetical privacy concerns, not independently established additional defects. No proof of causal quality improvement from the fidelity fixes."
+  },
+  "judges": [
+    {
+      "model": "gpt-6-sol",
+      "report": "judge-one.md",
+      "scores": "judge-one.json",
+      "review_order": [
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "model": "gpt-6-sol",
+      "report": "judge-two.md",
+      "scores": "judge-two.json",
+      "review_order": [
+        4,
+        3,
+        2,
+        1
+      ]
+    },
+    {
+      "model": "gpt-6-sol",
+      "report": "judge-three.md",
+      "scores": "judge-three.json",
+      "review_order": [
+        2,
+        4,
+        1,
+        3
+      ]
+    }
+  ]
+}

@@ -70,7 +70,11 @@ Starting from a user prompt in the TUI or `-p` mode:
    `provider.StreamOptions.SystemPrompt` on every request.
 5. **Transcript build + `transform_context` hooks.** `drive` scans the
    branch (`Storage.ScanBranch`), projects entries to `[]msg.Message`
-   (`entriesToTranscript`), and runs `Hooks.OnTransformContext`.
+   (`entriesToTranscript`), and runs `Hooks.OnTransformContext`. Automatic
+   memory, discovery suggestions and recovered task notes append transient
+   context after the conversation; they preserve the replayed prefix and remain
+   distinguishable from typed user queries. These hooks also run during fitting
+   and compaction, so they must not consume pending feedback speculatively.
 6. **Provider stream.** `Lane.requestWithRetry` resolves the provider/model
    and calls `Provider.Stream`, retrying retriable errors (429/529/5xx/
    network) per `RetryPolicy` (`internal/harness/retry.go`). Every stream
@@ -379,6 +383,16 @@ jobs the command spawned. Output is captured and truncated to
 `DefaultMaxLines` (2000) / `DefaultMaxBytes` (50 KiB) unless a larger
 `Capture` is requested; `Spill: true` preserves the complete output on disk
 regardless, recording the path in `ExecResult.SpillPath`.
+
+Each dispatched worker receives its own `execenv.JobScope`. Command startup
+and scope closure synchronize so a command cannot start after its worker ends.
+The dispatcher closes the scope after the prompt finishes, before artifact
+export and completion callbacks, and also on setup failures. On Unix, closure
+kills registered process groups, including background children whose shell has
+already exited. Parent and sibling scopes are independent. This is process
+lifetime management, not an OS security boundary: detached process groups and
+external tool servers are outside it; Windows retains its weaker `taskkill`
+ancestry-based cleanup.
 
 **OS sandbox** (`internal/sandbox`): with `sandbox.enabled` in settings,
 `internal/cli/sandbox.go` builds a `sandbox.Manager` and sets it as
@@ -709,3 +723,33 @@ stack to stderr and writes no file.
 `kiln doctor` (`internal/cli/subcommands.go`'s `Doctor`, also `/doctor`
 inside a session) prints model, tier, tool strategy, MCP status, hooks and
 agents on one screen, problems last.
+
+## Declared verification dependencies and dirty worker baselines
+
+Isolated file tools now use a worker-owned, descriptor-relative `execenv` file
+scope. Dispatch clones and closes it separately from parent/nested scopes.
+The independent macOS `sandbox.NewWorker` factory is a prerequisite for future
+shell support and is not yet wired into dispatch. See
+[confinement and discovery](worker-confinement-verification-discovery.md) for
+the implemented boundaries and remaining sandbox limitations.
+
+Optional `verificationDiscover: "go"` infers bounded package and metadata inputs
+for literal local Go test commands. `VerificationEvidence.Discovery` preserves
+the partial scope; `MissingFiles` records absent optional metadata. Recovery
+clones both existing and absent input lists, and status detects later creation.
+
+With task state enabled, the Bash wrapper in `internal/tools/task_verification.go`
+can record explicitly selected files and recursive directory snapshots. It checks
+read permissions and bounded membership/content snapshots before and after a
+successful command. Session checkpoints retain those proofs on their original
+branch. The `verification_status` tool rechecks current inputs; its optional
+`mode: "plan"` returns prior commands for changed inputs and flags unavailable
+evidence for review. It does not infer test coverage or skip commands.
+
+`orchestration.snapshotDirty` extends opt-in isolated editing workers with a
+captured parent baseline. `internal/agent/worker_snapshot.go` constructs that
+baseline with a private index, preserving the parent's staged/unstaged state.
+Artifacts bind to both HEAD and the captured state and contain only the worker's
+subsequent changes. Single and batch integration share baseline checks and the
+repository apply lock. This remains explicit file-edit isolation; shell/sandbox
+support and automatic patch integration are separate roadmap work.

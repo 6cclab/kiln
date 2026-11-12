@@ -196,3 +196,31 @@ func TestTaskToolDispatchReceivesModelAndToolCallID(t *testing.T) {
 type errFake string
 
 func (e errFake) Error() string { return string(e) }
+
+func TestTaskToolPersistsStructuredArtifactOnSuccessAndFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail bool
+	}{{"success", false}, {"failure", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dispatch := func(context.Context, TaskRequest) (TaskDispatchResult, error) {
+				r := TaskDispatchResult{Text: "report", Artifact: &TaskArtifact{ManifestPath: "/tmp/artifact.json", PatchPath: "/tmp/changes.patch", BaseCommit: "abc", SHA256: "123", Bytes: 5, ChangedFiles: []string{"a.txt"}}}
+				if tc.fail {
+					return r, errFake("worker failed")
+				}
+				return r, nil
+			}
+			tl := TaskTool(dispatch, []agents.Definition{generalPurposeFixture}, nil, budget.TierForWindow(200_000))
+			res := execTool(t, tl, map[string]any{"subagent_type": "general-purpose", "prompt": "x"})
+			var details struct {
+				Artifact TaskArtifact `json:"artifact"`
+			}
+			if err := json.Unmarshal(res.Details, &details); err != nil {
+				t.Fatal(err)
+			}
+			if details.Artifact.ManifestPath != "/tmp/artifact.json" {
+				t.Fatalf("details = %+v", details)
+			}
+		})
+	}
+}

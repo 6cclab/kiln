@@ -1,0 +1,169 @@
+{
+  "reviewer": "independent-2",
+  "rubric_order": [
+    "correctness_robustness",
+    "security_privacy",
+    "design_maintainability",
+    "test_quality",
+    "scope_usability"
+  ],
+  "candidates": {
+    "candidate-04": {
+      "scores": [
+        3,
+        2,
+        4,
+        3,
+        4
+      ],
+      "readiness": "major revisions",
+      "reasons": [
+        "Core CLI contract, transaction, history, and source tests pass; nonregular FIFO source can hang.",
+        "Source validation opens a destination FIFO before regular-file check, causing unbounded blocking; scope, size, and disclosure checks otherwise pass.",
+        "A narrow CLI dispatch and shared putTx reuse Put validation and one transaction without new dependencies.",
+        "Submitted store/CLI tests plus a real-binary e2e cover transfer and sources, but omit FIFO, cancellation, and injected rollback failures.",
+        "Existing memory help is preserved; documentation and diagnostics are useful; no unrelated changes."
+      ],
+      "findings": [
+        {
+          "severity": "high",
+          "type": "contract_violation",
+          "path": "internal/memory/sources.go",
+          "line": 30,
+          "trigger": "Import an otherwise valid record whose rebound destination path is a FIFO with a valid-form SHA-256.",
+          "observed": "Supplemental probe did not return within 3 seconds and terminated the process; RebindSources at line 143 calls sourceDigest, which opens before f.Stat checks regularity.",
+          "expected": "Reject nonregular source files promptly without blocking.",
+          "status": "reproduced"
+        }
+      ]
+    },
+    "candidate-03": {
+      "scores": [
+        2,
+        2,
+        3,
+        3,
+        2
+      ],
+      "readiness": "major revisions",
+      "reasons": [
+        "Main acceptance passes, but dry-run attempts writes and a source FIFO hangs.",
+        "Shared sourceDigest open-before-stat order permits an unbounded FIFO hang; other path/scope/privacy checks pass.",
+        "Validation and transactional writes are cohesive, though dry-run is implemented by rollback after writes and all memory commands bypass the parser.",
+        "Submitted tests cover history, conflicts, sources and final dry-run state, but miss attempted writes, FIFO, cancellation and injected failures.",
+        "Documentation is broad, but existing kiln memory --help changes from successful global help to exit 2 usage."
+      ],
+      "findings": [
+        {
+          "severity": "high",
+          "type": "contract_violation",
+          "path": "internal/memory/sources.go",
+          "line": 30,
+          "trigger": "Rebound destination source is a FIFO.",
+          "observed": "Supplemental probe timed out after 3 seconds; rebindSources in internal/memory/import.go:214 reaches sourceDigest open before regular-file check.",
+          "expected": "Reject nonregular source promptly.",
+          "status": "reproduced"
+        },
+        {
+          "severity": "high",
+          "type": "contract_violation",
+          "path": "internal/memory/import.go",
+          "line": 350,
+          "trigger": "Run --dry-run against a database with an INSERT-rejecting trigger.",
+          "observed": "Supplemental probe returns SQL constraint error; insertPrepared executes INSERT before DryRun branch at line 359.",
+          "expected": "Dry run performs validation/conflict analysis and attempts no memory, search or source writes.",
+          "status": "reproduced"
+        },
+        {
+          "severity": "medium",
+          "type": "compatibility_regression",
+          "path": "cmd/kiln/main.go",
+          "line": 78,
+          "trigger": "Invoke kiln memory --help.",
+          "observed": "Supplemental probe gets exit 2 usage; baseline gets exit 0 global help because the new dispatch bypasses cli.Parse for all memory invocations.",
+          "expected": "Preserve existing memory command help semantics.",
+          "status": "reproduced"
+        }
+      ]
+    },
+    "candidate-02": {
+      "scores": [
+        3,
+        2,
+        3,
+        3,
+        4
+      ],
+      "readiness": "major revisions",
+      "reasons": [
+        "Core acceptance and no-write dry run pass; FIFO source violates prompt nonregular-file rejection.",
+        "Source validation calls baseline sourceDigest, which opens FIFOs before checking file mode; other boundaries and scope isolation pass.",
+        "Import owns validation and one transaction with clear branches; it repeats some Put insert logic instead of sharing it.",
+        "Submitted CLI/store tests cover adversarial JSON, history, sources, conflicts and dry run, but miss FIFO, cancellation and injected rollback.",
+        "Import-only dispatch preserves existing memory help; documentation and success/error output meet the contract."
+      ],
+      "findings": [
+        {
+          "severity": "high",
+          "type": "contract_violation",
+          "path": "internal/memory/sources.go",
+          "line": 30,
+          "trigger": "Rebound destination source is a FIFO.",
+          "observed": "Supplemental probe timed out after 3 seconds; reboundSources in internal/memory/import.go:243 reaches sourceDigest open before file mode check.",
+          "expected": "Reject nonregular source promptly.",
+          "status": "reproduced"
+        }
+      ]
+    },
+    "candidate-01": {
+      "scores": [
+        2,
+        2,
+        3,
+        3,
+        4
+      ],
+      "readiness": "major revisions",
+      "reasons": [
+        "Core acceptance passes, but dry-run attempts writes and source FIFO hangs.",
+        "Source validation uses sourceDigest, which opens before checking regularity; other source/path/scope/privacy checks pass.",
+        "Validation, selection and transaction are cohesive; dry-run relies on rollback after write statements.",
+        "Submitted tests cover input, source binding, history and final dry-run state, but omit attempted-write, FIFO, cancellation and injected rollback cases.",
+        "Import-only dispatch keeps help behavior; documentation, diagnostics and explicit stdin support are usable and within task scope."
+      ],
+      "findings": [
+        {
+          "severity": "high",
+          "type": "contract_violation",
+          "path": "internal/memory/sources.go",
+          "line": 30,
+          "trigger": "Rebound destination source is a FIFO.",
+          "observed": "Supplemental probe timed out after 3 seconds; RebindSource at line 106 reaches sourceDigest open before file mode check.",
+          "expected": "Reject nonregular source promptly.",
+          "status": "reproduced"
+        },
+        {
+          "severity": "high",
+          "type": "contract_violation",
+          "path": "internal/memory/import.go",
+          "line": 205,
+          "trigger": "Run --dry-run against a database with an INSERT-rejecting trigger.",
+          "observed": "Supplemental probe returns SQL constraint error; INSERT into memories/search/sources occurs before dryRun rollback branch at line 226.",
+          "expected": "Dry run performs validation/conflict analysis and attempts no memory, search or source writes.",
+          "status": "reproduced"
+        }
+      ]
+    }
+  },
+  "grader_errors_separate": [
+    "Initial staticcheck failed only because uncached @2026.2.2 lookup was blocked by GOPROXY=off; corrected offline invocation of the same staticcheck release passed all four.",
+    "Initial full go test ./... failed in unchanged internal/sandbox due an overlong Unix socket path under grader TMPDIR.",
+    "Full-unit rerun with short TMPDIR failed in unchanged internal/tui TestHandleSubmit_LeadingPathIsNotACommand in all four. Independent clean baseline control failed that focused test identically under short TMPDIR and passed under native environment. Thus full unit gate is failed/inconclusive, not passed and not attributed to the patches."
+  ],
+  "comparison": "All four pass the main hidden CLI acceptance suite, formatting, build, vet, targeted race and memory e2e checks. Candidate-04 has the strongest implementation reuse and submitted binary e2e. Candidate-02 is similarly sound on observable behavior but duplicates Put SQL. Candidate-01 and candidate-03 additionally violate strict no-write dry-run behavior; candidate-03 also regresses existing memory help. All share the source FIFO blocker.",
+  "uncertainty": "The no-write dry-run finding follows the task's explicit wording and a trigger probe, although rolled-back writes leave the final database unchanged. Source-file validation against concurrent filesystem mutation is outside the practical guarantee of a SQLite transaction; no additional finding assigned.",
+  "objective_evidence": {
+    "all_candidates": "gofmt, build, vet, corrected staticcheck, targeted race, memory e2e, and 29/29 hidden CLI acceptance cases passed; full unit gate failed/inconclusive from baseline-sensitive grader environment.",
+    "supplemental": "FIFO source timeout all four; exactly 1000 input rows accepted all four; dry-run no-write trigger passed 02/04 and failed 01/03; existing kiln memory --help passed 01/02/04 and failed 03."
+  }
+}

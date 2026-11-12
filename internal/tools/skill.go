@@ -37,7 +37,7 @@ type SkillRecord struct {
 var skillParameters = json.RawMessage(`{
 	"type": "object",
 	"properties": {
-		"skill": {"type": "string", "description": "The skill's name, exactly as listed in the system prompt's <available_skills> index."},
+		"skill": {"type": "string", "description": "The exact skill name returned by skill_search or listed in the prompt."},
 		"args": {"type": "string", "description": "Optional further instructions for the skill."}
 	},
 	"required": ["skill"]
@@ -57,7 +57,7 @@ type skillArgs struct {
 // skills are installed.
 const skillToolDescription = `Invoke a named skill by its exact name to read its full instructions and act on them. Pass the skill name and, optionally, further instructions for it.
 
-Available skills are listed in the system prompt's <available_skills> index. When a skill there matches the task, invoke it with this tool before doing the task any other way.
+Use skill_search to discover installed skills. The prompt may also suggest relevant skills. When a skill matches the task, invoke it before proceeding.
 
 Invoking an unknown or unlisted name returns an error naming what is available; a skill omitted from the index for space is still invocable here by its exact name.`
 
@@ -95,7 +95,14 @@ func SkillTool(records []SkillRecord) *tool.Tool {
 			if !ok {
 				available := "none"
 				if len(names) > 0 {
-					available = strings.Join(names, ", ")
+					shown := names
+					if len(shown) > 20 {
+						shown = shown[:20]
+					}
+					available = strings.Join(shown, ", ")
+					if len(names) > len(shown) {
+						available += ", … (use skill_search for more)"
+					}
 				}
 				return tool.Errorf("unknown skill %q. Available skills: %s", a.Skill, available), nil
 			}

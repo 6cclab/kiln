@@ -39,6 +39,7 @@ var claudeToolNames = map[string]string{
 	"web_fetch":         "WebFetch",
 	"web_search":        "WebSearch",
 	"todo_write":        "TodoWrite",
+	"task_state_write":  "TaskStateWrite",
 	"ask_user_question": "AskUserQuestion",
 	"exit_plan_mode":    "ExitPlanMode",
 	"skill":             "Skill",

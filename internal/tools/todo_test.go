@@ -49,3 +49,17 @@ func TestTodoWriteDropsInvalidEntries(t *testing.T) {
 		t.Fatalf("got %+v", stored)
 	}
 }
+
+func TestTodoCheckpointContainsAcceptedItems(t *testing.T) {
+	res, err := TodoTool(nil).Execute(context.Background(), json.RawMessage(`{"todos":[{"content":"keep","status":"pending"},{"content":"invalid","status":"bogus"}]}`), nil, tool.Invocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint TodoCheckpoint
+	if err := json.Unmarshal(res.Details, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Version != 1 || len(checkpoint.Todos) != 1 || checkpoint.Todos[0].Content != "keep" {
+		t.Fatal(checkpoint)
+	}
+}

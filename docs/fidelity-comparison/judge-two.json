@@ -1,0 +1,195 @@
+{
+  "judge": "two",
+  "review_order": [
+    "04",
+    "03",
+    "02",
+    "01"
+  ],
+  "dimensions": [
+    "correctness_robustness",
+    "security_privacy",
+    "design_maintainability",
+    "test_quality",
+    "scope_usability"
+  ],
+  "candidates": {
+    "04": {
+      "scores": [
+        3,
+        3,
+        4,
+        3,
+        4
+      ],
+      "readiness": "major revisions",
+      "findings": [
+        {
+          "severity": "high",
+          "contract_violation": true,
+          "path": "candidate-04/source/internal/memory/sources.go",
+          "line": 29,
+          "trigger": "Import a project record bound to an existing destination FIFO with valid hash syntax.",
+          "observed": "CLI blocks in os.Open; supplemental probe terminated after 3 seconds.",
+          "expected": "Prompt nonzero rejection of nonregular source, no success JSON.",
+          "evidence": "reproduced"
+        }
+      ],
+      "test_assessment": "Meaningful history, IDs, malformed JSON, source rebinding, conflicts and dry-run tests; no post-write SQL fault or cancellation test, and no FIFO source test.",
+      "design_assessment": "Central Import validates historical records and sources, plans conflicts, then applies one transaction; dry run branches before SQL writes. CLI parses and bounds input. Destination scope derives from current project/global.",
+      "documentation": "Complete user documentation and restrained command dispatch.",
+      "uncertainty": "No other reproduced contract defects; symlink race behavior in shared baseline helper was not stress-tested."
+    },
+    "03": {
+      "scores": [
+        2,
+        2,
+        3,
+        3,
+        3
+      ],
+      "readiness": "major revisions",
+      "findings": [
+        {
+          "severity": "high",
+          "contract_violation": true,
+          "path": "candidate-03/source/internal/memory/import.go",
+          "line": 101,
+          "trigger": "Valid one-record --dry-run with BEFORE INSERT trigger aborting.",
+          "observed": "CLI exits 1 with trigger error; ImportRecords issues SQL writes then rolls back.",
+          "expected": "Success JSON with inserted=1 and no memory/search/source write attempt.",
+          "evidence": "reproduced"
+        },
+        {
+          "severity": "high",
+          "contract_violation": true,
+          "path": "candidate-03/source/internal/memory/sources.go",
+          "line": 29,
+          "trigger": "Import a project record bound to an existing destination FIFO with valid hash syntax.",
+          "observed": "CLI blocks in os.Open; supplemental probe terminated after 3 seconds.",
+          "expected": "Prompt nonzero rejection of nonregular source, no success JSON.",
+          "evidence": "reproduced"
+        },
+        {
+          "severity": "low",
+          "contract_violation": true,
+          "path": "candidate-03/source/internal/memory/import.go",
+          "line": 90,
+          "trigger": "Existing destination key containing a credential conflicts under error policy.",
+          "observed": "Conflict diagnostic includes the key via %q.",
+          "expected": "Diagnostic should describe conflict without echoing credentials.",
+          "evidence": "inferred"
+        }
+      ],
+      "test_assessment": "CLI/store tests exercise history, JSON, source rebinding, conflict, persisted dry-run state; miss transient writes, FIFO and mid-transaction rollback fault.",
+      "design_assessment": "CLI validates/rebinds all history before selecting current keys; store transaction handles writes and rollback, but dry-run branch is after INSERTs. Scope is destination-derived.",
+      "documentation": "Explains import and dry-run, but dry-run no-write claim is false.",
+      "uncertainty": "Credential-in-key finding is inferred and depends on key content; primary blockers are reproduced."
+    },
+    "02": {
+      "scores": [
+        2,
+        2,
+        3,
+        2,
+        2
+      ],
+      "readiness": "major revisions",
+      "findings": [
+        {
+          "severity": "high",
+          "contract_violation": true,
+          "path": "candidate-02/source/internal/cli/personal_memory.go",
+          "line": 217,
+          "trigger": "Input file contains []] or []}.",
+          "observed": "CLI exits 0 and prints success JSON; Decoder.More returns false after stray closing delimiter.",
+          "expected": "Nonzero, useful diagnostic, no success JSON.",
+          "evidence": "reproduced"
+        },
+        {
+          "severity": "high",
+          "contract_violation": true,
+          "path": "candidate-02/source/internal/memory/store.go",
+          "line": 460,
+          "trigger": "Valid one-record --dry-run with BEFORE INSERT trigger aborting.",
+          "observed": "CLI exits 1 with trigger error; Import executes writes before rollback at line 492.",
+          "expected": "Success JSON with inserted=1 and no write attempt.",
+          "evidence": "reproduced"
+        },
+        {
+          "severity": "high",
+          "contract_violation": true,
+          "path": "candidate-02/source/internal/memory/sources.go",
+          "line": 29,
+          "trigger": "Import a project record bound to an existing destination FIFO with valid hash syntax.",
+          "observed": "CLI blocks in os.Open; supplemental probe terminated after 3 seconds.",
+          "expected": "Prompt nonzero rejection of nonregular source, no success JSON.",
+          "evidence": "reproduced"
+        },
+        {
+          "severity": "medium",
+          "contract_violation": true,
+          "path": "candidate-02/source/cmd/kiln/main.go",
+          "line": 78,
+          "trigger": "Run kiln memory --help.",
+          "observed": "Exits 2 with usage on stderr due broad memory pre-dispatch.",
+          "expected": "Preserve existing help behavior (exit 0, help on stdout).",
+          "evidence": "reproduced"
+        },
+        {
+          "severity": "low",
+          "contract_violation": true,
+          "path": "candidate-02/source/internal/memory/store.go",
+          "line": 454,
+          "trigger": "Existing destination key contains a credential and conflicts.",
+          "observed": "Conflict error includes r.Key.",
+          "expected": "Do not echo credentials in diagnostics.",
+          "evidence": "inferred"
+        }
+      ],
+      "test_assessment": "Tests include [] [] but miss malformed closing delimiters; persisted dry-run assertions miss SQL writes. Source tests include symlink escape. No SQL-fault rollback/cancellation test.",
+      "design_assessment": "Shared Put/import validation and one transaction are reasonable; decoder completion check and dry-run branch are misplaced; broad main dispatch regresses help.",
+      "documentation": "Useful user docs, but strict JSON and no-write dry-run claims are false.",
+      "uncertainty": "Credential-in-key risk inferred; all other findings reproduced in supplemental/fidelity probes."
+    },
+    "01": {
+      "scores": [
+        3,
+        3,
+        4,
+        3,
+        4
+      ],
+      "readiness": "major revisions",
+      "findings": [
+        {
+          "severity": "high",
+          "contract_violation": true,
+          "path": "candidate-01/source/internal/memory/sources.go",
+          "line": 29,
+          "trigger": "Import a project record bound to an existing destination FIFO with valid hash syntax.",
+          "observed": "CLI blocks in os.Open; supplemental probe terminated after 3 seconds.",
+          "expected": "Prompt nonzero rejection of nonregular source, no success JSON.",
+          "evidence": "reproduced"
+        },
+        {
+          "severity": "low",
+          "contract_violation": false,
+          "path": "candidate-01/source/internal/cli/memory_import.go",
+          "line": 98,
+          "trigger": "Pass a secret as an invalid --on-conflict value or extra positional argument.",
+          "observed": "Usage diagnostic echoes supplied token.",
+          "expected": "Optional hardening: avoid echoing arbitrary input in usage errors.",
+          "evidence": "inferred"
+        }
+      ],
+      "test_assessment": "Tests cover max-ID history, stale historical source, global restrictions, conflict, expiry and dry-run persisted state; no FIFO, cancellation or post-write SQL fault test.",
+      "design_assessment": "Single Import validates all records and source history, plans conflicts, branches before dry-run writes, applies transaction and commits once. Source paths rebound lexically to current project.",
+      "documentation": "Complete user docs and targeted import pre-dispatch preserve existing commands.",
+      "uncertainty": "No other reproduced contract defects; optional usage-token disclosure is outside core record diagnostics."
+    }
+  },
+  "comparison": "01 and 04 are strongest and tied on the reviewed contract except for shared FIFO blocker. 03 additionally violates read-only dry-run. 02 additionally accepts malformed trailing closers and regresses memory help. No readiness is raised by high average scores because FIFO rejection is explicit contract behavior.",
+  "objective_evidence": "All four: build, gofmt, vet, staticcheck, changed-package race, memory e2e, and 29/29 hidden acceptance pass. All full unit suites fail same TUI timeout; unmodified baseline fails identically. Supplemental/fidelity probes confirm findings.",
+  "probes": "Fresh /tmp homes/projects/databases; no candidate artifacts changed. Source FIFO probe from grader; independent abort-on-INSERT and malformed delimiter probes confirmed actual CLI behavior."
+}

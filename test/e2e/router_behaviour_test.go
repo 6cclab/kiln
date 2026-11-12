@@ -464,7 +464,7 @@ func TestRouter_SkillsListingFollowsTheRoutedModel(t *testing.T) {
 	addr, srv := startFaux(t, loadFauxScript(t, "router-plan-implement"))
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
-	writeUserSettings(t, home, routerRoles)
+	writeUserSettings(t, home, strings.TrimSuffix(strings.TrimSpace(routerRoles), "}")+`,"skillDiscovery":{"mode":"catalog","budgetTokens":8192}}`)
 	writeLongUserSkills(t, home, skillCount)
 	env := baseEnv(home, sessDir, addr)
 

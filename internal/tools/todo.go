@@ -23,6 +23,13 @@ type TodoItem struct {
 	Status  TodoStatus `json:"status"`
 }
 
+// TodoCheckpoint is the accepted list saved with a successful tool result.
+// Details stay on disk without adding the list to every model request.
+type TodoCheckpoint struct {
+	Version int        `json:"todoVersion"`
+	Todos   []TodoItem `json:"todos"`
+}
+
 var todoParameters = json.RawMessage(`{
 	"type": "object",
 	"properties": {
@@ -99,7 +106,13 @@ func TodoTool(set func(items []TodoItem)) *tool.Tool {
 			if active != nil {
 				text += fmt.Sprintf(" Now: %s", active.Content)
 			}
-			return tool.Text(text), nil
+			details, err := json.Marshal(TodoCheckpoint{Version: 1, Todos: valid})
+			if err != nil {
+				return tool.Result{}, fmt.Errorf("todo_write: checkpoint: %w", err)
+			}
+			result := tool.Text(text)
+			result.Details = details
+			return result, nil
 		},
 	}
 }

@@ -1,11 +1,11 @@
   faux/faux-1 · 5k of 128k tokens
   ━ ━━ ━ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ■ System prompt                                                                          N    1%
-  ■ Tools                                                                               2.8k    2%
+  ■ System prompt                                                                          N     P
+  ■ Tools                                                                               3.9k    3%
   ■ Files read                                                                             0    0%
-  ■ Conversation                                                                           N    1%
+  ■ Conversation                                                                           N     P
   ■ Free                                                                              123.2k   96%
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ›  describe a task · / for commands · @ to add files
   ────────────────────────────────────────────────────────────────────────────────────────────────
-  ● ask before edits  ⇧⇥  <cwd>  faux/faux-1 ctx ━─────────  4%  $0.00
+  ● ask before edits  ⇧⇥  <cwd>  faux/faux-1 ctx ━─────────  4%  $0.0011

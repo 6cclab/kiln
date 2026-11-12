@@ -1,0 +1,202 @@
+{
+  "judge": "one",
+  "order": [
+    "candidate-01",
+    "candidate-02",
+    "candidate-03",
+    "candidate-04"
+  ],
+  "score_dimensions": [
+    "correctness_robustness",
+    "security_privacy",
+    "design_maintainability",
+    "test_quality",
+    "scope_usability"
+  ],
+  "candidates": {
+    "candidate-01": {
+      "scores": [
+        3,
+        3,
+        4,
+        3,
+        4
+      ],
+      "readiness": "minor revisions",
+      "evidence": {
+        "objective": "build/gofmt/vet/staticcheck/race/e2e pass; hidden acceptance 29/29",
+        "unit_caveat": "Broad unit failure TestHandleSubmit_LeadingPathIsNotACommand reproduces on unmodified baseline."
+      },
+      "score_reasons": [
+        "All main contract flows and write rollback work; source FIFO blocks.",
+        "Path/scope/byte controls are strong; FIFO enables local denial of service.",
+        "Cohesive importer, strict parser, read-only dry run, one transaction.",
+        "Strong history/source/conflict coverage; no FIFO, cancellation, or injected write rollback test.",
+        "Old memory dispatch preserved and user documentation complete."
+      ],
+      "findings": [
+        {
+          "severity": "blocker",
+          "type": "contract",
+          "path": "internal/memory/import.go",
+          "line": 276,
+          "trigger": "Imported destination source is a FIFO under project root.",
+          "observed": "CLI blocks; supplemental probe terminated after 3s.",
+          "expected": "Reject nonregular source file promptly.",
+          "status": "reproduced",
+          "mechanism": "Existing internal/memory/sources.go:30 opens before stat/mode check."
+        }
+      ],
+      "test_design_assessment": "CLI and store tests cover history, source rebinding, global, conflicts and dry run. They omit FIFO and fault-injected writes. Hidden acceptance confirms rollback. Transaction and dry run design are sound.",
+      "scope_docs": "Only import bypasses old flag parser; docs/configuration.md documents transfer and policies."
+    },
+    "candidate-02": {
+      "scores": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "readiness": "major revisions",
+      "evidence": {
+        "objective": "build/gofmt/vet/staticcheck/race/e2e pass; hidden acceptance 29/29",
+        "unit_caveat": "Broad unit failure TestHandleSubmit_LeadingPathIsNotACommand reproduces on unmodified baseline."
+      },
+      "score_reasons": [
+        "Rejects most invalid input but accepts trailing closers; dry run performs writes; FIFO blocks.",
+        "Source/scope checks are sound in common cases, but malformed acceptance and FIFO blocking weaken safety.",
+        "Single transaction but incorrect top-level JSON check, rollback-based dry run, broad command dispatch.",
+        "Submitted tests miss malformed closers, dry-run write attempts, FIFO, and help regression.",
+        "Docs exist, but existing memory --help behavior regresses."
+      ],
+      "findings": [
+        {
+          "severity": "blocker",
+          "type": "contract",
+          "path": "internal/cli/personal_memory.go",
+          "line": 217,
+          "trigger": "Import file is []] or []}.",
+          "observed": "Success JSON, exit 0; fidelity probes reproduced.",
+          "expected": "Reject trailing JSON/content.",
+          "status": "reproduced"
+        },
+        {
+          "severity": "blocker",
+          "type": "contract",
+          "path": "internal/memory/store.go",
+          "line": 457,
+          "trigger": "Valid --dry-run with destination INSERT-abort trigger.",
+          "observed": "Dry run attempts INSERT and exits 1; supplemental probe reproduced.",
+          "expected": "Analyze counts without memory writes.",
+          "status": "reproduced"
+        },
+        {
+          "severity": "blocker",
+          "type": "contract",
+          "path": "internal/memory/sources.go",
+          "line": 101,
+          "trigger": "Imported destination source is FIFO.",
+          "observed": "Blocks >3s; supplemental probe.",
+          "expected": "Reject nonregular source.",
+          "status": "reproduced"
+        },
+        {
+          "severity": "major",
+          "type": "compatibility",
+          "path": "cmd/kiln/main.go",
+          "line": 78,
+          "trigger": "kiln memory --help",
+          "observed": "Exit 2 with usage; supplemental probe.",
+          "expected": "Preserve global help behavior.",
+          "status": "reproduced"
+        }
+      ],
+      "test_design_assessment": "Ordinary CLI/store cases and source escapes are tested, but persistence-only dry-run test cannot see attempted writes. Transaction rolls back committed failures. No FIFO or targeted cancellation test.",
+      "scope_docs": "All memory commands bypass parser; docs/configuration.md documents import. Conflict error at internal/memory/store.go:454 echoes key, a possible credential concern but not an established violation."
+    },
+    "candidate-03": {
+      "scores": [
+        2,
+        3,
+        3,
+        2,
+        3
+      ],
+      "readiness": "major revisions",
+      "evidence": {
+        "objective": "build/gofmt/vet/staticcheck/race/e2e pass; hidden acceptance 29/29",
+        "unit_caveat": "Broad unit failure TestHandleSubmit_LeadingPathIsNotACommand reproduces on unmodified baseline."
+      },
+      "score_reasons": [
+        "History, JSON and transactions work, but dry run writes and source FIFO blocks.",
+        "Lexical/symlink and scope validation strong; FIFO is a denial of service edge.",
+        "Reasonable separation of selection and store, but dry-run transaction behavior contradicts contract.",
+        "Good common cases; no write-attempt, FIFO, cancellation or injected write failure regression.",
+        "Old memory commands preserved and docs useful; conflict diagnostic key disclosure is uncertain."
+      ],
+      "findings": [
+        {
+          "severity": "blocker",
+          "type": "contract",
+          "path": "internal/memory/import.go",
+          "line": 98,
+          "trigger": "Valid --dry-run with destination INSERT-abort trigger.",
+          "observed": "Attempts INSERT and exits 1; supplemental probe.",
+          "expected": "Read-only validation/conflict analysis.",
+          "status": "reproduced"
+        },
+        {
+          "severity": "blocker",
+          "type": "contract",
+          "path": "internal/memory/sources.go",
+          "line": 118,
+          "trigger": "Imported destination source is FIFO.",
+          "observed": "Blocks >3s; supplemental probe.",
+          "expected": "Reject nonregular source.",
+          "status": "reproduced"
+        }
+      ],
+      "test_design_assessment": "CLI/store tests check history, stale historical source, globals, conflicts and persistent dry run. They do not verify absence of writes or fault-injected rollback. One committed transaction is otherwise sound.",
+      "scope_docs": "Import-specific dispatch preserves existing help; docs/configuration.md explains policies. internal/memory/import.go:91 echoes conflict key, with uncertain credential impact."
+    },
+    "candidate-04": {
+      "scores": [
+        3,
+        3,
+        4,
+        3,
+        4
+      ],
+      "readiness": "minor revisions",
+      "evidence": {
+        "objective": "build/gofmt/vet/staticcheck/race/e2e pass; hidden acceptance 29/29",
+        "unit_caveat": "Broad unit failure TestHandleSubmit_LeadingPathIsNotACommand reproduces on unmodified baseline."
+      },
+      "score_reasons": [
+        "Main contract and rollback flow sound; source FIFO blocks.",
+        "Strong source/scope checks and bounded input; FIFO can hang import.",
+        "Strict decoder, clear validation/planning, one transaction, truly read-only dry run.",
+        "Broad record/conflict tests, but atomic-failure test only exercises pre-transaction validation; no FIFO/cancellation.",
+        "Old commands preserved and documentation complete."
+      ],
+      "findings": [
+        {
+          "severity": "blocker",
+          "type": "contract",
+          "path": "internal/memory/import.go",
+          "line": 139,
+          "trigger": "Imported destination source is FIFO.",
+          "observed": "Blocks >3s; supplemental probe.",
+          "expected": "Reject nonregular source promptly.",
+          "status": "reproduced",
+          "mechanism": "Existing internal/memory/sources.go:30 opens before stat/mode check."
+        }
+      ],
+      "test_design_assessment": "Broad submitted tests include unknown source fields, stale active conflict, dry-run replace, empty array. TestImportAtomicOnFailure uses invalid kind before transaction; hidden grader confirms actual write rollback. Dry-run branch makes no writes.",
+      "scope_docs": "Only import bypasses global parser; docs/configuration.md describes workflow and policies."
+    }
+  },
+  "comparison": "01 and 04 are strongest and tied, but both need FIFO source rejection. 03 also needs a read-only dry run. 02 additionally accepts trailing malformed input and regresses help. No score averages away those blockers.",
+  "uncertainty": "A conflict key can be secret-like and is echoed by 02/03, but the task does not explicitly ban diagnostic identifiers; treated as caution, not scored blocker. Concurrent source mutation after hash before commit is outside the stated concurrency model."
+}

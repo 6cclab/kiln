@@ -1,0 +1,29 @@
+{
+ "id": "20261111T153707Z-worker-cost-double-count",
+ "found_at": "2026-11-11T15:37:07Z",
+ "scenario": "TestTUI_CostByModel",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Worker usage counted twice in live cost breakdown",
+ "observed": "Persistent worker usage events and legacy OnSubagentStop accumulator both added the same usage to the live per-model breakdown.",
+ "expected": "Each worker request contributes once; resumed and live per-model totals agree.",
+ "design_ref": null,
+ "evidence": [
+  "/tmp/kiln-e2e-implementation.log"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/turn.go",
+   "internal/cli/chat.go",
+   "internal/agent/dispatch.go"
+  ],
+  "regression_test": "TestTUI_CostByModel",
+  "after_evidence": [
+   "/tmp/kiln-golden-update.log"
+  ],
+  "updated_at": "2026-11-11T15:40:00Z"
+ }
+}

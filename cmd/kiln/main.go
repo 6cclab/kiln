@@ -91,6 +91,8 @@ func run(argv []string) int {
 	ctx := context.Background()
 
 	switch args.Command {
+	case "worker":
+		return cli.Worker(ctx, args, os.Stdout, os.Stderr)
 	case "providers":
 		return cli.Providers(ctx, os.Stdout, os.Stderr)
 	case "models":
@@ -111,6 +113,12 @@ func run(argv []string) int {
 			return 1
 		}
 		return cli.LogoutCmd(ctx, args.Positional[0], os.Stdout, os.Stderr)
+	case "learning":
+		return cli.Learning(ctx, args, os.Stdout, os.Stderr)
+	case "config":
+		return cli.EfficiencyConfig(args, os.Stdout, os.Stderr)
+	case "memory":
+		return cli.PersonalMemory(ctx, args, os.Stdout, os.Stderr)
 	case "doctor":
 		return cli.Doctor(ctx, args, os.Stdout, os.Stderr)
 	case "mcp":

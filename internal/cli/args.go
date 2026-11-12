@@ -112,6 +112,10 @@ var commands = map[string]bool{
 	"login":     true,
 	"logout":    true,
 	"doctor":    true,
+	"memory":    true,
+	"config":    true,
+	"learning":  true,
+	"worker":    true,
 	"mcp":       true,
 	"session":   true,
 }
@@ -347,6 +351,11 @@ commands:
   mcp list | get <name> | remove     list with a live check, show, remove
   mcp                                connect every server and report
   doctor                             check config, credentials and servers
+  memory export|forget|restore       manage project memory
+  config                             show effective efficiency settings
+  learning                           evaluate and manage personal policies
+  worker inspect|apply <manifest>    review or apply an isolated worker patch
+  worker inspect-batch|apply-batch <manifests...>  preflight or apply independent worker patches
 
 session:
   -c, --continue                     continue the most recent session here

@@ -1,0 +1,27 @@
+{
+ "id": "20261111T161143Z-fixture-fingerprint-boundaries",
+ "found_at": "2026-11-11T16:11:43Z",
+ "scenario": "TestFingerprintSeparatesFileBoundariesAndKinds",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Different fixture layouts shared an evaluation fingerprint",
+ "observed": "Concatenating paths and contents without framing made a one-file fixture and a two-file fixture produce identical hashes.",
+ "expected": "Evaluation provenance distinguishes paths, file boundaries, types and permissions.",
+ "design_ref": null,
+ "evidence": [
+  "internal/learning/fingerprint_test.go"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/learning/policy.go"
+  ],
+  "regression_test": "TestFingerprintSeparatesFileBoundariesAndKinds",
+  "after_evidence": [
+   "/tmp/kiln-fingerprint-tests.log"
+  ],
+  "updated_at": "2026-11-11T16:12:06Z"
+ }
+}

@@ -1,0 +1,24 @@
+{
+ "id": "20261111T172239Z-progress-limit-bash-verification-details",
+ "found_at": "2026-11-11T17:22:39Z",
+ "scenario": "runtime-efficiency/progress-limit",
+ "step": "two identical failing Bash calls with unique tool IDs",
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Repeated Bash failures bypass progress limit",
+ "observed": "Verification attempt details include a unique tool call ID; the progress guard hashes Details and treats identical Bash failures as different.",
+ "expected": "The guard stops after the configured number of identical failed Bash calls even when metadata differs.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/progress.go",
+   "test/e2e/runtime_efficiency_test.go"
+  ],
+  "regression_test": "TestRuntimeEfficiencyProgressLimitRepeatedBashFailure",
+  "note": "Real CLI regression passed with progressLimit=2 and two unique Bash tool IDs.",
+  "updated_at": "2026-11-11T17:22:43Z"
+ }
+}

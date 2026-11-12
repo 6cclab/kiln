@@ -1,0 +1,1777 @@
+{
+  "schema": "kiln-real-work-comparison-v1",
+  "manifest": {
+    "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+    "claude_sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd",
+    "claude_version": "2.1.319 (Claude Code)",
+    "effort": "high",
+    "go_cache_note": "Shared warmed host Go caches; write protection is not filesystem-enforced.",
+    "hidden_acceptance_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+    "kiln_sha256": "f2aaaf22560c6bfaf9ad80df587cfa1ca9db6bba92dbf2a3085c4594779409ec",
+    "model": "claude-opus-4-8",
+    "prior_reported_usd": 1.1484105,
+    "reviewer_instructions_sha256": "34a5cb8d1661bfcbc6e8ea4c181c299e99f589ee50fde84af855e3fcb30785cc",
+    "rubric_sha256": "5381d51e074f22e3eb2b059bb40beb31b24e10a1edc7d407f4a73bf3d0fc9321",
+    "runner_sha256": "8a862a1fbccb8097a1ad8cf8d70649bc41270cd226e3d3bc8b07807f860c57e6",
+    "schedule": [
+      [
+        1,
+        "claude"
+      ],
+      [
+        1,
+        "kiln"
+      ],
+      [
+        2,
+        "kiln"
+      ],
+      [
+        2,
+        "claude"
+      ]
+    ],
+    "seed": "memory-import-40e9464-opus48-20261111-0",
+    "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+    "total_cap_usd": 50.0,
+    "turn_cap": 80,
+    "wall_cap_seconds": 1200
+  },
+  "rows": [
+    {
+      "candidate": "candidate-01",
+      "arm": "kiln",
+      "repeat": 2,
+      "process_exit_code": 0,
+      "wall_ms": 509018,
+      "patch_sha256": "d0bf7fd0ffb59db6a3ca65881465a1ece796e9e192e8d12ab6ce050346215ed3",
+      "patch_bytes": 36465,
+      "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+      "settings_sha256": "5fa48d32ec5a5c15a9d54afcf12be013f3ab5925ab933a0106bec7d81c77ca8e",
+      "settings": {
+        "learningEnabled": false,
+        "modelRoles": {
+          "fast": "anthropic/claude-opus-4-8",
+          "heavy": "anthropic/claude-opus-4-8"
+        },
+        "permissions": {
+          "deny": [
+            "WebSearch"
+          ]
+        },
+        "personalMemoryEnabled": false,
+        "requestBudget": {
+          "maxCalls": 100,
+          "maxUSD": 32.869029
+        }
+      },
+      "binary_sha256": "f2aaaf22560c6bfaf9ad80df587cfa1ca9db6bba92dbf2a3085c4594779409ec",
+      "status": "completed",
+      "reported_cost_usd": 2.6344935,
+      "usage": {
+        "input": 78,
+        "output": 39701,
+        "cache_read": 2289407,
+        "cache_write": 79500
+      },
+      "reported_turns": 39,
+      "reported_tool_calls": 46,
+      "observed_tool_names": [
+        "bash",
+        "edit",
+        "read",
+        "todo_write",
+        "write"
+      ],
+      "patch_artifact": "candidate-01.patch",
+      "hidden_acceptance": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.322
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.255
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.125
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.123
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.155
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.096
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.279
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.155
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.092
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.218
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.212
+        },
+        {
+          "case": "project_scope_isolation",
+          "passed": true,
+          "seconds": 0.164
+        },
+        {
+          "case": "replace_lineage",
+          "passed": true,
+          "seconds": 0.215
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.13
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.127
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.189
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.155
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.218
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.124
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.157
+        }
+      ],
+      "supplemental_probes": [
+        {
+          "probe": "fifo_source_rejected_without_blocking",
+          "reason": "did not return within 3s; process terminated",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "constraint failed: review probe observed INSERT (1811)\n",
+          "exit_code": 1,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "existing_memory_help_preserved",
+          "status": "passed"
+        }
+      ],
+      "objective_grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-01",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 95,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "candidate-01/grading/gofmt.stderr.txt",
+            "stdout": "candidate-01/grading/gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "/private<candidate-binaries>/candidate-01/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 2608,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "candidate-01/grading/build.stderr.txt",
+            "stdout": "candidate-01/grading/build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1388,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "candidate-01/grading/vet.stderr.txt",
+            "stdout": "candidate-01/grading/vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@2026.2.2",
+              "./..."
+            ],
+            "duration_ms": 16,
+            "exit_code": 1,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "candidate-01/grading/staticcheck.stderr.txt",
+            "stdout": "candidate-01/grading/staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 23398,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "candidate-01/grading/unit.stderr.txt",
+            "stdout": "candidate-01/grading/unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 456,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "candidate-01/grading/vet-e2e.stderr.txt",
+            "stdout": "candidate-01/grading/vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 10975,
+            "exit_code": 0,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "candidate-01/grading/race-memory-cli.stderr.txt",
+            "stdout": "candidate-01/grading/race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 4174,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "candidate-01/grading/e2e-memory.stderr.txt",
+            "stdout": "candidate-01/grading/e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "/private<candidate-binaries>/candidate-01/kiln"
+            ],
+            "duration_ms": 4954,
+            "exit_code": 0,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "candidate-01/grading/hidden-acceptance.stderr.txt",
+            "stdout": "candidate-01/grading/hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "infrastructure_rerun_source_unchanged": true,
+        "infrastructure_reruns": [
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "-version"
+            ],
+            "duration_ms": 205,
+            "exit_code": 0,
+            "name": "staticcheck-offline-version",
+            "state": "completed",
+            "stderr": "candidate-01/grading/staticcheck-offline-version.stderr.txt",
+            "stdout": "candidate-01/grading/staticcheck-offline-version.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 4296,
+            "exit_code": 0,
+            "name": "staticcheck-offline",
+            "state": "completed",
+            "stderr": "candidate-01/grading/staticcheck-offline.stderr.txt",
+            "stdout": "candidate-01/grading/staticcheck-offline.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 25585,
+            "exit_code": 1,
+            "name": "unit-shorttmp",
+            "state": "completed",
+            "stderr": "candidate-01/grading/unit-shorttmp.stderr.txt",
+            "stdout": "candidate-01/grading/unit-shorttmp.stdout.txt"
+          }
+        ],
+        "patch_applied": true,
+        "patch_bytes": 36465,
+        "patch_sha256": "d0bf7fd0ffb59db6a3ca65881465a1ece796e9e192e8d12ab6ce050346215ed3",
+        "status_after_sha256": "0e90d16e1f98407319c718f95d19f89c417e9e645eaaa573ff454f3926bb0434",
+        "status_before_sha256": "0e90d16e1f98407319c718f95d19f89c417e9e645eaaa573ff454f3926bb0434",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "d0bf7fd0ffb59db6a3ca65881465a1ece796e9e192e8d12ab6ce050346215ed3",
+        "tracked_diff_before_sha256": "d0bf7fd0ffb59db6a3ca65881465a1ece796e9e192e8d12ab6ce050346215ed3",
+        "tracked_source_unchanged_by_grading": true
+      }
+    },
+    {
+      "candidate": "candidate-02",
+      "arm": "kiln",
+      "repeat": 1,
+      "process_exit_code": 0,
+      "wall_ms": 562156,
+      "patch_sha256": "ab7f5566890b14865877b2871be45421e50d9c48fe36bb4c8a7b7fc51a07a571",
+      "patch_bytes": 36528,
+      "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+      "settings_sha256": "eb3b4917f834a00f07249a362c342578eaf9f66d652836c07fccfeffde891a0e",
+      "settings": {
+        "learningEnabled": false,
+        "modelRoles": {
+          "fast": "anthropic/claude-opus-4-8",
+          "heavy": "anthropic/claude-opus-4-8"
+        },
+        "permissions": {
+          "deny": [
+            "WebSearch"
+          ]
+        },
+        "personalMemoryEnabled": false,
+        "requestBudget": {
+          "maxCalls": 100,
+          "maxUSD": 35.0
+        }
+      },
+      "binary_sha256": "f2aaaf22560c6bfaf9ad80df587cfa1ca9db6bba92dbf2a3085c4594779409ec",
+      "status": "completed",
+      "reported_cost_usd": 3.063429,
+      "usage": {
+        "input": 118,
+        "output": 41816,
+        "cache_read": 3063053,
+        "cache_write": 77746
+      },
+      "reported_turns": 59,
+      "reported_tool_calls": 61,
+      "observed_tool_names": [
+        "bash",
+        "edit",
+        "exit_plan_mode",
+        "read",
+        "todo_write",
+        "write"
+      ],
+      "patch_artifact": "candidate-02.patch",
+      "hidden_acceptance": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.841
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.243
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.093
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.092
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.122
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.123
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.152
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.275
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.154
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.096
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.225
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.161
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.22
+        },
+        {
+          "case": "project_scope_isolation",
+          "passed": true,
+          "seconds": 0.166
+        },
+        {
+          "case": "replace_lineage",
+          "passed": true,
+          "seconds": 0.216
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.097
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.127
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.096
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.129
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.193
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.217
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.123
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.154
+        }
+      ],
+      "supplemental_probes": [
+        {
+          "probe": "fifo_source_rejected_without_blocking",
+          "reason": "did not return within 3s; process terminated",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "existing_memory_help_preserved",
+          "status": "passed"
+        }
+      ],
+      "objective_grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-02",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 112,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "candidate-02/grading/gofmt.stderr.txt",
+            "stdout": "candidate-02/grading/gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "/private<candidate-binaries>/candidate-02/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 2323,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "candidate-02/grading/build.stderr.txt",
+            "stdout": "candidate-02/grading/build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1314,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "candidate-02/grading/vet.stderr.txt",
+            "stdout": "candidate-02/grading/vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@2026.2.2",
+              "./..."
+            ],
+            "duration_ms": 16,
+            "exit_code": 1,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "candidate-02/grading/staticcheck.stderr.txt",
+            "stdout": "candidate-02/grading/staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 23253,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "candidate-02/grading/unit.stderr.txt",
+            "stdout": "candidate-02/grading/unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 463,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "candidate-02/grading/vet-e2e.stderr.txt",
+            "stdout": "candidate-02/grading/vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 11115,
+            "exit_code": 0,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "candidate-02/grading/race-memory-cli.stderr.txt",
+            "stdout": "candidate-02/grading/race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 4333,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "candidate-02/grading/e2e-memory.stderr.txt",
+            "stdout": "candidate-02/grading/e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "/private<candidate-binaries>/candidate-02/kiln"
+            ],
+            "duration_ms": 5481,
+            "exit_code": 0,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "candidate-02/grading/hidden-acceptance.stderr.txt",
+            "stdout": "candidate-02/grading/hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "infrastructure_rerun_source_unchanged": true,
+        "infrastructure_reruns": [
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "-version"
+            ],
+            "duration_ms": 140,
+            "exit_code": 0,
+            "name": "staticcheck-offline-version",
+            "state": "completed",
+            "stderr": "candidate-02/grading/staticcheck-offline-version.stderr.txt",
+            "stdout": "candidate-02/grading/staticcheck-offline-version.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 4314,
+            "exit_code": 0,
+            "name": "staticcheck-offline",
+            "state": "completed",
+            "stderr": "candidate-02/grading/staticcheck-offline.stderr.txt",
+            "stdout": "candidate-02/grading/staticcheck-offline.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 25240,
+            "exit_code": 1,
+            "name": "unit-shorttmp",
+            "state": "completed",
+            "stderr": "candidate-02/grading/unit-shorttmp.stderr.txt",
+            "stdout": "candidate-02/grading/unit-shorttmp.stdout.txt"
+          }
+        ],
+        "patch_applied": true,
+        "patch_bytes": 36528,
+        "patch_sha256": "ab7f5566890b14865877b2871be45421e50d9c48fe36bb4c8a7b7fc51a07a571",
+        "status_after_sha256": "6ac8aa104634abf79b005659f0ecfa96802fa01bdfba8aa3050797a98a89fd43",
+        "status_before_sha256": "6ac8aa104634abf79b005659f0ecfa96802fa01bdfba8aa3050797a98a89fd43",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "ab7f5566890b14865877b2871be45421e50d9c48fe36bb4c8a7b7fc51a07a571",
+        "tracked_diff_before_sha256": "ab7f5566890b14865877b2871be45421e50d9c48fe36bb4c8a7b7fc51a07a571",
+        "tracked_source_unchanged_by_grading": true
+      }
+    },
+    {
+      "candidate": "candidate-03",
+      "arm": "claude",
+      "repeat": 2,
+      "process_exit_code": 1,
+      "wall_ms": 1117584,
+      "patch_sha256": "695c48011c701e9abc30864e75d66cce757cd1d00a6f5b749acc57c9b096cd6d",
+      "patch_bytes": 40772,
+      "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+      "settings_sha256": "2fafedf25637be6de67f9707603fdc64374f750b561e62d413af0f96762e0fc5",
+      "settings": {
+        "permissions": {
+          "deny": [
+            "WebSearch"
+          ]
+        }
+      },
+      "binary_sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd",
+      "status": "budget_exhausted",
+      "reported_cost_usd": 6.008203999999998,
+      "model_usage": {
+        "claude-opus-4-8": {
+          "inputTokens": 148,
+          "outputTokens": 60881,
+          "cacheReadInputTokens": 6692318,
+          "cacheCreationInputTokens": 113928,
+          "webSearchRequests": 0,
+          "costUSD": 6.008203999999998,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000,
+          "thinkingTokens": 25261,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 113928,
+          "canonicalModel": "claude-opus-4-8",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "result_events": [
+        {
+          "subtype": "success",
+          "is_error": false,
+          "total_cost_usd": 4.340752499999999,
+          "num_turns": 57,
+          "duration_ms": 800558
+        },
+        {
+          "subtype": "success",
+          "is_error": false,
+          "total_cost_usd": 5.348417999999998,
+          "num_turns": 14,
+          "duration_ms": 67638
+        },
+        {
+          "subtype": "error_max_budget_usd",
+          "is_error": true,
+          "total_cost_usd": 6.008203999999998,
+          "num_turns": 8,
+          "duration_ms": 75191
+        }
+      ],
+      "observed_tool_names": [
+        "Bash",
+        "Edit",
+        "Read",
+        "Write"
+      ],
+      "patch_artifact": "candidate-03.patch",
+      "hidden_acceptance": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.862
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.247
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.093
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.128
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.126
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.154
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.278
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.154
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.154
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.213
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.153
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.213
+        },
+        {
+          "case": "project_scope_isolation",
+          "passed": true,
+          "seconds": 0.166
+        },
+        {
+          "case": "replace_lineage",
+          "passed": true,
+          "seconds": 0.214
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.126
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.128
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.154
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.184
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.217
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.126
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.157
+        }
+      ],
+      "supplemental_probes": [
+        {
+          "probe": "fifo_source_rejected_without_blocking",
+          "reason": "did not return within 3s; process terminated",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "constraint failed: review probe observed INSERT (1811)\n",
+          "exit_code": 1,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "usage: kiln memory [global] export | forget <key> | restore <id> | remember <key> <text> [source-files...] | import <file> [--dry-run] [--on-conflict error|skip|replace]\n",
+          "exit_code": 2,
+          "probe": "existing_memory_help_preserved",
+          "status": "failed"
+        }
+      ],
+      "objective_grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-03",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 102,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "candidate-03/grading/gofmt.stderr.txt",
+            "stdout": "candidate-03/grading/gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "/private<candidate-binaries>/candidate-03/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 2349,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "candidate-03/grading/build.stderr.txt",
+            "stdout": "candidate-03/grading/build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1325,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "candidate-03/grading/vet.stderr.txt",
+            "stdout": "candidate-03/grading/vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@2026.2.2",
+              "./..."
+            ],
+            "duration_ms": 16,
+            "exit_code": 1,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "candidate-03/grading/staticcheck.stderr.txt",
+            "stdout": "candidate-03/grading/staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 23359,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "candidate-03/grading/unit.stderr.txt",
+            "stdout": "candidate-03/grading/unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 442,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "candidate-03/grading/vet-e2e.stderr.txt",
+            "stdout": "candidate-03/grading/vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 11051,
+            "exit_code": 0,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "candidate-03/grading/race-memory-cli.stderr.txt",
+            "stdout": "candidate-03/grading/race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 4196,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "candidate-03/grading/e2e-memory.stderr.txt",
+            "stdout": "candidate-03/grading/e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "/private<candidate-binaries>/candidate-03/kiln"
+            ],
+            "duration_ms": 5474,
+            "exit_code": 0,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "candidate-03/grading/hidden-acceptance.stderr.txt",
+            "stdout": "candidate-03/grading/hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "infrastructure_rerun_source_unchanged": true,
+        "infrastructure_reruns": [
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "-version"
+            ],
+            "duration_ms": 139,
+            "exit_code": 0,
+            "name": "staticcheck-offline-version",
+            "state": "completed",
+            "stderr": "candidate-03/grading/staticcheck-offline-version.stderr.txt",
+            "stdout": "candidate-03/grading/staticcheck-offline-version.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 4546,
+            "exit_code": 0,
+            "name": "staticcheck-offline",
+            "state": "completed",
+            "stderr": "candidate-03/grading/staticcheck-offline.stderr.txt",
+            "stdout": "candidate-03/grading/staticcheck-offline.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 25549,
+            "exit_code": 1,
+            "name": "unit-shorttmp",
+            "state": "completed",
+            "stderr": "candidate-03/grading/unit-shorttmp.stderr.txt",
+            "stdout": "candidate-03/grading/unit-shorttmp.stdout.txt"
+          }
+        ],
+        "patch_applied": true,
+        "patch_bytes": 40772,
+        "patch_sha256": "695c48011c701e9abc30864e75d66cce757cd1d00a6f5b749acc57c9b096cd6d",
+        "status_after_sha256": "2f79ca6b7449582305440b1de7c4ba74ae1cd41268accea7b857ba34a8e00699",
+        "status_before_sha256": "2f79ca6b7449582305440b1de7c4ba74ae1cd41268accea7b857ba34a8e00699",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "695c48011c701e9abc30864e75d66cce757cd1d00a6f5b749acc57c9b096cd6d",
+        "tracked_diff_before_sha256": "695c48011c701e9abc30864e75d66cce757cd1d00a6f5b749acc57c9b096cd6d",
+        "tracked_source_unchanged_by_grading": true
+      }
+    },
+    {
+      "candidate": "candidate-04",
+      "arm": "claude",
+      "repeat": 1,
+      "process_exit_code": 0,
+      "wall_ms": 762178,
+      "patch_sha256": "1761f75f19a857fd1c1b9d88b5c5e3b0c91f2685d32af07783c3fa7cecf23b99",
+      "patch_bytes": 44022,
+      "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+      "settings_sha256": "2fafedf25637be6de67f9707603fdc64374f750b561e62d413af0f96762e0fc5",
+      "settings": {
+        "permissions": {
+          "deny": [
+            "WebSearch"
+          ]
+        }
+      },
+      "binary_sha256": "1f53587e92dee8e089fa349188a4cda64fa34ace6e7b0ca2ee278ddaa3cc2ebd",
+      "status": "completed",
+      "reported_cost_usd": 4.919131499999999,
+      "model_usage": {
+        "claude-opus-4-8": {
+          "inputTokens": 114,
+          "outputTokens": 57349,
+          "cacheReadInputTokens": 4778913,
+          "cacheCreationInputTokens": 109538,
+          "webSearchRequests": 0,
+          "costUSD": 4.919131499999999,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 64000,
+          "thinkingTokens": 25972,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 109538,
+          "canonicalModel": "claude-opus-4-8",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "result_events": [
+        {
+          "subtype": "success",
+          "is_error": false,
+          "total_cost_usd": 4.919131499999999,
+          "num_turns": 57,
+          "duration_ms": 761505
+        }
+      ],
+      "observed_tool_names": [
+        "Bash",
+        "Edit",
+        "Read",
+        "Write"
+      ],
+      "patch_artifact": "candidate-04.patch",
+      "hidden_acceptance": [
+        {
+          "case": "cancel_waiting_for_database",
+          "passed": true,
+          "seconds": 0.864
+        },
+        {
+          "case": "cli_args",
+          "passed": true,
+          "seconds": 0.252
+        },
+        {
+          "case": "default_conflict_atomic",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "diagnostics_do_not_leak",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "dry_run_and_conflicts",
+          "passed": true,
+          "seconds": 0.125
+        },
+        {
+          "case": "empty_and_insert",
+          "passed": true,
+          "seconds": 0.125
+        },
+        {
+          "case": "existing_workflow",
+          "passed": true,
+          "seconds": 0.153
+        },
+        {
+          "case": "expired_active_conflict",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "field_and_expiry_limits",
+          "passed": true,
+          "seconds": 0.277
+        },
+        {
+          "case": "global_history_invalid",
+          "passed": true,
+          "seconds": 0.153
+        },
+        {
+          "case": "global_preferences_only",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "history_collapse",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "input_id_rejections",
+          "passed": true,
+          "seconds": 0.219
+        },
+        {
+          "case": "invalid_history_rejected",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "json_shape",
+          "passed": true,
+          "seconds": 0.214
+        },
+        {
+          "case": "project_scope_isolation",
+          "passed": true,
+          "seconds": 0.165
+        },
+        {
+          "case": "replace_lineage",
+          "passed": true,
+          "seconds": 0.217
+        },
+        {
+          "case": "rollback_on_memory_write",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "rollback_on_replace",
+          "passed": true,
+          "seconds": 0.126
+        },
+        {
+          "case": "rollback_on_source_write",
+          "passed": true,
+          "seconds": 0.096
+        },
+        {
+          "case": "size_and_count_bounds",
+          "passed": true,
+          "seconds": 0.129
+        },
+        {
+          "case": "skip_preserves_local",
+          "passed": true,
+          "seconds": 0.156
+        },
+        {
+          "case": "source_failures_atomic",
+          "passed": true,
+          "seconds": 0.185
+        },
+        {
+          "case": "source_kind_and_limits",
+          "passed": true,
+          "seconds": 0.155
+        },
+        {
+          "case": "source_path_boundaries",
+          "passed": true,
+          "seconds": 0.216
+        },
+        {
+          "case": "source_rebind_and_freshness",
+          "passed": true,
+          "seconds": 0.127
+        },
+        {
+          "case": "stale_active_conflict",
+          "passed": true,
+          "seconds": 0.095
+        },
+        {
+          "case": "stale_historical_source",
+          "passed": true,
+          "seconds": 0.094
+        },
+        {
+          "case": "unknown_fields",
+          "passed": true,
+          "seconds": 0.15
+        }
+      ],
+      "supplemental_probes": [
+        {
+          "probe": "fifo_source_rejected_without_blocking",
+          "reason": "did not return within 3s; process terminated",
+          "status": "failed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "exactly_1000_records_accepted",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "dry_run_does_not_attempt_memory_writes",
+          "status": "passed"
+        },
+        {
+          "diagnostic": "",
+          "exit_code": 0,
+          "probe": "existing_memory_help_preserved",
+          "status": "passed"
+        }
+      ],
+      "objective_grading": {
+        "baseline": "40e946486120497606d0e0070180dfb9aad24f05",
+        "candidate": "candidate-04",
+        "commands": [
+          {
+            "command": [
+              "gofmt",
+              "-l",
+              "."
+            ],
+            "duration_ms": 100,
+            "exit_code": 0,
+            "formatted": true,
+            "name": "gofmt",
+            "state": "completed",
+            "stderr": "candidate-04/grading/gofmt.stderr.txt",
+            "stdout": "candidate-04/grading/gofmt.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "build",
+              "-o",
+              "/private<candidate-binaries>/candidate-04/kiln",
+              "./cmd/kiln"
+            ],
+            "duration_ms": 2270,
+            "exit_code": 0,
+            "name": "build",
+            "state": "completed",
+            "stderr": "candidate-04/grading/build.stderr.txt",
+            "stdout": "candidate-04/grading/build.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "duration_ms": 1353,
+            "exit_code": 0,
+            "name": "vet",
+            "state": "completed",
+            "stderr": "candidate-04/grading/vet.stderr.txt",
+            "stdout": "candidate-04/grading/vet.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@2026.2.2",
+              "./..."
+            ],
+            "duration_ms": 16,
+            "exit_code": 1,
+            "name": "staticcheck",
+            "state": "completed",
+            "stderr": "candidate-04/grading/staticcheck.stderr.txt",
+            "stdout": "candidate-04/grading/staticcheck.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 23420,
+            "exit_code": 1,
+            "name": "unit",
+            "state": "completed",
+            "stderr": "candidate-04/grading/unit.stderr.txt",
+            "stdout": "candidate-04/grading/unit.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "vet",
+              "-tags",
+              "e2e",
+              "./test/e2e/..."
+            ],
+            "duration_ms": 447,
+            "exit_code": 0,
+            "name": "vet-e2e",
+            "state": "completed",
+            "stderr": "candidate-04/grading/vet-e2e.stderr.txt",
+            "stdout": "candidate-04/grading/vet-e2e.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-race",
+              "./internal/memory",
+              "./internal/cli",
+              "-count=1"
+            ],
+            "duration_ms": 10963,
+            "exit_code": 0,
+            "name": "race-memory-cli",
+            "state": "completed",
+            "stderr": "candidate-04/grading/race-memory-cli.stderr.txt",
+            "stdout": "candidate-04/grading/race-memory-cli.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "-tags=e2e",
+              "./test/e2e",
+              "-run",
+              "Memory|Preference|Import",
+              "-count=1"
+            ],
+            "duration_ms": 4296,
+            "exit_code": 0,
+            "name": "e2e-memory",
+            "state": "completed",
+            "stderr": "candidate-04/grading/e2e-memory.stderr.txt",
+            "stdout": "candidate-04/grading/e2e-memory.stdout.txt"
+          },
+          {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "eval/real-work/memory-import/hidden_acceptance.py",
+              "--binary",
+              "/private<candidate-binaries>/candidate-04/kiln"
+            ],
+            "duration_ms": 5509,
+            "exit_code": 0,
+            "name": "hidden-acceptance",
+            "state": "completed",
+            "stderr": "candidate-04/grading/hidden-acceptance.stderr.txt",
+            "stdout": "candidate-04/grading/hidden-acceptance.stdout.txt"
+          }
+        ],
+        "hidden_grader_sha256": "694676000b8157be18b6ac8161d9586b0ad36e321d90f511b74c6905a3f1be6d",
+        "infrastructure_rerun_source_unchanged": true,
+        "infrastructure_reruns": [
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "-version"
+            ],
+            "duration_ms": 156,
+            "exit_code": 0,
+            "name": "staticcheck-offline-version",
+            "state": "completed",
+            "stderr": "candidate-04/grading/staticcheck-offline-version.stderr.txt",
+            "stdout": "candidate-04/grading/staticcheck-offline-version.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "run",
+              "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+              "./..."
+            ],
+            "duration_ms": 4245,
+            "exit_code": 0,
+            "name": "staticcheck-offline",
+            "state": "completed",
+            "stderr": "candidate-04/grading/staticcheck-offline.stderr.txt",
+            "stdout": "candidate-04/grading/staticcheck-offline.stdout.txt"
+          },
+          {
+            "command": [
+              "go",
+              "test",
+              "./...",
+              "-count=1"
+            ],
+            "duration_ms": 25238,
+            "exit_code": 1,
+            "name": "unit-shorttmp",
+            "state": "completed",
+            "stderr": "candidate-04/grading/unit-shorttmp.stderr.txt",
+            "stdout": "candidate-04/grading/unit-shorttmp.stdout.txt"
+          }
+        ],
+        "patch_applied": true,
+        "patch_bytes": 44022,
+        "patch_sha256": "1761f75f19a857fd1c1b9d88b5c5e3b0c91f2685d32af07783c3fa7cecf23b99",
+        "status_after_sha256": "9656f3435dc097b5d16ca43cf3c0017b41c18b8dde23adfba77fb29f6165fff6",
+        "status_before_sha256": "9656f3435dc097b5d16ca43cf3c0017b41c18b8dde23adfba77fb29f6165fff6",
+        "status_unchanged_by_grading": true,
+        "tracked_diff_after_sha256": "1761f75f19a857fd1c1b9d88b5c5e3b0c91f2685d32af07783c3fa7cecf23b99",
+        "tracked_diff_before_sha256": "1761f75f19a857fd1c1b9d88b5c5e3b0c91f2685d32af07783c3fa7cecf23b99",
+        "tracked_source_unchanged_by_grading": true
+      }
+    }
+  ],
+  "costs": {
+    "prior_reported_usd": 1.1484105,
+    "real_work_reported_usd": 16.625258,
+    "total_reported_usd": 17.7736685,
+    "authorized_total_usd": 50,
+    "reviewer_agent_usage": "Not available as provider billing; excluded from external Opus comparison ledger."
+  },
+  "cost_caveat": "Provider-reported/catalog estimates, not an invoice. Final Claude repeat2 result is cumulative; do not sum its intermediate totals.",
+  "grading_classification": {
+    "baseline_commit": "40e946486120497606d0e0070180dfb9aad24f05",
+    "hidden_acceptance_cases_per_candidate": 29,
+    "hidden_acceptance_passed_per_candidate": 29,
+    "staticcheck_initial": {
+      "state": "failed_environment",
+      "detail": "Go vanity version @2026.2.2 lookup blocked by GOPROXY=off; same failure all candidates"
+    },
+    "staticcheck_offline_rerun": {
+      "state": "passed",
+      "tool_version": "staticcheck 2026.2.2 (0.8.2)",
+      "module_selector": "honnef.co/go/tools/cmd/staticcheck@v0.8.2",
+      "proxy": "local file module cache",
+      "detail": "same tool release; corrected offline resolution; passed all candidates"
+    },
+    "unit_initial": {
+      "state": "failed_environment",
+      "detail": "Unix socket bind invalid argument under long grader TMPDIR; same internal/sandbox test all candidates"
+    },
+    "unit_shorttmp_rerun": {
+      "state": "failed_baseline_sensitive",
+      "detail": "same internal/tui TestHandleSubmit_LeadingPathIsNotACommand timeout all candidates"
+    },
+    "baseline_control": {
+      "source": "independent clean baseline clone",
+      "target": "go test ./internal/tui -run ^TestHandleSubmit_LeadingPathIsNotACommand$ -count=1",
+      "short_tmpdir_exit_code": 1,
+      "native_environment_exit_code": 0,
+      "short_tmpdir_failure": "timed out waiting for a committed block containing please read this",
+      "interpretation": "path-dependent rendering/expectation, unrelated to memory-import patches; exact wrapping mechanism inferred from RenderUserMessageMeta"
+    },
+    "full_unit_gate": "failed/inconclusive under grading environment; do not report pass"
+  },
+  "root_adjudication": {
+    "readiness": "major revisions for every candidate",
+    "accepted_findings": [
+      "FIFO source blocks all four",
+      "dry-run attempts writes in candidate-01 and candidate-03",
+      "existing memory --help regression in candidate-03"
+    ],
+    "not_established": [
+      "general harness superiority",
+      "cross-model orchestration efficiency",
+      "memory/learning quality"
+    ],
+    "patches_merged": false
+  },
+  "raw_grading_logs": "Retained locally under /tmp/kiln-realwork-review-bundles; published command paths are sanitized. Structured outcomes and all named acceptance/probe results are included here."
+}

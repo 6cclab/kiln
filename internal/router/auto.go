@@ -82,8 +82,10 @@ type Classifier interface {
 // the planning model is Plan whenever the classifier gives no answer (jev
 // picks Terra).
 type Auto struct {
-	Targets    Targets
-	Classifier Classifier
+	// Conservative keeps difficult work on its planning model and escalates repeated tool failures.
+	Conservative bool
+	Targets      Targets
+	Classifier   Classifier
 	// Fallback rates prompt when the classifier is nil or gives no
 	// answer. Nil rates every request Standard.
 	Fallback func(prompt string) Complexity
@@ -117,6 +119,16 @@ func (a *Auto) Route(ctx context.Context, req Request) (Route, error) {
 	if req.Reason == ReasonDirect {
 		return routeTo(req, a.Targets.Direct, nil)
 	}
+	if a.Conservative && req.Reason == ReasonUser {
+		// A new task must not inherit a previous task's implementation downgrade.
+		fresh := req
+		fresh.Previous = nil
+		m, err := a.choosePlanningModel(ctx, fresh)
+		if err != nil {
+			return Route{}, err
+		}
+		return routeTo(req, m, &AutoState{PhasePlanning, modelKey(m)})
+	}
 	state, ok := parseAutoState(req.State)
 	if !ok {
 		m, err := a.choosePlanningModel(ctx, req)
@@ -125,9 +137,13 @@ func (a *Auto) Route(ctx context.Context, req Request) (Route, error) {
 		}
 		return routeTo(req, m, &AutoState{Phase: PhasePlanning, Model: modelKey(m)})
 	}
+	if a.Conservative && consecutiveFailures(req.Messages) >= 2 {
+		m := a.Targets.PlanComplex
+		return routeTo(req, m, &AutoState{PhasePlanning, modelKey(m)})
+	}
 	// The planning model made the first edit: hand the rest of the work
 	// to the implementation model.
-	if state.Phase == PhasePlanning && editedThisTurn(req.Messages) {
+	if !a.Conservative && state.Phase == PhasePlanning && editedThisTurn(req.Messages) {
 		return routeTo(req, a.Targets.Implement, &AutoState{Phase: PhaseImplementation, Model: modelKey(a.Targets.Implement)})
 	}
 	m, current := a.stateModel(state)
@@ -321,4 +337,21 @@ func (p *VirtualProvider) Stream(_ context.Context, m provider.Model, _ []msg.Me
 	return ch, func() (*msg.AssistantMessage, error) {
 		return nil, fmt.Errorf("virtual model %s/%s must be routed before streaming", m.Provider, m.ID)
 	}
+}
+
+// Count tool failures since the last user message or successful tool result.
+func consecutiveFailures(messages []msg.Message) int {
+	count := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		switch m := messages[i].(type) {
+		case msg.UserMessage:
+			return count
+		case msg.ToolResultMessage:
+			if !m.IsError {
+				return count
+			}
+			count++
+		}
+	}
+	return count
 }

@@ -34,9 +34,11 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/andrepato/harness/internal/automode"
 	"github.com/andrepato/harness/internal/budget"
@@ -69,7 +71,19 @@ var residentToolNames = []string{"bash", "read", "edit", "write"}
 
 // Dispatcher runs subagents dispatched via the task tool.
 type Dispatcher struct {
-	Registry *provider.Registry
+	Limits *DispatchLimits
+	// ProgressLimit is inherited by each dispatched agent's harness.
+	ProgressLimit int
+	// CycleLimit is inherited by each dispatched agent's harness.
+	CycleLimit int
+	// ReadCache, when set, is shared by worker read tools. It is safe for
+	// concurrent workers and always validates fresh file content.
+	ReadCache *tools.ReadCache
+	// IsolatedWorkers runs each worker in a detached Git worktree. It is opt in.
+	IsolatedWorkers bool
+	// SnapshotDirty captures a bounded dirty parent baseline for isolated workers.
+	SnapshotDirty bool
+	Registry      *provider.Registry
 	// Parent is the session doing the dispatching. Its model is the
 	// inheritance default for ResolveModel, and its cwd anchors the
 	// subagent's own session (via Env.Cwd).
@@ -176,7 +190,9 @@ type DispatchRequest struct {
 
 // DispatchResult is what Dispatch returns to the task tool.
 type DispatchResult struct {
-	Text string
+	UsageByModel map[string]msg.Usage `json:"usageByModel,omitempty"`
+	Artifact     *WorkerArtifact      `json:"artifact,omitempty"`
+	Text         string
 	// ToolCalls is reported to the user, never to the model.
 	ToolCalls int
 	Chars     int
@@ -195,6 +211,17 @@ type DispatchResult struct {
 // the parent's context aborts the subagent's turn exactly as it would the
 // parent's own.
 func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (DispatchResult, error) {
+	release, limitErr := d.Limits.acquire(d.Depth + 1)
+	if limitErr != nil {
+		return DispatchResult{}, limitErr
+	}
+	defer release()
+	if d.Limits != nil && d.Limits.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d.Limits.Timeout)
+		defer cancel()
+	}
+
 	def, ok := findAgentDefinition(d.Agents, req.Agent)
 	if !ok {
 		return DispatchResult{}, fmt.Errorf("agent: no agent named %q", req.Agent)
@@ -265,13 +292,52 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		}
 	}
 
+	workerEnv := d.Env
+	var worktree *workerWorktree
+	if d.IsolatedWorkers {
+		if d.Env != nil && d.Env.Sandbox != nil && d.Env.Sandbox.Active() {
+			return DispatchResult{}, fmt.Errorf("agent: isolated workers require a worktree-aware OS sandbox; the current sandbox is bound to the parent")
+		}
+		worktree, workerEnv, err = newWorkerWorktreeWithSnapshot(ctx, d.Env, d.SnapshotDirty)
+		if err != nil {
+			return DispatchResult{}, fmt.Errorf("agent: prepare isolated worker: %w", err)
+		}
+		defer func() {
+			if closeErr := worktree.close(); closeErr != nil {
+				diag.L().Warn("isolated worker worktree cleanup failed", "path", worktree.path, "error", closeErr)
+			}
+		}()
+	}
+	// A dispatch owns its command lifetime, independently of the parent and
+	// sibling workers. Copy the environment so nested dispatch cannot replace
+	// the scope of the worker that launched it.
+	workerEnvCopy := *workerEnv
+	workerEnv = &workerEnvCopy
+	if worktree != nil {
+		workerEnv, err = workerEnv.CloneForConfinedFiles(worktree.path)
+		if err != nil {
+			return DispatchResult{}, fmt.Errorf("agent: confine isolated worker files: %w", err)
+		}
+		defer func() {
+			if err := workerEnv.CloseConfinedFiles(); err != nil {
+				diag.L().Warn("isolated worker file cleanup failed", "error", err)
+			}
+		}()
+	}
+	workerEnv.JobScope = execenv.NewJobScope()
+	defer workerEnv.JobScope.Close()
+
 	// allowTask gates both this subagent's own `task` tool (built below)
 	// and, through AllowedToolNames, whether "task" can even survive an
 	// explicit allowlist in def.Tools. A subagent built by a Dispatcher at
 	// Depth 0 or 1 gets one, wired to a child Dispatcher one level deeper;
 	// at Depth 2 nothing is registered at all, so the model never sees the
 	// tool and cannot even attempt it — see Dispatcher.Depth's doc comment.
-	allowTask := d.Depth < 2
+	maxDepth := 3
+	if d.Limits != nil && d.Limits.Depth > 0 {
+		maxDepth = d.Limits.Depth
+	}
+	allowTask := d.Depth+1 < maxDepth
 	available := append([]string(nil), residentToolNames...)
 	if allowTask {
 		available = append(available, TaskToolName)
@@ -279,6 +345,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	var hookTools []*tool.Tool
 	if d.Hooks != nil {
 		hookTools = d.Hooks.Tools(req.ToolCallID)
+		if d.IsolatedWorkers && len(hookTools) > 0 {
+			return DispatchResult{}, fmt.Errorf("agent: isolated workers cannot run extension tools without a worktree-aware path policy")
+		}
 		for _, t := range hookTools {
 			available = append(available, t.Name)
 		}
@@ -286,6 +355,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	// The allowlist is applied to what this harness actually has, not to
 	// what the definition imagined.
 	activeToolNames := AllowedToolNames(def.Tools, available, allowTask)
+	if d.IsolatedWorkers {
+		// Bash can change directory or address absolute paths without a
+		// worktree-aware OS sandbox. File tools are checked below.
+		activeToolNames = removeToolName(activeToolNames, "bash")
+	}
 
 	// Depth on the event is the depth of the subagent THIS Dispatch call is
 	// starting, i.e. one past this Dispatcher's own — it lines up with the
@@ -318,12 +392,18 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	var extraTools []*tool.Tool
 	if allowTask {
 		child = &Dispatcher{
+			Limits:             d.Limits,
+			ProgressLimit:      d.ProgressLimit,
+			CycleLimit:         d.CycleLimit,
+			ReadCache:          d.ReadCache,
+			IsolatedWorkers:    d.IsolatedWorkers,
+			SnapshotDirty:      d.SnapshotDirty,
 			Registry:           d.Registry,
 			Gate:               d.Gate,
 			Agents:             d.Agents,
 			Roles:              d.Roles,
 			SessionsRoot:       d.SessionsRoot,
-			Env:                d.Env,
+			Env:                workerEnv,
 			OnEvent:            d.OnEvent,
 			OnSubagentStop:     d.OnSubagentStop,
 			BeforeSubagentStop: d.BeforeSubagentStop,
@@ -341,12 +421,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	started, err := Start(ctx, Options{
 		Registry:     d.Registry,
 		Resolved:     resolved,
-		Cwd:          d.Env.Cwd,
+		Cwd:          workerEnv.Cwd,
 		SessionsRoot: d.SessionsRoot,
 		// The definition's body IS the system prompt. That is the whole
 		// point of a subagent, and the reason for a separate harness.
 		SystemPrompt: def.Prompt,
-		Env:          d.Env,
+		Env:          workerEnv,
 		// d.Parent is the session dispatching this one — set so the new
 		// session's own header records it as a subagent's, not a
 		// top-level one (internal/cli/tui.go's buildRecentSessionRows
@@ -359,6 +439,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		ParentSessionID: d.Parent.SessionID,
 		ExtraTools:      extraTools,
 		ActiveToolNames: activeToolNames,
+		ProgressLimit:   d.ProgressLimit,
+		CycleLimit:      d.CycleLimit,
+		ReadCache:       d.ReadCache,
 		Routers:         d.Routers,
 	})
 	if err != nil {
@@ -390,6 +473,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			userHistory = func() []msg.Message { return d.UserHistory(ctx) }
 		}
 		started.Harness.Hooks().OnBeforeTool(func(ctx context.Context, call msg.ToolCall) (harness.BeforeToolResult, error) {
+			if worktree != nil && (call.Name == "read" || call.Name == "edit" || call.Name == "write") {
+				// Their Execute wrappers check the final arguments after hook
+				// rewrites. Task dispatch still goes through the shared gate.
+				return harness.BeforeToolResult{}, nil
+			}
 			primaryArg, _ := permission.PrimaryArgOf(call.Arguments)
 			blocked, err := gate.Check(ctx, permission.Request{
 				ToolName:   call.Name,
@@ -423,6 +511,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 
 	if d.Hooks != nil {
 		d.Hooks.Attach(req.ToolCallID, choice.ModelID, started.Harness)
+	}
+	if worktree != nil {
+		// Execute wrappers see final arguments, including any hook rewrite.
+		// The original gate resolves the same relative paths against the
+		// logical parent; the wrapper enforces physical worktree containment.
+		started.Harness.AddTools(isolatedFileTools(workerEnv, worktree.path, d.Gate, started, d.UserHistory)...)
 	}
 
 	var toolCalls int
@@ -489,6 +583,26 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	defer unsubMsg()
 
 	result, err := started.Lane.Prompt(ctx, req.Prompt, nil)
+	// Stop leftover commands before exporting a patch or reporting completion.
+	// The defer above also covers failures during session setup.
+	workerEnv.JobScope.Close()
+	var artifact *WorkerArtifact
+	if worktree != nil {
+		// A cancelled run can still leave useful partial edits. Export them
+		// with a fresh bounded context after the worker has stopped.
+		exportCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		var exportErr error
+		artifact, exportErr = worktree.artifact(exportCtx)
+		cancel()
+		if exportErr != nil {
+			if err != nil {
+				err = errors.Join(err, fmt.Errorf("export worker patch: %w", exportErr))
+			} else {
+				err = fmt.Errorf("export worker patch: %w", exportErr)
+			}
+		}
+		text = boundedWorkerReport(text)
+	}
 	if d.Hooks != nil {
 		status := result.Status
 		if err != nil && status == "" {
@@ -507,7 +621,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		if d.OnEvent != nil {
 			d.OnEvent(SubagentEvent{Kind: SubagentEventError, Agent: def.Name, ID: req.ToolCallID, Message: err.Error(), Depth: depth})
 		}
-		return DispatchResult{}, err
+		return DispatchResult{Text: text, ToolCalls: toolCalls, Chars: len(text), Artifact: artifact, Usage: started.Harness.Stats().Usage, UsageByModel: started.Harness.UsageByModel(resolved.Model.Provider + "/" + resolved.Model.ID)}, err
 	}
 
 	modelLabel := choice.ProviderID + "/" + choice.ModelID
@@ -526,7 +640,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		if text == "" {
 			text = fmt.Sprintf("The subagent failed: %s", message)
 		}
-		return DispatchResult{Text: text, ToolCalls: toolCalls, Chars: len(text), Model: modelLabel, Usage: usage}, nil
+		return DispatchResult{Text: text, ToolCalls: toolCalls, Chars: len(text), Model: modelLabel, Usage: usage, UsageByModel: started.Harness.UsageByModel(modelLabel), Artifact: artifact}, nil
 	}
 
 	if d.OnEvent != nil {
@@ -542,7 +656,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			Text:      text,
 		})
 	}
-	return DispatchResult{Text: text, ToolCalls: toolCalls, Chars: len(text), Model: modelLabel, Usage: usage}, nil
+	return DispatchResult{Text: text, ToolCalls: toolCalls, Chars: len(text), Model: modelLabel, Usage: usage, UsageByModel: started.Harness.UsageByModel(modelLabel), Artifact: artifact}, nil
 }
 
 // adaptDispatch bridges a *Dispatcher.Dispatch method value to
@@ -560,7 +674,14 @@ func adaptDispatch(dispatch func(context.Context, DispatchRequest) (DispatchResu
 			Model:       req.Model,
 			ToolCallID:  req.ToolCallID,
 		})
-		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars, Model: r.Model, Usage: r.Usage}, err
+		var artifact *tools.TaskArtifact
+		if r.Artifact != nil {
+			artifact = &tools.TaskArtifact{ManifestPath: r.Artifact.ManifestPath, BaseCommit: r.Artifact.BaseCommit, PatchPath: r.Artifact.PatchPath, SHA256: r.Artifact.SHA256, Bytes: r.Artifact.Bytes, ChangedFiles: r.Artifact.ChangedFiles}
+			if r.Artifact.Baseline != nil {
+				artifact.Baseline = &tools.TaskBaseline{Tree: r.Artifact.Baseline.Tree, State: r.Artifact.Baseline.State}
+			}
+		}
+		return tools.TaskDispatchResult{Text: r.Text, ToolCalls: r.ToolCalls, Chars: r.Chars, Model: r.Model, Usage: r.Usage, UsageByModel: r.UsageByModel, Artifact: artifact}, err
 	}
 }
 

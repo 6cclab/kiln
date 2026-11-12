@@ -1,0 +1,29 @@
+{
+ "id": "20261112T003814Z-isolated-file-path-race",
+ "found_at": "2026-11-12T00:38:14Z",
+ "scenario": "agent/isolated-files",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Isolated file operations rely on path prechecks",
+ "observed": "Lstat path checks followed by ordinary filesystem calls cannot prevent a replaced ancestor from redirecting worker reads or writes. Removing the new confined-read branch reproduces outside symlink and hardlink reads.",
+ "expected": "Worker file operations remain bound to their own directory descriptors and refuse aliases, including after scope cleanup.",
+ "design_ref": null,
+ "evidence": [
+  "/tmp/kiln-parallel-confined-red.log"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/execenv/confined_unix.go",
+   "internal/agent/dispatch.go",
+   "internal/agent/worker_isolation.go"
+  ],
+  "regression_test": "TestConfinedFilesRejectLinksAndGitAliases,TestConfinedFilesAncestorSwap",
+  "after_evidence": [
+   "/tmp/kiln-parallel-race.log"
+  ],
+  "updated_at": "2026-11-12T00:39:24Z"
+ }
+}

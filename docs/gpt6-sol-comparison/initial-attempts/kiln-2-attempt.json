@@ -1,0 +1,13 @@
+{
+  "arm": "kiln",
+  "binary_sha256": "7270660c2375252bac3b31d5d5d7ccdc3fe1104eb7552c926d08c3238dba7499",
+  "exit_code": -15,
+  "patch_bytes": 33776,
+  "patch_sha256": "a65044e7d3b087ca21a14a61959ac27d373e721e3c375c6096bf8e278e80eb60",
+  "repeat": 2,
+  "reservation_usd": 7.19312,
+  "status": "exited",
+  "stop_reason": null,
+  "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+  "wall_ms": 488160
+}

@@ -1,0 +1,24 @@
+{
+ "id": "20261111T170813Z-progress-limit-orphan-calls",
+ "found_at": "2026-11-11T17:08:13Z",
+ "scenario": "runtime-efficiency/multiple-tool-calls",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "high",
+ "title": "Progress guard leaves later tool calls unresolved",
+ "observed": "After the repeated-failure limit, drive returned before writing results for later tool calls in the same assistant message.",
+ "expected": "Every emitted tool call receives a truthful result; later effects are skipped and a new prompt sees a valid transcript.",
+ "design_ref": null,
+ "evidence": [],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/harness/turn.go",
+   "internal/harness/resume.go"
+  ],
+  "regression_test": "TestProgressGuardPairsSkippedCallsWithoutEffects",
+  "note": "Confirmed skipped result has IsError, no side usage, and no later write effect; second prompt completed.",
+  "updated_at": "2026-11-11T17:08:19Z"
+ }
+}

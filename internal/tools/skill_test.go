@@ -32,8 +32,8 @@ func TestSkillTool_DescriptionDoesNotDuplicateCatalog(t *testing.T) {
 			t.Errorf("description must not embed per-skill catalog data, found %q in %q", name, withRecords.Description)
 		}
 	}
-	if !strings.Contains(withRecords.Description, "<available_skills>") {
-		t.Errorf("description should point at the system prompt's index, got %q", withRecords.Description)
+	if !strings.Contains(withRecords.Description, "skill_search") {
+		t.Errorf("description should point at skill_search, got %q", withRecords.Description)
 	}
 }
 

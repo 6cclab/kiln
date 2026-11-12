@@ -56,12 +56,22 @@ type readDetails struct {
 // multi-GB file never requires reading the rest of it into memory — only
 // counting past it to report how many lines remain.
 func ReadTool(env *execenv.Env) *tool.Tool {
+	return ReadToolWithCache(env, nil)
+}
+
+// ReadToolWithCache builds a read tool with optional bounded result reuse.
+// Every call still performs the normal stat and file read before consulting
+// the cache, so edits and permission changes are observed immediately.
+func ReadToolWithCache(env *execenv.Env, cache *ReadCache) *tool.Tool {
 	return &tool.Tool{
 		Name:        "read",
 		Label:       "read",
 		Description: readDescription,
 		Parameters:  readParameters,
-		Execute: func(_ context.Context, args json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
+		Execute: func(ctx context.Context, args json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {
+			if err := ctx.Err(); err != nil {
+				return tool.Result{}, err
+			}
 			var in readArgs
 			if err := json.Unmarshal(args, &in); err != nil {
 				return tool.Errorf("invalid arguments: %s", err), nil
@@ -91,17 +101,17 @@ func ReadTool(env *execenv.Env) *tool.Tool {
 						in.Path, execenv.FormatSize(int(info.Size)), execenv.FormatSize(int(execenv.ReadWholeFileCap)),
 					), nil
 				}
-				return readWholeFile(env, absolutePath, in.Path)
+				return readWholeFileCached(ctx, env, absolutePath, in.Path, cache)
 			}
 			return readFileWindow(env, absolutePath, in.Path, in.Offset, in.Limit)
 		},
 	}
 }
 
-// readWholeFile is the untargeted-read path: the whole file (already
+// readWholeFileCached is the untargeted-read path: the whole file (already
 // known to be at or under execenv.ReadWholeFileCap) is read once, sniffed
 // for an image, and otherwise truncated to the tool's usual output caps.
-func readWholeFile(env *execenv.Env, absolutePath, displayPath string) (tool.Result, error) {
+func readWholeFileCached(ctx context.Context, env *execenv.Env, absolutePath, displayPath string, cache *ReadCache) (tool.Result, error) {
 	bytes, err := env.ReadFile(absolutePath)
 	if err != nil {
 		errText := err.Error()
@@ -110,12 +120,20 @@ func readWholeFile(env *execenv.Env, absolutePath, displayPath string) (tool.Res
 		}
 		return tool.Errorf("%s", errText), nil
 	}
+	if err := ctx.Err(); err != nil {
+		return tool.Result{}, err
+	}
 
 	if mimeType := detectSupportedImageMimeType(bytes); mimeType != "" {
 		return tool.Result{Content: msg.Blocks{
 			msg.Text(fmt.Sprintf("Read image file [%s]", mimeType)),
 			msg.Image(mimeType, encodeImageBase64(bytes)),
 		}}, nil
+	}
+	if cache != nil {
+		if result, ok := cache.lookup(displayPath, bytes); ok {
+			return result, nil
+		}
 	}
 
 	textContent := string(bytes)
@@ -152,7 +170,11 @@ func readWholeFile(env *execenv.Env, absolutePath, displayPath string) (tool.Res
 	if details == nil {
 		detailsJSON = nil
 	}
-	return tool.Result{Content: msg.Blocks{msg.Text(outputText)}, Details: detailsJSON}, nil
+	result := tool.Result{Content: msg.Blocks{msg.Text(outputText)}, Details: detailsJSON}
+	if cache != nil {
+		cache.store(displayPath, bytes, result)
+	}
+	return result, nil
 }
 
 // readFileWindow is the offset/limit path: it streams the file a line at

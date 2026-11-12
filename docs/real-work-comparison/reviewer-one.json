@@ -1,0 +1,164 @@
+{
+  "reviewer": "one",
+  "dimensions": [
+    "correctness_and_robustness",
+    "security_and_privacy",
+    "design_and_maintainability",
+    "test_quality",
+    "scope_and_usability"
+  ],
+  "candidates": {
+    "candidate-01": {
+      "scores": [
+        2,
+        2,
+        3,
+        3,
+        3
+      ],
+      "readiness": "major revisions",
+      "score_reasons": [
+        "Dry run attempts SQL writes and fails under an INSERT trigger despite otherwise broad contract coverage.",
+        "A FIFO destination source hangs before nonregular-file rejection.",
+        "Import and transaction ownership are cohesive, with explicit source validation and bounded decoding.",
+        "Behavior tests are broad but miss FIFO and write-attempt dry-run failures.",
+        "Commands and docs are compatible and detailed."
+      ],
+      "findings": [
+        {
+          "severity": "blocker",
+          "kind": "contract/security",
+          "file": "internal/memory/sources.go",
+          "line": 30,
+          "trigger": "destination source path is a FIFO with no writer",
+          "observed": "import hung beyond three seconds",
+          "expected": "reject a nonregular source file",
+          "evidence": "reproduced: grading/supplemental-probes.jsonl fifo_source_rejected_without_blocking"
+        },
+        {
+          "severity": "blocker",
+          "kind": "contract",
+          "file": "internal/memory/import.go",
+          "line": 202,
+          "trigger": "dry run against a database with an INSERT-blocking trigger",
+          "observed": "SQL INSERT attempted; import exits 1",
+          "expected": "validate/analyse and report counts without writing memory/search/source tables",
+          "evidence": "reproduced: grading/supplemental-probes.jsonl dry_run_does_not_attempt_memory_writes"
+        }
+      ],
+      "assessment": "Validation, scope, history collapse, conflicts and normal rollback are sound; submitted tests cover many behaviors but omit the two adversarial cases; docs are comprehensive."
+    },
+    "candidate-02": {
+      "scores": [
+        3,
+        2,
+        3,
+        3,
+        3
+      ],
+      "readiness": "major revisions",
+      "score_reasons": [
+        "Named acceptance cases pass and dry run skips writes, with a remaining explicit source rejection gap.",
+        "A FIFO destination source hangs before nonregular-file rejection.",
+        "Validation and transactional writes are cohesive and deterministic.",
+        "Substantial unit/handler tests cover selection, validation, sources and policies, but omit FIFO and direct write-failure/cancellation tests.",
+        "Command flow and docs preserve existing use."
+      ],
+      "findings": [
+        {
+          "severity": "blocker",
+          "kind": "contract/security",
+          "file": "internal/memory/import.go",
+          "line": 243,
+          "trigger": "destination source path is a FIFO with no writer",
+          "observed": "import hung beyond three seconds through sourceDigest",
+          "expected": "reject a nonregular source file",
+          "evidence": "reproduced: grading/supplemental-probes.jsonl fifo_source_rejected_without_blocking"
+        }
+      ],
+      "assessment": "Single transaction, correct dry-run analysis and scope/source checks; tests are meaningful but no added real-binary e2e or FIFO case; docs are clear."
+    },
+    "candidate-03": {
+      "scores": [
+        2,
+        2,
+        2,
+        3,
+        2
+      ],
+      "readiness": "major revisions",
+      "score_reasons": [
+        "Dry run issues SQL writes and fails under an INSERT trigger.",
+        "A FIFO destination source hangs before nonregular-file rejection.",
+        "Import routing bypasses the existing parser for all memory actions and dry run relies on rollback after writes.",
+        "Broad unit tests cover history, sources, conflicts, restore and limits but miss adversarial failures and real-binary drive.",
+        "Existing memory --help now exits 2 instead of 0, despite good docs."
+      ],
+      "findings": [
+        {
+          "severity": "blocker",
+          "kind": "contract/security",
+          "file": "internal/memory/import.go",
+          "line": 214,
+          "trigger": "destination source path is a FIFO with no writer",
+          "observed": "import hung beyond three seconds through sourceDigest",
+          "expected": "reject a nonregular source file",
+          "evidence": "reproduced: grading/supplemental-probes.jsonl fifo_source_rejected_without_blocking"
+        },
+        {
+          "severity": "blocker",
+          "kind": "contract",
+          "file": "internal/memory/import.go",
+          "line": 350,
+          "trigger": "dry run against an INSERT-blocking trigger",
+          "observed": "INSERT attempted; import exits 1",
+          "expected": "report counts without writing memory/search/source tables",
+          "evidence": "reproduced: grading/supplemental-probes.jsonl dry_run_does_not_attempt_memory_writes"
+        },
+        {
+          "severity": "moderate",
+          "kind": "compatibility",
+          "file": "cmd/kiln/main.go",
+          "line": 78,
+          "trigger": "kiln memory --help",
+          "observed": "candidate exits 2 and prints memory usage",
+          "expected": "frozen baseline exits 0 and prints global help",
+          "evidence": "reproduced: grading/supplemental-probes.jsonl existing_memory_help_preserved"
+        }
+      ],
+      "assessment": "History, scope, sources and transaction rollback otherwise work; tests are broad but no e2e and miss discovered cases; documentation is detailed."
+    },
+    "candidate-04": {
+      "scores": [
+        3,
+        2,
+        3,
+        3,
+        3
+      ],
+      "readiness": "major revisions",
+      "score_reasons": [
+        "Named acceptance cases pass and dry run skips writes, with an explicit nonregular-source gap.",
+        "A FIFO destination source hangs before nonregular-file rejection.",
+        "Focused CLI validation and shared putTx transactional insert path are maintainable.",
+        "Unit and real-binary e2e tests are meaningful but omit FIFO and failed-write rollback.",
+        "Existing command routing is preserved and docs are detailed."
+      ],
+      "findings": [
+        {
+          "severity": "blocker",
+          "kind": "contract/security",
+          "file": "internal/memory/sources.go",
+          "line": 143,
+          "trigger": "destination source path is a FIFO with no writer",
+          "observed": "import hung beyond three seconds through sourceDigest",
+          "expected": "reject a nonregular source file",
+          "evidence": "reproduced: grading/supplemental-probes.jsonl fifo_source_rejected_without_blocking"
+        }
+      ],
+      "assessment": "Single transaction, correct dry run, history collapse and source rebinding; submitted e2e verifies real CLI transfer; one shared source regularity blocker remains."
+    }
+  },
+  "comparison": "02 and 04 are closest; 04 supplies real-binary e2e coverage while 02 avoids changing Put. 01 and 03 additionally require dry-run correction; 03 requires narrowing CLI import dispatch.",
+  "uncertainty": "Initial staticcheck failure was an offline module-version lookup issue; corrected offline same-release staticcheck passes all four. Initial full unit failure was an overlong grader temporary Unix socket path. Under a shorter path, unchanged TUI TestHandleSubmit_LeadingPathIsNotACommand times out in all four; independent clean baseline fails focused test identically there and passes in native environment. Full unit gate remains failed/inconclusive under grader environment, not passed; see grading/infrastructure-classification.json. Ordinary key-in-conflict diagnostics are not scored as leaks because the required expectation is not established."
+}

@@ -325,7 +325,7 @@ Order: deny rules first (absolute — deny wins even under `bypassPermissions`) 
 | `manual` | allow if read-only; otherwise ask |
 | (unrecognized) | ask |
 
-Read-only set: `read`, `glob`, `grep`, `session_search`, `tool_search`, `bash_output`, `exit_plan_mode`, `todo_write`. `bash` is deliberately excluded — the gate can't tell `bash(ls)` from `bash(rm -rf)`, so it's never blanket-allowed by mode alone.
+Read-only set: `read`, `glob`, `grep`, `session_search`, `tool_search`, `capability_search`, `bash_output`, `exit_plan_mode`, `todo_write`. `bash` is deliberately excluded — the gate can't tell `bash(ls)` from `bash(rm -rf)`, so it's never blanket-allowed by mode alone.
 
 ### Outside-workspace rule
 
@@ -597,9 +597,9 @@ Namespace: the relative path under `commands/` with `.md` stripped; every direct
 
 ### Memory (`CLAUDE.md`)
 
-Discovery: `~/.claude/CLAUDE.md` (user), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/*.md` and `~/.claude/rules/*.md` are loaded automatically too, no import needed, sorted alphabetically.
+Discovery: `~/.claude/CLAUDE.md` (user), and `<cwd>/CLAUDE.md` and `<cwd>/.claude/CLAUDE.md` (project; Claude Code reads both). `.claude/rules/**/*.md` and `~/.claude/rules/**/*.md` are discovered recursively and loaded automatically too, no import needed, sorted alphabetically. A symlinked rules root is supported; child symlink directories are not traversed. Path-scoped rule frontmatter does not currently defer loading until a matching file is accessed.
 
-`@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently. An import in a project memory file (`CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md`) whose path resolves outside the working directory is external: as in Claude Code, it loads only once external imports are approved for the project. kiln has no approval dialog; it honours the approval recorded when you accepted Claude Code's dialog for the project, and otherwise renders `<!-- external import not loaded ... -->` and warns at startup. Imports in your user memory files always load.
+`@import` syntax: only a line that is *entirely* `@path` triggers an import (an inline `@handle` in prose does not). `~/` expands to home; an absolute path is used as-is; otherwise resolved relative to the importing file's directory, not cwd. Recursion capped at depth 5; a cycle renders `<!-- skipped circular import: ... -->`; a broken import renders `<!-- missing import: ... -->` rather than vanishing silently. An import in a project memory file (`CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/**/*.md`) whose path resolves outside the working directory is external: as in Claude Code, it loads only once external imports are approved for the project. kiln has no approval dialog; it honours the approval recorded when you accepted Claude Code's dialog for the project, and otherwise renders `<!-- external import not loaded ... -->` and warns at startup. Imports in your user memory files always load.
 
 Budget: `LoadMemory(cwd, budgetTokens)` estimates tokens as `ceil(len/4)`; the budget is the tier's `SystemPromptTokens` (10% of the context window, 2k–32k). CLAUDE.md files always load in full. Rules load in full while the budget allows, project rules first; the rest are listed in a `<memory-index>` block, one line each with the rule's path and its frontmatter `description` (else its first heading), and the model is told to read a rule before doing work it covers. `Assembled.Indexed` lists those paths (logged at startup); if the CLAUDE.md files alone exceed the budget they load anyway and kiln prints a warning.
 
@@ -756,3 +756,603 @@ A real tool (`internal/tools/toolsearch.go`), present under `posture-index` and 
 `HARNESS_OFFLINE=1` makes kiln refuse every provider except `faux` and
 `ollama` before any request is made. Scripted and visual test runs set it so
 a settings-file model override can never route a test to a paid endpoint.
+
+### Skill discovery
+
+Kiln defaults to local, task-aware capability discovery. The startup prompt
+points to `capability_search` rather than listing every installed skill and
+MCP tool. It ranks eligible skills and posture-scoped MCP tools together by
+name and description, with a bounded result count and response size. Results
+give the matched query terms and the exact action to take. Relevant metadata
+suggestions for the latest user request are appended at the end of each model
+request, preserving earlier conversation text. Search and suggestions do
+not read skill bodies or call a model; `skill` loads full instructions only
+when invoked. Explicit `capability_search` admits returned MCP matches into
+the active tool set, so they are callable on the next step. Suggestions do not
+admit tools.
+
+Configure `skillDiscovery` in Kiln settings (`~/.kiln/settings.json` or
+`<project>/.kiln/settings.local.json`), or a session's `--settings` file:
+
+```json
+{
+  "skillDiscovery": {
+    "mode": "auto",
+    "unified": true,
+    "includeAgents": true,
+    "budgetTokens": 1024,
+    "pinned": ["project-conventions"],
+    "excluded": []
+  }
+}
+```
+
+`auto` supplies relevant suggestions and search; `search` supplies only search;
+`catalog` keeps the previous startup catalog behavior. `unified` defaults to
+`true`; set it to `false` to restore the separate `skill_search` and
+`tool_search` discovery path. Both legacy tools remain callable. The description budget
+is the smaller of `budgetTokens` and the model tier's skills allowance. Accepted
+configured budgets range from 128 to 8192 estimated tokens. The default is 1024.
+Suggestion wrappers count toward the allowance. Fixed startup discovery
+instructions are additional overhead.
+
+Pins are selected first within the budget in auto mode. Exclusions remove skills
+from model discovery and invocation, but do not change the user's slash-command
+palette. Explicit empty arrays clear inherited lists. Other fields inherit
+independently through the existing settings hierarchy; untrusted settings remain
+subject to the existing trust gate. Unknown modes and invalid budgets leave the
+inherited value unchanged. The catalog is loaded at session startup; restart a
+session after changing these settings or installed skills.
+
+Unified search is lexical and returns at most 10 results; its default is five.
+The MCP catalog refreshes after servers connect, and posture changes update
+which tools are eligible. Use specific topics or names to narrow results.
+Exact-name invocation remains available for skills omitted due to space.
+Discovery covers project, user, and enabled plugin skills, dispatchable agents,
+and eligible MCP tools, including plugin-provided agents and MCP tools.
+`includeAgents` defaults to `true`; set it to `false` to omit agents from unified
+search and suggestions without disabling explicit `task` dispatch. Agent matches
+provide a `task` invocation template; fill in the task description and prompt.
+Search does not load agent prompts or launch workers, and normal delegation
+permissions, model selection and limits still apply. Same-named skills and agents
+remain separate results. Plugin commands, hooks and other instruction types are
+not yet indexed as capabilities.
+
+### Personal memory
+
+Kiln stores attributed project observations in `~/.kiln/memory.db`, created with
+private file permissions. It does not write Claude's memory files. Git worktrees
+share the repository's common Git-directory scope; unrelated repositories stay
+separate. Outside Git, the canonical working directory is the scope.
+
+Set `"personalMemoryEnabled": false` to disable model memory tools for a session.
+When enabled, `memory_recall` searches locally and `memory_write` remembers,
+corrects, or forgets a key through the permission gate. Writes are refused in
+plan mode. Memory records are absent from startup context. Relevant records are
+retrieved using the latest user request under a 512-token default allowance
+(`memoryRetrievalTokens`, configurable from 128 to 8192). Retrieval refreshes
+before each model request so permission changes and stale sources take effect
+immediately. The bounded block is appended after the conversation, rather than
+rewriting an earlier user message. Set `memoryAutoRetrieve: false` to use explicit
+recall only.
+Model-written records remain attributed observations, not verified instructions.
+Kinds are preference, fact, procedure, and observation. Each record requires
+text and evidence; an optional Unix expiry timestamp removes it from recall
+when it expires. Reusing a key supersedes its previous value atomically.
+
+Manage records without starting a model, from the project directory:
+
+```sh
+kiln memory export                 # JSON, including correction history
+kiln memory forget test-runner     # deletes every version of this key
+kiln memory restore 12             # restores this project's version as a new record
+```
+
+Explicit user preferences can be shared across projects:
+
+```sh
+kiln memory global remember response-style "Prefer concise answers"
+kiln memory global export
+kiln memory global forget response-style
+kiln memory global restore 12
+```
+
+The global scope accepts preferences only, without project file dependencies.
+Model memory tools cannot write to it. Automatic retrieval searches project
+records first, then global preferences within the same record and token limits.
+A current project record with the same key overrides the global preference.
+`personalMemoryEnabled: false` disables both scopes in chat;
+`memoryAutoRetrieve: false` disables their automatic injection. Explicit model
+recall remains project-scoped; the global export command provides full inspection.
+
+Disabling memory does not delete it; management commands remain available.
+Forgetting removes database rows and search entries, not external backups or
+copies previously exported. Automatic extraction of verified facts is not yet implemented. For file-dependent observations, `kiln memory remember <key> <text> [source-files...]` captures source fingerprints; recall checks them against the current worktree and excludes stale records. Model-written observations without source fingerprints remain provisional.
+
+### Subagent limits and conservative routing
+
+`orchestration` controls one session's entire nested delegation tree:
+
+```json
+{
+  "orchestration": {
+    "maxConcurrent": 4,
+    "maxDispatches": 64,
+    "maxDepth": 2,
+    "timeoutSeconds": 1800
+  }
+}
+```
+
+These are the defaults. Depth counts a direct worker as one. Dispatch count is
+per running session, not reset for each prompt; restarting resets the counter.
+Timeout applies to each worker and its descendants. A full concurrency limit
+refuses new delegation immediately rather than blocking a nested worker behind
+its parent. The parent can finish other work before retrying. Limits use the
+normal settings precedence; positive upper bounds are 64 concurrent workers,
+10,000 dispatches, depth 8, and 86,400 seconds. Invalid values inherit.
+Model request ceilings are configured separately through `requestBudget`, described below.
+
+Set `"modelRouter": {"conservative": true}` in user settings or `--settings`
+to retain the planning model after edits, reassess each new user task, and
+escalate to the complex-planning model after two consecutive failed tool results.
+Successful tool results reset that failure count. This policy applies only to
+`kiln/auto`; explicit model selection is unchanged. It remains opt-in pending
+comparative live evaluation. The default router retains its existing behavior.
+
+Run `kiln config` to print the effective efficiency settings as JSON, including
+a per-field `sources` map for the reported efficiency controls. Each source is
+a settings path, `default`, or `evaluated personal policy`; rejected overrides
+retain the preceding source. Explicit false, zero, and empty lists retain their
+own source. The report also lists files contributing settings. It intentionally
+omits provider credentials and environment values. `--settings <file>` applies
+session overrides to this report as it does to a running session.
+
+### Optional local runtime controls
+
+```json
+{
+  "runtimeEfficiency": {
+    "readCache": false,
+    "readCacheEntries": 32,
+    "readCacheBytes": 4194304,
+    "progressLimit": 0,
+    "cycleLimit": 0
+  }
+}
+```
+
+These defaults preserve existing behavior. When enabled, the read cache shares
+bounded formatted text results with nested workers. Every read still passes
+permissions and reads fresh file bytes; only an identical content digest can
+reuse formatting. Images and windowed reads are excluded. This saves local
+formatting/truncation work, not filesystem reads or model input tokens. Entry
+limits accept 1–256 and stored-output byte limits accept 1024–67108864.
+
+`progressLimit` accepts 2–20 consecutive identical failed tool calls, or zero to
+disable. A repeated tool name, effective arguments and displayed error result stops the operation
+with an explicit error. Changed arguments/results or successful calls reset the
+counter, as does a new operation. Internal result metadata such as per-call IDs
+does not count as progress. It also applies to workers. This is a narrow
+repeated-error guard; successful but unproductive cycles are not detected.
+Invalid values inherit the preceding accepted setting.
+
+`cycleLimit` independently accepts 2–10 repetitions, or zero (default) to disable.
+It detects repeated sequences of two to four failed calls, with at least two
+distinct call fingerprints. The fingerprints use effective arguments and displayed
+error results, ignoring per-call bookkeeping. Successful calls clear the cycle
+history. The guard retains at most 40 hashes per operation, reaches nested
+workers, and pairs remaining skipped calls with explicit error results so the
+next prompt has a valid transcript. Successful polling does not trigger it.
+
+### Shared model request budgets
+
+`requestBudget` applies to the running session context and every descendant
+model call: workers, retries, classifiers, suggestions, and compaction.
+Project and local settings may tighten inherited ceilings or remove `freeModels`
+exemptions. Only user settings or an explicit `--settings` file may relax them.
+All ceilings default to disabled (zero):
+
+```json
+{
+  "requestBudget": {
+    "maxCalls": 100,
+    "maxTokens": 2000000,
+    "maxUSD": 10,
+    "freeModels": []
+  }
+}
+```
+
+Concurrent calls reserve capacity before dispatch. Token reservations use the
+model's full advertised context plus output allowance, deliberately more
+conservative than a tokenizer estimate. Requests can therefore be refused even
+when their likely actual usage would fit. Successful calls settle against
+reported usage; interrupted calls or missing usage retain the reservation.
+Limits reset when the process restarts, including when resuming a session.
+
+The USD guard uses catalog pricing, including the highest configured price tier
+and conservative cache-write allowance. It reserves the full context at the
+maximum input/cache rate, since uncached, cache-read and cache-write tokens are
+disjoint categories, plus the output allowance. It is a request admission
+control, not a guarantee of the provider's invoice or protection against stale catalog
+pricing. Unknown zero-valued prices fail closed under a USD ceiling; list exact
+`provider/model` identifiers in `freeModels` only for known zero-cost models.
+Provider-native tools with unbounded additional charges are refused under a USD
+ceiling. No ceiling grants permission to use a provider or execute a tool.
+
+### Opt-in learning from local run statistics
+
+```json
+{
+  "learningAutomation": {
+    "enabled": false,
+    "maxOutcomes": 100,
+    "minSamples": 5
+  }
+}
+```
+
+Enable capture in user settings or an explicit `--settings` file. Project and
+local settings may disable capture but cannot enable it. They also cannot
+re-enable user-disabled personal memory, automatic retrieval, or learning, or
+increase the inherited memory retrieval allowance or outcome retention limit.
+
+When explicitly enabled, Kiln records bounded aggregates for newly started main
+operations that complete or fail. `learningEnabled: false` also disables this
+capture. Resumed partial operations and aborted operations are excluded. Capture
+adds no model calls or prompt context and stores no raw prompts, arguments,
+commands, tool output, errors, or model/tool names. Records contain fixed tool
+categories, status, duration, response token counts including cache fields,
+command-evidence counts, and hashed model/binary identities. Usage covers the
+main model's responses; worker and auxiliary usage remain available through
+normal session accounting, but are excluded from these aggregates.
+
+The default retains 100 outcomes per project. `maxOutcomes` accepts 1–1000;
+`minSamples` accepts 2–100 and cannot exceed retention. Inconsistent numeric
+overrides retain the preceding accepted pair. Settings source paths are shown
+by `kiln config`. Duplicate retained operation IDs do not create extra samples,
+and insertion and pruning occur in one database transaction.
+
+```sh
+kiln learning outcomes
+kiln learning suggestions
+kiln learning dismiss tool-failures
+kiln learning forget-outcomes
+```
+
+Suggestions are deterministic review hypotheses over the retained outcomes,
+available after `minSamples`: recurring tool failures, failed operations, or high
+primary-model input usage. A completed operation or a successful command is not
+evidence of task correctness. Suggestions do not change routing, memory facts,
+skills, code, or active policies. They are computed on inspection, not injected
+into future prompts. Dismissal hides one category until `forget-outcomes` removes
+both aggregate records and dismissals for this project. Disabling capture leaves
+existing records available for inspection and deletion. Records and suggestions
+are separate from conversational memory and evaluated policy candidates.
+
+### Evaluated personal policies
+
+`kiln learning` manages a narrow policy containing `skillBudgetTokens` and
+`conservativeRouting`. It cannot change permissions, credentials, skills, or
+harness code. Generate a candidate without any model calls:
+
+```sh
+bin/kiln learning propose 512 > candidate-policy.json
+```
+
+Use at least five separate evaluation scenarios tagged `holdout`, with four
+repeats each. Run a baseline and then the exact candidate on the same binary,
+fixtures, primary model, and role mappings:
+
+```sh
+KILN_EVAL_LIVE=1 bin/kiln eval run --models provider/model --only holdout --repeat 4
+KILN_EVAL_LIVE=1 bin/kiln eval run --models provider/model --only holdout --repeat 4 --policy candidate-policy.json
+bin/kiln learning promote candidate-policy.json baseline-results.jsonl candidate-results.jsonl
+```
+
+Replace the example model and result filenames with your configured model and
+the paths printed by the runner. Live evaluations consume model usage and remain
+opt-in. Keep these scenarios separate from tasks used to design the candidate.
+Faux runs can test the harness but cannot authorize policy promotion.
+
+Promotion requires matched provenance, passing mechanical checks, no per-run
+score regression, and at least 5% lower measured cost or 20% lower latency.
+Known cost increases are rejected. Token reductions are recorded separately.
+A further promotion must compare against the currently active compatible policy,
+using its policy JSON as the baseline's `--policy` input. This gate checks the
+supplied evaluation evidence; it does not establish universal superiority or
+statistical significance across workloads.
+
+On subsequent sessions, a compatible policy is applied automatically only to
+models covered by its evidence and only when the binary and model-role mapping
+still match. Explicit discovery-budget and conservative-routing settings win.
+Custom router slot mappings prevent learned routing overrides. Setting
+`learningEnabled: false` disables policy application without deleting history.
+
+```sh
+bin/kiln learning status
+bin/kiln learning history
+bin/kiln learning rollback 12
+bin/kiln learning forget
+```
+
+An offline queue can derive a smaller discovery-budget hypothesis from recorded
+successful evaluation outcomes:
+
+```sh
+bin/kiln learning queue source-policy.json source-results.jsonl 1.00
+bin/kiln learning candidates
+bin/kiln learning discard <candidate-id>
+```
+
+The source policy must match the recorded policy hash. Source evidence requires
+20–1000 real-model runs across 5–20 non-held-out scenarios from one evaluation
+batch, with
+consistent binary, model, roles and fixture provenance, positive measured cost,
+and passing checks. The queue proposes a halved discovery budget (minimum 128),
+records its evidence digest, and estimates a 40-run paired evaluation over at
+least five separate held-out scenarios. The optional amount (default $1) bounds
+the estimate admitted to the queue, not actual spending. No evaluation runs are
+started and no candidate becomes active. Inspect the plan, arrange held-out
+scenarios absent from its source evidence, and use the normal evaluation and
+promotion commands. Candidates can be discarded independently of active policies.
+
+Queued candidates can now be bound to concrete local held-out scenarios:
+
+```sh
+bin/kiln learning plan <candidate-id> eval/scenarios eval/fixtures > plan.json
+bin/kiln learning promote-candidate <candidate-id> baseline-results.jsonl candidate-results.jsonl
+```
+
+Planning selects exactly five checked scenarios tagged `holdout`, excluding
+source scenario names and reused fixture contents even if a scenario was renamed.
+It stores canonical paths, scenario and fixture hashes, the full baseline and
+candidate policies, exact model/roles/binary provenance, and four repeats per
+scenario. `exactNames` in the manifest gives the required runner selection.
+Planning does not start the 40 evaluation runs.
+
+Export `baselinePolicy`, `candidatePolicy` and `roles` from the manifest as JSON
+files. For each arm, explicitly run `kiln eval run` with the matching `--policy`,
+`--models`, `--roles`, `--scenarios`, `--fixtures`, `--repeat 4`, and
+`--only-exact` containing the manifest's comma-separated exact names. Use the
+same evaluated binary recorded in the manifest. Live runs still require
+`KILN_EVAL_LIVE=1`. Unlike `--only`, `--only-exact` never expands substrings or
+tags; empty, missing or repeated names and ambiguous model pins are errors.
+The two filter flags cannot be combined. Scenario model pins also obey the live
+model opt-in gate.
+
+`promote-candidate` requires exactly those 20 results in each arm, separate run
+IDs, unchanged local scenario/fixture files, matching provenance and the existing
+quality/cost gate. A changed active baseline rejects promotion. New queued source
+results must include `fixture_hash`, emitted by this version of the eval runner;
+older candidates without complete source-policy/fixture provenance must be
+requeued from new evidence. Discarding a candidate also deletes its saved plan.
+The independent `learning promote` command remains available for manually
+proposed policies; it does not provide the queued plan's source-separation checks.
+
+Policies are scoped to the repository, stored in a separate namespace within
+`~/.kiln/memory.db`, and excluded from conversational memory recall. Evaluation
+is explicitly initiated through the CLI; there is no background paid evaluation
+loop or automatic harness-code editing.
+
+### Task state across resume and compaction
+
+Successful `todo_write` results save the accepted list in session metadata.
+Resuming or navigating a session restores the latest accepted list on that
+branch. Failed calls do not replace it, and an empty list explicitly clears it.
+These checkpoints are available for calls made by this version onward; older
+transcripts retain their existing conversational history.
+
+When compaction hides the saved update, the next request receives a bounded
+reminder, prioritizing active and pending items and reporting omissions. No
+reminder is added while the original update remains in context. Model-reported
+completion is not evidence that tests or other verification passed.
+
+```json
+{
+  "taskStateEnabled": true,
+  "taskStateTokens": 512
+}
+```
+
+These are the defaults. Set `taskStateEnabled` to false to disable recovery and
+automatic reminders. `taskStateTokens` accepts 128–8192 estimated tokens; the
+byte ceiling includes the reminder framing, using the same four-bytes-per-token
+estimate as discovery and memory retrieval. Checkpoints remain in the session
+log alongside tool results. No model call is needed to recover them.
+
+The `task_state_write` tool also saves an objective, constraints, and decisions.
+Its model-authored notes use the same recovery budget and do not certify that
+work is correct. Disabling `taskStateEnabled` removes this tool and command
+fingerprinting as well as automatic recovery.
+
+With task state enabled, `bash` accepts optional `verificationFiles`, an array
+of project-relative files, and `verificationDirectories`, an array of directories
+to check recursively. After the normal command permission check, Kiln
+checks read permissions and fingerprints those files immediately before and
+after execution. Only successful commands with unchanged snapshots produce
+evidence. Recovery identifies the command, tool call, selected files, and
+whether their contents still match. Directory snapshots also track membership
+and permissions, so adding or deleting a source file invalidates the earlier
+evidence. Include relevant dependency manifests, configuration and test files
+in the declared inputs. This is evidence of command success on those inputs,
+not proof that the command tests the whole repository.
+Failed commands and denied, missing, symlinked, or oversized inputs produce no
+verification evidence. File-only declarations retain their limits of 16 files,
+32 MiB per file, and 64 MiB total. Directory declarations accept up to eight
+roots. `verificationDirectoryFileLimit` defaults to 128 (maximum 512), and
+`verificationDirectoryByteLimit` defaults to 64 MiB (also its maximum).
+When combining file and directory declarations, explicit files count against
+those limits. Directory enumeration also stops at 512 total descendant entries,
+including subdirectories. A declaration exceeding its bounds produces no evidence; it is never partially
+recorded. Git metadata is excluded. These are opt-in tool arguments; existing
+file-only proofs continue to work.
+
+For a narrowly supported Go check, `verificationDiscover: "go"` discovers the
+selected package directory and root module/workspace metadata automatically:
+
+```json
+{"command":"go test ./internal/parser","verificationDiscover":"go"}
+```
+
+Only one unquoted, literal `go test ./path` or `go test ./path/...` invocation
+is accepted, without flags, assignments, redirections or other shell commands.
+Whole-repository `./...` discovery is not supported. The working directory must
+contain a readable regular `go.mod`. Existing `go.sum`, `go.work` and
+`go.work.sum` are included; initially absent optional metadata is tracked so
+creating it later invalidates the evidence. Explicit files/directories can be
+combined with discovery under the same shared limits. Unsupported discovery or
+unavailable inputs produce no evidence, while the requested command still runs
+through its normal permission checks.
+
+Discovery adds no subprocess or model call. It is a partial snapshot, recorded
+as `go-partial-v1`, not a dependency graph: imported packages outside the selected
+tree, replacements, toolchain, environment and ancestor workspace files are not
+discovered. Status and recovery preserve that limitation. Unchanged snapshots
+never establish that a check can safely be skipped.
+
+For example, a Bash call can bind a check to its source, tests and dependencies:
+
+```json
+{
+  "command": "go test ./internal/parser",
+  "verificationFiles": ["go.mod", "go.sum"],
+  "verificationDirectories": ["internal/parser"],
+  "verificationDirectoryFileLimit": 128,
+  "verificationDirectoryByteLimit": 8388608
+}
+```
+
+### Worker command lifetime
+
+Delegated workers own their shell commands. When a worker finishes or is
+cancelled, kiln stops its tracked process groups before reporting completion
+or exporting edits. Parent-session commands and other workers are unaffected;
+start long-lived development servers in the parent session. This cleanup is
+automatic and does not add a model call or a settings switch.
+
+On Unix, this includes background jobs that stay in the command's process
+group after its shell exits. Processes that detach into another group and
+external MCP servers are outside this tracking. Windows uses ancestry-based
+`taskkill`, which can miss children after their parent exits. Process cleanup
+does not substitute for OS sandboxing.
+
+### Isolated editing workers
+
+Set `orchestration.isolatedWorkers: true` to run delegated edits in detached
+Git worktrees. The default is false. By default this requires a clean checkout
+at the repository root. To let workers start from uncommitted work, opt in:
+
+```json
+{
+  "orchestration": {
+    "isolatedWorkers": true,
+    "snapshotDirty": true
+  }
+}
+```
+
+`snapshotDirty` defaults to false and only affects isolated workers. It captures
+staged and unstaged changes plus nonignored untracked files, preserving the
+parent's index and working tree. No stash or parent commit is created. The
+snapshot is limited to 1,000 changed/untracked paths and 4 MiB of their contents.
+Ignored build outputs are not copied. Snapshot content is stored as Git objects;
+removing the temporary worktree does not erase those objects from the repository.
+The worker artifact contains only changes made after this captured baseline.
+Workers receive read/edit/write tools restricted to relative, nonsymlink paths
+inside their worktree. The parent's permission rules still apply. Shell tools
+are unavailable in this mode, and a parent OS sandbox or extension tool setup
+that cannot be rebound safely is refused. This is constrained editing isolation,
+not a general-purpose OS sandbox.
+
+On macOS and Linux, isolated file operations pin an open directory and traverse
+components relative to directory descriptors without following symlinks. Reads
+reject hardlinks; writes replace entries instead of truncating existing inodes.
+Closed file scopes reject further operations. Windows isolated editing is
+unavailable until equivalent confined access is implemented; it fails explicitly
+instead of using ordinary file access. Normal sessions are unaffected.
+
+Each worker returns a bounded report and a private patch manifest with its base
+commit, changed files, size, and SHA-256 digest. Useful partial edits are exported
+after interruption where possible. Temporary worktrees are removed; patch
+artifacts remain available for review. Patches are capped at 1 MiB and reports
+at 8 KiB. Inspect the manifest and its `changes.patch`, then apply explicitly:
+
+```sh
+bin/kiln worker inspect /path/to/artifact.json
+bin/kiln worker apply /path/to/artifact.json
+```
+
+Application requires the original base commit and verifies the patch digest
+and applicability under a repository lock. Clean-base artifacts still require a
+clean parent. Snapshot artifacts require the captured working-tree and index
+state to match; edits made since capture are refused, including changes to the
+staged version of a file. Applying changes the working tree and preserves the
+parent's index. It does not commit. After one patch is applied, subsequent
+artifacts need explicit review/rebase; automatic merging of parallel edits is
+not implemented. Without `snapshotDirty`, untracked parent files are unsupported.
+Ignored build artifacts are excluded in either mode. A hard process kill may leave a worktree or
+integration lock requiring manual cleanup after confirming no worker is active.
+
+For offline comparisons with another harness, see
+[benchmark comparison](benchmark-comparison.md). Comparison commands do not
+launch paid model calls.
+
+### Selective verification status
+
+With task state enabled, `verification_status` checks up to 16 retained successful
+Bash proofs on the current branch and returns up to eight results within
+`taskStateTokens`. Supply an exact `command`, relative `files`, or relative
+`directories` to narrow results. It reports `unchanged`, `changed`, or `unavailable`, including
+which readable dependencies changed. Set `taskVerificationStatus: false` to
+omit the tool while keeping task checkpoints and evidence recording;
+`taskStateEnabled: false` disables both.
+
+Only the command's declared files and directories are covered. The tool compares
+fresh content hashes, permission bits and directory membership, rechecks read permission,
+and redacts command/path details when dependencies cannot be read. It never
+runs or skips a command, proves test coverage, or certifies task completion.
+Later attempts supersede earlier proofs for the same command. A failed Bash
+result without a reliable command identity conservatively invalidates older
+proofs. Branch navigation replaces the retained set with that branch's evidence.
+The prompt still recovers at most three proofs after compaction; status lookup
+uses the bounded snapshot instead of rescanning the transcript on every call.
+
+Use `verification_status` with `{"mode":"plan"}` for a conservative rerun list.
+Changed inputs produce `action: "rerun"` with the exact previously recorded
+command. Unavailable evidence produces `action: "review"`; unreadable dependency
+sets keep command/path details redacted. Unchanged records are omitted from the
+plan, which does **not** mean those checks are safe to skip. No command is run
+or omitted automatically. This is declared-dependency planning, not automatic
+test dependency discovery.
+
+### Integrating several isolated workers
+
+Workers that started from the same clean commit or the same dirty snapshot
+can be integrated together:
+
+```sh
+kiln worker inspect-batch first/artifact.json second/artifact.json
+kiln worker apply-batch first/artifact.json second/artifact.json
+```
+
+Inspection validates the complete set against the current parent baseline and
+prints its base commit, patch bytes and affected files. Application repeats the
+validation under the repository's Kiln apply lock, rechecks that baseline,
+and passes the verified combined bytes to one Git apply. It creates no commit.
+Review the working tree and run verification afterwards.
+
+A batch accepts up to 16 artifacts, each within the existing 1 MiB patch limit,
+and at most 4 MiB combined. Paths come from Git's parser and must agree with the
+manifests. Duplicate, overlapping, ancestor/descendant and existing hard-link
+aliases are rejected, with conservative case-insensitive path comparison even
+on case-sensitive filesystems. Rename/copy patches, symlinks, submodules and
+unsafe paths are unsupported. Conflicts, altered artifacts or changes since
+the recorded baseline are refused before application. Clean and dirty-baseline
+artifacts cannot be mixed in a batch.
+
+The lock coordinates Kiln processes. It is not a filesystem transaction: crashes,
+cancellation, write failures, or external edits during the final apply can leave
+partial state. Inspect the working tree before retrying such a failure. Batch
+integration remains an explicit command; workers do not apply their own patches.

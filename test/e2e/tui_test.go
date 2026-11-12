@@ -618,23 +618,26 @@ type stylesOpts struct {
 	// place, keeping the row's styling, for a golden taken after a wait
 	// long enough that the seconds can tick over.
 	normalizeElapsed bool
-	// normalizeCwdTokens masks the /context rows whose token counts depend
-	// on the length of the (random) project path, which the system prompt's
-	// environment block includes.
+	// normalizeCwdTokens masks the /context rows whose token counts and
+	// percentages depend on the length of the (random) project path, which
+	// the system prompt's environment block includes.
 	normalizeCwdTokens bool
 }
 
 // cwdTokenRow matches /context's "System prompt" and "Conversation" rows,
-// capturing the label and the token count before the percentage.
-var cwdTokenRow = regexp.MustCompile(`^(\s*■ (?:System prompt|Conversation)\s+)(\S+)(\s+<?\d+%.*)$`)
+// capturing the path-sensitive count and percentage independently.
+var cwdTokenRow = regexp.MustCompile(`^(\s*■ (?:System prompt|Conversation)\s+)(\S+)(\s+)(<?\d+%)(.*)$`)
 
-// maskCwdTokens replaces those rows' token counts with "N".
+// maskCwdTokens replaces those rows' path-sensitive values with N and P.
+// Right-aligning each marker keeps the screen columns stable in the golden.
 func maskCwdTokens(row string) (string, bool) {
 	m := cwdTokenRow.FindStringSubmatch(row)
 	if m == nil {
 		return row, false
 	}
-	return m[1] + strings.Repeat(" ", len([]rune(m[2]))-1) + "N" + m[3], true
+	countWidth := len([]rune(m[2]))
+	percentWidth := len([]rune(m[3])) + len([]rune(m[4]))
+	return m[1] + strings.Repeat(" ", countWidth-1) + "N" + strings.Repeat(" ", percentWidth-1) + "P" + m[5], true
 }
 
 func normalizeCwdTokenRows(rows []string) []string {

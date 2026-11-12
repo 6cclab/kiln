@@ -1,0 +1,27 @@
+{
+ "id": "20261111T161408Z-todo-snapshot-aliasing",
+ "found_at": "2026-11-11T16:14:08Z",
+ "scenario": "TestTodoStoreOwnsSnapshots",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "low",
+ "title": "Todo snapshots exposed mutable store contents",
+ "observed": "Callers and listeners could mutate the slice held by TodoStore outside its mutex.",
+ "expected": "The store, returned snapshots and listener arguments own independent slices.",
+ "design_ref": null,
+ "evidence": [
+  "internal/agent/todo_test.go"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/agent/todo.go"
+  ],
+  "regression_test": "TestTodoStoreOwnsSnapshots",
+  "after_evidence": [
+   "/tmp/kiln-final-race.log"
+  ],
+  "updated_at": "2026-11-11T16:14:08Z"
+ }
+}

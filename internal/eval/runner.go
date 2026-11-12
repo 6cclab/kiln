@@ -19,6 +19,7 @@ import (
 	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/crash"
+	"github.com/andrepato/harness/internal/learning"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/provider/builtin"
 	"github.com/andrepato/harness/internal/provider/ollama"
@@ -59,6 +60,7 @@ func ParseModelConfig(s string) (ModelConfig, error) {
 
 // RunOptions configures Run.
 type RunOptions struct {
+	Policy       *learning.Policy
 	KilnBin      string
 	ScenariosDir string
 	FixturesDir  string
@@ -80,6 +82,9 @@ type RunOptions struct {
 	// Filter, when non-empty, keeps only scenarios whose Name equals (or
 	// contains) one of these strings, or whose Tags contain one exactly.
 	Filter []string
+	// ExactScenarios selects only these names and rejects missing or duplicate names.
+	// It is mutually exclusive with Filter.
+	ExactScenarios []string
 }
 
 // RunSummary is what Run hands back once every job has finished.
@@ -113,6 +118,15 @@ func Run(ctx context.Context, opts RunOptions) (RunSummary, error) {
 	if abs, err := filepath.Abs(opts.KilnBin); err == nil {
 		opts.KilnBin = abs
 	}
+	if opts.Policy != nil {
+		if err := opts.Policy.Validate(); err != nil {
+			return RunSummary{}, err
+		}
+	}
+	binaryHash, err := learning.FileHash(opts.KilnBin)
+	if err != nil {
+		return RunSummary{}, err
+	}
 	version, err := KilnVersion(opts.KilnBin)
 	if err != nil {
 		return RunSummary{}, fmt.Errorf("eval: checking kiln binary: %w", err)
@@ -122,7 +136,17 @@ func Run(ctx context.Context, opts RunOptions) (RunSummary, error) {
 	if err != nil {
 		return RunSummary{}, err
 	}
-	scenarios = filterScenarios(scenarios, opts.Filter)
+	if len(opts.ExactScenarios) > 0 {
+		if len(opts.Filter) > 0 {
+			return RunSummary{}, fmt.Errorf("eval: exact scenario names and name/tag filters are mutually exclusive")
+		}
+		scenarios, err = exactScenarios(scenarios, opts.ExactScenarios)
+		if err != nil {
+			return RunSummary{}, err
+		}
+	} else {
+		scenarios = filterScenarios(scenarios, opts.Filter)
+	}
 	if len(scenarios) == 0 {
 		return RunSummary{}, fmt.Errorf("eval: no scenarios matched under %s", opts.ScenariosDir)
 	}
@@ -139,8 +163,15 @@ func Run(ctx context.Context, opts RunOptions) (RunSummary, error) {
 	var jobs []job
 	for _, sc := range scenarios {
 		models := opts.Models
-		if mc, ok := pinnedModel(sc); ok {
+		mc, pinned, err := pinnedModel(sc)
+		if err != nil {
+			return RunSummary{}, err
+		}
+		if pinned {
 			models = []ModelConfig{mc}
+		}
+		if err := validateModels(models); err != nil {
+			return RunSummary{}, err
 		}
 		for _, mc := range models {
 			for r := 1; r <= repeat; r++ {
@@ -156,10 +187,11 @@ func Run(ctx context.Context, opts RunOptions) (RunSummary, error) {
 	resultsFile := filepath.Join(opts.ResultsDir, batchID+".jsonl")
 
 	rt := &runtime{
-		opts:    opts,
-		version: version,
-		batchID: batchID,
-		liveReg: newLazyRegistry(),
+		binaryHash: binaryHash,
+		opts:       opts,
+		version:    version,
+		batchID:    batchID,
+		liveReg:    newLazyRegistry(),
 	}
 
 	jobCh := make(chan job)
@@ -235,17 +267,24 @@ func validateModels(models []ModelConfig) error {
 // against that one model, ignoring the run's --models matrix — used by
 // scenarios that only make sense on a specific model (e.g.
 // long-context-compaction, which needs faux-2's small window).
-func pinnedModel(sc *scenario.Scenario) (ModelConfig, bool) {
+func pinnedModel(sc *scenario.Scenario) (ModelConfig, bool, error) {
 	const prefix = "pin-model:"
+	var selected ModelConfig
+	found := false
 	for _, tag := range sc.Tags {
-		if strings.HasPrefix(tag, prefix) {
-			mc, err := ParseModelConfig(strings.TrimPrefix(tag, prefix))
-			if err == nil {
-				return mc, true
-			}
+		if !strings.HasPrefix(tag, prefix) {
+			continue
 		}
+		if found {
+			return ModelConfig{}, false, fmt.Errorf("eval: scenario %q has multiple model pins", sc.Name)
+		}
+		mc, err := ParseModelConfig(strings.TrimPrefix(tag, prefix))
+		if err != nil {
+			return ModelConfig{}, false, fmt.Errorf("eval: scenario %q has invalid model pin: %w", sc.Name, err)
+		}
+		selected, found = mc, true
 	}
-	return ModelConfig{}, false
+	return selected, found, nil
 }
 
 func filterScenarios(scenarios []*scenario.Scenario, filter []string) []*scenario.Scenario {
@@ -286,10 +325,11 @@ func newRunID() (string, error) {
 // runtime holds everything shared read-only (or safely concurrent) across
 // workers for one Run call.
 type runtime struct {
-	opts    RunOptions
-	version string
-	batchID string
-	liveReg *lazyRegistry
+	binaryHash string
+	opts       RunOptions
+	version    string
+	batchID    string
+	liveReg    *lazyRegistry
 
 	mcpBinOnce sync.Once
 	mcpBinPath string
@@ -402,6 +442,7 @@ func (rt *runtime) errorRecord(j job, err error) Record {
 func (rt *runtime) baseRecord(j job) Record {
 	return Record{
 		RunID:       rt.batchID,
+		BinaryHash:  rt.binaryHash,
 		Timestamp:   time.Now().UTC().Format(time.RFC3339),
 		KilnVersion: rt.version,
 		Scenario:    j.sc.Name,
@@ -447,6 +488,31 @@ func (rt *runtime) runJob(ctx context.Context, workerRoot string, j job, fauxSrv
 		}
 	}
 
+	definition := *j.sc
+	definition.Dir = ""
+	rawDefinition, marshalErr := json.Marshal(definition)
+	if marshalErr != nil {
+		rec.OK = false
+		rec.Reason = marshalErr.Error()
+		return rec
+	}
+	fingerprintRoot := ""
+	if j.sc.Fixture != "" {
+		fingerprintRoot = fixtureDir
+	}
+	fingerprint, hashErr := learning.Fingerprint(fingerprintRoot, rawDefinition)
+	if hashErr != nil {
+		rec.OK = false
+		rec.Reason = hashErr.Error()
+		return rec
+	}
+	rec.DatasetHash = fingerprint
+	fixtureHash, hashErr := learning.Fingerprint(fingerprintRoot, nil)
+	if hashErr != nil {
+		rec.OK, rec.Reason = false, hashErr.Error()
+		return rec
+	}
+	rec.FixtureHash = fixtureHash
 	settings := mergeRoles(j.sc.Settings, rt.opts.Roles)
 	if err := scenario.WriteSettings(projectDir, settings); err != nil {
 		rec.OK, rec.Reason = false, err.Error()
@@ -471,6 +537,29 @@ func (rt *runtime) runJob(ctx context.Context, workerRoot string, j job, fauxSrv
 	defer cancel()
 
 	args := []string{"-p", j.sc.Prompt, "--output-format", "json"}
+	// Both arms get the same trusted role mapping. The candidate additionally
+	// receives only the validated policy fields, recorded by canonical hash.
+	overrides := map[string]any{"modelRoles": rt.opts.Roles}
+	if rt.opts.Policy != nil {
+		for k, v := range rt.opts.Policy.Settings() {
+			overrides[k] = v
+		}
+		rec.PolicyHash = rt.opts.Policy.Hash()
+	}
+	overrideData, overrideErr := json.Marshal(overrides)
+	if overrideErr != nil {
+		rec.OK = false
+		rec.Reason = overrideErr.Error()
+		return rec
+	}
+	overridePath := filepath.Join(root, "efficiency-settings.json")
+	if err := os.WriteFile(overridePath, overrideData, 0600); err != nil {
+		rec.OK = false
+		rec.Reason = err.Error()
+		return rec
+	}
+	args = append(args, "--settings", overridePath)
+
 	if j.sc.PermissionMode != "" {
 		args = append(args, "--permission-mode", j.sc.PermissionMode)
 	}
@@ -525,7 +614,7 @@ func (rt *runtime) runJob(ctx context.Context, workerRoot string, j job, fauxSrv
 			rec.Reason = fmt.Sprintf("timeout after %s", timeout)
 			rec.Checks = []CheckResult{}
 			rec.Score = 0
-			rt.keepArtifacts(j, root, "", "", stdout.String())
+			rec.Artifacts = rt.keepArtifacts(j, "", "", stdout.String())
 			return rec
 		}
 		if ee, ok := runErr.(*exec.ExitError); ok {
@@ -537,7 +626,7 @@ func (rt *runtime) runJob(ctx context.Context, workerRoot string, j job, fauxSrv
 			rec.Reason = fmt.Sprintf("exec: %v (stderr: %s)", runErr, truncate(stderr.String(), 400))
 			rec.Checks = []CheckResult{}
 			rec.Score = 0
-			rt.keepArtifacts(j, root, "", "", stdout.String())
+			rec.Artifacts = rt.keepArtifacts(j, "", "", stdout.String())
 			return rec
 		}
 	}
@@ -610,13 +699,7 @@ func (rt *runtime) runJob(ctx context.Context, workerRoot string, j job, fauxSrv
 		rec.Reason = fmt.Sprintf("invalid json result: %v", resultParseErr)
 	}
 
-	rt.keepArtifacts(j, root, sessionPath, logPath, stdout.String())
-	if rt.opts.Keep {
-		rec.Artifacts = ArtifactPaths{
-			Session: sessionPath,
-			Log:     logPath,
-		}
-	}
+	rec.Artifacts = rt.keepArtifacts(j, sessionPath, logPath, stdout.String())
 
 	return rec
 }
@@ -667,25 +750,36 @@ func (rt *runtime) runJudge(ctx context.Context, j job, res ResultJSON, projectD
 	return &JudgeResult{Score: v.Score, Reasons: v.Reasons, Model: rt.opts.Judge}
 }
 
-func (rt *runtime) keepArtifacts(j job, root, sessionPath, logPath, stdout string) {
+func (rt *runtime) keepArtifacts(j job, sessionPath, logPath, stdout string) ArtifactPaths {
 	if !rt.opts.Keep {
-		return
+		return ArtifactPaths{}
 	}
 	dest := filepath.Join(rt.opts.ResultsDir, "runs", rt.batchID, j.sc.Name, j.mc.Provider+"-"+j.mc.Model, strconv.Itoa(j.repeat))
 	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return
+		return ArtifactPaths{}
 	}
-	_ = os.WriteFile(filepath.Join(dest, "stdout.json"), []byte(stdout), 0o644)
+	var paths ArtifactPaths
+	stdoutPath := filepath.Join(dest, "stdout.json")
+	if err := os.WriteFile(stdoutPath, []byte(stdout), 0o644); err == nil {
+		paths.Stdout = stdoutPath
+	}
 	if sessionPath != "" {
 		if data, err := os.ReadFile(sessionPath); err == nil {
-			_ = os.WriteFile(filepath.Join(dest, "session.jsonl"), data, 0o644)
+			kept := filepath.Join(dest, "session.jsonl")
+			if err := os.WriteFile(kept, data, 0o644); err == nil {
+				paths.Session = kept
+			}
 		}
 	}
 	if logPath != "" {
 		if data, err := os.ReadFile(logPath); err == nil {
-			_ = os.WriteFile(filepath.Join(dest, "run.log"), data, 0o644)
+			kept := filepath.Join(dest, "run.log")
+			if err := os.WriteFile(kept, data, 0o644); err == nil {
+				paths.Log = kept
+			}
 		}
 	}
+	return paths
 }
 
 // mergeRoles copies scenario settings and sets "modelRoles" from roles,

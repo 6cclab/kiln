@@ -1,0 +1,32 @@
+{
+ "id": "20261111T224522Z-responses-text-replay",
+ "found_at": "2026-11-11T22:45:22Z",
+ "scenario": "regression/TestResponsesTextIdentityStreamStoreReplay",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Responses replay loses assistant message identity and phase",
+ "observed": "OpenAI, Codex and Azure responses were replayed with synthesized text IDs and no phase.",
+ "expected": "Preserve originating message metadata through storage and replay without leaking it across API formats or models.",
+ "design_ref": null,
+ "evidence": [
+  "docs/request-fidelity-improvements.md"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/provider/api/responses_text_signature.go",
+   "internal/provider/api/openai_responses.go",
+   "internal/provider/api/openai_codex_responses.go",
+   "internal/provider/api/azure_openai_responses.go",
+   "internal/provider/api/google_generative_ai.go"
+  ],
+  "regression_test": "TestResponsesTextIdentityStreamStoreReplay",
+  "after_evidence": [
+   "docs/request-fidelity-improvements.md"
+  ],
+  "note": "Behavioral regression failed before the fix and passes afterward; live performance comparison deferred.",
+  "updated_at": "2026-11-11T22:45:22Z"
+ }
+}

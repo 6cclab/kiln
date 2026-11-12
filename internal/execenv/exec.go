@@ -52,8 +52,9 @@ type ExecResult struct {
 	SpillPath  string
 	// JobsLeft reports that the command left background jobs running
 	// ("server &"): its process group outlived the shell. They are
-	// stopped by KillLeftoverJobs when the session ends. JobsGroup is
-	// their process group, so they can be stopped precisely before that.
+	// stopped by the Env's JobScope when it closes, or by
+	// KillLeftoverJobs when no scope is set and the session ends.
+	// JobsGroup is their process group.
 	JobsLeft  bool
 	JobsGroup int
 }
@@ -191,8 +192,16 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	cmd.Stderr = feedWriter(feed)
 	cmd.WaitDelay = pipeDrainDelay
 
-	if err := cmd.Start(); err != nil {
+	if e.JobScope != nil {
+		err = e.JobScope.start(cmd)
+	} else {
+		err = cmd.Start()
+	}
+	if err != nil {
 		return ExecResult{}, err
+	}
+	if e.JobScope != nil {
+		defer e.JobScope.execFinished()
 	}
 
 	// Armed only once Start has returned: the callback runs on the timer's
@@ -202,16 +211,24 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	// that is already running.
 	var timedOut atomic.Bool
 	var timer *time.Timer
+	var timeoutDone chan struct{}
 	if opts.Timeout > 0 {
 		pid := cmd.Process.Pid
+		timeoutDone = make(chan struct{})
 		timer = time.AfterFunc(opts.Timeout, func() {
 			defer crash.Guard()
+			defer close(timeoutDone)
 			timedOut.Store(true)
 			_ = KillProcessGroup(pid, SignalKill)
 		})
 	}
 
 	waitErr := cmd.Wait()
+	if timer != nil && !timer.Stop() {
+		// A callback already running must finish before we release the
+		// group's scope registration or report the command finished.
+		<-timeoutDone
+	}
 	if errors.Is(waitErr, exec.ErrWaitDelay) {
 		waitErr = nil // the shell exited 0; only a background job held the pipes
 	}
@@ -219,15 +236,14 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	// the command backgrounded a job that is still running.
 	pgid := cmd.Process.Pid
 	jobsLeft := ProcGroupAlive(pgid)
-	if jobsLeft {
+	stoppedByScope := false
+	if e.JobScope != nil {
+		stoppedByScope = e.JobScope.processFinished(pgid, jobsLeft)
+	} else if jobsLeft {
 		leftoverGroups.mu.Lock()
 		leftoverGroups.pgids[pgid] = struct{}{}
 		leftoverGroups.mu.Unlock()
 	}
-	if timer != nil {
-		timer.Stop()
-	}
-
 	mu.Lock()
 	if spillFile != nil {
 		_ = spillFile.Close()
@@ -241,6 +257,9 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	}
 	if ctx.Err() != nil {
 		return ExecResult{Text: final.Text, Truncation: final.Truncation, SpillPath: final.SpillPath}, ctx.Err()
+	}
+	if stoppedByScope {
+		return ExecResult{Text: final.Text, Truncation: final.Truncation, SpillPath: final.SpillPath}, ErrJobScopeClosed
 	}
 
 	exitCode := 0

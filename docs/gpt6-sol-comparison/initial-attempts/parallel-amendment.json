@@ -1,0 +1,11 @@
+{
+  "budget": "Split remaining allowance equally across overlapping Kiln attempts.",
+  "coordinator_sha256": "622b009600dc4d6fb1f4aad28640dc4bc45213b9c80b533e5672bc2c31b365d2",
+  "kiln1_monitor": "Stop if committed cost plus one full request reservation exceeds its allocation.",
+  "kiln_allocation_usd": 7.19312,
+  "native_kiln2_limit": true,
+  "reason": "User requested parallel execution after Codex attempt 1 started.",
+  "schedule": "Codex 1; Kiln 1 and 2 concurrently; Codex 2.",
+  "timing_caveat": "Concurrent Kiln wall times include shared-machine contention.",
+  "watchdog_limit": "External monitor is approximate, not an invoice-level spending guarantee."
+}

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/andrepato/harness/internal/crash"
@@ -44,14 +43,13 @@ import (
 //     flat []msg.Message with no such resolution step, matching how
 //     anthropic_messages.go and openai_completions.go already handle it (pick the
 //     first msg.SystemMessage, override with opts.SystemPrompt).
-//   - assistant text block id/signature replay fidelity (parseTextSignature /
-//     encodeTextSignatureV1) is simplified to a stable synthesized id
-//     ("msg_pi_<index>"); a thinking block with no ThinkingSignature is dropped
-//     from the replayed request rather than synthesizing one, matching what pi
-//     does when a caller has no signature to replay.
-//   - applyMessagePhaseStopReason (item.phase === "final_answer") is skipped: this
-//     harness's content blocks carry no `phase` field, and the msg package is out
-//     of scope for this change.
+//   - assistant text item ID and phase are carried in TextSignature and replayed
+//     when source API, provider, model and text still match. Old session text
+//     synthesizes a stable ID ("msg_pi_<index>") with no phase. A thinking
+//     block with no ThinkingSignature is dropped, matching pi.
+//   - applyMessagePhaseStopReason (item.phase === "final_answer") is still
+//     skipped: phase is preserved for wire replay, but does not change this
+//     harness's stop-reason mapping.
 //   - custom_tool_call / custom_tool_call_output (grammar/constrained-sampling tool
 //     calls) are out of scope, matching the custom/grammar tools deviation above.
 
@@ -128,6 +126,7 @@ type responsesAssistantMessageItem struct {
 	Content []responsesOutputTextPart `json:"content"`
 	Status  string                    `json:"status"`
 	ID      string                    `json:"id"`
+	Phase   string                    `json:"phase,omitempty"`
 }
 
 type responsesFunctionCallItem struct {
@@ -215,7 +214,7 @@ func buildOpenAIResponsesRequest(model provider.Model, transcript []msg.Message,
 				req.Input = append(req.Input, marshalResponsesItem(responsesUserMessageItem{Role: "user", Content: parts}))
 			}
 		case msg.AssistantMessage:
-			req.Input = append(req.Input, convertResponsesAssistant(t, msgIndex)...)
+			req.Input = append(req.Input, convertResponsesAssistant(model, t, msgIndex)...)
 		case msg.ToolResultMessage:
 			req.Input = append(req.Input, convertResponsesToolResult(model, t))
 		}
@@ -284,7 +283,7 @@ func convertResponsesUserContent(blocks msg.Blocks) []responsesInputPart {
 // convertResponsesAssistant ports the assistant-message branch of
 // convertResponsesMessages (openai-responses-shared.js:169-244) for the
 // in-scope block kinds (text, thinking-with-signature, toolCall).
-func convertResponsesAssistant(t msg.AssistantMessage, msgIndex int) []json.RawMessage {
+func convertResponsesAssistant(model provider.Model, t msg.AssistantMessage, msgIndex int) []json.RawMessage {
 	var out []json.RawMessage
 	textBlockIndex := 0
 	for _, b := range t.Content {
@@ -297,10 +296,7 @@ func convertResponsesAssistant(t msg.AssistantMessage, msgIndex int) []json.RawM
 				out = append(out, json.RawMessage(c.ThinkingSignature))
 			}
 		case msg.TextContent:
-			id := "msg_pi_" + strconv.Itoa(msgIndex)
-			if textBlockIndex > 0 {
-				id = "msg_pi_" + strconv.Itoa(msgIndex) + "_" + strconv.Itoa(textBlockIndex)
-			}
+			id, phase := replayResponsesText(c, t, model, provider.ApiOpenAIResponses, msgIndex, textBlockIndex)
 			textBlockIndex++
 			out = append(out, marshalResponsesItem(responsesAssistantMessageItem{
 				Type:    "message",
@@ -308,6 +304,7 @@ func convertResponsesAssistant(t msg.AssistantMessage, msgIndex int) []json.RawM
 				Content: []responsesOutputTextPart{{Type: "output_text", Text: c.Text, Annotations: []any{}}},
 				Status:  "completed",
 				ID:      id,
+				Phase:   phase,
 			}))
 		case msg.ToolCall:
 			callID, itemID := splitToolCallID(c.ID)
@@ -422,6 +419,7 @@ type responsesCreatedWire struct {
 type responsesItemWire struct {
 	Type      string                 `json:"type"`
 	ID        string                 `json:"id"`
+	Phase     string                 `json:"phase"`
 	CallID    string                 `json:"call_id"`
 	Name      string                 `json:"name"`
 	Arguments string                 `json:"arguments"`
@@ -499,6 +497,8 @@ type responsesSlot struct {
 	kind         string // "thinking" | "text" | "toolCall"
 	contentIndex int
 	partialJSON  string
+	id           string
+	phase        string
 }
 
 // mapResponsesStopReason is pi's mapStopReason
@@ -619,9 +619,9 @@ func (c *OpenAIResponsesClient) run(ctx context.Context, model provider.Model, t
 			events <- msg.StreamEvent{Type: msg.EventThinkingStart, ContentIndex: pos, Partial: partial}
 			return slot
 		case "message":
-			partial.Content = append(partial.Content, msg.Text(""))
+			partial.Content = append(partial.Content, stampResponsesText(msg.Text(""), *partial, item.ID, item.Phase))
 			pos := len(partial.Content) - 1
-			slot := &responsesSlot{kind: "text", contentIndex: pos}
+			slot := &responsesSlot{kind: "text", contentIndex: pos, id: item.ID, phase: item.Phase}
 			slots[outputIndex] = slot
 			events <- msg.StreamEvent{Type: msg.EventTextStart, ContentIndex: pos, Partial: partial}
 			return slot
@@ -864,6 +864,14 @@ func (c *OpenAIResponsesClient) run(ctx context.Context, model provider.Model, t
 				}
 				tc := partial.Content[slot.contentIndex].(msg.TextContent)
 				tc.Text = b.String()
+				id, phase := item.ID, item.Phase
+				if id == "" {
+					id = slot.id
+				}
+				if phase == "" {
+					phase = slot.phase
+				}
+				tc = stampResponsesText(tc, *partial, id, phase)
 				partial.Content[slot.contentIndex] = tc
 				events <- msg.StreamEvent{Type: msg.EventTextEnd, ContentIndex: slot.contentIndex, Content: tc.Text, Partial: partial}
 				delete(slots, w.OutputIndex)
@@ -926,6 +934,12 @@ func (c *OpenAIResponsesClient) run(ctx context.Context, model provider.Model, t
 			partial.StopReason = msg.StopError
 		}
 	})
+	for _, slot := range slots {
+		if slot.kind == "text" {
+			c := partial.Content[slot.contentIndex].(msg.TextContent)
+			partial.Content[slot.contentIndex] = stampResponsesText(c, *partial, slot.id, slot.phase)
+		}
+	}
 	if streamErr != io.EOF {
 		// A read error before the terminal event (unexpected EOF from a
 		// mid-stream disconnect, or another transport failure) is a

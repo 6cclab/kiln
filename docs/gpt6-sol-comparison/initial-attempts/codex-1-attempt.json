@@ -1,0 +1,15 @@
+{
+  "arm": "codex",
+  "binary_sha256": "ebabe5f0d79145a9e61274ce9ecf7c02c9021b7b04bfa59b7e61ad4461c32b0b",
+  "cost_basis": "catalog-equivalent from per-session token counters",
+  "exit_code": 0,
+  "patch_bytes": 37563,
+  "patch_sha256": "eab70ab302ba74a98f19df157d7f717f372e2a1dea7ec7c06b45dc00429599e0",
+  "repeat": 1,
+  "reported_cost_usd": 1.7601292000000002,
+  "reservation_usd": 14.0,
+  "status": "completed",
+  "stop_reason": null,
+  "task_sha256": "2c41ec5dbed87534442383116bdf5bae1349a954ce894a633c4d8896e30a94a7",
+  "wall_ms": 842974
+}
