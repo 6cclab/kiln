@@ -9,10 +9,10 @@
  "category": "bug",
  "severity": "low",
  "title": "Renderer's model of the alt screen falls out of step after Ctrl+F mid-dispatch",
- "observed": "Entering fullscreen while the subagents panel redraws: the next frame skips a row the renderer believes blank but still shows a panel row (raw PTY recording: frame 2 emits a bare newline over row 17 where frame 1 drew gen-1; no scroll-region or insert/delete-line ops in between; persists with scroll optimisation disabled). ~1 in 12 runs of TestTUI_FullscreenWithSubagentsPanel under CPU load. Worked around by one full repaint after the replay (toggleFullscreen, msgFullRepaint): 0/90 under the same load.",
+ "observed": "Entering fullscreen while the subagents panel redraws: the next frame skips a row the renderer believes blank but still shows a panel row (raw PTY recording: frame 2 emits a bare newline over row 17 where frame 1 drew gen-1; no scroll-region or insert/delete-line ops in between; persists with scroll optimisation disabled). ~1 in 12 runs of TestTUI_FullscreenWithSubagentsPanel under CPU load. Worked around by one full repaint after the replay (toggleFullscreen, msgFullRepaint): 0/90 under the same load. Cause found: rows past the old inline height were never written into the renderer's model during the clear pass (first alt frame emitted EL/ECH on every such row).",
  "expected": "The renderer's cell model matches the screen after the alt-screen switch without a forced repaint; find where it loses step (cursed_renderer.go flushLocked / ultraviolet Render) and remove the workaround.",
  "design_ref": null,
  "evidence": [],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": "Root cause was kiln's own ultraviolet patch (erase before resize in TerminalRenderer.Render): entering the alt screen from a short inline frame left model rows past the old inline height blank. Fixed in third_party/ultraviolet (resize first unless an inline shrink); toggleFullscreen's msgFullRepaint workaround removed. Test: TestRendererFullscreenGrowTracksEveryRow. 0/180 under load, 3/60 before."
 }

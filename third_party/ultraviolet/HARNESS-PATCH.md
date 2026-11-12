@@ -22,3 +22,20 @@ with `tea.Println` stay on screen. The unpatched renderer left nine stale rows.
 Upstream as of 2026-09-22 (v0.0.0-20260922123528-4e49372c11f9) still has the early resize.
 The full diff is in HARNESS-PATCH.diff. Re-vendor when upstream fixes it, then drop the
 replace directive.
+
+## Patch: size the model before a fullscreen or growing clear (terminal_renderer.go, Render)
+
+The patch above runs `clearUpdate` before `curbuf.Resize` so an inline shrink erases against
+the old height. For a model that is growing, that order loses rows: `clearUpdate` walks every
+row of the new frame and `transformLine` copies each into `s.curbuf`, but rows past the old
+height have no line to copy into, and the later `Resize` makes them blank. Entering the
+alternate screen from a short inline frame (kiln's Ctrl+F, inline height about 12 of 30 rows)
+therefore left the model blank under rows the terminal showed. The next frame saw "blank
+before, blank now" and skipped clearing them: a stray subagents-panel row under the prompt,
+about 3 in 60 runs of `TestTUI_FullscreenWithSubagentsPanel` under CPU load (the inline
+height at the toggle depends on timing). The first alt frame's output showed it: `EL`/`ECH`
+on every row from the old height down, which a blank model would not emit.
+
+The patch resizes first unless the frame is a shorter inline one (the only case the previous
+patch needed the old height for). Test: `TestRendererFullscreenGrowTracksEveryRow`.
+HARNESS-PATCH.diff was not regenerated.
