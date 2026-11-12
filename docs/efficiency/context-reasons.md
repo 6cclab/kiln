@@ -7,9 +7,10 @@ the current request. Successful skill and agent tool results and capability
 search hits are reconstructed from tool-call IDs and results in the same
 compaction-projected branch used for the next request. Restored sessions show
 committed results; compacted-away results disappear. Search budget drops are
-kept by committed call ID, while current-turn suggestions and personal-memory
-retrieval decisions are transient and cleared for a new typed request. The
-ledger retains at most 64 drop call IDs and displays at most 64 rows.
+kept by committed call ID. Current-turn suggestions and personal-memory
+retrieval decisions belong to the last typed request and are replaced by the
+next one. All of these survive a restart (see "Persistence" below). The ledger
+retains at most 64 drop call IDs and displays at most 64 rows.
 
 Catalog-mode skill metadata is checked against the active system prompt, and
 configured exclusions are shown only for loaded, model-invocable skills.
@@ -28,18 +29,35 @@ roles and enablement flags. These paths call the existing runtime resolvers
 for model, effort, permission mode, workspace trust, and unsafe auto-memory
 directory rejection.
 
+## Persistence
+
+Just before each model request is sent (an `OnBeforeRequest` hook, after the
+context transforms ran), kiln commits the request's decisions to the session
+value store as namespace `kiln.context.selection`, key `last`
+(`internal/cli/context_selection.go`, written through `Lane.SetSessionValue`).
+The record holds a SHA-256 digest of the typed request, the transient rows
+(kind, material, name, reason, included) and the search-drop ledger by call ID,
+capped at the existing 64 rows and 64 call IDs (10 rows per call). It holds
+no prompt text and no memory content, only names, keys and reason codes. An
+unchanged record is not rewritten.
+
+On resume, `chat.go` reads the record into the ledger before the hooks are
+registered, so `/context` and `kiln config` show it. Rows are shown only while
+the digest matches the last typed request of the compaction-projected branch,
+the same rule live rows use: switching to another branch or compacting the
+request away hides them, and a new typed request replaces them. Sessions
+without the record, or with an unknown version or malformed record, behave as
+before.
+
 ## Limits
 
-Current-turn metadata suggestions and personal-memory retrieval are not
-persisted in a session. After a process restart `/context` can recover
-committed tool content and the current system prompt, but it cannot recover
-those unstored decisions for a prior request. Once a new user request starts,
-the view reports that request's transient decisions. Search budget drops
-likewise cannot be recovered after restart because the dropped candidates
-were never written to the transcript. The displayed row limit can omit later
-alphabetically sorted entries in unusually large sessions. Real-terminal
-`kiln-qa` verification of the final integrated binary is still needed; this
-worker did not perform that drive.
+A search drop made after the final request of a turn cannot exist: the result
+always precedes another request, which commits it. A crash between a request
+being sent and its commit loses only that request's decisions. Only the last
+request is kept; earlier requests' transient decisions are not recoverable.
+The displayed row limit can omit later alphabetically sorted entries in
+unusually large sessions. Real-terminal `kiln-qa` verification of the final
+integrated binary is still needed; this worker did not perform that drive.
 
 ## Evidence
 
@@ -68,6 +86,14 @@ worker did not perform that drive.
   the named PTY golden: it adds an agent metadata suggestion, the Settings
   heading, and four settings rows. Existing styled terminal padding is
   preserved.
+
+- Restart persistence: `TestContextSelectionLiveRestartKeepsRequestDecisions`
+  (faux-backed; a pinned suggestion, a memory hit and a search budget drop
+  appear in `/context` and `kiln config` from a fresh process and a new typed
+  request replaces them), `TestContextSelectionLiveOldSessionWithoutRecord`
+  (record stripped from the session file) and
+  `TestContextSelectionRecordHoldsNoContentAndIsBounded`. With the commit
+  disabled both live tests fail (all three rows missing; no record written).
 
 ### Red/green proof
 

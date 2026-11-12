@@ -167,6 +167,19 @@ func (l *Lane) FindEntries(ctx context.Context) ([]session.Entry, error) {
 	return l.h.opts.Storage.ScanBranch(session.BranchScan{Start: tip, Order: "newestFirst"})
 }
 
+// SessionValue reads a raw session value written with SetSessionValue.
+func (l *Lane) SessionValue(namespace, key string) (json.RawMessage, bool) {
+	raw, _, ok := l.h.opts.Storage.GetValue(namespace, key)
+	return json.RawMessage(raw), ok
+}
+
+// SetSessionValue durably stores one raw JSON value in the session's value
+// store. Namespaces outside the pi.* set are opaque to the harness.
+func (l *Lane) SetSessionValue(namespace, key string, raw json.RawMessage) error {
+	_, err := l.h.opts.Storage.Commit([]session.Write{session.SetValueRaw(namespace, key, raw)})
+	return err
+}
+
 // SetActiveTools updates the lane's active tool set and writes it into
 // pi.lane.config.
 func (l *Lane) SetActiveTools(names []string) error {

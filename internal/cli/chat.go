@@ -2043,9 +2043,26 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return started.Lane.Steer(auditFollowUp)
 	})
 
+	if raw, ok := started.Lane.SessionValue(ContextSelectionNamespace, contextSelectionKey); ok {
+		selections.Restore(raw)
+	}
 	started.Harness.Hooks().OnTransformContext(func(_ context.Context, transcript []msg.Message) ([]msg.Message, error) {
 		selections.BeginRequest(transcript)
 		return transcript, nil
+	})
+	// Commit this request's decisions once the context transforms have run
+	// and the request is about to be sent; unchanged records are not rewritten.
+	var lastSelectionRecord string
+	started.Harness.Hooks().OnBeforeRequest(func(context.Context) error {
+		raw := selections.Marshal()
+		if raw == nil || string(raw) == lastSelectionRecord {
+			return nil
+		}
+		if err := started.Lane.SetSessionValue(ContextSelectionNamespace, contextSelectionKey, raw); err != nil {
+			return err
+		}
+		lastSelectionRecord = string(raw)
+		return nil
 	})
 	if projectMemory != nil && (settings.MemoryAutoRetrieve == nil || *settings.MemoryAutoRetrieve) {
 		started.Harness.Hooks().OnTransformContext(memoryContextObserved(projectMemory, memoryScope(cwd), memoryProjectRoot(cwd), func() bool {

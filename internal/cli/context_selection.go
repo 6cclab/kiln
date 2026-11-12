@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -65,13 +68,16 @@ func (l *contextSelectionLedger) ExcludeConfiguredSkills(records []tools.SkillRe
 	}
 }
 
+// lastTypedUser identifies the newest typed request by a digest, so the same
+// key can be stored in the session without keeping prompt text.
 func lastTypedUser(transcript []msg.Message) string {
 	for i := len(transcript) - 1; i >= 0; i-- {
 		user, ok := transcript[i].(msg.UserMessage)
 		if !ok || user.KilnHook != "" {
 			continue
 		}
-		return fmt.Sprintf("%d\x00%s\x00%s", user.Timestamp, user.KilnTyped, msg.TextOf(user.Content))
+		sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s", user.Timestamp, user.KilnTyped, msg.TextOf(user.Content))))
+		return hex.EncodeToString(sum[:])
 	}
 	return ""
 }
@@ -233,4 +239,110 @@ func (l *contextSelectionLedger) SnapshotForRequest(transcript []msg.Message, sy
 		out = out[:maxContextSelections]
 	}
 	return out
+}
+
+// ContextSelectionNamespace holds the last request's selection decisions in
+// the session value store (key contextSelectionKey).
+const (
+	ContextSelectionNamespace = "kiln.context.selection"
+	contextSelectionKey       = "last"
+)
+
+type persistedSelection struct {
+	Kind     string `json:"kind"`
+	Material string `json:"material"`
+	Name     string `json:"name"`
+	Reason   string `json:"reason"`
+	Included bool   `json:"included"`
+}
+
+type persistedDrops struct {
+	CallID string               `json:"callId"`
+	Rows   []persistedSelection `json:"rows"`
+}
+
+// persistedContextSelection stores names, reason codes and call IDs only:
+// never prompt text or memory content. Request is a digest of the typed
+// request, so a branch switch or compaction that removes that request from
+// the projected transcript also hides its decisions.
+type persistedContextSelection struct {
+	Version int                  `json:"v"`
+	Request string               `json:"request"`
+	Rows    []persistedSelection `json:"rows"`
+	Drops   []persistedDrops     `json:"drops"`
+}
+
+// Marshal captures the current request's transient decisions and the bounded
+// search-drop ledger. It returns nil when there is no typed request yet.
+func (l *contextSelectionLedger) Marshal() json.RawMessage {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.requestUser == "" {
+		return nil
+	}
+	rec := persistedContextSelection{Version: 1, Request: l.requestUser, Rows: []persistedSelection{}, Drops: []persistedDrops{}}
+	for _, e := range l.transient {
+		rec.Rows = append(rec.Rows, toPersisted(e))
+	}
+	sort.Slice(rec.Rows, func(i, j int) bool {
+		a, b := rec.Rows[i], rec.Rows[j]
+		return a.Kind+"\x00"+a.Material+"\x00"+a.Name < b.Kind+"\x00"+b.Material+"\x00"+b.Name
+	})
+	if len(rec.Rows) > maxContextSelections {
+		rec.Rows = rec.Rows[:maxContextSelections]
+	}
+	for _, id := range l.dropOrder {
+		d := persistedDrops{CallID: id}
+		for _, e := range l.searchDrops[id] {
+			d.Rows = append(d.Rows, toPersisted(e))
+		}
+		rec.Drops = append(rec.Drops, d)
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// Restore loads a Marshal record into an empty ledger. A malformed or unknown
+// record is ignored, which is today's behaviour for sessions without one.
+func (l *contextSelectionLedger) Restore(raw json.RawMessage) {
+	var rec persistedContextSelection
+	if json.Unmarshal(raw, &rec) != nil || rec.Version != 1 || rec.Request == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.requestUser = rec.Request
+	l.transient = map[string]slashcommands.ContextSelection{}
+	for _, r := range rec.Rows {
+		if len(l.transient) >= maxContextSelections {
+			break
+		}
+		e := fromPersisted(r)
+		l.transient[selectionKey(e.Kind, e.Material, e.Name)] = e
+	}
+	for _, d := range rec.Drops {
+		if d.CallID == "" || len(l.dropOrder) >= maxContextSelections {
+			continue
+		}
+		if _, dup := l.searchDrops[d.CallID]; dup {
+			continue
+		}
+		l.dropOrder = append(l.dropOrder, d.CallID)
+		for _, r := range d.Rows {
+			if len(l.searchDrops[d.CallID]) < 10 {
+				l.searchDrops[d.CallID] = append(l.searchDrops[d.CallID], fromPersisted(r))
+			}
+		}
+	}
+}
+
+func toPersisted(e slashcommands.ContextSelection) persistedSelection {
+	return persistedSelection{Kind: e.Kind, Material: e.Material, Name: e.Name, Reason: e.Reason, Included: e.Included}
+}
+
+func fromPersisted(p persistedSelection) slashcommands.ContextSelection {
+	return selection(p.Kind, p.Material, p.Name, p.Reason, p.Included)
 }
