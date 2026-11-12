@@ -78,6 +78,8 @@ type Dispatcher struct {
 	CycleLimit int
 	// ProgressLoopLimit is inherited by each dispatched agent's harness.
 	ProgressLoopLimit int
+	// ProgressLoopFileBytes is inherited by each dispatched agent's harness.
+	ProgressLoopFileBytes int64
 	// ReadCache, when set, is shared by worker read tools. It is safe for
 	// concurrent workers and always validates fresh file content.
 	ReadCache *tools.ReadCache
@@ -444,6 +446,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			Hooks:              d.Hooks,
 			Routers:            d.Routers,
 			Approved:           d.Approved,
+
+			ProgressLoopFileBytes: d.ProgressLoopFileBytes,
 		}
 		extraTools = append(extraTools, tools.TaskTool(adaptDispatch(child.Dispatch), d.Agents, d.Roles, resolved.Tier))
 	}
@@ -476,6 +480,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		ProgressLoopLimit: d.ProgressLoopLimit,
 		ReadCache:         d.ReadCache,
 		Routers:           d.Routers,
+
+		ProgressLoopFileBytes: d.ProgressLoopFileBytes,
 	})
 	if err != nil {
 		return DispatchResult{}, fmt.Errorf("agent: start subagent session for %q: %w", def.Name, err)

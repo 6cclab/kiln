@@ -990,8 +990,8 @@ that an unfamiliar tool or external task state made progress.
 guard hashes when tracking edit/write cycles. The content is streamed through a
 hash and not retained; a larger file is unknown and cannot trigger a notice.
 Symlinks that resolve inside the working directory are tracked by their target.
-A repository setting can lower this cap but not raise it. (Not yet forwarded by
-the session dispatcher; see `docs/efficiency/progress-loop.md`.)
+A repository setting can lower this cap but not raise it.
+It reaches the root session and nested workers.
 
 With `readCache` on, a repeated `read`, `grep` or `glob` with identical arguments
 that returns byte-identical output to an earlier result still present in the

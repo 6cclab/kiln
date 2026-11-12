@@ -1068,6 +1068,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		OnEvent:      subagentEventSink(stderr),
 		Routers:      modelRouter.Routers,
 		Approved:     modelRouter.approved,
+
+		ProgressLoopFileBytes: int64(claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLoopFileBytes, 0)),
 	}
 	// Claude Code mods among the active plugins (hooks modules, run by
 	// internal/mods). Nil when none has one.
@@ -1276,6 +1278,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		ExtraTools:        extraTools,
 		ActiveToolNames:   mcpSess.activeToolNames(),
 		Routers:           modelRouter.Routers,
+
+		ProgressLoopFileBytes: int64(claudesettings.PositiveOr(settings.RuntimeEfficiency.ProgressLoopFileBytes, 0)),
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "kiln:", err)

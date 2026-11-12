@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -718,6 +719,64 @@ steps:
 	}
 	if notices != 1 {
 		t.Fatalf("nested worker corrective notices = %d, want one", notices)
+	}
+}
+
+func TestDispatchNestedWorkerInheritsProgressLoopFileBytes(t *testing.T) {
+	const script = `
+model: faux-1
+steps:
+  - tool_call: {name: task, args: {subagent_type: general-purpose, description: nested, prompt: edit}, id: nested}
+  - tool_call: {name: edit, args: {path: big.txt, edits: [{oldText: "MARK-A", newText: "MARK-B"}]}, id: e1}
+  - on_tool_result: e1
+    then:
+      - tool_call: {name: edit, args: {path: big.txt, edits: [{oldText: "MARK-B", newText: "MARK-A"}]}, id: e2}
+  - on_tool_result: e2
+    then:
+      - text: inner done
+  - on_tool_result: nested
+    then:
+      - text: outer done
+`
+	for _, tc := range []struct {
+		name    string
+		bytes   int64
+		notices int
+	}{
+		{"cap above the file size detects the revert", 4 << 20, 1},
+		{"default cap leaves a 2 MiB file unknown", 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, _, cwd := newParentAndDispatcher(t, script, nil)
+			content := append(bytes.Repeat([]byte("x\n"), 1<<20), "MARK-A\n"...)
+			if err := os.WriteFile(filepath.Join(cwd, "big.txt"), content, 0600); err != nil {
+				t.Fatal(err)
+			}
+			d.ProgressLoopLimit = 2
+			d.ProgressLoopFileBytes = tc.bytes
+			result, err := d.Dispatch(context.Background(), DispatchRequest{Agent: "general-purpose", Prompt: "delegate"})
+			if err != nil || result.Text != "outer done" {
+				t.Fatalf("nested dispatch result = %+v, error = %v", result, err)
+			}
+			var notices int
+			err = filepath.WalkDir(d.SessionsRoot, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || entry.IsDir() || filepath.Ext(path) != ".jsonl" {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				notices += strings.Count(string(data), `"progress-loop"`)
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if notices != tc.notices {
+				t.Fatalf("corrective notices = %d, want %d", notices, tc.notices)
+			}
+		})
 	}
 }
 
