@@ -14,9 +14,10 @@ import (
 
 // ObservationConfig bounds opt-in local outcome capture and suggestion review.
 type ObservationConfig struct {
-	Enabled     bool `json:"enabled"`
-	MaxOutcomes int  `json:"maxOutcomes"`
-	MinSamples  int  `json:"minSamples"`
+	Enabled                 bool `json:"enabled"`
+	MaxOutcomes             int  `json:"maxOutcomes"`
+	MinSamples              int  `json:"minSamples"`
+	SourceSkillBudgetTokens int  `json:"-"`
 }
 
 // NormalizeObservationConfig applies local defaults and enforces hard bounds.
@@ -30,7 +31,7 @@ func NormalizeObservationConfig(c ObservationConfig) (ObservationConfig, error) 
 	if c.MinSamples == 0 {
 		c.MinSamples = 5
 	}
-	if c.MaxOutcomes < 1 || c.MaxOutcomes > 1000 || c.MinSamples < 2 || c.MinSamples > 100 || c.MinSamples > c.MaxOutcomes {
+	if c.MaxOutcomes < 1 || c.MaxOutcomes > 1000 || c.MinSamples < 2 || c.MinSamples > 100 || c.MinSamples > c.MaxOutcomes || c.SourceSkillBudgetTokens < 0 || c.SourceSkillBudgetTokens > 32768 {
 		return c, fmt.Errorf("learning automation limits must be maxOutcomes 1..1000 and minSamples 2..100 within retention")
 	}
 	return c, nil
@@ -39,27 +40,28 @@ func NormalizeObservationConfig(c ObservationConfig) (ObservationConfig, error) 
 // Outcome is a sanitized aggregate for one main-lane operation. Hashes are
 // identities, not contents; no prompt, argument, command, path or error text is stored.
 type Outcome struct {
-	ID               string `json:"id"`
-	ObservedAt       int64  `json:"observedAt"`
-	Status           string `json:"status"`
-	ModelHash        string `json:"modelHash"`
-	ModelsUsed       int    `json:"modelsUsed"`
-	BinaryHash       string `json:"binaryHash"`
-	UsageScope       string `json:"usageScope"`
-	InputTokens      int    `json:"inputTokens"`
-	OutputTokens     int    `json:"outputTokens"`
-	CacheReadTokens  int    `json:"cacheReadTokens"`
-	CacheWriteTokens int    `json:"cacheWriteTokens"`
-	DurationMS       int64  `json:"durationMs"`
-	ToolSuccess      int    `json:"toolSuccess"`
-	ToolFailure      int    `json:"toolFailure"`
-	BashFailure      int    `json:"bashFailure"`
-	ReadFailure      int    `json:"readFailure"`
-	WriteFailure     int    `json:"writeFailure"`
-	SearchFailure    int    `json:"searchFailure"`
-	TaskFailure      int    `json:"taskFailure"`
-	OtherFailure     int    `json:"otherFailure"`
-	VerifiedCommands int    `json:"verifiedCommands"`
+	ID                string `json:"id"`
+	ObservedAt        int64  `json:"observedAt"`
+	Status            string `json:"status"`
+	ModelHash         string `json:"modelHash"`
+	ModelsUsed        int    `json:"modelsUsed"`
+	BinaryHash        string `json:"binaryHash"`
+	UsageScope        string `json:"usageScope"`
+	InputTokens       int    `json:"inputTokens"`
+	OutputTokens      int    `json:"outputTokens"`
+	CacheReadTokens   int    `json:"cacheReadTokens"`
+	CacheWriteTokens  int    `json:"cacheWriteTokens"`
+	DurationMS        int64  `json:"durationMs"`
+	ToolSuccess       int    `json:"toolSuccess"`
+	ToolFailure       int    `json:"toolFailure"`
+	BashFailure       int    `json:"bashFailure"`
+	ReadFailure       int    `json:"readFailure"`
+	WriteFailure      int    `json:"writeFailure"`
+	SearchFailure     int    `json:"searchFailure"`
+	TaskFailure       int    `json:"taskFailure"`
+	OtherFailure      int    `json:"otherFailure"`
+	VerifiedCommands  int    `json:"verifiedCommands"`
+	SkillBudgetTokens int    `json:"skillBudgetTokens,omitempty"`
 }
 
 // OutcomeScope isolates run aggregates from conversational memory and policy.
@@ -84,12 +86,12 @@ func (o Outcome) validate() error {
 	if !validDigest(o.ID) || !validDigest(o.ModelHash) || !validDigest(o.BinaryHash) || (o.Status != "completed" && o.Status != "failed") || o.ObservedAt <= 0 || o.ObservedAt > time.Now().Add(time.Hour).Unix() {
 		return fmt.Errorf("invalid outcome identity or status")
 	}
-	for _, n := range []int{o.InputTokens, o.OutputTokens, o.CacheReadTokens, o.CacheWriteTokens, o.ToolSuccess, o.ToolFailure, o.BashFailure, o.ReadFailure, o.WriteFailure, o.SearchFailure, o.TaskFailure, o.OtherFailure, o.VerifiedCommands} {
+	for _, n := range []int{o.InputTokens, o.OutputTokens, o.CacheReadTokens, o.CacheWriteTokens, o.ToolSuccess, o.ToolFailure, o.BashFailure, o.ReadFailure, o.WriteFailure, o.SearchFailure, o.TaskFailure, o.OtherFailure, o.VerifiedCommands, o.SkillBudgetTokens} {
 		if n < 0 || n > 1_000_000_000 {
 			return fmt.Errorf("outcome count outside bounds")
 		}
 	}
-	if o.DurationMS < 0 || o.DurationMS > 7*24*60*60*1000 || o.BashFailure+o.ReadFailure+o.WriteFailure+o.SearchFailure+o.TaskFailure+o.OtherFailure != o.ToolFailure || o.VerifiedCommands > o.ToolSuccess || o.ModelsUsed < 0 || o.ModelsUsed > 100 || (o.ModelsUsed == 0 && o.ModelHash != HashIdentity("")) || o.UsageScope != "main-lane model responses; worker and side usage excluded" {
+	if o.DurationMS < 0 || o.DurationMS > 7*24*60*60*1000 || o.SkillBudgetTokens > 32768 || o.BashFailure+o.ReadFailure+o.WriteFailure+o.SearchFailure+o.TaskFailure+o.OtherFailure != o.ToolFailure || o.VerifiedCommands > o.ToolSuccess || o.ModelsUsed < 0 || o.ModelsUsed > 100 || (o.ModelsUsed == 0 && o.ModelHash != HashIdentity("")) || o.UsageScope != "main-lane model responses; worker and side usage excluded" {
 		return fmt.Errorf("inconsistent outcome counters")
 	}
 	return nil
@@ -207,5 +209,11 @@ func ForgetOutcomes(ctx context.Context, store *memory.Store, project string) er
 	if err := store.ForgetScope(ctx, OutcomeScope(project)); err != nil {
 		return err
 	}
-	return store.ForgetScope(ctx, dismissalScope(project))
+	if err := store.ForgetScope(ctx, dismissalScope(project)); err != nil {
+		return err
+	}
+	if err := store.ForgetScope(ctx, ProposalScope(project)); err != nil {
+		return err
+	}
+	return store.ForgetScope(ctx, proposalDismissalScope(project))
 }

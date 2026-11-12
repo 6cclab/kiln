@@ -3,6 +3,7 @@ package settings
 type Orchestration struct {
 	IsolatedWorkers *bool `json:"isolatedWorkers,omitempty"`
 	SnapshotDirty   *bool `json:"snapshotDirty,omitempty"`
+	AutoIntegrate   *bool `json:"autoIntegrate,omitempty"`
 	MaxConcurrent   *int  `json:"maxConcurrent,omitempty"`
 	MaxDispatches   *int  `json:"maxDispatches,omitempty"`
 	MaxDepth        *int  `json:"maxDepth,omitempty"`
@@ -17,6 +18,10 @@ func (o *Orchestration) merge(next Orchestration) {
 	if next.SnapshotDirty != nil {
 		v := *next.SnapshotDirty
 		o.SnapshotDirty = &v
+	}
+	if next.AutoIntegrate != nil {
+		v := *next.AutoIntegrate
+		o.AutoIntegrate = &v
 	}
 	for _, p := range []struct {
 		dst **int

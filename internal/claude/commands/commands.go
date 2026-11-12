@@ -25,17 +25,19 @@ const (
 
 // Frontmatter is the parsed YAML header of a command file.
 type Frontmatter struct {
-	Description  string
-	ArgumentHint string
-	AllowedTools []string
-	Model        string
+	Description            string
+	ArgumentHint           string
+	AllowedTools           []string
+	Model                  string
+	DisableModelInvocation bool
 }
 
 type rawFrontmatter struct {
-	Description  string `yaml:"description"`
-	ArgumentHint string `yaml:"argument-hint"`
-	AllowedTools any    `yaml:"allowed-tools"`
-	Model        string `yaml:"model"`
+	Description            string `yaml:"description"`
+	ArgumentHint           string `yaml:"argument-hint"`
+	AllowedTools           any    `yaml:"allowed-tools"`
+	Model                  string `yaml:"model"`
+	DisableModelInvocation bool   `yaml:"disable-model-invocation"`
 }
 
 var frontmatterRe = regexp.MustCompile(`(?s)^---\r?\n(.*?)\r?\n---\r?\n?(.*)$`)
@@ -83,10 +85,11 @@ func SplitFrontmatter(source string) (Frontmatter, string) {
 		return Frontmatter{}, m[2]
 	}
 	return Frontmatter{
-		Description:  raw.Description,
-		ArgumentHint: raw.ArgumentHint,
-		AllowedTools: parseAllowedTools(raw.AllowedTools),
-		Model:        raw.Model,
+		Description:            raw.Description,
+		ArgumentHint:           raw.ArgumentHint,
+		AllowedTools:           parseAllowedTools(raw.AllowedTools),
+		Model:                  raw.Model,
+		DisableModelInvocation: raw.DisableModelInvocation,
 	}, m[2]
 }
 
@@ -124,13 +127,14 @@ func ApplyArguments(body, args string) string {
 // CommandFile is a neutral representation of a .claude/commands/*.md
 // file, exposed for a future command registry (phase 5) to consume.
 type CommandFile struct {
-	Name         string
-	Namespace    string // "" when the command has no namespace.
-	Description  string
-	ArgumentHint string
-	Origin       Origin
-	Path         string
-	body         string
+	Name                   string
+	Namespace              string // "" when the command has no namespace.
+	Description            string
+	ArgumentHint           string
+	Origin                 Origin
+	Path                   string
+	DisableModelInvocation bool
+	body                   string
 }
 
 // Render applies args to the command's body, exactly as ApplyArguments
@@ -146,13 +150,14 @@ func (c CommandFile) Render(args string) string {
 func ParseCommandFile(source, name, namespace string, origin Origin, path string) CommandFile {
 	fm, body := SplitFrontmatter(source)
 	return CommandFile{
-		Name:         name,
-		Namespace:    namespace,
-		Description:  fm.Description,
-		ArgumentHint: fm.ArgumentHint,
-		Origin:       origin,
-		Path:         path,
-		body:         body,
+		Name:                   name,
+		Namespace:              namespace,
+		Description:            fm.Description,
+		ArgumentHint:           fm.ArgumentHint,
+		Origin:                 origin,
+		Path:                   path,
+		DisableModelInvocation: fm.DisableModelInvocation,
+		body:                   body,
 	}
 }
 
@@ -219,13 +224,14 @@ func loadFrom(dir string, origin Origin) []CommandFile {
 		}
 
 		out = append(out, CommandFile{
-			Name:         name,
-			Namespace:    namespace,
-			Description:  fm.Description,
-			ArgumentHint: fm.ArgumentHint,
-			Origin:       origin,
-			Path:         file,
-			body:         body,
+			Name:                   name,
+			Namespace:              namespace,
+			Description:            fm.Description,
+			ArgumentHint:           fm.ArgumentHint,
+			Origin:                 origin,
+			Path:                   file,
+			DisableModelInvocation: fm.DisableModelInvocation,
+			body:                   body,
 		})
 	}
 	return out

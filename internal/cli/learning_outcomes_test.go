@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andrepato/harness/internal/agent"
 	"github.com/andrepato/harness/internal/harness"
@@ -17,6 +19,45 @@ import (
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/tools"
 )
+
+func TestLearningProposalCommandsInspectAndDismiss(t *testing.T) {
+	ctx := context.Background()
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(cwd)
+	store, err := memory.Open(filepath.Join(home, ".kiln", "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := learning.ObservationConfig{Enabled: true, MaxOutcomes: 5, MinSamples: 3}
+	for i := 0; i < 3; i++ {
+		o := learning.Outcome{ID: learning.HashIdentity(fmt.Sprint(i)), ObservedAt: time.Now().Unix(), Status: "failed", ModelHash: learning.HashIdentity(""), BinaryHash: learning.HashIdentity("binary"), UsageScope: "main-lane model responses; worker and side usage excluded"}
+		if err := learning.RecordOutcomeAndPropose(ctx, store, memoryScope(cwd), o, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := Learning(ctx, Args{Positional: []string{"proposals"}}, &out, &stderr); code != 0 {
+		t.Fatalf("proposals exit %d: %s", code, stderr.String())
+	}
+	var proposals []learning.Proposal
+	if err := json.Unmarshal(out.Bytes(), &proposals); err != nil || len(proposals) != 1 {
+		t.Fatalf("proposals output: %s %v", out.String(), err)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := Learning(ctx, Args{Positional: []string{"dismiss-proposal", proposals[0].ID}}, &out, &stderr); code != 0 {
+		t.Fatalf("dismiss exit %d: %s", code, stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := Learning(ctx, Args{Positional: []string{"proposals"}}, &out, &stderr); code != 0 || strings.TrimSpace(out.String()) != "[]" {
+		t.Fatalf("dismissed proposal still visible: exit %d output %s stderr %s", code, out.String(), stderr.String())
+	}
+}
 
 func TestDisabledLearningObserverDoesNotOpenDatabase(t *testing.T) {
 	home := t.TempDir()
@@ -42,7 +83,7 @@ func TestOutcomeObserverRedactsRawEventsAndCountsVerifiedProof(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	observer := &outcomeObserver{store: store, project: "project", config: learning.ObservationConfig{Enabled: true, MaxOutcomes: 10, MinSamples: 5}, sessionID: "session secret", binaryHash: learning.HashIdentity("binary")}
+	observer := &outcomeObserver{store: store, project: "project", config: learning.ObservationConfig{Enabled: true, MaxOutcomes: 10, MinSamples: 5, SourceSkillBudgetTokens: 512}, sessionID: "session secret", binaryHash: learning.HashIdentity("binary")}
 	modelA := &session.ModelRef{Provider: "provider", ModelID: "a"}
 	modelB := &session.ModelRef{Provider: "provider", ModelID: "b"}
 	observer.observe(ctx, harness.Event{Type: harness.EventRunStart, Lane: agent.MainLane, OperationID: "operation secret"})
@@ -61,7 +102,7 @@ func TestOutcomeObserverRedactsRawEventsAndCountsVerifiedProof(t *testing.T) {
 		t.Fatalf("outcomes: %+v %v", outcomes, err)
 	}
 	o := outcomes[0]
-	if o.Status != "failed" || o.ToolSuccess != 1 || o.ToolFailure != 1 || o.OtherFailure != 1 || o.VerifiedCommands != 1 || o.InputTokens != 130 || o.CacheReadTokens != 60 || o.CacheWriteTokens != 30 || o.ModelsUsed != 2 || o.ModelHash == learning.HashIdentity("provider/a") || o.ModelHash == learning.HashIdentity("provider/b") {
+	if o.Status != "failed" || o.ToolSuccess != 1 || o.ToolFailure != 1 || o.OtherFailure != 1 || o.VerifiedCommands != 1 || o.InputTokens != 130 || o.CacheReadTokens != 60 || o.CacheWriteTokens != 30 || o.SkillBudgetTokens != 512 || o.ModelsUsed != 2 || o.ModelHash == learning.HashIdentity("provider/a") || o.ModelHash == learning.HashIdentity("provider/b") {
 		t.Fatalf("wrong aggregate: %+v", o)
 	}
 	raw, err := store.Export(ctx, learning.OutcomeScope("project"))

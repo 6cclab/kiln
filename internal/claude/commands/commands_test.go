@@ -8,6 +8,16 @@ import (
 )
 
 func TestSplitFrontmatter(t *testing.T) {
+	t.Run("model invocation flag", func(t *testing.T) {
+		fm, _ := SplitFrontmatter("---\ndescription: private\ndisable-model-invocation: true\n---\nBody")
+		if !fm.DisableModelInvocation {
+			t.Fatal("did not parse disable-model-invocation")
+		}
+		command := ParseCommandFile("---\ndisable-model-invocation: true\n---\nBody", "private", "", Project, "/repo/private.md")
+		if !command.DisableModelInvocation {
+			t.Fatal("command lost invocation flag")
+		}
+	})
 	t.Run("separates frontmatter from body", func(t *testing.T) {
 		fm, body := SplitFrontmatter("---\ndescription: Track work\n---\nDo the thing.\n")
 		if fm.Description != "Track work" {

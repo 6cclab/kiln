@@ -73,7 +73,7 @@ func (o *outcomeObserver) observe(ctx context.Context, ev harness.Event) {
 		if ev.OperationID == "" {
 			return
 		}
-		o.current = &runAggregate{operationID: ev.OperationID, started: time.Now(), models: map[string]bool{}, outcome: learning.Outcome{ID: learning.HashIdentity(o.sessionID + "\x00" + ev.OperationID), ModelHash: learning.HashIdentity(""), BinaryHash: o.binaryHash, UsageScope: "main-lane model responses; worker and side usage excluded"}}
+		o.current = &runAggregate{operationID: ev.OperationID, started: time.Now(), models: map[string]bool{}, outcome: learning.Outcome{ID: learning.HashIdentity(o.sessionID + "\x00" + ev.OperationID), ModelHash: learning.HashIdentity(""), BinaryHash: o.binaryHash, SkillBudgetTokens: o.config.SourceSkillBudgetTokens, UsageScope: "main-lane model responses; worker and side usage excluded"}}
 	case harness.EventToolEnd:
 		r := o.current
 		if r == nil || r.operationID != ev.OperationID || ev.ToolResult == nil {
@@ -134,7 +134,7 @@ func (o *outcomeObserver) observe(ctx context.Context, ev harness.Event) {
 		}
 		boundedCtx, cancel := context.WithTimeout(writeCtx, 5*time.Second)
 		defer cancel()
-		if err := learning.RecordOutcome(boundedCtx, o.store, o.project, r.outcome, o.config.MaxOutcomes); err != nil {
+		if err := learning.RecordOutcomeAndPropose(boundedCtx, o.store, o.project, r.outcome, o.config); err != nil {
 			diag.L().Warn("learning outcome unavailable", "error", err)
 		}
 	}

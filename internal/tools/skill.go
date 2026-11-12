@@ -32,6 +32,9 @@ type SkillRecord struct {
 	// Dir is the skill's base directory (SKILL.md's parent), so its
 	// relative file references resolve.
 	Dir string
+	// Render, when set, applies a legacy command's argument placeholders.
+	// Ordinary skills continue to append args after their body.
+	Render func(args string) string
 }
 
 var skillParameters = json.RawMessage(`{
@@ -107,7 +110,9 @@ func SkillTool(records []SkillRecord) *tool.Tool {
 				return tool.Errorf("unknown skill %q. Available skills: %s", a.Skill, available), nil
 			}
 			body := record.Body
-			if a.Args != "" {
+			if record.Render != nil {
+				body = record.Render(a.Args)
+			} else if a.Args != "" {
 				body = body + "\n\n" + a.Args
 			}
 			return tool.Text(fmt.Sprintf("Base directory for this skill: %s\n\n%s", record.Dir, body)), nil

@@ -10,7 +10,7 @@ import (
 	"github.com/andrepato/harness/internal/tools"
 )
 
-const discoveryPointer = "Installed skills and MCP tools are available through capability_search. Search by topic when specialized instructions or tools would help, then invoke a skill by exact name or call an enabled MCP tool. Relevant suggestions may accompany the user request.\n"
+const discoveryPointer = "Installed skills, custom commands, agents, and MCP tools are available through capability_search. Search by topic when specialized instructions or tools would help, then invoke a skill or command by exact name, dispatch an agent, or call an enabled MCP tool. Relevant suggestions may accompany the user request.\n"
 
 const legacyDiscoveryPointer = "Installed skills are available through skill_search. Search by topic when specialized instructions would help, then invoke skill by exact name. Relevant suggestions may accompany the user request.\n"
 

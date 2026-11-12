@@ -2,6 +2,30 @@ package settings
 
 import "testing"
 
+func TestOrchestrationAutoIntegrateMerge(t *testing.T) {
+	yes, no := true, false
+	current := Orchestration{AutoIntegrate: &yes}
+	current.merge(Orchestration{})
+	if current.AutoIntegrate == nil || !*current.AutoIntegrate {
+		t.Fatal("absent setting replaced autoIntegrate")
+	}
+	current.merge(Orchestration{AutoIntegrate: &no})
+	if current.AutoIntegrate == nil || *current.AutoIntegrate {
+		t.Fatal("explicit false did not override autoIntegrate")
+	}
+}
+
+func TestOrchestrationAutoIntegrateProvenance(t *testing.T) {
+	yes := true
+	s := Settings{}
+	before := efficiencyPointers(s)
+	s.Orchestration.merge(Orchestration{AutoIntegrate: &yes})
+	s.recordEfficiencySources(before, rawSettings{}, "project settings")
+	if got := s.EfficiencySources["orchestration.autoIntegrate"]; got != "project settings" {
+		t.Fatalf("autoIntegrate source = %q", got)
+	}
+}
+
 func TestOrchestrationIsolatedWorkersMerge(t *testing.T) {
 	yes, no := true, false
 	current := Orchestration{IsolatedWorkers: &yes}

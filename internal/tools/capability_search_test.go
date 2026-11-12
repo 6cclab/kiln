@@ -42,6 +42,17 @@ func TestSearchCapabilitiesMixedRankingAndScope(t *testing.T) {
 	}
 }
 
+func TestSearchCapabilitiesUsesEffectiveSkillMetadata(t *testing.T) {
+	c := CapabilityCatalog{Skills: []SkillRecord{
+		{Name: "deploy", Description: "old cloud deployment"},
+		{Name: "deploy", Description: "new database deployment"},
+	}}
+	hits := SearchCapabilities(c, "deploy", 5)
+	if len(hits) != 1 || hits[0].Description != "new database deployment" {
+		t.Fatalf("search exposed shadowed command: %+v", hits)
+	}
+}
+
 func TestCapabilitySearchRefreshAdmissionAndBound(t *testing.T) {
 	all, _ := mcp.PostureByName("all")
 	state := mcp.NewGateState()
