@@ -149,7 +149,8 @@ and [worker snapshots and verification dependencies](worker-snapshot-verificatio
 - Isolated worker shells on macOS and Windows: both are refused. On Linux:
   - sockets created in `/etc` or the Git dirs after the per-command scan are
     still reachable;
-  - Git metadata is readable;
+  - Git metadata is readable, and worker commands inherit kiln's environment
+    (minus `DenyEnv`);
   - tools under `$HOME` or `/opt` are not found;
   - a worktree kept after an unconfirmed teardown must be removed by hand;
   - hosts that restrict user namespaces are untested (they get a refusal).
