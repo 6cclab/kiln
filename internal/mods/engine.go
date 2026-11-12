@@ -63,8 +63,9 @@ var gatingEvents = map[string]bool{
 
 var nameRule = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-// Clock is the time the mod API reads ($.clock) and its timers run on.
-// Tests inject a fake one; hook budgets always use the real clock.
+// Clock is the time the mod API reads ($.clock) and its timers run on, and
+// separately the time hook budgets and the busy-loop watchdog run on. Tests
+// inject fake ones.
 type Clock interface {
 	Now() time.Time
 	// AfterFunc calls f (on any goroutine) after d; stop cancels it and
@@ -90,6 +91,9 @@ type Options struct {
 	SessionID string
 	// Clock backs $.clock; nil is the real clock.
 	Clock Clock
+	// BudgetClock runs hook budgets and the watchdog that interrupts a hook
+	// that never yields; nil is the real clock.
+	BudgetClock Clock
 	// Logger receives every line the engine reports (a skipped hook, a
 	// rejected $ call); nil is the run log (diag.L()).
 	Logger *slog.Logger
@@ -260,6 +264,9 @@ func New(host Host, opts Options) *Engine {
 	if e.clock == nil {
 		e.clock = realClock{}
 	}
+	if e.opts.BudgetClock == nil {
+		e.opts.BudgetClock = realClock{}
+	}
 	if e.opts.LookupEnv == nil {
 		e.opts.LookupEnv = os.LookupEnv
 	}
@@ -269,7 +276,7 @@ func New(host Host, opts Options) *Engine {
 	if e.opts.CatchBudget <= 0 {
 		e.opts.CatchBudget = DefaultCatchBudget
 	}
-	e.w = newWorker(e.opts.HookBudget, func(r any, stack []byte) {
+	e.w = newWorker(e.opts.HookBudget, e.opts.BudgetClock, func(r any, stack []byte) {
 		e.log.Error("mods: panic in the engine's worker", "panic", fmt.Sprint(r), "stack", string(stack))
 	})
 	if !e.w.do(func() { e.init = e.setup() }) {
@@ -582,7 +589,7 @@ type frame struct {
 	used    time.Duration
 	since   time.Time
 	pending int
-	timer   *time.Timer
+	stop    func() bool // cancels the budget timer; nil when none is armed
 }
 
 func (f *frame) isRender() bool { return f.c != nil && f.c.event == "ui.render" }
@@ -605,7 +612,7 @@ func (c *chain) run(i int, input goja.Value) goja.Value {
 // start calls the hook (or the catch handler) and watches what it returns.
 func (f *frame) start(fn goja.Callable) {
 	e := f.c.e
-	f.since = time.Now()
+	f.since = e.opts.BudgetClock.Now()
 	f.arm()
 	var args []goja.Value
 	dollar, err := e.js.makeDollar(goja.Undefined(), e.js.apiCall, e.w.vm.ToValue(f), e.js.apiNames)
@@ -792,7 +799,7 @@ func (f *frame) wrapNext(p goja.Value) goja.Value {
 func (f *frame) remaining() time.Duration {
 	used := f.used
 	if f.pending == 0 && !f.settled {
-		used += time.Since(f.since)
+		used += f.c.e.opts.BudgetClock.Now().Sub(f.since)
 	}
 	if r := f.budget - used; r > 0 {
 		return r
@@ -803,20 +810,20 @@ func (f *frame) remaining() time.Duration {
 func (f *frame) arm() {
 	f.stopTimer()
 	e := f.c.e
-	f.timer = time.AfterFunc(f.remaining(), func() { e.w.post(f.checkBudget) })
+	f.stop = e.opts.BudgetClock.AfterFunc(f.remaining(), func() { e.w.post(f.checkBudget) })
 }
 
 func (f *frame) stopTimer() {
-	if f.timer != nil {
-		f.timer.Stop()
-		f.timer = nil
+	if f.stop != nil {
+		f.stop()
+		f.stop = nil
 	}
 }
 
 func (f *frame) pause() {
 	f.pending++
 	if f.pending == 1 && !f.settled {
-		f.used += time.Since(f.since)
+		f.used += f.c.e.opts.BudgetClock.Now().Sub(f.since)
 		f.stopTimer()
 	}
 }
@@ -824,7 +831,7 @@ func (f *frame) pause() {
 func (f *frame) resume() {
 	f.pending--
 	if f.pending == 0 && !f.settled {
-		f.since = time.Now()
+		f.since = f.c.e.opts.BudgetClock.Now()
 		f.arm()
 	}
 }

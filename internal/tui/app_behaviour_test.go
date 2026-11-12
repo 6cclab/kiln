@@ -67,7 +67,7 @@ func newTestModelWithBridge(t *testing.T) (Model, *fakeSink) {
 func waitForPrinted(t *testing.T, f *fakeSink, want string) string {
 	t.Helper()
 	wantWords := strings.Join(strings.Fields(want), " ")
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		printed, _ := f.snapshot()
 		for _, p := range printed {

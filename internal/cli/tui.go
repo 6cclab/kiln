@@ -102,8 +102,9 @@ type InteractiveDeps struct {
 	ApplyHeldRules func()
 	// TrustedSessionStart runs the SessionStart hooks that waited for
 	// trust and returns their context for the next prompt. Run off the
-	// TUI's goroutine once the trust dialog is accepted; nil to skip.
-	TrustedSessionStart func() []string
+	// TUI's goroutine once the trust dialog is accepted, until ctx is
+	// cancelled (Esc); nil to skip.
+	TrustedSessionStart func(ctx context.Context) []string
 	// Effort is the reasoning effort label shown in the banner ("medium");
 	// AuthKind is how the model's provider is authenticated ("Claude
 	// subscription", "API key", "Ollama").
@@ -378,14 +379,11 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			if deps.ApplyHeldRules != nil {
 				deps.ApplyHeldRules()
 			}
-			if deps.TrustedSessionStart != nil {
-				crash.Go(func() {
-					if lines := deps.TrustedSessionStart(); len(lines) > 0 {
-						bridge.Send(tui.MsgStartupContext{Lines: lines})
-					}
-				})
-			}
 		}
+		// SessionStart runs once the answer reaches the app
+		// (MsgTrustAnswered), as a background operation that holds a
+		// prompt typed meanwhile until its context is in.
+		cfg.TrustedSessionStart = deps.TrustedSessionStart
 	}
 
 	// Flip the bridge's commit sink before anything commits through it (the

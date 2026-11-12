@@ -9,7 +9,7 @@ SEND Write a paragraph (at least 150 words) in notes.md explaining, from first p
 WAITFOR /esc to stop/ 30
 SHOT busy
 SEND Also mention Robin Hood hashing in a short final paragraph.
-WAIT 2
+WAITFOR /queue a follow-up/ 30
 SHOT queued-followup
 EXPECT /queue a follow-up/
 KEY esc

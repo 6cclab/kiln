@@ -26,7 +26,7 @@ func TestBridge_CompactionRetryShownOnProgressRow(t *testing.T) {
 		"Compacting conversation (part 1 of 2) · ollama/qwen is writing the summary (138 tokens) · retry 2 of 2",
 	}
 	var got []string
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) && len(got) < len(want) {
 		got = got[:0]
 		_, sent := f.snapshot()

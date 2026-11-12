@@ -93,7 +93,7 @@ func TestTUI_Hangup_StopsBackgroundJobs(t *testing.T) {
 
 func waitGone(t *testing.T, pid int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for syscall.Kill(pid, 0) == nil {
 		if time.Now().After(deadline) {
 			t.Fatalf("background job %d still running after the session ended", pid)

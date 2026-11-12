@@ -269,18 +269,18 @@ func TestTUI_QueueTwo_OrderAfterDrain(t *testing.T) {
 	script := `
 model: faux-1
 steps:
-  - delay: 3s
+  - hold: turn
   - text: "Working on the upload route now."
     end_turn: true
   - text: "Checked the login route and updated the tests."
 `
-	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	proj, home, sessDir, addr, requests, srv := tuiFixtureSrv(t, script)
 	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 
 	s.Send("start the rate limiter work")
 	s.SendKey("enter")
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !anyRowMatches(s, spinnerFramePattern) {
 		if time.Now().After(deadline) {
 			t.Fatalf("spinner never appeared:\n%s", strings.Join(s.Rows(), "\n"))
@@ -304,6 +304,7 @@ steps:
 	if err := s.WaitFor("2 queued", 2*time.Second); err != nil {
 		t.Fatalf("second follow-up not queued:\n%s", strings.Join(s.Rows(), "\n"))
 	}
+	releaseFaux(srv, "turn") // done queueing: let the first turn end
 
 	if err := s.WaitFor("Checked the login route and updated the tests.", 15*time.Second); err != nil {
 		t.Fatalf("queued follow-ups never answered:\n%s", strings.Join(s.Rows(), "\n"))

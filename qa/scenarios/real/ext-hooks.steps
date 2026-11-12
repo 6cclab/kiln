@@ -8,7 +8,7 @@
 
 WAITFOR /describe a task/ 30
 SEND /hooks
-WAIT 1
+WAITFOR /PostToolUse/ 30
 SHOT hooks-list
 EXPECT /PostToolUse/
 EXPECT /PreToolUse/

@@ -65,9 +65,9 @@ type stallWatch struct {
 	onIdle func()
 }
 
-func watchStall(cancel context.CancelCauseFunc, first, idle time.Duration, promptTokens int) *stallWatch {
+func watchStall(cancel context.CancelCauseFunc, timer compaction.Timer, first, idle time.Duration, promptTokens int) *stallWatch {
 	return &stallWatch{
-		dog: compaction.NewWatchdog(first, func() {
+		dog: compaction.NewWatchdogOn(timer, first, func() {
 			cancel(&StallError{Waited: first, FirstToken: true, PromptTokens: promptTokens})
 		}),
 		idle: idle,

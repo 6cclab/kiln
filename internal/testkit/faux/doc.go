@@ -36,12 +36,16 @@
 //	                                models were previously scripted) and
 //	                                rewinds every cursor to its first
 //	                                step.
+//	POST /_faux/release?name=<n>    Releases the hold step named n (see
+//	                                "Holds" below). 200 with the number of
+//	                                requests it freed; 400 without name.
 //	GET  /_faux/state               Per scripted model: current step
 //	                                index, whether that model's script is
 //	                                exhausted, any recorded errors (e.g.
 //	                                on_tool_result mismatches), and how
 //	                                many disconnect_after faults have
-//	                                fired. See MultiState.
+//	                                fired, and how many requests wait at
+//	                                each hold. See MultiState.
 //
 // # Script format
 //
@@ -131,6 +135,34 @@
 //
 // A text step may carry chunk_delay (a duration) to sleep between its
 // streamed chunks, holding a partly arrived reply on screen.
+//
+// # Holds
+//
+// A hold step keeps a turn busy for exactly as long as a test needs, with no
+// clock involved. It is a step of its own (it takes no text or delay):
+//
+//	steps:
+//	  - text: "The file"
+//	  - hold: busy
+//	  - text: " is ready."
+//
+// The response stops at the hold (a streamed reply has already sent
+// everything before it) and continues once something calls POST
+// /_faux/release?name=busy. In-process tests call Server.Release; e2e tests
+// use releaseFaux next to startFaux; QA scenarios use the RELEASE step of
+// scripts/qa/drive.py. A non-streaming response holds before its first byte.
+//
+// A request waiting at a hold ends when its client disconnects (a cancelled
+// request), exactly like a delay.
+//
+// A release is latched under its name: releasing before the request reaches
+// the hold, or a name no script uses, is accepted and the hold is open when
+// reached, and it stays open for every later request that reaches a hold of
+// that name. POST /_faux/reset and a script load forget released names (holds
+// that requests still wait at are kept), so name holds per turn when one
+// script holds more than one request. Server.Held and the "holds" field of
+// /_faux/state say how many requests wait at a name now, so a test can wait
+// for the turn to be genuinely held.
 //
 // # Fault injection
 //

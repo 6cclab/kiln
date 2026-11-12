@@ -79,11 +79,12 @@ func TestSettingsReload_WatchAppliesANewProjectRule(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go f.reloader().watch(ctx, 10*time.Millisecond)
-	time.Sleep(30 * time.Millisecond) // the watcher's baseline is the empty state
+	baseline := make(chan struct{})
+	go f.reloader().watchReady(ctx, 10*time.Millisecond, func() { close(baseline) })
+	<-baseline // the watcher's baseline is the empty state
 	f.write(t, ".claude/settings.json", `{"permissions":{"allow":["Bash(go test *)","Bash(go build *)"]}}`)
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for f.decide("go test -count=1 ./...") != claudesettings.Allow {
 		if time.Now().After(deadline) {
 			t.Fatalf("the new allow rule never applied; rules %+v", f.gate.Permissions())

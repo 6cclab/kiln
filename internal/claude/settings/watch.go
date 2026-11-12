@@ -45,10 +45,21 @@ func fingerprintOf(path string) fingerprint {
 // reported for it. onChange runs on WatchFiles' goroutine; a slow one
 // delays the next poll, never overlaps it.
 func WatchFiles(ctx context.Context, files []string, interval time.Duration, onChange func(changed []string)) {
+	WatchFilesReady(ctx, files, interval, nil, onChange)
+}
+
+// WatchFilesReady is WatchFiles that calls ready (if non-nil) once the
+// baseline is taken. A change made after ready returns is always reported,
+// so a test can write a file without guessing how long the watcher takes to
+// start.
+func WatchFilesReady(ctx context.Context, files []string, interval time.Duration, ready func(), onChange func(changed []string)) {
 	if interval <= 0 {
 		interval = DefaultWatchInterval
 	}
 	w := newWatchState(files)
+	if ready != nil {
+		ready()
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

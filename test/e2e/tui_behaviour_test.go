@@ -54,9 +54,7 @@ func TestTUI_Esc_Interrupts(t *testing.T) {
 	if err := s.WaitFor("Interrupted. Tell kiln what to do instead.", 5*time.Second); err != nil {
 		t.Fatalf("never saw the interrupted note: %v", err)
 	}
-	if err := waitQuiescent(s, 200*time.Millisecond, 3*time.Second); err != nil {
-		t.Fatal(err)
-	}
+	waitTurnSettled(t, s)
 
 	joined := strings.Join(s.Rows(), "\n")
 	if !strings.Contains(joined, "sleep 5") {
@@ -102,9 +100,7 @@ func TestTUI_Permission_Declined_Note(t *testing.T) {
 	if err := s.WaitFor("Declined npm test -- upload", 3*time.Second); err != nil {
 		t.Fatalf("never saw the declined note: %v", err)
 	}
-	if err := waitQuiescent(s, 200*time.Millisecond, 3*time.Second); err != nil {
-		t.Fatal(err)
-	}
+	waitTurnSettled(t, s)
 
 	joined := strings.Join(s.Rows(), "\n")
 	if !strings.Contains(joined, "✕ Declined npm test -- upload") {
@@ -160,8 +156,8 @@ func TestTUI_Retry_CountdownAndReconnect(t *testing.T) {
 // --- Streaming caret -----------------------------------------------------
 
 // TestTUI_Streaming_Caret drives testdata/faux/behaviour-streaming.yaml
-// (a long text step held back by a 150ms delay before any bytes stream,
-// giving the turn a real busy window). It tries to catch the trailing
+// (a long text step behind a `hold: turn` step, so the turn
+// stays busy until the test releases it). It tries to catch the trailing
 // amber caret (`▍`, app.go's renderStreamLive) mid-stream; if it cannot
 // (faux writes every chunk of a scripted text back to back with no
 // per-chunk pacing — confirmed by reading internal/testkit/faux/
@@ -174,7 +170,7 @@ func TestTUI_Retry_CountdownAndReconnect(t *testing.T) {
 // asserting the committed text.
 func TestTUI_Streaming_Caret(t *testing.T) {
 	script := loadFauxScript(t, "behaviour-streaming")
-	proj, home, sessDir, addr, _ := tuiFixture(t, script)
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, script)
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
 		"--permission-mode", "bypassPermissions",
@@ -183,6 +179,7 @@ func TestTUI_Streaming_Caret(t *testing.T) {
 
 	s.Send("stream something long")
 	s.SendKey("enter")
+	releaseFaux(srv, "turn") // this test only logs the caret; it needs no busy window
 
 	caretSeen := false
 	deadline := time.Now().Add(2 * time.Second)
@@ -221,7 +218,7 @@ func TestTUI_Streaming_Caret(t *testing.T) {
 // check).
 func TestTUI_ResizeSweep_MidStream(t *testing.T) {
 	script := loadFauxScript(t, "behaviour-streaming")
-	proj, home, sessDir, addr, _ := tuiFixture(t, script)
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, script)
 
 	s := startTUI(t, 120, 30, proj, home, sessDir, addr,
 		"--permission-mode", "bypassPermissions",
@@ -233,7 +230,6 @@ func TestTUI_ResizeSweep_MidStream(t *testing.T) {
 
 	for _, w := range []int{120, 60, 40} {
 		s.Resize(w, 30)
-		time.Sleep(30 * time.Millisecond)
 		// Viewport() enforces the "no row exceeds the terminal width"
 		// invariant itself (screen.checkWidth, wired to t.Errorf since
 		// this Screen carries a testing.TB) — calling it here is the
@@ -241,6 +237,7 @@ func TestTUI_ResizeSweep_MidStream(t *testing.T) {
 		_ = s.Viewport()
 	}
 
+	releaseFaux(srv, "turn") // the sweep ran while the turn was held busy
 	waitTurnSettled(t, s)
 	assertFooterInvariant(t, s)
 }
@@ -274,9 +271,7 @@ func TestTUI_SystemNoteBlock_ReflowsOnResize(t *testing.T) {
 	if err := s.WaitFor("Interrupted. Tell kiln what to do instead.", 5*time.Second); err != nil {
 		t.Fatalf("never saw the interrupted note: %v", err)
 	}
-	if err := waitQuiescent(s, 200*time.Millisecond, 3*time.Second); err != nil {
-		t.Fatal(err)
-	}
+	waitTurnSettled(t, s)
 
 	systemRuleRow := func() string {
 		for _, r := range s.Rows() {

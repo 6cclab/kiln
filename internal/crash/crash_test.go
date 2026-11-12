@@ -85,7 +85,7 @@ func TestGuardReportsRestoresAndExits(t *testing.T) {
 		if code != ExitCode {
 			t.Fatalf("exit code = %d, want %d", code, ExitCode)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("handler never exited")
 	}
 	<-done
@@ -144,7 +144,7 @@ func TestGuardSurvivesPanickingRestore(t *testing.T) {
 	}()
 	select {
 	case <-e.exits:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("handler never exited")
 	}
 }
@@ -154,21 +154,26 @@ func TestGuardSurvivesPanickingRestore(t *testing.T) {
 func TestSecondPanicWaitsForFirst(t *testing.T) {
 	e := newFakeEnv(t)
 	release := make(chan struct{})
-	e.h.SetRestore(func() { <-release })
+	entered := make(chan struct{})
+	e.h.SetRestore(func() {
+		close(entered)
+		<-release
+	})
 	go func() {
 		defer e.h.Guard()
 		panic("first")
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// The first crash is now being reported and holds the exit.
+	<-entered
 	go func() {
 		defer e.h.Guard()
 		panic("second")
 	}()
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) // lets the second reach the exit lock; a slow machine only skips that check
 	close(release)
 	select {
 	case <-e.exits:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("handler never exited")
 	}
 	select {
@@ -186,14 +191,19 @@ func TestSecondPanicWaitsForFirst(t *testing.T) {
 func TestExitNormallyWaitsForCrash(t *testing.T) {
 	e := newFakeEnv(t)
 	release := make(chan struct{})
-	e.h.SetRestore(func() { <-release })
+	entered := make(chan struct{})
+	e.h.SetRestore(func() {
+		close(entered)
+		<-release
+	})
 	go func() {
 		defer e.h.Guard()
 		panic("first")
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// The first crash is now being reported and holds the exit.
+	<-entered
 	go e.h.ExitNormally(0)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond) // lets the second reach the exit lock; a slow machine only skips that check
 	close(release)
 	if code := <-e.exits; code != ExitCode {
 		t.Fatalf("first exit = %d, want the crash's %d", code, ExitCode)
@@ -266,12 +276,17 @@ func TestReportsInOneSecondKeepBoth(t *testing.T) {
 func TestRecordDuringCrashLeavesItToTheCrash(t *testing.T) {
 	e := newFakeEnv(t)
 	release := make(chan struct{})
-	e.h.SetRestore(func() { <-release })
+	entered := make(chan struct{})
+	e.h.SetRestore(func() {
+		close(entered)
+		<-release
+	})
 	go func() {
 		defer e.h.Guard()
 		panic("first")
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// The first crash is now being reported and holds the exit.
+	<-entered
 	returned := make(chan struct{})
 	go func() {
 		e.h.Record("consequence", nil)

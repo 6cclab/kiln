@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -52,48 +53,100 @@ func TestConnectAllCapsLocalServers(t *testing.T) {
 	}
 }
 
-// TestConnectAllRemoteServersHaveTheirOwnCap: network servers are capped
-// by MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE, not by the stdio cap. Every
-// request to the fixture is refused after a delay, so one server's failed
-// attempt takes a fixed time (measured first, since the SDK makes more
-// than one request). Two servers then take about one attempt when only
-// the stdio cap is 1, and about two when the remote cap is 1.
-func TestConnectAllRemoteServersHaveTheirOwnCap(t *testing.T) {
-	const delay = 300 * time.Millisecond
-	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(delay):
+// peakServer is an HTTP server that refuses every request and records the
+// most requests it ever had in flight at once. With need > 1 it holds each
+// request until that many are in flight together (or the client gives up),
+// so "this many connected at once" is observed rather than timed.
+type peakServer struct {
+	*httptest.Server
+	mu      sync.Mutex
+	inFlite int
+	peak    int
+	reached chan struct{}
+}
+
+func newPeakServer(need int) *peakServer {
+	p := &peakServer{reached: make(chan struct{})}
+	var once sync.Once
+	p.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		p.inFlite++
+		p.peak = max(p.peak, p.inFlite)
+		if p.inFlite >= need {
+			once.Do(func() { close(p.reached) })
 		}
+		p.mu.Unlock()
+		// Leave before the response is written: the client may send its next
+		// request the instant it has the answer, and that one is not
+		// concurrent with this.
+		leave := func() {
+			p.mu.Lock()
+			p.inFlite--
+			p.mu.Unlock()
+		}
+		if need > 1 {
+			select {
+			case <-p.reached:
+			case <-r.Context().Done():
+				leave()
+				return
+			case <-time.After(30 * time.Second):
+			}
+		} else {
+			// Long enough for an uncapped second connection to overlap.
+			time.Sleep(50 * time.Millisecond)
+		}
+		leave()
 		http.Error(w, "no", http.StatusNotFound)
 	}))
-	defer slow.Close()
-	run := func(localCap, remoteCap string, configs map[string]ServerConfig) time.Duration {
-		t.Setenv(connectTimeoutEnv, "10s")
+	return p
+}
+
+func (p *peakServer) Peak() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.peak
+}
+
+// TestConnectAllRemoteServersHaveTheirOwnCap: network servers are capped
+// by MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE, not by the stdio cap. The
+// fixture records its peak concurrent requests: two servers reach two at
+// once when only the stdio cap is 1, and never more than one when the
+// remote cap is 1.
+func TestConnectAllRemoteServersHaveTheirOwnCap(t *testing.T) {
+	run := func(localCap, remoteCap string, srv *peakServer) {
+		t.Setenv(connectTimeoutEnv, "60s")
 		t.Setenv(localConnectConcurrencyEnv, localCap)
 		t.Setenv(remoteConnectConcurrencyEnv, remoteCap)
+		configs := map[string]ServerConfig{
+			"r1": {Type: "http", URL: srv.URL},
+			"r2": {Type: "http", URL: srv.URL},
+		}
 		h := NewHub()
 		defer h.Close(context.Background())
-		elapsed := connectAllWithin(t, h, configs, 30*time.Second)
+		connectAllWithin(t, h, configs, 90*time.Second)
 		if n := len(h.Statuses()); n != len(configs) {
 			t.Errorf("Statuses() = %d, want %d", n, len(configs))
 		}
-		return elapsed
 	}
-	one := run("", "", map[string]ServerConfig{"r1": {Type: "http", URL: slow.URL}})
-	if one < delay {
-		t.Fatalf("one network server took %s, under the fixture's %s delay", one, delay)
+
+	// Stdio cap 1 must not throttle network servers: both reach the fixture
+	// together (each request waits for the other, so this cannot be missed
+	// on a slow machine; if they shared the stdio cap it would take 30s and
+	// fail).
+	both := newPeakServer(2)
+	defer both.Close()
+	run("1", "", both)
+	if got := both.Peak(); got < 2 {
+		t.Errorf("stdio cap 1: peak concurrent network requests = %d, want 2: they shared the stdio cap", got)
 	}
-	two := map[string]ServerConfig{
-		"r1": {Type: "http", URL: slow.URL},
-		"r2": {Type: "http", URL: slow.URL},
-	}
-	if elapsed := run("1", "", two); elapsed > one*3/2 {
-		t.Errorf("stdio cap 1: two network servers took %s (one alone: %s), so they shared the stdio cap", elapsed, one)
-	}
-	if elapsed := run("", "1", two); elapsed < one*9/5 {
-		t.Errorf("remote cap 1: two network servers took %s (one alone: %s), so both connected at once", elapsed, one)
+
+	// Remote cap 1 serialises them: never two requests at once.
+	capped := newPeakServer(1)
+	defer capped.Close()
+	run("", "1", capped)
+	if got := capped.Peak(); got != 1 {
+		t.Errorf("remote cap 1: peak concurrent network requests = %d, want 1", got)
 	}
 }
 

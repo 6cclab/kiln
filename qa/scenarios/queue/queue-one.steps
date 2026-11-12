@@ -21,6 +21,7 @@ EXPECT /you/
 EXPECT /queued/
 EXPECT /also check the login route/
 EXPECT_NOT /panic|goroutine/
+RELEASE first-turn
 WAITFOR /Checked the login route/ 30
 SHOT drained
 EXPECT_NOT /[0-9] queued/

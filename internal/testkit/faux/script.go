@@ -39,16 +39,19 @@ func (s *Script) modelScripts() map[string][]Step {
 // Usage may accompany Text or Thinking, and DisconnectAfter may accompany
 // Text or Thinking.
 type Step struct {
-	Text            string          `yaml:"text,omitempty"`
-	Thinking        string          `yaml:"thinking,omitempty"`
-	ToolCall        *ToolCallSpec   `yaml:"tool_call,omitempty"`
-	ToolCalls       []ToolCallSpec  `yaml:"tool_calls,omitempty"`
-	OnToolResult    string          `yaml:"on_tool_result,omitempty"`
-	OnToolResults   []string        `yaml:"on_tool_results,omitempty"`
-	Then            []Step          `yaml:"then,omitempty"`
-	Usage           *UsageSpec      `yaml:"usage,omitempty"`
-	Error           *ErrorSpec      `yaml:"error,omitempty"`
-	Delay           string          `yaml:"delay,omitempty"`
+	Text          string         `yaml:"text,omitempty"`
+	Thinking      string         `yaml:"thinking,omitempty"`
+	ToolCall      *ToolCallSpec  `yaml:"tool_call,omitempty"`
+	ToolCalls     []ToolCallSpec `yaml:"tool_calls,omitempty"`
+	OnToolResult  string         `yaml:"on_tool_result,omitempty"`
+	OnToolResults []string       `yaml:"on_tool_results,omitempty"`
+	Then          []Step         `yaml:"then,omitempty"`
+	Usage         *UsageSpec     `yaml:"usage,omitempty"`
+	Error         *ErrorSpec     `yaml:"error,omitempty"`
+	Delay         string         `yaml:"delay,omitempty"`
+	// Hold stops the response at this point until POST /_faux/release?name=<Hold>.
+	// A hold step carries no other content field.
+	Hold            string          `yaml:"hold,omitempty"`
 	DisconnectAfter *disconnectSpec `yaml:"disconnect_after,omitempty"`
 	// EndTurn closes the current turn after this step, so the next text
 	// step answers the following request instead of merging into this one.
@@ -142,6 +145,7 @@ type contentStep struct {
 	toolCall        *ToolCallSpec
 	usage           *UsageSpec
 	delay           time.Duration
+	hold            string
 	chunkDelay      time.Duration
 	disconnectAfter *disconnectSpec
 	// rawBlock is one object from a raw_blocks step, sent verbatim as an
@@ -299,6 +303,12 @@ func toContentStep(s Step) (contentStep, error) {
 	}
 	if s.Usage != nil {
 		cs.usage = s.Usage
+	}
+	if s.Hold != "" {
+		if s.Text != "" || s.Thinking != "" || s.ToolCall != nil || s.Delay != "" || s.DisconnectAfter != nil {
+			return cs, fmt.Errorf("faux: hold %q must be a step of its own", s.Hold)
+		}
+		cs.hold = s.Hold
 	}
 	if s.Delay != "" {
 		d, err := time.ParseDuration(s.Delay)

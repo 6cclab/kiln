@@ -91,7 +91,7 @@ steps:
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(30 * time.Second):
 				// Unwedge the lane so the test can finish, then fail.
 				go func() {
 					for range loop {
@@ -108,7 +108,7 @@ steps:
 			}()
 			select {
 			case <-done:
-			case <-time.After(10 * time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("the turn never finished")
 			}
 			close(loop)
@@ -135,7 +135,7 @@ func TestEventsPostIsOrderedAndDoesNotWait(t *testing.T) {
 	}
 	// Every Post returned while the first handler is still blocked.
 	close(release)
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		mu.Lock()
 		n := len(got)

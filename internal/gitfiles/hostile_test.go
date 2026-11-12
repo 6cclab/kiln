@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-// within fails the test unless fn returns within half a second: a read of
+// within fails the test unless fn returns within 10s (the bound only catches
+// a read that never ends, however slow the machine): a read of
 // /dev/zero or a FIFO must end at once, not allocate or block. On a
 // timeout it ends the whole test process: fn's goroutine cannot be
 // stopped, and an unbounded read of /dev/zero left running would take
@@ -24,8 +25,8 @@ func within(t *testing.T, what string, fn func()) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		fmt.Fprintf(os.Stderr, "--- FAIL: %s: %s did not return within half a second; exiting so the read cannot keep allocating\n", t.Name(), what)
+	case <-time.After(10 * time.Second):
+		fmt.Fprintf(os.Stderr, "--- FAIL: %s: %s did not return within 10s; exiting so the read cannot keep allocating\n", t.Name(), what)
 		os.Exit(1)
 	}
 }

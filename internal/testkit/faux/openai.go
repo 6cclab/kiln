@@ -1,6 +1,7 @@
 package faux
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -129,11 +130,15 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 		return // the client hung up mid-delay (a cancelled request)
 	}
 
+	if !req.Stream && !s.waitAllHolds(r.Context(), t) {
+		return
+	}
+
 	chatID := fmt.Sprintf("chatcmpl_faux_%d", rec.Seq)
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
 	spec := t.disconnectSpec()
 	if req.Stream {
-		s.streamOpenAI(w, req.Model, chatID, t, includeUsage, spec, me.recordDisconnect)
+		s.streamOpenAI(r.Context(), w, req.Model, chatID, t, includeUsage, spec, me.recordDisconnect)
 		return
 	}
 	s.respondOpenAIJSON(w, req.Model, chatID, t, spec, me.recordDisconnect)
@@ -208,7 +213,7 @@ func nullableString(s string) any {
 
 // --- streaming -----------------------------------------------------------
 
-func (s *Server) streamOpenAI(w http.ResponseWriter, model, chatID string, t turn, includeUsage bool, spec *disconnectSpec, onCut func()) {
+func (s *Server) streamOpenAI(ctx context.Context, w http.ResponseWriter, model, chatID string, t turn, includeUsage bool, spec *disconnectSpec, onCut func()) {
 	if spec != nil {
 		w = newDisconnectWriter(w, spec, onCut)
 	}
@@ -229,6 +234,10 @@ func (s *Server) streamOpenAI(w http.ResponseWriter, model, chatID string, t tur
 	toolIndex := 0
 	for _, c := range t.content {
 		switch {
+		case c.hold != "":
+			if !s.holds.wait(ctx, c.hold) {
+				return // the client hung up while held
+			}
 		case c.text != nil:
 			for _, chunk := range chunkString(*c.text, chunkSize) {
 				sw.sendChunk(base(map[string]any{"content": chunk}, nil))

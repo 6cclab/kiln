@@ -1,8 +1,9 @@
 model: faux-1
 steps:
-  # A delay precedes the whole response, so the first turn stays busy for
-  # 8s with nothing written; follow-ups typed during it are queued.
-  - delay: 8s
+  # The first turn stays busy with nothing written until the scenario says
+  # RELEASE first-turn (or esc cancels it); follow-ups typed during it are
+  # queued.
+  - hold: first-turn
   - text: "Working on the upload route now."
     usage: {input: 20, output: 12}
     end_turn: true

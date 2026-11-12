@@ -11,8 +11,7 @@ TYPE start a background sleep
 KEY enter
 WAITFOR /running in the background as bash_1/ 20
 SHOT dispatched
-RUN pgrep -f 'sleep 7[7]' >/dev/null
+RUN i=0; until pgrep -f 'sleep 777[7]' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
 TYPE /exit
 KEY enter
-WAIT 2
-RUN ! pgrep -f 'sleep 7[7]' >/dev/null
+RUN i=0; until ! pgrep -f 'sleep 777[7]' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done

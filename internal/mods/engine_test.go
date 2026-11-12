@@ -259,26 +259,85 @@ func TestHookThatThrowsIsSkipped(t *testing.T) {
 	}
 }
 
+// commandAsync runs a command on its own goroutine; the channel gets its text.
+func commandAsync(t *testing.T, h *harness, name string) <-chan string {
+	t.Helper()
+	got := make(chan string, 1)
+	go func() {
+		text, _, err := h.e.RunCommand(ctxT(t), name, "")
+		if err != nil {
+			text = "error: " + err.Error()
+		}
+		got <- text
+	}()
+	return got
+}
+
+// waitUntil polls cond until it holds; the deadline only catches a hang.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func receive(t *testing.T, what string, got <-chan string) string {
+	t.Helper()
+	select {
+	case text := <-got:
+		return text
+	case <-time.After(30 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		return ""
+	}
+}
+
 func TestHookTimeoutIsSkipped(t *testing.T) {
-	h := newHarness(t, Options{HookBudget: 200 * time.Millisecond, CatchBudget: 100 * time.Millisecond})
+	// Budgets and the watchdog run on a fake clock that only the test moves,
+	// so a stalled machine cannot charge a hook for time it did not use.
+	const budget = time.Second
+	budgets := newFakeClock()
+	h := newHarness(t, Options{HookBudget: budget, CatchBudget: budget / 2, BudgetClock: budgets})
 	h.load(t, "slow", "answerer")
 	ctx := ctxT(t)
 	h.e.SessionStart(ctx)
+	if n := budgets.pending(); n != 1 {
+		t.Fatalf("%d budget timers pending after session.start, want only the watchdog", n)
+	}
 
-	start := time.Now()
-	if got := runCommand(t, h, "hang", ""); got != "answered hang #1" {
-		t.Errorf("hang: %q", got)
+	// hang never settles: it is skipped once its own time passes the budget,
+	// and not before.
+	hang := func(want string) {
+		t.Helper()
+		got := commandAsync(t, h, "hang")
+		waitUntil(t, "the hang hook's budget timer", func() bool { return budgets.pending() == 2 })
+		budgets.advance(h.e, budget*3/4, budget/4)
+		select {
+		case text := <-got:
+			t.Fatalf("hang settled before its budget passed: %q", text)
+		default:
+		}
+		budgets.advance(h.e, budget/2, budget/4)
+		if text := receive(t, "hang to time out", got); text != want {
+			t.Errorf("hang: %q, want %q", text, want)
+		}
 	}
-	if d := time.Since(start); d < 150*time.Millisecond || d > 3*time.Second {
-		t.Errorf("hang settled after %v, want about its 200ms budget", d)
-	}
-	if got := runCommand(t, h, "spin", ""); got != "answered spin #1" {
-		t.Errorf("spin: %q", got)
+	hang("answered hang #1")
+
+	// spin never yields the worker: the watchdog interrupts it.
+	invalidated := h.host.invalidated()
+	got := commandAsync(t, h, "spin")
+	waitUntil(t, "the spin hook's loop", func() bool { return h.host.invalidated() > invalidated })
+	budgets.advance(h.e, budget*5/4, budget*5/4)
+	if text := receive(t, "the watchdog to stop spin", got); text != "answered spin #1" {
+		t.Errorf("spin: %q", text)
 	}
 	// The engine still answers after the watchdog interrupted a busy loop.
-	if got := runCommand(t, h, "hang", ""); got != "answered hang #2" {
-		t.Errorf("after spin: %q", got)
-	}
+	hang("answered hang #2")
 
 	// Waiting on next is not the hook's own time: a tool that runs three
 	// budgets long still reaches the hook's code after next.
@@ -286,8 +345,9 @@ func TestHookTimeoutIsSkipped(t *testing.T) {
 	if o.Handled {
 		t.Fatalf("Slow should run: %+v", o)
 	}
-	time.Sleep(600 * time.Millisecond)
+	budgets.advance(h.e, 3*budget, budget/4)
 	handle.Finish(json.RawMessage(`"done"`), false)
+	budgets.advance(h.e, budget/2, budget/4)
 	if got := stateJSON(t, h.e, "slow", "after"); got != "saw done" {
 		t.Errorf("after a long next the hook recorded %v\nlogs:\n%s", got, h.logs)
 	}

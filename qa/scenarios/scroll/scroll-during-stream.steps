@@ -1,6 +1,6 @@
 # SCROLL while a reply is streaming: testdata/faux/qa/scroll-stream.yaml
-# holds its response behind a 3s delay so the turn is still busy ("esc to
-# interrupt") when the scroll lands. Checks the scroll itself doesn't
+# holds its response until the scenario releases it, so the turn is still
+# busy ("esc to stop") when the scroll lands. Checks the scroll itself doesn't
 # corrupt anything and the streamed markers land intact once the turn
 # finishes.
 #
@@ -24,8 +24,9 @@ SHOT streaming-before-scroll
 SCROLL up 3
 SHOT streaming-during-scroll
 EXPECT_NOT /panic|goroutine/
-WAIT 3.5
-SHOT streaming-after-delay-still-scrolled
+RELEASE reply
+WAITGONE /esc to stop/ 20
+SHOT streaming-after-release-still-scrolled
 EXPECT_NOT /panic|goroutine/
 
 # Scroll back down explicitly rather than assume auto-snap either way

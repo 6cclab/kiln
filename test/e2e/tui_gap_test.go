@@ -249,7 +249,7 @@ func TestTUI_CostByModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proj, home, sessDir, addr, _ := tuiFixture(t, string(script))
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, string(script))
 	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
@@ -259,14 +259,17 @@ func TestTUI_CostByModel(t *testing.T) {
 
 	s.Send("dispatch two tasks")
 	s.SendKey("enter")
+	releaseFaux(srv, "subagents") // nothing to observe live here
 	waitTurnSettled(t, s)
 
 	submitSlashCommand(s, "cost")
 	if err := s.WaitFor("by model:", 3*time.Second); err != nil {
 		t.Fatalf("/cost never showed a by-model breakdown: %v", err)
 	}
-	if err := waitQuiescent(s, 150*time.Millisecond, 2*time.Second); err != nil {
-		t.Fatal(err)
+	for _, want := range []string{"faux/faux-1", "faux/faux-2"} {
+		if err := s.WaitFor(want, 3*time.Second); err != nil {
+			t.Fatalf("/cost by-model table never listed %q: %v", want, err)
+		}
 	}
 
 	joined := strings.Join(s.Rows(), "\n")
@@ -304,8 +307,10 @@ func TestTUI_ModelRolesView(t *testing.T) {
 	if err := s.WaitFor("provider/model", 3*time.Second); err != nil {
 		t.Fatalf("/model roles never rendered the roles table header: %v", err)
 	}
-	if err := waitQuiescent(s, 150*time.Millisecond, 2*time.Second); err != nil {
-		t.Fatal(err)
+	for _, want := range []string{"fast", "faux/faux-2", "heavy", "faux/faux-1"} {
+		if err := s.WaitFor(want, 3*time.Second); err != nil {
+			t.Fatalf("/model roles table never listed %q: %v", want, err)
+		}
 	}
 
 	joined := strings.Join(s.Rows(), "\n")
@@ -383,7 +388,7 @@ func TestTUI_FullscreenWithSubagentsPanel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proj, home, sessDir, addr, _ := tuiFixture(t, string(script))
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, string(script))
 	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
 
 	// Start inline (no --fullscreen yet).
@@ -411,6 +416,7 @@ func TestTUI_FullscreenWithSubagentsPanel(t *testing.T) {
 		t.Fatalf("Viewport() returned %d rows after entering fullscreen, want 30", len(rows))
 	}
 
+	releaseFaux(srv, "subagents") // done observing the live panel
 	waitTurnSettled(t, s)
 	if err := s.WaitFor(regexp.MustCompile(`2 subagents finished`), 3*time.Second); err != nil {
 		t.Fatalf("subagents panel did not settle to two done rows in fullscreen: %v", err)
@@ -465,7 +471,7 @@ func TestTUI_ResizeDuringLiveSubagentRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proj, home, sessDir, addr, _ := tuiFixture(t, string(script))
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, string(script))
 	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
@@ -493,6 +499,7 @@ func TestTUI_ResizeDuringLiveSubagentRow(t *testing.T) {
 	assertFooterInvariant(t, s)
 
 	// The turn that was live during the resize still finishes normally.
+	releaseFaux(srv, "subagents")
 	waitTurnSettled(t, s)
 	assertFooterInvariant(t, s)
 

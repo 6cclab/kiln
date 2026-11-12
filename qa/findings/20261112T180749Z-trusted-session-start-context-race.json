@@ -1,0 +1,31 @@
+{
+ "id": "20261112T180749Z-trusted-session-start-context-race",
+ "found_at": "2026-11-12T18:07:49Z",
+ "scenario": "qa/scenarios/startup/trust-accept-session-start-queues.steps",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "First prompt after accepting trust can go out without SessionStart context",
+ "observed": "After the trust dialog was accepted, internal/cli/tui.go ran the deferred SessionStart hooks on a goroutine of their own and sent their output later as MsgStartupContext. A prompt submitted before that message landed went out without the hook context; test/e2e/trust_test.go hid it with a 500ms sleep. Esc could not stop the hooks.",
+ "expected": "The prompt waits for the SessionStart hooks (busy line 'Running session start hooks', the prompt queues) and goes out with their context; Esc stops them and puts the queued prompt back in the input, as for /compact.",
+ "design_ref": null,
+ "evidence": [
+  "TestTUI_Trust_HooksAndAllowWaitForTrust with a 1s SessionStart hook fails on the old code: 'the first prompt lacks the SessionStart context'.",
+  "TestTrustedSessionStart_PromptWaitsForContext fails without the background operation; TestTrustedSessionStart_EscStopsHooks fails with a no-op cancel."
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/background.go",
+   "internal/tui/app.go",
+   "internal/cli/tui.go",
+   "internal/cli/chat.go"
+  ],
+  "regression_test": "TestTrustedSessionStart_PromptWaitsForContext,TestTrustedSessionStart_EscStopsHooks,TestTUI_Trust_HooksAndAllowWaitForTrust",
+  "after_evidence": [
+   "qa/runs/det-trust2/xterm-dark/startup-trust-accept-session-start-queues-120x40/02-prompt-queued.png"
+  ],
+  "updated_at": "2026-11-12T18:07:58Z"
+ }
+}

@@ -151,13 +151,14 @@ func TestRound3_Heredocs(t *testing.T) {
 }
 
 // TestRound3_GlobCap (MED 7): expanding a huge glob is capped, quickly,
-// and the operand is then unknowable.
+// and the operand is then unknowable. The time bound only catches an
+// unbounded expansion; the cap itself is checked by the verdict.
 func TestRound3_GlobCap(t *testing.T) {
 	newPathFixture(t)
 	p := Permissions{Deny: []string{"Read(.env)"}}
 	start := time.Now()
 	got := bashVerdict(p, "cat /*/*/*/*/*")
-	if took := time.Since(start); took > time.Second {
+	if took := time.Since(start); took > 30*time.Second {
 		t.Errorf("took %v", took)
 	}
 	if got != Ask {

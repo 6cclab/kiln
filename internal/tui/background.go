@@ -33,6 +33,9 @@ type msgBackgroundDone struct {
 	result    commands.Result
 	err       error
 	cancelled bool
+	// startupContext is SessionStart output from the hooks that waited
+	// for the trust dialog (startTrustedSessionStart).
+	startupContext []string
 }
 
 // startBackground runs handled.Background off the event loop.
@@ -58,6 +61,24 @@ func (m Model) startBackground(handled commands.Result) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmd, tickCmd())
 }
 
+// startTrustedSessionStart runs the SessionStart hooks that waited for the
+// trust dialog as a background operation, so a line submitted before their
+// output is in queues instead of going out without it. The output rides
+// on msgBackgroundDone, so finishBackground adds it before it sends what
+// was queued.
+func (m Model) startTrustedSessionStart(run func(context.Context) []string) (tea.Model, tea.Cmd) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.background = &backgroundState{cancel: cancel, cancelNote: "Session start hooks cancelled."}
+	m.spinner.StartLabel("Running session start hooks")
+	m.footer.SetBusy(true)
+	m = m.syncPromptPlaceholder()
+	hooks := func() tea.Msg {
+		lines := run(ctx)
+		return msgBackgroundDone{startupContext: lines, cancelled: ctx.Err() != nil}
+	}
+	return m, tea.Batch(hooks, tickCmd())
+}
+
 // finishBackground shows a background command's outcome, then runs what
 // was typed while it ran, the way finishTurn does for a turn: commands and
 // `!` lines held in m.deferredCmds first (drainDeferredCommands), then the
@@ -71,6 +92,7 @@ func (m Model) finishBackground(msg msgBackgroundDone) (tea.Model, tea.Cmd) {
 	}
 	m.spinner.Stop()
 	m.footer.SetBusy(false)
+	m.startupContext = append(m.startupContext, msg.startupContext...)
 	queued := m.queued
 	m.queued = nil
 	m.spinner.SetQueueLen(0)

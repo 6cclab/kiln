@@ -65,6 +65,23 @@ func startFaux(t *testing.T, scriptYAML string) (addr string, srv *tkfaux.Server
 	return fauxtest.Start(t, scriptYAML)
 }
 
+// releaseFaux releases the faux script's `hold: <name>` step.
+func releaseFaux(srv *tkfaux.Server, name string) { srv.Release(name) }
+
+// waitFauxHeld blocks until a request is waiting at the faux hold `name`, so
+// a test acts only once the turn is genuinely held. The deadline only bounds
+// a hang: the wait returns as soon as the request is there.
+func waitFauxHeld(t *testing.T, srv *tkfaux.Server, name string) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for srv.Held(name) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no request reached faux hold %q", name)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // scratchHome builds an isolated $HOME and session store root under
 // t.TempDir(), so no test reads or writes the real user's ~/.harness.
 func scratchHome(t *testing.T) (home, sessDir string) {
@@ -154,7 +171,7 @@ func runBinary(t *testing.T, bin, dir string, env map[string]string, timeout tim
 			}
 		}
 		return runResult{Stdout: stdout.String(), Stderr: stderr.String(), Code: code}
-	case <-time.After(timeout):
+	case <-time.After(max(timeout, e2eMinWait)):
 		_ = cmd.Process.Kill()
 		<-done
 		t.Fatalf("run %s: timed out after %s\nstdout so far:\n%s\nstderr so far:\n%s", bin, timeout, stdout.String(), stderr.String())

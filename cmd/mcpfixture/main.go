@@ -22,6 +22,11 @@
 //	                 TestMCP_FirstTurnDoesNotWaitForConnect, which needs a
 //	                 connect that is slow but eventually succeeds, to prove
 //	                 the harness's first turn does not block on it.
+//	--connect-gate   wait until the given file exists before reading stdin,
+//	                 like --connect-delay but released by an event instead
+//	                 of a clock: the test creates the file when it has seen
+//	                 what it needs, so a slow machine cannot end the wait
+//	                 early or late. Used by TestMCP_FirstTurnDoesNotWaitForConnect.
 package main
 
 import (
@@ -54,6 +59,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	failStartup := fs.Bool("fail-startup", false, "exit 1 immediately, before serving anything")
 	hang := fs.Bool("hang", false, "start but never complete MCP initialize")
 	connectDelay := fs.Duration("connect-delay", 0, "sleep this long before completing MCP initialize (test only)")
+	connectGate := fs.String("connect-gate", "", "wait until this file exists before completing MCP initialize (test only)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -74,6 +80,19 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		// response by exactly this long without touching protocol
 		// internals.
 		time.Sleep(*connectDelay)
+	}
+
+	if *connectGate != "" {
+		parent := os.Getppid()
+		for {
+			if _, err := os.Stat(*connectGate); err == nil {
+				break
+			}
+			if os.Getppid() != parent {
+				return 1 // the client is gone and the gate never opened
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 
 	server := mcpfixture.NewServer()

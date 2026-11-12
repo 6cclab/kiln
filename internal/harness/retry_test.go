@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/andrepato/harness/internal/provider"
 )
@@ -45,6 +46,22 @@ func TestRetryPolicy_DelayJitterEnv_Zero(t *testing.T) {
 				t.Fatalf("delay(%d) = %v, want exactly %dms with jitter disabled", attempt, got, want)
 			}
 		}
+	}
+}
+
+// HARNESS_RETRY_DELAY_MS fixes every backoff, past the 60s cap and with no
+// jitter, so a QA scenario's countdown stays up until it presses r.
+func TestRetryPolicy_DelayEnvFixesEveryAttempt(t *testing.T) {
+	t.Setenv("HARNESS_RETRY_DELAY_MS", "600000")
+	p := DefaultRetryPolicy()
+	for attempt := 1; attempt <= 4; attempt++ {
+		if got := p.delay(attempt); got != 10*time.Minute {
+			t.Fatalf("delay(%d) = %v, want exactly 10m", attempt, got)
+		}
+	}
+	t.Setenv("HARNESS_RETRY_DELAY_MS", "soon")
+	if got := p.delay(1); got > time.Second {
+		t.Fatalf("an unparseable value must fall back to the policy, got %v", got)
 	}
 }
 

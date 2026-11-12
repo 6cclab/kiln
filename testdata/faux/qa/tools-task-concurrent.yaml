@@ -5,28 +5,24 @@
 # the "fast" modelRoles entry to faux-2, tc3 via "heavy" to faux-3 (see
 # testdata/behaviour/qa/model-roles-fast-heavy/.claude/settings.json).
 #
-# All three subagent replies delay 2s: a real-terminal driver's
-# WAITFOR/SHOT round trip has noticeable overhead, and the original
-# 500ms delays meant the "3 subagents running in parallel" state never
-# survived to the first screenshot — by the time the shot was taken all
-# three had already finished, so it showed "3 subagents finished" instead
-# (subagents.go's renderLocked flips the header the moment the last one
-# completes). 2s leaves room for the live state to actually be captured.
+# All three subagent replies are held until the scenario has captured the
+# "3 subagents running" state and says RELEASE subagents (subagents.go's
+# renderLocked flips the header the moment the last one completes).
 models:
   faux-1:
     - tool_calls:
         - {name: task, args: {subagent_type: "general-purpose", description: "check the auth middleware", prompt: "Summarize src/middleware/auth.ts"}, id: tc1}
         - {name: task, args: {subagent_type: "general-purpose", description: "check the upload route", prompt: "Summarize src/routes/upload.ts", model: "fast"}, id: tc2}
         - {name: task, args: {subagent_type: "general-purpose", description: "check the redis mock", prompt: "Summarize test/helpers/redisMock.ts", model: "heavy"}, id: tc3}
+    - hold: subagents
     - text: "auth checks for an Authorization header"
-      delay: 2s
     - on_tool_results: [tc1, tc2, tc3]
       then:
         - text: "All three scouted. Ready to write the rate limiter."
           usage: {input: 500, output: 50}
   faux-2:
+    - hold: subagents
     - text: "upload route wires auth then multer then the handler"
-      delay: 2s
   faux-3:
+    - hold: subagents
     - text: "redis mock only stubs get/set/del"
-      delay: 2s

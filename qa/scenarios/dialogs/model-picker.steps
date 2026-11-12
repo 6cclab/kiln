@@ -14,7 +14,7 @@ WAITFOR /you[\s\S]*kiln/ 20
 SHOT turn-two
 EXPECT /Second task done as well/
 TYPE /model
-WAIT 1
+WAITFOR /Switch model/ 20
 SHOT model-autocomplete
 # design: Terminal.dc.html:220 (CMDS entry "/model" desc:'Switch model') —
 # kiln's actual popup description is "Show or change the active model"

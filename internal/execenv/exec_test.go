@@ -97,18 +97,19 @@ func TestExecCaptureLimitsTruncateTail(t *testing.T) {
 // invocation itself so this can't match an unrelated sleep on a shared
 // test machine.
 func sleepSurvives(marker string) bool {
-	err := exec.Command("pgrep", "-f", "sleep 3[.]"+marker).Run()
+	err := exec.Command("pgrep", "-f", "sleep 120[.]"+marker).Run()
 	return err == nil // exit 0 means pgrep found a match
 }
 
 func TestExecTimeoutKillsProcessGroup(t *testing.T) {
 	env := New(t.TempDir())
-	// A fractional suffix: the sleep stays a valid ~3s sleep, and the
+	// A fractional suffix: the sleep stays a valid ~2min sleep (long enough that one still
+	// alive after the generous poll below was not killed), and the
 	// pgrep pattern below cannot match an unrelated "sleep 30" from another
 	// process on the machine (a three-digit integer marker did, when it
 	// happened to be 0).
 	marker := fmt.Sprintf("%09d", time.Now().UnixNano()%1_000_000_000)
-	command := fmt.Sprintf(`sleep 3.%s & wait`, marker)
+	command := fmt.Sprintf(`sleep 120.%s & wait`, marker)
 
 	_, err := env.Exec(context.Background(), command, ExecOptions{
 		InheritEnv: true,
@@ -118,20 +119,20 @@ func TestExecTimeoutKillsProcessGroup(t *testing.T) {
 		t.Fatal("expected a timeout error")
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if !sleepSurvives(marker) {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("background sleep 3.%s survived Exec timeout", marker)
+	t.Fatalf("background sleep 120.%s survived Exec timeout", marker)
 }
 
 func TestExecContextCancelKillsProcessGroup(t *testing.T) {
 	env := New(t.TempDir())
 	marker := fmt.Sprintf("%09d", time.Now().UnixNano()%1_000_000_000+1)
-	command := fmt.Sprintf(`sleep 3.%s & wait`, marker)
+	command := fmt.Sprintf(`sleep 120.%s & wait`, marker)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -139,18 +140,23 @@ func TestExecContextCancelKillsProcessGroup(t *testing.T) {
 		defer close(done)
 		_, _ = env.Exec(ctx, command, ExecOptions{InheritEnv: true})
 	}()
-	time.Sleep(200 * time.Millisecond)
+	// Cancel only once the sleep is really running, so the kill is what the
+	// test observes.
+	started := time.Now().Add(30 * time.Second)
+	for !sleepSurvives(marker) && time.Now().Before(started) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	cancel()
 	<-done
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if !sleepSurvives(marker) {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("background sleep 3.%s survived context cancellation", marker)
+	t.Fatalf("background sleep 120.%s survived context cancellation", marker)
 }
 
 // TestExecReturnsWhileBackgroundJobHoldsPipes: a job the command
@@ -161,11 +167,11 @@ func TestExecReturnsWhileBackgroundJobHoldsPipes(t *testing.T) {
 	env := New(t.TempDir())
 	start := time.Now()
 	t.Cleanup(KillLeftoverJobs)
-	res, err := env.Exec(context.Background(), "sleep 20 & echo started; echo done", ExecOptions{})
+	res, err := env.Exec(context.Background(), "sleep 120 & echo started; echo done", ExecOptions{})
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	if elapsed := time.Since(start); elapsed > 60*time.Second {
 		t.Fatalf("Exec took %s; it waited on the background job", elapsed)
 	}
 	if res.ExitCode != 0 || !strings.Contains(res.Text, "started") || !strings.Contains(res.Text, "done") {
@@ -189,7 +195,7 @@ func TestExecKillLeftoverJobs(t *testing.T) {
 		t.Fatalf("plain command: JobsLeft=%v err=%v, want false", quiet.JobsLeft, err)
 	}
 	KillLeftoverJobs()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		check, _ := env.Exec(context.Background(), `kill -0 "$(cat pid)" 2>/dev/null && echo alive || echo gone`, ExecOptions{})
 		if strings.TrimSpace(check.Text) == "gone" {

@@ -43,7 +43,7 @@ func TestTransformLine_IsZeroInfiniteLoop(t *testing.T) {
 			t.Errorf("Expected loop to skip 2 zero cells, got %d", n)
 		}
 		t.Logf("Fix verified: loop correctly skipped %d zero cells and stopped at non-zero cell", n)
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Loop still hangs — fix did not work")
 	}
 }

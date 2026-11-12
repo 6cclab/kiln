@@ -9,9 +9,13 @@ WAIT 1
 TYPE 1
 WAIT 3
 SHOT 03-agents
+RELEASE agents
+RELEASE streaming
+RELEASE diff1
 TYPE 1
 WAIT 3
 SHOT 04-diff
+RELEASE diff2
 TYPE 1
 WAIT 3
 SHOT 05-permission
@@ -19,6 +23,7 @@ TYPE 1
 WAIT 3
 SHOT 06-error
 TYPE r
+RELEASE diff3
 WAIT 3
 SHOT 07-permission-2
 TYPE 1

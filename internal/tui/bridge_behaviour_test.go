@@ -15,7 +15,7 @@ func TestBridgeWorkerIntegrationCommitsVisibleNoteWithoutSyntheticCopy(t *testin
 	f := &fakeSink{}
 	b.setSink(f)
 	b.handleEvent(harness.Event{Type: harness.EventWorkerIntegration, IntegrationStatus: "conflict", IntegrationText: "Worker batch was not integrated: overlap at one.txt"}, &turnState{}, 4000)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		printed, _ := f.snapshot()
 		if strings.Contains(strings.Join(printed, "\n"), "overlap at one.txt") {
@@ -41,7 +41,7 @@ func TestBridge_RetryScheduled_SendsHumanisedMessage(t *testing.T) {
 		DelayMs: 1500, RetryError: "provider request failed: status=529 body=overloaded",
 	}, ts, 4000)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var gotRetry MsgRetry
 	var sawRetry, sawLabel bool
 	for time.Now().Before(deadline) && (!sawRetry || !sawLabel) {
@@ -85,7 +85,7 @@ func TestBridge_RetryStart_SendsAttempt(t *testing.T) {
 
 	b.handleEvent(harness.Event{Type: harness.EventRetryStart, Attempt: 2}, ts, 4000)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var sawStart bool
 	var gotAttempt int
 	for time.Now().Before(deadline) && !sawStart {
@@ -114,22 +114,31 @@ func TestBridge_StreamText_Throttled(t *testing.T) {
 	defer b.Stop()
 	f := &fakeSink{}
 	b.setSink(f)
-	ts := &turnState{toolStarts: map[string]toolStart{}}
+	// A stepped clock: the deltas all land inside one streamThrottle window
+	// however slow the machine is.
+	clock := time.Now()
+	ts := &turnState{toolStarts: map[string]toolStart{}, now: func() time.Time { return clock }}
+	streamTexts := func() int {
+		_, sent := f.snapshot()
+		count := 0
+		for _, m := range sent {
+			if _, ok := m.(MsgStreamText); ok {
+				count++
+			}
+		}
+		return count
+	}
 
 	for i := 0; i < 5; i++ {
 		b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "x"}, ts)
 	}
-	time.Sleep(10 * time.Millisecond)
-
-	_, sent := f.snapshot()
-	count := 0
-	for _, m := range sent {
-		if _, ok := m.(MsgStreamText); ok {
-			count++
-		}
+	if count := streamTexts(); count != 1 {
+		t.Errorf("MsgStreamText sent %d times within streamThrottle for 5 rapid deltas, want 1", count)
 	}
-	if count > 1 {
-		t.Errorf("MsgStreamText sent %d times within streamThrottle for 5 rapid deltas, want at most 1", count)
+	clock = clock.Add(streamThrottle)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "x"}, ts)
+	if count := streamTexts(); count != 2 {
+		t.Errorf("MsgStreamText sent %d times after the window passed, want 2", count)
 	}
 
 	b.handleEvent(harness.Event{
@@ -137,7 +146,7 @@ func TestBridge_StreamText_Throttled(t *testing.T) {
 		Message: &msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.Text("xxxxx")}},
 	}, ts, 4000)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var sawFinal bool
 	for time.Now().Before(deadline) && !sawFinal {
 		_, sent := f.snapshot()
@@ -150,6 +159,89 @@ func TestBridge_StreamText_Throttled(t *testing.T) {
 	}
 	if !sawFinal {
 		t.Fatal("EventMessageEnd did not send the final MsgStreamText{\"xxxxx\"}")
+	}
+}
+
+// streamTextsSent lists the MsgStreamText payloads f has received.
+func streamTextsSent(f *fakeSink) []string {
+	_, sent := f.snapshot()
+	var out []string
+	for _, m := range sent {
+		if v, ok := m.(MsgStreamText); ok {
+			out = append(out, v.Text)
+		}
+	}
+	return out
+}
+
+// A delta the throttle holds back reaches the screen once its window ends,
+// even when no later delta comes: a stream that pauses (a slow model
+// between bursts, or a held faux turn) must not leave the screen behind
+// what has arrived.
+func TestBridge_StreamText_TrailingFlush(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	clock := time.Now()
+	var flushes []func()
+	var waits []time.Duration
+	ts := &turnState{toolStarts: map[string]toolStart{}, now: func() time.Time { return clock },
+		after: func(d time.Duration, fn func()) { waits = append(waits, d); flushes = append(flushes, fn) }}
+
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "The limi"}, ts)
+	clock = clock.Add(10 * time.Millisecond)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "ter now"}, ts)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: " sits"}, ts)
+	if got := streamTextsSent(f); len(got) != 1 || got[0] != "The limi" {
+		t.Fatalf("sent %q inside the window, want only the first delta", got)
+	}
+	if len(flushes) != 1 || waits[0] != streamThrottle-10*time.Millisecond {
+		t.Fatalf("armed %d flushes with waits %v, want one for the rest of the window", len(flushes), waits)
+	}
+	flushes[0]()
+	if got := streamTextsSent(f); len(got) != 2 || got[1] != "The limiter now sits" {
+		t.Fatalf("after the window sent %q, want the held-back text flushed", got)
+	}
+}
+
+// A trailing flush armed before newer text was sent, or before the message
+// ended, must not send its older text over the newer state.
+func TestBridge_StreamText_StaleTrailingFlushDropped(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	clock := time.Now()
+	var flushes []func()
+	ts := &turnState{toolStarts: map[string]toolStart{}, now: func() time.Time { return clock },
+		after: func(_ time.Duration, fn func()) { flushes = append(flushes, fn) }}
+
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "a"}, ts)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "b"}, ts) // held back, flush armed
+	clock = clock.Add(streamThrottle)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "c"}, ts) // sent: supersedes it
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "d"}, ts) // held back again
+	b.handleEvent(harness.Event{
+		Type:    harness.EventMessageEnd,
+		Message: &msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.Text("abcd")}},
+	}, ts, 4000)
+	for _, flush := range flushes {
+		flush()
+	}
+	if got, want := strings.Join(streamTextsSent(f), "|"), "a|abc|abcd"; got != want {
+		t.Fatalf("stream texts %s, want %s: a superseded flush was sent", got, want)
+	}
+}
+
+// Stream text that arrives after the turn ended (a trailing flush that lost
+// the race with the turn's end) does not bring a live region back.
+func TestStreamTextAfterTurnEndIgnored(t *testing.T) {
+	m := streamCostModel(false, 0)
+	m.busy = false
+	next, _ := m.Update(MsgStreamText{Text: "stale partial"})
+	if got := next.(Model).streamText; got != "" {
+		t.Fatalf("streamText = %q after the turn ended, want it ignored", got)
 	}
 }
 
@@ -186,7 +278,7 @@ func TestBridge_StreamText_ResetsBetweenMessages(t *testing.T) {
 	}
 	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "Now the Redis client."}, ts)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	var gotSecond string
 	for time.Now().Before(deadline) {
 		_, sent := f.snapshot()
@@ -235,7 +327,7 @@ func TestBridge_FreezeBefore_SkipsIdenticalConsecutiveFreeze(t *testing.T) {
 	b.FreezeBefore()
 	b.FreezeBefore() // simulates Apply() having unfrozen it again in between
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if calls >= 2 {
 			break
@@ -261,7 +353,7 @@ func TestBridge_FreezeBefore_SkipsIdenticalConsecutiveFreeze(t *testing.T) {
 	// A genuinely changed freeze must still commit.
 	b.SetFreezeHook(func() []string { return []string{"", "3/3 done"} })
 	b.FreezeBefore()
-	deadline = time.Now().Add(2 * time.Second)
+	deadline = time.Now().Add(15 * time.Second)
 	var sawChanged bool
 	for time.Now().Before(deadline) && !sawChanged {
 		printed, _ := f.snapshot()

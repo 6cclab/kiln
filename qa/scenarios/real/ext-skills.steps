@@ -9,7 +9,7 @@
 
 WAITFOR /describe a task/ 30
 TYPE /rel
-WAIT 1
+WAITFOR /release-notes/ 30
 SHOT slash-palette
 EXPECT /release-notes/
 EXPECT_NOT /api-conventions/

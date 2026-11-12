@@ -13,6 +13,27 @@ import (
 	"github.com/andrepato/harness/internal/session"
 )
 
+// stallRequests makes the numbered model requests (1-based, in the order they
+// are made) hit the first-token limit, and gives every other request a limit
+// no test run comes near. The stalling steps in the script wait far longer
+// than the short limit, so they always stall however slow the machine is,
+// and the quick ones are never cut off by it.
+func stallRequests(h *Harness, stalled ...int) {
+	var mu sync.Mutex
+	calls := 0
+	h.opts.StallFirstEvent = func(int) time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		for _, n := range stalled {
+			if n == calls {
+				return 100 * time.Millisecond
+			}
+		}
+		return time.Minute
+	}
+}
+
 // compactionEvents records the retry and fault events of one run.
 type compactionEvents struct {
 	mu     sync.Mutex
@@ -44,10 +65,10 @@ model: faux-1
 steps:
   - text: "first reply"
     end_turn: true
-  - delay: 3s
+  - delay: 30s
     text: "too late (cache attempt)"
     end_turn: true
-  - delay: 3s
+  - delay: 30s
     text: "too late (serialized attempt)"
     end_turn: true
   - text: "a summary"
@@ -55,7 +76,7 @@ steps:
   - text: "second reply"
     end_turn: true
 `, []string{"bash"})
-	rig.H.opts.StallFirstEvent = func(int) time.Duration { return 300 * time.Millisecond }
+	stallRequests(rig.H, 2, 3)
 	lane := rig.mustLane("main")
 	if _, err := lane.Prompt(context.Background(), "first message", nil); err != nil {
 		t.Fatal(err)
@@ -101,22 +122,22 @@ model: faux-1
 steps:
   - text: "first reply"
     end_turn: true
-  - delay: 3s
+  - delay: 30s
     text: "late (attempt 1, cache)"
     end_turn: true
-  - delay: 3s
+  - delay: 30s
     text: "late (attempt 1, serialized)"
     end_turn: true
-  - delay: 3s
+  - delay: 30s
     text: "late again (attempt 2, cache)"
     end_turn: true
-  - delay: 3s
+  - delay: 30s
     text: "late again (attempt 2, serialized)"
     end_turn: true
   - text: "second reply"
     end_turn: true
 `, []string{"bash"})
-	rig.H.opts.StallFirstEvent = func(int) time.Duration { return 300 * time.Millisecond }
+	stallRequests(rig.H, 2, 3, 4, 5)
 	lane := rig.mustLane("main")
 	if _, err := lane.Prompt(context.Background(), "first message", nil); err != nil {
 		t.Fatal(err)

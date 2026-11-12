@@ -103,7 +103,7 @@ var mcpLogTimeRe = regexp.MustCompile(`^time=(\S+)`)
 // relative to the test goroutine.
 func mcpWaitLogLine(t *testing.T, dir, contains string, timeout time.Duration) (time.Time, string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(max(timeout, e2eMinWait))
 	for {
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
@@ -199,23 +199,17 @@ steps:
 // opposite of what's being asserted, so this test uses the TUI, exactly as
 // test/e2e/mcp_tui_test.go's TestTUI_MCP_BackgroundConnect does.
 //
-// cmd/mcpfixture's new -connect-delay flag (added for this test only, see
-// its doc comment) sleeps 3s before the fixture process starts reading
-// stdin at all, so the client's MCP initialize response is delayed exactly
-// that long without touching protocol internals.
-//
-// Proof is by real timestamps, not just ordering: the faux server records
-// a wall-clock Time on every request it receives (internal/testkit/faux/recording.go's
-// Request.Time), and internal/diag's run log records a real "time="
-// attribute per line (slog's default TextHandler; verified empirically --
-// see mcpLogTimeRe's comment -- not assumed). The test asserts the first
-// provider request's recorded Time is before the run log's "mcp connected"
-// line's time, with the 3s connect delay as the margin.
+// cmd/mcpfixture's -connect-gate flag holds the fixture process before it
+// starts reading stdin at all, until the test creates a file, so the
+// client's MCP initialize response is withheld by an event, not a clock:
+// the test finishes the whole first turn, checks the run log has no "mcp
+// connected" line yet, then opens the gate and waits for that line. No
+// elapsed-time bound is involved, so a slow machine cannot fail it.
 func TestMCP_FirstTurnDoesNotWaitForConnect(t *testing.T) {
 	fixture := mcpBuildFixture(t)
-	const connectDelay = "3s"
+	gate := filepath.Join(t.TempDir(), "connect-gate")
 	cfg := mcpWriteConfig(t, map[string][]string{
-		"fixture": {fixture, "-connect-delay", connectDelay},
+		"fixture": {fixture, "-connect-gate", gate},
 	})
 
 	addr, srv := startFaux(t, mcpPlainTextScript)
@@ -234,31 +228,30 @@ func TestMCP_FirstTurnDoesNotWaitForConnect(t *testing.T) {
 
 	s.Send("say hi")
 	s.SendKey("enter")
-	// 2.5s: comfortably above real turn latency, comfortably below the 3s
-	// connect delay. If the turn actually waited on connect, this would
-	// time out (a real, observable RED -- see the break/revert evidence in
-	// this task's final report, not asserted here).
-	if err := s.WaitFor(turnSummaryPattern, 2500*time.Millisecond); err != nil {
-		t.Fatalf("turn did not finish before the MCP connect delay elapsed (so it must have waited on connect): %v", err)
+	// The gate is closed, so the connect cannot have finished: if the turn
+	// waited on it, this would never complete (a real, observable RED).
+	if err := s.WaitFor(turnSummaryPattern, 30*time.Second); err != nil {
+		t.Fatalf("turn did not finish while the MCP connect was held (so it must have waited on connect): %v", err)
 	}
 
 	reqs := srv.Requests()
 	if len(reqs) == 0 {
 		t.Fatal("faux recorded no requests")
 	}
+	if n := mcpCountLogLines(t, logDir, `msg="mcp connected" server=fixture`); n != 0 {
+		t.Fatalf("run log already has %d \"mcp connected\" lines although the connect gate is closed", n)
+	}
 	firstReqTime := reqs[0].Time
 
-	connectedTime, connectedLine := mcpWaitLogLine(t, logDir, `msg="mcp connected" server=fixture`, 6*time.Second)
-
+	// Open the gate: the background connect now completes, after the turn.
+	if err := os.WriteFile(gate, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	connectedTime, connectedLine := mcpWaitLogLine(t, logDir, `msg="mcp connected" server=fixture`, 30*time.Second)
 	if !firstReqTime.Before(connectedTime) {
-		t.Errorf("first provider request (%s) is not before MCP connect completion (%s):\nfirst request time from srv.Requests()[0].Time\nrun log line: %s",
+		t.Errorf("first provider request (%s) is not before MCP connect completion (%s):\nrun log line: %s",
 			firstReqTime, connectedTime, connectedLine)
 	}
-	gap := connectedTime.Sub(firstReqTime)
-	if gap < 1*time.Second {
-		t.Errorf("first request landed only %s before MCP connect completed; want close to the %s connect delay, to be sure this isn't a coincidence of scheduling", gap, connectDelay)
-	}
-	t.Logf("first provider request at %s, MCP connect completed at %s, gap %s (connect delay was %s)", firstReqTime, connectedTime, gap, connectDelay)
 }
 
 // ---------------------------------------------------------------------

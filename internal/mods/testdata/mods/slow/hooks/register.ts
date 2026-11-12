@@ -9,8 +9,10 @@ export const register = (on: any) => {
   })
   // Never settles: its own time runs out.
   on('command.run', { command: 'hang' }, async () => new Promise(() => {}))
-  // Never yields the worker: the watchdog interrupts it.
-  on('command.run', { command: 'spin' }, () => {
+  // Never yields the worker: the watchdog interrupts it. The invalidate tells
+  // the test the loop has started.
+  on('command.run', { command: 'spin' }, ($: any) => {
+    $.ui.invalidate()
     for (;;) {}
   })
   // Waits on next far longer than its budget: that wait is not its own time.

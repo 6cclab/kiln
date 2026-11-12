@@ -25,6 +25,13 @@
 # exhausted)". Two concurrent subagents, each on its own model, has no
 # shared queue to race over — this is the same shape task_concurrent_tui.yaml
 # already proves reliable. See this suite's handback report.
+#
+# The dwell frames a test or a person looks at are holds, not delays: a
+# `hold: <name>` step stops the turn until POST /_faux/release?name=<name>
+# (tui_design_test.go's driveDesignTo, kiln-drive's and visual-drive.sh's
+# RELEASE step). Holds, in order: agents (both scouts' replies), streaming
+# (the text after the scouts), diff1 (before the second diff), diff2
+# (before the first test run), diff3 (before the second test run).
 models:
   faux-1:
     # Turn 1 (the user's initial task): a short lead-in, then the plan
@@ -58,15 +65,15 @@ models:
     # is blocked waiting on both task results and scout-1's dispatch
     # goroutine issues its request as soon as it starts, well before that
     # gate can be satisfied.
+    - hold: agents
     - text: "Found it: src/routes/upload.ts wires auth then multer then the handler; no rate limiting yet."
-      delay: 400ms
 
     # Turn 4 (on both scouts' results): the "text" step between agents and
     # the first diff, then the first diff (new file) ends the turn.
     - on_tool_results: [tc_scout1, tc_scout2]
       then:
+        - hold: streaming
         - text: "Redis is already configured for caching, and the upload tests use a jest mock. I'll add a rateLimit middleware and wire it in."
-          delay: 300ms
         - tool_call:
             name: write
             args:
@@ -88,12 +95,13 @@ models:
             id: tc_write1
 
     # Turn 5 (on the write's result): the second diff (edit upload.ts to
-    # wire the new middleware in). Delayed so a PTY-driven test polling
-    # the screen has a real dwell frame with diff1 (the new file) still
-    # showing before diff2 replaces it (test/e2e/tui_design_test.go's
+    # wire the new middleware in). Held (diff1) so a PTY-driven test
+    # polling the screen has a real dwell frame with diff1 (the new file)
+    # still showing before diff2 replaces it (test/e2e/tui_design_test.go's
     # TestTUI_Design_Streaming/Diff scenes).
     - on_tool_result: tc_write1
       then:
+        - hold: diff1
         - tool_call:
             name: edit
             args:
@@ -104,7 +112,6 @@ models:
                 - oldText: "router.post('/upload', requireAuth, upload.single('file'), handleUpload);"
                   newText: "router.post('/upload', requireAuth, rateLimit, upload.single('file'), handleUpload);"
             id: tc_edit1
-          delay: 500ms
 
     # Turn 6 (on the edit's result): run the test suite — the permission
     # prompt scene, then (once approved) the tool(err) scene: the fixture
@@ -112,11 +119,11 @@ models:
     # zremrangebyscore on the redis mock).
     - on_tool_result: tc_edit1
       then:
+        - hold: diff2
         - tool_call:
             name: bash
             args: {command: "./scripts/npm test -- upload", description: "Run the upload route's test suite"}
             id: tc_bash1
-          delay: 500ms
 
     # Turn 7 (on the failed test run's result): the "text" discussing the
     # failure, cut short by disconnect_after — the "error/retry" scene.
@@ -139,16 +146,16 @@ models:
               newText: "  del: jest.fn(),\n  zremrangebyscore: jest.fn().mockResolvedValue(0),\n  zcard: jest.fn().mockResolvedValue(0),\n  zadd: jest.fn().mockResolvedValue(1),"
         id: tc_edit2
 
-    # Turn 9 (on the fix's result): run the suite again — tool(ok). Delayed
-    # so the redisMock.ts diff has a real dwell frame before the second
-    # bash permission prompt replaces it.
+    # Turn 9 (on the fix's result): run the suite again — tool(ok). Held
+    # (diff3) so the redisMock.ts diff has a real dwell frame before the
+    # second bash permission prompt replaces it.
     - on_tool_result: tc_edit2
       then:
+        - hold: diff3
         - tool_call:
             name: bash
             args: {command: "./scripts/npm test -- upload", description: "Run the upload route's test suite"}
             id: tc_bash2
-          delay: 500ms
 
     # Turn 10 (on the passing run's result): the final text, then idle.
     - on_tool_result: tc_bash2
@@ -159,5 +166,5 @@ models:
   faux-2:
     # scout-2's own turn (the only subagent routed to faux-2 — see this
     # file's header comment on why there are two scouts, not three).
+    - hold: agents
     - text: "Redis is configured in src/redis.ts, a thin ioredis wrapper already used elsewhere for caching. test/helpers/redisMock.ts backs the upload tests today; it only stubs get/set/del."
-      delay: 400ms

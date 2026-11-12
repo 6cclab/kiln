@@ -12,7 +12,8 @@ WAITFOR /approval needed/ 20
 SHOT bash-prompt
 EXPECT /curl https:\/\/example\.invalid\/deploy/
 KEY ctrl+c
-WAIT 1
+WAITFOR /■ Interrupted\. Tell kiln what to do instead\./ 20
+WAITGONE /approval needed/ 20
 SHOT after-ctrlc
 EXPECT_NOT /approval needed/
 EXPECT /■ Interrupted\. Tell kiln what to do instead\./

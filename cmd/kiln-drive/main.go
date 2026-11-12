@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -53,11 +55,15 @@ func run(args []string, in *os.File, out *os.File) int {
 	}
 
 	opts := []screen.Option{}
+	fauxAddr := ""
 	for _, kv := range envs {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
 			fmt.Fprintf(out, "error: invalid --env %q, expected KEY=VAL\n", kv)
 			return 2
+		}
+		if k == "HARNESS_FAUX_ADDR" {
+			fauxAddr = v
 		}
 		opts = append(opts, screen.WithEnv(k, v))
 	}
@@ -72,7 +78,7 @@ func run(args []string, in *os.File, out *os.File) int {
 	}
 	defer s.Close()
 
-	d := &driver{screen: s, out: out, cols: *cols, rows: *rows}
+	d := &driver{screen: s, out: out, cols: *cols, rows: *rows, fauxAddr: fauxAddr}
 	d.loop(in)
 	return d.exitCode
 }
@@ -84,6 +90,9 @@ type driver struct {
 	rows     int
 	exitCode int
 	done     bool
+	// fauxAddr is the faux server kiln talks to (--env HARNESS_FAUX_ADDR),
+	// the one RELEASE sends to.
+	fauxAddr string
 }
 
 func (d *driver) loop(in *os.File) {
@@ -123,6 +132,8 @@ func (d *driver) dispatch(line string) {
 		err = d.cmdScreen(rest)
 	case "RESIZE":
 		err = d.cmdResize(rest)
+	case "RELEASE":
+		err = d.cmdRelease(rest)
 	case "SLEEP":
 		err = d.cmdSleep(rest)
 	case "EXIT":
@@ -169,6 +180,28 @@ func (d *driver) cmdWait(rest string) error {
 		pat = re
 	}
 	return d.screen.WaitFor(pat, timeout)
+}
+
+// cmdRelease handles "RELEASE <name>": it releases the faux script's
+// `hold: <name>` step (POST /_faux/release) on the server given by
+// --env HARNESS_FAUX_ADDR.
+func (d *driver) cmdRelease(rest string) error {
+	name := strings.TrimSpace(rest)
+	if name == "" {
+		return fmt.Errorf("RELEASE requires a hold name")
+	}
+	if d.fauxAddr == "" {
+		return fmt.Errorf("RELEASE needs --env HARNESS_FAUX_ADDR=<host:port> (the faux server)")
+	}
+	resp, err := http.Post("http://"+d.fauxAddr+"/_faux/release?name="+url.QueryEscape(name), "", nil)
+	if err != nil {
+		return fmt.Errorf("RELEASE %s: %w", name, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("RELEASE %s: faux answered %s", name, resp.Status)
+	}
+	return nil
 }
 
 func (d *driver) cmdScreen(rest string) error {

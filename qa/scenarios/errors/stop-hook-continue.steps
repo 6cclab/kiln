@@ -9,7 +9,7 @@
 WAITFOR /describe a task/ 20
 SEND finish the feature
 WAITFOR /Second pass, after the Stop hook asked for tests\./ 20
-WAIT 1
+WAITGONE /esc to stop/ 20
 SHOT continued
 EXPECT /First pass done\./
 EXPECT /Stop hook asked to continue: \[sh gate\.sh\]: add tests first/

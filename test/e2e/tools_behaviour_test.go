@@ -92,10 +92,10 @@ steps:
 //     surfaced a second, genuine race: bash_output's very next request
 //     could fire before the background shell's "sleep 0.1" had actually
 //     finished, observed live as "(no new output)" instead of the
-//     marker. Fixed with a `delay: 300ms` faux step between the two
-//     tool calls (see internal/testkit/faux/doc.go's delay step), which
-//     sleeps server-side before returning the bash_output call - giving
-//     the real background process time to finish first.
+//     marker. A `delay: 300ms` faux step first papered over it and still
+//     flaked on a slow CI runner (read at 302ms, output not yet in).
+//     bash_output now reads with block: true, which waits for the shell
+//     to finish, so the output is complete regardless of machine speed.
 //  2. With that fix in place, re-applying the same shells.go id-offset
 //     break DID turn this red, with "bash_output never captured the
 //     background shell's output" (bash_output for "bash_1" got "No
@@ -106,8 +106,7 @@ steps:
   - tool_call: {name: bash_background, args: {command: "sleep 0.1; printf 'marker-%s\n' \"$(echo aXbYcZ | rev)\""}, id: s1}
   - on_tool_result: s1
     then:
-      - delay: 300ms
-      - tool_call: {name: bash_output, args: {id: "bash_1"}, id: s2}
+      - tool_call: {name: bash_output, args: {id: "bash_1", block: true}, id: s2}
   - on_tool_result: s2
     then:
       - text: "done"

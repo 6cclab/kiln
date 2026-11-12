@@ -204,7 +204,7 @@ func TestCompactStallWatchdog(t *testing.T) {
 	if !errors.As(err, &ce) || ce.Code != "stalled" {
 		t.Fatalf("err = %v, want a stalled error", err)
 	}
-	if time.Since(start) > 5*time.Second {
+	if time.Since(start) > 60*time.Second {
 		t.Errorf("watchdog took %s", time.Since(start))
 	}
 

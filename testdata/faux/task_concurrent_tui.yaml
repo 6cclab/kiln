@@ -6,19 +6,19 @@ models:
     - tool_calls:
         - {name: task, args: {subagent_type: "general-purpose", description: "look something up", prompt: "find X"}, id: tc1}
         - {name: task, args: {subagent_type: "general-purpose", description: "do the fast lookup", prompt: "find Y", model: "fast"}, id: tc2}
-    # Turn 2: the inherited subagent's (tc1) own turn. A delay holds this
-    # response back long enough that a PTY-driven test polling the screen
-    # can observe both tc1 and tc2 live in the subagents panel at once,
-    # before either finishes.
+    # Turn 2: the inherited subagent's (tc1) own turn. The shared hold
+    # keeps this response back until the test releases "subagents", so a
+    # PTY-driven test can observe both tc1 and tc2 live in the subagents
+    # panel at once, before either finishes.
+    - hold: subagents
     - text: "inherited subagent report"
-      delay: 400ms
     - on_tool_results: [tc1, tc2]
       then:
         - text: "Both done."
   faux-2:
-    # The "fast"-routed subagent's (tc2) own turn, held back the same way.
+    # The "fast"-routed subagent's (tc2) own turn, held by the same hold.
+    - hold: subagents
     - text: "fast subagent report"
-      delay: 400ms
       # Explicit usage: faux's default (100 in, 50 out) at faux-2's $3/$15
       # per M rates costs exactly $0.00105, a rounding boundary that
       # formats as $0.0010 or $0.0011 depending on float summation order.

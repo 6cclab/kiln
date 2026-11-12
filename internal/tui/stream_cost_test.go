@@ -32,6 +32,7 @@ func streamCostModel(fullscreen bool, transcriptRows int) Model {
 		Fullscreen:  fullscreen,
 	})
 	m.width, m.height = 120, 40
+	m.busy = true // stream text only renders during a turn
 	if transcriptRows > 0 {
 		row := strings.Repeat("x", 100)
 		rows := make([]string, transcriptRows)

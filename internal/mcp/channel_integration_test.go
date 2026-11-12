@@ -175,7 +175,7 @@ func TestRootsAdvertisedToChannelServer(t *testing.T) {
 		if uri != want {
 			t.Errorf("advertised root uri = %q, want %q", uri, want)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("hub never answered roots/list with a root (studio sees no project)")
 	}
 }
@@ -208,7 +208,7 @@ func TestChannelPushReachesOnChannel(t *testing.T) {
 		if ev.Content != "a studio request" || ev.Meta["request"] != "c_1" {
 			t.Errorf("event = %+v, want the pushed request", ev)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("channel push never reached OnChannel")
 	}
 }

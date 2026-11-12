@@ -72,7 +72,7 @@ func TestTeaModel(t *testing.T) {
 	var in bytes.Buffer
 	in.Write([]byte("q"))
 
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	p := NewProgram(&testModel{},

@@ -958,6 +958,67 @@ type turnState struct {
 	// flushes the final state regardless of the throttle (see
 	// handleStreamEvent and the EventMessageEnd case above it).
 	lastStreamSend time.Time
+	// now is the clock the throttle reads (nil means time.Now); a test
+	// injects one so the throttle window is stepped, not waited for.
+	now func() time.Time
+	// The trailing flush: a delta the throttle held back is sent once its
+	// window ends, so a stream that pauses (a slow model between bursts)
+	// does not leave the screen behind what has arrived. flushMu guards
+	// the fields below and orders every MsgStreamText send; flushGen
+	// supersedes an armed flush whenever newer text is sent or the
+	// message or turn ends.
+	flushMu    sync.Mutex
+	flushGen   uint64
+	flushArmed bool
+	flushText  string
+	// after arms the flush timer (nil means time.AfterFunc); a test fires
+	// it by hand.
+	after func(time.Duration, func())
+}
+
+// sendStream sends text as the live stream now, superseding any armed
+// trailing flush.
+func (b *Bridge) sendStream(ts *turnState, text string) {
+	ts.flushMu.Lock()
+	defer ts.flushMu.Unlock()
+	ts.flushGen++
+	ts.flushArmed = false
+	b.Send(MsgStreamText{Text: text})
+}
+
+// trailStream remembers text a throttled delta held back and arms one
+// flush for when the throttle window ends.
+func (b *Bridge) trailStream(ts *turnState, text string, wait time.Duration) {
+	ts.flushMu.Lock()
+	defer ts.flushMu.Unlock()
+	ts.flushText = text
+	if ts.flushArmed {
+		return
+	}
+	ts.flushArmed = true
+	gen := ts.flushGen
+	flush := func() {
+		ts.flushMu.Lock()
+		defer ts.flushMu.Unlock()
+		if ts.flushGen != gen || !ts.flushArmed {
+			return
+		}
+		ts.flushArmed = false
+		b.Send(MsgStreamText{Text: ts.flushText})
+	}
+	if ts.after != nil {
+		ts.after(wait, flush)
+		return
+	}
+	time.AfterFunc(wait, flush)
+}
+
+// dropTrail cancels an armed trailing flush.
+func (ts *turnState) dropTrail() {
+	ts.flushMu.Lock()
+	defer ts.flushMu.Unlock()
+	ts.flushGen++
+	ts.flushArmed = false
 }
 
 // streamThrottle bounds how often the live streaming caret (stream.go)
@@ -1039,6 +1100,7 @@ func (b *Bridge) ResetTurnCounters() {
 		b.ts.abortCommitted = nil
 		b.ts.tasksInFlight = 0
 		b.ts.lastStreamSend = time.Time{}
+		b.ts.dropTrail()
 	}
 	// A new turn's plan/subagents state starts fresh (app.go's beginTurn
 	// resets both), so FreezeBefore's de-duplication guard must not compare
@@ -1096,6 +1158,7 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 		// message never reads ts.streamed (EventMessageEnd uses
 		// assistantText(ev.Message) instead), so no partial text is lost.
 		ts.streamed.Reset()
+		ts.dropTrail()
 
 	case harness.EventMessageUpdate:
 		b.handleStreamEvent(ev.StreamEvent, ts)
@@ -1116,7 +1179,9 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 			// a throttled-away last delta must not be the one dropped, or
 			// the live caret's last frame would show stale, truncated text
 			// for an instant before the committed block replaces it.
-			b.Send(MsgStreamText{Text: text})
+			b.sendStream(ts, text)
+		} else {
+			ts.dropTrail()
 		}
 		if !hasSearchBlocks(ev.Message.Content) {
 			if text != "" {
@@ -1597,9 +1662,14 @@ func (b *Bridge) handleStreamEvent(se *msg.StreamEvent, ts *turnState) {
 		})
 		b.Send(MsgTokens{Tokens: tokens})
 		now := time.Now()
-		if now.Sub(ts.lastStreamSend) >= streamThrottle {
+		if ts.now != nil {
+			now = ts.now()
+		}
+		if since := now.Sub(ts.lastStreamSend); since >= streamThrottle {
 			ts.lastStreamSend = now
-			b.Send(MsgStreamText{Text: ts.streamed.String()})
+			b.sendStream(ts, ts.streamed.String())
+		} else {
+			b.trailStream(ts, ts.streamed.String(), streamThrottle-since)
 		}
 	case msg.EventProviderBlockEnd:
 		// A server-side web search runs inside the stream, with no

@@ -649,13 +649,15 @@ func RunHooksConcurrently(opts RunOptions) Outcome {
 			var single Outcome
 			interpret(out, &single, label, h.Command, opts.Event)
 
+			// Report under the lock: two hooks finishing together would
+			// otherwise be able to deliver 2 then 1, leaving the UI's last
+			// progress at "1 of 2". The callback must not re-enter RunHooks.
 			mu.Lock()
 			finished++
-			n := finished
-			mu.Unlock()
 			if opts.OnHookDone != nil {
-				opts.OnHookDone(n, commands)
+				opts.OnHookDone(finished, commands)
 			}
+			mu.Unlock()
 			results <- single
 		})
 	}

@@ -59,7 +59,9 @@ func TestCursedRenderer_mouseVsFlush(t *testing.T) {
 		_, _ = p.Run()
 	}()
 
-	time.Sleep(150 * time.Millisecond)
+	// Send blocks until the event loop takes the message, so once it returns
+	// Run is up (no guessing how long that takes).
+	p.Send(struct{}{})
 
 	const iterations = 100
 	for i := range iterations {
@@ -78,7 +80,7 @@ func TestCursedRenderer_mouseVsFlush(t *testing.T) {
 	p.Quit()
 	select {
 	case <-runDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("program did not exit after Quit")
 	}
 }

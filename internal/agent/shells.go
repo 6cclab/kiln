@@ -86,6 +86,9 @@ type shellEntry struct {
 	droppedLines int
 
 	cancel context.CancelFunc
+	// done closes once the command's Exec has returned, by which point every
+	// byte of its output has been absorbed (Exec's Wait owns the copy).
+	done chan struct{}
 }
 
 // BackgroundShells is the registry of background shells for one session,
@@ -186,6 +189,7 @@ func (b *BackgroundShells) Start(ctx context.Context, command string, env *exece
 		command:   command,
 		startedAt: time.Now(),
 		status:    ShellRunning,
+		done:      make(chan struct{}),
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	entry.cancel = cancel
@@ -201,6 +205,7 @@ func (b *BackgroundShells) Start(ctx context.Context, command string, env *exece
 		sandbox = env.Sandbox.ForCommand(command, false)
 	}
 	crash.Go(func() {
+		defer close(entry.done)
 		result, err := env.Exec(runCtx, command, execenv.ExecOptions{
 			InheritEnv: true,
 			Sandbox:    sandbox,
@@ -350,6 +355,22 @@ func (b *BackgroundShells) Read(id string) (lines []string, missed int, shell Sh
 	entry.cursor = produced
 
 	return out, missed, entry.snapshotLocked(), true
+}
+
+// Wait blocks until shell id finishes or ctx ends. finished reports whether
+// the shell had finished, so its output is complete; ok is false for an
+// unknown id.
+func (b *BackgroundShells) Wait(ctx context.Context, id string) (finished, ok bool) {
+	entry := b.get(id)
+	if entry == nil {
+		return false, false
+	}
+	select {
+	case <-entry.done:
+		return true, true
+	case <-ctx.Done():
+		return false, true
+	}
 }
 
 // Kill stops a running shell. A shell that already finished is left alone

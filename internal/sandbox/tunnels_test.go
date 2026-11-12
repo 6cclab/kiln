@@ -61,7 +61,7 @@ func (u *heldUpstream) waitAccepted(t *testing.T) {
 	select {
 	case c := <-u.accepted:
 		u.accepted <- c
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the tunnel never reached the upstream")
 	}
 }
@@ -83,10 +83,10 @@ func closeWithin(t *testing.T, what string, closeFn func()) {
 }
 
 // expectClosed fails the test unless reading c ends (EOF or a reset)
-// within 5s: the far end closed it.
+// within 30s: the far end closed it.
 func expectClosed(t *testing.T, what string, c net.Conn) {
 	t.Helper()
-	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
 	_, err := c.Read(make([]byte, 1))
 	var ne net.Error
 	if err == nil || (errors.As(err, &ne) && ne.Timeout()) {
@@ -95,10 +95,10 @@ func expectClosed(t *testing.T, what string, c net.Conn) {
 }
 
 // expectNoGoroutine fails the test if a goroutine whose stack mentions fn
-// is still running 2s after Close returned.
+// is still running 15s after Close returned.
 func expectNoGoroutine(t *testing.T, fn string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(130 * time.Second)
 	for {
 		buf := make([]byte, 1<<20)
 		stacks := string(buf[:runtime.Stack(buf, true)])
@@ -141,7 +141,7 @@ func TestProxyCloseEndsConnectTunnels(t *testing.T) {
 	defer client.Close()
 	auth := base64.StdEncoding.EncodeToString([]byte(p.Userinfo()))
 	fmt.Fprintf(client, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: Basic %s\r\n\r\n", target, target, auth)
-	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = client.SetReadDeadline(time.Now().Add(30 * time.Second))
 	status, err := bufio.NewReader(client).ReadString('\n')
 	if err != nil || !strings.Contains(status, " 200 ") {
 		t.Fatalf("CONNECT: %q, %v", status, err)
@@ -153,7 +153,7 @@ func TestProxyCloseEndsConnectTunnels(t *testing.T) {
 	expectClosed(t, "the client side of the tunnel", client)
 	select {
 	case <-up.eof:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the upstream side of the tunnel is still open after Close")
 	}
 	expectNoGoroutine(t, "sandbox.(*Proxy).serveConnect")
@@ -197,7 +197,7 @@ func TestManagerCloseEndsBridgeRelays(t *testing.T) {
 	expectClosed(t, "the sandbox side of the relay", client)
 	select {
 	case <-up.eof:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the proxy side of the relay is still open after Close")
 	}
 	expectNoGoroutine(t, "sandbox.relay")

@@ -66,9 +66,7 @@ func TestAskUserQuestion_AnswerReachesModel(t *testing.T) {
 	if err := s.WaitFor("Got it, going with the fast path.", 5*time.Second); err != nil {
 		t.Fatalf("never saw the model's reply after the answer: %v", err)
 	}
-	if err := waitQuiescent(s, 200*time.Millisecond, 3*time.Second); err != nil {
-		t.Fatal(err)
-	}
+	waitTurnSettled(t, s)
 
 	joined := strings.Join(s.Rows(), "\n")
 	if strings.Contains(joined, "Which approach should I use?") == false {
@@ -118,9 +116,7 @@ func TestAskUserQuestion_EscCancelsAndModelIsToldSoItCanProceed(t *testing.T) {
 	if err := s.WaitFor("Got it, going with the fast path.", 5*time.Second); err != nil {
 		t.Fatalf("turn never completed after declining the question: %v", err)
 	}
-	if err := waitQuiescent(s, 200*time.Millisecond, 3*time.Second); err != nil {
-		t.Fatal(err)
-	}
+	waitTurnSettled(t, s)
 
 	found := false
 	for _, msgs := range requests() {

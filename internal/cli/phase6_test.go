@@ -187,7 +187,7 @@ steps:
 // a match.
 func assertProcessGone(t *testing.T, marker string) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		out, _ := pgrepF(marker)
 		if strings.TrimSpace(out) == "" {

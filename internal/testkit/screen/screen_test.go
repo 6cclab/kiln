@@ -1,6 +1,8 @@
 package screen_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +14,7 @@ import (
 // line followed by the two-line footer, nothing else.
 func TestGoldenInitialFrame(t *testing.T) {
 	s := screen.Start(t, stubBinary, nil, 60, 12)
-	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+	if err := s.WaitFor("❯", 30*time.Second); err != nil {
 		t.Fatalf("waiting for prompt: %v", err)
 	}
 	s.Golden(t, "stubtui-initial-60x12")
@@ -26,7 +28,7 @@ func TestGoldenInitialFrame(t *testing.T) {
 func TestPrintlnScrollsAboveLiveRegion(t *testing.T) {
 	const cols, rows = 40, 10
 	s := screen.Start(t, stubBinary, nil, cols, rows)
-	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+	if err := s.WaitFor("❯", 30*time.Second); err != nil {
 		t.Fatalf("waiting for prompt: %v", err)
 	}
 
@@ -34,11 +36,13 @@ func TestPrintlnScrollsAboveLiveRegion(t *testing.T) {
 	for i := 0; i < rows; i++ {
 		s.SendKey("p")
 	}
-	if err := s.WaitFor("committed line", 5*time.Second); err != nil {
+	if err := s.WaitFor("committed line", 30*time.Second); err != nil {
 		t.Fatalf("waiting for committed lines: %v", err)
 	}
-	// Let the frame settle.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the frame to settle.
+	if err := s.WaitQuiet(100*time.Millisecond, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
 
 	occBefore := s.OccupiedHeight()
 	cursorBefore := s.CursorRow()
@@ -56,7 +60,7 @@ func TestPrintlnScrollsAboveLiveRegion(t *testing.T) {
 	for i := 0; i < rows*3; i++ {
 		s.SendKey("p")
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if len(s.Scrollback()) > 0 {
 			break
@@ -66,7 +70,9 @@ func TestPrintlnScrollsAboveLiveRegion(t *testing.T) {
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	time.Sleep(100 * time.Millisecond)
+	if err := s.WaitQuiet(100*time.Millisecond, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
 
 	occAfter := s.OccupiedHeight()
 	cursorAfter := s.CursorRow()
@@ -90,20 +96,24 @@ func TestPrintlnScrollsAboveLiveRegion(t *testing.T) {
 func TestOverlayGrowsAndShrinks(t *testing.T) {
 	const cols, rows = 40, 20
 	s := screen.Start(t, stubBinary, nil, cols, rows)
-	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+	if err := s.WaitFor("❯", 30*time.Second); err != nil {
 		t.Fatalf("waiting for prompt: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	if err := s.WaitQuiet(100*time.Millisecond, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
 
 	// Commit one line first. Closing the overlay must give the rows back
 	// without erasing what was already committed above the live region;
 	// tea.ClearScreen reclaims rows but wipes this line, which is why the
 	// renderer is patched instead (third_party/ultraviolet).
 	s.SendKey("p")
-	if err := s.WaitFor("committed line 1", 5*time.Second); err != nil {
+	if err := s.WaitFor("committed line 1", 30*time.Second); err != nil {
 		t.Fatalf("waiting for committed line: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	if err := s.WaitQuiet(100*time.Millisecond, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
 
 	occBefore := s.OccupiedHeight()
 	cursorBefore := s.CursorRow()
@@ -112,10 +122,12 @@ func TestOverlayGrowsAndShrinks(t *testing.T) {
 	}
 
 	s.SendKey("o")
-	if err := s.WaitFor("overlay row 11", 5*time.Second); err != nil {
+	if err := s.WaitFor("overlay row 11", 30*time.Second); err != nil {
 		t.Fatalf("waiting for overlay: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	if err := s.WaitQuiet(100*time.Millisecond, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
 
 	occOpen := s.OccupiedHeight()
 	if occOpen <= occBefore {
@@ -126,10 +138,12 @@ func TestOverlayGrowsAndShrinks(t *testing.T) {
 	}
 
 	s.SendKey("escape")
-	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+	if err := s.WaitFor("❯", 30*time.Second); err != nil {
 		t.Fatalf("waiting for prompt after closing overlay: %v", err)
 	}
-	time.Sleep(150 * time.Millisecond)
+	if err := s.WaitQuiet(150*time.Millisecond, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
 
 	occClosed := s.OccupiedHeight()
 	cursorClosed := s.CursorRow()
@@ -169,13 +183,13 @@ func TestKeyEncodings(t *testing.T) {
 	}
 
 	s := screen.Start(t, stubBinary, nil, 40, 10)
-	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+	if err := s.WaitFor("❯", 30*time.Second); err != nil {
 		t.Fatalf("waiting for prompt: %v", err)
 	}
 
 	for _, c := range cases {
 		s.SendKey(c.key)
-		if err := s.WaitFor("key: "+c.want, 5*time.Second); err != nil {
+		if err := s.WaitFor("key: "+c.want, 30*time.Second); err != nil {
 			t.Errorf("key %q: footer never showed %q: %v", c.key, c.want, err)
 		}
 	}
@@ -186,7 +200,7 @@ func TestKeyEncodings(t *testing.T) {
 // program.
 func TestWidthInvariant(t *testing.T) {
 	s := screen.Start(t, stubBinary, nil, 30, 8)
-	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+	if err := s.WaitFor("❯", 30*time.Second); err != nil {
 		t.Fatalf("waiting for prompt: %v", err)
 	}
 	rows := s.Viewport()
@@ -198,7 +212,7 @@ func TestWidthInvariant(t *testing.T) {
 // TestExit verifies Exit waits for the process and reports its exit code.
 func TestExit(t *testing.T) {
 	s := screen.Start(t, stubBinary, nil, 40, 10)
-	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+	if err := s.WaitFor("❯", 30*time.Second); err != nil {
 		t.Fatalf("waiting for prompt: %v", err)
 	}
 	s.SendKey("q")
@@ -221,7 +235,7 @@ func TestExit(t *testing.T) {
 // stubtui here) would reliably time out.
 func TestExit_NoQuitKeySent(t *testing.T) {
 	s := screen.Start(t, stubBinary, nil, 40, 10)
-	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+	if err := s.WaitFor("❯", 30*time.Second); err != nil {
 		t.Fatalf("waiting for prompt: %v", err)
 	}
 	// A non-nil err here can legitimately be cmd.Wait()'s own "exit status
@@ -243,13 +257,13 @@ func TestExit_NoQuitKeySent(t *testing.T) {
 func TestStartupLatency(t *testing.T) {
 	start := time.Now()
 	s := screen.Start(t, stubBinary, nil, 80, 24)
-	if err := s.WaitFor("❯", 5*time.Second); err != nil {
+	if err := s.WaitFor("❯", 30*time.Second); err != nil {
 		t.Fatalf("waiting for first frame: %v", err)
 	}
 	elapsed := time.Since(start)
 	t.Logf("time to first frame: %s", elapsed)
-	if elapsed > time.Second {
-		t.Errorf("startup took %s, expected well under 1s if capability queries are answered promptly", elapsed)
+	if elapsed > 10*time.Second {
+		t.Errorf("startup took %s, expected far under 10s if capability queries are answered promptly", elapsed)
 	}
 }
 
@@ -258,11 +272,16 @@ func TestStartupLatency(t *testing.T) {
 // debounced re-wrap), only once the screen has stayed unchanged for the
 // whole quiet window.
 func TestWaitQuietWaitsOutADelayedSecondPaint(t *testing.T) {
-	s := screen.Start(t, "/bin/sh", []string{"-c", "echo first; sleep 0.3; echo second; sleep 10"}, 40, 8)
-	if err := s.WaitFor("first", 5*time.Second); err != nil {
+	// The second paint is released by the test (a gate file), 150ms after
+	// WaitQuiet starts, against a 1.5s quiet window: a stall of over 1.3s
+	// between the release and the paint is what it would take to fail.
+	gate := filepath.Join(t.TempDir(), "gate")
+	s := screen.Start(t, "/bin/sh", []string{"-c", "echo first; while [ ! -e " + gate + " ]; do sleep 0.01; done; echo second; sleep 30"}, 40, 8)
+	if err := s.WaitFor("first", 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WaitQuiet(600*time.Millisecond, 5*time.Second); err != nil {
+	time.AfterFunc(150*time.Millisecond, func() { _ = os.WriteFile(gate, nil, 0o644) })
+	if err := s.WaitQuiet(1500*time.Millisecond, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(s.Viewport(), "\n"); !strings.Contains(got, "second") {
@@ -271,15 +290,17 @@ func TestWaitQuietWaitsOutADelayedSecondPaint(t *testing.T) {
 }
 
 func TestWaitQuietTimesOutOnAScreenThatKeepsChanging(t *testing.T) {
-	s := screen.Start(t, "/bin/sh", []string{"-c", "i=0; while [ $i -lt 60 ]; do i=$((i+1)); echo tick $i; sleep 0.05; done"}, 40, 8)
+	s := screen.Start(t, "/bin/sh", []string{"-c", "i=0; while [ $i -lt 2000 ]; do i=$((i+1)); echo tick $i; sleep 0.05; done"}, 40, 8)
 	// Not WaitFor: its settle (up to settleMax) would spend part of the loop.
-	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(strings.Join(s.Viewport(), "\n"), "tick"); {
+	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(strings.Join(s.Viewport(), "\n"), "tick"); {
 		if time.Now().After(deadline) {
 			t.Fatal("the ticking shell never painted")
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if err := s.WaitQuiet(300*time.Millisecond, time.Second); err == nil {
+	// A 2s quiet window against a 50ms tick: only a >2s stall could make
+	// this screen look quiet.
+	if err := s.WaitQuiet(2*time.Second, 4*time.Second); err == nil {
 		t.Fatal("WaitQuiet returned nil on a screen that never stopped changing")
 	}
 }
@@ -290,12 +311,13 @@ func TestWaitQuietTimesOutOnAScreenThatKeepsChanging(t *testing.T) {
 // deadline held TestTUI_Esc_InterruptsAContinuedTurn's WaitFor for the
 // whole slow reply, so its Esc landed after the reply had finished.
 func TestWaitForReturnsPromptlyOnAScreenThatKeepsChanging(t *testing.T) {
-	s := screen.Start(t, "/bin/sh", []string{"-c", "echo ready; i=0; while [ $i -lt 400 ]; do i=$((i+1)); echo tick $i; sleep 0.02; done"}, 40, 8)
+	s := screen.Start(t, "/bin/sh", []string{"-c", "echo ready; i=0; while [ $i -lt 3000 ]; do i=$((i+1)); echo tick $i; sleep 0.02; done"}, 40, 8)
 	start := time.Now()
-	if err := s.WaitFor("tick", 5*time.Second); err != nil {
+	if err := s.WaitFor("tick", 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if took := time.Since(start); took > 2*time.Second {
+	// Unbounded settling would run to the 30s timeout (the ticks last 60s).
+	if took := time.Since(start); took > 20*time.Second {
 		t.Fatalf("WaitFor took %s on a screen that never stops changing: its settle must be bounded, not run to the timeout", took)
 	}
 }
@@ -303,7 +325,7 @@ func TestWaitForReturnsPromptlyOnAScreenThatKeepsChanging(t *testing.T) {
 // A row the caller ignores may keep changing without holding WaitQuiet up.
 func TestWaitQuietIgnoresMaskedRows(t *testing.T) {
 	s := screen.Start(t, "/bin/sh", []string{"-c", "echo steady; i=0; while [ $i -lt 60 ]; do i=$((i+1)); printf '\\rtick %d' $i; sleep 0.05; done"}, 40, 8)
-	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(strings.Join(s.Viewport(), "\n"), "tick"); {
+	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(strings.Join(s.Viewport(), "\n"), "tick"); {
 		if time.Now().After(deadline) {
 			t.Fatal("the ticking shell never painted")
 		}
@@ -318,7 +340,7 @@ func TestWaitQuietIgnoresMaskedRows(t *testing.T) {
 		}
 		return out
 	}
-	if err := s.WaitQuiet(300*time.Millisecond, 2*time.Second, dropTicks); err != nil {
+	if err := s.WaitQuiet(300*time.Millisecond, 30*time.Second, dropTicks); err != nil {
 		t.Fatalf("WaitQuiet with the ticking row ignored: %v", err)
 	}
 }

@@ -41,7 +41,7 @@ func TestVerificationCrossVolumeAncestorTraversal(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			var visited []string
 			err := verificationWalkAncestors(ctx, tc.full, `C:\module`, func(path string) string {

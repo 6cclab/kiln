@@ -22,8 +22,8 @@ func withinImgpathTest(t *testing.T, what string, fn func()) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		fmt.Fprintf(os.Stderr, "--- FAIL: %s: %s did not return within half a second\n", t.Name(), what)
+	case <-time.After(10 * time.Second):
+		fmt.Fprintf(os.Stderr, "--- FAIL: %s: %s did not return within 10s\n", t.Name(), what)
 		os.Exit(1)
 	}
 }

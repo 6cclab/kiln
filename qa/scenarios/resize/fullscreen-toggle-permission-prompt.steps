@@ -11,12 +11,12 @@ WAITFOR /approval needed/ 20
 SHOT prompt-inline
 EXPECT /Allow kiln to run this command\?/
 KEY ctrl+f
-WAIT 1
+WAITFOR /npm test -- upload/ 20
 SHOT prompt-fullscreen
 EXPECT /Allow kiln to run this command\?/
 EXPECT /npm test -- upload/
 KEY ctrl+f
-WAIT 1
+WAITFOR /Allow kiln to run this command\?/ 20
 SHOT prompt-inline-again
 EXPECT /Allow kiln to run this command\?/
 KEY enter

@@ -877,6 +877,9 @@ func TestSplitReads(t *testing.T) {
 	r := LimitedReader(strings.NewReader(strings.Join(inputs, "")), 8)
 	drv := NewTerminalReader(r, "dumb")
 	drv.SetLogger(TLogger{t})
+	// Back-to-back reads: only end of input should flush a split sequence,
+	// never the 50ms escape timeout firing during a scheduling stall.
+	drv.EscTimeout = time.Minute
 
 	eventc := make(chan Event)
 	go func(t testing.TB) {
@@ -2371,7 +2374,9 @@ func TestSplitSequences(t *testing.T) {
 				KeyPressEvent{Code: 'x', Text: "x"},
 				KeyPressEvent{Code: 'x', Text: "x"},
 			},
-			delay: 60 * time.Millisecond, // Ensure the timeout is triggered.
+			// Ensure the timeout (50ms) is triggered: the gap between chunks
+			// must outlast it even if the machine is slow to re-arm it.
+			delay: 500 * time.Millisecond,
 		},
 		{
 			name: "multiple broken down sequences",
@@ -2448,6 +2453,13 @@ func TestSplitSequences(t *testing.T) {
 			}
 			ir := NewTerminalReader(r, "xterm-256color")
 			ir.SetLogger(TLogger{TB: t})
+			if tt.delay == 0 {
+				// Chunks arrive back to back, so a split sequence must be
+				// completed by the next read; the escape timeout (50ms)
+				// would cut it off if the machine stalled between reads.
+				// End of input flushes what is left, so nothing waits on it.
+				ir.EscTimeout = time.Minute
+			}
 
 			eventc := make(chan Event)
 			go func(t testing.TB) {

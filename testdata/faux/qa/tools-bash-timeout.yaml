@@ -1,6 +1,6 @@
 model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "sleep 5", timeout: 1}, id: tc1}
+  - tool_call: {name: bash, args: {command: "sleep 600", timeout: 1}, id: tc1}
   - on_tool_result: tc1
     then:
       - text: "That timed out."

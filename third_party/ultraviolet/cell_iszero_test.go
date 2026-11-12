@@ -52,7 +52,7 @@ func TestCellIsZero_RecursiveColorPanicsOrHangs(t *testing.T) {
 	select {
 	case <-done:
 		// Good: returned without hanging
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Cell.IsZero() hung — likely infinite recursion in runtime.ifaceeq")
 	}
 }
@@ -74,7 +74,7 @@ func TestStyleIsZero_RecursiveColorPanicsOrHangs(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Style.IsZero() hung — likely infinite recursion in runtime.ifaceeq")
 	}
 }

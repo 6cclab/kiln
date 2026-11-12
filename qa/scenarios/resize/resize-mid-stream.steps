@@ -18,6 +18,7 @@ RESIZE 90 30
 WAITFOR /esc to stop/ 10
 SHOT mid-stream-during-resize
 EXPECT_NOT /panic|goroutine/
+RELEASE reply
 WAITFOR /resize-mid-stream-ok/ 20
 SHOT mid-stream-after
 EXPECT /resize-mid-stream-ok/

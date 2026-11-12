@@ -17,13 +17,11 @@ func TestTUI_AltArrowMovesByWord(t *testing.T) {
 	waitReady(t, s)
 	s.Send("hello world")
 	s.Send("\x1b[1;3D")
-	time.Sleep(150 * time.Millisecond)
 	s.Send("NEW")
 	if err := s.WaitFor("hello NEWworld", 2*time.Second); err != nil {
 		t.Fatalf("alt+left did not move back a word:\n%s", strings.Join(s.Rows(), "\n"))
 	}
 	s.Send("\x1b[1;3C")
-	time.Sleep(150 * time.Millisecond)
 	s.Send("END")
 	if err := s.WaitFor("hello NEWworldEND", 2*time.Second); err != nil {
 		t.Fatalf("alt+right did not move forward a word:\n%s", strings.Join(s.Rows(), "\n"))

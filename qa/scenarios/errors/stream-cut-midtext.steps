@@ -1,23 +1,25 @@
 # A mid-stream disconnect_after cut (testdata/faux/behaviour-retry.yaml
 # style) followed by a normal follow-up step: the cut retries and the
 # reconnected continuation lands as its own text.
+# The retry backoff is fixed at ten minutes, so the cut partial text and
+# the countdown stay on screen until the scenario presses r (retry now).
 @faux testdata/faux/qa/errors-stream-cut-midtext.yaml
+@env HARNESS_RETRY_DELAY_MS=600000
 
 WAITFOR /describe a task/ 20
 SHOT welcome
 TYPE tell me something long
 SHOT typed
 KEY enter
-# "Here is the first half" is transient: once the retry lands, kiln
-# replaces the cut partial text with the fresh reply rather than
-# appending to it, so this EXPECT must run right after the WAITFOR that
-# first observes it, not after the later reconnect/continuation waits.
-WAITFOR /Here is the first half/ 20
+# Once the retry lands, kiln replaces the cut partial text with the fresh
+# reply, so the partial is checked while the countdown holds it on screen.
+WAITFOR /Here is the first half[\s\S]*Retrying in \d+s · attempt 2 of 4/ 20
 EXPECT /Here is the first half/
 SHOT cut-point
-WAITFOR /Reconnected on attempt 2/ 10
+KEY r
+WAITFOR /Reconnected on attempt 2/ 20
 SHOT reconnected
-WAITFOR /reconnected continuation lands here/ 10
+WAITFOR /reconnected continuation lands here/ 20
 EXPECT /reconnected continuation lands here, safe and sound/
 SHOT continuation
 EXPECT_NOT /panic|goroutine/

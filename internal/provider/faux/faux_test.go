@@ -52,7 +52,7 @@ steps:
 		t.Fatalf("Api = %q", models[0].Api)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	events, wait := p.Stream(ctx, models[0], []msg.Message{
 		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("hi")}},

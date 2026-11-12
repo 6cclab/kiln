@@ -110,14 +110,27 @@ steps:
 	}
 }
 
+// waitHeld blocks until a request is parked at the faux hold name, so the
+// test acts while the provider request is provably in flight.
+func waitHeld(t *testing.T, rig *testRig, name string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for rig.Faux.Held(name) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no request reached the faux hold %q", name)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestAbortMidStream aborts a lane while its provider request is in
-// flight (a scripted delay gives us a window) and asserts the run ends
+// flight (a faux hold keeps it parked) and asserts the run ends
 // with status "aborted" and a clean pi.result (no dangling pi.op.* keys).
 func TestAbortMidStream(t *testing.T) {
 	script := `
 model: faux-1
 steps:
-  - delay: 300ms
+  - hold: inflight
   - text: "too late"
 `
 	rig := newTestRig(t, script, []string{"bash"})
@@ -131,8 +144,8 @@ steps:
 		errCh <- err
 	}()
 
-	// Give Prompt time to reach the in-flight request, then abort.
-	time.Sleep(50 * time.Millisecond)
+	// Wait until the provider request is parked at the hold, then abort.
+	waitHeld(t, rig, "inflight")
 	if err := lane.Abort(); err != nil {
 		t.Fatalf("Abort: %v", err)
 	}
@@ -142,7 +155,7 @@ steps:
 		if r.Status != StatusAborted {
 			t.Fatalf("status = %q, want aborted", r.Status)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Prompt did not return after Abort")
 	}
 	<-errCh

@@ -71,7 +71,7 @@ func TestBridge_FullscreenSinkOrdered(t *testing.T) {
 
 	var printed []string
 	var sent []tea.Msg
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		printed, sent = f.snapshot()
 		if len(printed) >= 1 && len(sent) >= 1 {
