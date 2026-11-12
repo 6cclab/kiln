@@ -797,7 +797,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		}
 		reqCtx, cancelReq := context.WithCancelCause(ctx)
 		first, idle := l.h.opts.stallLimits(promptTokens)
-		watch := watchStall(cancelReq, first, idle, promptTokens)
+		watch := watchStall(cancelReq, l.h.opts.StallTimer, first, idle, promptTokens)
 		events, wait := provider.Stream(reqCtx, p, m, transcript, opts)
 		for ev := range events {
 			watch.saw(ev)

@@ -35,27 +35,30 @@ type worker struct {
 	closed bool
 	done   chan struct{}
 
-	// busyMu guards busySince and the interrupt flag, so the watchdog only
-	// interrupts a job that is still running.
+	// busyMu guards busySince, the interrupt flag and the watchdog timer, so
+	// the watchdog only interrupts a job that is still running.
 	busyMu    sync.Mutex
 	busySince time.Time
 	budget    time.Duration
-	stopWatch chan struct{}
+	clock     Clock
+	stopWatch func() bool // cancels the next watchdog check; nil once closed
 
 	onPanic func(r any, stack []byte)
 }
 
-func newWorker(budget time.Duration, onPanic func(any, []byte)) *worker {
+func newWorker(budget time.Duration, clock Clock, onPanic func(any, []byte)) *worker {
 	w := &worker{
-		vm:        goja.New(),
-		wake:      make(chan struct{}, 1),
-		done:      make(chan struct{}),
-		budget:    budget,
-		stopWatch: make(chan struct{}),
-		onPanic:   onPanic,
+		vm:      goja.New(),
+		wake:    make(chan struct{}, 1),
+		done:    make(chan struct{}),
+		budget:  budget,
+		clock:   clock,
+		onPanic: onPanic,
 	}
 	crash.Go(w.run)
-	crash.Go(w.watch)
+	w.busyMu.Lock()
+	w.armWatch()
+	w.busyMu.Unlock()
 	return w
 }
 
@@ -108,7 +111,12 @@ func (w *worker) close() {
 	default:
 	}
 	<-w.done
-	close(w.stopWatch)
+	w.busyMu.Lock()
+	if w.stopWatch != nil {
+		w.stopWatch()
+		w.stopWatch = nil
+	}
+	w.busyMu.Unlock()
 }
 
 func (w *worker) run() {
@@ -138,7 +146,7 @@ func (w *worker) run() {
 // could leave torn beyond the one dispatch it belonged to.
 func (w *worker) exec(job func()) {
 	w.busyMu.Lock()
-	w.busySince = time.Now()
+	w.busySince = w.clock.Now()
 	w.busyMu.Unlock()
 	defer func() {
 		w.busyMu.Lock()
@@ -152,27 +160,28 @@ func (w *worker) exec(job func()) {
 	job()
 }
 
-// watch interrupts JavaScript that has run without yielding for longer than
-// a hook's budget: the only way an endless loop in a mod gives the worker back.
-func (w *worker) watch() {
+// armWatch schedules the watchdog's next check; the caller holds busyMu. The
+// watchdog interrupts JavaScript that has run without yielding for longer
+// than a hook's budget: the only way an endless loop in a mod gives the
+// worker back.
+func (w *worker) armWatch() {
 	tick := w.budget / 4
 	if tick < 10*time.Millisecond {
 		tick = 10 * time.Millisecond
 	}
-	t := time.NewTicker(tick)
-	defer t.Stop()
-	for {
-		select {
-		case <-w.stopWatch:
-			return
-		case <-t.C:
-			w.busyMu.Lock()
-			if !w.busySince.IsZero() && time.Since(w.busySince) > w.budget {
-				w.vm.Interrupt(errBudget)
-			}
-			w.busyMu.Unlock()
-		}
+	w.stopWatch = w.clock.AfterFunc(tick, w.checkWatch)
+}
+
+func (w *worker) checkWatch() {
+	w.busyMu.Lock()
+	defer w.busyMu.Unlock()
+	if w.stopWatch == nil {
+		return // closed
 	}
+	if !w.busySince.IsZero() && w.clock.Now().Sub(w.busySince) > w.budget {
+		w.vm.Interrupt(errBudget)
+	}
+	w.armWatch()
 }
 
 // natives are the Go halves of the prelude's web APIs.

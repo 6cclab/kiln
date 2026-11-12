@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/andrepato/harness/internal/compaction"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/router"
@@ -70,6 +71,9 @@ type Options struct {
 	// Zero values use compaction's defaults. There is no total deadline.
 	StallFirstEvent func(promptTokens int) time.Duration
 	StallIdle       time.Duration
+	// StallTimer, if set, arms the stall limits' timers instead of the real
+	// clock (tests only).
+	StallTimer compaction.Timer
 
 	Cwd string
 

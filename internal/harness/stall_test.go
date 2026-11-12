@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -30,33 +31,62 @@ steps:
 }
 
 // A slow but progressing stream is not cut off however long it runs in
-// total: only a gap longer than the idle limit ends it. The stream here
-// runs longer than the first-token allowance and the idle limit combined.
-// Each gap (100ms) is a twentieth of the idle limit, so only a machine
-// stalled for two seconds mid-stream could cut it off.
+// total: only a gap longer than the idle limit ends it. The limits run on
+// timers that never fire on their own. Each token re-arms the watchdog, and
+// the test then fires every limit it superseded, as if the stream had run
+// past all of them, so the stream outlasts every limit but the latest.
 func TestRequest_SlowProgressingStreamCompletes(t *testing.T) {
-	const limit = 2 * time.Second
-	// 8-character chunks, 100ms apart: 46 chunks take over 4.5s.
+	const first, idle = time.Minute, time.Second
+	text := strings.Repeat("slow tokens arrive steadily ", 13)
 	r := newTestRig(t, `
 steps:
-  - delay: 100ms
-    chunk_delay: 100ms
-    text: "`+strings.Repeat("slow tokens arrive steadily ", 13)+`"
+  - text: "`+text+`"
 `, nil)
 	r.H.opts.Retry = RetryPolicy{BaseDelayMs: 1, MaxAgentDelayMs: 1, MaxAttempts: 1}
-	r.H.opts.StallFirstEvent = func(int) time.Duration { return limit }
-	r.H.opts.StallIdle = limit
+	r.H.opts.StallFirstEvent = func(int) time.Duration { return first }
+	r.H.opts.StallIdle = idle
 
-	start := time.Now()
+	var (
+		mu      sync.Mutex
+		limits  []time.Duration
+		pending []func()
+		expired sync.WaitGroup
+	)
+	r.H.opts.StallTimer = func(d time.Duration, f func()) func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		limits = append(limits, d)
+		// Every earlier limit expires now. The watchdog holds its lock while
+		// it arms, so each callback runs once the re-arm is done.
+		for _, fire := range pending {
+			expired.Add(1)
+			go func() { defer expired.Done(); fire() }()
+		}
+		pending = []func(){f}
+		return func() bool { return false } // too late to stop, the worst case
+	}
+
 	res, err := r.mustLane("main").Prompt(context.Background(), "hello", nil)
+	expired.Wait()
 	if err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
 	if res.Status != StatusCompleted {
 		t.Fatalf("status %s err %v, want completed", res.Status, res.Error)
 	}
-	if took := time.Since(start); took < 2*limit {
-		t.Fatalf("stream took only %s; the test needs it to outlast first+idle (%s) to prove there is no total deadline", took, 2*limit)
+	mu.Lock()
+	defer mu.Unlock()
+	// faux streams 8-character chunks; each one must restart the idle limit.
+	if len(limits) == 0 || limits[0] != first {
+		t.Fatalf("limits armed %v, want the first-token allowance %v first", limits, first)
+	}
+	if chunks := len(text) / 8; len(limits)-1 < chunks {
+		t.Fatalf("watchdog re-armed %d times for %d chunks: progress must restart the idle limit", len(limits)-1, chunks)
+	}
+	for i, d := range limits[1:] {
+		if d != idle {
+			t.Fatalf("re-arm %d used %v, want the idle limit %v", i+1, d, idle)
+		}
 	}
 }
 

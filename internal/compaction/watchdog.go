@@ -24,6 +24,7 @@ import (
 // Watchdog.
 type Watchdog struct {
 	mu    sync.Mutex
+	after func(time.Duration, func()) stopper
 	timer stopper
 	gen   uint64
 	done  bool
@@ -31,6 +32,10 @@ type Watchdog struct {
 
 // stopper is the part of *time.Timer the Watchdog uses.
 type stopper interface{ Stop() bool }
+
+type stopFunc func() bool
+
+func (f stopFunc) Stop() bool { return f() }
 
 // afterFunc arms a timer; a test replaces it to fire callbacks by hand.
 // The callback runs on a goroutine of its own, guarded like any other.
@@ -44,7 +49,19 @@ var afterFunc = func(d time.Duration, f func()) stopper {
 // NewWatchdog returns a Watchdog that calls fire unless Reset or Stop
 // comes within d.
 func NewWatchdog(d time.Duration, fire func()) *Watchdog {
-	w := &Watchdog{}
+	return NewWatchdogOn(nil, d, fire)
+}
+
+// Timer arms a timer that calls f after d; stop cancels it.
+type Timer func(d time.Duration, f func()) (stop func() bool)
+
+// NewWatchdogOn is NewWatchdog with its timers armed by timer; nil is the
+// real clock. Tests pass timers they fire by hand.
+func NewWatchdogOn(timer Timer, d time.Duration, fire func()) *Watchdog {
+	w := &Watchdog{after: afterFunc}
+	if timer != nil {
+		w.after = func(d time.Duration, f func()) stopper { return stopFunc(timer(d, f)) }
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.arm(d, fire)
@@ -75,7 +92,7 @@ func (w *Watchdog) Stop() {
 func (w *Watchdog) arm(d time.Duration, fire func()) {
 	w.gen++
 	gen := w.gen
-	w.timer = afterFunc(d, func() {
+	w.timer = w.after(d, func() {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		if w.done || w.gen != gen {
