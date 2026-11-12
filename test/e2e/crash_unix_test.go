@@ -24,16 +24,12 @@ var (
 
 // crashtestKiln builds kiln with -tags kiln_crashtest, the build whose
 // crash.TestPoint panics where KILN_CRASHTEST_PANIC says. Release builds
-// and the shared harnessBin never carry it.
+// and the shared harnessBin never carry it. It goes in binDir so TestMain
+// removes it; its own temp dir was never removed and leaked one per run.
 func crashtestKiln(t *testing.T) string {
 	t.Helper()
 	crashtestBinOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "kiln-crashtest-bin-")
-		if err != nil {
-			crashtestBinErr = err
-			return
-		}
-		crashtestBin = filepath.Join(dir, "kiln")
+		crashtestBin = filepath.Join(binDir, "kiln-crashtest")
 		out, err := exec.Command("go", "build", "-tags", "kiln_crashtest", "-o", crashtestBin, "github.com/andrepato/harness/cmd/kiln").CombinedOutput()
 		if err != nil {
 			crashtestBinErr = err
@@ -44,6 +40,17 @@ func crashtestKiln(t *testing.T) string {
 		t.Fatalf("build the kiln_crashtest binary: %v", crashtestBinErr)
 	}
 	return crashtestBin
+}
+
+// TestCrashtestKilnBuildsIntoBinDir: the kiln_crashtest binary used to get a
+// temp dir of its own that nothing removed, so every e2e run left a ~55 MB
+// kiln-crashtest-bin-* dir behind. It must sit in binDir, which TestMain
+// removes after the run.
+func TestCrashtestKilnBuildsIntoBinDir(t *testing.T) {
+	bin := crashtestKiln(t)
+	if got := filepath.Dir(bin); got != binDir {
+		t.Fatalf("crashtest binary built in %s, want TestMain's binDir %s (removed after the run)", got, binDir)
+	}
 }
 
 // TestTUI_PanicOnKilnGoroutineRestoresTerminal: a panic on a goroutine kiln
