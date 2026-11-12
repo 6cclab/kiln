@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,7 +14,60 @@ import (
 	"github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/tool"
 )
+
+func TestIsolatedFileToolsRequireConfinementAtExecution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("confined file tools are unavailable on Windows")
+	}
+	root := t.TempDir()
+	args := json.RawMessage(`{"path":"safe.txt","content":"safe"}`)
+	run := func(env *execenv.Env, raw json.RawMessage) tool.Result {
+		t.Helper()
+		var write *tool.Tool
+		for _, candidate := range isolatedFileTools(env, root, nil, nil, nil) {
+			if candidate.Name == "write" {
+				write = candidate
+				break
+			}
+		}
+		if write == nil {
+			t.Fatal("isolated write tool missing")
+		}
+		result, err := write.Execute(context.Background(), raw, func(tool.Result) {}, tool.Invocation{ToolName: "write", Cwd: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if result := run(execenv.New(root), args); !result.IsError {
+		t.Fatal("unconfined worker write was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(root, "safe.txt")); !os.IsNotExist(err) {
+		t.Fatalf("unconfined worker wrote a file: %v", err)
+	}
+	confined, err := execenv.New(root).CloneForConfinedFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = confined.CloseConfinedFiles() })
+	if result := run(confined, json.RawMessage("{")); !result.IsError {
+		t.Fatal("malformed write arguments were accepted")
+	}
+	if result := run(confined, json.RawMessage(`{"path":"../escaped","content":"unsafe"}`)); !result.IsError {
+		t.Fatal("path escape was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(root, "..", "escaped")); !os.IsNotExist(err) {
+		t.Fatalf("isolated write escaped the worker root: %v", err)
+	}
+	if result := run(confined, args); result.IsError {
+		t.Fatalf("confined worker could not write inside its root: %+v", result)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "safe.txt")); err != nil || string(got) != "safe" {
+		t.Fatalf("confined write = %q, %v", got, err)
+	}
+}
 
 func testGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -158,6 +213,12 @@ func TestWorkerArtifactRejectsChangedParentAndTamper(t *testing.T) {
 
 func TestIsolatedToolPath(t *testing.T) {
 	root := t.TempDir()
+	if err := isolatedToolPath(root, msg.ToolCall{Name: "task"}); err != nil {
+		t.Fatalf("nested task was rejected: %v", err)
+	}
+	if err := isolatedToolPath(root, msg.ToolCall{Name: "write"}); err == nil {
+		t.Fatal("write without a relative path was accepted")
+	}
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
@@ -177,6 +238,15 @@ func TestIsolatedToolPath(t *testing.T) {
 	}
 	if err := isolatedToolPath(root, msg.ToolCall{Name: "bash"}); err == nil {
 		t.Fatal("bash allowed")
+	}
+}
+
+func TestWorkerIsolationRequiresWorkingDirectory(t *testing.T) {
+	if _, _, err := newWorkerWorktreeWithSnapshot(context.Background(), nil, false); err == nil || !strings.Contains(err.Error(), "working directory") {
+		t.Fatalf("nil worker environment: %v", err)
+	}
+	if _, _, err := newWorkerWorktreeWithSnapshot(context.Background(), execenv.New(""), false); err == nil || !strings.Contains(err.Error(), "working directory") {
+		t.Fatalf("empty worker directory: %v", err)
 	}
 }
 
