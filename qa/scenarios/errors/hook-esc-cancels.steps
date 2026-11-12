@@ -3,12 +3,13 @@
 # (internal/claude/hooks/runner.go), and the tool never runs. Before, the
 # turn sat until the hook's own 60s timeout.
 @faux testdata/faux/qa/hook-esc-cancels.yaml
-@setup mkdir -p .claude && printf '{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"sleep 300; touch hook-finished","timeout":600}]}]}}\n' > .claude/settings.json
+@setup mkdir -p .claude && printf '{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"type":"command","command":"echo $$ > hook.pid; sleep 300; touch hook-finished","timeout":600}]}]}}\n' > .claude/settings.json
 
 WAITFOR /describe a task/ 20
 SEND run the command
 WAITFOR /Running echo after the hook/ 20
 SHOT hook-running
+RUN i=0; until test -s hook.pid; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
 KEY esc
 WAITFOR /Interrupted/ 20
 SHOT interrupted
@@ -16,6 +17,6 @@ EXPECT /Interrupted/
 EXPECT /interrupted before the call ran/
 EXPECT_NOT /permission check failed|context canceled/
 EXPECT_NOT /The hook let it through/
-RUN i=0; until ! pgrep -f 'sleep 30[0]; touch hook-finished' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
+RUN p=$(cat hook.pid); i=0; while pgrep -g "$p" >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
 RUN ! test -e hook-finished
 EXPECT_NOT /panic|goroutine/

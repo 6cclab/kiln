@@ -136,9 +136,9 @@ type Config struct {
 	// trust dialog and returns their context lines. It runs once the
 	// folder is trusted, as a background operation: a prompt typed
 	// meanwhile queues and goes out with that context, as the first prompt
-	// in an already-trusted folder does (Config.StartupContext). Esc
-	// cancels ctx, which stops the hooks.
-	TrustedSessionStart func(ctx context.Context) []string
+	// in an already-trusted folder does (Config.StartupContext). Esc stops
+	// the wait, not the hooks (session_start.go).
+	TrustedSessionStart func() []string
 	SessionID           string
 	TranscriptPath      string
 	Version             string
@@ -337,6 +337,9 @@ type Model struct {
 	// startupContext is consumed by the first turn, then emptied, matching
 	// app.ts's own mutable startupContext.
 	startupContext []string
+	// sessionStart is the SessionStart hooks that waited for the trust
+	// dialog, while their output is not yet in startupContext.
+	sessionStart *sessionStartRun
 
 	// initCmd is the editor's focus Cmd (cursor blink, etc.), captured at
 	// construction and replayed by Init. Init cannot mutate the model —
@@ -1157,6 +1160,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgBackgroundDone:
 		return m.finishBackground(msg)
+
+	case msgSessionStartDone:
+		return m.collectSessionStart(), nil
 
 	case MsgCompaction:
 		return m.applyCompaction(msg), nil
@@ -2343,6 +2349,23 @@ func (m Model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	// command dispatch skip it for exactly this reason.
 	pathLeading := imgpath.LeadingTokenIsPath(line, m.cfg.Cwd)
 
+	// SessionStart hooks still running after Esc stopped the wait for
+	// them: a line waits for them again (session_start.go), except an
+	// immediate command, which runs as it would during a turn.
+	m = m.collectSessionStart()
+	immediate := !pathLeading && strings.HasPrefix(line, "/") && isImmediateCommand(line, m.cfg.Registry)
+	if m.sessionStartPending() && !m.prompt.Active() && !immediate {
+		var wait tea.Cmd
+		m, wait = m.waitSessionStart()
+		next, cmd := m.routeSubmit(line, pathLeading)
+		return next, tea.Batch(wait, cmd)
+	}
+	return m.routeSubmit(line, pathLeading)
+}
+
+// routeSubmit sends a submitted line, or holds it while a turn or a
+// background operation runs.
+func (m Model) routeSubmit(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 	// A follow-up typed while a turn is running (and no prompt is waiting
 	// on an answer — that keystroke belongs to the prompt, never to a new
 	// message) does not reach the model as text. A small allowlist of

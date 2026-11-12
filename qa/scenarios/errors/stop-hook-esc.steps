@@ -3,7 +3,7 @@
 # row stays up and Esc reaches it, as in Claude Code. Before, the hook ran
 # after the run had ended and Esc did nothing.
 @faux testdata/faux/qa/stop-hook-esc.yaml
-@setup mkdir -p .claude && printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sleep 300; touch stop-finished","timeout":600}]}]}}\n' > .claude/settings.json
+@setup mkdir -p .claude && printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo $$ > hook.pid; sleep 300; touch stop-finished","timeout":600}]}]}}\n' > .claude/settings.json
 
 WAITFOR /describe a task/ 20
 SEND finish up
@@ -11,6 +11,7 @@ WAITFOR /All done here\./ 20
 WAITFOR /running stop hook .*esc to stop/ 20
 SHOT stop-hook-running
 EXPECT /running stop hook .*esc to stop/
+RUN i=0; until test -s hook.pid; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
 KEY esc
 WAITFOR /Interrupted\. Tell kiln what to do instead\./ 20
 WAITGONE /esc to stop/ 20
@@ -18,6 +19,6 @@ SHOT after-esc
 EXPECT_NOT /esc to stop/
 EXPECT /Interrupted\. Tell kiln what to do instead\./
 EXPECT_NOT /Stop hook asked to continue/
-RUN i=0; until ! pgrep -f 'sleep 30[0]; touch stop-finished' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
+RUN p=$(cat hook.pid); i=0; while pgrep -g "$p" >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
 RUN ! test -e stop-finished
 EXPECT_NOT /panic|goroutine/

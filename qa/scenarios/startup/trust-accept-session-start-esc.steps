@@ -1,23 +1,34 @@
-# Esc while the SessionStart hooks that waited for the trust dialog run
-# stops them, as it stops /compact (internal/tui/background.go): the hook
-# process is killed, the busy line clears, and a prompt queued meanwhile
-# goes back into the input.
+# Esc while a prompt waits for the SessionStart hooks that waited for the
+# trust dialog stops the wait, not the hooks, as in Claude Code
+# (internal/tui/session_start.go): the busy line clears, the queued
+# prompt goes back into the input, and the hook keeps running. Sent again
+# while the hook still runs, the prompt waits again, and goes out once
+# the hook ends. The hook writes its PID, so the check looks at this
+# run's process only, and waits for a release file.
 @faux testdata/faux/hello.yaml
 @untrusted
-@setup printf 'touch hook-started\nexec sleep 7331\n' > start.sh
-@setup mkdir -p .claude && printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"sh start.sh"}]}]}}\n' > .claude/settings.json
+@setup mkdir -p .claude && printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo $$ > hook.pid; while [ ! -e release-hook ]; do sleep 0.1; done; echo CONTEXT-FROM-SESSION-START"}]}]}}\n' > .claude/settings.json
 
 WAITFOR /Accessing workspace/ 20
 KEY 2
 WAITFOR /Running session start hooks/ 20
-RUN i=0; until pgrep -f 'sleep 733[1]' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
+RUN i=0; until test -s hook.pid; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
 TYPE keep this
 KEY enter
 WAITFOR /queued/ 20
 KEY escape
-WAITFOR /Session start hooks cancelled\. Your queued message is back in the input\./ 20
-SHOT hooks-cancelled
+WAITFOR /Stopped waiting for session start hooks\. Your queued message is back in the input\./ 20
+SHOT wait-stopped
 EXPECT_NOT /Running session start hooks/
 EXPECT /keep this/
-RUN i=0; while pgrep -f 'sleep 733[1]' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
+RUN kill -0 "$(cat hook.pid)"
+KEY enter
+WAITFOR /Running session start hooks/ 20
+WAITFOR /queued/ 20
+SHOT waiting-again
+EXPECT_NOT /Hello from faux\./
+RUN touch release-hook
+WAITFOR /Hello from faux\./ 20
+SHOT sent-after-hooks
+EXPECT_NOT /Running session start hooks/
 EXPECT_NOT /panic|goroutine/

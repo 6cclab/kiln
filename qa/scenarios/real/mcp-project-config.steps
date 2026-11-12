@@ -12,9 +12,7 @@
 @setup mkdir -p {PROJ}/../bin && go -C {ROOT} build -o {PROJ}/../bin/incidents ./qa/fixtures/incident-mcp && printf '{"mcpServers":{"incidents":{"command":"%s"}}}' "{PROJ}/../bin/incidents" > {PROJ}/.mcp.json
 WAITFOR /describe a task/ 30
 SHOT ready
-WAIT 4
-TYPE /mcp
-KEY enter
+SUBMIT_UNTIL /incidents\s+\d+ tools/ 60 /mcp
 SHOT mcp-dialog
 EXPECT /incidents/
 KEY esc

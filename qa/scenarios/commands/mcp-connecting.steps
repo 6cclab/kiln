@@ -1,0 +1,25 @@
+# /mcp is a snapshot taken when it opens: a project MCP server still
+# connecting shows as connecting, and reopening /mcp once it has finished
+# shows it connected with its tools. The fixture server holds MCP
+# initialize until the scenario creates its gate file, so the first /mcp
+# always lands while it connects; SUBMIT_UNTIL then reopens /mcp until
+# the connected row is there.
+@faux testdata/faux/hello.yaml
+@setup mkdir -p {PROJ}/../bin && go -C {ROOT} build -o {PROJ}/../bin/mcpfixture ./cmd/mcpfixture && printf '{"mcpServers":{"gated":{"command":"%s","args":["-connect-gate","%s"]}}}' "{PROJ}/../bin/mcpfixture" "{PROJ}/mcp-gate" > {PROJ}/.mcp.json
+
+WAITFOR /describe a task/ 30
+TYPE /mcp
+KEY enter
+WAITFOR /Manage MCP servers/ 20
+WAITFOR /connecting/ 20
+SHOT mcp-connecting
+EXPECT /gated/
+KEY esc
+WAITGONE /Manage MCP servers/ 20
+RUN touch mcp-gate
+SUBMIT_UNTIL /gated\s+\d+ tools/ 60 /mcp
+SHOT mcp-connected
+EXPECT /gated/
+EXPECT_NOT /connecting/
+KEY esc
+EXPECT_NOT /panic|goroutine/
