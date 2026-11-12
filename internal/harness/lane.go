@@ -51,6 +51,10 @@ type Lane struct {
 	// request was routed to (route.go), nil before the first; guarded by
 	// mu. ContextTokens counts that model's measured usage as current.
 	lastRouted *session.ModelRef
+
+	// reuse holds digests for unchanged read-only results (result_reuse.go).
+	reuseMu sync.Mutex
+	reuse   *resultReuse
 }
 
 func (l *Lane) newID() string { return uuid.NewString() }

@@ -20,12 +20,29 @@ import (
 type progressLoopGuard struct {
 	limit                 int
 	cwd                   string
+	maxFileBytes          int64 // file-cycle hash cap; zero means defaultLoopFileBytes
 	reads                 [40][sha256.Size]byte
 	readNext, readCount   int
 	states                [40]fileState
 	stateNext, stateCount int
 	warned                bool
 	warnedSignature       [sha256.Size]byte
+}
+
+const (
+	defaultLoopFileBytes int64 = 1 << 20
+	// MaxLoopFileBytes is the largest cap a setting may request.
+	MaxLoopFileBytes int64 = 16 << 20
+)
+
+func (g *progressLoopGuard) fileCap() int64 {
+	switch {
+	case g.maxFileBytes <= 0:
+		return defaultLoopFileBytes
+	case g.maxFileBytes > MaxLoopFileBytes:
+		return MaxLoopFileBytes
+	}
+	return g.maxFileBytes
 }
 
 type fileState struct {
@@ -58,10 +75,14 @@ func (g *progressLoopGuard) snapshot(call msg.ToolCall) fileState {
 		path = filepath.Join(g.cwd, path)
 	}
 	path = filepath.Clean(path)
-	// Never inspect a path outside the working tree or a symlink. The guard
-	// reads at most 1 MiB, and stores only a digest.
+	// Never inspect a path outside the working tree. A symlink is followed
+	// only when its final target also stays inside it; the state is keyed by
+	// that target so a link and its target are one file. The content is
+	// streamed through a hash (nothing retained) up to fileCap bytes.
 	rel, err := filepath.Rel(g.cwd, path)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		// A lexically outside path can still be a link back in; it is not
+		// tracked, only links that start inside are.
 		return fileState{}
 	}
 	cwdReal, cwdErr := filepath.EvalSymlinks(g.cwd)
@@ -73,23 +94,24 @@ func (g *progressLoopGuard) snapshot(call msg.ToolCall) fileState {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fileState{}
 	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+	limit := g.fileCap()
+	info, err := os.Lstat(pathReal)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
 		return fileState{}
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(pathReal)
 	if err != nil {
 		return fileState{}
 	}
 	defer f.Close()
 	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, 1<<20+1))
-	if err != nil || n > 1<<20 {
+	n, err := io.Copy(h, io.LimitReader(f, limit+1))
+	if err != nil || n > limit {
 		return fileState{}
 	}
 	var digest [sha256.Size]byte
 	copy(digest[:], h.Sum(nil))
-	return fileState{path: sha256.Sum256([]byte(path)), digest: digest, valid: true}
+	return fileState{path: sha256.Sum256([]byte(pathReal)), digest: digest, valid: true}
 }
 
 func (g *progressLoopGuard) observe(call msg.ToolCall, result msg.ToolResultMessage, before fileState) progressLoopEvent {

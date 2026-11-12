@@ -54,6 +54,13 @@ type Options struct {
 	CycleLimit int
 	// ProgressLoopLimit bounds successful no-progress loops. Zero disables it.
 	ProgressLoopLimit int
+	// ProgressLoopFileBytes caps the streamed hash of a file the guard tracks
+	// across edit/write calls. Zero means 1 MiB; the maximum is 16 MiB.
+	ProgressLoopFileBytes int64
+	// ReuseUnchangedResults lets a repeated read/grep/glob whose fresh result
+	// is identical to an earlier one still in the transcript return a short
+	// "unchanged since call <id>" result. Off by default.
+	ReuseUnchangedResults bool
 
 	Retry RetryPolicy
 
@@ -123,6 +130,9 @@ func New(opts Options) (*Harness, error) {
 	}
 	if opts.CycleLimit != 0 && (opts.CycleLimit < 2 || opts.CycleLimit > 10) {
 		return nil, fmt.Errorf("harness: Options.CycleLimit must be zero or between 2 and 10")
+	}
+	if opts.ProgressLoopFileBytes < 0 || opts.ProgressLoopFileBytes > MaxLoopFileBytes {
+		return nil, fmt.Errorf("harness: Options.ProgressLoopFileBytes must be between 0 and %d", MaxLoopFileBytes)
 	}
 	if opts.ProgressLoopLimit != 0 && (opts.ProgressLoopLimit < 2 || opts.ProgressLoopLimit > 10) {
 		return nil, fmt.Errorf("harness: Options.ProgressLoopLimit must be zero or between 2 and 10")
