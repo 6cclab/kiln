@@ -8,7 +8,7 @@ A worker's Bash is safe to enable only if kiln can stop every process it started
 
 | Platform | Descendant ownership | Result |
 | --- | --- | --- |
-| Linux | `bwrap --unshare-pid --die-with-parent`: the command runs in a PID namespace. When its init exits (the command ends, or `JobScope.Close` kills the bwrap group) the kernel kills every process in the namespace, `setsid()` ones included. | enabled |
+| Linux | `bwrap --unshare-pid --die-with-parent`: the command runs in a PID namespace. When its init exits (the command ends, or `JobScope.Close` kills the bwrap group) the kernel kills every process in the namespace, `setsid()` ones included, and kiln waits on a pidfd of the init until that has finished (Synchronous teardown, below). | enabled |
 | macOS | None found (below). | refused |
 | Windows | No worktree-aware command sandbox. | refused |
 
@@ -45,6 +45,33 @@ Evidence gathered on macOS 27.0.1 with `sandbox-exec`:
 
 Probe files were in a scratch directory and are not part of the change. The Seatbelt profile and its live test (`worker_shell_darwin_test.go`) are kept as a foundation; `TestDispatchIsolatedShellRefusesDetachedDescendants` still asserts that dispatch refuses before running anything.
 
+## Synchronous teardown
+
+A command's namespace is confirmed empty before its `Exec` returns, so `JobScope.Close` and the worktree removal never race a live process.
+
+Mechanism (`internal/sandbox/nswatch_linux.go`):
+
+1. Every worker command is started with `bwrap --info-fd 3`. bwrap writes `{"child-pid": N}` (the host PID of the namespace's init) before it runs the command. Exec passes the pipe through `Wrapped.ExtraFiles`.
+2. As soon as the command starts, a goroutine reads that JSON and calls `pidfd_open(N)`. A pidfd names that process for good, so a recycled PID cannot be mistaken for it; it also works on a process that is not our child, which the init is not once its parent bwrap has been killed. The goroutine checks `/proc/N/status` shows `NSpid` ending in 1 (an init), and treats `ESRCH` as already exited.
+3. After `cmd.Wait` returns (normal exit, timeout, cancel or `JobScope.Close`), Exec calls `Drain`, which polls the pidfd for readability, bounded by 5 seconds. Only then does the command count as finished for the job scope (`execFinished`), so `Close` returns after it.
+4. `Manager.Shutdown`, which dispatch uses as the worker's cleanup, waits again on any namespace not yet confirmed (a command still in flight when `Close` gave up after its own 3 seconds). If anything is unconfirmed it returns an error, and dispatch leaves the worktree on disk (`releaseWorkerWorktree`) and returns that error with the dispatch result. Nothing falls back to asynchronous teardown.
+5. `NewWorker` probes the same path once (a real bwrap run with `--info-fd` and a pidfd on its init). A kernel without `pidfd_open` (before 5.3) or a bwrap without `--info-fd` makes worker creation fail with an error naming pidfd, so isolated shell is refused.
+
+Why a readable pidfd means the namespace is empty (Linux v6.6 source):
+
+- `kernel/exit.c` `do_exit` -> `exit_notify` -> `forget_original_parent` -> `find_child_reaper`, which for the namespace's init calls `zap_pid_ns_processes(pid_ns)`.
+- `kernel/pid_namespace.c` `zap_pid_ns_processes` marks the namespace as not accepting new processes, sends SIGKILL to every other task in it, reaps its children, and then loops in `TASK_INTERRUPTIBLE` sleep until `pid_ns->pid_allocated` is down to the init's own PID; the comment says `free_pid()` wakes it once the other tasks are gone. The init therefore cannot finish exiting while any task of the namespace exists.
+- `exit_notify` sets `exit_state` and calls `do_notify_parent`, and the pidfd's wait queue is woken by `do_notify_pidfd` at the top of `do_notify_parent` (`kernel/signal.c`). That happens after `forget_original_parent` returned, that is after `zap_pid_ns_processes`. `pidfd_poll` reports `EPOLLIN` when the thread group has exited (`exit_state` set); I recalled that function from memory, the fetch of `kernel/pid.c` did not contain it, so that last link is not verified against source in this session. `pid_namespaces(7)` states the kill-on-init-exit behaviour.
+- The fetched source was read through a text summarizer, not a full checkout. The empirical tests below back the chain.
+
+Evidence (container on a 7.0.14-linuxkit kernel, bubblewrap 0.12.0, `--privileged` and `--init`):
+
+- `TestWorkerLinuxScopeCloseWaitsForSlowTeardown` runs a `setsid` descendant holding a large amount of memory, so its exit after SIGKILL is slow, and takes one look right after `JobScope.Close`. With the wait it passes (Close took about 16 ms, three runs). With `Wrapped.Drain` disabled it fails three of three (Close took under 0.5 ms and the descendant was still there). This is the red/green pair for the wait.
+- The ordinary `setsid sleep` tests (`TestWorkerLinuxDetachedDescendantDiesWithCommand`, `...WithScope`, and the two dispatch tests) now check once, without polling, and loop 20 times. They pass with the wait. They also passed with the wait disabled (measured): a plain `sleep` dies faster than Exec's own return path, so they do not demonstrate the race; the slow-teardown test does.
+- `TestNSWatchTimeoutIsAnError`: an injected pidfd for a process that never exits makes the wait return a "still running" error after the 150 ms test timeout, and `Shutdown` reports it. `TestReleaseWorkerWorktreeKeepsWorktreeWhenShellNotStopped`: with that error the worktree stays on disk and the error wraps the cause; with no error it is removed.
+- `TestNSWatchNoInfo`: bwrap killed before reporting is an error; bwrap that exited by itself without a namespace is not.
+- `TestWorkerLinuxRefusedWithoutPidfd`: an opener returning `ENOSYS` makes `NewWorker` fail with an error naming pidfd.
+
 ## Evidence
 
 Linux tests ran in a disposable `golang:1.26.6` container (linux/arm64) with bubblewrap 0.12.0 and socat installed, started with `--privileged`. With only `--security-opt seccomp=unconfined apparmor=unconfined` bwrap failed with `Creating new namespace failed`; adding `--cap-add SYS_ADMIN` failed with `loopback: Failed RTM_NEWADDR`; `--privileged` worked. The container ran as root. The copy of the repo was `rsync`ed in without `.git` and no HOME or config was mounted.
@@ -64,7 +91,8 @@ Red runs: removing `--unshare-pid` made both descendant tests (sandbox and dispa
 
 ## Not covered
 
-- Teardown after `JobScope.Close` kills the outer bwrap is performed by the kernel (the namespace init receives its parent-death signal). It is not synchronous with `Close` returning; the tests poll for up to two seconds, and kiln itself does not wait for it. A process still being torn down could in theory hold a file in the worktree for a few milliseconds when cleanup starts.
+- A bwrap killed in the few microseconds between its `clone` and its `--info-fd` write leaves a namespace kiln never learned of. Exec treats "killed, no info" as unconfirmed, so the worktree is kept (a spurious keep when the kill landed before the clone, never a spurious removal).
+- A worktree kept after a failed wait is not removed by kiln later; it needs manual cleanup (`git worktree remove --force`).
 - A socket created inside `/etc` or the Git metadata after the per-command scan, by another host process while the command runs, is reachable. Nothing else outside the allowlist is.
 - The Git metadata, including the parent's `config`, hooks and packed refs, is readable by the worker. Reads of the parent worktree files are not possible.
 - The container runs were as root; non-root user-namespace behaviour on a host with restricted unprivileged user namespaces is reported as unavailable (refusal), not tested here.

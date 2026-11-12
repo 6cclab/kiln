@@ -221,7 +221,7 @@ type DispatchResult struct {
 // ctx is forwarded to both session creation and the run itself: cancelling
 // the parent's context aborts the subagent's turn exactly as it would the
 // parent's own.
-func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (DispatchResult, error) {
+func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (_ DispatchResult, retErr error) {
 	release, limitErr := d.Limits.acquire(d.Depth + 1)
 	if limitErr != nil {
 		return DispatchResult{}, limitErr
@@ -305,6 +305,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 
 	workerEnv := d.Env
 	var worktree *workerWorktree
+	// shellErr is set when the worker's shell processes are not confirmed
+	// stopped; the worktree is then left in place and the error returned.
+	var shellErr error
 	if d.IsolatedShell && !d.IsolatedWorkers {
 		return DispatchResult{}, fmt.Errorf("agent: isolated shell requires isolated workers")
 	}
@@ -322,8 +325,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			return DispatchResult{}, fmt.Errorf("agent: prepare isolated worker: %w", err)
 		}
 		defer func() {
-			if closeErr := worktree.close(); closeErr != nil {
+			if closeErr := releaseWorkerWorktree(shellErr, worktree); closeErr != nil {
 				diag.L().Warn("isolated worker worktree cleanup failed", "path", worktree.path, "error", closeErr)
+				if shellErr != nil {
+					retErr = errors.Join(retErr, closeErr)
+				}
 			}
 		}()
 	}
@@ -347,11 +353,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	// The shell sandbox is released after the job scope has stopped the
 	// worker's commands and before the worktree is removed (defers run in
 	// reverse order, and the worktree's was registered earlier).
-	var shellCleanup func()
+	var shellCleanup func() error
 	defer func() {
 		workerEnv.JobScope.Close()
 		if shellCleanup != nil {
-			shellCleanup()
+			shellErr = shellCleanup()
 		}
 	}()
 	if d.IsolatedShell {

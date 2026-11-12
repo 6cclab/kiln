@@ -8,27 +8,32 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/andrepato/harness/internal/execenv"
+	"golang.org/x/sys/unix"
 )
 
 type workerRig struct {
 	t             *testing.T
 	base          string // short, for Unix socket paths
 	parent, child string
+	home          string
 	m             *Manager
 	env           *execenv.Env
 }
 
-func newWorkerRig(t *testing.T) *workerRig {
+// newWorkerRepo makes a parent repository and a linked worktree, no sandbox.
+func newWorkerRepo(t *testing.T) *workerRig {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git unavailable")
@@ -41,6 +46,7 @@ func newWorkerRig(t *testing.T) *workerRig {
 	t.Setenv("KILN_TMPDIR", filepath.Join(base, "t"))
 	r := &workerRig{t: t, base: base, parent: filepath.Join(base, "parent"), child: filepath.Join(base, "child")}
 	home := filepath.Join(base, "home")
+	r.home = home
 	for _, d := range []string{r.parent, home} {
 		if err := os.Mkdir(d, 0o700); err != nil {
 			t.Fatal(err)
@@ -64,15 +70,20 @@ func newWorkerRig(t *testing.T) *workerRig {
 	git(r.parent, "add", "tracked")
 	git(r.parent, "commit", "-qm", "initial")
 	git(r.parent, "worktree", "add", "-qb", "worker", r.child)
+	return r
+}
 
-	m, err := NewWorker(Config{}, Options{Home: home}, r.parent, r.child)
+func newWorkerRig(t *testing.T) *workerRig {
+	t.Helper()
+	r := newWorkerRepo(t)
+	m, err := NewWorker(Config{}, Options{Home: r.home}, r.parent, r.child)
 	if err != nil {
 		if strings.Contains(err.Error(), "unavailable") {
 			t.Skipf("no Linux sandbox here: %v", err)
 		}
 		t.Fatal(err)
 	}
-	t.Cleanup(m.Close)
+	t.Cleanup(func() { _ = m.Shutdown() })
 	r.m = m
 	r.env = execenv.New(r.child)
 	return r
@@ -95,11 +106,14 @@ func (r *workerRig) run(command string) (string, int) {
 // hostProcessWith reports whether any process on the host has marker in its
 // command line.
 func hostProcessWith(marker string) bool {
-	dirs, _ := filepath.Glob("/proc/[0-9]*/cmdline")
-	for _, f := range dirs {
-		b, err := os.ReadFile(f)
-		if err == nil && strings.Contains(string(b), marker) {
-			return true
+	// comm survives while a process tears down its memory; cmdline does not.
+	for _, name := range []string{"cmdline", "comm"} {
+		files, _ := filepath.Glob("/proc/[0-9]*/" + name)
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err == nil && strings.Contains(string(b), marker) && !isZombie(filepath.Dir(f)) {
+				return true
+			}
 		}
 	}
 	return false
@@ -215,46 +229,194 @@ func TestWorkerLinuxNetworkIsolated(t *testing.T) {
 
 // A descendant that double-forks and calls setsid() leaves the command's
 // process group, yet does not outlive the command: its PID namespace ends
-// with the command's init.
+// with the command's init, and Exec returns only once the namespace is empty.
+// Each check is a single look right after Exec returns, with no polling, and
+// runs many times because a race would show up as an occasional survivor.
 func TestWorkerLinuxDetachedDescendantDiesWithCommand(t *testing.T) {
 	if _, err := exec.LookPath("setsid"); err != nil {
 		t.Skip("setsid not installed")
 	}
 	r := newWorkerRig(t)
-	const marker = "4242.0101"
-	out, code := r.run(`(setsid sleep ` + marker + ` </dev/null >/dev/null 2>&1 &) ; sleep 0.3; echo started`)
-	if code != 0 || !strings.Contains(out, "started") {
-		t.Fatalf("command failed (%d): %s", code, out)
-	}
-	if !waitHostProcess(t, marker, false, 2*time.Second) {
-		t.Fatal("a setsid descendant outlived the command")
+	for i := 0; i < 20; i++ {
+		marker := fmt.Sprintf("4242.01%02d", i)
+		out, code := r.run(`(setsid sleep ` + marker + ` </dev/null >/dev/null 2>&1 &) ; sleep 0.1; echo started`)
+		if code != 0 || !strings.Contains(out, "started") {
+			t.Fatalf("command failed (%d): %s", code, out)
+		}
+		if hostProcessWith(marker) {
+			t.Fatalf("run %d: a setsid descendant outlived the command", i)
+		}
 	}
 }
 
 // Closing the worker's job scope while a command runs stops its detached
-// descendants too, before the caller removes the worktree.
+// descendants too, and Close returns only after they are gone: one look, no
+// polling, 20 times.
 func TestWorkerLinuxDetachedDescendantDiesWithScope(t *testing.T) {
 	if _, err := exec.LookPath("setsid"); err != nil {
 		t.Skip("setsid not installed")
 	}
 	r := newWorkerRig(t)
+	for i := 0; i < 20; i++ {
+		r.env.JobScope = execenv.NewJobScope()
+		marker := fmt.Sprintf("4242.02%02d", i)
+		command := `(setsid sleep ` + marker + ` </dev/null >/dev/null 2>&1 &) ; sleep 300`
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = r.env.Exec(context.Background(), command, execenv.ExecOptions{
+				InheritEnv: true, Timeout: 60 * time.Second, Sandbox: r.m.ForCommand(command, false),
+			})
+		}()
+		if !waitHostProcess(t, marker, true, 10*time.Second) {
+			r.env.JobScope.Close()
+			t.Fatal("descendant never started")
+		}
+		r.env.JobScope.Close()
+		if hostProcessWith(marker) {
+			t.Fatalf("run %d: a setsid descendant outlived JobScope.Close", i)
+		}
+		<-done
+	}
+}
+
+// If the namespace is not confirmed empty, Shutdown says so (the caller then
+// keeps the worktree). The injected opener hands back a pidfd for a process
+// that never exits; the reported child-pid is 1, so the init check passes.
+func TestNSWatchTimeoutIsAnError(t *testing.T) {
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
+	m := New(Config{}, Options{
+		NSWaitTimeout: 150 * time.Millisecond,
+		PidfdOpen:     func(int) (int, error) { return unix.PidfdOpen(sleeper.Process.Pid, 0) },
+	})
+	n, err := m.newNSWatch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.w.WriteString(`{"child-pid": 1}`); err != nil {
+		t.Fatal(err)
+	}
+	n.start()
+	begin := time.Now()
+	err = n.drain(nil)
+	if err == nil || !strings.Contains(err.Error(), "still running") {
+		t.Fatalf("drain = %v, want a still-running error", err)
+	}
+	if d := time.Since(begin); d < 100*time.Millisecond || d > 5*time.Second {
+		t.Errorf("drain returned after %s, want about the 150ms timeout", d)
+	}
+	n.finish() // as Exec's cleanup does: the unconfirmed watch stays registered
+	if err := m.Shutdown(); err == nil {
+		t.Fatal("Shutdown reported success while a namespace was unconfirmed")
+	}
+}
+
+// bwrap killed before it reported its namespace may have left one unseen: that
+// is an error. bwrap that exited on its own before making one is not.
+func TestNSWatchNoInfo(t *testing.T) {
+	states := map[string]*os.ProcessState{}
+	for name, script := range map[string]string{"killed": "kill -9 $$", "exited": "exit 1"} {
+		c := exec.Command("sh", "-c", script)
+		_ = c.Run()
+		states[name] = c.ProcessState
+	}
+	for name, wantErr := range map[string]bool{"killed": true, "exited": false} {
+		m := New(Config{}, Options{NSWaitTimeout: time.Second})
+		n, err := m.newNSWatch()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = n.w.Close() // bwrap ended without writing anything
+		n.start()
+		err = n.stopped(states[name], time.Second)
+		if (err != nil) != wantErr {
+			t.Errorf("%s: err = %v, want error: %v", name, err, wantErr)
+		}
+	}
+}
+
+// Without pidfd_open, or a bwrap that does not report its namespace, worker
+// shell is refused instead of falling back to teardown nobody waits for.
+func TestWorkerLinuxRefusedWithoutPidfd(t *testing.T) {
+	r := newWorkerRepo(t)
+	_, err := NewWorker(Config{}, Options{Home: r.home, PidfdOpen: func(int) (int, error) { return -1, unix.ENOSYS }}, r.parent, r.child)
+	if err == nil {
+		t.Fatal("worker sandbox created without pidfd support")
+	}
+	if strings.Contains(err.Error(), "unavailable") {
+		t.Skipf("no Linux sandbox here: %v", err)
+	}
+	if !strings.Contains(err.Error(), "pidfd") {
+		t.Fatalf("error does not name pidfd: %v", err)
+	}
+}
+
+// Teardown can be slow: a descendant holding a lot of memory takes a while to
+// exit after SIGKILL. JobScope.Close must still return only after it is gone,
+// which is only true because Exec waits for the namespace to empty (without
+// that wait this test fails: the kernel finishes after Close has returned).
+func TestWorkerLinuxScopeCloseWaitsForSlowTeardown(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid not installed")
+	}
+	if _, err := exec.LookPath("awk"); err != nil {
+		t.Skip("awk not installed")
+	}
+	if avail := memAvailableKB(); avail < 4_000_000 {
+		t.Skipf("needs about 2 GB free, have %d kB", avail)
+	}
+	r := newWorkerRig(t)
 	r.env.JobScope = execenv.NewJobScope()
-	const marker = "4242.0202"
-	command := `(setsid sleep ` + marker + ` </dev/null >/dev/null 2>&1 &) ; sleep 300`
+	const marker = "zslow4242" // the copied awk's process name
+	command := `cp "$(command -v awk)" ./` + marker + ` && (head -c 900000000 /dev/zero | setsid ./` + marker +
+		` '{l=$0} END{system("sleep 300")}' >/dev/null 2>&1 &) ; sleep 300`
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		_, _ = r.env.Exec(context.Background(), command, execenv.ExecOptions{
-			InheritEnv: true, Timeout: 60 * time.Second, Sandbox: r.m.ForCommand(command, false),
+			InheritEnv: true, Timeout: 120 * time.Second, Sandbox: r.m.ForCommand(command, false),
 		})
 	}()
-	if !waitHostProcess(t, marker, true, 10*time.Second) {
+	if !waitHostProcess(t, marker, true, 20*time.Second) {
 		r.env.JobScope.Close()
 		t.Fatal("descendant never started")
 	}
+	time.Sleep(4 * time.Second) // let it read the input and grow
+	begin := time.Now()
 	r.env.JobScope.Close()
-	<-done
-	if !waitHostProcess(t, marker, false, 2*time.Second) {
-		t.Fatal("a setsid descendant outlived JobScope.Close")
+	t.Logf("Close took %s", time.Since(begin))
+	if hostProcessWith(marker) {
+		t.Fatal("a memory-heavy setsid descendant outlived JobScope.Close")
 	}
+	<-done
+}
+
+func memAvailableKB() int {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(l); len(f) >= 2 && f[0] == "MemAvailable:" {
+			n, _ := strconv.Atoi(f[1])
+			return n
+		}
+	}
+	return 0
+}
+
+// isZombie reports whether the /proc/<pid> directory is a process that has
+// exited and only awaits its parent's wait (it runs nothing).
+func isZombie(dir string) bool {
+	b, err := os.ReadFile(dir + "/stat")
+	if err != nil {
+		return true // gone
+	}
+	s := string(b)
+	i := strings.LastIndex(s, ")")
+	return i >= 0 && i+2 < len(s) && s[i+2] == 'Z'
 }

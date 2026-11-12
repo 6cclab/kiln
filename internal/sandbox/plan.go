@@ -54,6 +54,9 @@ type Plan struct {
 	// command, so a connect to it fails. Rules about paths that are not
 	// visible are dropped rather than mounted.
 	PrivateRoot bool
+	// InfoFD, when set, is passed to bwrap as --info-fd: it reports the host
+	// PID of the namespace's init there, which worker teardown waits on.
+	InfoFD int
 	// ReadOnlyMounts are extra host paths a PrivateRoot command sees
 	// read-only (a worktree's Git metadata).
 	ReadOnlyMounts []string

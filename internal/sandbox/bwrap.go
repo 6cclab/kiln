@@ -32,6 +32,9 @@ type bwrapBridge struct {
 // no port is reachable.
 func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridge) ([]string, error) {
 	a := []string{bwrap, "--new-session", "--die-with-parent", "--unshare-pid", "--unshare-net"}
+	if p.InfoFD > 0 {
+		a = append(a, "--info-fd", itoa(p.InfoFD))
+	}
 	visible := func(string) bool { return true }
 	switch {
 	case p.PrivateRoot:

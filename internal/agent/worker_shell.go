@@ -29,9 +29,11 @@ func isolatedShellSupport(goos string) error {
 
 // enableWorkerShellForOS installs a mandatory worktree-specific command
 // sandbox; callers pass runtime.GOOS as goos. Its cleanup must run after
-// JobScope.Close and before the worktree is removed. A nil cleanup is returned
-// on failure so dispatch cannot start the worker.
-func enableWorkerShellForOS(workerEnv, parentEnv *execenv.Env, worktree, goos string) (func(), error) {
+// JobScope.Close and before the worktree is removed. On Linux it waits until
+// every process the worker's commands started is confirmed gone, and returns an
+// error when it cannot confirm that; the worktree must then stay. A nil
+// cleanup is returned on failure so dispatch cannot start the worker.
+func enableWorkerShellForOS(workerEnv, parentEnv *execenv.Env, worktree, goos string) (func() error, error) {
 	if (goos != "darwin" && goos != "linux") || goos != runtime.GOOS {
 		return nil, fmt.Errorf("isolated worker shell requires macOS Seatbelt or Linux bubblewrap; %s has neither", goos)
 	}
@@ -51,5 +53,15 @@ func enableWorkerShellForOS(workerEnv, parentEnv *execenv.Env, worktree, goos st
 		return nil, fmt.Errorf("prepare isolated worker shell sandbox: %w", err)
 	}
 	workerEnv.Sandbox = manager
-	return manager.Close, nil
+	return manager.Shutdown, nil
+}
+
+// releaseWorkerWorktree removes the worker's worktree, unless its shell
+// processes are not confirmed stopped (shellErr): a live process could still
+// hold or write files there, so the worktree stays and the error says so.
+func releaseWorkerWorktree(shellErr error, w *workerWorktree) error {
+	if shellErr != nil {
+		return fmt.Errorf("isolated worker worktree %s kept: its shell processes are not confirmed stopped: %w", w.path, shellErr)
+	}
+	return w.close()
 }

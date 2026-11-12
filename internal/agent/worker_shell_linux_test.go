@@ -71,7 +71,15 @@ func isolatedShellDispatcher(t *testing.T, command string) (*Dispatcher, string)
 // returns, so removing the worktree cannot race a live process.
 func TestDispatchIsolatedShellRunsAndOwnsDetachedDescendants(t *testing.T) {
 	requireLinuxWorkerSandbox(t)
-	const marker = "4242.0303"
+	// One look right after Dispatch returns, no polling, repeated: a race
+	// would show up as an occasional survivor.
+	for i := 0; i < 20; i++ {
+		runIsolatedShellDispatch(t, fmt.Sprintf("4242.03%02d", i))
+	}
+}
+
+func runIsolatedShellDispatch(t *testing.T, marker string) {
+	t.Helper()
 	parentFile := "/tmp/never-written-by-worker"
 	d, repo := isolatedShellDispatcher(t, `printf from-worker > w.txt; printf x > `+parentFile+`; (setsid sleep `+marker+` </dev/null >/dev/null 2>&1 &); echo started`)
 	var bashOutput string
@@ -97,8 +105,8 @@ func TestDispatchIsolatedShellRunsAndOwnsDetachedDescendants(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repo, "w.txt")); !os.IsNotExist(err) {
 		t.Fatalf("worker wrote the parent checkout: %v", err)
 	}
-	if !waitProcess(marker, false, 2*time.Second) {
-		t.Fatal("a setsid descendant outlived Dispatch")
+	if hostHasProcess(marker) {
+		t.Fatalf("a setsid descendant (%s) outlived Dispatch", marker)
 	}
 }
 
@@ -126,7 +134,7 @@ func TestDispatchIsolatedShellCancelStopsDetachedDescendants(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("dispatch did not return after cancel")
 	}
-	if !waitProcess(marker, false, 2*time.Second) {
+	if hostHasProcess(marker) {
 		t.Fatal("a setsid descendant outlived a cancelled dispatch")
 	}
 }

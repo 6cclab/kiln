@@ -80,6 +80,14 @@ func NewWorker(parent Config, opts Options, parentRoot, worktreeRoot string) (*M
 		m.Close()
 		return nil, fmt.Errorf("sandbox: worker isolation unavailable: %w", err)
 	}
+	if runtime.GOOS == "linux" {
+		// Descendants are stopped by the PID namespace; teardown must be able
+		// to see it empty. Without that, refuse rather than tear down blindly.
+		if err := m.probeNSWatch(); err != nil {
+			m.Close()
+			return nil, err
+		}
+	}
 	return m, nil
 }
 

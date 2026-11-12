@@ -135,11 +135,12 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 		return ExecResult{}, fmt.Errorf("working directory does not exist: %s", cwd)
 	}
 
-	cmd, cleanup, err := shellCommand(ctx, shellPath, command, cwd, opts)
+	cmd, cleanup, wrapped, err := shellCommand(ctx, shellPath, command, cwd, opts)
 	if err != nil {
 		return ExecResult{}, err
 	}
 	defer cleanup()
+	defer closeFiles(wrapped.ExtraFiles)
 	SetProcGroup(cmd)
 	// exec.CommandContext's default cancel (ctx.Done) sends the process a
 	// plain Kill signal to the leader only; override so the whole process
@@ -197,8 +198,12 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	} else {
 		err = cmd.Start()
 	}
+	closeFiles(wrapped.ExtraFiles)
 	if err != nil {
 		return ExecResult{}, err
+	}
+	if wrapped.Started != nil {
+		wrapped.Started()
 	}
 	if e.JobScope != nil {
 		defer e.JobScope.execFinished()
@@ -232,6 +237,13 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	if errors.Is(waitErr, exec.ErrWaitDelay) {
 		waitErr = nil // the shell exited 0; only a background job held the pipes
 	}
+	// A sandbox that owns a namespace confirms it is empty before the
+	// command counts as finished: the job scope's Close, and the caller's
+	// removal of the worker's files, wait on this.
+	var drainErr error
+	if wrapped.Drain != nil {
+		drainErr = wrapped.Drain(cmd.ProcessState)
+	}
 	// The shell ran in its own process group; if anything is still in it,
 	// the command backgrounded a job that is still running.
 	pgid := cmd.Process.Pid
@@ -251,6 +263,9 @@ func (e *Env) Exec(ctx context.Context, command string, opts ExecOptions) (ExecR
 	final := capture.Snapshot()
 	mu.Unlock()
 
+	if drainErr != nil {
+		return ExecResult{Text: final.Text, Truncation: final.Truncation, SpillPath: final.SpillPath}, drainErr
+	}
 	if timedOut.Load() {
 		return ExecResult{TimedOut: true, Text: final.Text, Truncation: final.Truncation, SpillPath: final.SpillPath},
 			fmt.Errorf("timeout after %s", opts.Timeout)
@@ -319,4 +334,10 @@ func startSpill(fileRef **os.File, pathRef *string, capture *OutputCapture, chun
 		capture.SetSpillPath(*pathRef)
 	}
 	_, _ = (*fileRef).WriteString(chunk)
+}
+
+func closeFiles(files []*os.File) {
+	for _, f := range files {
+		_ = f.Close()
+	}
 }

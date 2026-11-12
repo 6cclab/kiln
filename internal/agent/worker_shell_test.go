@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -119,5 +120,29 @@ func TestDispatchIsolatedShellRefusesBeforeStartingWorker(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repo, "marker")); !os.IsNotExist(err) {
 		t.Fatalf("worker Bash ran despite refusal: %v", err)
+	}
+}
+
+// A worktree whose shell processes are not confirmed stopped stays on disk and
+// the failure is returned; a confirmed one is removed.
+func TestReleaseWorkerWorktreeKeepsWorktreeWhenShellNotStopped(t *testing.T) {
+	repo := testRepo(t)
+	w, _, err := newWorkerWorktree(context.Background(), execenv.New(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := errors.New("namespace still running after 5s")
+	err = releaseWorkerWorktree(stuck, w)
+	if err == nil || !errors.Is(err, stuck) || !strings.Contains(err.Error(), "kept") {
+		t.Fatalf("err = %v, want a kept-worktree error wrapping the cause", err)
+	}
+	if _, statErr := os.Stat(w.path); statErr != nil {
+		t.Fatalf("worktree removed despite unconfirmed shell: %v", statErr)
+	}
+	if err := releaseWorkerWorktree(nil, w); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(w.path); !os.IsNotExist(statErr) {
+		t.Fatalf("worktree not removed after confirmed stop: %v", statErr)
 	}
 }
