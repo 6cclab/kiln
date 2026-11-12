@@ -2,7 +2,7 @@
 
 ## Foundation retained
 
-`enableWorkerShell` builds a mandatory macOS Seatbelt manager for a linked child worktree. Its direct live Bash-tool test permits child and private-temp writes and rejects writes to the parent checkout, shared Git metadata and shared temp, plus a Unix socket connection. The helper requires descriptor-confined files and a worker `JobScope`, disables unsandboxed commands and proxy access, and rejects Linux and Windows. These are profile and helper tests, not proof of safe product activation.
+`enableWorkerShellForOS` builds a mandatory macOS Seatbelt manager for a linked child worktree. Its direct live Bash-tool test permits child and private-temp writes and rejects writes to the parent checkout, shared Git metadata and shared temp, plus a Unix socket connection. The helper requires descriptor-confined files and a worker `JobScope`, disables unsandboxed commands and proxy access, and rejects Linux and Windows. These are profile and helper tests, not proof of safe product activation.
 
 ## Product activation is refused
 
