@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ type FactCandidate struct {
 	ID           string                     `json:"id"`
 	OutcomeID    string                     `json:"outcomeId"`
 	Command      string                     `json:"command"`
+	Workdir      string                     `json:"workdir,omitempty"`
 	Proof        tools.VerificationEvidence `json:"proof"`
 	EvidenceHash string                     `json:"evidenceHash,omitempty"`
 	CreatedAt    int64                      `json:"createdAt"`
@@ -35,12 +37,84 @@ func factID(outcomeID string, proof tools.VerificationEvidence) string {
 	return HashIdentity("fact-candidate-v1\x00" + outcomeID + "\x00" + string(raw))
 }
 
-func factKey(proof tools.VerificationEvidence) string {
+func factKey(proof tools.VerificationEvidence) string { return factKeyIn("", proof) }
+
+// factKeyIn names a fact by its command, working directory and every declared
+// dependency. A root launch with file dependencies only keeps the original key
+// shape, so facts stored before directories and subdirectories existed keep
+// their keys.
+func factKeyIn(workdir string, proof tools.VerificationEvidence) string {
+	if workdir == "" && len(proof.Directories) == 0 && len(proof.MissingFiles) == 0 {
+		raw, _ := json.Marshal(struct {
+			Command string                   `json:"command"`
+			Files   []tools.VerificationFile `json:"files"`
+		}{proof.Command, proof.Files})
+		return "verified-command:" + HashIdentity(string(raw))
+	}
+	type dirKey struct {
+		Path   string `json:"path"`
+		Digest string `json:"digest"`
+	}
+	dirs := make([]dirKey, 0, len(proof.Directories))
+	for _, dir := range proof.Directories {
+		digest, _ := proofTreeDigest(dir)
+		dirs = append(dirs, dirKey{dir.Path, digest})
+	}
+	missing := append([]string(nil), proof.MissingFiles...)
+	sort.Strings(missing)
 	raw, _ := json.Marshal(struct {
 		Command string                   `json:"command"`
+		Workdir string                   `json:"workdir"`
 		Files   []tools.VerificationFile `json:"files"`
-	}{proof.Command, proof.Files})
-	return "verified-command:" + HashIdentity(string(raw))
+		Dirs    []dirKey                 `json:"dirs"`
+		Missing []string                 `json:"missing"`
+	}{proof.Command, workdir, proof.Files, dirs, missing})
+	return "verified-command:" + HashIdentity("v2\x00"+string(raw))
+}
+
+// proofTreeDigest rebuilds the memory tree digest of a verification directory,
+// with member paths relative to the directory.
+func proofTreeDigest(dir tools.VerificationDirectory) (string, bool) {
+	entries := []memory.TreeEntry{{Kind: "d", Path: ".", Mode: dir.Mode}}
+	within := func(path string) (string, bool) {
+		rel, err := filepath.Rel(dir.Path, path)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", false
+		}
+		return filepath.ToSlash(rel), true
+	}
+	for _, sub := range dir.Subdirectories {
+		rel, ok := within(sub.Path)
+		if !ok {
+			return "", false
+		}
+		entries = append(entries, memory.TreeEntry{Kind: "d", Path: rel, Mode: sub.Mode})
+	}
+	for _, file := range dir.Files {
+		rel, ok := within(file.Path)
+		if !ok {
+			return "", false
+		}
+		entries = append(entries, memory.TreeEntry{Kind: "f", Path: rel, Mode: file.Mode, SHA256: file.SHA256})
+	}
+	return memory.TreeDigest(entries), true
+}
+
+// validFactWorkdir accepts a plain project-relative directory, so it can be
+// written into memory text without quoting.
+func validFactWorkdir(workdir string) bool {
+	if workdir == "" {
+		return true
+	}
+	if len(workdir) > 200 || !asciiToken(workdir, "_./-") || strings.HasPrefix(workdir, "/") || filepath.Clean(workdir) != workdir {
+		return false
+	}
+	for _, part := range strings.Split(workdir, "/") {
+		if part == ".." || part == ".git" || part == "." {
+			return false
+		}
+	}
+	return true
 }
 
 func observedCommand(proof tools.VerificationEvidence) bool {
@@ -106,6 +180,14 @@ func asciiDigits(value string) bool {
 // RecordFactCandidates derives reviewable observations from one opted-in run.
 // Only fully checkable file snapshots can be promoted automatically.
 func RecordFactCandidates(ctx context.Context, store *memory.Store, project, root string, outcome Outcome, proofs []tools.VerificationEvidence, cfg ObservationConfig) error {
+	return RecordFactCandidatesIn(ctx, store, project, root, "", outcome, proofs, cfg)
+}
+
+// RecordFactCandidatesIn is RecordFactCandidates for a run that started in
+// workdir, a slash-separated path below the project root ("" is the root).
+// Proof paths are relative to that directory; sources are stored relative to
+// the root so they stay correct in every worktree.
+func RecordFactCandidatesIn(ctx context.Context, store *memory.Store, project, root, workdir string, outcome Outcome, proofs []tools.VerificationEvidence, cfg ObservationConfig) error {
 	if !cfg.Enabled || !cfg.FactMemoryEnabled || outcome.Status != "completed" {
 		return nil
 	}
@@ -119,7 +201,7 @@ func RecordFactCandidates(ctx context.Context, store *memory.Store, project, roo
 		if !observedCommand(proof) || len(proof.Files)+len(proof.Directories) == 0 {
 			continue
 		}
-		candidate := FactCandidate{ID: factID(outcome.ID, proof), OutcomeID: outcome.ID, Command: proof.Command, Proof: proof, CreatedAt: time.Now().Unix(), Status: "review-only"}
+		candidate := FactCandidate{ID: factID(outcome.ID, proof), OutcomeID: outcome.ID, Command: proof.Command, Workdir: workdir, Proof: proof, CreatedAt: time.Now().Unix(), Status: "review-only"}
 		dismissed, err := store.Current(ctx, factDismissalScope(project), candidate.ID, "")
 		if err != nil {
 			return err
@@ -139,12 +221,15 @@ func RecordFactCandidates(ctx context.Context, store *memory.Store, project, roo
 			}
 			continue
 		}
-		if sources, reason := factSourcesForPromotion(ctx, root, proof, cfg.FactReadAllowed); reason != "" {
+		if sources, reason := factSourcesForPromotion(ctx, root, workdir, proof, cfg.FactReadAllowed); reason != "" {
 			candidate.Reason = reason
 		} else {
-			key := factKey(proof)
+			key := factKeyIn(workdir, proof)
 			text := fmt.Sprintf("Observed successful verification command: %s", proof.Command)
-			evidence := fmt.Sprintf("Successful Bash command in opted-in outcome %s; call %s; declared file snapshot rechecked", outcome.ID, proof.CallID)
+			if workdir != "" {
+				text = fmt.Sprintf("Observed successful verification command (in %s): %s", workdir, proof.Command)
+			}
+			evidence := fmt.Sprintf("Successful Bash command in opted-in outcome %s; call %s; declared input snapshot rechecked", outcome.ID, proof.CallID)
 			stored, err := store.PutIfAbsent(ctx, memory.Record{Scope: project, Key: key, Kind: "procedure", Text: text, Evidence: evidence, Sources: sources, Expires: time.Now().Add(30 * 24 * time.Hour).Unix()})
 			if err != nil {
 				candidate.Reason = "memory write failed"
@@ -174,42 +259,94 @@ func storeFactCandidate(ctx context.Context, store *memory.Store, project string
 	return err
 }
 
-func factSourcesForPromotion(ctx context.Context, root string, proof tools.VerificationEvidence, allowRead func(string) bool) ([]memory.Source, string) {
-	if len(proof.Directories) != 0 {
-		return nil, "directory membership cannot be represented by memory sources"
-	}
-	if len(proof.MissingFiles) != 0 {
-		return nil, "missing-file dependencies cannot be represented by memory sources"
-	}
-	if len(proof.Files) == 0 {
+// factSourcesForPromotion re-verifies a proof against the current tree and
+// returns memory sources whose paths are relative to the project root. Proof
+// paths are relative to root/workdir and allowRead receives paths relative to
+// that directory, as the tools that recorded the proof did.
+func factSourcesForPromotion(ctx context.Context, root, workdir string, proof tools.VerificationEvidence, allowRead func(string) bool) ([]memory.Source, string) {
+	if len(proof.Files) == 0 && len(proof.Directories) == 0 {
 		return nil, "no declared regular file sources"
 	}
-	if len(proof.Files) > 8 {
-		return nil, "more than eight declared files exceed memory source limit"
+	if len(proof.Files)+len(proof.Directories)+len(proof.MissingFiles) > 8 {
+		return nil, "more than eight declared dependencies exceed memory source limit"
 	}
 	if allowRead == nil {
 		return nil, "current Read permission unavailable"
 	}
-	paths := make([]string, len(proof.Files))
-	for i, file := range proof.Files {
-		paths[i] = file.Path
-		if !allowRead(file.Path) {
-			return nil, "current Read permission denied"
-		}
+	if !validFactWorkdir(workdir) {
+		return nil, "working directory name is not supported"
 	}
-	if !tools.VerificationFreshContext(ctx, root, proof, allowRead) {
-		for _, path := range paths {
-			if !allowRead(path) {
-				return nil, "current Read permission denied"
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, "project root unavailable"
+	}
+	cwd := filepath.Join(canonical, filepath.FromSlash(workdir))
+	if resolved, err := filepath.EvalSymlinks(cwd); err != nil || resolved != cwd {
+		return nil, "working directory unavailable or redirected"
+	}
+	normalize := func(path string) (string, bool) {
+		if path == "" || filepath.IsAbs(path) {
+			return "", false
+		}
+		rel, err := filepath.Rel(canonical, filepath.Join(cwd, path))
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", false
+		}
+		for _, part := range strings.Split(rel, string(filepath.Separator)) {
+			if part == ".git" {
+				return "", false
 			}
+		}
+		return rel, true
+	}
+	specs := make([]memory.SourceSpec, 0, 8)
+	var raw []string
+	for _, file := range proof.Files {
+		rel, ok := normalize(file.Path)
+		if !ok || rel == "." {
+			return nil, "dependency outside the project root"
+		}
+		specs = append(specs, memory.SourceSpec{Kind: memory.SourceFile, Path: rel})
+		raw = append(raw, file.Path)
+	}
+	for _, dir := range proof.Directories {
+		rel, ok := normalize(dir.Path)
+		if !ok {
+			return nil, "dependency outside the project root"
+		}
+		specs = append(specs, memory.SourceSpec{Kind: memory.SourceDir, Path: rel})
+		raw = append(raw, dir.Path)
+	}
+	for _, path := range proof.MissingFiles {
+		rel, ok := normalize(path)
+		if !ok || rel == "." {
+			return nil, "dependency outside the project root"
+		}
+		specs = append(specs, memory.SourceSpec{Kind: memory.SourceAbsent, Path: rel})
+		raw = append(raw, path)
+	}
+	allAllowed := func() bool {
+		for _, path := range raw {
+			if !allowRead(path) {
+				return false
+			}
+		}
+		return true
+	}
+	if !allAllowed() {
+		return nil, "current Read permission denied"
+	}
+	if !tools.VerificationFreshContext(ctx, cwd, proof, allowRead) {
+		if !allAllowed() {
+			return nil, "current Read permission denied"
 		}
 		return nil, "declared input snapshot changed or unavailable"
 	}
-	for _, path := range paths {
-		if !allowRead(path) {
+	for _, file := range proof.Files {
+		if !allAllowed() {
 			return nil, "current Read permission denied"
 		}
-		info, err := os.Stat(filepath.Join(root, path))
+		info, err := os.Stat(filepath.Join(cwd, file.Path))
 		if err != nil || !info.Mode().IsRegular() {
 			return nil, "source file unavailable or not regular"
 		}
@@ -217,25 +354,33 @@ func factSourcesForPromotion(ctx context.Context, root string, proof tools.Verif
 			return nil, "source file exceeds 1 MiB memory source limit"
 		}
 	}
-	sources, err := memory.CaptureSourcesWithRead(root, paths, allowRead)
+	captureRead := func(rel string) bool {
+		inCwd, err := filepath.Rel(cwd, filepath.Join(canonical, rel))
+		return err == nil && allowRead(inCwd)
+	}
+	sources, err := memory.CaptureSourceSpecs(canonical, specs, captureRead)
 	if errors.Is(err, memory.ErrSourceReadDenied) {
 		return nil, "current Read permission denied during source capture"
 	}
 	if err != nil {
 		return nil, "source capture failed or source exceeded memory limit"
 	}
-	for i, source := range sources {
-		if source.SHA256 != proof.Files[i].SHA256 || !source.ModeKnown || source.Mode != proof.Files[i].Mode {
+	for i, file := range proof.Files {
+		if sources[i].SHA256 != file.SHA256 || !sources[i].ModeKnown || sources[i].Mode != file.Mode {
 			return nil, "source snapshot changed during capture"
 		}
 	}
-	if !tools.VerificationFreshContext(ctx, root, proof, allowRead) {
+	for i, dir := range proof.Directories {
+		source := sources[len(proof.Files)+i]
+		if digest, ok := proofTreeDigest(dir); !ok || source.SHA256 != digest || source.Mode != dir.Mode {
+			return nil, "source snapshot changed during capture"
+		}
+	}
+	if !tools.VerificationFreshContext(ctx, cwd, proof, allowRead) {
 		return nil, "declared input snapshot changed or current Read permission denied"
 	}
-	for _, path := range paths {
-		if !allowRead(path) {
-			return nil, "current Read permission denied"
-		}
+	if !allAllowed() {
+		return nil, "current Read permission denied"
 	}
 	return sources, ""
 }
@@ -259,7 +404,7 @@ func ListFactCandidates(ctx context.Context, store *memory.Store, project, root 
 			candidate.Status, candidate.Reason = "review-only", "legacy candidate has no recorded promotion result"
 		}
 		if candidate.Status == "stored" {
-			present, err := store.DerivedFactStored(ctx, project, factKey(candidate.Proof), candidate.OutcomeID)
+			present, err := store.DerivedFactStored(ctx, project, factKeyIn(candidate.Workdir, candidate.Proof), candidate.OutcomeID)
 			if err != nil {
 				return nil, err
 			}

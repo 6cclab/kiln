@@ -148,7 +148,7 @@ func (s *Store) Put(ctx context.Context, r Record) (int64, error) {
 // is never overwritten. An expired derived fact can be refreshed with lineage.
 // Only automatic fact rows without a user correction descendant are pruned.
 func (s *Store) PutIfAbsent(ctx context.Context, r Record) (bool, error) {
-	if r.Kind != "procedure" || r.Scope == "" || r.Scope == GlobalPreferencesScope || !strings.HasPrefix(r.Key, "verified-command:") || !strings.HasPrefix(r.Text, "Observed successful verification command: ") || !strings.HasPrefix(r.Evidence, "Successful Bash command in opted-in outcome ") || len(r.Key) > 256 || len(r.Text) > 8192 || len(r.Evidence) > 2048 || len(r.Sources) == 0 {
+	if r.Kind != "procedure" || r.Scope == "" || r.Scope == GlobalPreferencesScope || !strings.HasPrefix(r.Key, "verified-command:") || derivedFactGroup(r.Text) == "" || !strings.HasPrefix(r.Evidence, "Successful Bash command in opted-in outcome ") || len(r.Key) > 256 || len(r.Text) > 8192 || len(r.Evidence) > 2048 || len(r.Sources) == 0 {
 		return false, errors.New("invalid attributed procedure")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -195,13 +195,28 @@ func (s *Store) PutIfAbsent(ctx context.Context, r Record) (bool, error) {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_sources(memory_id,sources) VALUES(?,?)`, id, string(raw)); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_automatic_facts(memory_id,scope,command) VALUES(?,?,?)`, id, r.Scope, strings.TrimPrefix(r.Text, "Observed successful verification command: ")); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO memory_automatic_facts(memory_id,scope,command) VALUES(?,?,?)`, id, r.Scope, derivedFactGroup(r.Text)); err != nil {
 		return false, err
 	}
 	if err := pruneDerivedFacts(ctx, tx, r.Scope); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()
+}
+
+// derivedFactGroup returns the per-command retention group of an automatic
+// fact text, or "" for any other text. A root launch keeps the original shape
+// ("...command: go test ./..."); a subdirectory launch names its working
+// directory ("...command (in internal/foo): go test ./...").
+func derivedFactGroup(text string) string {
+	const prefix = "Observed successful verification command"
+	if rest, ok := strings.CutPrefix(text, prefix+": "); ok {
+		return rest
+	}
+	if rest, ok := strings.CutPrefix(text, prefix+" (in "); ok && strings.Contains(rest, "): ") {
+		return "(in " + rest
+	}
+	return ""
 }
 
 const maxDerivedFactsPerCommand = 8
