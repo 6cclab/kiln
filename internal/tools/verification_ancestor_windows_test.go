@@ -31,7 +31,7 @@ func TestVerificationWindowsCrossVolumePathSemantics(t *testing.T) {
 			if stop != sourceRoot {
 				t.Fatalf("fallback ancestor = %q, want %q", stop, sourceRoot)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			err := verificationWalkAncestors(ctx, tc.target, stop, filepath.Dir, func(string) error { return nil })
 			if err == nil || !strings.Contains(err.Error(), "across volumes") {

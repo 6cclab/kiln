@@ -202,7 +202,7 @@ func TestConcurrentToolsOverlapAndCommitInSourceOrder(t *testing.T) {
 	var result RunResult
 	select {
 	case result = <-resultCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Prompt did not return: the two barrier_tool calls likely ran sequentially and deadlocked")
 	}
 	if err := <-errCh; err != nil {

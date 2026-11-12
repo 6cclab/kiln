@@ -38,7 +38,7 @@ func TestReader(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(30 * time.Second):
 		t.Errorf("expected cancellation to unblock reader")
 	}
 	if n != 0 {

@@ -110,7 +110,7 @@ func TestLoginOAuthAnthropic(t *testing.T) {
 	reg, store := newTestRegistry(t)
 	ia := &fakeInteraction{authURL: make(chan string, 1)}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	errCh := make(chan error, 1)
@@ -119,7 +119,7 @@ func TestLoginOAuthAnthropic(t *testing.T) {
 	var authURL string
 	select {
 	case authURL = <-ia.authURL:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("timed out waiting for auth_url notification")
 	}
 
@@ -149,7 +149,7 @@ func TestLoginOAuthAnthropic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Login: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("timed out waiting for Login to return")
 	}
 

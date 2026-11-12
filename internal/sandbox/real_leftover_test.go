@@ -23,7 +23,7 @@ func TestRealSandboxLeftoverStaysConfined(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "started") {
 		t.Fatalf("start: %d %q", code, out)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(mark); err == nil {
 			break

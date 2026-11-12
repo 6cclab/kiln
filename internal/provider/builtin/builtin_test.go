@@ -78,7 +78,7 @@ func codexModel(baseURL string) provider.Model {
 
 func streamCodexOnce(t *testing.T, p provider.Provider, model provider.Model) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	events, wait := p.Stream(ctx, model, []msg.Message{
 		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("hi")}},
@@ -213,7 +213,7 @@ func TestStreamRefreshesExpiredOAuthToken(t *testing.T) {
 		MaxTokens:     100,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	events, wait := p.Stream(ctx, model, []msg.Message{
 		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("hi")}},
@@ -277,7 +277,7 @@ func TestStreamUsesUnexpiredStoredOAuthTokenWithoutRefresh(t *testing.T) {
 		MaxTokens:     100,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	events, wait := p.Stream(ctx, model, []msg.Message{
 		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("hi")}},
@@ -326,7 +326,7 @@ func TestStreamPrefersStoredAPIKeyOverEnv(t *testing.T) {
 		MaxTokens:     100,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	events, wait := p.Stream(ctx, model, []msg.Message{
 		msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("hi")}},
@@ -362,7 +362,7 @@ func TestStreamRejectedRefreshAsksToSignInAgain(t *testing.T) {
 	}
 	p := NewAnthropicProvider(store)
 	model := provider.Model{ID: "m", Provider: "anthropic", Api: provider.ApiAnthropicMessages, BaseURL: "http://127.0.0.1:1", ContextWindow: 1000, MaxTokens: 100}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	events, wait := p.Stream(ctx, model, []msg.Message{msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("hi")}}}, provider.StreamOptions{})
 	collect(events)

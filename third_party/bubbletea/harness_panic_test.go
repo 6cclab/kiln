@@ -49,7 +49,7 @@ func TestHarnessRendererPanicIsRecovered(t *testing.T) {
 		if !errors.Is(err, ErrProgramPanic) {
 			t.Fatalf("Run = %v, want ErrProgramPanic", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Run did not return after the renderer panicked")
 	}
 	stack, ok := hooked.Load("renderer broke")

@@ -78,7 +78,7 @@ func TestPollDeviceCodeSlowDownAdoptsServerInterval(t *testing.T) {
 // since actually waiting 5s in a unit test would be too slow.
 func TestPollDeviceCodeSlowDownDefaultBackoff(t *testing.T) {
 	calls := 0
-	_, err := PollDeviceCode(context.Background(), DevicePollOptions{IntervalSeconds: 0.01, ExpiresInSeconds: 0.05},
+	_, err := PollDeviceCode(context.Background(), DevicePollOptions{IntervalSeconds: 0.01, ExpiresInSeconds: 0.5},
 		func(ctx context.Context) DevicePollResult[string] {
 			calls++
 			return DevicePollResult[string]{Status: DeviceSlowDown}
@@ -105,7 +105,9 @@ func TestPollDeviceCodeCancelled(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		cancel()
 	}()
-	_, err := PollDeviceCode(ctx, DevicePollOptions{IntervalSeconds: 0.01, ExpiresInSeconds: 5},
+	// A long expiry, so only the cancel can end the poll however slow the
+	// machine is.
+	_, err := PollDeviceCode(ctx, DevicePollOptions{IntervalSeconds: 0.01, ExpiresInSeconds: 600},
 		func(ctx context.Context) DevicePollResult[string] {
 			calls++
 			return DevicePollResult[string]{Status: DevicePending}

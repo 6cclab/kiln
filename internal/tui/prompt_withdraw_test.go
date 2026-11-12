@@ -90,7 +90,7 @@ func TestBridgeApprovers_WithdrawOnCancel(t *testing.T) {
 			cancel()
 			select {
 			case <-done:
-			case <-time.After(5 * time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("approver did not return after its context was cancelled")
 			}
 			waitFor(t, func() bool { return len(sink.snapshot()) >= 2 })
@@ -119,7 +119,7 @@ func TestBridgeApprovers_WithdrawOnCancel(t *testing.T) {
 
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out waiting")

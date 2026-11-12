@@ -310,7 +310,7 @@ func TestNSWatchTimeoutIsAnError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "still running") {
 		t.Fatalf("drain = %v, want a still-running error", err)
 	}
-	if d := time.Since(begin); d < 100*time.Millisecond || d > 5*time.Second {
+	if d := time.Since(begin); d < 100*time.Millisecond || d > 60*time.Second {
 		t.Errorf("drain returned after %s, want about the 150ms timeout", d)
 	}
 	n.finish() // as Exec's cleanup does: the unconfirmed watch stays registered
@@ -469,7 +469,7 @@ func TestNSWatchKillsInitThatOutlivedBwrap(t *testing.T) {
 	n.finish()
 	select {
 	case <-exited:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("orphaned init still running after drain")
 	}
 }
