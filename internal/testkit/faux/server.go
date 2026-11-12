@@ -174,6 +174,7 @@ type Server struct {
 	opts     Options
 	engine   *engineState
 	rec      *recorder
+	holds    *holds
 	mux      *http.ServeMux
 	httpSrv  *http.Server
 	listener net.Listener
@@ -192,6 +193,7 @@ func New(opts Options) (*Server, error) {
 		opts:   opts,
 		engine: newEngineState(),
 		rec:    newRecorder(opts.RecordTo),
+		holds:  newHolds(),
 	}
 	switch {
 	case opts.ScriptYAML != "":
@@ -222,6 +224,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /_faux/reset", s.handleFauxReset)
 	s.mux.HandleFunc("POST /_faux/script", s.handleFauxScript)
 	s.mux.HandleFunc("GET /_faux/state", s.handleFauxState)
+	s.mux.HandleFunc("POST /_faux/release", s.handleFauxRelease)
 }
 
 // Start begins listening and serving in a background goroutine, and
@@ -255,7 +258,7 @@ func (s *Server) LoadScript(path string) error {
 	if err != nil {
 		return err
 	}
-	return s.engine.load(sc)
+	return s.loadScript(sc)
 }
 
 // LoadScriptYAML loads a YAML script from a string and rewinds execution
@@ -265,7 +268,15 @@ func (s *Server) LoadScriptYAML(doc string) error {
 	if err != nil {
 		return err
 	}
-	return s.engine.load(sc)
+	return s.loadScript(sc)
+}
+
+func (s *Server) loadScript(sc *Script) error {
+	if err := s.engine.load(sc); err != nil {
+		return err
+	}
+	s.holds.forget()
+	return nil
 }
 
 // Requests returns every request recorded so far, in order.
@@ -278,6 +289,7 @@ func (s *Server) Requests() []Request {
 func (s *Server) Reset() {
 	s.rec.reset()
 	s.engine.resetPosition()
+	s.holds.forget()
 }
 
 // Main is a standalone entry point so that a future harness-drive command
@@ -362,10 +374,14 @@ func (s *Server) handleFauxScript(w http.ResponseWriter, r *http.Request) {
 // model name.
 type MultiState struct {
 	Models map[string]State `json:"models"`
+	// Holds counts the requests waiting at each hold step right now.
+	Holds map[string]int `json:"holds,omitempty"`
 }
 
 func (s *Server) handleFauxState(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.engine.state())
+	st := s.engine.state()
+	st.Holds = s.holds.waitingCounts()
+	writeJSON(w, http.StatusOK, st)
 }
 
 // state reports the current position of every scripted model.

@@ -3,6 +3,7 @@ package faux
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -142,10 +143,14 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request)
 		return // the client hung up mid-delay (a cancelled request)
 	}
 
+	if !req.Stream && !s.waitAllHolds(r.Context(), t) {
+		return
+	}
+
 	msgID := fmt.Sprintf("msg_faux_%d", rec.Seq)
 	spec := t.disconnectSpec()
 	if req.Stream {
-		s.streamAnthropic(w, req.Model, msgID, t, spec, me.recordDisconnect)
+		s.streamAnthropic(r.Context(), w, req.Model, msgID, t, spec, me.recordDisconnect)
 		return
 	}
 	s.respondAnthropicJSON(w, req.Model, msgID, t, spec, me.recordDisconnect)
@@ -308,7 +313,7 @@ func (sw *sseWriter) sendRaw(data string) {
 	}
 }
 
-func (s *Server) streamAnthropic(w http.ResponseWriter, model, msgID string, t turn, spec *disconnectSpec, onCut func()) {
+func (s *Server) streamAnthropic(ctx context.Context, w http.ResponseWriter, model, msgID string, t turn, spec *disconnectSpec, onCut func()) {
 	if spec != nil {
 		w = newDisconnectWriter(w, spec, onCut)
 	}
@@ -337,6 +342,10 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, model, msgID string, t t
 	index := 0
 	for _, c := range t.content {
 		switch {
+		case c.hold != "":
+			if !s.holds.wait(ctx, c.hold) {
+				return // the client hung up while held
+			}
 		case c.text != nil:
 			sw.send("content_block_start", map[string]any{
 				"type":  "content_block_start",

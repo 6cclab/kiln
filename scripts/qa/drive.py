@@ -66,6 +66,15 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     RESIZE <cols> <rows>         resize the window
     WAIT <seconds>               sleep
     WAITFOR /regex/ [seconds]    poll the screen text until it matches
+    WAITGONE /regex/ [seconds]   poll the screen text until it no longer
+                                 matches (default 15s, like WAITFOR): the
+                                 wait for something to disappear, e.g. the
+                                 UI after /exit
+    RELEASE <name>               release the faux script's `hold: <name>`
+                                 step (POST /_faux/release); a release
+                                 before the request reaches the hold is
+                                 remembered, an unused name is harmless.
+                                 Faux scenarios only
     SHOT <name>                  screenshot (PNG) plus screen text (.txt)
     EXPECT /regex/               record a pass/fail against the screen text
     EXPECT_NOT /regex/           the inverse
@@ -630,6 +639,7 @@ class Run:
             time.sleep(0.1)
         if not addr:
             raise DriveError("faux did not report an address")
+        self.faux_addr = addr
 
         def expand(s):
             return s.replace("{ROOT}", str(ROOT)).replace("{PROJ}", str(proj)).replace("{HOME}", str(home))
@@ -886,6 +896,20 @@ class Run:
                            "scrollback_rows": scrollback_rows})
         self.log("SHOT %s" % stem)
 
+    def release_hold(self, name):
+        """POST /_faux/release?name=<name> to the scenario's faux server."""
+        addr = getattr(self, "faux_addr", None)
+        if not addr:
+            raise DriveError("RELEASE needs a faux scenario (no @faux server running)")
+        if not re.match(r"^[A-Za-z0-9_.-]+$", name):
+            raise DriveError("RELEASE: bad hold name %r" % name)
+        import urllib.request
+        req = urllib.request.Request("http://%s/_faux/release?name=%s" % (addr, name), method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=10).read()
+        except OSError as e:
+            raise DriveError("RELEASE %s failed: %s" % (name, e))
+
     def execute(self):
         for lineno, verb, arg in self.steps:
             self.log("%s %s" % (verb, arg))
@@ -937,6 +961,18 @@ class Run:
                         self.shot("waitfor-timeout-line%d" % lineno)
                         raise DriveError("line %d: WAITFOR %s timed out" % (lineno, arg))
                     time.sleep(0.4)
+            elif verb == "WAITGONE":
+                rx, timeout = parse_regex(arg)
+                deadline = time.time() + (timeout or 15)
+                while True:
+                    if not rx.search(self.screen()):
+                        break
+                    if time.time() > deadline:
+                        self.shot("waitgone-timeout-line%d" % lineno)
+                        raise DriveError("line %d: WAITGONE %s timed out" % (lineno, arg))
+                    time.sleep(0.4)
+            elif verb == "RELEASE":
+                self.release_hold(arg.strip())
             elif verb == "SHOT":
                 self.shot(arg or "shot")
             elif verb in ("EXPECT", "EXPECT_NOT"):
@@ -997,11 +1033,11 @@ class Run:
         return result
 
 
-VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE",
+VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "WAITGONE", "RELEASE", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE",
          "SEND", "IDLE", "TURN", "RUN", "RELAUNCH"}
 FAUX_TOP = {"model", "steps", "models"}
 FAUX_STEP = {"text", "thinking", "tool_call", "tool_calls", "on_tool_result", "on_tool_results",
-             "then", "usage", "error", "delay", "disconnect_after", "end_turn", "chunk_delay"}
+             "then", "usage", "error", "delay", "hold", "disconnect_after", "end_turn", "chunk_delay"}
 FAUX_CALL = {"name", "args", "raw_args", "id"}
 
 
@@ -1094,8 +1130,11 @@ def lint_scenario(path):
             if verb == "KEY":
                 for name in arg.split():
                     key_action(name)
-            elif verb in ("WAITFOR", "EXPECT", "EXPECT_NOT"):
+            elif verb in ("WAITFOR", "WAITGONE", "EXPECT", "EXPECT_NOT"):
                 parse_regex(arg)
+            elif verb == "RELEASE":
+                if not re.match(r"^[A-Za-z0-9_.-]+$", arg.strip()):
+                    raise DriveError("RELEASE needs a hold name")
             elif verb == "RESIZE":
                 c, r = (int(v) for v in arg.split()[:2])
             elif verb == "SCROLL":
