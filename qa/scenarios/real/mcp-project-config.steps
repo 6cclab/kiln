@@ -7,6 +7,7 @@
 # lead is closing; NOTE lines below mark what should change once project
 # .mcp.json support lands.
 @real
+@home scratch
 @size 140x45
 @fixture qa/fixtures/real/mcp-orders-svc
 @setup mkdir -p {PROJ}/../bin && go -C {ROOT} build -o {PROJ}/../bin/incidents ./qa/fixtures/incident-mcp && printf '{"mcpServers":{"incidents":{"command":"%s"}}}' "{PROJ}/../bin/incidents" > {PROJ}/.mcp.json
