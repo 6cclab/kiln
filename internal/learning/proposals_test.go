@@ -125,3 +125,78 @@ func TestHighInputProposalHasSourceBoundSettingsDiff(t *testing.T) {
 		t.Fatal("cohort and configuration provenance conflated")
 	}
 }
+
+func TestReadinessProposalRefreshesRetainedCohortAndBudget(t *testing.T) {
+	ctx := context.Background()
+	store, err := memory.Open(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	cfg := ObservationConfig{Enabled: true, MaxOutcomes: 3, MinSamples: 3, SourceSkillBudgetTokens: 512}
+	for i := 0; i < 3; i++ {
+		o := sampleOutcome(string(rune('a' + i)))
+		o.InputTokens, o.SkillBudgetTokens = 40000, 512
+		if err := RecordOutcomeAndPropose(ctx, store, "project", o, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := ListProposals(ctx, store, "project")
+	if err != nil || len(first) != 1 || first[0].FromValue != 512 {
+		t.Fatalf("first proposal: %+v %v", first, err)
+	}
+	cfg.SourceSkillBudgetTokens = 1024
+	for i := 0; i < 3; i++ {
+		o := sampleOutcome(string(rune('d' + i)))
+		o.InputTokens, o.SkillBudgetTokens = 40000, 1024
+		if err := RecordOutcomeAndPropose(ctx, store, "project", o, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	second, err := ListProposals(ctx, store, "project")
+	if err != nil || len(second) != 1 || second[0].FromValue != 1024 || second[0].ToValue != 512 || second[0].SourceOutcomesHash == first[0].SourceOutcomesHash || second[0].SourceConfigHash == first[0].SourceConfigHash || second[0].ID != first[0].ID {
+		t.Fatalf("proposal did not refresh retained cohort and budget: first=%+v second=%+v err=%v", first, second, err)
+	}
+	if err := DismissProposal(ctx, store, "project", second[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	o := sampleOutcome("g")
+	o.InputTokens, o.SkillBudgetTokens = 40000, 1024
+	if err := RecordOutcomeAndPropose(ctx, store, "project", o, cfg); err != nil {
+		t.Fatal(err)
+	}
+	afterDismissal, err := ListProposals(ctx, store, "project")
+	if err != nil || len(afterDismissal) != 0 {
+		t.Fatalf("explicit dismissal was lost: %+v %v", afterDismissal, err)
+	}
+}
+
+func TestReadinessProposalWithdrawsWithoutSupportingCohort(t *testing.T) {
+	ctx := context.Background()
+	store, err := memory.Open(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	cfg := ObservationConfig{Enabled: true, MaxOutcomes: 3, MinSamples: 3, SourceSkillBudgetTokens: 512}
+	for i := 0; i < 3; i++ {
+		o := sampleOutcome(string(rune('a' + i)))
+		o.InputTokens, o.SkillBudgetTokens = 40000, 512
+		if err := RecordOutcomeAndPropose(ctx, store, "project", o, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	initial, err := ListProposals(ctx, store, "project")
+	if err != nil || len(initial) != 1 {
+		t.Fatalf("initial cohort: %+v %v", initial, err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := RecordOutcomeAndPropose(ctx, store, "project", sampleOutcome(string(rune('d'+i))), cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withdrawn, err := ListProposals(ctx, store, "project")
+	if err != nil || len(withdrawn) != 0 {
+		t.Fatalf("unsupported proposal remained active: %+v %v", withdrawn, err)
+	}
+}

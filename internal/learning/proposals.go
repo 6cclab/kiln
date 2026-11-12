@@ -81,7 +81,19 @@ func RecordOutcomeAndPropose(ctx context.Context, store *memory.Store, project s
 		_, _ = h.Write([]byte(id)) // SHA-256 Hash.Write cannot fail.
 	}
 	sourceHash := hex.EncodeToString(h.Sum(nil))
-	for _, suggestion := range Suggestions(outcomes, cfg.MinSamples) {
+	suggestions := Suggestions(outcomes, cfg.MinSamples)
+	active := make(map[string]bool, len(suggestions))
+	for _, suggestion := range suggestions {
+		active[suggestion.Kind] = true
+	}
+	for kind := range proposalActions {
+		if !active[kind] {
+			if err := store.Forget(ctx, ProposalScope(project), kind); err != nil {
+				return err
+			}
+		}
+	}
+	for _, suggestion := range suggestions {
 		dismissed, err := store.Current(ctx, proposalDismissalScope(project), suggestion.Kind, "")
 		if err != nil {
 			return err
@@ -132,7 +144,7 @@ func RecordOutcomeAndPropose(ctx context.Context, store *memory.Store, project s
 		if err != nil {
 			return err
 		}
-		if _, err := store.PutUniquePruned(ctx, memory.Record{Scope: ProposalScope(project), Key: suggestion.Kind, Kind: "procedure", Text: string(raw), Evidence: proposal.Source}, len(proposalActions)); err != nil {
+		if _, err := store.PutProposalPruned(ctx, memory.Record{Scope: ProposalScope(project), Key: suggestion.Kind, Kind: "procedure", Text: string(raw), Evidence: proposal.Source}, len(proposalActions)); err != nil {
 			return err
 		}
 	}

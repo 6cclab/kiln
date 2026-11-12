@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +14,43 @@ import (
 	"github.com/andrepato/harness/internal/tool"
 	"github.com/andrepato/harness/internal/tools"
 )
+
+func TestRun_CustomCommandDiscoveryAndExactInvocation(t *testing.T) {
+	srv := startFaux(t, `model: faux-1
+steps:
+  - tool_call: {name: capability_search, args: {query: "migration review"}, id: search}
+  - on_tool_result: search
+    then:
+      - tool_call: {name: skill, args: {skill: "review", args: "schema"}, id: invoke}
+  - on_tool_result: invoke
+    then:
+      - text: "done"
+`)
+	project := scratchProject(t)
+	dir := filepath.Join(project, ".claude", "commands")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "review.md"), []byte("---\ndescription: Migration review\n---\nREVIEW $ARGUMENTS"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := baseArgs()
+	args.Print, args.PrintPrompt = true, "find and invoke the migration review command"
+	var stdout, stderr strings.Builder
+	if code := Run(context.Background(), args, &stdout, &stderr, strings.NewReader("")); code != 0 {
+		t.Fatalf("Run exit %d: %s", code, stderr.String())
+	}
+	requests := srv.Requests()
+	if len(requests) < 3 {
+		t.Fatalf("expected search and invocation results, got %d requests", len(requests))
+	}
+	if got := string(requests[1].Messages); !strings.Contains(got, "review [skill]") || strings.Contains(got, "REVIEW schema") {
+		t.Fatalf("search did not expose command metadata only: %s", got)
+	}
+	if got := string(requests[2].Messages); !strings.Contains(got, "REVIEW schema") {
+		t.Fatalf("exact command invocation did not render arguments: %s", got)
+	}
+}
 
 func TestCommandSkillRecordsPrecedenceAndInvocation(t *testing.T) {
 	skills := []tools.SkillRecord{{Name: "deploy", Description: "skill version", Body: "skill body"}}

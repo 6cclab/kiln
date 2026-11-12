@@ -72,6 +72,41 @@ func TestDisabledLearningObserverDoesNotOpenDatabase(t *testing.T) {
 	}
 }
 
+func TestRun_LearningObserverRecordsEffectiveDiscoveryBudget(t *testing.T) {
+	startFaux(t, `model: faux-1
+steps:
+  - text: "done"
+    usage: {input: 40000, output: 10}
+`)
+	project := scratchProject(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(settingsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{"learningAutomation":{"enabled":true,"minSamples":3},"skillDiscovery":{"budgetTokens":512}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := baseArgs()
+	args.Print, args.PrintPrompt = true, "hello"
+	var stdout, stderr strings.Builder
+	if code := Run(context.Background(), args, &stdout, &stderr, strings.NewReader("")); code != 0 {
+		t.Fatalf("Run exit %d: %s", code, stderr.String())
+	}
+	store, err := memory.Open(filepath.Join(home, ".kiln", "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	outcomes, err := learning.ListOutcomes(context.Background(), store, memoryScope(project))
+	if err != nil || len(outcomes) != 1 || outcomes[0].SkillBudgetTokens != 512 {
+		t.Fatalf("live observer source budget: %+v %v", outcomes, err)
+	}
+}
+
 func TestOutcomeObserverRedactsRawEventsAndCountsVerifiedProof(t *testing.T) {
 	ctx := context.Background()
 	store, err := memory.Open(filepath.Join(t.TempDir(), "memory.db"))

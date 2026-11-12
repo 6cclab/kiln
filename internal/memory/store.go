@@ -280,6 +280,20 @@ func (s *Store) ForgetScope(ctx context.Context, scope string) error {
 // PutUniquePruned atomically inserts a new key once and retains only the
 // newest limit records in its scope. It never creates correction history.
 func (s *Store) PutUniquePruned(ctx context.Context, r Record, limit int) (bool, error) {
+	return s.putRetained(ctx, r, limit, false)
+}
+
+// PutProposalPruned refreshes a bounded active review proposal in place. A
+// dismissal marker suppresses it inside the same transaction, so a concurrent
+// dismissal cannot leave the proposal visible again.
+func (s *Store) PutProposalPruned(ctx context.Context, r Record, limit int) (bool, error) {
+	if !strings.HasPrefix(r.Scope, "outcome-proposal:") {
+		return false, errors.New("invalid proposal scope")
+	}
+	return s.putRetained(ctx, r, limit, true)
+}
+
+func (s *Store) putRetained(ctx context.Context, r Record, limit int, replaceProposal bool) (bool, error) {
 	validScope := (strings.HasPrefix(r.Scope, "outcome:") && r.Kind == "observation") || ((strings.HasPrefix(r.Scope, "outcome-dismissed:") || strings.HasPrefix(r.Scope, "outcome-proposal:") || strings.HasPrefix(r.Scope, "outcome-proposal-dismissed:")) && r.Kind == "procedure")
 	if !validScope || strings.TrimSpace(r.Key) == "" || strings.TrimSpace(r.Text) == "" || strings.TrimSpace(r.Evidence) == "" || len(r.Key) > 256 || len(r.Text) > 8192 || len(r.Evidence) > 2048 || limit < 1 || limit > 1000 || len(r.Sources) != 0 {
 		return false, errors.New("invalid unique retained record")
@@ -289,6 +303,16 @@ func (s *Store) PutUniquePruned(ctx context.Context, r Record, limit int) (bool,
 		return false, err
 	}
 	defer rollback(tx)
+	if replaceProposal {
+		dismissalScope := "outcome-proposal-dismissed:" + strings.TrimPrefix(r.Scope, "outcome-proposal:")
+		var dismissed bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM memories WHERE scope=? AND key=? AND active=1)`, dismissalScope, r.Key).Scan(&dismissed); err != nil {
+			return false, err
+		}
+		if dismissed {
+			return false, nil
+		}
+	}
 	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO memories(scope,key,kind,text,evidence,created,expires,supersedes) VALUES(?,?,?,?,?,?,0,0)`, r.Scope, r.Key, r.Kind, r.Text, r.Evidence, time.Now().Unix())
 	if err != nil {
 		return false, err
@@ -304,6 +328,24 @@ func (s *Store) PutUniquePruned(ctx context.Context, r Record, limit int) (bool,
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO memory_search(rowid,text,evidence) VALUES(?,?,?)`, id, r.Key+"\n"+r.Text, r.Evidence); err != nil {
 			return false, err
+		}
+	} else if replaceProposal {
+		var id int64
+		var oldText, oldEvidence string
+		if err := tx.QueryRowContext(ctx, `SELECT id,text,evidence FROM memories WHERE scope=? AND key=? AND active=1`, r.Scope, r.Key).Scan(&id, &oldText, &oldEvidence); err != nil {
+			return false, err
+		}
+		if oldText != r.Text || oldEvidence != r.Evidence {
+			if _, err := tx.ExecContext(ctx, `UPDATE memories SET text=?,evidence=?,created=? WHERE id=?`, r.Text, r.Evidence, time.Now().Unix(), id); err != nil {
+				return false, err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM memory_search WHERE rowid=?`, id); err != nil {
+				return false, err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO memory_search(rowid,text,evidence) VALUES(?,?,?)`, id, r.Key+"\n"+r.Text, r.Evidence); err != nil {
+				return false, err
+			}
+			affected = 1
 		}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM memories WHERE scope=? ORDER BY id DESC LIMIT -1 OFFSET ?`, r.Scope, limit)

@@ -832,6 +832,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			Dir:         tools.SkillDir(s.FilePath),
 		})
 	}
+	skillRecords = commandSkillRecords(skillRecords, append(claudecommands.LoadCommands(cwd), pluginCommands...))
 	skillRecords = discoveryRecords(skillRecords, settings.SkillDiscovery)
 	skillTool := tools.SkillTool(skillRecords)
 
@@ -1271,9 +1272,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return 1
 	}
 	observerCleanup, observerErr := attachLearningObserver(ctx, cwd, started, learning.ObservationConfig{
-		Enabled:     (settings.LearningEnabled == nil || *settings.LearningEnabled) && settings.LearningAutomation.Enabled != nil && *settings.LearningAutomation.Enabled,
-		MaxOutcomes: claudesettings.PositiveOr(settings.LearningAutomation.MaxOutcomes, 100),
-		MinSamples:  claudesettings.PositiveOr(settings.LearningAutomation.MinSamples, 5),
+		Enabled:                 (settings.LearningEnabled == nil || *settings.LearningEnabled) && settings.LearningAutomation.Enabled != nil && *settings.LearningAutomation.Enabled,
+		MaxOutcomes:             claudesettings.PositiveOr(settings.LearningAutomation.MaxOutcomes, 100),
+		MinSamples:              claudesettings.PositiveOr(settings.LearningAutomation.MinSamples, 5),
+		SourceSkillBudgetTokens: settings.SkillDiscovery.Budget(resolved.Tier.SkillsListingTokens),
 	})
 	if observerErr != nil {
 		startupWarn("Local learning observations unavailable: " + observerErr.Error())
