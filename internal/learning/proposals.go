@@ -48,6 +48,10 @@ var proposalActions = map[string]struct{ action, evaluation string }{
 		"Inspect failed sessions, group confirmed causes, and draft a fix for one reproducible cause with a regression test.",
 		"Repeat equivalent tasks and compare completion and correctness before adopting the fix. Failure status alone does not identify a cause.",
 	},
+	"unverified-changes": {
+		"Inspect the sessions that changed files without a check and decide whether the project should state its check (a CLAUDE.md line, a skill, or a PostToolUse hook).",
+		"Repeat equivalent tasks with and without the change; compare how many file-changing runs run a relevant check and whether those checks pass. These counters do not show that a check was needed.",
+	},
 	"high-input": {
 		"Inspect context assembly for repeated material and draft one bounded reduction to evaluate.",
 		"Run paired checked tasks with the same model, binary, and fixtures; compare quality, input tokens, cost, and latency before any policy change.",
@@ -116,6 +120,9 @@ func RecordOutcomeAndPropose(ctx context.Context, store *memory.Store, project s
 		case "run-failures":
 			proposal.ChangeType, proposal.Target = "diagnostic-fix", "run completion"
 			proposal.AcceptanceCriteria = "A confirmed cause has a regression test; equivalent tasks complete and pass their checks."
+		case "unverified-changes":
+			proposal.ChangeType, proposal.Target = "diagnostic-review", "verification habits"
+			proposal.AcceptanceCriteria = "Equivalent file-changing tasks run a relevant check, and those checks pass."
 		case "high-input":
 			proposal.ChangeType, proposal.Target = "diagnostic-review", "context assembly"
 			proposal.AcceptanceCriteria = "Paired held-out checks pass without quality regression and measured cost or latency improves."

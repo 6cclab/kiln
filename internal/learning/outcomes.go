@@ -64,6 +64,35 @@ type Outcome struct {
 	OtherFailure      int    `json:"otherFailure"`
 	VerifiedCommands  int    `json:"verifiedCommands"`
 	SkillBudgetTokens int    `json:"skillBudgetTokens,omitempty"`
+	// MutationChecks counts check commands that also wrote files (a change
+	// made to see a test catch it, then restored). Their failures are
+	// intended, so they count as neither tool success nor failure.
+	MutationChecks int `json:"mutationChecks,omitempty"`
+	// Shape is what the run did (RunShape*); "" on records saved before it
+	// existed, which are left out of shape statistics.
+	Shape string `json:"shape,omitempty"`
+}
+
+// Run shapes, read from what a run did rather than how it was asked: it
+// changed no files, changed files and ran a check, or changed files and ran
+// none. Whether a check passed, or was the right one, is a different question.
+const (
+	RunShapeQuestion             = "question"
+	RunShapeCodeChange           = "code_change"
+	RunShapeCodeChangeUnverified = "code_change_unverified"
+)
+
+// ClassifyRunShape returns the shape of a run that made fileEdits file
+// changes and checks check runs (mutation checks included).
+func ClassifyRunShape(fileEdits, checks int) string {
+	switch {
+	case fileEdits == 0:
+		return RunShapeQuestion
+	case checks > 0:
+		return RunShapeCodeChange
+	default:
+		return RunShapeCodeChangeUnverified
+	}
 }
 
 // OutcomeScope isolates run aggregates from conversational memory and policy.
@@ -88,10 +117,15 @@ func (o Outcome) validate() error {
 	if !validDigest(o.ID) || !validDigest(o.ModelHash) || !validDigest(o.BinaryHash) || (o.Status != "completed" && o.Status != "failed") || o.ObservedAt <= 0 || o.ObservedAt > time.Now().Add(time.Hour).Unix() {
 		return fmt.Errorf("invalid outcome identity or status")
 	}
-	for _, n := range []int{o.InputTokens, o.OutputTokens, o.CacheReadTokens, o.CacheWriteTokens, o.ToolSuccess, o.ToolFailure, o.BashFailure, o.ReadFailure, o.WriteFailure, o.SearchFailure, o.TaskFailure, o.OtherFailure, o.VerifiedCommands, o.SkillBudgetTokens} {
+	for _, n := range []int{o.InputTokens, o.OutputTokens, o.CacheReadTokens, o.CacheWriteTokens, o.ToolSuccess, o.ToolFailure, o.BashFailure, o.ReadFailure, o.WriteFailure, o.SearchFailure, o.TaskFailure, o.OtherFailure, o.VerifiedCommands, o.SkillBudgetTokens, o.MutationChecks} {
 		if n < 0 || n > 1_000_000_000 {
 			return fmt.Errorf("outcome count outside bounds")
 		}
+	}
+	switch o.Shape {
+	case "", RunShapeQuestion, RunShapeCodeChange, RunShapeCodeChangeUnverified:
+	default:
+		return fmt.Errorf("invalid outcome run shape")
 	}
 	if o.DurationMS < 0 || o.DurationMS > 7*24*60*60*1000 || o.SkillBudgetTokens > 32768 || o.BashFailure+o.ReadFailure+o.WriteFailure+o.SearchFailure+o.TaskFailure+o.OtherFailure != o.ToolFailure || o.VerifiedCommands > o.ToolSuccess || o.ModelsUsed < 0 || o.ModelsUsed > 100 || (o.ModelsUsed == 0 && o.ModelHash != HashIdentity("")) || o.UsageScope != "main-lane model responses; worker and side usage excluded" {
 		return fmt.Errorf("inconsistent outcome counters")
@@ -144,14 +178,14 @@ type Suggestion struct {
 	AffectedRuns int    `json:"affectedRuns"`
 }
 
-var suggestionKinds = map[string]bool{"tool-failures": true, "run-failures": true, "high-input": true}
+var suggestionKinds = map[string]bool{"tool-failures": true, "run-failures": true, "high-input": true, "unverified-changes": true}
 
 // Suggestions computes deterministic hypotheses without changing policy.
 func Suggestions(outcomes []Outcome, minSamples int) []Suggestion {
 	if minSamples < 2 || len(outcomes) < minSamples {
 		return []Suggestion{}
 	}
-	var failedRuns, toolFailureRuns, toolFailures, highInputRuns int
+	var failedRuns, toolFailureRuns, toolFailures, highInputRuns, changedRuns, uncheckedRuns int
 	for _, o := range outcomes {
 		if o.Status == "failed" {
 			failedRuns++
@@ -163,8 +197,15 @@ func Suggestions(outcomes []Outcome, minSamples int) []Suggestion {
 		if o.InputTokens+o.CacheReadTokens+o.CacheWriteTokens >= 32000 {
 			highInputRuns++
 		}
+		switch o.Shape {
+		case RunShapeCodeChange:
+			changedRuns++
+		case RunShapeCodeChangeUnverified:
+			changedRuns++
+			uncheckedRuns++
+		}
 	}
-	out := make([]Suggestion, 0, 3)
+	out := make([]Suggestion, 0, 4)
 	if toolFailureRuns >= 2 && toolFailures >= 3 {
 		out = append(out, Suggestion{Kind: "tool-failures", Summary: "Review recurring tool failures", Evidence: fmt.Sprintf("%d failed tool calls across %d of %d observed runs; cause and correctness are unknown.", toolFailures, toolFailureRuns, len(outcomes)), Samples: len(outcomes), AffectedRuns: toolFailureRuns})
 	}
@@ -173,6 +214,9 @@ func Suggestions(outcomes []Outcome, minSamples int) []Suggestion {
 	}
 	if highInputRuns >= minSamples {
 		out = append(out, Suggestion{Kind: "high-input", Summary: "Investigate context use", Evidence: fmt.Sprintf("%d of %d observed runs used at least 32000 main-lane input and cache tokens; no improvement is established.", highInputRuns, len(outcomes)), Samples: len(outcomes), AffectedRuns: highInputRuns})
+	}
+	if changedRuns >= minSamples && uncheckedRuns >= 3 && uncheckedRuns*2 >= changedRuns {
+		out = append(out, Suggestion{Kind: "unverified-changes", Summary: "Review changes made without a check", Evidence: fmt.Sprintf("%d of %d observed runs that changed files ran no recognised test, build or lint command; whether a check was needed is unknown.", uncheckedRuns, changedRuns), Samples: changedRuns, AffectedRuns: uncheckedRuns})
 	}
 	return out
 }

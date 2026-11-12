@@ -46,7 +46,7 @@ func TestVerificationBashToolPipedFailureRecordsNoProof(t *testing.T) {
 		})
 	}
 	// Shapes whose exit status is the check's own still record evidence.
-	for _, command := range []string{`sh -c 'exit 0'`, `cd . && sh -c 'exit 0' > out.txt 2>&1`} {
+	for _, command := range []string{`sh -c 'exit 0'`, `cd . && sh -c 'exit 0' > /dev/null 2>&1`} {
 		t.Run(command, func(t *testing.T) {
 			if _, ok := VerificationFromResult(runVerification(t, wrapped, cwd, command).Details); !ok {
 				t.Fatal("successful check recorded no proof")
