@@ -10,7 +10,7 @@ KEY enter
 WAITFOR /Allow kiln to run this command\?/ 20
 SHOT permission-prompt
 KEY enter
-WAIT 1
+WAITFOR /Running sleep/ 20
 SHOT tool-running-before-esc
 KEY esc
 # design: Terminal.dc.html:312

@@ -22,7 +22,7 @@ KEY 2
 IDLE 180
 SHOT after-permissions
 SEND /permissions
-WAIT 2
+WAITFOR /mode\s+acceptEdits/ 30
 SHOT permissions-dialog
 EXPECT /mode\s+acceptEdits/
 KEY esc

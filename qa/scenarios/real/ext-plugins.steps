@@ -8,12 +8,12 @@
 
 WAITFOR /describe a task/ 30
 SEND /plugin
-WAIT 1
+WAITFOR /rubber-ducky@apato-plugins/ 30
 SHOT plugin-command
 EXPECT /rubber-ducky@apato-plugins/
 EXPECT_NOT /\(s\)|vunknown/
 TYPE /rubber
-WAIT 1
+WAITFOR /rubber-ducky:/ 30
 SHOT slash-palette
 EXPECT /rubber-ducky:/
 KEY backspace backspace backspace backspace backspace backspace backspace

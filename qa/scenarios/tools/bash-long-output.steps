@@ -16,6 +16,6 @@ EXPECT /→ 1\b/
 EXPECT /ctrl\+o to expand/
 EXPECT /\+37 lines/
 KEY ctrl+o
-WAIT 1
+WAITFOR /Showing detailed transcript/ 20
 SHOT expanded
 EXPECT /Showing detailed transcript/

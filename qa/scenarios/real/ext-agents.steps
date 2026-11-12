@@ -8,7 +8,7 @@
 
 WAITFOR /describe a task/ 30
 SEND /agents
-WAIT 1
+WAITFOR /security-reviewer/ 30
 SHOT agents-list
 EXPECT /security-reviewer/
 KEY esc

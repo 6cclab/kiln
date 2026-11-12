@@ -15,19 +15,19 @@ TURN What did we change last time, in one line?
 SHOT recall
 EXPECT /[Gg]reet/
 SEND /resume
-WAIT 2
+WAITFOR /past session|No past sessions/ 30
 SHOT resume-list
 EXPECT /past session|No past sessions/
 SEND /context
-WAIT 2
+WAITFOR /\d+(\.\d+)?k of \d+k tokens/ 30
 SHOT context
 EXPECT /\d+(\.\d+)?k of \d+k tokens/
 SEND /cost
-WAIT 2
+WAITFOR /Session:/ 30
 SHOT cost
 EXPECT /Session:/
 SEND /export
-WAIT 2
+WAITFOR /Wrote .* entries to/ 30
 SHOT export
 EXPECT /Wrote .* entries to/
 RUN ls kiln-transcript-*.md

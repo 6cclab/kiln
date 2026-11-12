@@ -20,7 +20,7 @@ WAITFOR /zremrangebyscore/ 10
 SHOT after-ctrl-o-expand
 EXPECT /only implements zremrangebyscore/
 KEY ctrl+o
-WAIT 1
+WAITGONE /zremrangebyscore/ 20
 SHOT after-ctrl-o-collapse
 EXPECT_NOT /zremrangebyscore/
 EXPECT_NOT /panic|goroutine/

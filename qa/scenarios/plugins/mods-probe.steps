@@ -21,7 +21,7 @@ KEY ctrl+x tab
 WAIT 1
 SHOT pane-focused
 KEY esc
-WAIT 1
+WAITFOR /probe notes: none/ 20
 SHOT pane-blurred
 EXPECT /probe notes: none/
 EXPECT_NOT /panic|goroutine/

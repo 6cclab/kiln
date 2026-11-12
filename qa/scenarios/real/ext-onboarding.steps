@@ -15,7 +15,7 @@ SHOT trust-dialog
 KEY 2
 WAITFOR /describe a task/ 30
 SEND /help
-WAIT 1
+WAITFOR /init/ 30
 SHOT help-palette
 EXPECT /init/
 TURN /init

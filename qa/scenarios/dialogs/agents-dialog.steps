@@ -17,7 +17,7 @@ KEY enter
 WAITFOR /Second task handled too/ 20
 SHOT turn-two
 TYPE /agents
-WAIT 1
+WAITFOR /Manage subagents/ 20
 SHOT agents-autocomplete
 # design: Terminal.dc.html:220 (CMDS entry "/agents" desc:'Manage
 # subagents') — kiln's actual popup description is "View the subagents

@@ -19,5 +19,4 @@ SHOT session-start-context-reached-model
 EXPECT /The codeword is PINEAPPLE42\./
 TYPE /exit
 KEY enter
-WAIT 2
-RUN test -e session-ended
+RUN i=0; until test -e session-ended; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done

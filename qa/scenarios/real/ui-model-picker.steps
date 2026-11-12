@@ -9,20 +9,21 @@
 WAITFOR /describe a task/ 30
 TYPE /model
 KEY enter
-WAIT 1
+WAITFOR /›\s+\d+\. \S+ ✓/ 30
 SHOT picker-open
 EXPECT /›\s+\d+\. \S+ ✓/
 KEY right
-WAIT 1
+WAITFOR /Effort set to (low|medium|high|xhigh|max) for this session/ 30
 SHOT effort-changed
 EXPECT /Effort set to (low|medium|high|xhigh|max) for this session/
 EXPECT /effort  auto · low · medium · high · xhigh · max/
 KEY down
-WAIT 1
+WAITFOR /›\s+\d+\. \S+\s{2,}/ 30
 SHOT cursor-moved
 EXPECT /›\s+\d+\. \S+\s{2,}/
 KEY enter
-WAIT 2
+WAITFOR /Now on \S+ · \S+ tier · .* \(default for new sessions\)/ 30
+WAITGONE /Select model/ 30
 SHOT picked
 EXPECT /Now on \S+ · \S+ tier · .* \(default for new sessions\)/
 EXPECT_NOT /Select model/

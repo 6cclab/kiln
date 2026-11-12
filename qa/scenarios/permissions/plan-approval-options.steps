@@ -22,14 +22,14 @@ SHOT plan-option2-highlighted
 KEY down
 SHOT plan-option3-highlighted
 KEY enter
-WAIT 1
+WAITFOR /What should change about the plan\?/ 20
 SHOT plan-feedback-open
 EXPECT /What should change about the plan\?/
 TYPE make it use a token bucket instead
 SHOT plan-feedback-typed
 EXPECT /make it use a token bucket instead/
 KEY esc
-WAIT 1
+WAITGONE /What should change about the plan\?/ 20
 SHOT plan-feedback-cancelled
 EXPECT_NOT /What should change about the plan\?/
 KEY 2
