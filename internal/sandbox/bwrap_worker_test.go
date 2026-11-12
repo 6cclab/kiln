@@ -131,3 +131,20 @@ func TestWorkerHiddenSocketsFindsMetadataSockets(t *testing.T) {
 		t.Errorf("fsmonitor socket not found in %v", socks)
 	}
 }
+
+// A worker shares no IPC, UTS or cgroup namespace with the host: System V and
+// POSIX IPC objects are reached by key, which the private root cannot hide.
+func TestBwrapPrivateRootUnsharesIPC(t *testing.T) {
+	child := realPath(t.TempDir())
+	p := Plan{Cwd: child, PrivateRoot: true, WriteRoots: []string{child}, DenyWrite: []Rule{{Path: "/"}}}
+	argv, err := bwrapArgs(p, "/usr/bin/bwrap", "", "/bin/sh", "true", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := " " + strings.Join(argv, " ") + " "
+	for _, want := range []string{" --unshare-ipc ", " --unshare-uts ", " --unshare-cgroup-try "} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("private-root argv lacks %q: %v", want, argv)
+		}
+	}
+}

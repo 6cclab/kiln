@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/andrepato/harness/internal/crash"
@@ -42,6 +43,8 @@ type Options struct {
 	Probe func(argv []string) error
 	// PidfdOpen replaces pidfd_open for worker shell teardown (tests).
 	PidfdOpen func(pid int) (int, error)
+	// PidfdSignal replaces pidfd_send_signal for worker shell teardown (tests).
+	PidfdSignal func(pidfd int, sig syscall.Signal) error
 	// NSWaitTimeout bounds the wait for a worker command's PID namespace to
 	// empty; 0 means 5 seconds.
 	NSWaitTimeout time.Duration
@@ -203,7 +206,11 @@ func (m *Manager) Always() execenv.CommandSandbox {
 }
 
 // Close stops the proxy and relays.
-func (m *Manager) Close() {
+func (m *Manager) Close() { m.close(true) }
+
+// close is Close; removeTemp false keeps a worker's temp directory, which a
+// process not confirmed stopped may still be using.
+func (m *Manager) close(removeTemp bool) {
 	if m == nil {
 		return
 	}
@@ -217,7 +224,7 @@ func (m *Manager) Close() {
 	// Closes each bridge's listener and every relay it accepted, and
 	// waits for their goroutines.
 	m.relays.closeAll()
-	if m.worker != nil {
+	if m.worker != nil && removeTemp {
 		_ = os.RemoveAll(m.worker.temp)
 	}
 }
@@ -230,7 +237,7 @@ func (m *Manager) Shutdown() error {
 	if m != nil {
 		err = m.shutdownWatches()
 	}
-	m.Close()
+	m.close(err == nil)
 	return err
 }
 

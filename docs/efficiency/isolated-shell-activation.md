@@ -22,7 +22,7 @@ A worker's Bash is safe to enable only if kiln can stop every process it started
   - the worktree's Git metadata (`gitDirs`), read-only.
 
   Rules about paths that are not visible (parent checkout write denials, deny-read entries for the parent) are dropped rather than mounted, because mounting them would expose the path.
-- Unix sockets (spec item c). Avoiding the host `/` removes `/run`, `/var/run`, `/tmp`, `/mnt` and `$HOME`, where sockets live, so `docker.sock`, the D-Bus and ssh-agent sockets and anything in `/tmp` do not exist for the worker. The two visible places that can hold sockets are scanned each command (`workerHiddenSockets`) and any socket found is covered by `/dev/null`: `/etc`, and the worktree's Git metadata (git's fsmonitor daemon listens in the git directory). Abstract sockets and TCP are cut off by `--unshare-net`. This is stricter than masking known paths: nothing outside the allowlist is reachable, whatever its name.
+- Unix sockets (spec item c). Avoiding the host `/` removes `/run`, `/var/run`, `/tmp`, `/mnt` and `$HOME`, where sockets live, so `docker.sock`, the D-Bus and ssh-agent sockets and anything in `/tmp` do not exist for the worker. The two visible places that can hold sockets are scanned each command (`workerHiddenSockets`) and any socket found is covered by `/dev/null`: `/etc`, and the worktree's Git metadata (git's fsmonitor daemon listens in the git directory). Abstract sockets and TCP are cut off by `--unshare-net`. System V and POSIX IPC (shared memory, message queues, semaphores) are reached by key, not path, so the plan also unshares the IPC namespace, along with the UTS and (where available) cgroup namespaces (`--unshare-ipc --unshare-uts --unshare-cgroup-try`). This is stricter than masking known paths: nothing outside the allowlist is reachable, whatever its name.
 - Writes (spec items a, b): only the child worktree and the private temp are writable; `.git` and the shared Git directories are read-only; the parent checkout is not mounted. `rejectWorkerHardlinks` now runs on Linux too (it was macOS only), because an inode shared with the parent checkout is the same file wherever it is mounted.
 - Dispatch: the blanket refusal is replaced by `isolatedShellSupport`. On a supported platform dispatch builds the worker sandbox after the worker's `JobScope` exists and releases it after `JobScope.Close` and before the worktree is removed. Bash stays in the worker's tool set only when the opt-in is on.
 - Settings: `orchestration.isolatedShell: true` is honoured only from user-scope settings, like `autoIntegrate`. A repository or `--settings` file cannot turn it on (`internal/claude/settings/settings.go`); it can still turn it off.
@@ -72,6 +72,13 @@ Evidence (container on a 7.0.14-linuxkit kernel, bubblewrap 0.12.0, `--privilege
 - `TestNSWatchNoInfo`: bwrap killed before reporting is an error; bwrap that exited by itself without a namespace is not.
 - `TestWorkerLinuxRefusedWithoutPidfd`: an opener returning `ENOSYS` makes `NewWorker` fail with an error naming pidfd.
 
+Teardown also kills, not only waits. Once bwrap has exited (or `Shutdown` begins), the wait sends SIGKILL to the namespace's init through its pidfd, then polls. `--die-with-parent` arms `PR_SET_PDEATHSIG` only inside bwrap's init after namespace setup, so a bwrap killed between its `--info-fd` write and that point would leave the init running with no parent. Killing init through the pidfd covers that, and it is safe against PID reuse. The pidfd is held under a mutex and the wait polls a duplicate: Exec's cleanup and `Shutdown` can both reach the same watch, because `JobScope.Close` returns before Exec's deferred cleanup runs. When `Shutdown` cannot confirm a namespace empty, it keeps the worker's temp directory as well as the worktree (`TestWorkerShutdownKeepsTempWhenUnconfirmed`). The init check compares the innermost `NSpid` entry with `1` exactly.
+
+- `TestNSWatchKillsInitThatOutlivedBwrap`: a live process standing in for an orphaned init is killed and confirmed gone. With the kill removed, the wait times out (red).
+- `TestNSWatchConcurrentReleaseAndShutdown` (run with `-race`): drain plus cleanup and `Shutdown` on the same watch, 50 times. Without the mutex in `release`, the race detector fails it.
+- `TestIsNSInit`: `NSpid: 12345 12345` and `... 17` are not an init (the earlier substring check accepted them).
+- `TestBwrapPrivateRootUnsharesIPC` and `TestWorkerLinuxIPCNamespaceIsolated` (the worker's `/proc/self/ns/ipc` differs from the host's). Both fail with the unshare flags removed.
+
 ## Evidence
 
 Linux tests ran in a disposable `golang:1.26.6` container (linux/arm64) with bubblewrap 0.12.0 and socat installed, started with `--privileged`. With only `--security-opt seccomp=unconfined apparmor=unconfined` bwrap failed with `Creating new namespace failed`; adding `--cap-add SYS_ADMIN` failed with `loopback: Failed RTM_NEWADDR`; `--privileged` worked. The container ran as root. The copy of the repo was `rsync`ed in without `.git` and no HOME or config was mounted.
@@ -92,6 +99,8 @@ Red runs: removing `--unshare-pid` made both descendant tests (sandbox and dispa
 ## Not covered
 
 - A bwrap killed in the few microseconds between its `clone` and its `--info-fd` write leaves a namespace kiln never learned of. Exec treats "killed, no info" as unconfirmed, so the worktree is kept (a spurious keep when the kill landed before the clone, never a spurious removal).
+- The worker inherits kiln's environment (only `DenyEnv` names are removed), so provider keys or tokens in it are readable by worker commands. With no network, the patch is the only way out.
+- A socket inside a directory under `/etc` that the scan cannot list (mode 0711, say) is not covered, but can be connected to by name. `/usr` and `/lib*` are not scanned.
 - A worktree kept after a failed wait is not removed by kiln later; it needs manual cleanup (`git worktree remove --force`).
 - A socket created inside `/etc` or the Git metadata after the per-command scan, by another host process while the command runs, is reachable. Nothing else outside the allowlist is.
 - The Git metadata, including the parent's `config`, hooks and packed refs, is readable by the worker. Reads of the parent worktree files are not possible.

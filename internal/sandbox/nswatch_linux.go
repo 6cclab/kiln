@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -40,9 +41,12 @@ type nsWatch struct {
 	ok      atomic.Bool   // drain confirmed the namespace empty
 	noInfo  bool          // the pipe closed before bwrap reported anything
 	done    chan struct{} // closed when the reader goroutine finished
-	pidfd   int           // -1 when none was opened
-	gone    bool          // init already gone when the pidfd was opened
-	err     error         // reading or opening failed
+	// mu guards pidfd: Exec's cleanup and Manager.Shutdown can both reach
+	// release while the other is still waiting on the namespace.
+	mu    sync.Mutex
+	pidfd int   // -1 when none was opened, or once released
+	gone  bool  // init already gone when the pidfd was opened
+	err   error // reading or opening failed
 }
 
 func (m *Manager) pidfdOpen(pid int) (int, error) {
@@ -50,6 +54,13 @@ func (m *Manager) pidfdOpen(pid int) (int, error) {
 		return m.opts.PidfdOpen(pid)
 	}
 	return unix.PidfdOpen(pid, 0)
+}
+
+func (m *Manager) pidfdSignal(fd int, sig syscall.Signal) error {
+	if m.opts.PidfdSignal != nil {
+		return m.opts.PidfdSignal(fd, sig)
+	}
+	return unix.PidfdSendSignal(fd, sig, nil, 0)
 }
 
 func (m *Manager) nsWaitTimeout() time.Duration {
@@ -105,25 +116,28 @@ func (n *nsWatch) start() {
 			n.err = fmt.Errorf("pidfd_open(%d): %w", info.ChildPID, err)
 			return
 		}
+		n.mu.Lock()
 		n.pidfd = fd
+		n.mu.Unlock()
 		// The PID must still be the namespace's init, not a recycled PID.
 		if st, err := os.ReadFile("/proc/" + strconv.Itoa(info.ChildPID) + "/status"); err == nil {
-			if !strings.Contains(nsPidLine(string(st)), "\t1") {
+			if !isNSInit(string(st)) {
 				n.err = fmt.Errorf("pid %d is not a namespace init", info.ChildPID)
 			}
 		}
 	})
 }
 
-// nsPidLine returns the "NSpid:" line of a /proc status file.
-func nsPidLine(status string) string {
+// isNSInit reports whether a /proc status file belongs to a PID namespace's
+// init: the innermost PID on its "NSpid:" line is exactly 1.
+func isNSInit(status string) bool {
 	for _, l := range strings.Split(status, "\n") {
 		if strings.HasPrefix(l, "NSpid:") {
 			f := strings.Fields(l)
-			return "\t" + f[len(f)-1]
+			return len(f) > 1 && f[len(f)-1] == "1"
 		}
 	}
-	return "\t1" // kernel without NSpid: cannot check
+	return true // kernel without NSpid: cannot check
 }
 
 // stopped waits up to timeout for the namespace to be empty. cmdState is
@@ -150,12 +164,31 @@ func (n *nsWatch) stopped(cmdState *os.ProcessState, timeout time.Duration) erro
 	if n.gone {
 		return nil
 	}
+	// Work on a duplicate: release may close n.pidfd meanwhile, and a closed
+	// number can be reused by another file before the poll below.
+	n.mu.Lock()
+	if n.pidfd < 0 {
+		n.mu.Unlock()
+		return nil // released, which happens only once the namespace was confirmed empty
+	}
+	pidfd, err := unix.Dup(n.pidfd)
+	n.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("sandbox: waiting for a worker command's namespace: %w", err)
+	}
+	defer unix.Close(pidfd)
+	// bwrap has exited (or teardown has begun), so nothing in the namespace
+	// may outlive this. --die-with-parent alone does not cover a bwrap
+	// killed before its init armed PR_SET_PDEATHSIG. Killing init makes the
+	// kernel kill the rest. An error here (ESRCH: already exited) is left to
+	// the poll to settle.
+	_ = n.m.pidfdSignal(pidfd, syscall.SIGKILL)
 	for {
 		left := time.Until(deadline)
 		if left < 0 {
 			left = 0
 		}
-		fds := []unix.PollFd{{Fd: int32(n.pidfd), Events: unix.POLLIN}}
+		fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
 		k, err := unix.Poll(fds, int(left.Milliseconds()))
 		switch {
 		case err == unix.EINTR:
@@ -195,10 +228,12 @@ func (n *nsWatch) finish() {
 }
 
 func (n *nsWatch) release() {
+	n.mu.Lock()
 	if n.pidfd >= 0 {
 		_ = unix.Close(n.pidfd)
 		n.pidfd = -1
 	}
+	n.mu.Unlock()
 	n.m.mu.Lock()
 	delete(n.m.nsWatches, n)
 	n.m.mu.Unlock()
@@ -244,7 +279,10 @@ func (m *Manager) probeNSWatch() error {
 	n.start()
 	_ = cmd.Wait()
 	err = n.stopped(cmd.ProcessState, m.nsWaitTimeout())
-	if err == nil && n.pidfd < 0 && !n.gone {
+	n.mu.Lock()
+	reported := n.pidfd >= 0 || n.gone
+	n.mu.Unlock()
+	if err == nil && !reported {
 		err = errors.New("bwrap did not report its namespace (--info-fd unsupported?)")
 	}
 	n.ok.Store(err == nil)

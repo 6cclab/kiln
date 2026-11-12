@@ -35,6 +35,12 @@ func bwrapArgs(p Plan, bwrap, socat, shell, command string, bridges []bwrapBridg
 	if p.InfoFD > 0 {
 		a = append(a, "--info-fd", itoa(p.InfoFD))
 	}
+	if p.PrivateRoot {
+		// A worker shares no System V or POSIX IPC, hostname or cgroup view
+		// with the host: a message queue or shared-memory segment is reached
+		// by key, not path, so the private root alone does not hide it.
+		a = append(a, "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try")
+	}
 	visible := func(string) bool { return true }
 	switch {
 	case p.PrivateRoot:

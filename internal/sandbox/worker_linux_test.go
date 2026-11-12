@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -292,6 +294,8 @@ func TestNSWatchTimeoutIsAnError(t *testing.T) {
 	m := New(Config{}, Options{
 		NSWaitTimeout: 150 * time.Millisecond,
 		PidfdOpen:     func(int) (int, error) { return unix.PidfdOpen(sleeper.Process.Pid, 0) },
+		// An init the kill does not stop in time.
+		PidfdSignal: func(int, syscall.Signal) error { return nil },
 	})
 	n, err := m.newNSWatch()
 	if err != nil {
@@ -419,4 +423,132 @@ func isZombie(dir string) bool {
 	s := string(b)
 	i := strings.LastIndex(s, ")")
 	return i >= 0 && i+2 < len(s) && s[i+2] == 'Z'
+}
+
+// The worker's IPC namespace is not the host's.
+func TestWorkerLinuxIPCNamespaceIsolated(t *testing.T) {
+	host, err := os.Readlink("/proc/self/ns/ipc")
+	if err != nil {
+		t.Skip(err)
+	}
+	r := newWorkerRig(t)
+	out, code := r.run(`readlink /proc/self/ns/ipc`)
+	if code != 0 || !strings.HasPrefix(strings.TrimSpace(out), "ipc:[") {
+		t.Fatalf("readlink in worker: exit %d: %s", code, out)
+	}
+	if strings.TrimSpace(out) == host {
+		t.Errorf("worker shares the host IPC namespace %s", host)
+	}
+}
+
+// A namespace init that outlived bwrap (killed before its init armed
+// PR_SET_PDEATHSIG) is killed by teardown, not merely waited on.
+func TestNSWatchKillsInitThatOutlivedBwrap(t *testing.T) {
+	orphan := exec.Command("sleep", "60")
+	if err := orphan.Start(); err != nil {
+		t.Skip(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- orphan.Wait() }()
+	t.Cleanup(func() { _ = orphan.Process.Kill() })
+	m := New(Config{}, Options{
+		NSWaitTimeout: 2 * time.Second,
+		PidfdOpen:     func(int) (int, error) { return unix.PidfdOpen(orphan.Process.Pid, 0) },
+	})
+	n, err := m.newNSWatch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.w.WriteString(`{"child-pid": 1}`); err != nil {
+		t.Fatal(err)
+	}
+	n.start()
+	if err := n.drain(nil); err != nil {
+		t.Fatalf("drain = %v, want the orphaned init killed and confirmed gone", err)
+	}
+	n.finish()
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("orphaned init still running after drain")
+	}
+}
+
+// Exec's cleanup and Manager.Shutdown may release the same watch at once
+// (Shutdown runs when JobScope.Close returns, which is before Exec's cleanup).
+// Run under -race.
+func TestNSWatchConcurrentReleaseAndShutdown(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		done := exec.Command("true")
+		if err := done.Start(); err != nil {
+			t.Skip(err)
+		}
+		pid := done.Process.Pid
+		fd, err := unix.PidfdOpen(pid, 0)
+		if err != nil {
+			t.Skip(err)
+		}
+		_ = done.Wait()
+		m := New(Config{}, Options{
+			NSWaitTimeout: time.Second,
+			PidfdOpen:     func(int) (int, error) { return fd, nil },
+		})
+		n, err := m.newNSWatch()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := n.w.WriteString(`{"child-pid": 1}`); err != nil {
+			t.Fatal(err)
+		}
+		n.start()
+		<-n.done
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _ = n.drain(nil); n.finish() }()
+		go func() { defer wg.Done(); _ = m.Shutdown() }()
+		wg.Wait()
+	}
+}
+
+func TestIsNSInit(t *testing.T) {
+	for status, want := range map[string]bool{
+		"Name:\tsh\nNSpid:\t4242\t1\n":      true,
+		"Name:\tsh\nNSpid:\t12345\t12345\n": false,
+		"Name:\tsh\nNSpid:\t4242\t17\n":     false,
+		"Name:\tsh\n":                       true, // no NSpid line: cannot check
+	} {
+		if got := isNSInit(status); got != want {
+			t.Errorf("isNSInit(%q) = %v, want %v", status, got, want)
+		}
+	}
+}
+
+// A worker whose namespace Shutdown cannot confirm empty keeps its private
+// temp directory too: a process still running may be writing there.
+func TestWorkerShutdownKeepsTempWhenUnconfirmed(t *testing.T) {
+	r := newWorkerRig(t)
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
+	r.m.opts.NSWaitTimeout = 150 * time.Millisecond
+	r.m.opts.PidfdOpen = func(int) (int, error) { return unix.PidfdOpen(sleeper.Process.Pid, 0) }
+	r.m.opts.PidfdSignal = func(int, syscall.Signal) error { return nil }
+	n, err := r.m.newNSWatch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.w.WriteString(`{"child-pid": 1}`); err != nil {
+		t.Fatal(err)
+	}
+	n.start()
+	_ = n.drain(nil)
+	n.finish()
+	if err := r.m.Shutdown(); err == nil {
+		t.Fatal("Shutdown reported success while a namespace was unconfirmed")
+	}
+	if _, err := os.Stat(r.m.worker.temp); err != nil {
+		t.Errorf("worker temp removed after an unconfirmed shutdown: %v", err)
+	}
 }
