@@ -9,6 +9,8 @@ type RuntimeEfficiency struct {
 	CycleLimit        *int  `json:"cycleLimit,omitempty"`
 	ProgressLimit     *int  `json:"progressLimit,omitempty"`
 	ProgressLoopLimit *int  `json:"progressLoopLimit,omitempty"`
+	// ProgressLoopFileBytes caps the streamed hash of files the loop guard tracks.
+	ProgressLoopFileBytes *int `json:"progressLoopFileBytes,omitempty"`
 }
 
 func (r *RuntimeEfficiency) merge(next RuntimeEfficiency) {
@@ -23,6 +25,7 @@ func (r *RuntimeEfficiency) merge(next RuntimeEfficiency) {
 	}{
 		{&r.ReadCacheEntries, next.ReadCacheEntries, 1, 256},
 		{&r.ReadCacheBytes, next.ReadCacheBytes, 1024, 64 << 20},
+		{&r.ProgressLoopFileBytes, next.ProgressLoopFileBytes, 1024, 16 << 20},
 	} {
 		if field.src != nil && *field.src >= field.min && *field.src <= field.max {
 			v := *field.src

@@ -492,6 +492,11 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 					raw.RuntimeEfficiency.ProgressLoopLimit = nil
 				}
 			}
+			// A repository cannot raise the file-hash cap above what the user
+			// set (or the 1 MiB default).
+			if n := raw.RuntimeEfficiency.ProgressLoopFileBytes; n != nil && *n > PositiveOr(merged.RuntimeEfficiency.ProgressLoopFileBytes, 1<<20) {
+				raw.RuntimeEfficiency.ProgressLoopFileBytes = nil
+			}
 			// Repository settings can turn off local learning and memory,
 			// but cannot undo a user's opt-out or enable opt-in capture.
 			if raw.LearningAutomation.Enabled != nil && *raw.LearningAutomation.Enabled {

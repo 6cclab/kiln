@@ -78,6 +78,8 @@ type Dispatcher struct {
 	CycleLimit int
 	// ProgressLoopLimit is inherited by each dispatched agent's harness.
 	ProgressLoopLimit int
+	// ProgressLoopFileBytes is inherited by each dispatched agent's harness.
+	ProgressLoopFileBytes int64
 	// ReadCache, when set, is shared by worker read tools. It is safe for
 	// concurrent workers and always validates fresh file content.
 	ReadCache *tools.ReadCache
@@ -421,29 +423,30 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	var extraTools []*tool.Tool
 	if allowTask {
 		child = &Dispatcher{
-			Limits:             d.Limits,
-			ProgressLimit:      d.ProgressLimit,
-			CycleLimit:         d.CycleLimit,
-			ProgressLoopLimit:  d.ProgressLoopLimit,
-			ReadCache:          d.ReadCache,
-			IsolatedWorkers:    d.IsolatedWorkers,
-			IsolatedShell:      d.IsolatedShell,
-			SnapshotDirty:      d.SnapshotDirty,
-			AutoIntegrate:      d.AutoIntegrate,
-			Registry:           d.Registry,
-			Gate:               d.Gate,
-			Agents:             d.Agents,
-			Roles:              d.Roles,
-			SessionsRoot:       d.SessionsRoot,
-			Env:                workerEnv,
-			OnEvent:            d.OnEvent,
-			OnSubagentStop:     d.OnSubagentStop,
-			BeforeSubagentStop: d.BeforeSubagentStop,
-			UserHistory:        d.UserHistory,
-			Depth:              depth,
-			Hooks:              d.Hooks,
-			Routers:            d.Routers,
-			Approved:           d.Approved,
+			Limits:                d.Limits,
+			ProgressLimit:         d.ProgressLimit,
+			CycleLimit:            d.CycleLimit,
+			ProgressLoopLimit:     d.ProgressLoopLimit,
+			ReadCache:             d.ReadCache,
+			IsolatedWorkers:       d.IsolatedWorkers,
+			IsolatedShell:         d.IsolatedShell,
+			SnapshotDirty:         d.SnapshotDirty,
+			AutoIntegrate:         d.AutoIntegrate,
+			Registry:              d.Registry,
+			Gate:                  d.Gate,
+			Agents:                d.Agents,
+			Roles:                 d.Roles,
+			SessionsRoot:          d.SessionsRoot,
+			Env:                   workerEnv,
+			OnEvent:               d.OnEvent,
+			OnSubagentStop:        d.OnSubagentStop,
+			BeforeSubagentStop:    d.BeforeSubagentStop,
+			UserHistory:           d.UserHistory,
+			Depth:                 depth,
+			Hooks:                 d.Hooks,
+			Routers:               d.Routers,
+			Approved:              d.Approved,
+			ProgressLoopFileBytes: d.ProgressLoopFileBytes,
 		}
 		extraTools = append(extraTools, tools.TaskTool(adaptDispatch(child.Dispatch), d.Agents, d.Roles, resolved.Tier))
 	}
@@ -468,14 +471,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		// process-level dispatcher, or a child Dispatcher this same
 		// function assigns Parent to just below, once this call
 		// succeeds).
-		ParentSessionID:   d.Parent.SessionID,
-		ExtraTools:        extraTools,
-		ActiveToolNames:   activeToolNames,
-		ProgressLimit:     d.ProgressLimit,
-		CycleLimit:        d.CycleLimit,
-		ProgressLoopLimit: d.ProgressLoopLimit,
-		ReadCache:         d.ReadCache,
-		Routers:           d.Routers,
+		ParentSessionID:       d.Parent.SessionID,
+		ExtraTools:            extraTools,
+		ActiveToolNames:       activeToolNames,
+		ProgressLimit:         d.ProgressLimit,
+		CycleLimit:            d.CycleLimit,
+		ProgressLoopLimit:     d.ProgressLoopLimit,
+		ReadCache:             d.ReadCache,
+		Routers:               d.Routers,
+		ProgressLoopFileBytes: d.ProgressLoopFileBytes,
 	})
 	if err != nil {
 		return DispatchResult{}, fmt.Errorf("agent: start subagent session for %q: %w", def.Name, err)

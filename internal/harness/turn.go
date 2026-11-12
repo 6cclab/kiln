@@ -186,7 +186,7 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 		same:  progressGuard{limit: l.h.opts.ProgressLimit},
 		cycle: cycleGuard{limit: l.h.opts.CycleLimit},
 	}
-	loop := progressLoopGuard{limit: l.h.opts.ProgressLoopLimit, cwd: l.h.opts.Cwd}
+	loop := progressLoopGuard{limit: l.h.opts.ProgressLoopLimit, cwd: l.h.opts.Cwd, maxFileBytes: l.h.opts.ProgressLoopFileBytes}
 	firstIteration := true
 	// compactNext: check the compaction threshold before the next request,
 	// which is an operation's first and every one after a tool step.
@@ -265,6 +265,7 @@ driveLoop:
 			}
 			return l.finishFailed(operationID, tip, err)
 		}
+		l.noteLive(transcript)
 		// A failed automatic compaction is reported only if nothing made
 		// up for it: when fitRequest compacted the conversation to fit,
 		// the turn recovered and an error block would only mislead.
@@ -324,6 +325,9 @@ driveLoop:
 				}
 				if fitErr == nil {
 					tip, transcript, fitErr = l.fitRequest(ctx, tip, &overflowRecoveryUsed, resend)
+				}
+				if fitErr == nil {
+					l.noteLive(transcript)
 				}
 				if fitErr != nil {
 					err = fitErr
@@ -455,12 +459,15 @@ driveLoop:
 			}
 			var runErr error
 			var effectiveArgs []map[string]any
-			before := loop.before(toolCalls[i])
+			// before is captured by beginTool after any before-tool hook has
+			// rewritten the arguments and just before the tool runs, so a
+			// file cycle is tracked on the path that actually executed.
+			var before fileState
 			if j-i >= 2 {
 				tip, effectiveArgs, runErr = l.executeConcurrentRun(ctx, operationID, tip, responseEntryID, toolCalls, batch, i, j)
 			} else {
 				var effective map[string]any
-				tip, effective, runErr = l.executeOneTool(ctx, operationID, tip, responseEntryID, toolCalls[i], i, batch)
+				tip, effective, runErr = l.executeOneTool(ctx, operationID, tip, responseEntryID, toolCalls[i], i, batch, func(c msg.ToolCall) { before = loop.before(c) })
 				effectiveArgs = []map[string]any{effective}
 			}
 			if runErr != nil {
@@ -903,11 +910,11 @@ func (l *Lane) isConcurrentTool(name string) bool {
 // sequential path used by drive() for a run of length 1 and by
 // resume.go's re-run of a not-yet-finished tool call. batch is the whole
 // turn's []ToolCallState; sourceIndex is this call's position in it.
-func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, batch []ToolCallState) (string, map[string]any, error) {
+func (l *Lane) executeOneTool(ctx context.Context, operationID, tip, assistantEntryID string, call msg.ToolCall, sourceIndex int, batch []ToolCallState, preExec func(msg.ToolCall)) (string, map[string]any, error) {
 	if err := l.commitToolPending(operationID, assistantEntryID, call, sourceIndex, batch); err != nil {
 		return tip, nil, err
 	}
-	result, permOutcome, effectiveArgs, err := l.beginTool(ctx, operationID, call)
+	result, permOutcome, effectiveArgs, err := l.beginTool(ctx, operationID, call, preExec)
 	if err != nil {
 		return tip, nil, err
 	}
@@ -960,7 +967,7 @@ func (l *Lane) executeConcurrentRun(ctx context.Context, operationID, tip, assis
 	wg.Add(n)
 	for k := 0; k < n; k++ {
 		crash.Go(func() {
-			results[k], permOutcomes[k], effectiveArgs[k], beginErrs[k] = l.beginTool(ctx, operationID, toolCalls[start+k])
+			results[k], permOutcomes[k], effectiveArgs[k], beginErrs[k] = l.beginTool(ctx, operationID, toolCalls[start+k], nil)
 			// Not deferred: after a panic in beginTool the batch must not
 			// go on to commit this call's zero result.
 			wg.Done()
@@ -1004,7 +1011,10 @@ func (l *Lane) commitToolPending(operationID, assistantEntryID string, call msg.
 // It performs no Storage.Commit, which is what makes it safe to run on a
 // goroutine of its own for a Concurrent run: every write for this call
 // happens later, back on the driving goroutine, in commitToolResult.
-func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolCall) (msg.ToolResultMessage, string, map[string]any, error) {
+// preExec, if set, is called with the call carrying its final (post-hook)
+// arguments immediately before the tool executes; it is not called for a
+// call that is refused or blocked.
+func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolCall, preExec func(msg.ToolCall)) (msg.ToolResultMessage, string, map[string]any, error) {
 	if err := ctx.Err(); err != nil {
 		return msg.ToolResultMessage{}, "", nil, err
 	}
@@ -1095,6 +1105,11 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		// through the branches above.
 		t, _ := tools.Get(call.Name)
 		argsJSON, _ := json.Marshal(args)
+		if preExec != nil {
+			final := call
+			final.Arguments = args
+			preExec(final)
+		}
 		res, execErr := t.Execute(ctx, argsJSON, func(tool.Result) {}, tool.Invocation{ToolCallID: call.ID, ToolName: call.Name, Cwd: l.h.opts.Cwd})
 		if execErr != nil {
 			result = tool.Errorf("%s", execErr.Error())
@@ -1103,7 +1118,7 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		}
 	}
 
-	return msg.ToolResultMessage{
+	toolResult := msg.ToolResultMessage{
 		Content:      truncateToolResult(sanitizeToolResult(result.Content), l.h.ToolOutputTokens()),
 		Details:      result.Details,
 		Usage:        result.Usage,
@@ -1113,7 +1128,9 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		Timestamp:    l.now(),
 		ToolCallID:   call.ID,
 		ToolName:     call.Name,
-	}, before.PermissionOutcome, args, nil
+	}
+	l.reuseUnchanged(call, args, &toolResult)
+	return toolResult, before.PermissionOutcome, args, nil
 }
 
 // argsRefusal is the tool result for input tool.CheckArgs refused.

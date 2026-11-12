@@ -946,7 +946,8 @@ session overrides to this report as it does to a running session.
     "readCacheBytes": 4194304,
     "progressLimit": 0,
     "cycleLimit": 0,
-    "progressLoopLimit": 0
+    "progressLoopLimit": 0,
+    "progressLoopFileBytes": 1048576
   }
 }
 ```
@@ -986,6 +987,20 @@ that pattern fails the operation.
 It applies to nested workers. A repository setting cannot enable it when the
 user left it off, or raise a user-selected limit. The guard does not prove
 that an unfamiliar tool or external task state made progress.
+
+`progressLoopFileBytes` (1024 to 16777216, default 1048576) caps the file size the
+guard hashes when tracking edit/write cycles. The content is streamed through a
+hash and not retained; a larger file is unknown and cannot trigger a notice.
+Symlinks that resolve inside the working directory are tracked by their target.
+A repository setting can lower this cap but not raise it.
+It reaches the root session and nested workers.
+
+With `readCache` on, a repeated `read`, `grep` or `glob` with identical arguments
+that returns byte-identical output to an earlier result still present in the
+conversation is replaced by a short "Unchanged since call <id>" result. The tool
+still runs again, so permissions, hooks and fresh file reads are unaffected; only
+model input tokens are saved. Results under 256 bytes, errors and images are not
+replaced.
 
 ### Shared model request budgets
 

@@ -93,7 +93,7 @@ func EfficiencyConfig(args Args, out, stderr io.Writer) int {
 		"compatibleLearnedPolicy": learned,
 		"loadedFrom":              s.LoadedFrom,
 		"sources":                 sources,
-		"runtimeEfficiency":       map[string]any{"readCache": s.RuntimeEfficiency.ReadCache != nil && *s.RuntimeEfficiency.ReadCache, "readCacheEntries": settings.PositiveOr(s.RuntimeEfficiency.ReadCacheEntries, 32), "readCacheBytes": settings.PositiveOr(s.RuntimeEfficiency.ReadCacheBytes, 4<<20), "progressLimit": settings.PositiveOr(s.RuntimeEfficiency.ProgressLimit, 0), "progressLoopLimit": settings.PositiveOr(s.RuntimeEfficiency.ProgressLoopLimit, 0), "cycleLimit": settings.PositiveOr(s.RuntimeEfficiency.CycleLimit, 0)},
+		"runtimeEfficiency":       map[string]any{"readCache": s.RuntimeEfficiency.ReadCache != nil && *s.RuntimeEfficiency.ReadCache, "readCacheEntries": settings.PositiveOr(s.RuntimeEfficiency.ReadCacheEntries, 32), "readCacheBytes": settings.PositiveOr(s.RuntimeEfficiency.ReadCacheBytes, 4<<20), "progressLimit": settings.PositiveOr(s.RuntimeEfficiency.ProgressLimit, 0), "progressLoopLimit": settings.PositiveOr(s.RuntimeEfficiency.ProgressLoopLimit, 0), "progressLoopFileBytes": settings.PositiveOr(s.RuntimeEfficiency.ProgressLoopFileBytes, 1<<20), "cycleLimit": settings.PositiveOr(s.RuntimeEfficiency.CycleLimit, 0)},
 	}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")

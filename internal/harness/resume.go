@@ -207,7 +207,7 @@ func (l *Lane) resumeToolBatch(ctx context.Context, operationID, tip string, bat
 				result := resumeErrorResult(l.now(), call, reason)
 				tip, err = l.commitToolResult(ctx, operationID, tip, batch.AssistantEntryID, call, i, result, "", batch.Calls, false)
 			} else {
-				tip, _, err = l.executeOneTool(ctx, operationID, tip, batch.AssistantEntryID, call, i, batch.Calls)
+				tip, _, err = l.executeOneTool(ctx, operationID, tip, batch.AssistantEntryID, call, i, batch.Calls, nil)
 				if err != nil && ctx.Err() != nil {
 					aborted = true
 					result := resumeErrorResult(l.now(), call, "Recovery was canceled while this tool call was starting. Its effect is unknown; kiln did not run it again.")

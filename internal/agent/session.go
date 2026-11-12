@@ -111,6 +111,8 @@ type Options struct {
 	CycleLimit int
 	// ProgressLoopLimit bounds successful no-progress loops. Zero disables it.
 	ProgressLoopLimit int
+	// ProgressLoopFileBytes caps the loop guard's streamed file hash (max 16 MiB).
+	ProgressLoopFileBytes int64
 
 	SystemPrompt string
 
@@ -279,13 +281,15 @@ func Start(ctx context.Context, opts Options) (*Started, error) {
 		Compaction:      compactionFromTier(tier),
 		// Every tool result is capped at the tier's share of the window
 		// before it is sent; the tools' own fixed limits are only a first line.
-		ToolOutputTokens:  tier.ToolOutputTokens,
-		ProgressLimit:     opts.ProgressLimit,
-		CycleLimit:        opts.CycleLimit,
-		ProgressLoopLimit: opts.ProgressLoopLimit,
-		Cwd:               cwd,
-		Now:               now,
-		Routers:           opts.Routers,
+		ToolOutputTokens:      tier.ToolOutputTokens,
+		ProgressLimit:         opts.ProgressLimit,
+		CycleLimit:            opts.CycleLimit,
+		ProgressLoopLimit:     opts.ProgressLoopLimit,
+		ProgressLoopFileBytes: opts.ProgressLoopFileBytes,
+		ReuseUnchangedResults: opts.ReadCache != nil,
+		Cwd:                   cwd,
+		Now:                   now,
+		Routers:               opts.Routers,
 	})
 	if err != nil {
 		_ = storage.Close()
