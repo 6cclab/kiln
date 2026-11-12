@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/tool"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 const maxVerificationFiles = 16
@@ -69,6 +70,9 @@ type VerificationAttempt struct {
 	CallID               string `json:"callId"`
 	Command              string `json:"command"`
 	DiscoveryUnsupported string `json:"discoveryUnsupported,omitempty"`
+	// ExitStatusUnreliable names the shell construct that lets the command
+	// exit 0 while its check failed; no evidence is recorded for it.
+	ExitStatusUnreliable string `json:"exitStatusUnreliable,omitempty"`
 }
 
 // VerificationBashTool wraps a Bash tool without changing its permission gate.
@@ -84,7 +88,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 	if err := json.Unmarshal(schema["properties"], &properties); err != nil {
 		panic("invalid built-in bash properties: " + err.Error())
 	}
-	properties["verificationFiles"] = json.RawMessage(`{"type":"array","maxItems":16,"items":{"type":"string"},"description":"Project files to fingerprint before and after this command. Evidence is recorded only when the command succeeds and files remain unchanged."}`)
+	properties["verificationFiles"] = json.RawMessage(`{"type":"array","maxItems":16,"items":{"type":"string"},"description":"Project files to fingerprint before and after this command. Evidence is recorded only when the command succeeds and files remain unchanged. The command must be one command or an && chain: a pipeline, ||, ; or & can exit 0 after a failed check, so it records no evidence."}`)
 	properties["verificationDiscover"] = json.RawMessage(`{"type":"string","enum":["go"],"description":"Opt in to a partial bounded input snapshot for a literal go test ./path, go test ./path/..., or go test ./... command. Includes in-module and go.work module imports (every file in each scanned directory, regardless of build constraints), local go.mod/go.work replacement targets, Go module/workspace metadata, go.sum, and the GOFLAGS, GOOS, GOARCH, CGO_ENABLED, GOEXPERIMENT, GOTOOLCHAIN and GOWORK environment values. Shell expansion, flags and compound commands are unsupported; the module cache and the go binary are not read; unchanged evidence never means safe to skip verification. Unsupported or unavailable discovery records no evidence."}`)
 	properties["verificationDirectories"] = json.RawMessage(`{"type":"array","maxItems":8,"items":{"type":"string"},"description":"Project directories to fingerprint recursively, including regular file contents, permissions and membership. .git is excluded. Evidence requires a successful command and unchanged inputs."}`)
 	properties["verificationDirectoryFileLimit"] = json.RawMessage(`{"type":"integer","minimum":1,"maximum":512,"description":"Maximum regular files across all declared files and directories (default 128, hard ceiling 512). Tree entries, including subdirectories, also have a shared hard ceiling of 512. Above limit, evidence is unavailable."}`)
@@ -155,6 +159,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 				discoveryReason = err.Error()
 			}
 		}
+		exitMasked := verificationExitMasked(args.Command)
 		result, err := base.Execute(ctx, raw, update, inv)
 		if err == nil && args.Command != "" && len(args.Command) <= maxVerificationCommandBytes {
 			var details map[string]json.RawMessage
@@ -162,14 +167,14 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 				if details == nil {
 					details = make(map[string]json.RawMessage)
 				}
-				attempt, marshalErr := json.Marshal(VerificationAttempt{CallID: inv.ToolCallID, Command: args.Command, DiscoveryUnsupported: discoveryReason})
+				attempt, marshalErr := json.Marshal(VerificationAttempt{CallID: inv.ToolCallID, Command: args.Command, DiscoveryUnsupported: discoveryReason, ExitStatusUnreliable: exitMasked})
 				if marshalErr == nil {
 					details["taskVerificationAttempt"] = attempt
 					result.Details, _ = json.Marshal(details)
 				}
 			}
 		}
-		if err != nil || result.IsError || !discoveryValid || len(before)+len(beforeDirs) == 0 || len(args.Command) > maxVerificationCommandBytes || (len(requestedFiles) > 0 && len(before) == 0) || (len(requestedDirs) > 0 && len(beforeDirs) == 0) || !verificationMissingFiles(inv.Cwd, inferred.missing, allowRead) {
+		if err != nil || result.IsError || exitMasked != "" || !discoveryValid || len(before)+len(beforeDirs) == 0 || len(args.Command) > maxVerificationCommandBytes || (len(requestedFiles) > 0 && len(before) == 0) || (len(requestedDirs) > 0 && len(beforeDirs) == 0) || !verificationMissingFiles(inv.Cwd, inferred.missing, allowRead) {
 			return result, err
 		}
 		if args.VerificationDiscover == "go" {
@@ -215,6 +220,51 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		return result, nil
 	}
 	return &wrapped
+}
+
+// verificationExitMasked names the shell construct that can make command exit
+// 0 although its check failed, or returns "" when the exit status is the
+// check's own. kiln's shell does not set pipefail, so a pipeline reports its
+// last stage (`go test ./... | tail` passes when tests fail); `||`, a later
+// statement, `&` and `!` likewise detach the status from the check. Only
+// simple commands, alone or joined by &&, qualify. The text of a nested
+// `sh -c` string and command substitutions are not inspected.
+func verificationExitMasked(command string) string {
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
+	if err != nil {
+		return "unparseable shell syntax"
+	}
+	if len(file.Stmts) != 1 {
+		return "more than one statement"
+	}
+	var check func(*syntax.Stmt) string
+	check = func(s *syntax.Stmt) string {
+		if s.Background || s.Coprocess || s.Disown {
+			return "background command"
+		}
+		if s.Negated {
+			return "negated command"
+		}
+		switch c := s.Cmd.(type) {
+		case *syntax.CallExpr:
+			return ""
+		case *syntax.BinaryCmd:
+			switch c.Op {
+			case syntax.AndStmt:
+				if reason := check(c.X); reason != "" {
+					return reason
+				}
+				return check(c.Y)
+			case syntax.OrStmt:
+				return "|| fallback"
+			default:
+				return "pipeline without pipefail"
+			}
+		default:
+			return "compound command"
+		}
+	}
+	return check(file.Stmts[0])
 }
 
 // VerificationAttemptFromResult reads the wrapper's command identity.
