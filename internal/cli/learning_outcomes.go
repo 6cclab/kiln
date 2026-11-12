@@ -36,6 +36,8 @@ type runAggregate struct {
 	outcome       learning.Outcome
 	proofs        map[string]tools.VerificationEvidence
 	proofBytes    int
+	fileEdits     int // successful edit/write calls and file-writing shell commands
+	checks        int // test, build or lint commands run, passed or not
 }
 
 const maxCollectedFactProofs = 16
@@ -63,6 +65,31 @@ func toolFailureCategory(name string, o *learning.Outcome) {
 	default:
 		o.OtherFailure++
 	}
+}
+
+// shellCommandShape reads what a shell tool call did from its command: whether
+// it ran a check (a recognised test, build or lint command, or one the model
+// declared verification inputs for) and whether it wrote files.
+func shellCommandShape(ev harness.Event) (check, writes bool) {
+	switch ev.ToolName {
+	case "bash", "Bash", "bash_background":
+	default:
+		return false, false
+	}
+	command, _ := ev.ToolArgs["command"].(string)
+	if command == "" {
+		return false, false
+	}
+	check = tools.CommandRunsCheck(command)
+	for _, key := range []string{"verificationFiles", "verificationDirectories", "verificationDiscover"} {
+		if v, ok := ev.ToolArgs[key]; ok && v != nil && v != "" {
+			if list, isList := v.([]any); !isList || len(list) > 0 {
+				check = true
+			}
+		}
+	}
+	reason := tools.CommandMutatesFiles(command)
+	return check, reason != "" && reason != tools.UnparseableCommand
 }
 
 func verifiedCommand(ev harness.Event) bool {
@@ -123,10 +150,28 @@ func (o *outcomeObserver) observe(ctx context.Context, ev harness.Event) {
 				}
 			}
 		}
+		check, writes := shellCommandShape(ev)
+		if check {
+			r.checks++
+			if writes {
+				// A mutation check: its failure is the point, so it is
+				// neither a tool success nor a failure.
+				r.outcome.MutationChecks++
+				return
+			}
+		}
 		if ev.ToolResult.IsError {
 			r.outcome.ToolFailure++
 			toolFailureCategory(ev.ToolName, &r.outcome)
 		} else {
+			switch ev.ToolName {
+			case "write", "Write", "edit", "Edit", "multi_edit", "MultiEdit":
+				r.fileEdits++
+			default:
+				if writes {
+					r.fileEdits++
+				}
+			}
 			r.outcome.ToolSuccess++
 			if verifiedCommand(ev) {
 				r.outcome.VerifiedCommands++
@@ -161,6 +206,7 @@ func (o *outcomeObserver) observe(ctx context.Context, ev harness.Event) {
 			return
 		}
 		r.outcome.Status = ev.Status
+		r.outcome.Shape = learning.ClassifyRunShape(r.fileEdits, r.checks)
 		if len(r.models) > 0 {
 			models := make([]string, 0, len(r.models))
 			for model := range r.models {

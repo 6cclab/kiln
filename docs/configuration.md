@@ -1079,8 +1079,18 @@ kiln learning forget-outcomes
 ```
 
 Suggestions are deterministic review hypotheses over the retained outcomes,
-available after `minSamples`: recurring tool failures, failed operations, or high
-primary-model input usage. A completed operation or a successful command is not
+available after `minSamples`: recurring tool failures, failed operations, high
+primary-model input usage, or file changes made without a check
+(`unverified-changes`). Each record carries a structural run shape read from its
+tool calls, never from prompt text: `question` (no files changed),
+`code_change` (files changed and a recognised test, build or lint command ran),
+or `code_change_unverified` (files changed, no such command). The
+`unverified-changes` suggestion appears once `minSamples` runs changed files and
+at least 3 of them, and at least half, ran no check; whether those runs needed
+one is for you to judge. A check that writes files as it runs, such as a mutation test
+that breaks a source file to confirm the test catches it, is counted as
+`mutationChecks` rather than as a tool success or failure, because its failure is
+expected. A completed operation or a successful command is not
 evidence of task correctness. Suggestions do not change routing, memory facts,
 skills, code, or active policies. They are computed on inspection, not injected
 into future prompts. Dismissal hides one category until `forget-outcomes` removes
@@ -1240,8 +1250,14 @@ verification evidence. Neither does a command whose exit status can hide a
 failed check: only a single command or an `&&` chain qualifies. Kiln's shell
 does not set `pipefail`, so `go test ./... | tail` exits 0 when tests fail; a
 pipeline, `||`, `;` or a second line, `&`, `!`, or a compound command records the
-attempt with `exitStatusUnreliable` naming the construct, and no evidence. The
-text inside a nested `sh -c` string is not inspected. File-only declarations retain their limits of 16 files,
+attempt with `exitStatusUnreliable` naming the construct, and no evidence. A
+command that writes files while it runs records `mutatesFiles` and no evidence
+either: an in-place edit (`sed -i`, `perl -pi`), `cp`, `mv`, `rm`, `tee`,
+`touch`, a working-tree `git` command such as `checkout`, `restore` or `stash`,
+or an output redirect to anything outside `/dev` and `/tmp`. Such a command can
+break a file, run the check and restore it, so its exit status says nothing
+about the inputs as they are now. The text inside a nested `sh -c` string is not
+inspected. File-only declarations retain their limits of 16 files,
 32 MiB per file, and 64 MiB total. Directory declarations accept up to eight
 roots. `verificationDirectoryFileLimit` defaults to 128 (maximum 512), and
 `verificationDirectoryByteLimit` defaults to 64 MiB (also its maximum).
