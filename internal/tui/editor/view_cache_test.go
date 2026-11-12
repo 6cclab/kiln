@@ -45,6 +45,8 @@ func TestViewCacheInvalidation(t *testing.T) {
 		start func(Model) Model
 	}{
 		{"typing", 40, func(m *Model) { *m, _, _ = m.Update(key('x')) }, nil},
+		// Same length, same cursor: only the text differs (history recall).
+		{"value replaced", 40, func(m *Model) { m.SetValue("xyz") }, func(m Model) Model { m.SetValue("abc"); return m }},
 		{"cursor move", 40, func(m *Model) { *m, _, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft}) }, func(m Model) Model { m.SetValue("abc"); return m }},
 		{"scroll (cursor up through many lines)", 40, func(m *Model) {
 			for range 12 {
