@@ -117,6 +117,24 @@ being mistaken for the complete roadmap.
   releases wait for checks and native install smoke
   ([distribution](efficiency/readiness-distribution-fixes.md)).
 
+- Efficiency wave (one PR per item):
+  - [Isolated worker shells](efficiency/isolated-shell-activation.md) on Linux:
+    a bwrap private root, host Unix sockets hidden, and synchronous teardown
+    through a pidfd on the namespace init. If the namespace can't be confirmed
+    empty, the worktree is kept and dispatch fails. Hosts without pidfd or
+    `--info-fd` are refused.
+  - [Verification discovery](efficiency/verify-discovery.md) (`go-partial-v2`)
+    traces `go.work` modules, counts build-tagged and cgo files, and records the
+    Go environment variables that select or compile files.
+  - [Fact extraction](efficiency/fact-extraction.md) works when kiln is launched
+    from a subdirectory, and facts can cite directory and absent-file sources.
+  - The [progress guard](efficiency/progress-loop.md) tracks hook-rewritten
+    paths and in-tree symlinks, and has a configurable file cap. Behind
+    `readCache`, it replaces unchanged read, grep and glob results with a
+    pointer to the earlier call.
+  - [`/context` reasons](efficiency/context-reasons.md) persist with the
+    session and survive a restart.
+
 The integrated tranche is described in
 [readiness integration](efficiency/readiness-integration.md). Earlier details are in
 [worker confinement and verification discovery](worker-confinement-verification-discovery.md)
@@ -124,26 +142,32 @@ and [worker snapshots and verification dependencies](worker-snapshot-verificatio
 
 ## Still outstanding from the full plan
 
-- Hooks and other instruction types in unified retrieval; the catalog covers
-  model-invocable skills and custom commands, dispatchable agents and eligible MCP tools.
-- Shell-capable isolated workers. `orchestration.isolatedShell` is refused on
-  every platform before a child starts: a `setsid()` descendant can outlive the
-  worker's process-group scope and worktree cleanup, and no enforceable descendant
-  ownership exists yet ([sandbox shell](efficiency/sandbox-shell.md)). The macOS
-  Seatbelt profile is tested directly only. Linux still needs host Unix socket
-  protection; Windows isolated editing fails explicitly.
-- A full verification dependency graph and selective test policies. Discovery does
-  not trace external or workspace modules, build tags, cgo, toolchain or
-  environment, or non-Go commands; Windows cross-volume handling is cross-compiled
-  but not run natively. Nothing proves an unchanged check can be skipped.
-- Fact extraction beyond a single literal Go test command launched at the project
-  root; directory and missing-file dependencies stay review-only. Policy candidates
-  still require explicitly run evaluation; nothing schedules paid evaluations.
-- Broader file/result reuse. The progress guard excludes effectful Bash, files
-  outside the working directory or over 1 MiB, symlinks and hook-rewritten edit paths.
-- `/context` cannot recover per-request suggestions, retrieval decisions or search
-  budget drops after a restart, and the integrated binary has not had a
-  real-terminal `kiln-qa` drive of the new view.
+- Hooks in unified retrieval are out of scope on purpose. Claude Code never
+  exposes hooks to the model, so indexing them would break parity. The catalog
+  covers model-invocable skills and custom commands, dispatchable agents and
+  eligible MCP tools.
+- Isolated worker shells on macOS and Windows: both are refused. On Linux:
+  - sockets created in `/etc` or the Git dirs after the per-command scan are
+    still reachable;
+  - Git metadata is readable;
+  - tools under `$HOME` or `/opt` are not found;
+  - a worktree kept after an unconfirmed teardown must be removed by hand;
+  - hosts that restrict user namespaces are untested (they get a refusal).
+- A full verification dependency graph and selective test policies. Discovery
+  does not cover:
+  - environment variables outside the recorded set, `go env -w` / `GOENV` files,
+    the `go` binary or the module cache;
+  - imports of workspace modules outside the root, or ancestor `go.work` files;
+  - non-Go commands.
+
+  Nothing proves an unchanged check can be skipped.
+- Fact extraction still covers only one literal Go test command. Evidence
+  outside the project root, symlinked or special directory entries, and
+  oversized directories stay review-only. Policy candidates still need an
+  explicitly run evaluation; nothing schedules paid evaluations.
+- The progress guard still excludes effectful Bash and files outside the working
+  directory. `/context` restores only the last request's decisions. It has not
+  had a real-terminal `kiln-qa` drive.
 - Broader head-to-head evaluation with complete external usage attribution.
 
 A policy promotion is evidence about the evaluated tasks, not proof that the full
