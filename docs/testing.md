@@ -271,7 +271,9 @@ a scratch `HOME` and project per scenario.
 Step files: directives `@faux`, `@fixture`, `@size`, `@args`, `@env`,
 `@untrusted`, `@nogit`, `@pre`; verbs `TYPE`, `KEY`, `CLICK`, `RESIZE`, `WAIT`,
 `WAITFOR /re/ [s]`, `WAITGONE /re/ [s]`, `SUBMIT_UNTIL /re/ s text` (resubmit a snapshot view such as `/mcp`
-until it matches), `RELEASE name`, `SHOT`, `EXPECT /re/`, `EXPECT_NOT /re/`, `NOTE`. The full
+until it matches), `RELEASE name`, `SHOT`, `EXPECT /re/`, `EXPECT_NOT /re/`, `NOTE`. `@real` scenarios add `SEND`, `IDLE`, `TURN`,
+`RUN`, `RELAUNCH` and `EXPECT_PROMPTS max`, which fails when IDLE answered more permission
+prompts than `max` and lists each prompt's question and shot (`real/wf-auto-mode` asserts 0). The full
 reference is the docstring of `scripts/qa/drive.py`. Faux scripts for
 scenarios live in `testdata/faux/qa/`; `end_turn: true` closes a turn and
 `chunk_delay` paces a streamed reply (`internal/testkit/faux/doc.go`). To keep a

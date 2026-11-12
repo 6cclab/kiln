@@ -91,6 +91,13 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
                                  again" or yes, a dangerous command -> esc);
                                  progress shots every 60s (default 1200s)
     TURN <text>                  SEND then IDLE
+    EXPECT_PROMPTS <max>         @real: record a pass/fail on how many
+                                 permission prompts (DANGER included) IDLE
+                                 has answered so far, listing each one's
+                                 question and shot; for auto mode, which
+                                 should act without asking. A prompt no mode
+                                 skips (an rm of a critical path) is listed
+                                 but not counted
     RUN <shell command>          run in the project (after {PROJ}/{HOME}/
                                  {ROOT} expansion) and record pass/fail on its
                                  exit status, output in the run log
@@ -269,14 +276,25 @@ class TerminalApp:
         self.wid = None
 
     def launch(self, command, cols, rows):
+        # A cold-started Terminal opens its own startup window; a plain
+        # `do script` would then open a second one, and _new_window would
+        # rightly refuse to guess. Run the scenario in that startup window
+        # instead (waiting for it, bounded), so exactly one window is new
+        # and none is left behind after teardown closes it.
+        cold = osa('return application id "com.apple.Terminal" is running') != "true"
         before = set(orca_windows(self.bundle))
         self.tty = osa(
             'on run argv\n tell application "Terminal"\n  activate\n'
-            '  set t to do script (item 1 of argv)\n'
+            '  set cold to (item 4 of argv) is "cold"\n'
+            '  if cold then\n   repeat 50 times\n    if (count windows) > 0 then exit repeat\n'
+            '    delay 0.1\n   end repeat\n  end if\n'
+            '  if cold and (count windows) > 0 then\n'
+            '   set t to do script (item 1 of argv) in window 1\n'
+            '  else\n   set t to do script (item 1 of argv)\n  end if\n'
             '  set number of columns of t to (item 2 of argv as integer)\n'
             '  set number of rows of t to (item 3 of argv as integer)\n'
             '  return tty of t\n end tell\nend run',
-            command, str(cols), str(rows))
+            command, str(cols), str(rows), "cold" if cold else "warm")
         self.wid = _new_window(self.bundle, before)
 
     def _tab(self, body):
@@ -582,6 +600,7 @@ class Run:
         self.out.mkdir(parents=True, exist_ok=True)
         self.keep = keep
         self.shot_n = 0
+        self.prompts = []
         self.expects = []
         self.shots = []
         self.log_lines = []
@@ -732,13 +751,28 @@ class Run:
             return ("trust folder -> 2", ["2"])
         if re.search(r"Would you like to proceed\?|Ready to code\?", tail):
             return ("plan approval -> 1", ["1"])
-        if re.search(r"Allow kiln to|approval needed", tail) and re.search(r"press 1, 2", tail):
+        if re.search(r"Allow kiln to|approval needed", tail) and re.search(r"press 1(, | or )2", tail):
             if self.DANGER.search(tail):
                 return ("DANGER -> esc", ["esc"])
             if re.search(r"2\s+Yes, and don.t ask again", tail):
                 return ("permission -> 2", ["2"])
             return ("permission -> 1", ["1"])
         return None
+
+    # kiln's note on a prompt no mode skips (criticalNote in
+    # internal/claude/permission): EXPECT_PROMPTS lists these but does not
+    # count them, since asking is the intended behaviour.
+    ALWAYS_ASK = re.compile(r"This removes a critical path")
+
+    @staticmethod
+    def prompt_summary(s):
+        """What a permission prompt asked, for EXPECT_PROMPTS: its question
+        and, when auto mode explains why it is asking, that reason."""
+        tail = s.split("\n")[-40:]
+        keep = [l.strip() for l in tail
+                if re.search(r"Allow kiln to|Auto mode|classifier|^\s*\$ ", l)]
+        keep = [re.sub(r"[─╌]{3,}", "", l).strip() for l in keep]
+        return " | ".join(l for l in keep if l) or "(question scrolled off; see the shot)"
 
     def idle(self, timeout):
         start = time.time()
@@ -752,8 +786,10 @@ class Run:
             s = self.screen()
             d = self.decide(s)
             if d:
-                self.shot("prompt")
+                stem = self.shot("prompt")
                 self.log("  answer: %s" % d[0])
+                if d[0].startswith(("permission", "DANGER")):
+                    self.prompts.append((stem, self.prompt_summary(s), bool(self.ALWAYS_ASK.search(s))))
                 for k in d[1]:
                     self.key(k)
                     time.sleep(0.3)
@@ -908,6 +944,7 @@ class Run:
                            "buffer": str(self.out / (stem + ".buffer.txt")),
                            "scrollback_rows": scrollback_rows})
         self.log("SHOT %s" % stem)
+        return stem
 
     def release_hold(self, name):
         """POST /_faux/release?name=<name> to the scenario's faux server."""
@@ -1027,6 +1064,16 @@ class Run:
                     self.idle(1200)
             elif verb == "IDLE":
                 self.idle(float(arg) if arg else 1200)
+            elif verb == "EXPECT_PROMPTS":
+                counted = [p for p in self.prompts if not p[2]]
+                ok = len(counted) <= int(arg)
+                self.expects.append({"line": lineno, "verb": verb, "pattern": arg, "ok": ok,
+                                     "prompts": ["%s: %s%s" % (st, q, " (always asks)" if a else "")
+                                                 for st, q, a in self.prompts]})
+                self.log("  -> %s (%d permission prompt(s) counted, at most %s allowed; %d always-ask not counted)" % (
+                    "pass" if ok else "FAIL", len(counted), arg, len(self.prompts) - len(counted)))
+                for st, q, a in self.prompts:
+                    self.log("     %s: %s%s" % (st, q, " (always asks, not counted)" if a else ""))
             elif verb == "RUN":
                 cmd = arg.replace("{ROOT}", str(ROOT)).replace("{PROJ}", str(self.proj)).replace("{HOME}", str(self.home))
                 p = run(["/bin/sh", "-c", cmd], cwd=self.proj, env={**os.environ, "HOME": str(self.home)}, timeout=600)
@@ -1068,7 +1115,7 @@ class Run:
 
 
 VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "WAITGONE", "SUBMIT_UNTIL", "RELEASE", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE",
-         "SEND", "IDLE", "TURN", "RUN", "RELAUNCH"}
+         "SEND", "IDLE", "TURN", "RUN", "RELAUNCH", "EXPECT_PROMPTS"}
 FAUX_TOP = {"model", "steps", "models"}
 FAUX_STEP = {"text", "thinking", "tool_call", "tool_calls", "on_tool_result", "on_tool_results",
              "then", "usage", "error", "delay", "hold", "disconnect_after", "end_turn", "chunk_delay"}
@@ -1180,6 +1227,11 @@ def lint_scenario(path):
                 int(n)
             elif verb == "WAIT":
                 float(arg)
+            elif verb == "EXPECT_PROMPTS":
+                if not re.match(r"^\d+$", arg.strip()):
+                    raise DriveError("needs a whole number, the most prompts allowed")
+                if "real" not in directives:
+                    raise DriveError("only @real scenarios answer prompts in IDLE")
             elif verb == "SHOT":
                 shots += 1
                 if not re.match(r"^[a-z0-9][a-z0-9-]*$", arg):
