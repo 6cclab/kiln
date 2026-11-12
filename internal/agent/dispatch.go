@@ -36,6 +36,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -222,7 +223,7 @@ type DispatchResult struct {
 // ctx is forwarded to both session creation and the run itself: cancelling
 // the parent's context aborts the subagent's turn exactly as it would the
 // parent's own.
-func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (DispatchResult, error) {
+func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (_ DispatchResult, retErr error) {
 	release, limitErr := d.Limits.acquire(d.Depth + 1)
 	if limitErr != nil {
 		return DispatchResult{}, limitErr
@@ -306,11 +307,16 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 
 	workerEnv := d.Env
 	var worktree *workerWorktree
+	// shellErr is set when the worker's shell processes are not confirmed
+	// stopped; the worktree is then left in place and the error returned.
+	var shellErr error
 	if d.IsolatedShell && !d.IsolatedWorkers {
 		return DispatchResult{}, fmt.Errorf("agent: isolated shell requires isolated workers")
 	}
 	if d.IsolatedShell {
-		return DispatchResult{}, fmt.Errorf("agent: isolated shell is unavailable: detached descendants cannot yet be owned safely across process-group changes")
+		if err := isolatedShellSupport(runtime.GOOS); err != nil {
+			return DispatchResult{}, fmt.Errorf("agent: %w", err)
+		}
 	}
 	if d.IsolatedWorkers {
 		if d.Env != nil && d.Env.Sandbox != nil && d.Env.Sandbox.Active() {
@@ -321,8 +327,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			return DispatchResult{}, fmt.Errorf("agent: prepare isolated worker: %w", err)
 		}
 		defer func() {
-			if closeErr := worktree.close(); closeErr != nil {
+			if closeErr := releaseWorkerWorktree(shellErr, worktree); closeErr != nil {
 				diag.L().Warn("isolated worker worktree cleanup failed", "path", worktree.path, "error", closeErr)
+				if shellErr != nil {
+					retErr = errors.Join(retErr, closeErr)
+				}
 			}
 		}()
 	}
@@ -343,7 +352,22 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 		}()
 	}
 	workerEnv.JobScope = execenv.NewJobScope()
-	defer workerEnv.JobScope.Close()
+	// The shell sandbox is released after the job scope has stopped the
+	// worker's commands and before the worktree is removed (defers run in
+	// reverse order, and the worktree's was registered earlier).
+	var shellCleanup func() error
+	defer func() {
+		workerEnv.JobScope.Close()
+		if shellCleanup != nil {
+			shellErr = shellCleanup()
+		}
+	}()
+	if d.IsolatedShell {
+		shellCleanup, err = enableWorkerShellForOS(workerEnv, d.Env, worktree.path, runtime.GOOS)
+		if err != nil {
+			return DispatchResult{}, fmt.Errorf("agent: isolated shell: %w", err)
+		}
+	}
 
 	// allowTask gates both this subagent's own `task` tool (built below)
 	// and, through AllowedToolNames, whether "task" can even survive an
@@ -357,7 +381,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	}
 	allowTask := d.Depth+1 < maxDepth
 	available := append([]string(nil), residentToolNames...)
-	if d.IsolatedWorkers {
+	if d.IsolatedWorkers && !d.IsolatedShell {
 		// File-only workers never offer Bash, even when a definition names it.
 		available = removeToolName(available, "bash")
 	}

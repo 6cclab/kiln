@@ -1329,15 +1329,22 @@ inside their worktree. The parent's permission rules still apply. Shell tools
 are unavailable by default. A parent OS sandbox or extension tool setup that
 cannot be rebound safely is refused in this file-only mode.
 
-`orchestration.isolatedShell` is reserved for a future shell-capable isolated
-worker. It defaults to false, requires `isolatedWorkers`, and currently refuses
-activation on macOS, Linux and Windows before starting a child. macOS Seatbelt
-can confine shell writes, network and sockets, but the current process-group
-owner cannot stop a descendant that calls `setsid()` and leaves its group.
-Cleanup of the worktree while that process runs is unsafe. The tested Seatbelt
-profile remains a foundation, not an active product shell mode. File-only
-isolated workers still work on macOS and Linux. An isolated worker with a
-nonempty `tools` allowlist naming an unsupported tool now fails explicitly;
+`orchestration.isolatedShell` gives isolated workers a Bash tool. It defaults
+to false, requires `isolatedWorkers`, and is honoured only from user-scope
+settings (`~/.kiln/settings.json`): a repository or `--settings` file cannot
+turn it on. It works on Linux with bubblewrap and socat installed. The worker's
+commands run in a PID namespace, so every process they start, including ones
+that call `setsid()`, ends when the command or the worker ends, before the
+worktree is removed. They see only the system directories (`/usr`, `/bin`,
+`/lib*`, `/etc`), their worktree and a private temp directory, and the
+worktree's Git metadata read-only; the parent checkout, `$HOME`, `/run` and
+`/tmp` are not visible, so host Unix sockets cannot be reached, and there is no
+network. Toolchains installed under `$HOME` are therefore not found. On macOS
+and Windows the setting is refused with an error before a child starts: macOS
+has no way to stop a descendant that leaves its process group. Without the
+setting, isolated workers remain file-only. See
+`docs/efficiency/isolated-shell-activation.md`. An isolated worker with a
+nonempty `tools` allowlist naming an unsupported tool fails explicitly;
 the allowlist is never widened to grant Bash. Parent MCP and other host-executing
 extension tools remain unavailable in isolated workers.
 

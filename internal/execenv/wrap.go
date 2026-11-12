@@ -2,6 +2,7 @@ package execenv
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -39,30 +40,42 @@ type Wrapped struct {
 	Env     map[string]string
 	Unset   []string
 	Cleanup func()
+	// ExtraFiles are inherited by the command as fds 3, 4, ... Exec closes
+	// its own copies once the command has started (or failed to start).
+	ExtraFiles []*os.File
+	// Started, if set, runs right after the command started.
+	Started func()
+	// Drain, if set, runs after the command's process has exited, before
+	// the job scope is told the command finished. It returns an error when
+	// it cannot confirm that every process the command started has stopped
+	// (a sandbox that owns a PID namespace waits for it to be empty); Exec
+	// then reports that error.
+	Drain func(*os.ProcessState) error
 }
 
 // shellCommand builds the process Exec starts: `shell -c command`, or
 // what opts.Sandbox wraps it in.
-func shellCommand(ctx context.Context, shellPath, command, cwd string, opts ExecOptions) (*exec.Cmd, func(), error) {
+func shellCommand(ctx context.Context, shellPath, command, cwd string, opts ExecOptions) (*exec.Cmd, func(), Wrapped, error) {
 	env := buildEnv(opts.Env, opts.InheritEnv)
 	if opts.Sandbox == nil {
 		cmd := exec.CommandContext(ctx, shellPath, "-c", command)
 		cmd.Dir = cwd
 		cmd.Env = env
-		return cmd, func() {}, nil
+		return cmd, func() {}, Wrapped{}, nil
 	}
 	w, err := opts.Sandbox.Wrap(shellPath, command, cwd)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, Wrapped{}, err
 	}
 	cmd := exec.CommandContext(ctx, w.Argv[0], w.Argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = applyEnv(env, w.Env, w.Unset)
+	cmd.ExtraFiles = w.ExtraFiles
 	cleanup := w.Cleanup
 	if cleanup == nil {
 		cleanup = func() {}
 	}
-	return cmd, cleanup, nil
+	return cmd, cleanup, w, nil
 }
 
 // applyEnv returns base with set's variables replacing any of the same

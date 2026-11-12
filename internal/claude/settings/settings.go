@@ -483,6 +483,11 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 		if f.Scope != paths.ScopeUser && raw.Orchestration.AutoIntegrate != nil && *raw.Orchestration.AutoIntegrate {
 			raw.Orchestration.AutoIntegrate = nil
 		}
+		// A shell-capable worker runs model-chosen commands on the host (inside
+		// a sandbox); a repository must not be able to switch that on.
+		if f.Scope != paths.ScopeUser && raw.Orchestration.IsolatedShell != nil && *raw.Orchestration.IsolatedShell {
+			raw.Orchestration.IsolatedShell = nil
+		}
 		if !trustedEfficiencySource {
 			// A repository may tighten an enabled guard, but cannot turn on
 			// progress-loop detection after the user left it off.

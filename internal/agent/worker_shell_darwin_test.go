@@ -160,7 +160,7 @@ func TestDispatchIsolatedShellRefusesDetachedDescendants(t *testing.T) {
 				ctx, stop = context.WithCancel(ctx)
 				stop()
 			}
-			if _, err := d.Dispatch(ctx, DispatchRequest{Agent: "general-purpose", Prompt: "detach"}); err == nil || !strings.Contains(err.Error(), "detached descendants cannot yet be owned safely") {
+			if _, err := d.Dispatch(ctx, DispatchRequest{Agent: "general-purpose", Prompt: "detach"}); err == nil || !strings.Contains(err.Error(), "setsid()") {
 				t.Fatalf("unsafe isolated shell was not refused: %v", err)
 			}
 			if bashOutput != "" {

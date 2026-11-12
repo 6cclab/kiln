@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/execenv"
@@ -39,6 +41,13 @@ type Options struct {
 	// Probe, when set, replaces the start-up check that the mechanism
 	// actually runs (tests).
 	Probe func(argv []string) error
+	// PidfdOpen replaces pidfd_open for worker shell teardown (tests).
+	PidfdOpen func(pid int) (int, error)
+	// PidfdSignal replaces pidfd_send_signal for worker shell teardown (tests).
+	PidfdSignal func(pidfd int, sig syscall.Signal) error
+	// NSWaitTimeout bounds the wait for a worker command's PID namespace to
+	// empty; 0 means 5 seconds.
+	NSWaitTimeout time.Duration
 	// LookupIP, when set, resolves hostnames for the proxy (tests).
 	LookupIP func(ctx context.Context, host string) ([]netip.Addr, error)
 }
@@ -65,6 +74,9 @@ type Manager struct {
 	onSave   func(host string)
 	closed   bool
 	held     map[string]int // Linux placeholders in use (placeholders.go)
+	// nsWatches are the worker commands' PID namespaces not yet confirmed
+	// empty (nswatch_linux.go).
+	nsWatches map[*nsWatch]struct{}
 	// newGit are the git directories sandboxed commands created this
 	// session (git init); kiln cleans them after every command and on
 	// Close (gitdir.go sanitizeNewGitDir).
@@ -194,7 +206,11 @@ func (m *Manager) Always() execenv.CommandSandbox {
 }
 
 // Close stops the proxy and relays.
-func (m *Manager) Close() {
+func (m *Manager) Close() { m.close(true) }
+
+// close is Close; removeTemp false keeps a worker's temp directory, which a
+// process not confirmed stopped may still be using.
+func (m *Manager) close(removeTemp bool) {
 	if m == nil {
 		return
 	}
@@ -208,9 +224,21 @@ func (m *Manager) Close() {
 	// Closes each bridge's listener and every relay it accepted, and
 	// waits for their goroutines.
 	m.relays.closeAll()
-	if m.worker != nil {
+	if m.worker != nil && removeTemp {
 		_ = os.RemoveAll(m.worker.temp)
 	}
+}
+
+// Shutdown is Close for a worker: it first waits until every PID namespace its
+// commands ran in is empty, and returns an error naming any it could not
+// confirm. A caller must not remove the worker's files after an error.
+func (m *Manager) Shutdown() error {
+	var err error
+	if m != nil {
+		err = m.shutdownWatches()
+	}
+	m.close(err == nil)
+	return err
 }
 
 // noteNewGitDirs records the git directories a command may create (its
@@ -392,6 +420,17 @@ func (m *Manager) plan(cwd string) (Plan, *Proxy, error) {
 			p.DenyWrite = append(p.DenyWrite, Rule{Path: g})
 		}
 		p.DenyWriteLiteral = append(p.DenyWriteLiteral, filepath.Join(m.worker.child, ".git"))
+		if m.opts.GOOS == "linux" {
+			// The worker sees only the system directories, its worktree and
+			// temp, and its Git metadata read-only (bwrap.go privateRootArgs).
+			p.PrivateRoot = true
+			p.ReadOnlyMounts = m.worker.gitDirs
+			socks, err := workerHiddenSockets(m.worker.gitDirs)
+			if err != nil {
+				return Plan{}, nil, err
+			}
+			p.HiddenSockets = dedupe(append(p.HiddenSockets, socks...))
+		}
 	}
 	if !m.cfg.FilesystemDisabled && ensureCacheRoot(tmp) {
 		for k, v := range cacheEnv(tmp, userSetEnv(m.cfg.SettingsEnv)) {
@@ -469,12 +508,22 @@ func (c *commandSandbox) Wrap(shell, command, cwd string) (execenv.Wrapped, erro
 			sweepGitDirs(p.GitDirs, before)
 			c.m.cleanNewGitDirs()
 		}
+		if c.m.worker != nil {
+			p.InfoFD = 3 // attachNSWatch passes the pipe as fd 3
+		}
 		argv, err := bwrapArgs(p, c.m.bwrap, c.m.socat, shell, command, bridges)
 		if err != nil {
 			release()
 			return execenv.Wrapped{}, err
 		}
-		return execenv.Wrapped{Argv: argv, Unset: p.Unset, Cleanup: release}, nil
+		w := execenv.Wrapped{Argv: argv, Unset: p.Unset, Cleanup: release}
+		if c.m.worker != nil {
+			if err := c.m.attachNSWatch(&w); err != nil {
+				release()
+				return execenv.Wrapped{}, err
+			}
+		}
+		return w, nil
 	}
 	return execenv.Wrapped{}, fmt.Errorf("sandboxing is not supported on %s", c.m.opts.GOOS)
 }

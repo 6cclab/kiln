@@ -46,6 +46,21 @@ type Plan struct {
 
 	FilesystemDisabled bool
 
+	// PrivateRoot (Linux, isolated workers) builds the mount namespace from
+	// an allowlist instead of bind-mounting the host's "/": only
+	// workerSystemDirs, the write roots and ReadOnlyMounts are visible.
+	// Everything else, including every host path-based Unix socket under
+	// /run, /var/run, /tmp and the home directory, does not exist for the
+	// command, so a connect to it fails. Rules about paths that are not
+	// visible are dropped rather than mounted.
+	PrivateRoot bool
+	// InfoFD, when set, is passed to bwrap as --info-fd: it reports the host
+	// PID of the namespace's init there, which worker teardown waits on.
+	InfoFD int
+	// ReadOnlyMounts are extra host paths a PrivateRoot command sees
+	// read-only (a worktree's Git metadata).
+	ReadOnlyMounts []string
+
 	// HTTPProxyPort and SOCKSProxyPort are the loopback ports sandboxed
 	// commands may connect to; 0 for none.
 	HTTPProxyPort  int

@@ -124,3 +124,29 @@ func TestOrchestrationIsolatedShellMergeAndProvenance(t *testing.T) {
 		t.Fatal("explicit false did not disable isolated shell")
 	}
 }
+
+func TestIsolatedShellRequiresUserScopeOptIn(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	user := filepath.Join(home, ".kiln", "settings.json")
+	project := filepath.Join(cwd, ".claude", "settings.json")
+	put(t, project, `{"orchestration":{"isolatedShell":true}}`)
+	if got := LoadSettings(cwd, LoadOptions{Headless: true, Trusted: true}); got.Orchestration.IsolatedShell != nil {
+		t.Fatal("repository enabled shell-capable workers")
+	}
+	extra := filepath.Join(t.TempDir(), "extra-settings.json")
+	put(t, extra, `{"orchestration":{"isolatedShell":true}}`)
+	if got := LoadSettings(cwd, LoadOptions{Headless: true, Trusted: true, Extra: extra}); got.Orchestration.IsolatedShell != nil {
+		t.Fatal("extra settings file enabled shell-capable workers")
+	}
+	put(t, user, `{"orchestration":{"isolatedShell":true}}`)
+	got := LoadSettings(cwd, LoadOptions{Headless: true, Trusted: true})
+	if got.Orchestration.IsolatedShell == nil || !*got.Orchestration.IsolatedShell {
+		t.Fatal("user opt-in did not enable shell-capable workers")
+	}
+	put(t, project, `{"orchestration":{"isolatedShell":false}}`)
+	got = LoadSettings(cwd, LoadOptions{Headless: true, Trusted: true})
+	if got.Orchestration.IsolatedShell == nil || *got.Orchestration.IsolatedShell {
+		t.Fatal("repository could not turn the user opt-in off")
+	}
+}
