@@ -76,6 +76,18 @@ func TestCompareRecordsRejectsUnmatchedOrDifferentEvidence(t *testing.T) {
 	}
 }
 
+// Both sides carry the same pair of checks named alike with different types,
+// so their check sets match and only the duplicate-name rule can reject them.
+func TestCompareRecordsRejectsDuplicateNameOnBothSides(t *testing.T) {
+	k, e := comparisonFixtures()
+	k.Checks[1].Name = k.Checks[0].Name
+	e.Checks[1].Name = e.Checks[0].Name
+	_, err := CompareRecords([]Record{k}, []ExternalRecord{e})
+	if err == nil || !strings.Contains(err.Error(), "duplicate check name") {
+		t.Fatalf("want a duplicate check name rejection, got %v", err)
+	}
+}
+
 func TestCompareRecordsRejectsMixedKilnPolicyOrRoles(t *testing.T) {
 	for _, tt := range []struct {
 		name   string

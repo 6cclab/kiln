@@ -11,6 +11,14 @@
  "expected": "Each mechanical check name is unique within a run so matched check sets are unambiguous.",
  "design_ref": null,
  "evidence": [],
- "status": "open",
- "fix": null
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/eval/compare.go",
+   "internal/eval/compare_test.go"
+  ],
+  "regression_test": "internal/eval/compare_test.go:TestCompareRecordsRejectsDuplicateNameOnBothSides",
+  "note": "validateChecks rejects a repeated check name (compare.go:177, added in #67 with this finding). The existing 'duplicate check name' case renamed only the external check, so the check-set mismatch rejected it even without the guard. The new test duplicates the name on both sides and fails without the guard.",
+  "updated_at": "2026-11-12T20:44:35Z"
+ }
 }
