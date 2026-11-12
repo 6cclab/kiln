@@ -14,6 +14,10 @@ being mistaken for the complete roadmap.
 - Full-request wire-size evaluation checks, policy/binary/fixture fingerprints,
   and atomic shared model-call/token/catalog-cost admission reservations.
 - Shared worker concurrency, dispatch-count, depth and timeout controls.
+- Per-worker shell process ownership: completion and cancellation stop the
+  worker's tracked Unix process groups without stopping parent or sibling jobs.
+  Commands cannot start after their worker scope closes. This is a prerequisite
+  for isolated shell workers, not shell sandbox support itself.
 - Opt-in conservative routing, new-task reassessment, and tool-failure escalation.
 - Private SQLite project memory with lexical retrieval, attribution, correction
   history, expiry, forgetting, export, restore and worktree-aware source fingerprints.
@@ -85,6 +89,10 @@ Details and local performance evidence for the latest tranche are in
 - General-purpose isolated workers with shell/sandbox support and automatic
   integration of concurrent patches. Current isolated workers support file edits
   from clean HEAD or an opt-in dirty snapshot and require explicit application.
+  Shell support still needs worktree-specific sandbox profiles, race-safe file
+  access alongside shell commands, and Linux protection against arbitrary host
+  Unix socket access. Rebinding the existing sandbox's working directory alone
+  would leave shared Git metadata writable.
 - Automatic verification dependency discovery and broader selective test policies;
   current evidence and rerun planning cover explicitly declared files/directories,
   not whole-task correctness or proof that unchanged checks can be skipped.

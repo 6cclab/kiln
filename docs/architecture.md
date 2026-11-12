@@ -384,6 +384,16 @@ jobs the command spawned. Output is captured and truncated to
 `Capture` is requested; `Spill: true` preserves the complete output on disk
 regardless, recording the path in `ExecResult.SpillPath`.
 
+Each dispatched worker receives its own `execenv.JobScope`. Command startup
+and scope closure synchronize so a command cannot start after its worker ends.
+The dispatcher closes the scope after the prompt finishes, before artifact
+export and completion callbacks, and also on setup failures. On Unix, closure
+kills registered process groups, including background children whose shell has
+already exited. Parent and sibling scopes are independent. This is process
+lifetime management, not an OS security boundary: detached process groups and
+external tool servers are outside it; Windows retains its weaker `taskkill`
+ancestry-based cleanup.
+
 **OS sandbox** (`internal/sandbox`): with `sandbox.enabled` in settings,
 `internal/cli/sandbox.go` builds a `sandbox.Manager` and sets it as
 `execenv.Env.Sandbox`. The bash tools ask it per command

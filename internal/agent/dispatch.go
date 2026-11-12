@@ -308,6 +308,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 			}
 		}()
 	}
+	// A dispatch owns its command lifetime, independently of the parent and
+	// sibling workers. Copy the environment so nested dispatch cannot replace
+	// the scope of the worker that launched it.
+	workerEnvCopy := *workerEnv
+	workerEnv = &workerEnvCopy
+	workerEnv.JobScope = execenv.NewJobScope()
+	defer workerEnv.JobScope.Close()
 
 	// allowTask gates both this subagent's own `task` tool (built below)
 	// and, through AllowedToolNames, whether "task" can even survive an
@@ -565,6 +572,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	defer unsubMsg()
 
 	result, err := started.Lane.Prompt(ctx, req.Prompt, nil)
+	// Stop leftover commands before exporting a patch or reporting completion.
+	// The defer above also covers failures during session setup.
+	workerEnv.JobScope.Close()
 	var artifact *WorkerArtifact
 	if worktree != nil {
 		// A cancelled run can still leave useful partial edits. Export them

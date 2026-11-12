@@ -1201,6 +1201,20 @@ For example, a Bash call can bind a check to its source, tests and dependencies:
 }
 ```
 
+### Worker command lifetime
+
+Delegated workers own their shell commands. When a worker finishes or is
+cancelled, kiln stops its tracked process groups before reporting completion
+or exporting edits. Parent-session commands and other workers are unaffected;
+start long-lived development servers in the parent session. This cleanup is
+automatic and does not add a model call or a settings switch.
+
+On Unix, this includes background jobs that stay in the command's process
+group after its shell exits. Processes that detach into another group and
+external MCP servers are outside this tracking. Windows uses ancestry-based
+`taskkill`, which can miss children after their parent exits. Process cleanup
+does not substitute for OS sandboxing.
+
 ### Isolated editing workers
 
 Set `orchestration.isolatedWorkers: true` to run delegated edits in detached

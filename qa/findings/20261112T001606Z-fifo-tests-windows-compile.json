@@ -1,0 +1,28 @@
+{
+ "id": "20261112T001606Z-fifo-tests-windows-compile",
+ "found_at": "2026-11-12T00:16:06Z",
+ "scenario": "ci/windows-cross-compile",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "FIFO regressions break Windows test compilation",
+ "observed": "Portable test files called syscall.Mkfifo, which is undefined on Windows; Windows go vet failed.",
+ "expected": "Windows build and vet compile all portable tests; FIFO assertions run only on supported Unix platforms.",
+ "design_ref": null,
+ "evidence": [
+  "/tmp/kiln-worker-jobs-windows-before.log"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/agent/worker_snapshot_fifo_unix_test.go",
+   "internal/tools/verification_directories_fifo_unix_test.go"
+  ],
+  "regression_test": "Windows go build/go vet; Unix FIFO regressions",
+  "after_evidence": [
+   "/tmp/kiln-worker-jobs-windows-after.log"
+  ],
+  "updated_at": "2026-11-12T00:19:56Z"
+ }
+}

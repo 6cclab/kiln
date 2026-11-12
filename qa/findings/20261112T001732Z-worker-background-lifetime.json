@@ -1,0 +1,29 @@
+{
+ "id": "20261112T001732Z-worker-background-lifetime",
+ "found_at": "2026-11-12T00:17:32Z",
+ "scenario": "agent/dispatch-background-jobs",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Worker background jobs survive dispatch completion",
+ "observed": "Worker bash commands registered surviving background groups only in the process-global session ledger, allowing jobs to continue after a delegated task completed.",
+ "expected": "A worker stops its own tracked commands before completing, without stopping parent or sibling commands.",
+ "design_ref": null,
+ "evidence": [
+  "/tmp/kiln-worker-jobs-red.log"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/execenv/job_scope.go",
+   "internal/execenv/exec.go",
+   "internal/agent/dispatch.go"
+  ],
+  "regression_test": "TestDispatchStopsWorkerBackgroundJobsWithoutStoppingParent,TestDispatchCancellationStopsWorkerBackgroundJobs,TestDispatchNestedWorkerJobScopeIsIndependent",
+  "after_evidence": [
+   "/tmp/kiln-worker-jobs-race.log"
+  ],
+  "updated_at": "2026-11-12T00:19:56Z"
+ }
+}

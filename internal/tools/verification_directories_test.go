@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/andrepato/harness/internal/msg"
@@ -108,11 +107,6 @@ func TestVerificationDirectoriesUnavailableEvidence(t *testing.T) {
 		{"symlink", func(t *testing.T, c string) {
 			writeVerificationFile(t, filepath.Join(c, "outside"), "x")
 			if err := os.Symlink(filepath.Join(c, "outside"), filepath.Join(c, "src", "link")); err != nil {
-				t.Fatal(err)
-			}
-		}, `{"command":"test","verificationDirectories":["src"]}`, func(string) bool { return true }},
-		{"fifo", func(t *testing.T, c string) {
-			if err := syscall.Mkfifo(filepath.Join(c, "src", "pipe"), 0600); err != nil {
 				t.Fatal(err)
 			}
 		}, `{"command":"test","verificationDirectories":["src"]}`, func(string) bool { return true }},

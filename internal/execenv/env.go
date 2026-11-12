@@ -59,6 +59,11 @@ type Env struct {
 	// Sandbox, when set, decides which commands the bash tools run inside
 	// an OS sandbox (wrap.go). Nil runs everything unsandboxed.
 	Sandbox Sandbox
+
+	// JobScope, when set, owns every process group Exec starts through this
+	// Env. Closing it stops active commands and their background jobs, and
+	// refuses later Exec calls. Nil preserves session-wide job tracking.
+	JobScope *JobScope
 }
 
 // New builds an Env rooted at cwd.
