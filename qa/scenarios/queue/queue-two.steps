@@ -23,6 +23,7 @@ EXPECT_NOT /1 queued/
 EXPECT /also check the login route/
 EXPECT /and update the tests too/
 EXPECT_NOT /panic|goroutine/
+RELEASE first-turn
 WAITFOR /updated the tests/ 30
 SHOT drained
 EXPECT_NOT /\d queued/

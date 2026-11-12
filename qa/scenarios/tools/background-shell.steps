@@ -12,7 +12,7 @@ WAITFOR /running in the background as bash_1/ 20
 # as the shell starts — pushed via MsgShells, internal/tui/status.go.
 WAITFOR /⟳ 1 shell/ 20
 SHOT dispatched
-EXPECT /bash background ─[\s\S]*sleep 30[\s\S]*running in the background as bash_1 · \/bashes to check on it/
+EXPECT /bash background ─[\s\S]*sleep 600[\s\S]*running in the background as bash_1 · \/bashes to check on it/
 EXPECT_NOT /bash_output\(/
 EXPECT /Started it in the background/
 EXPECT /⟳ 1 shell/
@@ -22,5 +22,5 @@ WAITFOR /shells?,/ 20
 SHOT bashes-list
 EXPECT /1 shell, 1 running/
 EXPECT /bash_1\s+running/
-EXPECT /sleep 30/
+EXPECT /sleep 600/
 EXPECT_NOT /panic|goroutine/

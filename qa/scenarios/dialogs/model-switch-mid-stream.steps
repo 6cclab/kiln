@@ -19,6 +19,8 @@ KEY down
 KEY enter
 WAITFOR /Now on faux\/faux-2 · small tier/ 10
 SHOT switched-while-still-streaming
+EXPECT /esc to stop/
+RELEASE slow-turn
 WAITFOR /Finished the slow turn\./ 20
 SHOT first-turn-completed-on-old-model
 EXPECT /Finished the slow turn\./

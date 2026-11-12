@@ -30,6 +30,7 @@ EXPECT /do the fast lookup/
 RESIZE 90 30
 SHOT subagents-after-resize
 EXPECT_NOT /panic|goroutine/
+RELEASE subagents
 
 WAITFOR /2 subagents? finished/ 20
 SHOT subagents-finished

@@ -1,5 +1,7 @@
 model: faux-1
 steps:
+  # Held until the scenario has resized (RELEASE reply).
+  - hold: reply
   - text: "This reply is held back before it streams so a resize can land while
       kiln is still busy with the turn. It exists only to give the resize
       scenario real content to check for once the response lands: filler
@@ -7,5 +9,4 @@ steps:
       alert that fires if the rollout looks wrong, all just padding so the
       streamed text runs long enough to matter. The one thing that has to
       survive the resize intact is this exact marker: resize-mid-stream-ok."
-    delay: 3s
     usage: {input: 60, output: 90}

@@ -1,7 +1,10 @@
 models:
   faux-1:
-    - text: "working on it, this will take a moment... Finished the slow turn."
-      chunk_delay: 150ms
+    # Held mid-reply until the scenario has switched models (RELEASE
+    # slow-turn), so the switch always lands while the turn streams.
+    - text: "working on it, this will take a moment..."
+    - hold: slow-turn
+    - text: " Finished the slow turn."
   faux-2:
     - text: "Second turn on faux-2."
       usage: {input: 30, output: 8}

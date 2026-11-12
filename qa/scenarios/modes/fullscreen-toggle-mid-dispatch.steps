@@ -14,6 +14,7 @@ TYPE scout the upload path with three subagents
 KEY enter
 WAITFOR /subagents? running/ 20
 KEY ctrl+f
+RELEASE subagents
 WAITFOR /3 subagents? finished/ 20
 SHOT fullscreen-done
 EXPECT /scout the upload path with three subagents/

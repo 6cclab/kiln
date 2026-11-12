@@ -6,8 +6,8 @@ steps:
   - text: "Second turn done."
     usage: {input: 140, output: 18}
     end_turn: true
-  # The /compact summarisation request itself: delayed so there is time
-  # to send Esc while "Compacting conversation" is still on the busy line.
+  # The /compact summarisation request itself: held (nothing releases it)
+  # so Esc always lands while "Compacting conversation" is on the busy line.
+  - hold: summary
   - text: "Summary of the above."
-    delay: 5s
     usage: {input: 200, output: 30}

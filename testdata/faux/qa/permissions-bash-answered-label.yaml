@@ -1,6 +1,8 @@
 model: faux-1
 steps:
-  - tool_call: {name: bash, args: {command: "sh -c 'sleep 4; echo slow done'"}, id: tc1}
+  # The command runs until the scenario creates release-cmd, so "Running"
+  # stays on screen for as long as the scenario needs.
+  - tool_call: {name: bash, args: {command: "sh -c 'while [ ! -e release-cmd ]; do sleep 0.1; done; echo slow done'"}, id: tc1}
   - on_tool_result: tc1
     then:
       - text: "The slow command finished."

@@ -31,6 +31,7 @@ TYPE turn four
 KEY enter
 WAITFOR /Compacting conversation/ 20
 SHOT compacting
+RELEASE compact
 WAITFOR /Second pass, after the context was auto-compacted\./ 180
 SHOT compacted-and-continued
 EXPECT /Second pass, after the context was auto-compacted\./

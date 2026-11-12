@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,7 +48,16 @@ func (p RetryPolicy) normalized() RetryPolicy {
 // backoff, unjittered) — the e2e suite sets this so its countdown/reconnect
 // tests get a deterministic delay instead of racing a random one every run
 // (see startTUI in test/e2e/tui_test.go).
+//
+// HARNESS_RETRY_DELAY_MS sets every backoff to exactly that many
+// milliseconds, with no jitter or cap. QA scenarios set a long one so the
+// retry countdown stays on screen until they press r (retry now).
 func (p RetryPolicy) delay(attempt int) time.Duration {
+	if v := os.Getenv("HARNESS_RETRY_DELAY_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
 	p = p.normalized()
 	ms := p.BaseDelayMs * (1 << uint(attempt-1))
 	if ms > p.MaxAgentDelayMs {
