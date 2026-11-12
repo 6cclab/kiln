@@ -21,6 +21,7 @@ type outcomeObserver struct {
 	store      *memory.Store
 	project    string
 	root       string
+	workdir    string // slash-separated launch directory below root; "" at the root
 	config     learning.ObservationConfig
 	sessionID  string
 	binaryHash string
@@ -187,11 +188,31 @@ func (o *outcomeObserver) observe(ctx context.Context, ev harness.Event) {
 				proofs = append(proofs, proof)
 			}
 			sort.Slice(proofs, func(i, j int) bool { return proofs[i].Command < proofs[j].Command })
-			if err := learning.RecordFactCandidates(boundedCtx, o.store, o.project, o.root, r.outcome, proofs, o.config); err != nil {
+			if err := learning.RecordFactCandidatesIn(boundedCtx, o.store, o.project, o.root, o.workdir, r.outcome, proofs, o.config); err != nil {
 				diag.L().Warn("learning fact candidates unavailable", "error", err)
 			}
 		}
 	}
+}
+
+// factLaunchDir splits the launch directory into the project (worktree) root
+// and the slash-separated directory below it. Verification paths are relative
+// to the launch directory, so promotion needs both. A launch directory outside
+// its own worktree root yields no root, which disables fact extraction.
+func factLaunchDir(cwd string) (root, workdir string) {
+	root = memoryProjectRoot(cwd)
+	canonical := cwd
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		canonical = resolved
+	}
+	rel, err := filepath.Rel(root, canonical)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", ""
+	}
+	if rel == "." {
+		return root, ""
+	}
+	return root, filepath.ToSlash(rel)
 }
 
 // attachLearningObserver installs opt-in sanitized main-run capture. A disabled
@@ -221,11 +242,8 @@ func attachLearningObserver(ctx context.Context, cwd string, started *agent.Star
 	if err != nil {
 		return nil, err
 	}
-	root := memoryProjectRoot(cwd)
-	if cwd != root {
-		root = ""
-	}
-	observer := &outcomeObserver{store: store, project: memoryScope(cwd), root: root, config: cfg, sessionID: started.SessionID, binaryHash: binaryHash}
+	root, workdir := factLaunchDir(cwd)
+	observer := &outcomeObserver{store: store, project: memoryScope(cwd), root: root, workdir: workdir, config: cfg, sessionID: started.SessionID, binaryHash: binaryHash}
 	events := started.Harness.Events()
 	kinds := []harness.EventType{harness.EventRunStart, harness.EventRunResume, harness.EventToolEnd, harness.EventUsage, harness.EventRunEnd}
 	unsubs := make([]func(), 0, len(kinds))

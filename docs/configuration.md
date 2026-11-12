@@ -874,22 +874,24 @@ stale records. Model-written observations without source fingerprints remain
 provisional.
 
 With the user's `learningAutomation.enabled` opt-in, `learningEnabled` and
-`personalMemoryEnabled` both enabled, and kiln launched at the project root,
-a completed run can turn a successful literal local `go test` command into a
-reviewable fact candidate. Promotion stores only the narrow procedure
-“Observed successful verification command: …” when one to eight declared
-regular-file dependencies are fresh, readable under the current permission
-rules, and at most 1 MiB each. Directory or missing-file dependencies,
-oversized proof data, changed inputs, and denied Read permission leave a
-review-only candidate with a reason. A successful test is an observation, not
+`personalMemoryEnabled` both enabled, a completed run can turn a successful
+literal local `go test` command into a reviewable fact candidate, whether kiln
+started at the project root or in a subdirectory of it. Promotion stores only
+the narrow procedure “Observed successful verification command: …” (from a
+subdirectory: “Observed successful verification command (in internal/foo): …”)
+when one to eight declared dependencies are fresh and readable under the
+current permission rules: regular files of at most 1 MiB, directories (their
+recursive membership, file contents and modes), and paths that must stay
+absent. Oversized proof data, changed inputs, paths outside the project and
+denied Read permission leave a review-only candidate with a reason. A successful test is an observation, not
 proof that the command is sufficient or the task is correct. The extractor
 makes no model call and does not write Claude memory files.
 
 Use `kiln learning fact-candidates` to inspect candidates and
 `kiln learning dismiss-fact <id>` to remove one. Dismissal does not erase an
 already stored memory record; use `kiln memory forget <key>` for that. Derived
-records expire after 30 days and are rechecked against source bytes and file
-modes on retrieval. User corrections retain their history. A user memory or
+records expire after 30 days and are rechecked against source bytes, file
+modes, directory membership and path absence on retrieval. User corrections retain their history. A user memory or
 learning opt-out takes precedence over project settings; a memory opt-out
 keeps opted-in aggregate counts but stores no raw verification proofs or
 candidates. See [verified fact extraction](efficiency/fact-extraction.md) for

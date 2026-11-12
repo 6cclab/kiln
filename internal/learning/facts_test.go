@@ -215,7 +215,7 @@ func TestFactCandidateRejectsAmbiguousCommandText(t *testing.T) {
 	}
 }
 
-func TestFactCandidateDirectoryOnlyEvidenceStaysReviewable(t *testing.T) {
+func TestFactCandidateStaleDirectoryEvidenceStaysReviewable(t *testing.T) {
 	ctx, store, root, outcome, proof := factFixture(t)
 	proof.Files = nil
 	proof.Directories = []tools.VerificationDirectory{{Path: ".", Mode: 0700}}
@@ -223,7 +223,7 @@ func TestFactCandidateDirectoryOnlyEvidenceStaysReviewable(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidates, err := ListFactCandidates(ctx, store, "project", root)
-	if err != nil || len(candidates) != 1 || candidates[0].Status != "review-only" || !strings.Contains(candidates[0].Reason, "directory membership") {
+	if err != nil || len(candidates) != 1 || candidates[0].Status != "review-only" || !strings.Contains(candidates[0].Reason, "snapshot changed") {
 		t.Fatalf("unsupported candidate missing: %+v %v", candidates, err)
 	}
 	record, err := store.Current(ctx, "project", factKey(proof), root)
