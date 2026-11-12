@@ -1,0 +1,21 @@
+# Real-user job in auto mode: a routine on-call fix (read the incidents MCP,
+# edit the repo, add a test, run go vet and go test) should go through without
+# a single permission prompt, because auto mode is meant to act rather than
+# ask. EXPECT_PROMPTS lists every prompt IDLE had to answer, with the question
+# it asked and its shot, so an over-asking auto mode fails with the reason.
+@real
+@home scratch
+@size 140x45
+@args --permission-mode auto
+@fixture qa/fixtures/real/mcp-orders-svc
+@setup mkdir -p {PROJ}/../bin && go -C {ROOT} build -o {PROJ}/../bin/incidents ./qa/fixtures/incident-mcp && printf '{"mcpServers":{"incidents":{"command":"%s"}}}' "{PROJ}/../bin/incidents" > {PROJ}/.mcp.json
+WAITFOR /describe a task/ 30
+SHOT ready
+EXPECT /auto mode/
+SUBMIT_UNTIL /incidents\s+\d+ tools/ 60 /mcp
+KEY esc
+TURN orders-svc is paging... use the incidents MCP to figure out what's wrong, then fix it in this repo, add a regression test, and run go vet and go test
+SHOT done
+EXPECT_PROMPTS 0
+RUN go vet ./... && go test ./...
+RUN grep -RIl "page=3\|per_page=10\|page: *3" --include=*_test.go . | grep -v vendor

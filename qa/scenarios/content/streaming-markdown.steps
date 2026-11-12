@@ -1,0 +1,26 @@
+# Assistant content: markdown while it streams. The live block renders the
+# reply's markdown as it arrives (internal/tui/streammd.go), so a reply
+# stopped partway, mid bold phrase, already shows its heading, bullet and
+# bold text rendered, with no raw "##" or "**" on screen, and nothing
+# reformats when the block commits.
+@faux testdata/faux/qa/content-streaming-markdown.yaml
+@size 120x40
+
+WAITFOR /describe a task/ 20
+SHOT welcome
+TYPE explain the change
+KEY enter
+WAITFOR /per-user bucket that refills/ 20
+SHOT mid-stream
+EXPECT /Rate limiter/
+EXPECT /• each request takes a token/
+EXPECT_NOT /##|\*\*/
+EXPECT /▍/
+RELEASE rest
+WAITFOR /Nothing else in the upload path changed/ 20
+SHOT reply-committed
+EXPECT /Rate limiter/
+EXPECT /limiter := NewBucket/
+EXPECT_NOT /##|\*\*|```/
+EXPECT_NOT /▍/
+EXPECT_NOT /panic|goroutine/

@@ -13,7 +13,8 @@ func TestRenderStreamLive_LastRowsAndCaret(t *testing.T) {
 	for i := 1; i <= 12; i++ {
 		lines = append(lines, "line "+string(rune('a'+i-1)))
 	}
-	text := strings.Join(lines, "\n")
+	// Each line complete: the word still being typed is held back.
+	text := strings.Join(lines, "\n") + "\n"
 
 	got := RenderStreamLive(text, 40, maxStreamRows)
 	// rule + maxStreamRows wrapped rows.
@@ -71,7 +72,7 @@ func TestModel_StreamLive_UsesTheRoomItHas(t *testing.T) {
 	for i := 1; i <= 14; i++ {
 		src = append(src, fmt.Sprintf("line %02d", i))
 	}
-	m.streamText = strings.Join(src, "\n")
+	m.streamText = strings.Join(src, "\n") + "\n"
 	joined := stripANSI(strings.Join(m.liveTail(80), "\n"))
 	for _, want := range []string{"line 01", "line 14"} {
 		if !strings.Contains(joined, want) {
@@ -82,7 +83,7 @@ func TestModel_StreamLive_UsesTheRoomItHas(t *testing.T) {
 	for i := 15; i <= 80; i++ {
 		src = append(src, fmt.Sprintf("line %02d", i))
 	}
-	m.streamText = strings.Join(src, "\n")
+	m.streamText = strings.Join(src, "\n") + "\n"
 	joined = stripANSI(strings.Join(m.liveTail(80), "\n"))
 	if !strings.Contains(joined, "line 80") || strings.Contains(joined, "line 01") {
 		t.Errorf("80 streamed lines: want the newest rows only\n%s", joined)
