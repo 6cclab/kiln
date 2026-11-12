@@ -1,0 +1,26 @@
+{
+ "id": "20261112T163242Z-concurrent-worktree-add-race",
+ "found_at": "2026-11-12T16:32:42Z",
+ "scenario": "tools/worker-integration-durable",
+ "step": "11",
+ "terminals": [
+  "xterm-light"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Concurrent isolated workers race in git worktree add",
+ "observed": "In CI (run 43257491916, qa-headless xterm-light 3/3) the second isolated worker failed to start: git worktree add --detach ... exit status 128: fatal: failed to read .git/worktrees/worktree/commondir: Success. The batch was not integrated and WAITFOR /integrated 2 patches/ timed out.",
+ "expected": "Every isolated worker in a batch gets its worktree; concurrent git worktree add/remove calls never read each other's half-written admin directory.",
+ "design_ref": null,
+ "evidence": [
+  "https://github.com/6cclab/kiln/actions/runs/43257491916/job/131319565580"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/agent/worker_isolation.go"
+  ],
+  "regression_test": "TestConcurrentWorkerWorktreeCommandsDoNotOverlap",
+  "updated_at": "2026-11-12T16:32:48Z"
+ }
+}

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andrepato/harness/internal/automode"
@@ -317,6 +318,12 @@ func repositoryHead(ctx context.Context, repo string) (string, error) {
 	return strings.TrimSpace(string(head)), nil
 }
 
+// worktreeCommandMu serialises "git worktree add" and "remove". Both list every
+// worktree of the repository and read its commondir, so concurrent workers
+// could read another's half-written admin directory and fail with "failed to
+// read .git/worktrees/<id>/commondir". It covers workers in this process only.
+var worktreeCommandMu sync.Mutex
+
 func newWorkerWorktree(ctx context.Context, env *execenv.Env) (*workerWorktree, *execenv.Env, error) {
 	return newWorkerWorktreeWithSnapshot(ctx, env, false)
 }
@@ -347,7 +354,10 @@ func newWorkerWorktreeWithSnapshot(ctx context.Context, env *execenv.Env, snapsh
 		return nil, nil, err
 	}
 	w := &workerWorktree{repo: repo, root: root, path: filepath.Join(root, "worktree"), base: base}
-	if _, err := gitRun(ctx, repo, "worktree", "add", "--detach", w.path, base); err != nil {
+	worktreeCommandMu.Lock()
+	_, err = gitRun(ctx, repo, "worktree", "add", "--detach", w.path, base)
+	worktreeCommandMu.Unlock()
+	if err != nil {
 		_ = os.RemoveAll(root)
 		return nil, nil, err
 	}
@@ -391,7 +401,9 @@ func (w *workerWorktree) close() error {
 	// cancelled worker context cannot strand an active Git worktree.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	worktreeCommandMu.Lock()
 	_, err := gitRun(ctx, w.repo, "worktree", "remove", "--force", w.path)
+	worktreeCommandMu.Unlock()
 	if err != nil {
 		return err
 	}

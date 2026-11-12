@@ -441,3 +441,61 @@ func TestWorkerGitFiltersNeverExecute(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Concurrent isolated workers must not run "git worktree add" or "remove" at
+// the same time. Each lists every worktree of the repository and reads its
+// commondir, so one add can read another's half-written admin directory and
+// die with "failed to read .git/worktrees/<id>/commondir: Success" (seen in
+// CI). The window is microseconds wide, so a git shim widens it: it marks any
+// overlap of two worktree commands.
+func TestConcurrentWorkerWorktreeCommandsDoNotOverlap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell shim")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	repo := testRepo(t)
+	shimDir := t.TempDir()
+	busy := filepath.Join(shimDir, "busy")
+	overlap := filepath.Join(shimDir, "overlap")
+	shim := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = worktree ]; then\n" +
+		"    mkdir '" + busy + "' 2>/dev/null || touch '" + overlap + "'\n" +
+		"    sleep 0.1\n" +
+		"    '" + realGit + "' \"$@\"; status=$?\n" +
+		"    rmdir '" + busy + "' 2>/dev/null\n" +
+		"    exit $status\n" +
+		"  fi\n" +
+		"done\n" +
+		"exec '" + realGit + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const workers = 4
+	errs := make(chan error, workers)
+	start := make(chan struct{})
+	for i := 0; i < workers; i++ {
+		go func() {
+			<-start
+			w, _, err := newWorkerWorktree(context.Background(), execenv.New(repo))
+			if err == nil {
+				err = w.close()
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	for i := 0; i < workers; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("worker worktree: %v", err)
+		}
+	}
+	if _, err := os.Stat(overlap); err == nil {
+		t.Fatal("concurrent git worktree add/remove commands overlapped")
+	}
+}
