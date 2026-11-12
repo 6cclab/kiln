@@ -10,6 +10,7 @@ import (
 
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/session"
+	"github.com/andrepato/harness/internal/tool"
 )
 
 // A crash after the last tool result leaves the complete batch at tools.
@@ -106,6 +107,122 @@ steps:
 				t.Fatal("recovery replayed external effect")
 			}
 		})
+	}
+}
+
+func TestWorkerBatchProgressLoopDecisionBeforeNoticeOrEscalation(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		escalate      bool
+		skippedTail   bool
+		wantDecisions int
+	}{
+		{name: "notice continues", wantDecisions: 1},
+		{name: "notice skips later call", skippedTail: true, wantDecisions: 1},
+		{name: "continued loop escalates", escalate: true, wantDecisions: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			read := func(id string) msg.ToolCall { return msg.NewToolCall(id, "read", map[string]any{"path": "same.txt"}) }
+			batch := func(suffix string, skip bool) *msg.AssistantMessage {
+				calls := []msg.ToolCall{
+					msg.NewToolCall("task"+suffix, "task", map[string]any{"prompt": "edit"}),
+					read("read1" + suffix), read("read2" + suffix),
+				}
+				if skip {
+					calls = append(calls, msg.NewToolCall("write"+suffix, "write", map[string]any{"path": "must-not-write.txt", "content": "unexpected"}))
+				}
+				return assistantToolCalls(calls...)
+			}
+			turns := []func() *msg.AssistantMessage{func() *msg.AssistantMessage { return batch("a", tc.skippedTail) }}
+			if tc.escalate {
+				turns = append(turns, func() *msg.AssistantMessage { return batch("b", false) })
+			} else {
+				turns = append(turns, func() *msg.AssistantMessage { return assistantText("done") })
+			}
+			worker := &tool.Tool{Name: "task", Parameters: json.RawMessage(`{"type":"object"}`), Execute: func(context.Context, json.RawMessage, tool.Update, tool.Invocation) (tool.Result, error) {
+				return tool.Text("worker patch retained"), nil
+			}}
+			h, lane := newConcurrentTestRig(t, turns, worker)
+			if err := os.WriteFile(filepath.Join(h.opts.Cwd, "same.txt"), []byte("same"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			h.opts.ProgressLoopLimit = 2
+			decisions := 0
+			h.SetToolBatchComplete(func(_ context.Context, storage session.Storage, _, assistantID string, calls []msg.ToolCall, results []msg.ToolResultMessage, recovered bool) (*ToolBatchCompletion, error) {
+				decisions++
+				if recovered || len(calls) != len(results) || len(calls) < 3 || calls[0].Name != "task" || results[0].ToolCallID != calls[0].ID {
+					t.Fatalf("incomplete worker batch: calls=%v results=%v recovered=%t", calls, results, recovered)
+				}
+				if tc.skippedTail && (len(results) != 4 || !results[3].IsError) {
+					t.Fatalf("skipped call absent from batch: %+v", results)
+				}
+				if _, _, ok := storage.GetValue(WorkerIntegrationNamespace, assistantID); ok {
+					t.Fatal("decision already recorded before callback")
+				}
+				status := "applied"
+				if tc.skippedTail {
+					status = "blocked"
+				}
+				return &ToolBatchCompletion{Status: status, Text: "worker batch " + status}, nil
+			})
+			result, err := lane.Prompt(context.Background(), "delegate and inspect", nil)
+			if tc.escalate {
+				if result.Status != StatusFailed || err == nil || !strings.Contains(err.Error(), "progress loop continued") {
+					t.Fatalf("escalation result=%+v error=%v", result, err)
+				}
+			} else if err != nil || result.Status != StatusCompleted {
+				t.Fatalf("notice result=%+v error=%v", result, err)
+			}
+			if decisions != tc.wantDecisions {
+				t.Fatalf("worker batch decisions=%d, want %d", decisions, tc.wantDecisions)
+			}
+			if _, err := os.Stat(filepath.Join(h.opts.Cwd, "must-not-write.txt")); !os.IsNotExist(err) {
+				t.Fatalf("later write ran: %v", err)
+			}
+			entries, err := lane.FindEntries(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var integration, notices int
+			for _, entry := range entries {
+				user, ok := entry.Message.(msg.UserMessage)
+				if !ok {
+					continue
+				}
+				switch user.KilnHook {
+				case "WorkerIntegration":
+					integration++
+				case "progress-loop":
+					notices++
+				}
+			}
+			if integration != tc.wantDecisions || notices != 1 {
+				t.Fatalf("durable integration decisions=%d corrective notices=%d", integration, notices)
+			}
+			if _, pending := lane.PendingOperation(); pending {
+				t.Fatal("completed decision left pending operation")
+			}
+		})
+	}
+}
+
+func TestWorkerBatchProgressLoopCallbackFailureRemainsRecoverable(t *testing.T) {
+	read := func(id string) msg.ToolCall { return msg.NewToolCall(id, "read", map[string]any{"path": "same.txt"}) }
+	turns := []func() *msg.AssistantMessage{func() *msg.AssistantMessage { return assistantToolCalls(read("one"), read("two")) }}
+	h, lane := newConcurrentTestRig(t, turns)
+	if err := os.WriteFile(filepath.Join(h.opts.Cwd, "same.txt"), []byte("same"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h.opts.ProgressLoopLimit = 2
+	h.SetToolBatchComplete(func(context.Context, session.Storage, string, string, []msg.ToolCall, []msg.ToolResultMessage, bool) (*ToolBatchCompletion, error) {
+		return nil, context.Canceled
+	})
+	result, err := lane.Prompt(context.Background(), "read", nil)
+	if result.Status != StatusFailed || err == nil {
+		t.Fatalf("completion fault result=%+v error=%v", result, err)
+	}
+	if _, pending := lane.PendingOperation(); !pending {
+		t.Fatal("failed integration callback cleared the pending batch")
 	}
 }
 

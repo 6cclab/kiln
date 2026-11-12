@@ -11,6 +11,59 @@ repairs). Their history remains behind the candidate branch; see
 `readiness-candidate-snapshot.md` and `readiness-snapshot-fixes.md` for exact
 preservation and red/green evidence.
 
+## Final integration review repair
+
+The independent review of integrated commit `90a0dcb` found that the
+progress-loop branch in `internal/harness/turn.go` returned or continued after
+a completed tool batch without calling `completeToolBatch`. A successful
+retained worker patch followed by repeated successful reads could therefore
+reach a corrective notice, then finish the operation, with no durable
+integration decision. Continued repetition could reach the escalation error
+with the same omission. The reviewer reproduced the first case with the
+temporary overlay `/private/tmp/kiln_review_overlay.json` and test source
+`/private/tmp/kiln_review_probe_test.go`.
+
+This repair calls `completeToolBatch` after the remaining tool calls have
+truthful skipped results and before either the progress-loop notice or error
+exit. If a skipped-result commit or completion callback fails, the operation
+stays pending so recovery can pair the result and resolve any durable intent;
+the patch is never applied twice by this path. The other exits were audited:
+ordinary batch completion and the older progress-limit failure already call
+the callback; tool execution or skipped-result commit failures leave a
+partially durable batch pending when a callback is installed. The completion
+callback still receives the full batch only after all result entries are
+durable. This change does not weaken the existing uncertain recovery rule.
+
+`TestWorkerBatchProgressLoopDecisionBeforeNoticeOrEscalation` covers a worker
+task followed by successful repeated reads, a later call skipped with a
+truthful error result, and a subsequent repeated batch that escalates. It
+checks one decision per complete batch, the durable decision and corrective
+notice, terminal status, and that the skipped write did not execute.
+`TestWorkerBatchProgressLoopCallbackFailureRemainsRecoverable` checks that
+an error from the decision callback retains the pending operation. Both tests
+failed against unmodified `90a0dcb` source with callback count zero or lost
+pending state (`/private/tmp/kiln-readiness-review-progress-red.log`), then
+passed after the fix (`/private/tmp/kiln-readiness-review-progress-green.log`).
+The focused race run covering these and the existing worker integration tests
+passed (`/private/tmp/kiln-readiness-review-progress-race.log`).
+The coordinator's original overlay probes
+`TestReviewProgressGuardCompletesWorkerBatch` and
+`TestReviewWorkerTaskBatchStoppedByProgressGuard` also passed with this fix
+(`/private/tmp/kiln-integration-fix-review-probes.log`).
+
+This review round's required gates passed with a scratch HOME:
+
+```sh
+HOME=/private/tmp/kiln-readiness-review-home GOPATH=/Users/andrepato/go GOCACHE=/private/tmp/kiln-readiness-gocache make check
+HOME=/private/tmp/kiln-readiness-review-home GOPATH=/Users/andrepato/go GOCACHE=/private/tmp/kiln-readiness-gocache make e2e
+HOME=/private/tmp/kiln-readiness-review-home GOPATH=/Users/andrepato/go GOCACHE=/private/tmp/kiln-readiness-gocache go test -race -short ./internal/harness -run 'TestWorkerBatchProgressLoop|TestWorkerIntegration' -count=1
+```
+
+Logs are `/private/tmp/kiln-readiness-review-fix-check.log`,
+`/private/tmp/kiln-readiness-review-fix-e2e.log` (223.070 seconds), and
+`/private/tmp/kiln-readiness-review-progress-race.log`. No paid evaluation
+or installed GOBIN replacement was used.
+
 ## Approved inputs applied so far
 
 | Area | Original commits, in application order | Result |
@@ -22,6 +75,24 @@ preservation and red/green evidence.
 | Worker patch batch | `be8d7be`, `9e52a80` | Applied with `git cherry-pick --no-commit` |
 | Shell and progress wiring | `858abd5`, `57cb696`, `96abf69`, `faf6bc2` | Applied together with `--no-commit`; unsafe `96abf69` was never a candidate endpoint |
 | Verified facts | `8effd97`, `7cf946f` | Applied with `git cherry-pick --no-commit` |
+
+All source worktrees below live under
+`/Users/andrepato/orca/workspaces/harness-kiln/`; each source branch is
+`anpato/<worktree>`. The roadmap table immediately below identifies the main
+files and per-task limits, while the linked reports hold each task's detailed
+red/green tests and review repairs.
+
+| Task | Source worktree and branch | Source and approved integration commits | Detailed report |
+| --- | --- | --- | --- |
+| Snapshot | `readiness-candidate`, `anpato/readiness-candidate` | `966fb18`, `ceab8c0`, `02ffe46` | `readiness-candidate-snapshot.md`, `readiness-snapshot-fixes.md` |
+| Runtime | `readiness-runtime-audit`, `anpato/readiness-runtime-audit` | `51d009e`, `4f13da6` | `readiness-runtime-fixes.md` |
+| Distribution | `readiness-distribution-audit`, `anpato/readiness-distribution-audit` | `b711eae`, `c538d07` | `readiness-distribution-fixes.md` |
+| T1 shell foundation and safety wiring | `sandbox-shell`, `anpato/sandbox-shell`; `readiness-wiring`, `anpato/readiness-wiring` | foundation `61460f0`; integrated `858abd5`, `96abf69`, `faf6bc2` | `sandbox-shell.md`, `readiness-wiring.md` |
+| T2 verification discovery | `verify-discovery`, `anpato/verify-discovery` | `f0ccb76`, `316fdbe`, `7f64af1`, `0288c32` | `verify-discovery.md` |
+| T3 progress loop and nested wiring | `progress-loop`, `anpato/progress-loop`; `readiness-wiring`, `anpato/readiness-wiring` | foundation `93c0810`; integrated `57cb696`, `96abf69`, `faf6bc2` | `progress-loop.md`, `readiness-wiring.md` |
+| T4 context reasons | `context-reasons`, `anpato/context-reasons` | `ded22b2`, `d6d0a5c` | `context-reasons.md` |
+| T5 verified facts | `fact-extraction`, `anpato/fact-extraction` | `8effd97`, `7cf946f` | `fact-extraction.md` |
+| T6 worker batch | `patch-integration`, `anpato/patch-integration` | `be8d7be`, `9e52a80` | `patch-integration.md` |
 
 ## Roadmap coverage and ownership
 
@@ -164,6 +235,12 @@ The original failure logs, respectively, are
 `/private/tmp/kiln-wiring-final-coordinator-e2e.log`. The final integrated
 e2e passes with the assertion fix.
 
+The coordinator independently reran `make check` and `make e2e` on
+`90a0dcb`; both passed, with the e2e run taking 228.005 seconds. Logs are
+`/private/tmp/kiln-readiness-candidate-coordinator-check.log` and
+`/private/tmp/kiln-readiness-candidate-coordinator-e2e.log`. This review
+repair has its own gates below, since the prior passes do not cover it.
+
 The exact final gate invocations were:
 
 ```sh
@@ -176,9 +253,12 @@ HOME=/private/tmp/kiln-readiness-home make qa-lint
 
 ## Coordinator terminal validation
 
-After the final binary is built in this worktree without replacing the real
-installed GOBIN binary, the coordinator will run the visible scenarios. The
-target invocation is:
+The coordinator's iTerm2 and Terminal.app attempts both failed before kiln
+launched: AppleEvent create-window timed out with `-1712`, and teardown then
+reported a `None` tty error. The desktop was unlocked. No scenario passed and
+there is no screenshot to review. This is an environment/driver blocker, not
+evidence that kiln's visible terminal behavior passed or failed. The planned
+target invocation remains:
 
 ```sh
 python3 scripts/qa/drive.py --terminal iterm-dark \
@@ -190,8 +270,30 @@ python3 scripts/qa/drive.py --terminal iterm-dark \
   qa/scenarios/tools/worker-integration-durable.steps
 ```
 
-The coordinator will record the exact command, run directory and screenshots
-from its drive. This worker does not move focus or run visible drives.
+The coordinator separately drove all six listed scenarios in headless
+`xterm-dark` against `90a0dcb`: all passed, and the screenshots were inspected
+for context selection, existing-file diff, fullscreen permission prompt,
+uncertain recovery, and durable worker integration notice. Evidence is
+`/private/tmp/kiln-readiness-headless-90a0dcb.log` and the result files under
+`/private/tmp/kiln-readiness-headless-90a0dcb/xterm-dark/`. This is useful
+nonvisual coverage, not the blocked visible macOS terminal gate. The
+coordinator will rerun affected scenarios on the repaired binary.
+
+The coordinator also ran one zero-paid local loopback smoke on the exact
+`90a0dcb` binary, SHA-256
+`39b039b3ce74d9eb5e186c1ea68fdebf3789189d92bad663677396278a489aa9`.
+Under an isolated HOME with `HARNESS_OFFLINE=1`, `ollama/bonsai-2:27b-q2_0`
+repaired a four-case Node arithmetic fixture: baseline verification exited 1,
+kiln exited 0, and post-edit verification exited 0 in 122.3 seconds. The
+scratch evidence is `/private/tmp/kiln-local-smoke-yxqv87om` (`result.json`,
+`stdout.json`, `stderr.log`, `served.json`, and `project/src/math.js`). This
+run made seven turns and six tool calls with reported cost USD 0. Kiln's two
+attempted Node Bash checks were correctly blocked in noninteractive
+`acceptEdits` mode; the passing behavioral check was the coordinator's
+independent Node VM verification after the edit. This one bounded coding task
+is not a broad model-quality comparison. It ran
+before this review repair; no model smoke has yet been repeated on the
+repaired binary. This worker does not move focus or run visible drives.
 
 ## Proposed status document update
 

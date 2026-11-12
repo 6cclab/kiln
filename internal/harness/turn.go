@@ -513,7 +513,21 @@ driveLoop:
 						var skipErr error
 						tip, skipErr = l.skipToolAfterProgressLimit(ctx, operationID, tip, responseEntryID, toolCalls[skipped], skipped, batch)
 						if skipErr != nil {
+							if l.h.batchComplete() != nil {
+								// A partial batch still needs recovery to make its
+								// integration decision after the missing result is paired.
+								return RunResult{Status: StatusFailed, TipID: tip, Error: skipErr}
+							}
 							return l.finishFailed(operationID, tip, skipErr)
+						}
+					}
+					if l.h.batchComplete() != nil {
+						var completeErr error
+						tip, completeErr = l.completeToolBatch(ctx, operationID, tip, responseEntryID, toolCalls, batch, false)
+						if completeErr != nil {
+							// The callback may have committed an intent. Preserve
+							// this operation so recovery can resolve it once.
+							return RunResult{Status: StatusFailed, TipID: tip, Error: completeErr}
 						}
 					}
 					if observation.Err != nil {
