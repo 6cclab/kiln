@@ -1123,7 +1123,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m.openPrompt(queuedPrompt{plan: &pendingPlan{plan: msg.Plan, reply: msg.Reply}}), nil
 
 	case MsgAskUserPrompt:
-		return m.openPrompt(queuedPrompt{question: &pendingQuestion{questions: msg.Questions, checked: map[int]bool{}, reply: msg.Reply}}), nil
+		return m.openPrompt(queuedPrompt{question: newPendingQuestion(msg.Questions, msg.Entry, msg.NoOther, msg.Reply)}), nil
 
 	case MsgPromptWithdrawn:
 		wasActive := m.prompt.Active()
@@ -2240,7 +2240,7 @@ func (m Model) syncPromptPlaceholder() Model {
 	case m.prompt.question != nil && m.prompt.question.reviewing:
 		m.editor.SetPlaceholder("press 1 or 2")
 	case m.prompt.question != nil:
-		total := len(m.prompt.question.questions[m.prompt.question.index].Options) + 1
+		total := m.prompt.question.rows()
 		m.editor.SetPlaceholder(placeholderForOptionCount(total))
 	case m.prompt.pending != nil:
 		m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request))))
@@ -2297,6 +2297,11 @@ func (m Model) restoreLabelAfterPrompt(declined bool) Model {
 func placeholderForOptionCount(n int) string {
 	if n <= 1 {
 		return "press 1"
+	}
+	if n > 9 {
+		// A long list is picked with the arrows; a two-digit row has no
+		// single key.
+		return "↑↓ to select · enter to confirm"
 	}
 	digits := make([]string, n)
 	for i := range digits {

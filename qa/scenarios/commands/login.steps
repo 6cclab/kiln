@@ -1,17 +1,25 @@
-# @env clears OLLAMA_HOST: /login's CheckAuth treats a nonempty
-# OLLAMA_HOST in the real environment as "ollama configured" regardless of
-# the faux provider (internal/provider/registry.go CheckAuth, ollama's
-# AuthSpec{EnvVars: []string{"OLLAMA_HOST"}}), so this scenario was
-# non-deterministic on any machine that has OLLAMA_HOST set for real local
-# use.
+# /login with no provider asks which one to log in to (Claude Code's /login
+# opens its own picker too); Esc backs out and nothing is stored.
+# @env clears OLLAMA_HOST: CheckAuth treats a nonempty OLLAMA_HOST in the
+# real environment as "ollama configured" regardless of the faux provider
+# (internal/provider/registry.go CheckAuth, ollama's
+# AuthSpec{EnvVars: []string{"OLLAMA_HOST"}}), so the picker's "configured"
+# marks were non-deterministic on any machine that has OLLAMA_HOST set.
 @faux testdata/faux/qa/commands-baseline.yaml
 @env OLLAMA_HOST=
 
 WAITFOR /describe a task/ 20
 TYPE /login
 KEY enter
-WAITFOR /Not logged in to any provider\./ 20
-SHOT login
-EXPECT /Not logged in to any provider\./
-EXPECT /Log in with: kiln login <provider>/
+WAITFOR /Which provider do you want to log in to\?/ 20
+SHOT login-picker
+EXPECT /Which provider do you want to log in to\?/
+EXPECT /1\s+anthropic/
+EXPECT /↓ \d+ more/
+EXPECT_NOT /Other/
+EXPECT_NOT /Run this outside the session/
+KEY esc
+WAITFOR /Login cancelled\./ 20
+SHOT login-cancelled
+EXPECT /Login cancelled\./
 EXPECT_NOT /panic|goroutine/

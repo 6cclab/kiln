@@ -1614,6 +1614,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// hookActivity shows what a running Stop/SubagentStop hook chain is
 	// doing on the TUI's busy row; "" clears it. Nothing outside the TUI.
 	hookActivity := &rebindable[func(string)]{fn: func(string) {}}
+	// loginUI is /login and /logout's prompt surface: unset (nil) outside
+	// the TUI, so print mode keeps the "run kiln login" text.
+	loginUI := &rebindable[auth.Interaction]{}
 	activity := func(text string) { hookActivity.get()(text) }
 	// "Yes, and don't ask again" on a bash prompt saves its rules, as
 	// Claude Code does, but to kiln's own .kiln/settings.local.json (the
@@ -1875,6 +1878,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Cwd:                cwd,
 		Started:            started,
 		Interactive:        !args.Print,
+		LoginInteraction:   loginUI.get,
 		Registry:           reg,
 		Gate:               gate,
 		Hooks:              hookConfig,
@@ -2286,6 +2290,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			SetPlanApprover:  func(fn tools.PlanApprover) { planApprover.set(fn) },
 			SetHookNotice:    func(fn func(string)) { hookNotice.set(fn) },
 			SetHookActivity:  func(fn func(string)) { hookActivity.set(fn) },
+			SetLoginUI:       loginUI.set,
 			ModelLabel:       providerID + "/" + modelID,
 			Resolved:         resolved,
 			Started:          started,

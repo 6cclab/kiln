@@ -750,6 +750,10 @@ type MsgPlanPrompt struct {
 type MsgAskUserPrompt struct {
 	Questions []tools.AskUserQuestion
 	Reply     chan AskUserReply
+	// Entry, if set, makes the one question a bare text field (TextEntry).
+	Entry *TextEntry
+	// NoOther drops the automatic "Other" row (a closed choice).
+	NoOther bool
 }
 
 // MsgPromptWithdrawn takes back a prompt whose caller stopped waiting

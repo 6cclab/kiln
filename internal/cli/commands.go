@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/auth"
 	"github.com/andrepato/harness/internal/budget"
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudecommands "github.com/andrepato/harness/internal/claude/commands"
@@ -46,6 +47,9 @@ type registryDeps struct {
 	// Interactive enables commands that only make sense in the TUI, such
 	// as /resume switching sessions by relaunching.
 	Interactive bool
+	// LoginInteraction yields the TUI's login prompts once it is up, nil
+	// before and in print mode (AccountDeps.Interaction).
+	LoginInteraction func() auth.Interaction
 
 	Registry *provider.Registry
 	Gate     *permission.Gate
@@ -269,6 +273,7 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 	}))
 
 	registry.Add(slashcommands.AccountCommands(slashcommands.AccountDeps{
+		Interaction: deps.LoginInteraction,
 		Registry:    reg,
 		Todos:       deps.Todos,
 		Tier:        started.CurrentTier(),

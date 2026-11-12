@@ -289,6 +289,23 @@ type pendingQuestion struct {
 	reviewing      bool
 	reviewSelected int // 0 = submit, 1 = cancel
 	reply          chan AskUserReply
+	// entry is non-nil for a bare text field (AskText): otherText is open
+	// from the start and an empty Enter does not leave it.
+	entry *TextEntry
+	// noOther drops the automatic "Other" row: the answer must be one of
+	// the listed options (a closed choice such as which provider to log
+	// in to).
+	noOther bool
+}
+
+// rows is how many rows the current question's option list has,
+// counting the automatic "Other" row unless noOther.
+func (q *pendingQuestion) rows() int {
+	n := len(q.questions[q.index].Options)
+	if !q.noOther {
+		n++
+	}
+	return n
 }
 
 // AskUserReply is the answer to an ask_user_question exchange: either
@@ -380,8 +397,42 @@ func (p *PromptState) AskPlan(plan, path string) chan PlanReply {
 // contract as AskTool/AskPlan.
 func (p *PromptState) AskAskUser(questions []tools.AskUserQuestion) chan AskUserReply {
 	reply := make(chan AskUserReply, 1)
-	p.enqueue(queuedPrompt{question: &pendingQuestion{questions: questions, checked: map[int]bool{}, reply: reply}})
+	p.enqueue(queuedPrompt{question: newPendingQuestion(questions, nil, false, reply)})
 	return reply
+}
+
+// AskText arms a single free-text question that opens straight in the
+// entry field (see TextEntry), the same blocking-reply contract as
+// AskAskUser. The typed text is the one answer of the one question.
+func (p *PromptState) AskText(question string, entry TextEntry) chan AskUserReply {
+	reply := make(chan AskUserReply, 1)
+	p.enqueue(queuedPrompt{question: newPendingQuestion([]tools.AskUserQuestion{{Question: question}}, &entry, false, reply)})
+	return reply
+}
+
+// TextEntry turns an ask-user question into a bare text field: it opens in
+// free-text mode with no option list, Esc cancels, and an empty Enter is
+// ignored (unless AllowEmpty, for a field whose blank means "the default").
+// Used by in-session login for API keys, pasted codes and domains.
+type TextEntry struct {
+	// Secret masks what is typed (one bullet per character); the text is
+	// never drawn.
+	Secret bool
+	// Placeholder is dim ghost text while the field is empty. Never drawn
+	// for a Secret field.
+	Placeholder string
+	// Header is the rule label; "question" when empty.
+	Header     string
+	AllowEmpty bool
+}
+
+func newPendingQuestion(questions []tools.AskUserQuestion, entry *TextEntry, noOther bool, reply chan AskUserReply) *pendingQuestion {
+	q := &pendingQuestion{questions: questions, checked: map[int]bool{}, reply: reply, entry: entry, noOther: noOther}
+	if entry != nil {
+		t := ""
+		q.otherText = &t
+	}
+	return q
 }
 
 func (p *PromptState) finishTool(choice PromptChoice) {
@@ -492,7 +543,7 @@ func (p *PromptState) handleQuestionKey(msg tea.KeyPressMsg) bool {
 	}
 
 	current := q.questions[q.index]
-	total := len(current.Options) + 1 // + the automatic "Other" row
+	total := q.rows()
 
 	switch strings.ToLower(msg.String()) {
 	case "up", "k":
@@ -556,6 +607,12 @@ func (p *PromptState) handleOtherKey(msg tea.KeyPressMsg) bool {
 	switch msg.String() {
 	case "enter":
 		text := strings.TrimSpace(*q.otherText)
+		if text == "" && q.entry != nil {
+			if q.entry.AllowEmpty {
+				p.recordAnswer([]string{""})
+			}
+			return true
+		}
 		if text == "" {
 			// Empty free text is not an answer; back to the option list.
 			q.otherText = nil
@@ -666,6 +723,11 @@ func (p *PromptState) handleReviewKey(msg tea.KeyPressMsg) bool {
 // text field, so the paste is not the prompt's to take.
 func (p *PromptState) Paste(text string) bool {
 	if p.question != nil && p.question.otherText != nil {
+		if p.question.entry != nil {
+			// A single-line field: a pasted newline would only hide in the
+			// value (a key copied with its trailing newline).
+			text = strings.NewReplacer("\r\n", "", "\n", "", "\r", "").Replace(text)
+		}
 		f := *p.question.otherText + strings.ReplaceAll(text, "\r\n", "\n")
 		p.question.otherText = &f
 		return true
@@ -979,6 +1041,7 @@ func (p *PromptState) renderQuestion(width int) []string {
 	for i, qq := range q.questions {
 		headers[i] = qq.Header
 		views[i] = toAskUserQuestionView(qq)
+		views[i].NoOther = q.noOther
 	}
 	if q.reviewing {
 		return RenderAskUserReview(views, q.answers, width, q.reviewSelected)
@@ -986,6 +1049,9 @@ func (p *PromptState) renderQuestion(width int) []string {
 	otherText := ""
 	if q.otherText != nil {
 		otherText = *q.otherText
+	}
+	if q.entry != nil {
+		return RenderTextEntry(views[q.index], *q.entry, otherText, width)
 	}
 	return RenderAskUserQuestion(headers, q.index, views[q.index], width, q.selected, q.checked, q.otherText != nil, otherText)
 }

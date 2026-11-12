@@ -29,6 +29,8 @@ type AskUserQuestionView struct {
 	Question    string
 	Options     []AskUserOptionView
 	MultiSelect bool
+	// NoOther drops the automatic "Other — type your own answer" row.
+	NoOther bool
 }
 
 // renderQuestionTabs renders the tab strip / progress across questions:
@@ -103,14 +105,18 @@ func RenderAskUserQuestion(headers []string, index int, q AskUserQuestionView, w
 		return FitLines(lines, width, "    ")
 	}
 
+	var rows []string
 	for i, opt := range q.Options {
 		label := askUserOptionLabel(opt, q.MultiSelect, checked[i])
 		key := fmt.Sprintf("%d", i+1)
-		lines = append(lines, " "+permissionOptionRow(key, label, i == selected, maxInt(width-1, 1)))
+		rows = append(rows, " "+permissionOptionRow(key, label, i == selected, maxInt(width-1, 1)))
 	}
-	otherIdx := len(q.Options)
-	otherKey := fmt.Sprintf("%d", otherIdx+1)
-	lines = append(lines, " "+permissionOptionRow(otherKey, "Other — type your own answer", otherIdx == selected, maxInt(width-1, 1)))
+	if !q.NoOther {
+		otherIdx := len(q.Options)
+		otherKey := fmt.Sprintf("%d", otherIdx+1)
+		rows = append(rows, " "+permissionOptionRow(otherKey, "Other — type your own answer", otherIdx == selected, maxInt(width-1, 1)))
+	}
+	lines = append(lines, windowRows(rows, selected, askUserMaxRows)...)
 
 	hint := "↑↓ select · enter confirm · esc cancel"
 	if q.MultiSelect {
@@ -118,6 +124,31 @@ func RenderAskUserQuestion(headers []string, index int, q AskUserQuestionView, w
 	}
 	lines = append(lines, "", " "+Muted(hint), amberRule)
 	return FitLines(lines, width, "    ")
+}
+
+// askUserMaxRows is how many option rows a question shows at once. A model's
+// question has at most four options; a closed choice such as the /login
+// provider picker can have dozens, and an unwindowed list pushes the
+// question itself off the top of the screen.
+const askUserMaxRows = 8
+
+// windowRows returns at most limit of rows, scrolled so the selected row is
+// inside, with a dim "↑ n more" / "↓ n more" row in place of what is cut.
+func windowRows(rows []string, selected, limit int) []string {
+	if len(rows) <= limit {
+		return rows
+	}
+	start := selected - limit/2
+	start = maxInt(0, min(start, len(rows)-limit))
+	end := start + limit
+	out := append([]string(nil), rows[start:end]...)
+	if start > 0 {
+		out[0] = " " + Faint(fmt.Sprintf("↑ %d more", start+1))
+	}
+	if end < len(rows) {
+		out[len(out)-1] = " " + Faint(fmt.Sprintf("↓ %d more", len(rows)-end+1))
+	}
+	return out
 }
 
 // RenderAskUserReview renders the review screen shown after the last
@@ -147,5 +178,33 @@ func RenderAskUserReview(questions []AskUserQuestionView, answers [][]string, wi
 		lines = append(lines, " "+permissionOptionRow(key, opt, i == selected, maxInt(width-1, 1)))
 	}
 	lines = append(lines, "", " "+Muted("↑↓ select · enter confirm · esc cancel"), amberRule)
+	return FitLines(lines, width, "    ")
+}
+
+// RenderTextEntry renders a bare text field (TextEntry): the question, one
+// input row and the key hints, in the question prompt's own styles. A secret
+// field shows one bullet per character and never the text itself.
+func RenderTextEntry(q AskUserQuestionView, entry TextEntry, text string, width int) []string {
+	amberRule := KilnAmber(strings.Repeat(RuleFillChar(), maxInt(width, 1)))
+	label := entry.Header
+	if label == "" {
+		label = "question"
+	}
+	shown := text
+	if entry.Secret {
+		shown = strings.Repeat("•", len([]rune(text)))
+	} else if text == "" && entry.Placeholder != "" {
+		shown = Faint(entry.Placeholder)
+	}
+	lines := []string{
+		labelRule(label, KilnAmber, "", width),
+		amberRule,
+		" " + KilnAmber(Bold(q.Question)),
+		"",
+		fmt.Sprintf(" %s %s%s", KilnAmber(">"), shown, Faint("▌")),
+		"",
+		" " + Muted("enter to send · esc to cancel"),
+		amberRule,
+	}
 	return FitLines(lines, width, "    ")
 }
