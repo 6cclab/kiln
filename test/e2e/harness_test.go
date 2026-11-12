@@ -24,10 +24,13 @@ import (
 )
 
 // harnessBin and fauxBin are absolute paths to binaries built once by
-// TestMain, shared read-only by every test in this package.
+// TestMain, shared read-only by every test in this package. binDir holds
+// them; TestMain removes it after the run, so any other test binary built
+// into it (crashtestKiln) is removed with it.
 var (
 	harnessBin string
 	fauxBin    string
+	binDir     string
 )
 
 func TestMain(m *testing.M) {
@@ -35,6 +38,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("harness e2e: mkdtemp: " + err.Error())
 	}
+	binDir = tmp
 
 	harnessBin = filepath.Join(tmp, "kiln")
 	if out, err := exec.Command("go", "build", "-o", harnessBin, "github.com/andrepato/harness/cmd/kiln").CombinedOutput(); err != nil {
