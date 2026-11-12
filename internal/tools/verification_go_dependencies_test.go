@@ -119,14 +119,220 @@ func TestGoVerificationDiscoveryImportedTreeExceedsSharedLimit(t *testing.T) {
 	}
 }
 
-func TestGoVerificationDiscoveryUnsupportedSourceFeatures(t *testing.T) {
-	for _, source := range []string{"//go:build linux\npackage app\n", "package app\nimport \"C\"\n"} {
-		cwd := t.TempDir()
-		writeGoDiscoveryFixture(t, cwd, "go.mod", "module example.com/test\n")
-		writeGoDiscoveryFixture(t, cwd, "app/app.go", source)
-		if _, ok, runs := runGoDiscoveryFixture(t, cwd, "go test ./app", 0); ok || runs != 1 {
-			t.Fatalf("unsupported source %q: proof=%v runs=%d", strings.TrimSpace(source), ok, runs)
+func TestGoVerificationDiscoveryBuildTaggedAndCgoFilesFlipStatus(t *testing.T) {
+	cwd := t.TempDir()
+	for path, body := range map[string]string{
+		"go.mod":           "module example.com/test\n",
+		"app/app.go":       "package app\n",
+		"app/app_linux.go": "//go:build linux\n\npackage app\nimport _ \"example.com/test/tagged\"\n",
+		"app/cgo.go":       "package app\n/*\n#include \"x.h\"\n*/\nimport \"C\"\n",
+		"app/x.h":          "#define X 1\n",
+		"app/x.c":          "int x(void){return 1;}\n",
+		"tagged/tagged.go": "package tagged\n",
+	} {
+		writeGoDiscoveryFixture(t, cwd, path, body)
+	}
+	proof, ok, runs := runGoDiscoveryFixture(t, cwd, "go test ./app", 0)
+	if !ok || runs != 1 {
+		t.Fatalf("tagged/cgo package gave no proof: ok=%v runs=%d", ok, runs)
+	}
+	if got := goDiscoveryStatus(t, cwd, proof, `{}`); got.Status != "unchanged" {
+		t.Fatalf("unchanged: %+v", got)
+	}
+	for _, path := range []string{"app/app_linux.go", "tagged/tagged.go", "app/x.h", "app/x.c"} {
+		saved, err := os.ReadFile(filepath.Join(cwd, path))
+		if err != nil {
+			t.Fatal(err)
 		}
+		writeGoDiscoveryFixture(t, cwd, path, string(saved)+"// edit\n")
+		if got := goDiscoveryStatus(t, cwd, proof, `{}`); got.Status != "changed" {
+			t.Fatalf("edit of %s did not flip status: %+v", path, got)
+		}
+		writeGoDiscoveryFixture(t, cwd, path, string(saved))
+	}
+}
+
+func TestGoVerificationDiscoveryEmbedTargetFlipsStatus(t *testing.T) {
+	cwd := t.TempDir()
+	for path, body := range map[string]string{
+		"go.mod":           "module example.com/test\n",
+		"app/app.go":       "package app\nimport _ \"embed\"\n//go:embed static/*.txt data.json\nvar f string\n",
+		"app/static/a.txt": "a\n",
+		"app/data.json":    "{}\n",
+	} {
+		writeGoDiscoveryFixture(t, cwd, path, body)
+	}
+	proof, ok, _ := runGoDiscoveryFixture(t, cwd, "go test ./app", 0)
+	if !ok {
+		t.Fatal("no proof")
+	}
+	for _, path := range []string{"app/static/a.txt", "app/data.json"} {
+		writeGoDiscoveryFixture(t, cwd, path, "changed\n")
+		if got := goDiscoveryStatus(t, cwd, proof, `{}`); got.Status != "changed" {
+			t.Fatalf("embed edit of %s: %+v", path, got)
+		}
+	}
+}
+
+func TestGoVerificationDiscoveryWorkspaceModules(t *testing.T) {
+	cwd := t.TempDir()
+	for path, body := range map[string]string{
+		"go.work":          "go 1.24\n\nuse (\n\t.\n\t./lib\n)\n",
+		"go.mod":           "module example.com/root\n",
+		"app/app.go":       "package app\nimport _ \"example.com/lib/sub\"\n",
+		"lib/go.mod":       "module example.com/lib\n\ngo 1.24\n",
+		"lib/sub/sub.go":   "package sub\nimport _ \"example.com/root/common\"\n",
+		"common/common.go": "package common\n",
+		"other/other.go":   "package other\n",
+	} {
+		writeGoDiscoveryFixture(t, cwd, path, body)
+	}
+	proof, ok, runs := runGoDiscoveryFixture(t, cwd, "go test ./app", 0)
+	if !ok || runs != 1 {
+		t.Fatalf("workspace discovery: ok=%v runs=%d", ok, runs)
+	}
+	writeGoDiscoveryFixture(t, cwd, "other/other.go", "package other\nconst V = 2\n")
+	if got := goDiscoveryStatus(t, cwd, proof, `{}`); got.Status != "unchanged" {
+		t.Fatalf("unrelated edit: %+v", got)
+	}
+	for _, path := range []string{"lib/sub/sub.go", "lib/go.mod", "common/common.go"} {
+		saved, _ := os.ReadFile(filepath.Join(cwd, path))
+		writeGoDiscoveryFixture(t, cwd, path, string(saved)+"// edit\n")
+		if got := goDiscoveryStatus(t, cwd, proof, `{}`); got.Status != "changed" {
+			t.Fatalf("edit of %s did not flip status: %+v", path, got)
+		}
+		writeGoDiscoveryFixture(t, cwd, path, string(saved))
+	}
+}
+
+func TestGoVerificationDiscoveryWorkspaceModuleOutsideRoot(t *testing.T) {
+	parent := t.TempDir()
+	cwd := filepath.Join(parent, "root")
+	for path, body := range map[string]string{
+		"root/go.work":    "go 1.24\nuse ../ext\nuse .\n",
+		"root/go.mod":     "module example.com/root\n",
+		"root/app/app.go": "package app\nimport _ \"example.com/ext\"\n",
+		"ext/go.mod":      "module example.com/ext\n",
+		"ext/ext.go":      "package ext\n",
+	} {
+		writeGoDiscoveryFixture(t, parent, path, body)
+	}
+	proof, ok, _ := runGoDiscoveryFixture(t, cwd, "go test ./app", 0)
+	if !ok {
+		t.Fatal("no proof")
+	}
+	writeGoDiscoveryFixture(t, parent, "ext/ext.go", "package ext\nconst V = 2\n")
+	if got := goDiscoveryStatus(t, cwd, proof, `{}`); got.Status != "changed" {
+		t.Fatalf("external workspace edit: %+v", got)
+	}
+}
+
+func TestGoVerificationDiscoveryGoSumAndToolchainFlipStatus(t *testing.T) {
+	cwd := t.TempDir()
+	for path, body := range map[string]string{
+		"go.mod":     "module example.com/test\n\ngo 1.24\n",
+		"go.sum":     "example.com/dep v1.0.0 h1:aaa=\n",
+		"app/app.go": "package app\n",
+	} {
+		writeGoDiscoveryFixture(t, cwd, path, body)
+	}
+	proof, ok, _ := runGoDiscoveryFixture(t, cwd, "go test ./app", 0)
+	if !ok {
+		t.Fatal("no proof")
+	}
+	for path, body := range map[string]string{
+		"go.sum": "example.com/dep v1.0.1 h1:bbb=\n",
+		"go.mod": "module example.com/test\n\ngo 1.24\n\ntoolchain go1.24.5\n",
+	} {
+		saved, _ := os.ReadFile(filepath.Join(cwd, path))
+		writeGoDiscoveryFixture(t, cwd, path, body)
+		if got := goDiscoveryStatus(t, cwd, proof, `{}`); got.Status != "changed" {
+			t.Fatalf("%s edit: %+v", path, got)
+		}
+		writeGoDiscoveryFixture(t, cwd, path, string(saved))
+	}
+}
+
+func TestGoVerificationDiscoveryEnvironmentFlipsStatus(t *testing.T) {
+	cwd := t.TempDir()
+	writeGoDiscoveryFixture(t, cwd, "go.mod", "module example.com/test\n")
+	writeGoDiscoveryFixture(t, cwd, "app/app.go", "package app\n")
+	t.Setenv("GOFLAGS", "-count=1")
+	t.Setenv("GOOS", "linux")
+	proof, ok, _ := runGoDiscoveryFixture(t, cwd, "go test ./app", 0)
+	if !ok || proof.Env["GOFLAGS"] != "-count=1" || proof.Env["GOOS"] != "linux" || len(proof.Env) != 2 {
+		t.Fatalf("env not recorded: ok=%v env=%v", ok, proof.Env)
+	}
+	if got := goDiscoveryStatus(t, cwd, proof, `{}`); got.Status != "unchanged" {
+		t.Fatalf("unchanged env: %+v", got)
+	}
+	if !VerificationFresh(cwd, proof, func(string) bool { return true }) {
+		t.Fatal("fresh proof rejected")
+	}
+	t.Setenv("GOFLAGS", "-tags=integration")
+	got := goDiscoveryStatus(t, cwd, proof, `{}`)
+	if got.Status != "changed" || len(got.Env) != 1 || got.Env[0] != "GOFLAGS" || VerificationFresh(cwd, proof, func(string) bool { return true }) {
+		t.Fatalf("GOFLAGS change: %+v", got)
+	}
+	t.Setenv("GOFLAGS", "-count=1")
+	t.Setenv("CGO_ENABLED", "0")
+	if got := goDiscoveryStatus(t, cwd, proof, `{}`); got.Status != "changed" || len(got.Env) != 1 || got.Env[0] != "CGO_ENABLED" {
+		t.Fatalf("newly set variable: %+v", got)
+	}
+}
+
+func TestGoVerificationDiscoveryV1RecordsStillReadable(t *testing.T) {
+	cwd := t.TempDir()
+	writeGoDiscoveryFixture(t, cwd, "go.mod", "module example.com/test\n")
+	writeGoDiscoveryFixture(t, cwd, "app/app.go", "package app\n")
+	t.Setenv("GOFLAGS", "-count=1")
+	proof, ok, _ := runGoDiscoveryFixture(t, cwd, "go test ./app", 0)
+	if !ok {
+		t.Fatal("no proof")
+	}
+	proof.Discovery, proof.Env = goPartialDiscoveryV1, nil
+	details, _ := json.Marshal(map[string]any{"taskVerification": proof})
+	old, ok := VerificationFromResult(details)
+	if !ok {
+		t.Fatal("v1 record rejected")
+	}
+	t.Setenv("GOFLAGS", "-race")
+	if got := goDiscoveryStatus(t, cwd, old, `{}`); got.Status != "unchanged" {
+		t.Fatalf("v1 compares no environment: %+v", got)
+	}
+	proof.Env = map[string]string{"GOFLAGS": "x"}
+	details, _ = json.Marshal(map[string]any{"taskVerification": proof})
+	if _, ok := VerificationFromResult(details); ok {
+		t.Fatal("v1 record with env accepted")
+	}
+	proof.Discovery, proof.Env = goPartialDiscovery, map[string]string{"PATH": "x"}
+	details, _ = json.Marshal(map[string]any{"taskVerification": proof})
+	if _, ok := VerificationFromResult(details); ok {
+		t.Fatal("unlisted env name accepted")
+	}
+}
+
+func TestGoVerificationDiscoveryOversizedEnvironmentSavesNoProof(t *testing.T) {
+	cwd := t.TempDir()
+	writeGoDiscoveryFixture(t, cwd, "go.mod", "module example.com/test\n")
+	writeGoDiscoveryFixture(t, cwd, "app/app.go", "package app\n")
+	t.Setenv("GOFLAGS", strings.Repeat("x", maxGoVerificationEnvBytes+1))
+	if _, ok, runs := runGoDiscoveryFixture(t, cwd, "go test ./app", 0); ok || runs != 1 {
+		t.Fatalf("ok=%v runs=%d", ok, runs)
+	}
+}
+
+func TestGoVerificationDiscoveryWorkspaceLimitSavesNoProof(t *testing.T) {
+	cwd := t.TempDir()
+	writeGoDiscoveryFixture(t, cwd, "go.work", "go 1.24\nuse ./lib\n")
+	writeGoDiscoveryFixture(t, cwd, "go.mod", "module example.com/root\n")
+	writeGoDiscoveryFixture(t, cwd, "app/app.go", "package app\nimport _ \"example.com/lib\"\n")
+	writeGoDiscoveryFixture(t, cwd, "lib/go.mod", "module example.com/lib\n")
+	for i := 0; i < defaultVerificationDirectoryFiles; i++ {
+		writeGoDiscoveryFixture(t, cwd, fmt.Sprintf("lib/file%03d.go", i), "package lib\n")
+	}
+	if _, ok, runs := runGoDiscoveryFixture(t, cwd, "go test ./app", 0); ok || runs != 1 {
+		t.Fatalf("workspace over shared limit: proof=%v runs=%d", ok, runs)
 	}
 }
 

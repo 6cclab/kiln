@@ -75,7 +75,7 @@ steps:
 			t.Fatalf("missing discovery evidence: %s (%v)", msg.TextOf(result.Content), err)
 		}
 		want, found := statuses[result.ToolCallID]
-		if !found || len(output.Records) != 1 || output.Records[0].Status != want || output.Records[0].Command != "go test ./src" || output.Records[0].Discovery != "go-partial-v1" || !strings.Contains(output.Scope, "no task correctness") {
+		if !found || len(output.Records) != 1 || output.Records[0].Status != want || output.Records[0].Command != "go test ./src" || output.Records[0].Discovery != "go-partial-v2" || !strings.Contains(output.Scope, "no task correctness") {
 			t.Fatalf("unexpected discovery status for %s: %+v", result.ToolCallID, output)
 		}
 		if want == "changed" && output.Records[0].Action != "rerun" {

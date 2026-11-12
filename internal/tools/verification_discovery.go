@@ -4,15 +4,76 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
 
-const goPartialDiscovery = "go-partial-v1"
+// go-partial-v2 adds the recorded environment values. go-partial-v1 records
+// (saved before that field existed) stay readable and compare no environment.
+const goPartialDiscoveryV1 = "go-partial-v1"
+const goPartialDiscovery = "go-partial-v2"
+
+const maxGoVerificationEnvBytes = 4096
+
+// goVerificationEnvNames are the process environment values that change which
+// files a go test build selects or how it compiles them.
+var goVerificationEnvNames = []string{"CGO_ENABLED", "GOARCH", "GOEXPERIMENT", "GOFLAGS", "GOOS", "GOTOOLCHAIN", "GOWORK"}
+
+func isGoPartialDiscovery(discovery string) bool {
+	return discovery == goPartialDiscovery || discovery == goPartialDiscoveryV1
+}
 
 type discoveredVerificationInputs struct {
 	files, missing, directories []string
+	env                         map[string]string
+}
+
+func currentGoVerificationEnv() (map[string]string, bool) {
+	var env map[string]string
+	for _, name := range goVerificationEnvNames {
+		if value, ok := os.LookupEnv(name); ok {
+			if len(value) > maxGoVerificationEnvBytes {
+				return nil, false
+			}
+			if env == nil {
+				env = make(map[string]string)
+			}
+			env[name] = value
+		}
+	}
+	return env, true
+}
+
+// changedGoVerificationEnv names the recorded environment values that differ
+// from the current process environment. v1 records carry none.
+func changedGoVerificationEnv(proof VerificationEvidence) []string {
+	if proof.Discovery != goPartialDiscovery {
+		return nil
+	}
+	current, ok := currentGoVerificationEnv()
+	var changed []string
+	for _, name := range goVerificationEnvNames {
+		old, hadOld := proof.Env[name]
+		now, hasNow := current[name]
+		if !ok || hadOld != hasNow || old != now {
+			changed = append(changed, name)
+		}
+	}
+	return changed
+}
+
+func validGoVerificationEnv(proof VerificationEvidence) bool {
+	if proof.Discovery != goPartialDiscovery {
+		return len(proof.Env) == 0
+	}
+	for name, value := range proof.Env {
+		if !slices.Contains(goVerificationEnvNames, name) || len(value) > maxGoVerificationEnvBytes {
+			return false
+		}
+	}
+	return true
 }
 
 // discoverGoVerificationInputs recognizes only one literal local go test
@@ -78,6 +139,11 @@ func discoverGoVerificationInputs(cwd, command string, allowRead func(string) bo
 		}
 		out.files = append(out.files, name)
 	}
+	env, ok := currentGoVerificationEnv()
+	if !ok {
+		return discoveredVerificationInputs{}, fmt.Errorf("environment value too large")
+	}
+	out.env = env
 	more, err := discoverGoLocalDependencies(cwd, path, strings.HasSuffix(words[2], "/..."), allowRead)
 	if err != nil {
 		return discoveredVerificationInputs{}, err
@@ -114,7 +180,7 @@ func appendUniqueVerificationPaths(existing, additional []string) []string {
 }
 
 func validGoDiscoveryEvidence(proof VerificationEvidence) bool {
-	if len(proof.Directories) == 0 {
+	if len(proof.Directories) == 0 || !validGoVerificationEnv(proof) {
 		return false
 	}
 	seen := make(map[string]bool)

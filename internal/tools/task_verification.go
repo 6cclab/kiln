@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,6 +55,7 @@ type VerificationEvidence struct {
 	CallID             string                  `json:"callId"`
 	Command            string                  `json:"command"`
 	Discovery          string                  `json:"discovery,omitempty"`
+	Env                map[string]string       `json:"env,omitempty"`
 	Files              []VerificationFile      `json:"files"`
 	MissingFiles       []string                `json:"missingFiles,omitempty"`
 	Directories        []VerificationDirectory `json:"directories,omitempty"`
@@ -83,7 +85,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		panic("invalid built-in bash properties: " + err.Error())
 	}
 	properties["verificationFiles"] = json.RawMessage(`{"type":"array","maxItems":16,"items":{"type":"string"},"description":"Project files to fingerprint before and after this command. Evidence is recorded only when the command succeeds and files remain unchanged."}`)
-	properties["verificationDiscover"] = json.RawMessage(`{"type":"string","enum":["go"],"description":"Opt in to a partial bounded input snapshot for a literal go test ./path, go test ./path/..., or go test ./... command. Includes in-module imports, local go.mod replacement targets, and Go module/workspace metadata. Shell expansion, flags, compound commands, build tags, cgo, toolchain and environment are unsupported; unchanged evidence never means safe to skip verification. Unsupported or unavailable discovery records no evidence."}`)
+	properties["verificationDiscover"] = json.RawMessage(`{"type":"string","enum":["go"],"description":"Opt in to a partial bounded input snapshot for a literal go test ./path, go test ./path/..., or go test ./... command. Includes in-module and go.work module imports (every file in each scanned directory, regardless of build constraints), local go.mod/go.work replacement targets, Go module/workspace metadata, go.sum, and the GOFLAGS, GOOS, GOARCH, CGO_ENABLED, GOEXPERIMENT, GOTOOLCHAIN and GOWORK environment values. Shell expansion, flags and compound commands are unsupported; the module cache and the go binary are not read; unchanged evidence never means safe to skip verification. Unsupported or unavailable discovery records no evidence."}`)
 	properties["verificationDirectories"] = json.RawMessage(`{"type":"array","maxItems":8,"items":{"type":"string"},"description":"Project directories to fingerprint recursively, including regular file contents, permissions and membership. .git is excluded. Evidence requires a successful command and unchanged inputs."}`)
 	properties["verificationDirectoryFileLimit"] = json.RawMessage(`{"type":"integer","minimum":1,"maximum":512,"description":"Maximum regular files across all declared files and directories (default 128, hard ceiling 512). Tree entries, including subdirectories, also have a shared hard ceiling of 512. Above limit, evidence is unavailable."}`)
 	properties["verificationDirectoryByteLimit"] = json.RawMessage(`{"type":"integer","minimum":1,"maximum":67108864,"description":"Maximum total bytes across all declared files and directories (default and hard ceiling 67108864). Above limit, evidence is unavailable."}`)
@@ -172,7 +174,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		}
 		if args.VerificationDiscover == "go" {
 			afterInference, discoverErr := discoverGoVerificationInputs(inv.Cwd, args.Command, allowRead)
-			if discoverErr != nil || !slices.Equal(inferred.files, afterInference.files) || !slices.Equal(inferred.missing, afterInference.missing) || !slices.Equal(inferred.directories, afterInference.directories) {
+			if discoverErr != nil || !slices.Equal(inferred.files, afterInference.files) || !slices.Equal(inferred.missing, afterInference.missing) || !slices.Equal(inferred.directories, afterInference.directories) || !maps.Equal(inferred.env, afterInference.env) {
 				return result, nil
 			}
 		}
@@ -204,7 +206,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		if args.VerificationDiscover == "go" {
 			provenance = goPartialDiscovery
 		}
-		proof, marshalErr := json.Marshal(VerificationEvidence{CallID: inv.ToolCallID, Command: args.Command, Discovery: provenance, Files: before, MissingFiles: inferred.missing, Directories: beforeDirs, DirectoryFileLimit: fileLimit, DirectoryByteLimit: byteLimit})
+		proof, marshalErr := json.Marshal(VerificationEvidence{CallID: inv.ToolCallID, Command: args.Command, Discovery: provenance, Env: inferred.env, Files: before, MissingFiles: inferred.missing, Directories: beforeDirs, DirectoryFileLimit: fileLimit, DirectoryByteLimit: byteLimit})
 		if marshalErr != nil {
 			return result, nil
 		}
@@ -231,7 +233,7 @@ func VerificationFromResult(details json.RawMessage) (VerificationEvidence, bool
 	var envelope struct {
 		Evidence VerificationEvidence `json:"taskVerification"`
 	}
-	if json.Unmarshal(details, &envelope) != nil || strings.TrimSpace(envelope.Evidence.Command) == "" || len(envelope.Evidence.Command) > maxVerificationCommandBytes || envelope.Evidence.CallID == "" || len(envelope.Evidence.Files)+len(envelope.Evidence.Directories) == 0 || len(envelope.Evidence.Files)+len(envelope.Evidence.MissingFiles) > maxVerificationFiles || len(envelope.Evidence.Directories) > maxVerificationDirectories || envelope.Evidence.Discovery != "" && envelope.Evidence.Discovery != goPartialDiscovery {
+	if json.Unmarshal(details, &envelope) != nil || strings.TrimSpace(envelope.Evidence.Command) == "" || len(envelope.Evidence.Command) > maxVerificationCommandBytes || envelope.Evidence.CallID == "" || len(envelope.Evidence.Files)+len(envelope.Evidence.Directories) == 0 || len(envelope.Evidence.Files)+len(envelope.Evidence.MissingFiles) > maxVerificationFiles || len(envelope.Evidence.Directories) > maxVerificationDirectories || envelope.Evidence.Discovery != "" && !isGoPartialDiscovery(envelope.Evidence.Discovery) {
 		return VerificationEvidence{}, false
 	}
 	if !validVerificationDirectories(envelope.Evidence) {
@@ -260,7 +262,7 @@ func VerificationFromResult(details json.RawMessage) (VerificationEvidence, bool
 			}
 		}
 	}
-	if envelope.Evidence.Discovery == goPartialDiscovery && !validGoDiscoveryEvidence(envelope.Evidence) {
+	if isGoPartialDiscovery(envelope.Evidence.Discovery) && !validGoDiscoveryEvidence(envelope.Evidence) {
 		return VerificationEvidence{}, false
 	}
 	return envelope.Evidence, true
@@ -291,8 +293,8 @@ func VerificationFreshContext(ctx context.Context, cwd string, proof Verificatio
 	if len(proof.Directories) == 0 {
 		return true
 	}
-	currentDirs, err := fingerprintDirectories(ctx, cwd, directoryPaths(proof.Directories), allowRead, proof.DirectoryFileLimit, proof.DirectoryByteLimit, proof.Discovery == goPartialDiscovery)
-	return err == nil && sameDirectories(proof.Directories, currentDirs)
+	currentDirs, err := fingerprintDirectories(ctx, cwd, directoryPaths(proof.Directories), allowRead, proof.DirectoryFileLimit, proof.DirectoryByteLimit, isGoPartialDiscovery(proof.Discovery))
+	return err == nil && sameDirectories(proof.Directories, currentDirs) && len(changedGoVerificationEnv(proof)) == 0
 }
 
 func sameFingerprints(a, b []VerificationFile) bool {
@@ -471,7 +473,7 @@ func validVerificationDirectories(proof VerificationEvidence) bool {
 }
 
 func validVerificationDirectoryPath(path, discovery string) bool {
-	return path == "." || validRelativeVerificationPath(path) || discovery == goPartialDiscovery && validGoExternalVerificationPath(path)
+	return path == "." || validRelativeVerificationPath(path) || isGoPartialDiscovery(discovery) && validGoExternalVerificationPath(path)
 }
 
 func validVerificationDirectoryChildPath(path, parent, discovery string) bool {
@@ -481,7 +483,7 @@ func validVerificationDirectoryChildPath(path, parent, discovery string) bool {
 	if !strings.HasPrefix(path, parent+string(filepath.Separator)) {
 		return false
 	}
-	return validRelativeVerificationPath(path) || discovery == goPartialDiscovery && validGoExternalVerificationPath(path)
+	return validRelativeVerificationPath(path) || isGoPartialDiscovery(discovery) && validGoExternalVerificationPath(path)
 }
 
 func verificationCommonAncestor(root, full string) string {

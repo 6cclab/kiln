@@ -44,7 +44,7 @@ func TestDiscoveredVerificationRestoresAbsentMetadata(t *testing.T) {
 	state := &taskState{cwd: cwd, allowRead: allow}
 	state.restore([]session.Entry{{Type: session.EntryMessage, Message: replayed}})
 	proofs := state.verificationSnapshot()
-	if len(proofs) != 1 || proofs[0].Discovery != "go-partial-v1" || len(proofs[0].MissingFiles) != 3 || !tools.VerificationFresh(cwd, proofs[0], allow) {
+	if len(proofs) != 1 || proofs[0].Discovery != "go-partial-v2" || len(proofs[0].MissingFiles) != 3 || !tools.VerificationFresh(cwd, proofs[0], allow) {
 		t.Fatalf("replayed discovery proof: %+v", proofs)
 	}
 	proofs[0].MissingFiles[0] = "changed"
