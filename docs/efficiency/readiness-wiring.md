@@ -2,7 +2,7 @@
 
 ## Outcome
 
-T1 foundation `858abd5`, T3 foundation `57cb696`, and original wiring `96abf69` remain in this child. The review found a live `setsid()` descendant after confined dispatch cleanup, so `orchestration.isolatedShell` now refuses activation on every platform before starting a child. This is an intentional fail-closed safety state, not T1 general-purpose shell delivery. File-only isolated workers remain the default and continue to work on macOS and Linux. `internal/sandbox/worker.go` and `enableWorkerShell` remain tested foundations, but their direct profile tests do not establish safe worker lifetime ownership. [The T1 report](sandbox-shell.md) gives the platform mechanism and unresolved limitation.
+T1 foundation `858abd5`, T3 foundation `57cb696`, and original wiring `96abf69` remain in this child. The review found a live `setsid()` descendant after confined dispatch cleanup, so `orchestration.isolatedShell` now refuses activation on every platform before starting a child. This is an intentional fail-closed safety state, not T1 general-purpose shell delivery. File-only isolated workers remain the default and continue to work on macOS and Linux. `internal/sandbox/worker.go` and `enableWorkerShellForOS` remain tested foundations, but their direct profile tests do not establish safe worker lifetime ownership. [The T1 report](sandbox-shell.md) gives the platform mechanism and unresolved limitation.
 
 Dispatch also keeps Bash out of every isolated worker's active tool set and
 retains the parent-sandbox conflict check. The unsafe helper is no longer
