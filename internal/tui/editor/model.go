@@ -121,6 +121,11 @@ type Model struct {
 	// via SetSuggestion and clears it when a turn starts; the editor itself
 	// drops it on any edit. It shows in place of the placeholder when set.
 	suggestion string
+
+	// cache is View's last render, shared by every copy of the Model; see
+	// View. styleGen counts SetStyles calls so a theme change misses it.
+	cache    *viewCache
+	styleGen int
 }
 
 // New builds an unfocused, empty Model. Call Focus (and issue its Cmd) once
@@ -142,7 +147,7 @@ func New(styles Styles) Model {
 	ta.SetVirtualCursor(false) // hardware cursor via Cursor(), not an inline block
 	ta.SetStyles(neutralTextareaStyles(styles))
 	ta.SetHeight(1)
-	return Model{ta: ta, styles: styles, historyIdx: -1, placeholder: DefaultPlaceholder}
+	return Model{ta: ta, styles: styles, historyIdx: -1, placeholder: DefaultPlaceholder, cache: &viewCache{}}
 }
 
 // SetPlaceholder overrides the placeholder text shown in an empty editor.
@@ -179,6 +184,7 @@ func (m *Model) ClearSuggestion() { m.suggestion = "" }
 // *light-bg-you-text-invisible).
 func (m *Model) SetStyles(styles Styles) {
 	m.styles = styles
+	m.styleGen++
 	m.ta.SetStyles(neutralTextareaStyles(styles))
 }
 

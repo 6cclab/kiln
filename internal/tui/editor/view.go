@@ -2,6 +2,7 @@ package editor
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -38,14 +39,69 @@ func (m Model) innerWidth(width int) int {
 // textarea's content lines each prefixed with the marker, and a full-width
 // bottom rule — ported from BorderedEditor.render (app.ts:157-179). Every
 // returned line is exactly width columns wide by ansi.StringWidth.
+//
+// The rows are cached on a pointer every copy of the Model shares, keyed by
+// everything they are drawn from (viewKey), so a frame in which only the
+// transcript changed — every streamed delta — reuses them instead of
+// re-wrapping the buffer. The returned slice is shared: callers must not
+// write into it (reslicing and append are fine, its capacity is clipped).
 func (m Model) View(width int) []string {
 	if width < 1 {
 		width = 1
 	}
+	key := m.viewKeyFor(width)
+	if c := m.cache; c != nil && c.valid && c.key == key {
+		return c.rows
+	}
+	rows := m.render(width)
+	if m.cache != nil {
+		m.cache.key, m.cache.rows, m.cache.valid = key, slices.Clip(rows), true
+		m.cache.renders++
+		rows = m.cache.rows
+	}
+	return rows
+}
+
+// viewKey is every input of render that can change between frames. The
+// buffer is compared by value rather than tracked through the mutators, so
+// no edit path can leave a stale row behind; the scroll offset is part of it
+// because the textarea scrolls on cursor moves.
+type viewKey struct {
+	width, taWidth, taHeight int
+	value                    string
+	line, col, scroll        int
+	placeholder, suggestion  string
+	focused, popup           bool
+	styleGen                 int
+}
+
+// viewCache holds the last render. It is shared by pointer between copies
+// of the Model (bubbletea passes it by value), which is safe because the
+// key fully determines the rows.
+type viewCache struct {
+	key     viewKey
+	rows    []string
+	valid   bool
+	renders int // times render ran; the cache-hit test reads it
+}
+
+func (m Model) viewKeyFor(width int) viewKey {
+	return viewKey{
+		width: width, taWidth: m.ta.Width(), taHeight: m.ta.Height(),
+		value: m.ta.Value(), line: m.ta.Line(), col: m.ta.Column(), scroll: m.ta.ScrollYOffset(),
+		placeholder: m.placeholder, suggestion: m.suggestion,
+		focused: m.ta.Focused(), popup: m.PopupActive, styleGen: m.styleGen,
+	}
+}
+
+// render draws the frame; View caches it.
+func (m Model) render(width int) []string {
 	inner := m.innerWidth(width)
 
 	ta := m.ta // value type: SetWidth here does not mutate the receiver
-	ta.SetWidth(inner)
+	if ta.Width() != inner {
+		ta.SetWidth(inner)
+	}
 
 	above, below := m.scrollHints(&ta)
 	body := strings.Split(ta.View(), "\n")
