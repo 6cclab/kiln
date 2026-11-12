@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -53,7 +54,7 @@ func TestWorkerShellLiveSeatbeltThroughBashTool(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = workerEnv.CloseConfinedFiles() })
 	workerEnv.JobScope = execenv.NewJobScope()
-	cleanup, err := enableWorkerShell(workerEnv, parentEnv, child)
+	cleanup, err := enableWorkerShellForOS(workerEnv, parentEnv, child, runtime.GOOS)
 	if err != nil {
 		t.Fatal(err)
 	}

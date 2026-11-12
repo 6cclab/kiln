@@ -459,9 +459,13 @@ func hookNoticeSink(stderr io.Writer) func(string) {
 // subagent's tool calls are deliberately not echoed, only the dispatch, the
 // model it landed on, and the result size. Kept as a plain func value, not
 // inlined at the call site, so a future TUI can swap it for its own
-// rendering without touching the wiring around it.
+// rendering without touching the wiring around it. Concurrent workers report
+// events from their own goroutines, so writes to stderr are serialised.
 func subagentEventSink(stderr io.Writer) func(agent.SubagentEvent) {
+	var mu sync.Mutex
 	return func(e agent.SubagentEvent) {
+		mu.Lock()
+		defer mu.Unlock()
 		switch e.Kind {
 		case agent.SubagentEventStart:
 			note := ""

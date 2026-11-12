@@ -9,13 +9,10 @@ import (
 	"github.com/andrepato/harness/internal/sandbox"
 )
 
-// enableWorkerShell installs a mandatory worktree-specific command sandbox.
-// Its cleanup must run after JobScope.Close and before the worktree is removed.
-// A nil cleanup is returned on failure so dispatch cannot start the worker.
-func enableWorkerShell(workerEnv, parentEnv *execenv.Env, worktree string) (func(), error) {
-	return enableWorkerShellForOS(workerEnv, parentEnv, worktree, runtime.GOOS)
-}
-
+// enableWorkerShellForOS installs a mandatory worktree-specific command
+// sandbox; callers pass runtime.GOOS as goos. Its cleanup must run after
+// JobScope.Close and before the worktree is removed. A nil cleanup is returned
+// on failure so dispatch cannot start the worker.
 func enableWorkerShellForOS(workerEnv, parentEnv *execenv.Env, worktree, goos string) (func(), error) {
 	if goos != "darwin" || runtime.GOOS != "darwin" {
 		return nil, fmt.Errorf("isolated worker shell requires macOS Seatbelt; %s cannot confine Unix sockets and files", goos)
