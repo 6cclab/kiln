@@ -90,7 +90,7 @@ func renderGoldenPath(name string) string {
 // first because SetPlainMode(false) recomputes colour from the real
 // terminal state (colorEnabled()), which would clobber a color-forced
 // setting if applied afterward.
-func withRenderEnv(t *testing.T, width int) {
+func withRenderEnv(t testing.TB, width int) {
 	t.Helper()
 	prevEnabled := enabled
 	prevPlain := plain

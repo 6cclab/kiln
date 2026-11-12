@@ -219,7 +219,7 @@ func RenderDiffLines(lines []DiffLine) []string {
 	for _, l := range lines {
 		numStr := fmt.Sprintf("%4d", l.Num)
 		var sign, row string
-		var bg func(string) string
+		var bg func(string) string // nil: context, no tint
 		switch l.Sign {
 		case '+':
 			sign = KilnGreen("+ ")
@@ -233,10 +233,13 @@ func RenderDiffLines(lines []DiffLine) []string {
 			out = append(out, padToWidth(Faint("   …"), width))
 			continue
 		default:
-			bg = func(s string) string { return s }
 			row = Faint(numStr) + "   " + Muted(l.Text)
 		}
-		out = append(out, bg(padToWidth(FitStatus(row, width), width)))
+		row = padToWidth(FitStatus(row, width), width)
+		if bg != nil {
+			row = onRow(bg, row)
+		}
+		out = append(out, row)
 	}
 	return out
 }
@@ -260,7 +263,7 @@ func diffHeaderRow(path string, d *ToolDiff, width int) string {
 		pad = 1
 	}
 	row := left + strings.Repeat(" ", pad) + counts + " "
-	return OnPanel(padToWidth(row, width))
+	return onRow(OnPanel, padToWidth(row, width))
 }
 
 // diffCountsRow renders "+N  −N" for the diff header row. Both sides
