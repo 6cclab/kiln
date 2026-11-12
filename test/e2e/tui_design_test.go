@@ -24,9 +24,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
 	"github.com/andrepato/harness/internal/testkit/screen"
 )
 
@@ -139,9 +141,29 @@ func designFixture(t *testing.T) (proj, home, sessDir, addr string) {
 	proj = designProject(t)
 	home, sessDir = scratchHome(t)
 	script := loadFauxScript(t, "design-session")
-	addr, _ = startFaux(t, script)
+	addr, srv := startFaux(t, script)
+	designServers.Store(t, srv)
+	t.Cleanup(func() { designServers.Delete(t) })
 	writeDesignSettings(t, proj)
 	return proj, home, sessDir, addr
+}
+
+// designServers maps a test to its design-session faux server, so
+// driveDesignTo can release the script's holds as it moves past each scene.
+var designServers sync.Map
+
+// releaseDesign releases design-session.yaml holds (see the header comment
+// there): the scene a test stops at stays on screen, unchanged, until
+// driveDesignTo moves past it.
+func releaseDesign(t *testing.T, names ...string) {
+	t.Helper()
+	srv, ok := designServers.Load(t)
+	if !ok {
+		t.Fatal("releaseDesign: no design faux server for this test (use designFixture)")
+	}
+	for _, n := range names {
+		releaseFaux(srv.(*tkfaux.Server), n)
+	}
 }
 
 // --- scene anchors -----------------------------------------------------
@@ -216,6 +238,7 @@ func driveDesignTo(t *testing.T, s *screen.Screen, scene string) {
 	if scene == "agents" {
 		return
 	}
+	releaseDesign(t, "agents") // the scouts report back
 
 	// "streaming": the text step right after both scouts report back,
 	// before the first diff's write tool call lands. There is no unique
@@ -226,6 +249,7 @@ func driveDesignTo(t *testing.T, s *screen.Screen, scene string) {
 	if scene == "streaming" {
 		return
 	}
+	releaseDesign(t, "streaming", "diff1") // let the write and the second diff through
 
 	// diff1 ("rateLimit.ts") is not independently waited on here — see
 	// this function's doc comment; it may already be out of the visible
@@ -235,6 +259,7 @@ func driveDesignTo(t *testing.T, s *screen.Screen, scene string) {
 	if scene == "diff" || scene == "diff2" {
 		return
 	}
+	releaseDesign(t, "diff2") // on to the first test run's permission prompt
 
 	mustSee(t, s, designPermAnchor, 5*time.Second)
 	if scene == "permission" {
@@ -251,6 +276,7 @@ func driveDesignTo(t *testing.T, s *screen.Screen, scene string) {
 	// deterministic base delay, not a race against a random near-zero
 	// jittered one.
 	s.SendKey("r")
+	releaseDesign(t, "diff3") // on to the second test run's permission prompt
 
 	// The reconnect note ("Reconnected on attempt N") and diff3
 	// ("redisMock.ts") are not independently waited on — same viewport-
@@ -497,11 +523,17 @@ func designSortSubagentPanel(rows []string, styles [][]screen.CellStyle) ([]stri
 // includes the two-scout live or committed panel.
 func assertDesignGoldenTailSorted(t *testing.T, s *screen.Screen, name, anchor string) {
 	t.Helper()
-	assertDesignGoldenTailRowsSorted(t, s.Rows(), name, anchor)
+	goldenEventually(t, goldenPath(name+".txt"), func() (string, error) {
+		return designTailCapture(s.Rows(), anchor), nil
+	})
 }
 
 func assertDesignGoldenTailRowsSorted(t *testing.T, rows []string, name, anchor string) {
 	t.Helper()
+	assertGolden(t, goldenPath(name+".txt"), designTailCapture(rows, anchor))
+}
+
+func designTailCapture(rows []string, anchor string) string {
 	start := 0
 	for i, r := range rows {
 		if strings.Contains(r, anchor) {
@@ -514,8 +546,8 @@ func assertDesignGoldenTailRowsSorted(t *testing.T, rows []string, name, anchor 
 	// The status row now always carries the working directory, which is a
 	// fresh t.TempDir() on every run — mask it, as tui_test.go's own
 	// assertions do, or no golden containing that row can be stable.
-	rows = normalizeSpinnerGlyph(normalizeStatusRowCwd(rows))
-	assertGolden(t, goldenPath(name+".txt"), strings.Join(rows, "\n")+"\n")
+	rows = normalizeBusyElapsed(normalizeSpinnerGlyph(normalizeStatusRowCwd(rows)))
+	return strings.Join(rows, "\n") + "\n"
 }
 
 // assertDesignGoldenStylesSorted is assertGoldenStyles plus
@@ -524,12 +556,18 @@ func assertDesignGoldenTailRowsSorted(t *testing.T, rows []string, name, anchor 
 // comment in tui_test.go for the encoding this mirrors.
 func assertDesignGoldenStylesSorted(t *testing.T, s *screen.Screen, name, anchor string) {
 	t.Helper()
-	assertDesignGoldenStylesRowsSorted(t, s.Viewport(), s.Styles(), name, anchor)
+	goldenEventually(t, goldenPath(name+".styles.txt"), func() (string, error) {
+		frame := s.Snapshot()
+		return designStylesCapture(frame.Rows, frame.Styles, anchor), nil
+	})
 }
 
 func assertDesignGoldenStylesRowsSorted(t *testing.T, rows []string, styles [][]screen.CellStyle, name, anchor string) {
 	t.Helper()
+	assertGolden(t, goldenPath(name+".styles.txt"), designStylesCapture(rows, styles, anchor))
+}
 
+func designStylesCapture(rows []string, styles [][]screen.CellStyle, anchor string) string {
 	start := 0
 	for i, r := range rows {
 		if strings.Contains(r, anchor) {
@@ -541,7 +579,7 @@ func assertDesignGoldenStylesRowsSorted(t *testing.T, rows []string, styles [][]
 	styles = styles[start:]
 	rows, styles = designSortSubagentPanel(rows, styles)
 	rows, styles = maskStyledRows(rows, styles, maskStatusRowCwd)
-	rows = normalizeSpinnerGlyph(rows)
+	rows = normalizeBusyElapsed(normalizeSpinnerGlyph(rows))
 
 	lines := make([]string, len(rows))
 	for i := range rows {
@@ -550,7 +588,7 @@ func assertDesignGoldenStylesRowsSorted(t *testing.T, rows []string, styles [][]
 	for len(lines) > 0 && strings.TrimRight(lines[len(lines)-1], " ") == "" {
 		lines = lines[:len(lines)-1]
 	}
-	assertGolden(t, goldenPath(name+".styles.txt"), strings.Join(lines, "\n")+"\n")
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // --- welcome -------------------------------------------------------------
@@ -688,8 +726,8 @@ func TestTUI_Design_Permission(t *testing.T) {
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr, "--permission-mode", "manual")
 	waitReady(t, s)
 	driveDesignTo(t, s, "permission")
-	assertGoldenTail(t, s, "design-permission", designPermAnchor)
-	assertGoldenStyles(t, s, "design-permission", stylesOpts{anchor: designPermAnchor})
+	assertGoldenTail(t, s, "design-permission", designPermAnchor, normalizeBusyElapsed)
+	assertGoldenStyles(t, s, "design-permission", stylesOpts{anchor: designPermAnchor, normalizeElapsed: true})
 }
 
 // resizeRewrapQuiet is how long the screen must stay unchanged after a
@@ -1045,7 +1083,7 @@ func TestTUI_Design_Fullscreen_Permission(t *testing.T) {
 		t.Errorf("last row is not the mode line: %q", last)
 	}
 
-	rows = normalizeStatusRowCwd(normalizeDesignSpinnerGlyph(rows))
+	rows = normalizeBusyElapsed(normalizeStatusRowCwd(normalizeDesignSpinnerGlyph(rows)))
 	assertGolden(t, goldenPath("design-fs-permission.txt"), strings.Join(rows, "\n")+"\n")
 }
 
@@ -1200,7 +1238,7 @@ func TestTUI_Design_ModelRouterFooterRoutes(t *testing.T) {
 // screen has settled, failing with the screen if it never does.
 func waitSingle(t *testing.T, s *screen.Screen, text string, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(max(timeout, e2eMinWait))
 	for {
 		rows := strings.Join(s.Viewport(), "\n")
 		if strings.Count(rows, text) == 1 {

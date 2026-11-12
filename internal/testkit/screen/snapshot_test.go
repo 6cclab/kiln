@@ -9,7 +9,7 @@ import (
 )
 
 func TestWaitForFrameSkipsPartialPaintAndPairsStyles(t *testing.T) {
-	s := &Screen{cols: 40, rows: 3, emu: vt.NewSafeEmulator(40, 3), timeout: time.Second}
+	s := &Screen{cols: 40, rows: 3, emu: vt.NewSafeEmulator(40, 3), timeout: 30 * time.Second}
 	write := func(data string) {
 		t.Helper()
 		s.emuMu.Lock()
@@ -39,7 +39,7 @@ func TestWaitForFrameSkipsPartialPaintAndPairsStyles(t *testing.T) {
 			return strings.Contains(frame.Rows[0], "2 subagents running") &&
 				strings.Contains(frame.Rows[1], "queue a follow-up") &&
 				strings.Contains(frame.Rows[2], "faux/faux-1 ctx")
-		}, time.Second)
+		}, 30*time.Second)
 		finished <- struct {
 			frame Frame
 			err   error
@@ -47,7 +47,7 @@ func TestWaitForFrameSkipsPartialPaintAndPairsStyles(t *testing.T) {
 	}()
 	select {
 	case <-seenPartial:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("partial paint was not observed")
 	}
 	select {
@@ -64,7 +64,7 @@ func TestWaitForFrameSkipsPartialPaintAndPairsStyles(t *testing.T) {
 		if result.frame.Styles[1][0].Fg != "#ff0000" || result.frame.Styles[2][0].Fg != "#ff0000" {
 			t.Fatalf("complete text and styles came from different paints: %+v", result.frame.Styles)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("complete frame was not returned")
 	}
 }

@@ -218,7 +218,7 @@ func TestTUI_Signals_ExitPromptly(t *testing.T) {
 					if phase == "turn" {
 						s.Send("hello")
 						s.SendKey("enter")
-						deadline := time.Now().Add(5 * time.Second)
+						deadline := time.Now().Add(30 * time.Second)
 						for len(requests()) < 1 {
 							if time.Now().After(deadline) {
 								t.Fatal("the turn's request never reached the model")
@@ -253,7 +253,7 @@ func TestTUI_Turn_NeverAnswers_EscInterrupts(t *testing.T) {
 	waitReady(t, s)
 	s.Send("hello")
 	s.SendKey("enter")
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for len(requests()) < 1 {
 		if time.Now().After(deadline) {
 			t.Fatal("the turn's request never reached the model")

@@ -124,14 +124,14 @@ const subagentToolActionScript = `models:
         id: r1
     - on_tool_result: r1
       then:
-        # The delay gives a PTY-driven test a real window to observe the
+        # The hold gives a PTY-driven test a real window to observe the
         # panel row's "running" state (its action line already updated
         # from the just-finished read, but the subagent's own final
         # answer — and so the row's Done transition — still pending)
-        # before this reply lands.
+        # until the test releases it, before this reply lands.
+        - hold: final
         - text: "add() subtracts instead of adding."
           usage: {input: 50, output: 10}
-          delay: 600ms
 `
 
 // TestTUI_SubagentPanel_ShowsToolActionThenFinalAnswer checks the running
@@ -141,7 +141,7 @@ const subagentToolActionScript = `models:
 // answer, not "✓ finished".
 // *qa/findings/20260927T000638Z-subagent-row-no-action.json*.
 func TestTUI_SubagentPanel_ShowsToolActionThenFinalAnswer(t *testing.T) {
-	proj, home, sessDir, addr, _ := tuiFixture(t, subagentToolActionScript)
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, subagentToolActionScript)
 	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
 
 	s := startTUI(t, 120, 40, proj, home, sessDir, addr,
@@ -155,6 +155,7 @@ func TestTUI_SubagentPanel_ShowsToolActionThenFinalAnswer(t *testing.T) {
 	if err := s.WaitFor(regexp.MustCompile(`Read "src/math\.js"`), 5*time.Second); err != nil {
 		t.Fatalf("subagent row never showed its finished tool call:\n%s", strings.Join(s.Rows(), "\n"))
 	}
+	releaseFaux(srv, "final") // the running row was seen: let the subagent answer
 
 	if err := s.WaitFor(turnSummaryPattern, 20*time.Second); err != nil {
 		t.Fatal(err)

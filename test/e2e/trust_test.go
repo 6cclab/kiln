@@ -56,6 +56,7 @@ func untrustedTUI(t *testing.T, prepare ...func(proj, home string)) (s *screen.S
 }
 
 func waitFile(path string, timeout time.Duration) bool {
+	timeout = max(timeout, e2eMinWait)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {

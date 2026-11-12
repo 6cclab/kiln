@@ -32,7 +32,11 @@ steps:
 	waitReady(t, s)
 	s.Send("/posture ops")
 	s.SendKey("enter")
-	time.Sleep(500 * time.Millisecond)
+	// The switch is done once its result line is printed (the typed command
+	// reads "/posture ops", so this capitalised line is the result only).
+	if err := s.WaitFor("Posture: ops", 15*time.Second); err != nil {
+		t.Fatalf("/posture ops never reported the switch: %v\n%s", err, strings.Join(s.Rows(), "\n"))
+	}
 	s.Send("use grafana to echo")
 	s.SendKey("enter")
 	if err := s.WaitFor("done", 15*time.Second); err != nil {

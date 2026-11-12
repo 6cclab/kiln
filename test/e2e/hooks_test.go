@@ -71,7 +71,7 @@ func startGlobalMarkerControl(t *testing.T, marker string) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		command, present, err := processCommand(cmd.Process.Pid)
 		if err != nil {
@@ -131,7 +131,7 @@ func timedOutProcessGone(pidFile, marker string) error {
 	if err != nil || pid <= 0 {
 		return fmt.Errorf("invalid timed-out process PID %q: %v", raw, err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		command, present, err := processCommand(pid)
 		if err != nil {
@@ -158,7 +158,7 @@ func TestTimedOutProcessAssertionDetectsUncleanedOwnedProcess(t *testing.T) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		command, present, err := processCommand(cmd.Process.Pid)
 		if err != nil {
@@ -463,8 +463,8 @@ func TestHooks_Timeout_KillsSleepForever(t *testing.T) {
 		"--permission-mode", "acceptEdits",
 	)
 	elapsed := time.Since(start)
-	if elapsed > 5*time.Second {
-		t.Errorf("run took %s, want it to complete within ~5s (the timed-out hook should be killed, not awaited)", elapsed)
+	if elapsed > 30*time.Second { // the hook never exits (sleep-forever), so a slow machine cannot reach this
+		t.Errorf("run took %s, want it to complete within 30s (the timed-out hook should be killed, not awaited)", elapsed)
 	}
 	_ = res // exit code is not asserted here; the timeout behavior is.
 

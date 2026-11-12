@@ -51,7 +51,7 @@ func TestTUI_Continue_AfterKilledPrintRun(t *testing.T) {
 		_ = cmd.Process.Kill()
 		t.Fatal("seed run never reached an in-flight tool call")
 	}
-	markerDeadline := time.Now().Add(5 * time.Second)
+	markerDeadline := time.Now().Add(30 * time.Second)
 	for {
 		body, err := os.ReadFile(marker)
 		if err == nil && string(body) == "x" {
@@ -66,7 +66,7 @@ func TestTUI_Continue_AfterKilledPrintRun(t *testing.T) {
 	_ = cmd.Process.Signal(syscall.SIGKILL)
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("seed run did not exit after SIGKILL")
 	}
 
@@ -108,7 +108,7 @@ func TestTUI_Continue_AfterKilledPrintRun(t *testing.T) {
 // appears (the bash tool's arguments are persisted as it begins executing).
 func waitForToolInFlight(t *testing.T, sessDir, proj string, timeout time.Duration) bool {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(max(timeout, e2eMinWait))
 	for time.Now().Before(deadline) {
 		if sessionContains(sessDir, proj, `"namespace":"pi.op.tool_args"`) {
 			return true

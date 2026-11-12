@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/andrepato/harness/internal/testkit/screen"
 )
 
 // TestTUI_RewindEnterApplies: Esc Esc on an empty prompt opens Rewind;
@@ -35,11 +37,31 @@ steps:
 	if err := s.WaitFor("Files are not restored", 3*time.Second); err != nil {
 		t.Fatalf("rewind dialog did not open:\n%s", strings.Join(s.Rows(), "\n"))
 	}
-	// Selection is colour-only (no marker glyph), so there is no text to
-	// wait on between the two keys; give the dialog time to take "up".
-	time.Sleep(500 * time.Millisecond)
+	// Selection is colour-only (no marker glyph), so wait on the styles:
+	// "(current)" starts selected, "up" moves the selection to "turn two",
+	// which is selected when it is no longer drawn in "turn one"'s muted colour.
+	rewindRowFg := func(f screen.Frame, text string) (string, bool) {
+		// From the bottom: the transcript above repeats the user's messages.
+		for y := len(f.Rows) - 1; y >= 0; y-- {
+			r := f.Rows[y]
+			if i := strings.Index(r, text); i >= 0 {
+				return f.Styles[y][len([]rune(r[:i]))].Fg, true
+			}
+		}
+		return "", false
+	}
+	selected := func(f screen.Frame, text string) bool {
+		fg, ok := rewindRowFg(f, text)
+		other, ok2 := rewindRowFg(f, "turn one") // never selected here: the muted colour
+		return ok && ok2 && fg != other
+	}
+	if _, err := s.WaitForFrame(func(f screen.Frame) bool { return !selected(f, "turn two") }, 0); err != nil {
+		t.Fatal(err)
+	}
 	s.SendKey("up")
-	time.Sleep(500 * time.Millisecond)
+	if _, err := s.WaitForFrame(func(f screen.Frame) bool { return selected(f, "turn two") }, 0); err != nil {
+		t.Fatalf("up did not move the selection to turn two: %v", err)
+	}
 	s.SendKey("enter")
 	if err := s.WaitFor("Rewound to before: turn two", 3*time.Second); err != nil {
 		t.Fatalf("enter did not apply the rewind:\n%s", strings.Join(s.Rows(), "\n"))

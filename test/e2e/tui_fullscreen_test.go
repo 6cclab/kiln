@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/andrepato/harness/internal/testkit/screen"
 )
 
 // This file drives kiln's opt-in full-screen (alt-screen) TUI mode
@@ -182,14 +184,7 @@ func TestTUI_Fullscreen_ScrollPause(t *testing.T) {
 	// stays pinned to the last row (the bottom region does not move). At
 	// 14 rows the transcript is much taller than one page, so this presses
 	// PgUp repeatedly rather than assuming one press reaches the top.
-	bannerVisible := false
-	for i := 0; i < 10 && !bannerVisible; i++ {
-		s.SendKey("pgup")
-		time.Sleep(30 * time.Millisecond)
-		if strings.Contains(strings.Join(s.Rows(), "\n"), "/ commands") {
-			bannerVisible = true
-		}
-	}
+	bannerVisible := pressUntilVisible(s, "pgup", "/ commands", 10)
 	if !bannerVisible {
 		t.Fatalf("pgup never scrolled the banner into view:\n%s", strings.Join(s.Rows(), "\n"))
 	}
@@ -215,7 +210,7 @@ func TestTUI_Fullscreen_ScrollPause(t *testing.T) {
 	s.Send("go again")
 	s.SendKey("enter")
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) && len(requests()) <= before {
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -236,17 +231,26 @@ func TestTUI_Fullscreen_ScrollPause(t *testing.T) {
 	}
 
 	// PgDn back to the bottom: the new turn's reply becomes visible.
-	found := false
-	for i := 0; i < 15 && !found; i++ {
-		s.SendKey("pgdown")
-		time.Sleep(30 * time.Millisecond)
-		if strings.Contains(strings.Join(s.Rows(), "\n"), "Second turn done.") {
-			found = true
-		}
-	}
+	found := pressUntilVisible(s, "pgdown", "Second turn done.", 15)
 	if !found {
 		t.Errorf("second turn's reply (\"Second turn done.\") never became visible after pgdown:\n%s", strings.Join(s.Rows(), "\n"))
 	}
+}
+
+// pressUntilVisible sends key (at most presses times) until text is on
+// screen, giving each press a moment to render before sending the next, then
+// waits for text on the last result. Pressing past the end of the scroll
+// range is harmless, so a slow render can only cost presses, not the check.
+func pressUntilVisible(s *screen.Screen, key, text string, presses int) bool {
+	for i := 0; i < presses; i++ {
+		s.SendKey(key)
+		for until := time.Now().Add(150 * time.Millisecond); time.Now().Before(until); time.Sleep(10 * time.Millisecond) {
+			if strings.Contains(strings.Join(s.Rows(), "\n"), text) {
+				return true
+			}
+		}
+	}
+	return s.WaitFor(text, 0) == nil
 }
 
 // --- 4. Resize re-wrap -----------------------------------------------------
@@ -268,10 +272,20 @@ func TestTUI_Fullscreen_Resize(t *testing.T) {
 		t.Helper()
 		s.Resize(w, h)
 		// The rewrap is debounced 150ms after the last WindowSizeMsg
-		// (app.go's msgFullscreenRewrap); wait past that before checking.
-		time.Sleep(350 * time.Millisecond)
-		if err := waitQuiescent(s, 200*time.Millisecond, 3*time.Second); err != nil {
-			t.Fatalf("resize to %dx%d: %v", w, h, err)
+		// (app.go's msgFullscreenRewrap): wait for what it produces, a rule
+		// row exactly as wide as the new content width and the mode line on
+		// the last row, rather than for a fixed time or a quiet window.
+		wantRule := contentWidthForTest(w)
+		if _, err := s.WaitForFrame(func(f screen.Frame) bool {
+			for _, r := range f.Rows {
+				if isRuleRow(r) {
+					return len([]rune(strings.TrimSpace(r))) == wantRule &&
+						modeLinePattern.MatchString(strings.TrimRight(f.Rows[len(f.Rows)-1], " "))
+				}
+			}
+			return false
+		}, 0); err != nil {
+			t.Fatalf("resize to %dx%d: the re-wrap never produced a %d-wide rule: %v", w, h, wantRule, err)
 		}
 
 		// Rows() itself asserts the per-row width invariant.
@@ -402,7 +416,7 @@ func TestTUI_Fullscreen_ToggleKey(t *testing.T) {
 
 	// ctrl+f: enter fullscreen.
 	s.SendKey("ctrl+f")
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		rows := s.Rows()
 		if len(rows) == 30 && modeLinePattern.MatchString(rows[len(rows)-1]) {

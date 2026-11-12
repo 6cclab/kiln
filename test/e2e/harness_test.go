@@ -171,7 +171,7 @@ func runBinary(t *testing.T, bin, dir string, env map[string]string, timeout tim
 			}
 		}
 		return runResult{Stdout: stdout.String(), Stderr: stderr.String(), Code: code}
-	case <-time.After(timeout):
+	case <-time.After(max(timeout, e2eMinWait)):
 		_ = cmd.Process.Kill()
 		<-done
 		t.Fatalf("run %s: timed out after %s\nstdout so far:\n%s\nstderr so far:\n%s", bin, timeout, stdout.String(), stderr.String())

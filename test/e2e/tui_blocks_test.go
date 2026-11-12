@@ -17,9 +17,9 @@ import (
 // waitTurnSettled from that file.
 
 // TestTUI_PlanBlock_Live drives testdata/faux/plan-live.yaml: two
-// todo_write calls in one turn, the second held back by a 600ms delay on
-// the text that follows it, long enough for a PTY-driven poll to observe
-// the live "plan" block's current-item marker (▸) move from the first
+// todo_write calls in one turn, each step held (hold:
+// first-seen / third-seen) until the test has observed the frame, so the
+// PTY-driven poll sees the live "plan" block's current-item marker (▸) move from the first
 // item to the third before the turn settles. Once settled, the committed
 // plan block should show the turn's final state (2 of 5 done), and the
 // live copy should be gone (finishTurn clears m.todos after committing).
@@ -28,7 +28,7 @@ func TestTUI_PlanBlock_Live(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proj, home, sessDir, addr, _ := tuiFixture(t, string(script))
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, string(script))
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
 		"--permission-mode", "bypassPermissions",
@@ -45,15 +45,18 @@ func TestTUI_PlanBlock_Live(t *testing.T) {
 	if err := s.WaitFor(regexp.MustCompile(`▸  read the upload handler`), 3*time.Second); err != nil {
 		t.Fatalf("live plan never showed the first in-progress item: %v", err)
 	}
+	// The second turn is held (hold: first-seen) until this frame was seen.
+	releaseFaux(srv, "first-seen")
 
-	// Second todo_write moves the ▸ marker to item three; the 600ms delay
-	// on the following text keeps this frame observable.
+	// Second todo_write moves the ▸ marker to item three; the hold before
+	// the following text keeps this frame observable.
 	if err := s.WaitFor(regexp.MustCompile(`▸  wire the retry loop into the route`), 3*time.Second); err != nil {
 		t.Fatalf("live plan marker never moved to the third item: %v", err)
 	}
 	if err := s.WaitFor(regexp.MustCompile(`plan .*2/5`), 1*time.Second); err != nil {
 		t.Fatalf("live plan label rule never showed 2/5 done: %v", err)
 	}
+	releaseFaux(srv, "third-seen") // the final text is held until the third-item frame was seen
 
 	waitTurnSettled(t, s)
 

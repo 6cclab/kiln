@@ -74,7 +74,7 @@ func TestTUI_PanicOnKilnGoroutineRestoresTerminal(t *testing.T) {
 		screen.WithRecord(record),
 		screen.WithEnv("KILN_CRASHTEST_PANIC", "provider-stream"),
 		screen.WithUnsetEnv("HARNESS_LOG_DIR"),
-		screen.WithTimeout(10 * time.Second),
+		screen.WithTimeout(30 * time.Second),
 	}
 	t.Cleanup(func() { tuiExtraOpts = nil })
 

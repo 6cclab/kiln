@@ -53,6 +53,7 @@ type config struct {
 	env        map[string]string
 	unsetEnv   map[string]bool
 	timeout    time.Duration
+	minWait    time.Duration
 	recordPath string
 	bgColor    color.Color
 }
@@ -91,6 +92,25 @@ func WithUnsetEnv(key string) Option {
 // exit.
 func WithTimeout(d time.Duration) Option {
 	return func(c *config) { c.timeout = d }
+}
+
+// WithMinWait makes d the shortest deadline WaitFor, WaitForFrame and
+// WaitQuiet will use: a shorter timeout argument is raised to d. A wait
+// returns as soon as its condition holds, so a long deadline costs nothing
+// on a run that is fast and only stops a slow one from failing. A test that
+// passes 2s is saying how long it expects, not how long a loaded CI runner
+// may take. Left unset, timeouts are used as given (kiln-drive's WAIT takes
+// a user's timeout, and the screen's own tests time the waits).
+func WithMinWait(d time.Duration) Option {
+	return func(c *config) { c.minWait = d }
+}
+
+// floor applies WithMinWait to a wait's timeout.
+func (s *Screen) floor(timeout time.Duration) time.Duration {
+	if timeout < s.minWait {
+		return s.minWait
+	}
+	return timeout
 }
 
 // WithRecord tees the raw bytes the process writes to the PTY, and the raw
@@ -146,6 +166,7 @@ type Screen struct {
 	emuMu sync.Mutex
 
 	timeout time.Duration
+	minWait time.Duration
 
 	recordFile *os.File
 	recordMu   sync.Mutex
@@ -211,6 +232,7 @@ func start(tb testing.TB, binary string, args []string, cols, rows int, opts ...
 		ptmx:     ptmx,
 		emu:      vt.NewSafeEmulator(cols, rows),
 		timeout:  cfg.timeout,
+		minWait:  cfg.minWait,
 		waitDone: make(chan struct{}),
 		copyDone: make(chan struct{}),
 	}
@@ -459,6 +481,7 @@ func (s *Screen) WaitFor(pattern any, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = s.timeout
 	}
+	timeout = s.floor(timeout)
 	deadline := time.Now().Add(timeout)
 	var matches func(string) bool
 	switch p := pattern.(type) {
@@ -498,6 +521,7 @@ func (s *Screen) WaitForFrame(complete func(Frame) bool, timeout time.Duration) 
 	if timeout <= 0 {
 		timeout = s.timeout
 	}
+	timeout = s.floor(timeout)
 	deadline := time.Now().Add(timeout)
 	for {
 		frame := s.Snapshot()
@@ -532,6 +556,7 @@ func (s *Screen) WaitQuiet(quiet, timeout time.Duration, ignore ...func([]string
 		}
 		return strings.Join(rows, "\n")
 	}
+	timeout = s.floor(timeout)
 	deadline := time.Now().Add(timeout)
 	last := view()
 	quietSince := time.Now()

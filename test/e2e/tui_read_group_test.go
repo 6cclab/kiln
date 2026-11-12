@@ -135,32 +135,37 @@ func TestTUI_EnterRunsFullyTypedArgument(t *testing.T) {
 func TestTUI_ReadGroupCommitsBeforeStreamedReply(t *testing.T) {
 	home, sessDir := scratchHome(t)
 	proj := scratchProject(t)
-	addr, _ := startFaux(t, `model: faux-1
+	addr, srv := startFaux(t, `model: faux-1
 steps:
   - tool_call: {name: bash, args: {command: "cat src/math.js"}, id: tc1}
   - on_tool_result: tc1
     then:
-      - text: "The file exports one function that adds two numbers together and nothing else at all, which is the whole module."
-        chunk_delay: 250ms
+      # One 8-rune chunk before the hold: kiln's live stream render is
+      # throttled and shows only the first delta of a burst until the next
+      # one arrives, so a longer text would sit half-drawn while held.
+      - text: "The file"
+      - hold: mid-reply
+      - text: " exports one function that adds two numbers together and nothing else at all, which is the whole module."
 `)
 	s := startTUI(t, 100, 40, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	defer s.Close()
 	waitReady(t, s)
 	s.Send("what is in math.js")
 	s.SendKey("enter")
+	// The reply is held after its first sentence (hold: mid-reply), so the
+	// mid-stream check below cannot overtake the end of the reply.
+	waitFauxHeld(t, srv, "mid-reply")
 	if err := s.WaitFor("The file", 10*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	rows := strings.Join(s.Rows(), "\n")
-	if strings.Contains(rows, "the whole module.") {
-		t.Fatalf("reply finished before the mid-stream check; slow the stream down:\n%s", rows)
-	}
 	if !regexp.MustCompile(`bash ─+`).MatchString(rows) || !strings.Contains(rows, "cat src/math.js") {
 		t.Errorf("the bash call is not on screen while the reply after it streams:\n%s", rows)
 	}
 	if strings.Contains(rows, "Running cat") {
 		t.Errorf("the busy line still names the finished command:\n%s", rows)
 	}
+	releaseFaux(srv, "mid-reply")
 	waitTurnSettled(t, s)
 	if n := strings.Count(strings.Join(s.Rows(), "\n"), "cat src/math.js"); n != 1 {
 		t.Errorf("the bash call is on screen %d times after the turn, want 1:\n%s", n, strings.Join(s.Rows(), "\n"))

@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMainFailStartupReturnsOne(t *testing.T) {
@@ -33,6 +36,31 @@ func TestMainInvalidConnectDelayReturnsUsageError(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "connect-delay") {
 		t.Fatalf("Main(-connect-delay=not-a-duration) stderr = %q, want mention of connect-delay", stderr.String())
+	}
+}
+
+// TestConnectGateHoldsUntilTheFileExists: with -connect-gate the fixture
+// does not read stdin until the gate file exists, then serves normally (an
+// empty stdin then ends the server cleanly).
+func TestConnectGateHoldsUntilTheFileExists(t *testing.T) {
+	gate := filepath.Join(t.TempDir(), "gate")
+	done := make(chan int, 1)
+	go func() {
+		var stdout, stderr bytes.Buffer
+		done <- Main([]string{"-connect-gate", gate}, &stdout, &stderr)
+	}()
+	select {
+	case code := <-done:
+		t.Fatalf("Main returned %d while the gate was closed", code)
+	case <-time.After(200 * time.Millisecond): // negative wait: slow only makes it pass vacuously
+	}
+	if err := os.WriteFile(gate, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Main did not proceed after the gate file was created")
 	}
 }
 

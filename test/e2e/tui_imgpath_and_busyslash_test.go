@@ -82,10 +82,10 @@ func TestTUI_ImmediateSlashCommandMidTurn_NeverReachesModel(t *testing.T) {
 	script := `
 model: faux-1
 steps:
+  - hold: turn
   - text: "working on it"
-    delay: 2s
 `
-	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	proj, home, sessDir, addr, requests, srv := tuiFixtureSrv(t, script)
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
 		"--permission-mode", "bypassPermissions",
 	)
@@ -95,7 +95,7 @@ steps:
 	s.Send("first")
 	s.SendKey("enter")
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if anyRowMatches(s, spinnerFramePattern) {
 			break
@@ -118,6 +118,7 @@ steps:
 	}
 	s.SendKey("esc")
 
+	releaseFaux(srv, "turn") // done acting mid-turn
 	waitTurnSettled(t, s)
 	if err := s.WaitFor("working on it", 3*time.Second); err != nil {
 		t.Fatal(err)
@@ -138,10 +139,10 @@ func TestTUI_DeferredSlashCommandMidTurn_RunsAfterTurnEnds(t *testing.T) {
 	script := `
 model: faux-1
 steps:
+  - hold: turn
   - text: "working on it"
-    delay: 2s
 `
-	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	proj, home, sessDir, addr, requests, srv := tuiFixtureSrv(t, script)
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
 		"--permission-mode", "bypassPermissions",
 	)
@@ -151,7 +152,7 @@ steps:
 	s.Send("first")
 	s.SendKey("enter")
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if anyRowMatches(s, spinnerFramePattern) {
 			break
@@ -168,7 +169,9 @@ steps:
 	// Held, not run yet: with nothing in the conversation to compact,
 	// /compact's own "Nothing to compact yet" (or "Context compacted")
 	// note must not appear before the turn ends.
-	time.Sleep(150 * time.Millisecond)
+	if err := s.WaitFor("queued", 5*time.Second); err != nil {
+		t.Fatalf("deferred /compact never showed a queued block: %v\n%s", err, strings.Join(s.Rows(), "\n"))
+	}
 	beforeEnd := strings.Join(s.Rows(), "\n")
 	if strings.Contains(beforeEnd, "Nothing to compact") || strings.Contains(beforeEnd, "Context compacted") {
 		t.Fatalf("/compact ran before the turn ended:\n%s", beforeEnd)
@@ -182,6 +185,7 @@ steps:
 		t.Fatalf("deferred /compact must show a \"queued\" block while held:\n%s", beforeEnd)
 	}
 
+	releaseFaux(srv, "turn") // done acting mid-turn
 	waitTurnSettled(t, s)
 	if err := s.WaitFor(regexp.MustCompile(`Nothing to compact|Context compacted`), 3*time.Second); err != nil {
 		t.Fatalf("/compact never ran after the turn ended: %v\n%s", err, strings.Join(s.Rows(), "\n"))

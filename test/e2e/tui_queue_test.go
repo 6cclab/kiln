@@ -49,13 +49,13 @@ func TestTUI_Queue(t *testing.T) {
 	script := `
 model: faux-1
 steps:
+  - hold: turn
   - text: "working on it"
-    delay: 1500ms
   - on_tool_result: none
     then:
       - text: "Got the follow-up."
 `
-	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	proj, home, sessDir, addr, requests, srv := tuiFixtureSrv(t, script)
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
 		"--permission-mode", "bypassPermissions",
@@ -71,7 +71,7 @@ steps:
 	if err := s.WaitFor("first", 3*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if anyRowMatches(s, spinnerFramePattern) {
 			break
@@ -94,6 +94,9 @@ steps:
 	if !strings.Contains(joined, "second") {
 		t.Fatalf("queued follow-up text %q not on screen:\n%s", "second", joined)
 	}
+
+	// The first turn is held (hold: turn) until the test is done queueing.
+	releaseFaux(srv, "turn")
 
 	// Once the first turn ends, the queued follow-up must have been
 	// driven automatically — no second Enter needed — and its reply
@@ -123,18 +126,18 @@ func TestTUI_QueueTwo(t *testing.T) {
 	script := `
 model: faux-1
 steps:
-  - delay: 3s
+  - hold: turn
   - text: "working on it"
     end_turn: true
   - text: "Got both follow-ups."
 `
-	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	proj, home, sessDir, addr, requests, srv := tuiFixtureSrv(t, script)
 	s := startTUI(t, 160, 60, proj, home, sessDir, addr, "--permission-mode", "bypassPermissions")
 	waitReady(t, s)
 
 	s.Send("first")
 	s.SendKey("enter")
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !anyRowMatches(s, spinnerFramePattern) {
 		if time.Now().After(deadline) {
 			t.Fatalf("spinner never appeared:\n%s", strings.Join(s.Rows(), "\n"))
@@ -151,6 +154,7 @@ steps:
 	if err := s.WaitFor("2 queued", 2*time.Second); err != nil {
 		t.Fatalf("second follow-up not queued:\n%s", strings.Join(s.Rows(), "\n"))
 	}
+	releaseFaux(srv, "turn") // done queueing: let the first turn end
 	if err := s.WaitFor("Got both follow-ups.", 15*time.Second); err != nil {
 		t.Fatalf("queued follow-ups never answered:\n%s", strings.Join(s.Rows(), "\n"))
 	}
@@ -171,8 +175,8 @@ func TestTUI_QueueRestoredOnInterrupt(t *testing.T) {
 	script := `
 model: faux-1
 steps:
+  - hold: turn
   - text: "working on it"
-    delay: 5s
   - on_tool_result: none
     then:
       - text: "Made done.txt."
@@ -183,7 +187,7 @@ steps:
 
 	s.Send("first")
 	s.SendKey("enter")
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !anyRowMatches(s, spinnerFramePattern) {
 		if time.Now().After(deadline) {
 			t.Fatalf("spinner never appeared:\n%s", strings.Join(s.Rows(), "\n"))

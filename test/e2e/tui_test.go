@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	tkfaux "github.com/andrepato/harness/internal/testkit/faux"
 	"github.com/andrepato/harness/internal/testkit/screen"
 )
 
@@ -41,6 +42,9 @@ const testClock = "2026-09-23T12:00:00Z"
 // internal/tui/theme.go's UnicodeGlyphs.UserMark (kiln's "›" input
 // prompt).
 const tuiUserMark = "›"
+
+// e2eMinWait is the shortest deadline any e2e screen wait uses.
+const e2eMinWait = 20 * time.Second
 
 // startTUI starts the real harness binary under a PTY, cwd'd to proj, wired
 // to a faux server at fauxAddr (empty to omit faux env entirely — the
@@ -87,6 +91,11 @@ func startTUI(t *testing.T, cols, rows int, proj, home, sessDir, fauxAddr string
 		// rather than depending on whatever default background
 		// github.com/charmbracelet/x/vt's emulator happens to start with.
 		screen.WithBackgroundColor(tuiDesignBackground),
+		// A WaitFor timeout in a test is how long the test expects, not a
+		// bound on a slow runner: every e2e wait gets at least this long
+		// (screen.WithMinWait).
+		screen.WithMinWait(e2eMinWait),
+		screen.WithTimeout(e2eMinWait), // the default wait, Golden and the exit bound
 	}
 	if fauxAddr != "" {
 		opts = append(opts,
@@ -129,9 +138,16 @@ var tuiExtraOpts []screen.Option
 // (not just its address) so a caller can inspect Requests().
 func tuiFixture(t *testing.T, script string) (proj, home, sessDir, addr string, requests func() []recordedMessages) {
 	t.Helper()
+	proj, home, sessDir, addr, requests, _ = tuiFixtureSrv(t, script)
+	return proj, home, sessDir, addr, requests
+}
+
+// tuiFixtureSrv is tuiFixture plus the faux server itself, for a test that
+// releases a `hold:` step (releaseFaux) or reads what is held.
+func tuiFixtureSrv(t *testing.T, script string) (proj, home, sessDir, addr string, requests func() []recordedMessages, srv *tkfaux.Server) {
+	t.Helper()
 	proj = scratchProject(t)
 	home, sessDir = scratchHome(t)
-	var srvAddr string
 	srvAddr, srv := startFaux(t, script)
 	return proj, home, sessDir, srvAddr, func() []recordedMessages {
 		out := make([]recordedMessages, 0)
@@ -139,7 +155,7 @@ func tuiFixture(t *testing.T, script string) (proj, home, sessDir, addr string, 
 			out = append(out, recordedMessages(r.Messages))
 		}
 		return out
-	}
+	}, srv
 }
 
 // recordedMessages is one faux request's raw Messages JSON, kept as its
@@ -194,7 +210,7 @@ var turnSummaryPattern = regexp.MustCompile(regexp.QuoteMeta(idlePlaceholderText
 // "Interactions").
 func waitTurnSettled(t *testing.T, s *screen.Screen) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		rows := s.Rows()
 		spinning := false
@@ -225,14 +241,18 @@ func waitTurnSettled(t *testing.T, s *screen.Screen) {
 }
 
 // waitQuiescent blocks until Rows() stops changing for quiet, or fails
-// after timeout.
+// after timeout (floored at e2eMinWait, so a slow machine cannot fail it).
+// The busy row repaints on every spinner tick and elapsed second, so it is
+// left out of the comparison: only the rest of the screen has to settle.
 func waitQuiescent(s *screen.Screen, quiet, timeout time.Duration) error {
-	last := strings.Join(s.Rows(), "\n")
+	timeout = max(timeout, e2eMinWait)
+	snapshot := func() string { return strings.Join(dropSpinnerRows(s.Rows()), "\n") }
+	last := snapshot()
 	deadline := time.Now().Add(timeout)
 	stableSince := time.Now()
 	for {
 		time.Sleep(15 * time.Millisecond)
-		cur := strings.Join(s.Rows(), "\n")
+		cur := snapshot()
 		if cur != last {
 			last = cur
 			stableSince = time.Now()
@@ -245,6 +265,25 @@ func waitQuiescent(s *screen.Screen, quiet, timeout time.Duration) error {
 	}
 }
 
+// allowEditPromptPattern is the edit permission prompt's title row.
+var allowEditPromptPattern = regexp.MustCompile(`Allow kiln to edit`)
+
+// waitScreenGone blocks until re no longer matches the visible screen, or
+// fails after timeout (floored at e2eMinWait). Use it after a key that
+// dismisses something, so the next loop iteration does not act on the stale
+// frame.
+func waitScreenGone(s *screen.Screen, re *regexp.Regexp, timeout time.Duration) error {
+	timeout = max(timeout, e2eMinWait)
+	deadline := time.Now().Add(timeout)
+	for re.MatchString(strings.Join(s.Viewport(), "\n")) {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("waitScreenGone: %v still on screen after %s:\n%s", re, timeout, strings.Join(s.Rows(), "\n"))
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	return nil
+}
+
 // waitScrollbackQuiescent is waitQuiescent's scrollback-only counterpart:
 // it waits for s.Scrollback() (committed rows that have scrolled off the
 // visible viewport) to stop changing, ignoring the live viewport entirely.
@@ -255,6 +294,7 @@ func waitQuiescent(s *screen.Screen, quiet, timeout time.Duration) error {
 // TestTUI_Design_Streaming needs, since it only asserts on already-
 // committed scrollback content.
 func waitScrollbackQuiescent(s *screen.Screen, quiet, timeout time.Duration) error {
+	timeout = max(timeout, e2eMinWait)
 	last := strings.Join(s.Scrollback(), "\n")
 	deadline := time.Now().Add(timeout)
 	stableSince := time.Now()
@@ -365,26 +405,58 @@ func normalizeStatusRowCwd(rows []string) []string {
 
 func assertGoldenTail(t *testing.T, s *screen.Screen, name, anchor string, normalize ...func([]string) []string) {
 	t.Helper()
-	rows := s.Rows()
-	for _, f := range normalize {
-		rows = f(rows)
-	}
-	// An empty anchor keeps the whole screen.
-	start := 0
-	if anchor != "" {
-		start = -1
-		for i, r := range rows {
-			if strings.Contains(r, anchor) {
-				start = i
-				break
+	goldenEventually(t, goldenPath(name+".txt"), func() (string, error) {
+		rows := s.Rows()
+		for _, f := range normalize {
+			rows = f(rows)
+		}
+		// An empty anchor keeps the whole screen.
+		start := 0
+		if anchor != "" {
+			start = -1
+			for i, r := range rows {
+				if strings.Contains(r, anchor) {
+					start = i
+					break
+				}
+			}
+			if start < 0 {
+				return "", fmt.Errorf("golden %s: anchor %q is not on screen, so the snapshot would start at the wrong row:\n%s", name, anchor, strings.Join(rows, "\n"))
 			}
 		}
+		return strings.Join(normalizeSpinnerGlyph(normalizeStatusRowCwd(rows[start:])), "\n") + "\n", nil
+	})
+}
+
+// goldenEventually compares a live screen capture against a golden. A
+// capture can land between two PTY reads of one repaint (a half-drawn status
+// row, say), so a mismatch is retried with a fresh capture until the golden
+// matches or e2eMinWait passes; only then does it report the last capture's
+// diff. The golden still has to match exactly: a wrong final screen fails, a
+// transient one does not.
+func goldenEventually(t *testing.T, path string, capture func() (string, error)) {
+	t.Helper()
+	deadline := time.Now().Add(e2eMinWait)
+	for {
+		got, err := capture()
+		if err == nil {
+			if os.Getenv("UPDATE") == "1" {
+				assertGolden(t, path, got)
+				return
+			}
+			if want, rerr := os.ReadFile(path); rerr == nil && string(want) == got {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertGolden(t, path, got)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if start < 0 {
-		t.Fatalf("golden %s: anchor %q is not on screen, so the snapshot would start at the wrong row:\n%s", name, anchor, strings.Join(rows, "\n"))
-	}
-	got := strings.Join(normalizeSpinnerGlyph(normalizeStatusRowCwd(rows[start:])), "\n")
-	assertGolden(t, goldenPath(name+".txt"), got+"\n")
 }
 
 // busyElapsedPattern finds the elapsed seconds on the busy row
@@ -707,9 +779,17 @@ func maskSpinnerRowStyled(r string) (string, bool) {
 // shift where a style span ends) never reaches the golden file.
 func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts stylesOpts) {
 	t.Helper()
+	goldenEventually(t, goldenPath(name+".styles.txt"), func() (string, error) {
+		return stylesCapture(s, name, opts)
+	})
+}
 
-	rows := s.Viewport()
-	styles := s.Styles()
+// stylesCapture is one capture of the styled encoding assertGoldenStyles
+// compares: rows and styles come from one Snapshot, so they cannot straddle
+// two paints.
+func stylesCapture(s *screen.Screen, name string, opts stylesOpts) (string, error) {
+	frame := s.Snapshot()
+	rows, styles := frame.Rows, frame.Styles
 
 	start := 0
 	if opts.anchor != "" {
@@ -721,7 +801,7 @@ func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts styles
 			}
 		}
 		if start < 0 {
-			t.Fatalf("golden %s styles: anchor %q is not on screen, so the snapshot would start at the wrong row:\n%s", name, opts.anchor, strings.Join(rows, "\n"))
+			return "", fmt.Errorf("golden %s styles: anchor %q is not on screen, so the snapshot would start at the wrong row:\n%s", name, opts.anchor, strings.Join(rows, "\n"))
 		}
 	}
 	rows = rows[start:]
@@ -749,8 +829,7 @@ func assertGoldenStyles(t *testing.T, s *screen.Screen, name string, opts styles
 	for len(lines) > 0 && strings.TrimRight(lines[len(lines)-1], " ") == "" {
 		lines = lines[:len(lines)-1]
 	}
-	got := strings.Join(lines, "\n")
-	assertGolden(t, goldenPath(name+".styles.txt"), got+"\n")
+	return strings.Join(lines, "\n") + "\n", nil
 }
 
 // TestTUI_Startup_NoDuplicateRows guards the real bug a screenshot of kiln
@@ -945,7 +1024,7 @@ func TestTUI_FixBug(t *testing.T) {
 
 func TestTUI_Spinner_Busy(t *testing.T) {
 	script := loadFauxScript(t, "slow")
-	proj, home, sessDir, addr, _ := tuiFixture(t, script)
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, script)
 
 	s := startTUI(t, 100, 24, proj, home, sessDir, addr,
 		"--permission-mode", "bypassPermissions",
@@ -964,12 +1043,13 @@ func TestTUI_Spinner_Busy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The turn is still running (slow.yaml delays before replying): the
-	// busy hint must still be up a beat later, not a one-frame flash.
-	time.Sleep(200 * time.Millisecond)
+	// The turn is held (slow.yaml): once the model request is waiting, the
+	// busy hint must still be up, not a one-frame flash.
+	waitFauxHeld(t, srv, "turn")
 	if !anyRowMatches(s, spinnerRowPattern) {
 		t.Error("busy hint disappeared before the turn finished")
 	}
+	releaseFaux(srv, "turn")
 
 	if err := s.WaitFor(turnSummaryPattern, 5*time.Second); err != nil {
 		t.Fatal(err)
@@ -1089,7 +1169,11 @@ func TestTUI_Permission_Allow(t *testing.T) {
 			break
 		}
 		s.SendKey("y")
-		time.Sleep(50 * time.Millisecond)
+		// The next iteration must see the next prompt, not this one still
+		// on screen.
+		if err := waitScreenGone(s, allowEditPromptPattern, 0); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := s.WaitFor(turnSummaryPattern, 5*time.Second); err != nil {
 		t.Fatal(err)
@@ -1593,7 +1677,7 @@ func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proj, home, sessDir, addr, _ := tuiFixture(t, string(script))
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, string(script))
 	writeModelRolesSettings(t, proj, map[string]string{"fast": "faux/faux-2"})
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr,
@@ -1617,6 +1701,7 @@ func TestTUI_SubagentsPanel_TwoLiveThenCleared(t *testing.T) {
 		t.Fatalf("subagents panel missing the fast-routed dispatch's description: %v", err)
 	}
 
+	releaseFaux(srv, "subagents") // both live rows were seen
 	waitTurnSettled(t, s)
 
 	// The panel is gone once the turn has settled and no further prompt
@@ -1716,7 +1801,7 @@ func TestTUI_StatusLine_CtxAndCost(t *testing.T) {
 // "Interactions"), then back once the turn settles.
 func TestTUI_Placeholder_Busy(t *testing.T) {
 	script := loadFauxScript(t, "slow")
-	proj, home, sessDir, addr, _ := tuiFixture(t, script)
+	proj, home, sessDir, addr, _, srv := tuiFixtureSrv(t, script)
 
 	s := startTUI(t, 100, 24, proj, home, sessDir, addr,
 		"--permission-mode", "bypassPermissions",
@@ -1736,6 +1821,7 @@ func TestTUI_Placeholder_Busy(t *testing.T) {
 		t.Error("idle placeholder still visible while busy")
 	}
 
+	releaseFaux(srv, "turn")
 	waitTurnSettled(t, s)
 	if err := s.WaitFor(idlePlaceholderText, 2*time.Second); err != nil {
 		t.Fatalf("idle placeholder did not return after the turn settled: %v", err)

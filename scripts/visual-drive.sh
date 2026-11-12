@@ -17,6 +17,7 @@
 #   KEY <k>          press a key: enter, esc, up, down, ctrl-c, ctrl-f, or a char
 #   WAIT <seconds>   sleep
 #   SHOT <name>      screenshot the window to <out>/<name>.png
+#   RELEASE <name>   release the faux script's `hold: <name>` step
 set -euo pipefail
 COLS=100 ROWS=30 MODE=manual FAUX="" FIXTURE="" STEPS="" OUT=""
 while [ $# -gt 0 ]; do
@@ -71,6 +72,7 @@ while IFS= read -r line || [ -n "$line" ]; do
            *) sess "write text \"$arg\" newline NO";;
          esac;;
     WAIT) sleep "$arg";;
+    RELEASE) curl -s -X POST "http://$ADDR/_faux/release?name=$arg" >/dev/null;;
     SHOT) screencapture -x -o -l "$WID" "$OUT/$arg.png"; echo "shot $OUT/$arg.png";;
     ''|'#'*) ;;
     *) echo "unknown step: $line" >&2;;

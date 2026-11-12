@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/andrepato/harness/internal/msg"
 )
@@ -85,13 +84,13 @@ steps:
 // EventMessageEnd handling, `SetValue(BranchTip(...), &responseEntryID)`)
 // could in principle race with — and silently clobber — Steer's tip write
 // if the running turn computed its response entry's parent before Steer
-// ran. This test scripts a delay so Steer's call lands mid-turn, then
+// ran. This test scripts a hold so Steer's call lands mid-turn, then
 // asserts the queued text still reaches the model on the following turn.
 func TestSteerDeliveryWhileBusy(t *testing.T) {
 	rig := newTestRig(t, `
 model: faux-1
 steps:
-  - delay: 200ms
+  - hold: running
   - text: "first reply"
   - text: "second reply"
 `, []string{"bash"})
@@ -105,13 +104,14 @@ steps:
 		errCh <- err
 	}()
 
-	// Give Prompt time to reach the in-flight (delayed) request before
+	// Wait until the first request is parked at the faux hold before
 	// queuing, so Steer genuinely runs concurrently with the running turn
-	// — not just before it starts.
-	time.Sleep(50 * time.Millisecond)
+	// — not just before it starts — then let the turn finish.
+	waitHeld(t, rig, "running")
 	if err := lane.Steer("queued while busy"); err != nil {
 		t.Fatalf("Steer (mid-turn): %v", err)
 	}
+	rig.Faux.Release("running")
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("Prompt 1: %v", err)

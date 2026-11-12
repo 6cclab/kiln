@@ -17,6 +17,14 @@ ones. See the `Makefile` for the exact commands each layer maps to.
 - Assert at the layer where the user perceives the bug. A layout complaint is a
   screen assertion, not a byte assertion.
 - `make check` is the fast layers; `make e2e` drives the real binary.
+- A test must not be able to fail because the machine is slow. Wait on an event, never on
+  a fixed sleep or an elapsed bound. To keep a turn busy, script a faux `hold: <name>` step
+  and release it from the test (`releaseFaux`, `RELEASE` in kiln-drive and drive.py), not a
+  `delay`. To wait for something to disappear, use `waitScreenGone` or `WAITGONE`. e2e
+  screens floor every wait at 20 s (`screen.WithMinWait`), `waitQuiescent` ignores the busy
+  row, and golden comparisons retry a fresh capture until they match or 20 s pass
+  (`goldenEventually`), so a half-painted frame cannot fail one. Only a negative check
+  ("nothing happens within N") may use a plain sleep: slow can only make it pass vacuously.
 
 ## 1. Unit — `go test ./...`
 
@@ -143,7 +151,7 @@ To update a golden after an intentional UI change:
     UPDATE=1 go test -tags e2e ./test/e2e/... -run TestTUI_FixBug -v
 
 Goldens live under `testdata/golden/tui-*.txt`. `testdata/faux/slow.yaml`
-(a single response with a `delay`) exists so the busy-state test has
+(a response behind a `hold: turn` step the test releases) exists so the busy-state test has
 something to observe while a turn is still running.
 
 A few of these tests carry comments describing real, reproduced bugs
@@ -230,7 +238,7 @@ It is safe by construction: kiln runs with an empty `HOME` (no
 `~/.claude/settings.json`, nothing written to `~/.harness`), `HARNESS_OFFLINE=1`
 (any provider other than faux or ollama is refused), `--model faux/faux-1`,
 and the deterministic `HARNESS_TEST_CLOCK` / `HARNESS_RETRY_JITTER=0` knobs.
-The step file takes `SEND`, `TYPE`, `KEY`, `WAIT` and `SHOT` lines;
+The step file takes `SEND`, `TYPE`, `KEY`, `WAIT`, `SHOT` and `RELEASE <hold>` lines;
 `testdata/drive/design-visual.txt` walks the design handoff's session. The
 script closes its window and stops faux when done. It needs macOS with
 iTerm2 and Screen Recording permission for the terminal that runs it.

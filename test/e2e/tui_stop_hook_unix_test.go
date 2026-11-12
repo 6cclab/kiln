@@ -37,7 +37,7 @@ func TestTUI_Esc_KillsASlowStopHook(t *testing.T) {
 	pid := waitPidFile(t, pidFile, 5*time.Second)
 
 	s.SendKey("esc")
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for syscall.Kill(pid, 0) == nil {
 		if time.Now().After(deadline) {
 			t.Fatalf("the Stop hook (pid %d) is still running 5s after Esc", pid)
@@ -85,7 +85,7 @@ func TestTUI_Esc_KillsBothSlowStopHooks(t *testing.T) {
 	pidB := waitPidFile(t, pidFileB, 5*time.Second)
 
 	s.SendKey("esc")
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for syscall.Kill(pidA, 0) == nil || syscall.Kill(pidB, 0) == nil {
 		if time.Now().After(deadline) {
 			t.Fatalf("a Stop hook is still running 5s after Esc (pids %d, %d)", pidA, pidB)
@@ -108,8 +108,7 @@ func TestTUI_Esc_KillsBothSlowStopHooks(t *testing.T) {
 // Stop hook runs only when a turn completes, not when the user interrupts
 // it. It used to run at every run end, including an interrupted one.
 func TestTUI_StopHook_SkippedWhenTheTurnIsInterrupted(t *testing.T) {
-	script := "model: faux-1\nsteps:\n  - chunk_delay: 60ms\n    text: \"" +
-		strings.Repeat("Slow words keep streaming in. ", 30) + "\"\n    end_turn: true\n"
+	script := "model: faux-1\nsteps:\n  - text: \"Partial.\"\n  - hold: stream\n  - text: \"never sent\"\n    end_turn: true\n"
 	proj, home, sessDir, addr, _ := tuiFixture(t, script)
 	ran := filepath.Join(t.TempDir(), "stop-ran")
 	writeHookSettings(t, proj, "Stop", "", "touch "+ran)
@@ -118,7 +117,7 @@ func TestTUI_StopHook_SkippedWhenTheTurnIsInterrupted(t *testing.T) {
 	waitReady(t, s)
 	s.Send("write slowly")
 	s.SendKey("enter")
-	if err := s.WaitFor("Slow words keep streaming", 5*time.Second); err != nil {
+	if err := s.WaitFor("Partial.", 5*time.Second); err != nil {
 		t.Fatalf("the reply never started streaming: %v", err)
 	}
 	s.SendKey("esc")
@@ -133,7 +132,7 @@ func TestTUI_StopHook_SkippedWhenTheTurnIsInterrupted(t *testing.T) {
 
 func waitPidFile(t *testing.T, path string, timeout time.Duration) int {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(max(timeout, e2eMinWait))
 	for {
 		if b, err := os.ReadFile(path); err == nil {
 			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 0 {
@@ -237,22 +236,18 @@ func TestTUI_StopHook_AdditionalContextNeverShown(t *testing.T) {
 // hook's continuation, so Esc interrupts the continued reply like any
 // other, and nothing continues it again.
 func TestTUI_Esc_InterruptsAContinuedTurn(t *testing.T) {
-	script := "model: faux-1\nsteps:\n  - text: \"First reply here.\"\n    end_turn: true\n  - chunk_delay: 60ms\n    text: \"" +
-		strings.Repeat("Slow words keep streaming in. ", 30) + "\"\n    end_turn: true\n"
-	proj, home, sessDir, addr, requests := tuiFixture(t, script)
+	script := "model: faux-1\nsteps:\n  - text: \"First reply here.\"\n    end_turn: true\n  - hold: stream\n  - text: \"never sent\"\n    end_turn: true\n"
+	proj, home, sessDir, addr, requests, srv := tuiFixtureSrv(t, script)
 	writeHookSettings(t, proj, "Stop", "", hookScript(t, "block-exit2.sh"))
 
 	s := startTUI(t, 100, 30, proj, home, sessDir, addr)
 	waitReady(t, s)
 	s.Send("finish up")
 	s.SendKey("enter")
-	if err := s.WaitFor("Slow words keep streaming", 10*time.Second); err != nil {
-		t.Fatalf("the continued reply never started: %v", err)
-	}
-	// The hook blocks every stop, so once the slow reply has finished the
-	// turn continues on the faux's instant "script exhausted" replies. Esc
-	// must land while the slow reply is still streaming, or the count
-	// below measures the test's timing, not kiln.
+	// The continued reply is held (hold: stream) until Esc cancels it, so
+	// it cannot finish first: wait for its request to be the held one, not
+	// for text (kiln's throttled stream render may drop a lone delta).
+	waitFauxHeld(t, srv, "stream")
 	if n := len(requests()); n != 2 {
 		t.Fatalf("%d model requests before Esc, want 2: the slow reply finished before the test pressed Esc", n)
 	}

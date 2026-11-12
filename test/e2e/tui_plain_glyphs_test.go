@@ -79,7 +79,9 @@ func TestTUI_AxScreenReader_NoBoxDrawingGlyphs(t *testing.T) {
 			sawPrompt = true
 		}
 		s.SendKey("y")
-		time.Sleep(50 * time.Millisecond)
+		if err := waitScreenGone(s, allowEditPromptPattern, 0); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if !sawPrompt {
 		t.Fatal("never saw the Edit permission prompt")
