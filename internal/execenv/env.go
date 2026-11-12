@@ -32,6 +32,7 @@ type FileInfo struct {
 // expands to the user's home directory, and file operations never panic —
 // failures come back as an error.
 type Env struct {
+	confined *confinedFiles
 	// Cwd is the working directory relative paths resolve against.
 	Cwd string
 	// ShellPath overrides the shell used by Exec. Empty selects pi's
@@ -121,6 +122,9 @@ func parseFileURL(raw string) (string, error) {
 
 // WriteFile creates or overwrites a file, creating parent directories.
 func (e *Env) WriteFile(path string, content []byte) error {
+	if e.confined != nil {
+		return e.confinedWriteFile(path, content)
+	}
 	resolved := e.AbsolutePath(path)
 	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
 		return err
@@ -131,6 +135,9 @@ func (e *Env) WriteFile(path string, content []byte) error {
 // ListDir lists the direct children of a directory without following
 // symlinks, sorted by name for deterministic output.
 func (e *Env) ListDir(path string) ([]FileInfo, error) {
+	if e.confined != nil {
+		return nil, os.ErrPermission
+	}
 	resolved := e.AbsolutePath(path)
 	entries, err := os.ReadDir(resolved)
 	if err != nil {
@@ -152,6 +159,9 @@ func (e *Env) ListDir(path string) ([]FileInfo, error) {
 // Stat returns metadata for path without following symlinks, mirroring
 // pi's fileInfo (which uses lstat).
 func (e *Env) Stat(path string) (FileInfo, error) {
+	if e.confined != nil {
+		return e.confinedStat(path)
+	}
 	return statNoFollow(e.AbsolutePath(path))
 }
 

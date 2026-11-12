@@ -53,7 +53,9 @@ type VerificationSubdirectory struct {
 type VerificationEvidence struct {
 	CallID             string                  `json:"callId"`
 	Command            string                  `json:"command"`
+	Discovery          string                  `json:"discovery,omitempty"`
 	Files              []VerificationFile      `json:"files"`
+	MissingFiles       []string                `json:"missingFiles,omitempty"`
 	Directories        []VerificationDirectory `json:"directories,omitempty"`
 	DirectoryFileLimit int                     `json:"directoryFileLimit,omitempty"`
 	DirectoryByteLimit int64                   `json:"directoryByteLimit,omitempty"`
@@ -80,6 +82,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		panic("invalid built-in bash properties: " + err.Error())
 	}
 	properties["verificationFiles"] = json.RawMessage(`{"type":"array","maxItems":16,"items":{"type":"string"},"description":"Project files to fingerprint before and after this command. Evidence is recorded only when the command succeeds and files remain unchanged."}`)
+	properties["verificationDiscover"] = json.RawMessage(`{"type":"string","enum":["go"],"description":"Opt in to a partial bounded input snapshot for one literal go test ./path or go test ./path/... command. Includes selected package tree and Go module/workspace metadata. Imports, replacements, toolchain and environment are not discovered; unchanged evidence never means safe to skip verification. Unsupported or unavailable discovery records no evidence."}`)
 	properties["verificationDirectories"] = json.RawMessage(`{"type":"array","maxItems":8,"items":{"type":"string"},"description":"Project directories to fingerprint recursively, including regular file contents, permissions and membership. .git is excluded. Evidence requires a successful command and unchanged inputs."}`)
 	properties["verificationDirectoryFileLimit"] = json.RawMessage(`{"type":"integer","minimum":1,"maximum":512,"description":"Maximum regular files across all declared files and directories (default 128, hard ceiling 512). Tree entries, including subdirectories, also have a shared hard ceiling of 512. Above limit, evidence is unavailable."}`)
 	properties["verificationDirectoryByteLimit"] = json.RawMessage(`{"type":"integer","minimum":1,"maximum":67108864,"description":"Maximum total bytes across all declared files and directories (default and hard ceiling 67108864). Above limit, evidence is unavailable."}`)
@@ -88,6 +91,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 	wrapped.Execute = func(ctx context.Context, raw json.RawMessage, update tool.Update, inv tool.Invocation) (tool.Result, error) {
 		var args struct {
 			Command                 string   `json:"command"`
+			VerificationDiscover    string   `json:"verificationDiscover"`
 			VerificationFiles       []string `json:"verificationFiles"`
 			VerificationDirectories []string `json:"verificationDirectories"`
 			DirectoryFileLimit      int      `json:"verificationDirectoryFileLimit"`
@@ -96,11 +100,24 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return base.Execute(ctx, raw, update, inv)
 		}
+		requestedFiles := append([]string(nil), args.VerificationFiles...)
+		requestedDirs := append([]string(nil), args.VerificationDirectories...)
+		var inferred discoveredVerificationInputs
+		discoveryValid := args.VerificationDiscover == ""
+		if args.VerificationDiscover == "go" {
+			var discoverErr error
+			inferred, discoverErr = discoverGoVerificationInputs(inv.Cwd, args.Command, allowRead)
+			discoveryValid = discoverErr == nil
+			if discoveryValid {
+				requestedFiles = appendUniqueVerificationPaths(requestedFiles, inferred.files)
+				requestedDirs = appendUniqueVerificationPaths(requestedDirs, inferred.directories)
+			}
+		}
 		var before []VerificationFile
 		var beforeDirs []VerificationDirectory
-		if len(args.VerificationFiles) > 0 && len(args.VerificationFiles) <= maxVerificationFiles {
+		if discoveryValid && len(requestedFiles) > 0 && len(requestedFiles)+len(inferred.missing) <= maxVerificationFiles {
 			var err error
-			before, err = fingerprintFiles(ctx, inv.Cwd, args.VerificationFiles, allowRead)
+			before, err = fingerprintFiles(ctx, inv.Cwd, requestedFiles, allowRead)
 			if err != nil {
 				before = nil
 			}
@@ -108,7 +125,7 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		fileLimit := effectiveDirectoryFileLimit(args.DirectoryFileLimit)
 		byteLimit := effectiveDirectoryByteLimit(args.DirectoryByteLimit)
 		validLimits := fileLimit > 0 && fileLimit <= maxVerificationDirectoryFiles && byteLimit > 0 && byteLimit <= maxVerificationDirectoryBytes
-		if len(before) > 0 && len(args.VerificationDirectories) > 0 {
+		if len(before) > 0 && len(requestedDirs) > 0 {
 			fileLimit -= len(before)
 			var used int64
 			for _, file := range before {
@@ -121,8 +138,8 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 			}
 			byteLimit -= used
 		}
-		if len(args.VerificationDirectories) > 0 && len(args.VerificationDirectories) <= maxVerificationDirectories && (len(args.VerificationFiles) == 0 || len(before) > 0) && validLimits && fileLimit > 0 && byteLimit > 0 {
-			beforeDirs, _ = fingerprintDirectories(ctx, inv.Cwd, args.VerificationDirectories, allowRead, fileLimit, byteLimit)
+		if discoveryValid && len(requestedDirs) > 0 && len(requestedDirs) <= maxVerificationDirectories && (len(requestedFiles) == 0 || len(before) > 0) && validLimits && fileLimit > 0 && byteLimit > 0 {
+			beforeDirs, _ = fingerprintDirectories(ctx, inv.Cwd, requestedDirs, allowRead, fileLimit, byteLimit)
 		}
 		result, err := base.Execute(ctx, raw, update, inv)
 		if err == nil && args.Command != "" && len(args.Command) <= maxVerificationCommandBytes {
@@ -138,20 +155,26 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 				}
 			}
 		}
-		if err != nil || result.IsError || len(before)+len(beforeDirs) == 0 || len(args.Command) > maxVerificationCommandBytes || (len(args.VerificationFiles) > 0 && len(before) == 0) || (len(args.VerificationDirectories) > 0 && len(beforeDirs) == 0) {
+		if err != nil || result.IsError || !discoveryValid || len(before)+len(beforeDirs) == 0 || len(args.Command) > maxVerificationCommandBytes || (len(requestedFiles) > 0 && len(before) == 0) || (len(requestedDirs) > 0 && len(beforeDirs) == 0) || !verificationMissingFiles(inv.Cwd, inferred.missing, allowRead) {
 			return result, err
+		}
+		if args.VerificationDiscover == "go" {
+			afterInference, discoverErr := discoverGoVerificationInputs(inv.Cwd, args.Command, allowRead)
+			if discoverErr != nil || !slices.Equal(inferred.files, afterInference.files) || !slices.Equal(inferred.missing, afterInference.missing) || !slices.Equal(inferred.directories, afterInference.directories) {
+				return result, nil
+			}
 		}
 		var after []VerificationFile
 		var hashErr error
 		if len(before) > 0 {
-			after, hashErr = fingerprintFiles(ctx, inv.Cwd, args.VerificationFiles, allowRead)
+			after, hashErr = fingerprintFiles(ctx, inv.Cwd, requestedFiles, allowRead)
 		}
 		if hashErr != nil || !sameFingerprints(before, after) {
 			return result, nil
 		}
 		var afterDirs []VerificationDirectory
 		if len(beforeDirs) > 0 {
-			afterDirs, hashErr = fingerprintDirectories(ctx, inv.Cwd, args.VerificationDirectories, allowRead, fileLimit, byteLimit)
+			afterDirs, hashErr = fingerprintDirectories(ctx, inv.Cwd, requestedDirs, allowRead, fileLimit, byteLimit)
 		}
 		if hashErr != nil || !sameDirectories(beforeDirs, afterDirs) {
 			return result, nil
@@ -165,7 +188,11 @@ func VerificationBashTool(base *tool.Tool, allowRead func(path string) bool) *to
 		if details == nil {
 			details = make(map[string]json.RawMessage)
 		}
-		proof, marshalErr := json.Marshal(VerificationEvidence{CallID: inv.ToolCallID, Command: args.Command, Files: before, Directories: beforeDirs, DirectoryFileLimit: fileLimit, DirectoryByteLimit: byteLimit})
+		provenance := ""
+		if args.VerificationDiscover == "go" {
+			provenance = goPartialDiscovery
+		}
+		proof, marshalErr := json.Marshal(VerificationEvidence{CallID: inv.ToolCallID, Command: args.Command, Discovery: provenance, Files: before, MissingFiles: inferred.missing, Directories: beforeDirs, DirectoryFileLimit: fileLimit, DirectoryByteLimit: byteLimit})
 		if marshalErr != nil {
 			return result, nil
 		}
@@ -192,7 +219,7 @@ func VerificationFromResult(details json.RawMessage) (VerificationEvidence, bool
 	var envelope struct {
 		Evidence VerificationEvidence `json:"taskVerification"`
 	}
-	if json.Unmarshal(details, &envelope) != nil || strings.TrimSpace(envelope.Evidence.Command) == "" || len(envelope.Evidence.Command) > maxVerificationCommandBytes || envelope.Evidence.CallID == "" || len(envelope.Evidence.Files)+len(envelope.Evidence.Directories) == 0 || len(envelope.Evidence.Files) > maxVerificationFiles || len(envelope.Evidence.Directories) > maxVerificationDirectories {
+	if json.Unmarshal(details, &envelope) != nil || strings.TrimSpace(envelope.Evidence.Command) == "" || len(envelope.Evidence.Command) > maxVerificationCommandBytes || envelope.Evidence.CallID == "" || len(envelope.Evidence.Files)+len(envelope.Evidence.Directories) == 0 || len(envelope.Evidence.Files)+len(envelope.Evidence.MissingFiles) > maxVerificationFiles || len(envelope.Evidence.Directories) > maxVerificationDirectories || envelope.Evidence.Discovery != "" && envelope.Evidence.Discovery != goPartialDiscovery {
 		return VerificationEvidence{}, false
 	}
 	if !validVerificationDirectories(envelope.Evidence) {
@@ -206,6 +233,24 @@ func VerificationFromResult(details json.RawMessage) (VerificationEvidence, bool
 			return VerificationEvidence{}, false
 		}
 	}
+	seenMissing := make(map[string]bool)
+	if envelope.Evidence.Discovery == "" && len(envelope.Evidence.MissingFiles) > 0 {
+		return VerificationEvidence{}, false
+	}
+	for _, path := range envelope.Evidence.MissingFiles {
+		if !validRelativeVerificationPath(path) || seenMissing[path] {
+			return VerificationEvidence{}, false
+		}
+		seenMissing[path] = true
+		for _, file := range envelope.Evidence.Files {
+			if file.Path == path {
+				return VerificationEvidence{}, false
+			}
+		}
+	}
+	if envelope.Evidence.Discovery == goPartialDiscovery && !validGoDiscoveryEvidence(envelope.Evidence) {
+		return VerificationEvidence{}, false
+	}
 	return envelope.Evidence, true
 }
 
@@ -216,7 +261,7 @@ func VerificationFresh(cwd string, proof VerificationEvidence, allowRead func(st
 
 // VerificationFreshContext rechecks a bounded snapshot with cancellation.
 func VerificationFreshContext(ctx context.Context, cwd string, proof VerificationEvidence, allowRead func(string) bool) bool {
-	if len(proof.Files)+len(proof.Directories) == 0 || len(proof.Files) > maxVerificationFiles || len(proof.Directories) > maxVerificationDirectories || !validVerificationDirectories(proof) || allowRead == nil {
+	if len(proof.Files)+len(proof.Directories) == 0 || len(proof.Files)+len(proof.MissingFiles) > maxVerificationFiles || len(proof.Directories) > maxVerificationDirectories || !validVerificationDirectories(proof) || allowRead == nil || !verificationMissingFiles(cwd, proof.MissingFiles, allowRead) {
 		return false
 	}
 	paths := make([]string, 0, len(proof.Files))

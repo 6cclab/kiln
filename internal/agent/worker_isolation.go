@@ -87,6 +87,9 @@ func isolatedFileTools(env *execenv.Env, root string, gate *permission.Gate, sta
 		copyTool := *original
 		baseExecute := original.Execute
 		copyTool.Execute = func(ctx context.Context, raw json.RawMessage, update tool.Update, inv tool.Invocation) (tool.Result, error) {
+			if !env.ConfinedFilesEnabled() {
+				return tool.Errorf("isolated file access is not confined"), nil
+			}
 			var args map[string]any
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return tool.Errorf("invalid isolated worker arguments: %s", err), nil

@@ -23,6 +23,7 @@ type verificationStatusArgs struct {
 
 type verificationStatusRecord struct {
 	CallID      string   `json:"callId"`
+	Discovery   string   `json:"discovery,omitempty"`
 	Command     string   `json:"command,omitempty"`
 	Status      string   `json:"status"`
 	Reason      string   `json:"reason"`
@@ -74,7 +75,7 @@ func VerificationStatusTool(cwd string, allowRead func(string) bool, proofs func
 				if args.Command != "" && args.Command != proof.Command {
 					continue
 				}
-				if len(args.Files) > 0 && !verificationFileIntersection(proof.Files, proof.Directories, args.Files) {
+				if len(args.Files) > 0 && !verificationFileIntersection(proof.Files, proof.MissingFiles, proof.Directories, args.Files) {
 					continue
 				}
 				if len(args.Directories) > 0 && !verificationDirectoryIntersection(proof.Directories, args.Directories) {
@@ -101,7 +102,7 @@ func VerificationStatusTool(cwd string, allowRead func(string) bool, proofs func
 				encoded, err := json.Marshal(struct {
 					Scope   string                     `json:"scope"`
 					Records []verificationStatusRecord `json:"records"`
-				}{Scope: "declared inputs only; no task correctness or safe-to-skip claim", Records: candidate})
+				}{Scope: verificationScope(candidate), Records: candidate})
 				if err != nil {
 					return tool.Result{}, err
 				}
@@ -118,7 +119,7 @@ func VerificationStatusTool(cwd string, allowRead func(string) bool, proofs func
 				Scope   string                     `json:"scope"`
 				Records []verificationStatusRecord `json:"records"`
 				Omitted int                        `json:"omitted"`
-			}{Scope: "declared inputs only; no task correctness or safe-to-skip claim", Records: records, Omitted: used - len(records)})
+			}{Scope: verificationScope(records), Records: records, Omitted: used - len(records)})
 			if err != nil {
 				return tool.Result{}, err
 			}
@@ -127,10 +128,17 @@ func VerificationStatusTool(cwd string, allowRead func(string) bool, proofs func
 	}
 }
 
-func verificationFileIntersection(files []VerificationFile, dirs []VerificationDirectory, requested []string) bool {
+func verificationFileIntersection(files []VerificationFile, missing []string, dirs []VerificationDirectory, requested []string) bool {
 	for _, file := range files {
 		for _, path := range requested {
 			if file.Path == path {
+				return true
+			}
+		}
+	}
+	for _, path := range missing {
+		for _, target := range requested {
+			if path == target {
 				return true
 			}
 		}
@@ -164,13 +172,19 @@ func verificationDirectoryIntersection(dirs []VerificationDirectory, requested [
 }
 
 func checkVerificationProof(ctx context.Context, cwd string, proof VerificationEvidence, allowRead func(string) bool) verificationStatusRecord {
-	record := verificationStatusRecord{CallID: proof.CallID}
-	if len(proof.Files)+len(proof.Directories) == 0 || len(proof.Files) > maxVerificationFiles || len(proof.Directories) > maxVerificationDirectories || !validVerificationDirectories(proof) || allowRead == nil {
+	record := verificationStatusRecord{CallID: proof.CallID, Discovery: proof.Discovery}
+	if len(proof.Files)+len(proof.Directories) == 0 || len(proof.Files)+len(proof.MissingFiles) > maxVerificationFiles || len(proof.Directories) > maxVerificationDirectories || !validVerificationDirectories(proof) || allowRead == nil {
 		record.Status, record.Reason = "unavailable", "saved dependency set cannot be checked"
 		return record
 	}
 	for _, file := range proof.Files {
 		if !allowRead(file.Path) {
+			record.Status, record.Reason = "unavailable", "one or more dependencies cannot be read"
+			return record
+		}
+	}
+	for _, path := range proof.MissingFiles {
+		if !validRelativeVerificationPath(path) || !allowRead(path) {
 			record.Status, record.Reason = "unavailable", "one or more dependencies cannot be read"
 			return record
 		}
@@ -204,6 +218,20 @@ func checkVerificationProof(ctx context.Context, cwd string, proof VerificationE
 	}
 	if err != nil {
 		record.Status, record.Reason = "unavailable", "one or more dependencies cannot be checked"
+		return record
+	}
+	for _, path := range proof.MissingFiles {
+		_, statErr := os.Lstat(filepath.Join(cwd, path))
+		if os.IsNotExist(statErr) {
+			continue
+		}
+		if statErr != nil {
+			record.Status, record.Reason = "unavailable", "one or more dependencies cannot be checked"
+			return record
+		}
+		record.Command = proof.Command
+		record.Status, record.Reason = "changed", "a previously absent metadata file now exists"
+		record.Files = append(record.Files, path)
 		return record
 	}
 	var currentDirs []VerificationDirectory
@@ -251,4 +279,14 @@ func checkVerificationProof(ctx context.Context, cwd string, proof VerificationE
 		}
 	}
 	return record
+}
+
+// Keep ordinary evidence concise; inferred inputs need the additional scope limit.
+func verificationScope(records []verificationStatusRecord) string {
+	for _, record := range records {
+		if record.Discovery != "" {
+			return "recorded inputs only; partial Go discovery omits imports, replacements, toolchain and environment; dependency graph incomplete; no task correctness or safe-to-skip claim"
+		}
+	}
+	return "declared inputs only; no task correctness or safe-to-skip claim"
 }

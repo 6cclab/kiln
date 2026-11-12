@@ -34,11 +34,16 @@ being mistaken for the complete roadmap.
   superseded evidence without executing or skipping checks. Explicit directory
   dependencies include membership changes; an optional plan returns prior commands
   to rerun or evidence needing review without making safe-to-skip claims.
+  Opt-in discovery for literal local Go package tests adds a bounded partial
+  package/metadata snapshot, including the absence of optional workspace files.
 - Opt-in clean-checkout editing worktrees, structured retained patch artifacts,
   and explicit digest/base-checked patch application under a repository lock.
   Batch preflight/application combines disjoint artifacts from one clean base.
   Opt-in dirty-parent snapshots preserve staged/unstaged/untracked inputs and
   export only worker changes; integration requires the captured baseline to match.
+- Descriptor-relative isolated file operations on macOS/Linux reject symlink and
+  hardlink aliases and fail closed after cleanup. Windows isolated editing fails
+  explicitly pending a corresponding implementation.
 - Offline exact-cohort comparison with external harness records, including
   strict usage accounting, setup provenance, mechanical quality, and paired costs.
   `eval plan` fingerprints a selected Claude Code cohort without model calls;
@@ -79,7 +84,9 @@ being mistaken for the complete roadmap.
   avoid double-counting disjoint input categories. Local regressions cover these
   changes; their effect on live cost and generated-code quality is not measured.
 
-Details and local performance evidence for the latest tranche are in
+Details for the latest tranche are in
+[worker confinement and verification discovery](worker-confinement-verification-discovery.md).
+Earlier snapshot performance evidence is in
 [worker snapshots and verification dependencies](worker-snapshot-verification-improvements.md).
 
 ## Still outstanding from the full plan
@@ -89,13 +96,14 @@ Details and local performance evidence for the latest tranche are in
 - General-purpose isolated workers with shell/sandbox support and automatic
   integration of concurrent patches. Current isolated workers support file edits
   from clean HEAD or an opt-in dirty snapshot and require explicit application.
-  Shell support still needs worktree-specific sandbox profiles, race-safe file
-  access alongside shell commands, and Linux protection against arbitrary host
-  Unix socket access. Rebinding the existing sandbox's working directory alone
-  would leave shared Git metadata writable.
+  A macOS worker-profile factory is implemented and tested independently but is
+  not connected to worker shell execution. Activation still needs integration
+  and validation of the combined confinement path; Linux needs protection against
+  arbitrary host Unix socket access. File tools now use descriptor-relative access.
 - Automatic verification dependency discovery and broader selective test policies;
-  current evidence and rerun planning cover explicitly declared files/directories,
-  not whole-task correctness or proof that unchanged checks can be skipped.
+  current evidence covers declared files/directories and opt-in partial discovery
+  for narrow Go package commands, not a full dependency graph, whole-task
+  correctness or proof that unchanged checks can be skipped.
 - Verified automatic fact extraction and background policy-candidate generation
   from ordinary task outcomes. Run statistics produce review hypotheses only;
   policy candidates still require explicit evaluation evidence, and plans do not

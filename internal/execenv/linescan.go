@@ -3,6 +3,7 @@ package execenv
 import (
 	"bufio"
 	"io"
+	"os"
 )
 
 // ReadWholeFileCap bounds an untargeted read tool call (no offset or
@@ -22,7 +23,13 @@ const ReadWholeFileCap int64 = 256 * 1024
 // whole. The returned io.Closer must be closed once scanning is done.
 func (e *Env) OpenLineScanner(path string, maxLineBytes int) (*LineScanner, io.Closer, error) {
 	resolved := e.AbsolutePath(path)
-	f, _, err := openRegular(resolved)
+	var f *os.File
+	var err error
+	if e.confined != nil {
+		f, _, err = e.confinedOpenRegular(path)
+	} else {
+		f, _, err = openRegular(resolved)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

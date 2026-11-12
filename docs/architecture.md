@@ -726,6 +726,18 @@ agents on one screen, problems last.
 
 ## Declared verification dependencies and dirty worker baselines
 
+Isolated file tools now use a worker-owned, descriptor-relative `execenv` file
+scope. Dispatch clones and closes it separately from parent/nested scopes.
+The independent macOS `sandbox.NewWorker` factory is a prerequisite for future
+shell support and is not yet wired into dispatch. See
+[confinement and discovery](worker-confinement-verification-discovery.md) for
+the implemented boundaries and remaining sandbox limitations.
+
+Optional `verificationDiscover: "go"` infers bounded package and metadata inputs
+for literal local Go test commands. `VerificationEvidence.Discovery` preserves
+the partial scope; `MissingFiles` records absent optional metadata. Recovery
+clones both existing and absent input lists, and status detects later creation.
+
 With task state enabled, the Bash wrapper in `internal/tools/task_verification.go`
 can record explicitly selected files and recursive directory snapshots. It checks
 read permissions and bounded membership/content snapshots before and after a

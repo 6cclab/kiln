@@ -138,6 +138,7 @@ func (s *taskState) verificationSnapshot() []tools.VerificationEvidence {
 	for i, proof := range s.proofs {
 		out[i] = proof
 		out[i].Files = append([]tools.VerificationFile(nil), proof.Files...)
+		out[i].MissingFiles = append([]string(nil), proof.MissingFiles...)
 		out[i].Directories = append([]tools.VerificationDirectory(nil), proof.Directories...)
 		for j := range out[i].Directories {
 			out[i].Directories[j].Files = append([]tools.VerificationFile(nil), proof.Directories[j].Files...)
@@ -288,6 +289,12 @@ func (s *taskState) transform(tokens int) func(context.Context, []msg.Message) (
 			label := "files"
 			if len(proof.Directories) > 0 {
 				kind, label = "declared input snapshots", "inputs"
+			}
+			if proof.Discovery != "" {
+				kind, label = "partially discovered Go input snapshots; dependency graph incomplete", "inputs"
+				for _, path := range proof.MissingFiles {
+					paths = append(paths, path+" (absent)")
+				}
 			}
 			line := fmt.Sprintf("Command success on selected %s (%s, call %s, %s %s): %s\n", kind, status, proof.CallID, label, strings.Join(paths, ", "), proof.Command)
 			if len(prefix)+len(text)+len(line)+len(suffix) <= tokens*4 {

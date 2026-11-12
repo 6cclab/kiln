@@ -188,6 +188,9 @@ func invisibleDifference(requested, candidate string) (string, bool) {
 // parent directory — see that field's doc comment for what this is, and
 // is not, a substitute for.
 func (e *Env) DidYouMeanHint(absPath string) string {
+	if e.confined != nil {
+		return ""
+	}
 	dir := filepath.Dir(absPath)
 	base := filepath.Base(absPath)
 

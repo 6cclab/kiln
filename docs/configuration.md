@@ -1189,6 +1189,29 @@ including subdirectories. A declaration exceeding its bounds produces no evidenc
 recorded. Git metadata is excluded. These are opt-in tool arguments; existing
 file-only proofs continue to work.
 
+For a narrowly supported Go check, `verificationDiscover: "go"` discovers the
+selected package directory and root module/workspace metadata automatically:
+
+```json
+{"command":"go test ./internal/parser","verificationDiscover":"go"}
+```
+
+Only one unquoted, literal `go test ./path` or `go test ./path/...` invocation
+is accepted, without flags, assignments, redirections or other shell commands.
+Whole-repository `./...` discovery is not supported. The working directory must
+contain a readable regular `go.mod`. Existing `go.sum`, `go.work` and
+`go.work.sum` are included; initially absent optional metadata is tracked so
+creating it later invalidates the evidence. Explicit files/directories can be
+combined with discovery under the same shared limits. Unsupported discovery or
+unavailable inputs produce no evidence, while the requested command still runs
+through its normal permission checks.
+
+Discovery adds no subprocess or model call. It is a partial snapshot, recorded
+as `go-partial-v1`, not a dependency graph: imported packages outside the selected
+tree, replacements, toolchain, environment and ancestor workspace files are not
+discovered. Status and recovery preserve that limitation. Unchanged snapshots
+never establish that a check can safely be skipped.
+
 For example, a Bash call can bind a check to its source, tests and dependencies:
 
 ```json
@@ -1242,6 +1265,13 @@ inside their worktree. The parent's permission rules still apply. Shell tools
 are unavailable in this mode, and a parent OS sandbox or extension tool setup
 that cannot be rebound safely is refused. This is constrained editing isolation,
 not a general-purpose OS sandbox.
+
+On macOS and Linux, isolated file operations pin an open directory and traverse
+components relative to directory descriptors without following symlinks. Reads
+reject hardlinks; writes replace entries instead of truncating existing inodes.
+Closed file scopes reject further operations. Windows isolated editing is
+unavailable until equivalent confined access is implemented; it fails explicitly
+instead of using ordinary file access. Normal sessions are unaffected.
 
 Each worker returns a bounded report and a private patch manifest with its base
 commit, changed files, size, and SHA-256 digest. Useful partial edits are exported

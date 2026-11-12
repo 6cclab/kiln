@@ -70,7 +70,14 @@ func openRegular(path string) (*os.File, os.FileInfo, error) {
 // to Cwd.
 func (e *Env) ReadFile(path string) ([]byte, error) {
 	resolved := e.AbsolutePath(path)
-	f, fi, err := openRegular(resolved)
+	var f *os.File
+	var fi os.FileInfo
+	var err error
+	if e.confined != nil {
+		f, fi, err = e.confinedOpenRegular(path)
+	} else {
+		f, fi, err = openRegular(resolved)
+	}
 	if err != nil {
 		return nil, err
 	}

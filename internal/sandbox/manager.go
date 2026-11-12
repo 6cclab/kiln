@@ -47,8 +47,9 @@ type Options struct {
 // sandboxed, wraps them for the platform, and runs the network proxy.
 // It implements execenv.Sandbox.
 type Manager struct {
-	cfg  Config
-	opts Options
+	cfg    Config
+	opts   Options
+	worker *workerScope
 
 	once     sync.Once
 	mech     string // "sandbox-exec", "bwrap", ""
@@ -207,6 +208,9 @@ func (m *Manager) Close() {
 	// Closes each bridge's listener and every relay it accepted, and
 	// waits for their goroutines.
 	m.relays.closeAll()
+	if m.worker != nil {
+		_ = os.RemoveAll(m.worker.temp)
+	}
 }
 
 // noteNewGitDirs records the git directories a command may create (its
@@ -349,15 +353,46 @@ func (m *Manager) tmpDir() (string, error) {
 
 // plan resolves the configuration for a command run in cwd.
 func (m *Manager) plan(cwd string) (Plan, *Proxy, error) {
-	httpPort, socksPort, proxy, err := m.network()
-	if err != nil {
-		return Plan{}, nil, err
+	m.mu.Lock()
+	closed := m.closed
+	m.mu.Unlock()
+	if closed {
+		return Plan{}, nil, errors.New("sandbox: session closed")
+	}
+	if m.worker != nil {
+		if err := rejectWorkerHardlinks(m.worker.child); err != nil {
+			return Plan{}, nil, err
+		}
+	}
+	var httpPort, socksPort int
+	var proxy *Proxy
+	if m.worker == nil {
+		var err error
+		httpPort, socksPort, proxy, err = m.network()
+		if err != nil {
+			return Plan{}, nil, err
+		}
 	}
 	tmp, err := m.tmpDir()
 	if err != nil {
 		return Plan{}, nil, err
 	}
 	p := buildPlan(m.cfg, cwd, m.opts.Roots(), tmp, m.opts.Home, httpPort, socksPort)
+	if m.worker != nil {
+		// A linked worktree's common git directory is deliberately absent.
+		// buildPlan serves ordinary interactive sessions and grants it write
+		// access; workers must not be able to alter shared repository state.
+		p.WriteRoots = []string{m.worker.child, tmp}
+		p.WriteGlobs = nil
+		p.GitDirs = nil
+		p.NewGitDirs = nil
+		p.DenyWrite = append(p.DenyWrite,
+			Rule{Path: m.worker.parent}, Rule{Path: filepath.Join(m.worker.child, ".git")})
+		for _, g := range m.worker.gitDirs {
+			p.DenyWrite = append(p.DenyWrite, Rule{Path: g})
+		}
+		p.DenyWriteLiteral = append(p.DenyWriteLiteral, filepath.Join(m.worker.child, ".git"))
+	}
 	if !m.cfg.FilesystemDisabled && ensureCacheRoot(tmp) {
 		for k, v := range cacheEnv(tmp, userSetEnv(m.cfg.SettingsEnv)) {
 			p.Env[k] = v

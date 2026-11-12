@@ -313,6 +313,17 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	// the scope of the worker that launched it.
 	workerEnvCopy := *workerEnv
 	workerEnv = &workerEnvCopy
+	if worktree != nil {
+		workerEnv, err = workerEnv.CloneForConfinedFiles(worktree.path)
+		if err != nil {
+			return DispatchResult{}, fmt.Errorf("agent: confine isolated worker files: %w", err)
+		}
+		defer func() {
+			if err := workerEnv.CloseConfinedFiles(); err != nil {
+				diag.L().Warn("isolated worker file cleanup failed", "error", err)
+			}
+		}()
+	}
 	workerEnv.JobScope = execenv.NewJobScope()
 	defer workerEnv.JobScope.Close()
 
