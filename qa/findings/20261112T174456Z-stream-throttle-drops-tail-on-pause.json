@@ -1,0 +1,18 @@
+{
+ "id": "20261112T174456Z-stream-throttle-drops-tail-on-pause",
+ "found_at": "2026-11-12T17:44:56Z",
+ "scenario": "qa/scenarios/content/streaming.steps",
+ "step": null,
+ "terminals": [],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Live stream text stops short when the model pauses",
+ "observed": "internal/tui/bridge.go handleStreamEvent sent MsgStreamText at most once per 50ms and dropped deltas inside the window with no trailing send, so when a stream paused (a slow model between bursts, a held faux turn) the live region showed only the text up to the last unthrottled delta until the next delta or the message end.",
+ "expected": "Everything that has arrived is on screen within one throttle window, even when no further delta comes.",
+ "design_ref": null,
+ "evidence": [
+  "TestBridge_StreamText_TrailingFlush fails without the trailing flush: armed 0 flushes, only 'The limi' sent."
+ ],
+ "status": "open",
+ "fix": null
+}

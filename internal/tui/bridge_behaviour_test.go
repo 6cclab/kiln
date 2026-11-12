@@ -162,6 +162,89 @@ func TestBridge_StreamText_Throttled(t *testing.T) {
 	}
 }
 
+// streamTextsSent lists the MsgStreamText payloads f has received.
+func streamTextsSent(f *fakeSink) []string {
+	_, sent := f.snapshot()
+	var out []string
+	for _, m := range sent {
+		if v, ok := m.(MsgStreamText); ok {
+			out = append(out, v.Text)
+		}
+	}
+	return out
+}
+
+// A delta the throttle holds back reaches the screen once its window ends,
+// even when no later delta comes: a stream that pauses (a slow model
+// between bursts, or a held faux turn) must not leave the screen behind
+// what has arrived.
+func TestBridge_StreamText_TrailingFlush(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	clock := time.Now()
+	var flushes []func()
+	var waits []time.Duration
+	ts := &turnState{toolStarts: map[string]toolStart{}, now: func() time.Time { return clock },
+		after: func(d time.Duration, fn func()) { waits = append(waits, d); flushes = append(flushes, fn) }}
+
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "The limi"}, ts)
+	clock = clock.Add(10 * time.Millisecond)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "ter now"}, ts)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: " sits"}, ts)
+	if got := streamTextsSent(f); len(got) != 1 || got[0] != "The limi" {
+		t.Fatalf("sent %q inside the window, want only the first delta", got)
+	}
+	if len(flushes) != 1 || waits[0] != streamThrottle-10*time.Millisecond {
+		t.Fatalf("armed %d flushes with waits %v, want one for the rest of the window", len(flushes), waits)
+	}
+	flushes[0]()
+	if got := streamTextsSent(f); len(got) != 2 || got[1] != "The limiter now sits" {
+		t.Fatalf("after the window sent %q, want the held-back text flushed", got)
+	}
+}
+
+// A trailing flush armed before newer text was sent, or before the message
+// ended, must not send its older text over the newer state.
+func TestBridge_StreamText_StaleTrailingFlushDropped(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	clock := time.Now()
+	var flushes []func()
+	ts := &turnState{toolStarts: map[string]toolStart{}, now: func() time.Time { return clock },
+		after: func(_ time.Duration, fn func()) { flushes = append(flushes, fn) }}
+
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "a"}, ts)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "b"}, ts) // held back, flush armed
+	clock = clock.Add(streamThrottle)
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "c"}, ts) // sent: supersedes it
+	b.handleStreamEvent(&msg.StreamEvent{Type: msg.EventTextDelta, Delta: "d"}, ts) // held back again
+	b.handleEvent(harness.Event{
+		Type:    harness.EventMessageEnd,
+		Message: &msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.Text("abcd")}},
+	}, ts, 4000)
+	for _, flush := range flushes {
+		flush()
+	}
+	if got, want := strings.Join(streamTextsSent(f), "|"), "a|abc|abcd"; got != want {
+		t.Fatalf("stream texts %s, want %s: a superseded flush was sent", got, want)
+	}
+}
+
+// Stream text that arrives after the turn ended (a trailing flush that lost
+// the race with the turn's end) does not bring a live region back.
+func TestStreamTextAfterTurnEndIgnored(t *testing.T) {
+	m := streamCostModel(false, 0)
+	m.busy = false
+	next, _ := m.Update(MsgStreamText{Text: "stale partial"})
+	if got := next.(Model).streamText; got != "" {
+		t.Fatalf("streamText = %q after the turn ended, want it ignored", got)
+	}
+}
+
 // TestBridge_StreamText_ResetsBetweenMessages is the regression for the
 // defect where a turn's separate assistant text messages (each its own
 // EventMessageStart/EventMessageEnd pair around a tool call) ran together

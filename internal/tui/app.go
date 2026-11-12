@@ -834,6 +834,11 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			// the streaming caret never renders in plain mode (D's spec).
 			return m, nil
 		}
+		if !m.busy {
+			// A trailing flush (bridge.go's trailStream) that lands after
+			// the turn ended must not bring its partial text back.
+			return m, nil
+		}
 		m = m.commitReconnectNote()
 		// Text after a held read group ends the group: commit it now, or
 		// the calls stay off screen while the reply that follows them
