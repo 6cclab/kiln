@@ -815,8 +815,8 @@ search and suggestions without disabling explicit `task` dispatch. Agent matches
 provide a `task` invocation template; fill in the task description and prompt.
 Search does not load agent prompts or launch workers, and normal delegation
 permissions, model selection and limits still apply. Same-named skills and agents
-remain separate results. Plugin commands, hooks and other instruction types are
-not yet indexed as capabilities.
+remain separate results. Model-invocable personal, project and plugin custom
+commands are indexed as skills; hooks and other instruction types are not.
 
 ### Personal memory
 
