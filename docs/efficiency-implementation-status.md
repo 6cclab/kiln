@@ -83,35 +83,68 @@ being mistaken for the complete roadmap.
   and retries; Responses adapters retain text identity/phase; USD reservations
   avoid double-counting disjoint input categories. Local regressions cover these
   changes; their effect on live cost and generated-code quality is not measured.
+- Model-invocable personal, project and plugin custom commands join the skill
+  catalog in slash-registry precedence, with exact-name invocation; a command
+  that disables model invocation shadows a same-named entry instead of exposing it.
+- [Automatic patch integration](efficiency/patch-integration.md): with the user's
+  own `orchestration.autoIntegrate` opt-in, a fully committed tool batch of
+  isolated-worker artifacts is applied all-or-none through the existing batch
+  preflight under the repository lock. Overlaps, a moved baseline or any failed
+  call apply nothing and name the conflict. A recorded intent is reported as
+  uncertain after a restart and never replayed.
+- [Broader Go verification discovery](efficiency/verify-discovery.md): in-module
+  transitive imports (parsed statically), local `replace` targets and module-root
+  `go test ./...`, within the shared limits. Evidence stays `go-partial-v1` and
+  never justifies skipping the requested command.
+- [Progress-loop guard](efficiency/progress-loop.md): opt-in
+  `runtimeEfficiency.progressLoopLimit` notices repeated unchanged reads,
+  repeated read-only sequences (including conservatively parsed Bash against a
+  bounded worktree snapshot) and edit/revert cycles, then escalates through the
+  existing guard. Forwarded to nested workers; no model calls.
+- [Verified fact extraction](efficiency/fact-extraction.md): with learning and
+  personal memory enabled, an observed successful literal local Go test command
+  becomes an attributed, expiring project-memory procedure only after its cited
+  file snapshot is rechecked; everything else stays a dismissible review candidate.
+  Run counters also produce reviewable, unevaluated improvement proposals
+  (`kiln learning proposals`) that never change policy.
+- [Context selection reasons](efficiency/context-reasons.md): `/context` shows
+  why each skill, agent, MCP tool and memory item is in or out of the request,
+  and reports model, effort, permission mode and auto-memory directory with
+  their sources, as does `kiln config`.
+- Readiness fixes: crash recovery never replays an effect-pending tool and print
+  mode stops on an unresumable operation ([runtime](efficiency/readiness-runtime-fixes.md));
+  Windows installs keep `kiln.exe`, `kiln doctor` flags an unusable model, and
+  releases wait for checks and native install smoke
+  ([distribution](efficiency/readiness-distribution-fixes.md)).
 
-Details for the latest tranche are in
-[worker confinement and verification discovery](worker-confinement-verification-discovery.md).
-Earlier snapshot performance evidence is in
-[worker snapshots and verification dependencies](worker-snapshot-verification-improvements.md).
+The integrated tranche is described in
+[readiness integration](efficiency/readiness-integration.md). Earlier details are in
+[worker confinement and verification discovery](worker-confinement-verification-discovery.md)
+and [worker snapshots and verification dependencies](worker-snapshot-verification-improvements.md).
 
 ## Still outstanding from the full plan
 
-- Plugin commands, hooks and other instruction types in unified retrieval; the
-  current catalog covers model-invocable skills, dispatchable agents and eligible MCP tools.
-- General-purpose isolated workers with shell/sandbox support and automatic
-  integration of concurrent patches. Current isolated workers support file edits
-  from clean HEAD or an opt-in dirty snapshot and require explicit application.
-  A macOS worker-profile factory is implemented and tested independently but is
-  not connected to worker shell execution. Activation still needs integration
-  and validation of the combined confinement path; Linux needs protection against
-  arbitrary host Unix socket access. File tools now use descriptor-relative access.
-- Automatic verification dependency discovery and broader selective test policies;
-  current evidence covers declared files/directories and opt-in partial discovery
-  for narrow Go package commands, not a full dependency graph, whole-task
-  correctness or proof that unchanged checks can be skipped.
-- Verified automatic fact extraction and background policy-candidate generation
-  from ordinary task outcomes. Run statistics produce review hypotheses only;
-  policy candidates still require explicit evaluation evidence, and plans do not
-  schedule or execute paid evaluations.
-- Broader file/result reuse, progress-loop detection beyond repeated failure sequences,
-  selective verification policies, and reviewable skill/harness improvement proposals.
-- Provenance outside the efficiency controls and detailed selection reasons in
-  `/context`; broader head-to-head evaluation with complete external usage attribution.
+- Hooks and other instruction types in unified retrieval; the catalog covers
+  model-invocable skills and custom commands, dispatchable agents and eligible MCP tools.
+- Shell-capable isolated workers. `orchestration.isolatedShell` is refused on
+  every platform before a child starts: a `setsid()` descendant can outlive the
+  worker's process-group scope and worktree cleanup, and no enforceable descendant
+  ownership exists yet ([sandbox shell](efficiency/sandbox-shell.md)). The macOS
+  Seatbelt profile is tested directly only. Linux still needs host Unix socket
+  protection; Windows isolated editing fails explicitly.
+- A full verification dependency graph and selective test policies. Discovery does
+  not trace external or workspace modules, build tags, cgo, toolchain or
+  environment, or non-Go commands; Windows cross-volume handling is cross-compiled
+  but not run natively. Nothing proves an unchanged check can be skipped.
+- Fact extraction beyond a single literal Go test command launched at the project
+  root; directory and missing-file dependencies stay review-only. Policy candidates
+  still require explicitly run evaluation; nothing schedules paid evaluations.
+- Broader file/result reuse. The progress guard excludes effectful Bash, files
+  outside the working directory or over 1 MiB, symlinks and hook-rewritten edit paths.
+- `/context` cannot recover per-request suggestions, retrieval decisions or search
+  budget drops after a restart, and the integrated binary has not had a
+  real-terminal `kiln-qa` drive of the new view.
+- Broader head-to-head evaluation with complete external usage attribution.
 
 A policy promotion is evidence about the evaluated tasks, not proof that the full
 harness outperforms another product. The implementation keeps incomplete behavior
