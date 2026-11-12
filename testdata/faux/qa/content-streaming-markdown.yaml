@@ -1,0 +1,10 @@
+model: faux-1
+steps:
+  # The reply stops partway, inside a bold phrase and right after a code
+  # span opens, until the scenario has captured the live block (RELEASE
+  # rest): what is on screen must already be the rendered markdown, with
+  # no raw markers.
+  - text: "## Rate limiter\n\nThe limiter now sits in front of the upload route:\n\n- each request takes a token from a **per-user bucket that refills"
+  - hold: rest
+  - text: " at ten tokens a minute**\n- an empty bucket returns `429` with a `Retry-After` header\n\n```go\nlimiter := NewBucket(10, time.Minute)\n```\n\nNothing else in the upload path changed."
+    usage: {input: 40, output: 90}

@@ -1,5 +1,5 @@
 # Assistant content: streaming. internal/tui/stream.go's RenderStreamLive
-# shows the last 8 wrapped rows of in-flight text with a trailing amber
+# shows the in-flight text, rendered as markdown, with a trailing amber
 # caret (theme.go's StreamCaret, "▍" in the fancy theme) while the turn is
 # still arriving; a faux hold stops the reply partway until the scenario
 # has captured it.

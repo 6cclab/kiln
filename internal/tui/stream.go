@@ -2,45 +2,34 @@ package tui
 
 // The "kiln" block, live streaming variant (docs/kiln-design-handoff/
 // README.md's "Streaming" section): while the assistant's text is still
-// arriving, the live region shows the last few wrapped rows of what has
-// streamed so far, with a trailing amber caret, instead of the plain
-// markdown-rendered block a completed message commits as.
+// arriving, the live region shows the rows of what has streamed so far,
+// rendered as the markdown the completed message commits as (streammd.go),
+// with a trailing amber caret.
 
 // maxStreamRows is how many wrapped rows of in-flight text the live region
 // shows (docs/kiln-design-handoff/README.md: "last 8 lines").
 const maxStreamRows = 8
 
 // RenderStreamLive renders the live "kiln" block: a muted `kiln ───` label
-// rule, the last maxRows rows of text wrapped plainly to width (no markdown
-// rendering — glamour's cost per keystroke-sized delta would make every
-// stream tick expensive; the committed block re-renders the full markdown
-// once streaming ends, in msgCommitMarkdown), with the streaming caret
-// (G().StreamCaret, kiln amber) appended to the last row.
+// rule, then the last maxRows rows of text rendered as markdown at width,
+// holding back what is still ambiguous (streammd.go's settle), with the
+// streaming caret (G().StreamCaret, kiln amber) appended to the last row.
 func RenderStreamLive(text string, width, maxRows int) []string {
 	return renderStreamLiveRows(text, width, maxRows, nil)
 }
 
-// renderStreamLiveRows is RenderStreamLive, taking its wrapped rows from
-// cache when it is not nil: the same rows, without re-wrapping the whole
-// reply on every frame (streamwrap.go).
-func renderStreamLiveRows(text string, width, maxRows int, cache *streamWrapCache) []string {
+// renderStreamLiveRows is RenderStreamLive, keeping the finished blocks'
+// rows in cache between frames when it is not nil: the same rows, without
+// rendering the whole reply on every frame.
+func renderStreamLiveRows(text string, width, maxRows int, cache *streamMarkdown) []string {
 	rule := labelRule("kiln", Muted, "", width)
 	if text == "" {
 		return []string{rule, KilnAmber(G().StreamCaret)}
 	}
-	// FitLines only wraps a line that overflows width as one call; text
-	// here may already contain embedded newlines (paragraph breaks in the
-	// streamed markdown source), so wrap each source line independently
-	// and flatten, same as ansiWrap's own per-line contract.
-	var rows []string
-	if cache != nil {
-		rows, _ = cache.tailRows(text, width, maxRows)
-	} else {
-		rows = wrapMultiline(text, width)
-		if len(rows) > maxRows {
-			rows = rows[len(rows)-maxRows:]
-		}
+	if cache == nil {
+		cache = &streamMarkdown{}
 	}
+	rows := cache.tailRows(text, width, maxRows)
 	if len(rows) == 0 {
 		rows = []string{""}
 	}
