@@ -549,30 +549,59 @@ func (s *Screen) WaitForFrame(complete func(Frame) bool, timeout time.Duration) 
 // that animates on its own (a busy spinner and its elapsed time) does not
 // keep the screen from ever counting as quiet.
 func (s *Screen) WaitQuiet(quiet, timeout time.Duration, ignore ...func([]string) []string) error {
-	view := func() string {
-		rows := s.Viewport()
-		for _, f := range ignore {
-			rows = f(rows)
-		}
-		return strings.Join(rows, "\n")
-	}
 	timeout = s.floor(timeout)
-	deadline := time.Now().Add(timeout)
+	if changed, ok := waitQuiet(realClock{}, maskedView(s.Viewport, ignore...), quiet, timeout); !ok {
+		return fmt.Errorf("screen.WaitQuiet: the screen kept changing for %s (wanted %s unchanged); last change:\n%s\nscreen:\n%s", timeout, quiet, changed, dumpRows(s.Viewport(), s.cols))
+	}
+	return nil
+}
+
+// clock is what WaitQuiet and settle read time from, so their own tests
+// run on a fake one instead of racing a real process against the wall
+// clock.
+type clock interface {
+	Now() time.Time
+	Sleep(time.Duration)
+}
+
+type realClock struct{}
+
+func (realClock) Now() time.Time        { return time.Now() }
+func (realClock) Sleep(d time.Duration) { time.Sleep(d) }
+
+// pollEvery is how often WaitQuiet and settle sample the screen.
+const pollEvery = 15 * time.Millisecond
+
+// maskedView is the screen as WaitQuiet compares it: rows, mapped by each
+// of ignore, joined.
+func maskedView(rows func() []string, ignore ...func([]string) []string) func() string {
+	return func() string {
+		r := rows()
+		for _, f := range ignore {
+			r = f(r)
+		}
+		return strings.Join(r, "\n")
+	}
+}
+
+// waitQuiet samples view until it has stayed the same for quiet (ok), or
+// timeout passes; changed is the last change it saw.
+func waitQuiet(c clock, view func() string, quiet, timeout time.Duration) (changed string, ok bool) {
+	deadline := c.Now().Add(timeout)
 	last := view()
-	quietSince := time.Now()
-	var changed string
+	quietSince := c.Now()
 	for {
-		time.Sleep(15 * time.Millisecond)
+		c.Sleep(pollEvery)
 		now := view()
 		if now != last {
 			changed = diffRows(last, now)
 			last = now
-			quietSince = time.Now()
-		} else if time.Since(quietSince) >= quiet {
-			return nil
+			quietSince = c.Now()
+		} else if c.Now().Sub(quietSince) >= quiet {
+			return changed, true
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("screen.WaitQuiet: the screen kept changing for %s (wanted %s unchanged); last change:\n%s\nscreen:\n%s", timeout, quiet, changed, dumpRows(s.Viewport(), s.cols))
+		if c.Now().After(deadline) {
+			return changed, false
 		}
 	}
 }
@@ -590,20 +619,26 @@ func (s *Screen) WaitQuiet(quiet, timeout time.Duration, ignore ...func([]string
 // WaitFor for the whole stream, so the caller's next key landed long
 // after the moment it waited for.
 func (s *Screen) settle(deadline time.Time) {
-	if limit := time.Now().Add(settleMax); limit.Before(deadline) {
+	settleView(realClock{}, maskedView(s.Viewport), deadline)
+}
+
+// settleView samples view until it has stayed the same for settleQuiet,
+// for at most settleMax, and never past deadline.
+func settleView(c clock, view func() string, deadline time.Time) {
+	if limit := c.Now().Add(settleMax); limit.Before(deadline) {
 		deadline = limit
 	}
-	last := strings.Join(s.Viewport(), "\n")
-	quietSince := time.Now()
-	for time.Now().Before(deadline) {
-		time.Sleep(15 * time.Millisecond)
-		now := strings.Join(s.Viewport(), "\n")
+	last := view()
+	quietSince := c.Now()
+	for c.Now().Before(deadline) {
+		c.Sleep(pollEvery)
+		now := view()
 		if now != last {
 			last = now
-			quietSince = time.Now()
+			quietSince = c.Now()
 			continue
 		}
-		if time.Since(quietSince) >= settleQuiet {
+		if c.Now().Sub(quietSince) >= settleQuiet {
 			return
 		}
 	}

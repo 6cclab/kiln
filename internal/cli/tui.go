@@ -102,9 +102,8 @@ type InteractiveDeps struct {
 	ApplyHeldRules func()
 	// TrustedSessionStart runs the SessionStart hooks that waited for
 	// trust and returns their context for the next prompt. Run off the
-	// TUI's goroutine once the trust dialog is accepted, until ctx is
-	// cancelled (Esc); nil to skip.
-	TrustedSessionStart func(ctx context.Context) []string
+	// TUI's goroutine once the trust dialog is accepted; nil to skip.
+	TrustedSessionStart func() []string
 	// Effort is the reasoning effort label shown in the banner ("medium");
 	// AuthKind is how the model's provider is authenticated ("Claude
 	// subscription", "API key", "Ollama").

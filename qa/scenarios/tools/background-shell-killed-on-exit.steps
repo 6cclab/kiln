@@ -2,7 +2,8 @@
 # kills every background shell (shells.KillAll) and leftover job
 # (execenv.KillLeftoverJobs) before SessionEnd fires, on a clean /exit
 # the same as on Ctrl+C/Ctrl+D, so nothing kiln started outlives the
-# process. Checked by actually looking for the process after exit.
+# process. Checked by looking for the process after exit, by the PID it
+# wrote (exec makes it the sleep's own), not a machine-wide pgrep.
 @faux testdata/faux/qa/tools-background-shell-exit.yaml
 @args --permission-mode bypassPermissions
 
@@ -11,7 +12,7 @@ TYPE start a background sleep
 KEY enter
 WAITFOR /running in the background as bash_1/ 20
 SHOT dispatched
-RUN i=0; until pgrep -f 'sleep 777[7]' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
+RUN i=0; until test -s bg.pid; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done; kill -0 "$(cat bg.pid)"
 TYPE /exit
 KEY enter
-RUN i=0; until ! pgrep -f 'sleep 777[7]' >/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done
+RUN p=$(cat bg.pid); i=0; while kill -0 "$p" 2>/dev/null; do i=$((i+1)); [ $i -ge 100 ] && exit 1; sleep 0.2; done

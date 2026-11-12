@@ -70,6 +70,11 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
                                  matches (default 15s, like WAITFOR): the
                                  wait for something to disappear, e.g. the
                                  UI after /exit
+    SUBMIT_UNTIL /regex/ seconds text
+                                 type text and Enter until the screen
+                                 matches, Esc between tries: for a view
+                                 that is a snapshot taken when it opens
+                                 (/mcp while a server connects)
     RELEASE <name>               release the faux script's `hold: <name>`
                                  step (POST /_faux/release); a release
                                  before the request reaches the hold is
@@ -531,6 +536,14 @@ def parse_scenario(path):
     return directives, steps
 
 
+def parse_submit_until(arg):
+    """SUBMIT_UNTIL's argument: /regex/ timeout text."""
+    m = re.match(r"^/(.*)/\s+(\S+)\s+(.+)$", arg)
+    if not m:
+        raise DriveError("expected /regex/ timeout text, got %r" % arg)
+    return re.compile(m.group(1), re.S), float(m.group(2)), m.group(3)
+
+
 def parse_regex(arg):
     m = re.match(r"^/(.*)/(\s+(\S+))?$", arg)
     if not m:
@@ -971,6 +984,27 @@ class Run:
                         self.shot("waitgone-timeout-line%d" % lineno)
                         raise DriveError("line %d: WAITGONE %s timed out" % (lineno, arg))
                     time.sleep(0.4)
+            elif verb == "SUBMIT_UNTIL":
+                # Submits text until /re/ shows, Esc between tries: for a
+                # view that is a snapshot taken when it opens (/mcp while a
+                # server connects). How long each try looks only sets how
+                # many tries it takes; the deadline is the only clock.
+                rx, timeout, text = parse_submit_until(arg)
+                deadline = time.time() + timeout
+                while True:
+                    self.type_text(text)
+                    time.sleep(0.3)
+                    self.key("enter")
+                    look = time.time() + 2
+                    while time.time() < look and not rx.search(self.screen()):
+                        time.sleep(0.2)
+                    if rx.search(self.screen()):
+                        break
+                    if time.time() > deadline:
+                        self.shot("submit-until-timeout-line%d" % lineno)
+                        raise DriveError("line %d: SUBMIT_UNTIL %s timed out" % (lineno, arg))
+                    self.key("esc")
+                    time.sleep(0.3)
             elif verb == "RELEASE":
                 self.release_hold(arg.strip())
             elif verb == "SHOT":
@@ -1033,7 +1067,7 @@ class Run:
         return result
 
 
-VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "WAITGONE", "RELEASE", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE",
+VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "WAITGONE", "SUBMIT_UNTIL", "RELEASE", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE",
          "SEND", "IDLE", "TURN", "RUN", "RELAUNCH"}
 FAUX_TOP = {"model", "steps", "models"}
 FAUX_STEP = {"text", "thinking", "tool_call", "tool_calls", "on_tool_result", "on_tool_results",
@@ -1132,6 +1166,8 @@ def lint_scenario(path):
                     key_action(name)
             elif verb in ("WAITFOR", "WAITGONE", "EXPECT", "EXPECT_NOT"):
                 parse_regex(arg)
+            elif verb == "SUBMIT_UNTIL":
+                parse_submit_until(arg)
             elif verb == "RELEASE":
                 if not re.match(r"^[A-Za-z0-9_.-]+$", arg.strip()):
                     raise DriveError("RELEASE needs a hold name")

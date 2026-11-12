@@ -1,8 +1,6 @@
 package screen_test
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -264,83 +262,5 @@ func TestStartupLatency(t *testing.T) {
 	t.Logf("time to first frame: %s", elapsed)
 	if elapsed > 10*time.Second {
 		t.Errorf("startup took %s, expected far under 10s if capability queries are answered promptly", elapsed)
-	}
-}
-
-// WaitQuiet must not return in the gap between two paints that are
-// separated by a delay (kiln's resize: an immediate reflow, then a
-// debounced re-wrap), only once the screen has stayed unchanged for the
-// whole quiet window.
-func TestWaitQuietWaitsOutADelayedSecondPaint(t *testing.T) {
-	// The second paint is released by the test (a gate file), 150ms after
-	// WaitQuiet starts, against a 1.5s quiet window: a stall of over 1.3s
-	// between the release and the paint is what it would take to fail.
-	gate := filepath.Join(t.TempDir(), "gate")
-	s := screen.Start(t, "/bin/sh", []string{"-c", "echo first; while [ ! -e " + gate + " ]; do sleep 0.01; done; echo second; sleep 30"}, 40, 8)
-	if err := s.WaitFor("first", 30*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	time.AfterFunc(150*time.Millisecond, func() { _ = os.WriteFile(gate, nil, 0o644) })
-	if err := s.WaitQuiet(1500*time.Millisecond, 30*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(s.Viewport(), "\n"); !strings.Contains(got, "second") {
-		t.Fatalf("WaitQuiet returned before the delayed second paint:\n%s", got)
-	}
-}
-
-func TestWaitQuietTimesOutOnAScreenThatKeepsChanging(t *testing.T) {
-	s := screen.Start(t, "/bin/sh", []string{"-c", "i=0; while [ $i -lt 2000 ]; do i=$((i+1)); echo tick $i; sleep 0.05; done"}, 40, 8)
-	// Not WaitFor: its settle (up to settleMax) would spend part of the loop.
-	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(strings.Join(s.Viewport(), "\n"), "tick"); {
-		if time.Now().After(deadline) {
-			t.Fatal("the ticking shell never painted")
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	// A 2s quiet window against a 50ms tick: only a >2s stall could make
-	// this screen look quiet.
-	if err := s.WaitQuiet(2*time.Second, 4*time.Second); err == nil {
-		t.Fatal("WaitQuiet returned nil on a screen that never stopped changing")
-	}
-}
-
-// WaitFor's settle is short: on a screen that keeps changing (a reply
-// streaming in, a spinner) it returns soon after the pattern appears, not
-// once the screen goes quiet or the timeout runs out. Settling until the
-// deadline held TestTUI_Esc_InterruptsAContinuedTurn's WaitFor for the
-// whole slow reply, so its Esc landed after the reply had finished.
-func TestWaitForReturnsPromptlyOnAScreenThatKeepsChanging(t *testing.T) {
-	s := screen.Start(t, "/bin/sh", []string{"-c", "echo ready; i=0; while [ $i -lt 3000 ]; do i=$((i+1)); echo tick $i; sleep 0.02; done"}, 40, 8)
-	start := time.Now()
-	if err := s.WaitFor("tick", 30*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	// Unbounded settling would run to the 30s timeout (the ticks last 60s).
-	if took := time.Since(start); took > 20*time.Second {
-		t.Fatalf("WaitFor took %s on a screen that never stops changing: its settle must be bounded, not run to the timeout", took)
-	}
-}
-
-// A row the caller ignores may keep changing without holding WaitQuiet up.
-func TestWaitQuietIgnoresMaskedRows(t *testing.T) {
-	s := screen.Start(t, "/bin/sh", []string{"-c", "echo steady; i=0; while [ $i -lt 60 ]; do i=$((i+1)); printf '\\rtick %d' $i; sleep 0.05; done"}, 40, 8)
-	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(strings.Join(s.Viewport(), "\n"), "tick"); {
-		if time.Now().After(deadline) {
-			t.Fatal("the ticking shell never painted")
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	dropTicks := func(rows []string) []string {
-		out := make([]string, len(rows))
-		for i, r := range rows {
-			if !strings.Contains(r, "tick") {
-				out[i] = r
-			}
-		}
-		return out
-	}
-	if err := s.WaitQuiet(300*time.Millisecond, 30*time.Second, dropTicks); err != nil {
-		t.Fatalf("WaitQuiet with the ticking row ignored: %v", err)
 	}
 }

@@ -13,7 +13,7 @@ WAITFOR /queue a follow-up/ 30
 SHOT queued-followup
 EXPECT /queue a follow-up/
 KEY esc
-WAIT 2
+WAITGONE /esc to stop/ 20
 SHOT after-esc
 TURN Actually, stop that and just create an empty file called done.txt instead.
 SHOT redirected
