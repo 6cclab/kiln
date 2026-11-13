@@ -142,7 +142,11 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 				// tool call in between, hits this branch directly instead).
 				flush()
 				out = append(out, "")
-				out = append(out, RenderAssistantText(renderer.Render(text))...)
+				if rows := modAssistantRows(text, width); rows != nil {
+					out = append(out, rows...)
+				} else {
+					out = append(out, RenderAssistantText(renderer.Render(text))...)
+				}
 			}
 		case msg.ToolResultMessage:
 			call := calls[m.ToolCallID]

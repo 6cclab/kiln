@@ -359,6 +359,7 @@ func TestBridge_CommitCommandResult_ModDrawsTheRow(t *testing.T) {
 	f := &fakeSink{}
 	b.setSink(f)
 	var gotProps map[string]any
+	t.Cleanup(func() { b.SetRowDrawer(nil) })
 	b.SetRowDrawer(func(component, id string, props map[string]any, width int) []string {
 		gotProps = props
 		if component != "CommandOutput" || id != "status" {

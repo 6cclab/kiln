@@ -314,6 +314,31 @@ func TestRenderOtherComponentsCarryTheirProps(t *testing.T) {
 	}
 }
 
+// Every transcript row kiln lets a mod draw reaches ui.render with its own
+// props and requestId.
+func TestRenderTranscriptRowsCarryTheirProps(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.load(t, "rowdrawer")
+	ctx := ctxT(t)
+	h.e.SessionStart(ctx)
+	for component, props := range map[string]map[string]any{
+		"UserMessage":      {"text": "hi", "origin": map[string]any{"kind": "composer"}, "isExpanded": true},
+		"AssistantMessage": {"text": "hello", "isFirstOfReply": true},
+		"ToolUse":          {"tool": "Read", "input": "a.go", "isRunning": false, "isErrored": false, "isInterrupted": false},
+		"ToolGroup":        {"calls": []any{}, "isActive": false, "isExpanded": false},
+	} {
+		raw, _ := json.Marshal(props)
+		ds := h.e.Render(ctx, Site{Component: component, RequestID: "r1", BodyColumns: 60, Props: props})
+		if len(ds) != 1 || ds[0].Tree == nil {
+			t.Errorf("%s: Render = %+v\n%s", component, ds, h.logs)
+			continue
+		}
+		if want := component + " r1 " + string(raw); joined(ds[0].Tree) != want {
+			t.Errorf("%s: row = %q, want %q", component, joined(ds[0].Tree), want)
+		}
+	}
+}
+
 func TestUIPressHookCanTakeThePress(t *testing.T) {
 	h := newHarness(t, Options{})
 	h.load(t, "drawer", "presstaker")

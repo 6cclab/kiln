@@ -34,5 +34,12 @@ SHOT asking
 KEY enter
 WAITFOR /asked: Alpha/ 20
 SHOT asked
+KEY esc
+TYPE ping mod
+KEY enter
+WAITFOR /modrow user said ping mod/ 20
+WAITFOR /modrow assistant said Hello from faux\./ 20
+SHOT mod-drawn-messages
+EXPECT /modrow user said ping mod/
 EXPECT /asked: Alpha/
 EXPECT_NOT /panic|goroutine/

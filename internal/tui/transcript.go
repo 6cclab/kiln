@@ -367,6 +367,9 @@ func clipResultLines(lines []string, max int, status CallStatus) []string {
 // followed by the result. The design repeats the tool name before the
 // argument; Andre dropped it as printing the name twice.
 func RenderToolCall(view ToolCallView) []string {
+	if rows := drawModRow("ToolUse", rowID("tool", view.Name+"\x00"+view.PrimaryArg), toolViewProps(view), ruleWidth()); rows != nil {
+		return rows
+	}
 	gl := G()
 	statusColor := toolStatusColor(view.Status)
 	width := ruleWidth()
@@ -455,6 +458,18 @@ func CompactReadGroup(views []ToolCallView, verbose bool) bool {
 //
 // design-studio: kiln / Terminal {"scene":"readgroup","layout":"ruled"}
 func RenderReadGroup(views []ToolCallView) []string {
+	calls := make([]any, 0, len(views))
+	ids := make([]string, 0, len(views))
+	for _, v := range views {
+		p := toolViewProps(v)
+		calls = append(calls, map[string]any{"tool": p["tool"], "input": p["input"],
+			"isRunning": p["isRunning"], "isErrored": p["isErrored"], "isInterrupted": false})
+		ids = append(ids, v.Name+"\x00"+v.PrimaryArg)
+	}
+	if rows := drawModRow("ToolGroup", rowID("group", strings.Join(ids, "\x01")),
+		map[string]any{"calls": calls, "isActive": false, "isExpanded": false}, ruleWidth()); rows != nil {
+		return rows
+	}
 	allRead := true
 	for _, v := range views {
 		if !strings.EqualFold(v.Name, "read") {
@@ -903,6 +918,10 @@ func RenderThinking(view ThinkingView) []string {
 // and a slash-command echo ("you" / "/model") — CommitCommandResult
 // (bridge.go) renders the result row that follows a command's echo.
 func RenderUserMessage(text string, width int) []string {
+	if rows := drawModRow("UserMessage", rowID("user", text), map[string]any{
+		"text": text, "origin": map[string]any{"kind": "composer"}, "isExpanded": true}, width); rows != nil {
+		return append([]string{""}, rows...)
+	}
 	return RenderUserMessageMeta(text, "", width)
 }
 

@@ -650,8 +650,13 @@ func (b *Bridge) CommitCommandResult(name string, lines []string) {
 
 // SetRowDrawer binds the mods' drawing of transcript rows: it returns the
 // rows a mod's ui.render tree drew for the component, nil when none did.
-func (b *Bridge) SetRowDrawer(f func(component, requestID string, props map[string]any, width int) []string) {
+func (b *Bridge) SetRowDrawer(f RowDrawFunc) {
 	b.drawRow = f
+	if f == nil {
+		modRowDrawer.Store(nil)
+		return
+	}
+	modRowDrawer.Store(&f)
 }
 
 // Send delivers msg to the program's Update loop. tea.Program.Send already

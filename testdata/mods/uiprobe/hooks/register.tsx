@@ -32,6 +32,17 @@ export function register(on: any) {
     return next(e)
   })
 
+  // Transcript rows a mod may draw: the person's prompt "ping mod" and the
+  // reply to it.
+  on('ui.render', { component: 'UserMessage', props: { text: 'ping mod' } }, async ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>modrow user said {e.props.text}</Text>
+  })
+  on('ui.render', { component: 'AssistantMessage' }, async ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>modrow assistant said {e.props.text}</Text>
+  })
+
   on('ui.render', { component: 'Pane', requestId: 'uiprobe' }, async ($: any, e: any) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const rows = []

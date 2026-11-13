@@ -853,6 +853,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cfg.Bridge != nil {
 			m = m.commitReconnectNote()
 			lines := append([]string{""}, RenderAssistantText(transcriptRenderer(m.contentWidth()).Render(msg.Text))...)
+			if rows := modAssistantRows(msg.Text, m.contentWidth()); rows != nil {
+				lines = append([]string{""}, rows...)
+			}
 			m.commit(lines)
 		}
 		return m, nil
