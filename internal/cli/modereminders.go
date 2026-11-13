@@ -26,6 +26,10 @@ type modeReminders struct {
 	// planExtra is appended to the full plan-mode text (the plan ledger
 	// experiment's paragraph, HARNESS_EXP_LEDGER); "" when off.
 	planExtra string
+	// attach raises the mods' prompt.attachment for a reminder before it
+	// reaches the model; keep is false when a hook left it out. Nil without
+	// mods.
+	attach func(typ, text string) (out string, keep bool)
 
 	mu            sync.Mutex
 	announcedPlan bool
@@ -38,7 +42,7 @@ func newModeReminders(mode func() claudesettings.PermissionMode, planExtra strin
 // reminder is the text for the current mode given what was announced,
 // and whether it changes what the model knows (entering or leaving plan).
 // Caller holds mu.
-func (r *modeReminders) reminder() (text string, changes bool) {
+func (r *modeReminders) reminder() (text, typ string, changes bool) {
 	cur := r.mode()
 	inPlan := cur == claudesettings.ModePlan
 	switch {
@@ -47,13 +51,13 @@ func (r *modeReminders) reminder() (text string, changes bool) {
 		if r.planExtra != "" {
 			full += "\n\n" + r.planExtra
 		}
-		return full, true
+		return full, "plan_mode", true
 	case inPlan:
-		return agent.PlanModeSparseReminder, false
+		return agent.PlanModeSparseReminder, "plan_mode", false
 	case r.announcedPlan:
-		return agent.PlanModeExitReminder(string(cur)), true
+		return agent.PlanModeExitReminder(string(cur)), "plan_mode_exit", true
 	}
-	return "", false
+	return "", "", false
 }
 
 // TakeForPrompt returns the <system-reminder> preamble for the prompt
@@ -61,13 +65,22 @@ func (r *modeReminders) reminder() (text string, changes bool) {
 // announced, since the prompt is stored with it.
 func (r *modeReminders) TakeForPrompt() string {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	text, _ := r.reminder()
+	text, typ, _ := r.reminder()
 	r.announcedPlan = r.mode() == claudesettings.ModePlan
-	if text == "" {
+	r.mu.Unlock()
+	text, ok := r.shape(typ, text)
+	if !ok || text == "" {
 		return ""
 	}
 	return wrapReminder(text)
+}
+
+// shape runs a reminder through the mods' prompt.attachment hooks.
+func (r *modeReminders) shape(typ, text string) (string, bool) {
+	if r.attach == nil || text == "" {
+		return text, true
+	}
+	return r.attach(typ, text)
 }
 
 // Prefix puts TakeForPrompt's preamble ahead of prompt.
@@ -82,9 +95,13 @@ func (r *modeReminders) Prefix(prompt string) string {
 // prompt, so the model's next request in this turn already follows it.
 func (r *modeReminders) TransformContext(_ context.Context, transcript []msg.Message) ([]msg.Message, error) {
 	r.mu.Lock()
-	text, changes := r.reminder()
+	text, typ, changes := r.reminder()
 	r.mu.Unlock()
 	if !changes {
+		return transcript, nil
+	}
+	text, ok := r.shape(typ, text)
+	if !ok || text == "" {
 		return transcript, nil
 	}
 	return append(transcript, msg.UserMessage{

@@ -122,6 +122,12 @@ type Model struct {
 	// drops it on any edit. It shows in place of the placeholder when set.
 	suggestion string
 
+	// cause says what last changed the text when it was not a key the
+	// textarea took as an edit: "history", "clear", "engine", or "plugin:<name>".
+	// The app resets it before each message (ClearCause) and reads it after
+	// (Cause), to tell prompt.change from prompt.edit.
+	cause string
+
 	// cache is View's last render, shared by every copy of the Model; see
 	// View. styleGen counts SetStyles calls so a theme change misses it.
 	cache    *viewCache
@@ -230,6 +236,11 @@ func (m Model) Value() string { return m.ta.Value() }
 // SetValue replaces the buffer contents and exits history browsing (the
 // new value becomes the draft).
 func (m *Model) SetValue(s string) {
+	if s == "" {
+		m.cause = "clear"
+	} else {
+		m.cause = "engine"
+	}
 	m.ta.SetValue(s)
 	m.exitHistoryBrowsing()
 	m.syncHeight()
@@ -239,6 +250,7 @@ func (m *Model) SetValue(s string) {
 // part of the buffer's own state, the same way a shell's kill ring outlives
 // a cleared command line.
 func (m *Model) Clear() {
+	m.cause = "clear"
 	m.ta.Reset()
 	m.exitHistoryBrowsing()
 	m.syncHeight()
@@ -368,6 +380,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd, Event) {
 		// can edit or submit.
 		accepted := m.suggestion
 		m.suggestion = ""
+		m.cause = "engine"
 		m.ta.SetValue(accepted)
 		m.historyIdx = -1
 		m.syncHeight()
@@ -383,6 +396,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (Model, tea.Cmd, Event) {
 		}
 		text := m.ta.Value()
 		m.ta.Reset()
+		m.cause = "clear"
 		m.exitHistoryBrowsing()
 		m.suggestion = ""
 		m.syncHeight()
@@ -506,6 +520,7 @@ func (m *Model) navigateHistory(dir int) {
 }
 
 func (m *Model) recall(text string) {
+	m.cause = "history"
 	m.ta.SetValue(text)
 	m.syncHeight()
 }
@@ -561,6 +576,7 @@ func (m *Model) ReplaceCursorLine(start, end int, replacement string) {
 	}
 	newLine := string(line[:start]) + replacement + string(line[end:])
 	lines[row] = newLine
+	m.cause = "engine"
 	m.ta.SetValue(strings.Join(lines, "\n"))
 	// SetValue leaves the cursor at the very end of the buffer (its Reset
 	// + InsertString implementation); walk it back up onto this line, then
@@ -670,5 +686,60 @@ func (m *Model) yank() {
 	}
 	m.ta.InsertString(text)
 	m.historyIdx = -1
+	m.syncHeight()
+}
+
+// Cause is what last changed the text other than an edit key ("" when none
+// since ClearCause): "history", "clear", "engine" or "plugin:<name>".
+func (m Model) Cause() string { return m.cause }
+
+// ClearCause forgets the last cause; the app calls it before each message.
+func (m *Model) ClearCause() { m.cause = "" }
+
+// SetCause names who is about to change the text (a plugin's fill).
+func (m *Model) SetCause(c string) { m.cause = c }
+
+// CursorOffset is the cursor's position in Value, counted in runes.
+func (m Model) CursorOffset() int {
+	lines := strings.Split(m.ta.Value(), "\n")
+	row := m.ta.Line()
+	if row < 0 {
+		row = 0
+	}
+	if row >= len(lines) {
+		row = len(lines) - 1
+	}
+	n := 0
+	for _, l := range lines[:row] {
+		n += len([]rune(l)) + 1
+	}
+	col := m.ta.Column()
+	if max := len([]rune(lines[row])); col > max {
+		col = max
+	}
+	if col < 0 {
+		col = 0
+	}
+	return n + col
+}
+
+// SetValueCursor replaces the buffer and puts the cursor at rune offset
+// cursor (clamped), without recording a cause: the caller names it.
+func (m *Model) SetValueCursor(s string, cursor int) {
+	m.ta.SetValue(s)
+	m.exitHistoryBrowsing()
+	runes := []rune(s)
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	row := strings.Count(string(runes[:cursor]), "\n")
+	col := cursor - len([]rune(string(runes[:cursor])[:strings.LastIndex(string(runes[:cursor]), "\n")+1]))
+	for m.ta.Line() > row {
+		m.ta.CursorUp()
+	}
+	m.ta.SetCursorColumn(col)
 	m.syncHeight()
 }

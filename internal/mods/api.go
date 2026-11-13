@@ -54,6 +54,8 @@ var implemented = map[string]bool{
 	"tool.list": true, "tool.call": true, "tool.check": true,
 	"command.list": true, "command.run": true,
 	"agent.register": true, "agent.spawn": true,
+	"prompt.compose": true, "prompt.fill": true, "prompt.media": true, "prompt.read": true,
+	"prompt.submit": true, "prompt.suggest": true,
 }
 
 // documented lists the rest of the mod API as Claude Code declares it, plus
@@ -63,7 +65,6 @@ var documented = []string{
 	"audio.play", "audio.speak",
 	"config.list", "config.set",
 	"mcp.connect", "process.spawn",
-	"prompt.compose", "prompt.fill", "prompt.media", "prompt.read", "prompt.submit", "prompt.suggest",
 	"session.authorize", "session.identity", "session.messages", "session.send",
 	"session.surface", "session.surfaces",
 	"telemetry.log", "telemetry.mark",
@@ -199,6 +200,17 @@ func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, e
 		return goja.Undefined(), nil
 
 	case "ui.invalidate":
+		// Invalidating prompt.section or prompt.compose asks for the system
+		// prompt to be composed again. The rebuild raises those hooks, which
+		// the worker runs, so it happens off the worker.
+		if ev, ok := arg(0).Export().(string); ok && (ev == "prompt.section" || ev == "prompt.compose") {
+			if rebuild := e.opts.Services.RebuildPrompt; rebuild != nil {
+				go func() {
+					defer crash.Guard()
+					rebuild()
+				}()
+			}
+		}
 		e.host.Invalidate()
 		return goja.Undefined(), nil
 

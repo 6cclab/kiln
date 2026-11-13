@@ -111,6 +111,16 @@ type modsRuntime struct {
 	// endReason is session.end's reason: "prompt_input_exit" leaving the
 	// interactive UI, "other" when a -p run finishes.
 	endReason string
+
+	// print is set for a -p run, which draws no prompt box.
+	print bool
+	// modelFn is the live model id, for the system prompt's facts.
+	modelFn func() string
+	// toolsFn lists the tools the model has (Services.Tools).
+	toolsFn func() []mods.ToolInfo
+	// lastSections is the system prompt's sections before the hooks shaped
+	// them, for $.prompt.compose (read without taking the sizing lock).
+	lastSections atomic.Pointer[[]mods.PromptSection]
 }
 
 // newModsRuntime collects the hooks modules of the active plugins; nil
@@ -207,6 +217,7 @@ func (r *modsRuntime) start(ctx context.Context, cwd, sessionID string, dep egre
 		Services: r.services(dep.services),
 	})
 	r.sessionID = sessionID
+	r.modelFn = dep.model
 	errs := e.Load(r.modules)
 	for _, err := range errs {
 		diag.L().Warn("mods: module failed to load", "error", err)
@@ -821,5 +832,7 @@ func (r *modsRuntime) services(base mods.Services) mods.Services {
 		}
 		return lane.Abort()
 	}
+	r.toolsFn = base.Tools
+	r.promptServices(&svc)
 	return svc
 }

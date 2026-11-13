@@ -16,6 +16,11 @@ import (
 type ModsEngine interface {
 	Render(ctx context.Context, site mods.Site) []mods.Drawing
 	Press(cb mods.Callback)
+
+	// The prompt events, raised for what the person does in the box.
+	PromptEdit(ctx context.Context, before mods.PromptBox, start, end int, inputText string)
+	PromptChange(ctx context.Context, box mods.PromptBox, origin map[string]any)
+	PromptAutocomplete(ctx context.Context, box mods.PromptBox, token string, start int) []mods.PromptSuggestion
 }
 
 // modsRedrawInterval caps how often mod sites are re-rendered: Claude Code
@@ -40,6 +45,12 @@ type ModsDriver struct {
 	band   []mods.Drawing
 	toasts func(plugin, text string)
 
+	// box is the prompt box as the TUI last published it ($.prompt.read).
+	box mods.PromptBox
+	// events carries the prompt events to one goroutine, so they reach the
+	// mods in order and one at a time.
+	events chan func(ctx context.Context)
+
 	dirty  chan struct{}
 	cancel context.CancelFunc
 }
@@ -53,9 +64,11 @@ func NewModsDriver(engine ModsEngine) *ModsDriver {
 		engine: engine,
 		panes:  NewModPanes(),
 		dirty:  make(chan struct{}, 1),
+		events: make(chan func(ctx context.Context), 256),
 		cancel: cancel,
 	}
 	crash.Go(func() { d.loop(ctx) })
+	crash.Go(func() { d.runEvents(ctx) })
 	return d
 }
 

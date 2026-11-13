@@ -124,6 +124,9 @@ type Options struct {
 	Tier *budget.Tier
 	// Roots are workspace roots. A mention outside them is not inlined.
 	Roots []string
+	// Mods raises prompt.mention for each file and prompt.attachment for
+	// the text attached; nil without mods.
+	Mods *modsRuntime
 }
 
 // Resolved is the outcome of resolving every `@path` mention on a line.
@@ -221,6 +224,7 @@ func ResolveMentions(line string, opts Options) (Resolved, error) {
 	}
 
 	mentions := make([]Mention, 0, len(raws))
+	var extra []string // context the prompt.mention hooks attach
 	for _, raw := range raws {
 		path := raw
 		if !filepath.IsAbs(path) {
@@ -253,6 +257,38 @@ func ResolveMentions(line string, opts Options) (Resolved, error) {
 			continue
 		}
 
+		// prompt.mention: the mods may refuse the file, read another, or
+		// add context for the model. A redirected path is judged by the
+		// same rules as a typed one.
+		if res, hooked := opts.Mods.mention(raw, path); hooked {
+			if res.Deny != "" {
+				m.Skipped = "refused by a mod: " + res.Deny
+				mentions = append(mentions, m)
+				continue
+			}
+			if res.Skip {
+				m.Skipped = "a mod read nothing for it"
+				mentions = append(mentions, m)
+				continue
+			}
+			extra = append(extra, res.Context...)
+			if res.Path != path {
+				path = filepath.Clean(res.Path)
+				m.Path = path
+				if len(opts.Roots) > 0 && !withinRoots(path, opts.Roots) {
+					m.Skipped = "outside the workspace"
+				} else if info, err = os.Stat(path); err != nil {
+					m.Skipped = describeReadError(err)
+				} else if info.IsDir() {
+					m.Skipped = "is a directory"
+				}
+				if m.Skipped != "" {
+					mentions = append(mentions, m)
+					continue
+				}
+			}
+		}
+
 		// An image is attached, not inlined. Checked before reading,
 		// because reading a PNG as UTF-8 produces megabytes of replacement
 		// characters.
@@ -279,6 +315,14 @@ func ResolveMentions(line string, opts Options) (Resolved, error) {
 			continue
 		}
 		text, truncated := capToTokens(string(data), perMention)
+		// prompt.attachment: the file's text as the model will read it.
+		if t, keep := opts.Mods.attachment("file", text, nil); !keep {
+			m.Skipped = "left out by a mod"
+			mentions = append(mentions, m)
+			continue
+		} else {
+			text = t
+		}
 		m.Content = text
 		m.Truncated = truncated
 		m.Tokens = countTokens(text)
@@ -298,11 +342,11 @@ func ResolveMentions(line string, opts Options) (Resolved, error) {
 			attached = append(attached, m)
 		}
 	}
-	if len(attached) == 0 {
+	if len(attached) == 0 && len(extra) == 0 {
 		return Resolved{Prompt: line, Mentions: mentions, Images: images}, nil
 	}
 
-	blocks := make([]string, 0, len(attached))
+	blocks := make([]string, 0, len(attached)+len(extra))
 	for _, m := range attached {
 		shown := relativeOrRaw(opts.Cwd, m.Path, m.Raw)
 		note := ""
@@ -311,6 +355,8 @@ func ResolveMentions(line string, opts Options) (Resolved, error) {
 		}
 		blocks = append(blocks, fmt.Sprintf("<file path=\"%s\">\n%s%s\n</file>", shown, m.Content, note))
 	}
+
+	blocks = append(blocks, extra...)
 
 	// Files first, question last: the instruction is what the model should
 	// be holding when it starts generating, and trailing content is

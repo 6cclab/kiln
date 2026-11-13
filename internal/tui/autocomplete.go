@@ -54,6 +54,10 @@ type AutocompleteItem struct {
 	// the name in the name column so every description starts at the
 	// same column.
 	Hint string
+	// Mod marks a row a mod's prompt.autocomplete hook added: taking it
+	// writes Value over [ModStart,ModEnd) of the cursor's line, as is.
+	Mod              bool
+	ModStart, ModEnd int
 }
 
 // Popup is the pure, TUI-framework-free autocomplete state: which items
@@ -105,6 +109,9 @@ func (p *Popup) Accept() (replacement string, cursorCol int) {
 	if !ok {
 		return "", p.Start
 	}
+	if item.Mod {
+		return item.Value, item.ModStart + len([]rune(item.Value))
+	}
 	switch p.Kind {
 	case KindSlashCommand:
 		replacement = "/" + item.Value + " "
@@ -117,6 +124,15 @@ func (p *Popup) Accept() (replacement string, cursorCol int) {
 		}
 	}
 	return replacement, p.Start + len([]rune(replacement))
+}
+
+// Range is the span of the cursor's line the selected row replaces: the
+// popup's own, or the token's for a row a mod added.
+func (p *Popup) Range() (start, end int) {
+	if item, ok := p.SelectedItem(); ok && item.Mod {
+		return item.ModStart, item.ModEnd
+	}
+	return p.Start, p.End
 }
 
 // Render draws up to maxRows item rows the way Claude Code lays its
@@ -212,6 +228,9 @@ const popupDescRows = 2
 // colours over that background); unselected rows show the command in ink
 // and the description dimmed, no background.
 func renderItem(kind AutocompleteKind, item AutocompleteItem, selected bool, width, column int) []string {
+	if item.Mod {
+		kind = KindArgument // a mod's row is a plain value and description
+	}
 	paintValue := func(s string) string {
 		if selected {
 			return onRaiseSpan(textHex.Amber, s)
