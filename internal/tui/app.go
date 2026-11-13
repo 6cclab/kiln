@@ -373,6 +373,10 @@ type Model struct {
 	// (fullscreenViewport).
 	transcriptWidest    int
 	transcriptMultiline bool
+	// transcriptWidths is the display width of each row in transcript,
+	// measured once when the row was committed, so a frame can pad the rows
+	// on screen without measuring them again.
+	transcriptWidths []int
 	// sel is the fullscreen transcript selection being dragged or last
 	// copied (selection.go); nil when there is none.
 	sel *selection
@@ -1618,7 +1622,9 @@ func (m Model) appendTranscript(newLines []string) Model {
 		if strings.Contains(line, "\n") {
 			m.transcriptMultiline = true
 		}
-		m.transcriptWidest = max(m.transcriptWidest, ansi.StringWidth(line))
+		w := ansi.StringWidth(line)
+		m.transcriptWidths = append(m.transcriptWidths, w)
+		m.transcriptWidest = max(m.transcriptWidest, w)
 	}
 	m.viewport.SetContent(strings.Join(m.transcript, "\n"))
 	if wasBottom {
@@ -1631,6 +1637,7 @@ func (m Model) appendTranscript(newLines []string) Model {
 func (m Model) clearTranscript() Model {
 	m.transcript = nil
 	m.transcriptWidest = 0
+	m.transcriptWidths = nil
 	m.transcriptMultiline = false
 	return m
 }
@@ -1743,11 +1750,21 @@ func (m Model) fullscreenViewport(tail []string) (rows []string, top int) {
 		}
 		return tailLines[i-len(m.transcript)]
 	}
+	// Each row's width is known without measuring it again: the
+	// transcript's from commit time, the tail's from this one pass.
 	widest := m.transcriptWidest
-	for _, l := range tailLines {
-		widest = max(widest, ansi.StringWidth(l))
+	tailWidths := make([]int, len(tailLines))
+	for i, l := range tailLines {
+		tailWidths[i] = ansi.StringWidth(l)
+		widest = max(widest, tailWidths[i])
 	}
-	if total == 1 && ansi.StringWidth(line(0)) == 0 {
+	width := func(i int) int {
+		if i < len(m.transcript) {
+			return m.transcriptWidths[i]
+		}
+		return tailWidths[i-len(m.transcript)]
+	}
+	if total == 1 && width(0) == 0 {
 		// SetContentLines holds a lone empty row as no content at all.
 		total, widest = 0, 0
 	}
@@ -1772,12 +1789,18 @@ func (m Model) fullscreenViewport(tail []string) (rows []string, top int) {
 		first := min(top, total)
 		last := min(first+maxH, total)
 		window = make([]string, 0, last-first)
+		windowWidths := make([]int, 0, last-first)
 		for i := first; i < last; i++ {
-			l := line(i)
+			l, w := line(i), width(i)
 			if vp.XOffset() != 0 || widest > maxW {
 				l = ansi.Cut(l, vp.XOffset(), vp.XOffset()+maxW)
+				w = ansi.StringWidth(l)
 			}
 			window = append(window, l)
+			windowWidths = append(windowWidths, w)
+		}
+		if rows, ok := padViewportRows(window, windowWidths, maxW, maxH, vp); ok {
+			return rows, top
 		}
 	}
 	// The window rows all fit, so a viewport holding only them renders
@@ -1786,6 +1809,53 @@ func (m Model) fullscreenViewport(tail []string) (rows []string, top int) {
 	vp.SetXOffset(0)
 	vp.SetYOffset(0)
 	return strings.Split(vp.View(), "\n"), top
+}
+
+// padViewportRows is what viewport.View makes of rows that all fit: each
+// padded with spaces to width, then blank rows down to height. View gets
+// there through two lipgloss renders that re-wrap and re-measure every row
+// (about a fifth of a streamed delta's time), so when nothing in the
+// viewport's own styling could change the result the padding is done here
+// from the known widths. ok is false, and the caller falls back to the
+// viewport, when it could: a frame, a fixed size or a gutter on the
+// viewport, a row wider than it, or a tab or carriage return in a row
+// (lipgloss rewrites both).
+func padViewportRows(rows []string, widths []int, width, height int, vp viewport.Model) (out []string, ok bool) {
+	if vp.Style.GetHorizontalFrameSize() != 0 || vp.Style.GetVerticalFrameSize() != 0 ||
+		vp.Style.GetWidth() != 0 || vp.Style.GetHeight() != 0 ||
+		vp.LeftGutterFunc(viewport.GutterContext{}) != "" || vp.Width() != width || vp.Height() != height {
+		return nil, false
+	}
+	for i, r := range rows {
+		// A row wider than the viewport (ansi.Cut can leave one a column
+		// over when it cuts through a double-width glyph) is wrapped by
+		// lipgloss onto a second row; leave that to it.
+		if widths[i] > width || strings.ContainsAny(r, "\t\r") {
+			return nil, false
+		}
+	}
+	out = make([]string, height)
+	for i := range out {
+		if i < len(rows) {
+			out[i] = rows[i] + spaces(width-widths[i])
+		} else {
+			out[i] = spaces(width)
+		}
+	}
+	return out, true
+}
+
+// spaces is n blank columns, sliced from a shared run when it is short
+// enough.
+func spaces(n int) string {
+	const run = "                                                                                "
+	if n <= 0 {
+		return ""
+	}
+	if n <= len(run) {
+		return run[:n]
+	}
+	return strings.Repeat(" ", n)
 }
 
 // fullscreenViewportFull is fullscreenViewport the direct way: a copy of
