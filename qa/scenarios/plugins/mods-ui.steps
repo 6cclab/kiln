@@ -17,6 +17,9 @@ KEY enter
 WAITFOR /uiprobe opened\./ 20
 WAITFOR /uiprobe status: ready/ 20
 WAITFOR /uiprobe log: opened/ 20
+# The pane draws its first frame a moment after it opens; Enter presses the
+# button only once it is on screen.
+WAITFOR /\[ go \]/ 20
 SHOT status-and-pane
 KEY enter
 WAITFOR /pressed go/ 20
