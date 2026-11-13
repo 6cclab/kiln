@@ -3,7 +3,7 @@
 - Drive kiln only through `scripts/qa/drive.py`. Input goes through Orca (TYPE, KEY, SEND) and
   wheel events through `scripts/qa/wheel.swift` (SCROLL). Never inject bytes with AppleScript
   `write text`: it skips the terminal's key encoder, so the drive tests input no user can produce.
-- Build before a drive, never during one. The drive launches `bin/kiln` for every scenario.
+- Build before a drive, never during one: the drive launches `bin/kiln` for every scenario.
 - Tell the user before a drive that moves the pointer or takes focus, and ask them not to type
   until it finishes: stray keystrokes land in the driven window.
 - Faux scenarios run in a scratch HOME. Never let a test or scenario write to the real
