@@ -467,7 +467,7 @@ func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, e
 		return e.httpFetch(arg)
 
 	case "process.run":
-		return e.processRun(arg)
+		return e.processRun(p.name, arg)
 
 	case "mcp.call":
 		return e.mcpCall(arg)
@@ -809,12 +809,15 @@ func (e *Engine) httpFetch(arg func(int) goja.Value) (any, error) {
 // processRun serves $.process.run: a subprocess on a background goroutine
 // (exec must not block the engine's worker), resolving a promise with
 // { exitCode, stdout, stderr } to match Claude Code's ProcessRunResult. Like
-// Claude Code, a mod's subprocess is not permission-gated: a loaded mod is
-// trusted (user decision 2026-11-09). init.env is merged over the inherited
+// $.process.spawn, and stricter than Claude Code, it never runs ungated
+// (user decision 2026-11-13, safety first): before anything starts, the
+// argument vector goes through Services.GateProcess, the permission gate the
+// Bash tool goes through, and with no gate wired the call rejects. A refusal
+// rejects with the gate's reason. init.env is merged over the inherited
 // environment; a failure to start (program not found, bad cwd) rejects, while
 // a non-zero exit resolves with that exitCode (-1 when signal-killed, e.g. on
-// timeout).
-func (e *Engine) processRun(arg func(int) goja.Value) (any, error) {
+// timeout). timeoutMs counts from the start, not from the gate's prompt.
+func (e *Engine) processRun(plugin string, arg func(int) goja.Value) (any, error) {
 	vm := e.w.vm
 	var argv []string
 	if a, ok := arg(0).Export().([]any); ok {
@@ -825,10 +828,14 @@ func (e *Engine) processRun(arg func(int) goja.Value) (any, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("process.run(argv): argv must be a non-empty array")
 	}
+	gateFn := e.opts.Services.GateProcess
+	if gateFn == nil {
+		return nil, fmt.Errorf("process.run is not available: kiln has no permission gate wired for it, and never runs a mod's process ungated")
+	}
 	dir := e.opts.Cwd
 	stdin := ""
 	var timeout time.Duration
-	env := os.Environ()
+	envOver := map[string]string{}
 	if obj, ok := arg(1).(*goja.Object); ok {
 		if c := str(obj.Get("cwd")); c != "" {
 			dir = e.fsPath(c)
@@ -839,13 +846,27 @@ func (e *Engine) processRun(arg func(int) goja.Value) (any, error) {
 		}
 		if ev, ok := obj.Get("env").(*goja.Object); ok {
 			for _, k := range ev.Keys() {
-				env = append(env, k+"="+str(ev.Get(k)))
+				envOver[k] = str(ev.Get(k))
 			}
 		}
+	}
+	env := os.Environ()
+	for k, v := range envOver {
+		env = append(env, k+"="+v)
 	}
 	promise, resolve, reject := vm.NewPromise()
 	go func() {
 		defer crash.Guard()
+		deny, gerr := gateFn(context.Background(), plugin, argv, dir, envOver)
+		if gerr == nil && deny != "" {
+			gerr = fmt.Errorf("process.run was refused: %s", deny)
+		} else if gerr != nil {
+			gerr = fmt.Errorf("process.run: %w", gerr)
+		}
+		if gerr != nil {
+			e.w.post(func() { _ = reject(e.errorValue(gerr.Error())) })
+			return
+		}
 		ctx := context.Background()
 		if timeout > 0 {
 			var cancel context.CancelFunc

@@ -38,7 +38,7 @@ type modsToolDeps struct {
 	// hub is the session's MCP hub ($.mcp.connect reads what it connected).
 	hub *mcp.Hub
 	// sandboxed is set when the OS sandbox wraps the bash tool; a mod's
-	// process is not wrapped by it, so $.process.spawn refuses.
+	// process is not wrapped by it, so $.process.run and $.process.spawn refuse.
 	sandboxed bool
 }
 
@@ -50,9 +50,10 @@ func quoteArg(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 }
 
-// modsProcessCommand is the shell command line $.process.spawn's argument
-// vector stands for, as the permission gate reads it: a directory other than
-// the session's is a leading cd, env a leading assignment each.
+// modsProcessCommand is the shell command line the argument vector of
+// $.process.run or $.process.spawn stands for, as the permission gate reads
+// it: a directory other than the session's is a leading cd, env a leading
+// assignment each.
 func modsProcessCommand(argv []string, cwd, sessionCwd string, env map[string]string) string {
 	var parts []string
 	if cwd != "" && cwd != sessionCwd {
