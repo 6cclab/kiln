@@ -3,8 +3,8 @@
 ## Overview
 
 `kiln` is a single Go binary (module `github.com/andrepato/harness`, command
-`cmd/kiln`) that provides Claude Code's interface — slash commands, `@file`
-mentions, `!shell`, permission modes, `.claude/` configuration — over any
+`cmd/kiln`) that provides Claude Code's interface (slash commands, `@file`
+mentions, `!shell`, permission modes, `.claude/` configuration) over any
 model provider, local or hosted. The agent loop, session format, compaction
 and provider catalog are Go ports of [`@earendil-works/pi`](https://github.com/earendil-works/pi):
 sessions are written in pi's JSONL v4 format and are readable by either
@@ -17,7 +17,7 @@ directory's `HARNESS-PATCH.md`).
 
 Everything downstream of model choice reads a `budget.Tier`
 (`internal/budget/tier.go`) derived from the model's context window, never
-the provider — the same code relaxes on a 200k-token subscription model
+the provider. The same code relaxes on a 200k-token subscription model
 instead of branching per provider.
 
 ## Repository map
@@ -91,7 +91,7 @@ Starting from a user prompt in the TUI or `-p` mode:
    `Lane.beginTool` first runs `Hooks.OnBeforeTool` (the CLI wires this to
    `hooks.GuardToolCall`, running `.claude/settings.json` `PreToolUse` hooks
    *before* `permission.Gate.Check`, so the gate judges what will actually
-   run — `internal/claude/hooks/doc.go`). A hook may rewrite arguments or
+   run; `internal/claude/hooks/doc.go`). A hook may rewrite arguments or
    block the call (`ToolBlock`); otherwise `tool.Tool.Execute` runs and the
    result becomes a `msg.ToolResultMessage`. `Lane.commitToolResult` writes
    the result entry, runs `Hooks.OnAfterTool` (wired to `PostToolUse`), and
@@ -112,11 +112,12 @@ events (plus user echo, `!`/`#` output and command output) and serializes
 every commit onto one background goroutine that owns `Program.Println`,
 because concurrent `tea.Println` calls from different goroutines are
 documented to land out of order. Every session entry is committed to disk
-inside the transactions listed above — there is no separate "flush" step;
+inside the transactions listed above. There is no separate "flush" step:
 `Storage.Commit` (`internal/session/jsonl`) is the durable write.
 
-In print mode (`-p`), there is no `Prompter`: `internal/claude/permission`'s
-`Gate.Check` refuses (rather than asking) any call whose verdict is `ask`.
+In print mode (`-p`), there is no `Prompter`, so `Gate.Check`
+(`internal/claude/permission`) refuses any call whose verdict is `ask`
+instead of asking.
 
 ## Harness and lanes
 
@@ -145,21 +146,25 @@ for five minutes.
 Interruption: `Lane.Abort` cancels the lane's `context.CancelFunc` and
 posts `EventOperationAbort` (`Events.Post`: delivered on another
 goroutine, so a UI's event loop calling Abort, Steer or ClearInbox never
-waits on the bus while one of its own handlers waits on that loop); the turn loop itself notices `ctx.Err() != nil`
+waits on the bus while one of its own handlers waits on that loop). The turn loop notices `ctx.Err() != nil`
 at the top of its next iteration or mid-request and calls `finishAborted`,
 which still writes the terminal `pi.result` transaction with
-`StatusAborted`. A reply interrupted mid-stream keeps its text
-(`Lane.commitInterrupted`, `internal/harness/interrupt.go`): it is committed
-as an aborted assistant entry, shown, sent with the next request
-(`compaction.ContextMessages` keeps an aborted reply's text), and its
-usage, with output estimated from what streamed, is counted. `Lane.Steer` queues text into `pi.lane.state.inbox` for
+`StatusAborted`.
+
+A reply interrupted mid-stream keeps its text
+(`Lane.commitInterrupted`, `internal/harness/interrupt.go`). It is committed
+as an aborted assistant entry, shown, and sent with the next request
+(`compaction.ContextMessages` keeps an aborted reply's text). Its
+usage, with output estimated from what streamed, is counted.
+
+`Lane.Steer` queues text into `pi.lane.state.inbox` for
 injection at the next checkpoint (a best-effort approximation of pi's
 mid-stream steering).
 
-Resume replays no partial streaming state: an interrupted operation's
+Resume replays no partial streaming state. An interrupted operation's
 `pi.pending.assistant_frame` list exists on disk (written for
-storage-format parity with pi) but this port's `Resume` re-requests a fresh
-assistant response from scratch rather than reconstructing a partial one
+storage-format parity with pi), but this port's `Resume` re-requests a fresh
+assistant response from scratch instead of reconstructing a partial one
 from frames (`internal/harness/turn.go`'s `Frame` doc comment).
 
 ## Sessions
@@ -195,17 +200,17 @@ file per session (`FileName`: ISO-8601 `createdAt` + the session id,
 **Legacy v3 detection**: a line-1 header shaped
 `{"type":"session","version":3,...}` identifies a legacy session
 (`internal/session/jsonl/codec.go`'s `isLegacyV3Header`); `Open` upgrades it
-to v4 as a side effect before any other code (including `Fork`) reads it —
-see `internal/session/jsonl/legacy_v3.go` for what the upgrade does and does
-not yet carry over (the full v3 record model — compaction tails, branch
-summaries, per-field change records — is deferred).
+to v4 as a side effect before any other code (including `Fork`) reads it.
+See `internal/session/jsonl/legacy_v3.go` for what the upgrade does and does
+not yet carry over (the full v3 record model, meaning compaction tails, branch
+summaries and per-field change records, is deferred).
 
 **Session search** (`internal/search`) indexes both formats over SQLite
 FTS5 (`modernc.org/sqlite`, CGO-free, FTS5 compiled in) in one standalone
 FTS5 virtual table (`entries`) plus a plain `indexed_files` table tracking
 which files have been synced. A hit returns a short snippet (12 tokens,
-`snippetTokens`), never full entry text — the design constraint carried
-over from pi's `sqlite.ts` is that recall must cost tens of tokens, not
+`snippetTokens`), never full entry text. The design constraint, carried
+over from pi's `sqlite.ts`, is that recall must cost tens of tokens, not
 thousands.
 
 ## Context budget
@@ -215,9 +220,9 @@ context window via `TierForWindow`. The tier **name** is a step function
 (`small` ≤ 32,768, `medium` ≤ 131,072, else `large`) because it selects the
 tool-catalog strategy, which has a fixed measured cost that either fits or
 doesn't; every other budget scales continuously with the window as a
-fraction, not a per-tier constant — an earlier constant-per-tier design let
+fraction, not a per-tier constant. An earlier constant-per-tier design let
 a 49,152-token window fall into "medium" and inherit budgets sized for
-128k, ending up with *less* usable context than a 32,768-token window.
+128k, leaving it *less* usable context than a 32,768-token window.
 
 | Budget | Share of window | Floor | Ceiling |
 |---|---|---|---|
@@ -256,16 +261,19 @@ estimated context usage nears the window, then `FindCutPoint` (turn-aware:
 never splits a tool call from its result except for a deliberately
 "split turn" case) picks the boundary between what gets summarized and what
 is kept verbatim (bounded by `Settings.KeepRecentTokens`). `Compact` calls
-the lane's own provider/model (`Lane.CompactWith` may name another: `/compact`
-right after a switch to a smaller window uses the outgoing model) with a
+the lane's own provider/model with a
 fixed structured-summary prompt (`SummarizationSystemPrompt` /
 `summarizationPrompt`, or `updateSummarizationPrompt` when extending a prior
-summary). History too large for one request to that model is summarised in
+summary). `Lane.CompactWith` may name another model: `/compact`
+right after a switch to a smaller window uses the outgoing model. History too
+large for one request to that model is summarised in
 parts that each fit its window, each carrying the summary so far through
 `updateSummarizationPrompt` (`fit.go`); every request has a stall watchdog.
-It appends a read-files/modified-files tag block, and returns a
-`Result` stored as a new `session.EntryCompaction` carrying `Summary`,
-`RetainedTail` and `TokensBefore`. On the next request the lane projects the
+`Compact` appends a read-files/modified-files tag block and returns a
+`Result`, stored as a new `session.EntryCompaction` carrying `Summary`,
+`RetainedTail` and `TokensBefore`.
+
+On the next request the lane projects the
 branch through `compaction.ContextMessages` (`entriesToTranscript` in
 `internal/harness/lane.go`): everything before the last compaction entry is
 replaced by that entry's summary and retained tail, so compaction shrinks
@@ -274,9 +282,12 @@ turn loop checks the request against the window (`Lane.fitRequest`):
 compacting once if it does not fit and refusing with a
 `ContextOverflowError` if it still does not, since Ollama truncates an
 oversized prompt silently instead of refusing it. A provider that does
-refuse one as too long gets one compaction and one retry. `/compact` runs as
+refuse one as too long gets one compaction and one retry.
+
+`/compact` runs as
 a background command (`commands.Result.Background`), off the TUI's event
 loop, so Esc cancels it.
+
 `SummarizeBranch`/`PrepareBranchSummary` are the sibling path used when
 navigation abandons a branch.
 
@@ -322,10 +333,10 @@ whose `api` is catalog-known but not yet streamable reports
 `/api/show`, resolving the context window kiln will ask Ollama to serve
 (`ResolveContextWindow`), and streams completions through Ollama's native
 `/api/chat` protocol (`client.go`) rather than its OpenAI-compatible `/v1`
-endpoint, sending that window as `options.num_ctx` on every request — `/v1`
+endpoint, sending that window as `options.num_ctx` on every request. `/v1`
 cannot carry `num_ctx` at all, so a model's *actually served* window used to
 depend on whichever caller last loaded it. `TierForWindow` is fed the
-resolved window for Ollama models, and because kiln itself asked Ollama to
+resolved window for Ollama models. Because kiln itself asked Ollama to
 serve exactly that window, the budgeted and served windows now agree by
 construction.
 
@@ -353,8 +364,8 @@ streams partial results through an `Update` callback and returns a final
 session but not sent to the model, and an `IsError` flag).
 
 **Built-ins** (`internal/tools/builtins.go`, `tools.Builtins`): `bash`,
-`read`, `edit`, `write` — the four every session gets for free, in pi's
-order, all operating against an `execenv.Env`.
+`read`, `edit`, `write`. Every session gets these four for free, in pi's
+order, and all operate against an `execenv.Env`.
 
 **Harness-authored tools** (`internal/tools`): `tool_search`
 (`toolsearch.go`, described above), `task` (`task.go`, subagent dispatch,
@@ -363,8 +374,8 @@ described below), plus `todo_write`, `exit_plan_mode`, `session_search`,
 
 **MCP adapters** (`internal/mcp`): each configured server's tools are
 adapted into `tool.Tool` values; whether an adapted tool is *active* in a
-session is governed by the gating described in Context budget, above —
-registration is free, activation is what costs tokens (`README.md`). The
+session is governed by the gating described in Context budget, above.
+Registration is free; activation is what costs tokens (`README.md`). The
 active set is enforced at execution, not only in the schema offered to the
 model: `beginTool` in `internal/harness/turn.go` refuses a call whose name is
 not in the lane's recorded active set (`tool "x" is not available to this
@@ -421,29 +432,35 @@ own `git status` for the status line does (`cli/gitstatus.go`, through
 `permission.Gate` (`internal/claude/permission/permission.go`) decides
 whether a tool call proceeds, given: the merged `.claude/settings.json`
 permission rules (`settings.Permissions`), the active `PermissionMode`, a
-workspace boundary (`Roots`, widened via `/add-dir`), and — for anything
-`ask` or allow-outside-workspace — a `Prompter` (absent in headless/print
+workspace boundary (`Roots`, widened via `/add-dir`), and, for anything
+`ask` or allow-outside-workspace, a `Prompter` (absent in headless/print
 runs). A denial is not a Go error: `Check` returns a `*BlockResult` whose
 `Reason` is written for the model, so a refused call ends the tool call, not
 the session.
 
 **The six modes** (`internal/claude/settings/settings.go`): `manual`,
-`acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`. `Decide`
-checks deny rules first (absolute, never overridable), then, in `plan`,
-refuses edit tools whatever allow or ask rules say (Claude Code keeps edits
-blocked until the plan is approved), then ask rules (they ask even in
-`bypassPermissions`, and even when an allow rule matches too), then
-`bypassPermissions` (allow everything else), then allow rules — Claude
-Code's deny, ask, allow — then falls through to mode defaults: `plan`
-allows `settings.ReadOnly` tools and read-only bash, asks about any other
-shell command (the regular flow, as in Claude Code) and denies everything
-else outright; `acceptEdits`
-allows `edit`/`write`/read-only tools and asks for the rest; `dontAsk`
-answers like `manual`, and the gate then denies whatever `manual` would have
-asked about; `auto` allows as far as rules go, and the gate then sends
-what the workspace boundary leaves past the auto mode classifier
-(`permission/classifier.go`, the model call in `internal/automode`;
-`docs/configuration.md` "Auto mode classifier").
+`acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`.
+
+`Decide` checks in this order (Claude Code's deny, ask, allow):
+
+1. Deny rules first. They are absolute and never overridable.
+2. In `plan`, edit tools are refused whatever allow or ask rules say (Claude
+   Code keeps edits blocked until the plan is approved).
+3. Ask rules. They ask even in `bypassPermissions`, and even when an allow rule
+   matches too.
+4. `bypassPermissions` allows everything else.
+5. Allow rules.
+6. Mode defaults, for anything still undecided:
+   - `plan` allows `settings.ReadOnly` tools and read-only bash, asks about any
+     other shell command (the regular flow, as in Claude Code) and denies
+     everything else outright.
+   - `acceptEdits` allows `edit`/`write`/read-only tools and asks for the rest.
+   - `dontAsk` answers like `manual`, and the gate then denies whatever `manual`
+     would have asked about.
+   - `auto` allows as far as rules go, and the gate then sends what the
+     workspace boundary leaves past the auto mode classifier
+     (`permission/classifier.go`, the model call in `internal/automode`;
+     `docs/configuration.md` "Auto mode classifier").
 
 **Mods.** `internal/mods` runs Claude Code hooks modules (esbuild bundle,
 goja runtime, one engine goroutine, the middleware chain behind `on(...)`).
@@ -492,8 +509,8 @@ runs generated command lines in real bash with logging stub commands and fails
 when bash runs a command the analysis did not collect.
 
 **Outside-workspace rule**: a path argument outside `Gate.Roots` always
-warrants a question — even when a rule would otherwise `Allow` — unless
-mode is `bypassPermissions`; with no prompter available, it is refused. This
+warrants a question, even when a rule would otherwise `Allow`, unless
+mode is `bypassPermissions`. With no prompter available, it is refused. This
 is the concrete mechanism behind `README.md`'s "`allow: [Read]` means
 reading is fine here, not read anything on this machine."
 
@@ -506,13 +523,13 @@ block continues the run), `PreCompact` (compaction start) and
 `internal/cli/chat.go`, Stop and SubagentStop through the harness's
 `Hooks.OnBeforeStop`; `Notification` fires on the TUI's permission prompt
 (`internal/cli/tui.go`). `hooks.GuardToolCall` composes `PreToolUse`
-with the permission gate by running hooks *before* `Check`: a hook may
+with the permission gate by running hooks *before* `Check`. A hook may
 rewrite the command's arguments, and the gate then judges what will
 actually execute, not what the model originally proposed
 (`internal/claude/hooks/doc.go`).
 
 **Print-mode behaviour**: with no `Prompter` wired, `Gate.Check` refuses
-(rather than blocking indefinitely) any call whose verdict is `ask` —
+(rather than blocking indefinitely) any call whose verdict is `ask`:
 "in print mode there is nobody to ask, so `ask` is a refusal" (`README.md`).
 
 ## Subagents and model roles
@@ -520,17 +537,17 @@ actually execute, not what the model originally proposed
 The `task` tool (`internal/tools/task.go`, `TaskTool`) dispatches to a
 named agent from `.claude/agents/*.md` (`agents.Definition`), passing a
 self-contained prompt (the subagent sees none of the parent conversation).
-It is `Concurrent: true` — several `task` calls in one assistant message run
-in parallel, each starting its own session with its own storage, sharing no
+It is `Concurrent: true`: several `task` calls in one assistant message run
+in parallel, each starting its own session with its own storage and sharing no
 mutable state.
 
 `agent.Dispatcher` (`internal/agent/dispatch.go`) resolves the requested
-agent, resolves its model (the task call's own `model` argument — a role
-name, `"inherit"`, or empty — wins over the agent definition's `model:`
+agent and resolves its model. The task call's own `model` argument (a role
+name, `"inherit"`, or empty) wins over the agent definition's `model:`
 field, via `agents.ResolveModel` against the registry's available
-candidates and `settings.json`'s `modelRoles`), and starts a **fresh**
-`agent.Start` session — a full harness with its own JSONL file, not a lane
-on the parent's — because the system prompt is set per-harness: a subagent
+candidates and `settings.json`'s `modelRoles`. It then starts a **fresh**
+`agent.Start` session: a full harness with its own JSONL file, not a lane
+on the parent's. The system prompt is set per-harness, and a subagent
 whose system prompt is its parent's would not be a specialized subagent at
 all.
 
@@ -538,18 +555,18 @@ all.
 dispatcher sits (0 = the process-level dispatcher). A dispatch at
 `Depth < 2` gives its subagent its own `task` tool wired to a child
 `Dispatcher` at `Depth+1`; at `Depth 2`, no `task` tool is built at all, so
-the model at the bottom of the tree never sees the option — root → subagent
+the model at the bottom of the tree never sees the option. The tree is root → subagent
 → subagent's-subagent, then no further fan-out.
 
 **Shared gate**: every `Dispatcher` in the tree shares the same
-`*permission.Gate` — one permission ledger, so an "allow always" granted
-three levels down is remembered everywhere — installed on each subagent
-harness's `before_tool` hook.
+`*permission.Gate`, installed on each subagent harness's `before_tool` hook.
+That is one permission ledger, so an "allow always" granted three levels down
+is remembered everywhere.
 
 **Paid-provider prompt**: a dispatch that crosses onto a *different*,
 metered provider than the parent's current model, where that model's input
 cost rate is nonzero, goes through `Gate.Check` with tool name `task` and
-primary arg `"role:" + requested` before starting: a dispatch onto a paid
+primary arg `"role:" + requested` before starting. A dispatch onto a paid
 provider the user did not already choose for this turn is a spending
 decision, not just a routing one (`internal/agent/dispatch.go`).
 Same-provider switches and free models never hit this check.
@@ -589,8 +606,10 @@ successful `edit`/`write`, send `direct` requests to `direct`. Its state is
 user-scope `modelRouter` and `modelRoles` (`settings.LoadModelRouter`) and,
 when `implement` resolves, registers the `kiln` provider
 (`router.VirtualProvider`) with a model that declares its `plan` target's
-window, the model a session's first request goes to. The budgets follow the
-routed model from there: `Lane.route` calls the synchronous
+window, the model a session's first request goes to.
+
+The budgets follow the
+routed model from there. `Lane.route` calls the synchronous
 `Hooks.OnRoute` (never for `direct`, never on a physical lane) after it
 resolves and before the `EventRoute` emit — outside any emit, because
 `Events.Emit` holds a non-reentrant lock and the setters a re-size calls
@@ -602,7 +621,9 @@ the CLI (`internal/cli/tiersizing.go`, `sessionSizing`) rebuilds the system
 prompt from a per-window memo of memory, auto memory and the skills listing
 (loaded at startup for every target window, so no disk IO on the lane),
 replaces the `task` tool, and moves the MCP session's tier without a
-re-gate (every tier's strategy is posture-index). `drive` reads these live
+re-gate (every tier's strategy is posture-index).
+
+`drive` reads these live
 after routing, so the routed request itself is built with them. `/model`
 (`agent.SetModel`) goes through the same `Retier`. Each `Retier` is one unit
 (`Started.retierMu`), so a `/model` and a route that race (the `/model`
@@ -610,6 +631,7 @@ picker applies on a command goroutine, and Esc closes it before the switch
 lands) leave the session sized for one tier throughout; the route handler
 also skips its re-size when the lane is no longer on the virtual model it
 routed for, so a `/model` that lands mid-route keeps the picked model's size.
+
 A subagent's harness budgets follow its routes through the same handler;
 its system prompt is the agent definition's body, which nothing sizes, and
 its nested `task` tool (whose agent and role text is truncated per tier) is
@@ -622,7 +644,9 @@ the router's own targets. A resumed `kiln/auto` session whose router no
 longer resolves continues on the physical model that answered last
 (`agent.ResumedLastPhysical`); one whose router still resolves starts sized
 for that model when it is one of the targets (`resumedRouterTarget`,
-`sizeForResumedTarget` in `tiersizing.go`), not for the plan target. The classifier that picks `planComplex`
+`sizeForResumedTarget` in `tiersizing.go`),not for the plan target.
+
+The classifier that picks `planComplex`
 (pi's Jev classifier) is `router.LLMClassifier` (`internal/router/
 classify.go`): one call on `modelRoles.fast`, no tools, thinking off, with
 jev's own question and criteria, trusting only a clean stop and a strict
@@ -632,14 +656,16 @@ its usage reaches `Harness.RecordSideUsage` once the harness exists (the
 same late-binding `modelrouter.go` uses for the registered `*router.Auto`,
 since the classifier is built before the harness is). `Auto.rate` falls
 back to `router.Heuristic` (`heuristics.go`) when `modelRouter.fallback` is
-`"heuristic"`, else to `Standard` (`plan`, jev's own fallback) — except
-when ctx itself was cancelled mid-classification (Esc), which `Auto.Route`
-propagates as an error instead of falling back. After `setupModelRouter`
+`"heuristic"`, else to `Standard` (`plan`, jev's own fallback). The exception
+is a ctx cancelled mid-classification (Esc), which `Auto.Route`
+propagates as an error instead of falling back.
+
+After `setupModelRouter`
 resolves the slots and before it builds `kiln`'s virtual model,
 `collapseLocalServers` groups them (plus `fast`) by host through the
 optional `provider.SelfHosted` interface (`Host`, `Resident`) and, for a
 host with two or more distinct models, calls `router.CollapseLocal`
-(`internal/router/local.go`) to move them all onto one — the model
+(`internal/router/local.go`) to move them all onto one: the model
 `Resident` (`/api/ps` for Ollama) says is already loaded, so a self-hosted
 server that can only hold one model at a time never has to swap mid-session.
 See `docs/configuration.md` §6a.
@@ -678,14 +704,13 @@ once as an ordinary transcript block and then drops out of the live
 region entirely, rather than the live region growing without bound.
 Ctrl+O, Ctrl+F and Rewind all redraw the transcript from the session log
 rather than from anything the live region held, so
-`internal/tui/replay.go`'s `RenderTranscriptEntries` reconstructs it: it
+`RenderTranscriptEntries` in `internal/tui/replay.go` reconstructs it. It
 walks the session's logged entries and, in the same pass, splices back in
-every synthetic (non-entry) block that was recorded via
-`Bridge.CommitSynthetic` — the committed plan checklist, subagent dispatch
-lines, system notes, the `/context` block — immediately after the entry
-it was originally committed alongside, since none of those exist in the
-session log itself and a replay built purely from the log would silently
-drop them.
+every synthetic (non-entry) block recorded via `Bridge.CommitSynthetic`
+(the committed plan checklist, subagent dispatch lines, system notes, the
+`/context` block), immediately after the entry it was originally committed
+alongside. None of those exist in the session log itself, and a replay built
+purely from the log would silently drop them.
 
 Design language, per-row layout and style details are covered in
 `docs/kiln-design.md`; the terminal-emulation test methodology (every
@@ -715,8 +740,8 @@ report on stderr and exits 2. It never recovers and carries on: the
 panicking work may have left a session transaction half-written. Panics
 Bubble Tea catches itself (Update, View, Cmds, which is where a turn runs,
 and the renderer goroutine, patched in `third_party/bubbletea`) restore the
-terminal through Bubble Tea and get the same report through its panic hook;
-in the interactive session, SIGQUIT writes every goroutine's stack to a report instead of onto the
+terminal through Bubble Tea and get the same report through its panic hook.
+In the interactive session, SIGQUIT writes every goroutine's stack to a report instead of onto the
 alternate screen. A process with no run log (tests, subcommands) prints the
 stack to stderr and writes no file.
 

@@ -1,8 +1,7 @@
 # Configuration reference
 
 Every entry below was verified against the source at the cited `file:line`.
-Where a default could not be confirmed in code, it says so rather than
-guessing.
+Where a default could not be confirmed in code, the entry says so.
 
 ## 1. Command line
 
@@ -20,17 +19,17 @@ guessing.
 | `kiln doctor` | `cli.Doctor` | model, tier, roles, MCP (connects for real), tools, hooks, agents, settings, logs, problems |
 | `kiln mcp` | `cli.MCP` | connects to every configured server for real, prints connected/failed |
 | `kiln session inspect <path>` | `main.sessionCommand` | dumps a session JSONL file's header/stats as JSON |
-| `kiln eval run` | `main.evalCommand` → `internal/eval` | runs `eval/scenarios` against the built binary; flags `--kiln-bin`, `--scenarios`, `--fixtures`, `--results`, `--models`, `--roles`, `--repeat`, `-j`, `--keep`, `--judge`, `--only` |
+| `kiln eval run` | `main.evalCommand` → `internal/eval` | runs `eval/scenarios` against the built binary; flags `--kiln-bin`, `--scenarios`, `--fixtures`, `--results`, `--models`, `--policy`, `--roles`, `--repeat`, `-j`, `--keep`, `--judge`, `--only`, `--only-exact` |
 | `kiln eval report` | `main.evalCommand` → `internal/eval` | reports a results file against a baseline; flags `--results`, `--target`, `--baseline`, `--last`, `--format text\|md\|json`, `--fail-on-regression` |
 
-Recognized as a subcommand only when it's the first non-flag token (`internal/cli/args.go`, `commands` map: `providers`, `models`, `login`, `logout`, `doctor`, `mcp`, `session`). `eval` is dispatched in `cmd/kiln/main.go` before `cli.Parse` runs, because its flag set is its own (`cmd/kiln/eval.go`). `--version`/`-v` and `--help`/`-h` are answered before anything else, even ahead of unknown-flag rejection (`cmd/kiln/main.go`).
+A word is a subcommand only when it is the first non-flag token (`internal/cli/args.go`, `commands` map: `providers`, `models`, `login`, `logout`, `doctor`, `mcp`, `session`). `eval` has its own flag set (`cmd/kiln/eval.go`), so `cmd/kiln/main.go` dispatches it before `cli.Parse` runs. `--version`/`-v` and `--help`/`-h` are answered first, even ahead of unknown-flag rejection (`cmd/kiln/main.go`).
 
 ### Session flags
 
 | Flag | Semantics |
 |---|---|
 | `-c`, `--continue` | continue the most recent session in this cwd |
-| `-r`, `--resume [id]` | resume by id; **with no id**, resumes the latest (`args.go`: `ResumeSet=true`, `ResumeLatest=true` when the flag has no value) |
+| `-r`, `--resume [id]` | resume by id; **with no id**, resumes the latest (`args.go`: the flag with no value sets `ResumeSet=true` and `ResumeLatest=true`) |
 | `--session-id <uuid>` | use a specific session id |
 | `--fork-session` | branch instead of continuing in place |
 | `-n`, `--name <name>` | name the session |
@@ -40,7 +39,7 @@ Recognized as a subcommand only when it's the first non-flag token (`internal/cl
 | Flag | Semantics |
 |---|---|
 | `--model <provider/model>` | e.g. `ollama/qwen3.8:latest` |
-| `--effort <level>` | one of `low`, `medium`, `high`, `xhigh`, `max` (`args.go`); any other value is silently ignored, leaving `Effort` unset |
+| `--effort <level>` | one of `low`, `medium`, `high`, `xhigh`, `max` (`args.go`); any other value is silently ignored and `Effort` stays unset |
 
 ### Permission flags
 
@@ -50,9 +49,9 @@ Recognized as a subcommand only when it's the first non-flag token (`internal/cl
 | `--add-dir <dirs>` | repeatable; a single value also splits on whitespace or commas (`args.go`, `wsOrComma` regex) |
 | `--allowed-tools "Bash(git *)"` | additive to `settings.json`'s `permissions.allow`, not a replacement (`internal/cli/chat.go`) |
 | `--disallowed-tools "Write"` | additive to `permissions.deny`; deny is still checked first in `Decide` (see §5) |
-| `--max-turns <n>` | print mode only; caps the run at `n` assistant turns. Must be a positive integer, else `kiln: --max-turns expects a positive integer` and exit 1. Interactive mode ignores it. |
+| `--max-turns <n>` | print mode only; caps the run at `n` assistant turns. Must be a positive integer, else `kiln: --max-turns expects a positive integer` and exit 1. Interactive mode ignores it |
 
-Both tool-list flags accept `Read,Write,Edit` (commas) and `Bash(git *) Edit` (whitespace, with parens tracked so a space-containing rule stays one token) — `cli.SplitToolList` (`args.go`).
+Both tool-list flags accept commas (`Read,Write,Edit`) or whitespace (`Bash(git *) Edit`). `cli.SplitToolList` (`args.go`) tracks parentheses, so a rule containing a space stays one token.
 
 ### Config flags
 
@@ -77,19 +76,19 @@ Both tool-list flags accept `Read,Write,Edit` (commas) and `Bash(git *) Edit` (w
 | `--inline` | opt out of the default full-screen (alt-screen) TUI, keeping native scrollback; toggled either way at runtime with `ctrl+f` |
 | `--fullscreen` | accepted for compatibility; full-screen is already the default |
 
-`-v`/`--version` and `-h`/`--help` take no value. An unrecognized flag is collected into `Unknown` and the whole run refuses with `unknown flag(s): ...` rather than being silently ignored (`args.go`, `main.go`).
+`-v`/`--version` and `-h`/`--help` take no value. An unrecognized flag is collected into `Unknown`, and the run refuses with `unknown flag(s): ...` instead of ignoring it (`args.go`, `main.go`).
 
 ### `-p` / print-mode specifics
 
 `internal/cli/chat.go`, `internal/cli/print.go`
 
-- The prompt is the joined positional args, or stdin if none were given (`readStdin`, `chat.go`) — `git diff | kiln -p "review this"` works.
-- A prompt starting with `/` runs as a slash command first; a command with a `Prompt` result feeds that text into the turn (mentions resolved against it, not the original text), a command with no `Prompt` just prints its `Output` and exits without a model turn.
-- `@path` mentions are resolved the same as interactive mode, capped at the tier's per-result budget.
+- The prompt is the joined positional args, or stdin if there are none (`readStdin`, `chat.go`), so `git diff | kiln -p "review this"` works.
+- A prompt starting with `/` runs as a slash command first. A command with a `Prompt` result feeds that text into the turn (mentions are resolved against it, not the original text). A command with no `Prompt` prints its `Output` and exits without a model turn.
+- `@path` mentions resolve as in interactive mode, capped at the tier's per-result budget.
 - `--output-format json` prints `{ok, text, toolCalls, blocked, usage, total_cost_usd, duration_ms, num_turns, num_tool_calls, reason?}` where `usage` is `{input, output, cache_read, cache_write}`, `duration_ms` is wall-clock for the whole run, `num_turns` counts assistant turns, and `reason` is present only when the run was cut short (`max-turns-exceeded`). `stream-json` streams NDJSON lines of shape `tool_start`/`tool_end`/`assistant`/`result` as they happen and prints nothing at the end; its terminal `result` event carries the same enriched fields. Plain `text` prints the trimmed final assistant text.
 - `--max-turns n` cancels the run when the harness is about to start turn `n+1`; a run that ends exactly at turn `n` is not cut off. When it trips: stderr `kiln: stopped after n turns (--max-turns)`, `ok` false, `reason` `max-turns-exceeded`, exit 1.
 - `PrintResult.Blocked` combines every `before_tool` refusal (hook or permission gate), not just ones that reached `gate.Check` (`chat.go`).
-- print mode has nobody to ask: a permission mode that would otherwise prompt (`ask`) is a refusal instead (README, confirmed by the gate design in §5).
+- Print mode has nobody to ask, so a permission decision that would otherwise prompt (`ask`) becomes a refusal (README, confirmed by the gate design in §5).
 
 ## 2. Environment variables
 
@@ -125,13 +124,13 @@ Source: `grep -rn 'os.Getenv\|os.LookupEnv' --include="*.go" cmd internal | grep
 | `TERM`, `TERM_PROGRAM`, `COLORTERM` | `internal/commands/account_commands.go` | terminal-capability diagnostics (e.g. warns on `TERM=dumb`) | `"unknown"`, `"unknown"`, `"not set"` |
 | `VISUAL`, `EDITOR` | `internal/commands/session_commands.go` | editor launched to open `CLAUDE.md` from a `/config`-style command | `VISUAL` > `EDITOR`; prints the path if both unset |
 
-`HARNESS_TEST_CLOCK` (`internal/tui/footer.go`) is compiled into the shipped binary (not behind a test build tag) but is inert unless explicitly set — it overrides wall-clock time in the footer for deterministic golden-file tests. Included here for completeness rather than under §test/dev.
+`HARNESS_TEST_CLOCK` (`internal/tui/footer.go`) is compiled into the shipped binary (not behind a test build tag) but is inert unless set. It overrides wall-clock time in the footer for deterministic golden-file tests. It is listed here, not under test/dev only, because it ships in the binary.
 
 ### Provider credentials
 
 `internal/provider/catalog/providers.go`, `internal/provider/builtin/builtin.go`
 
-Precedence: **a stored credential (`~/.harness/credentials.json`) always wins over an environment variable** for the same provider — env vars are consulted only when nothing is stored (`builtin.go`, explicit in the source comment: "opposite of 'env wins'"). Within "nothing stored," `envKeys` are tried in order and the first non-empty one is used; for Anthropic, `ANTHROPIC_AUTH_TOKEN` (if that's the one used) is sent as a Bearer token.
+Precedence: **a stored credential (`~/.harness/credentials.json`) always wins over an environment variable** for the same provider. Env vars are consulted only when nothing is stored (`builtin.go`; the source comment says "opposite of 'env wins'"). When nothing is stored, `envKeys` are tried in order and the first non-empty one is used. For Anthropic, `ANTHROPIC_AUTH_TOKEN`, if used, is sent as a Bearer token.
 
 | Provider | Env var(s), in order |
 |---|---|
@@ -167,13 +166,13 @@ Precedence: **a stored credential (`~/.harness/credentials.json`) always wins ov
 | xiaomi (+3 variants) | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_AMS/CN/SGP_API_KEY` |
 | typesafe | `TYPESAFE_API_KEY` |
 
-Ollama has no credential — it's reached via `OLLAMA_HOST`/`OLLAMA_BASE_URL` above.
+Ollama has no credential; it is reached via `OLLAMA_HOST`/`OLLAMA_BASE_URL` above.
 
-`openai-codex` supports **both** a ChatGPT Plus/Pro subscription and an OpenAI API key. `kiln login openai-codex` offers either the subscription (OAuth) flow or pasting an API key; `OPENAI_API_KEY` works as the env fallback. A stored subscription credential wins over the env var. With a subscription the Codex models stream from the ChatGPT backend (`chatgpt.com/backend-api`); with an API key they are routed to the standard OpenAI Responses endpoint (`api.openai.com/v1`), since the ChatGPT backend only accepts the subscription token.
+`openai-codex` supports **both** a ChatGPT Plus/Pro subscription and an OpenAI API key. `kiln login openai-codex` offers the subscription (OAuth) flow or pasting an API key, and `OPENAI_API_KEY` is the env fallback. A stored subscription credential wins over the env var. With a subscription, Codex models stream from the ChatGPT backend (`chatgpt.com/backend-api`). With an API key they go to the standard OpenAI Responses endpoint (`api.openai.com/v1`), because the ChatGPT backend accepts only the subscription token.
 
 ### Test / dev only
 
-Not read by the shipped `kiln` binary in normal operation — set by test harnesses, `cmd/faux`, or other dev-only binaries.
+The shipped `kiln` binary does not read these in normal operation. Test harnesses, `cmd/faux` or other dev-only binaries set them.
 
 | Variable | Purpose |
 |---|---|
@@ -200,9 +199,9 @@ Not read by the shipped `kiln` binary in normal operation — set by test harnes
 | — retention | `internal/diag/diag.go` (`prune`) | deletes oldest beyond `keepFiles = 30`, current run's file is never a victim | — | — | — |
 | `search.db` | `internal/search/sqlite.go` (`DefaultDBPath`) | `Sync`/`indexFile` write `entries` (FTS5) and `indexed_files` tables | `SearchEntries`, `SearchSessions` | SQLite (`modernc.org/sqlite`, WAL) | none |
 
-`search.db`'s `Sync` also reads (not writes) `~/.claude/projects` — Claude Code's own session history — alongside `~/.harness/sessions`, when called with no explicit roots (`internal/search/sqlite.go`).
+When called with no explicit roots, `search.db`'s `Sync` reads (never writes) `~/.claude/projects`, Claude Code's own session history, alongside `~/.harness/sessions` (`internal/search/sqlite.go`).
 
-Not shipped: `~/.harness/plans/<slug>.md` is named only in a doc comment (`internal/tui/permissionview.go`) for a feature with zero call sites — do not treat it as a real path.
+Not shipped: `~/.harness/plans/<slug>.md` appears only in a doc comment (`internal/tui/permissionview.go`) for a feature with no call sites. Do not treat it as a real path.
 
 ## 4. Model selection and effort
 
@@ -224,17 +223,17 @@ Thinking effort comes from `--effort`, else `settings.json`'s `effortLevel` for 
 
 ### Tiers (`internal/budget/tier.go`)
 
-The model's context window is the only input. A tier is a step function on name, but every budget inside it scales proportionally with the window (deliberately not a fixed table per tier name — see the file's own comment on why absolute per-tier budgets produced a smaller usable window on a bigger model).
+The model's context window is the only input. The tier name is a step function of the window, but every budget inside a tier scales proportionally with the window. This is deliberate: the file's own comment explains that absolute per-tier budgets gave a bigger model a smaller usable window.
 
 | Context window | Tier name | Tool strategy |
 |---|---|---|
-| ≤ 32,768 | small | derived from `StrategyForWindow` (see below) |
-| ≤ 131,072 | medium | derived |
-| > 131,072 | large | derived |
+| ≤ 32,768 | small | `posture-index` |
+| ≤ 131,072 | medium | `posture-index` |
+| > 131,072 | large | `posture-index` |
 
-Tool strategy is chosen independently of the tier name: the most generous strategy whose measured token cost fits 20% of the window (`toolBudgetShare = 0.2`, `StrategyForWindow`), tried in order `full-schemas` (31,897 tokens) → `full-index` (7,597) → `posture-index` (1,286, always fits).
+The tool strategy does not depend on the tier name or the window: `StrategyForWindow` always returns `posture-index` (`internal/budget/tier.go:102`). MCP schemas stay behind `tool_search`, because resident schemas cost tokens and latency on every turn (the code comment cites a 1M-window model, 165 tools: a 74k-token first request and 3x the session cost). `full-index` (7,597 tokens) and `full-schemas` (31,897) stay defined and priced (`ToolStrategyCost`), against `posture-index` at 1,286.
 
-Per-window budgets (all proportional, with floors/ceilings): system prompt 10% of window (floor 2,048, ceiling 32,768), reserve 10% (floor 2,048, ceiling 32,768), keep-recent 25% (floor 4,096, ceiling 100,000), tool output 12% (floor 2,048, ceiling 49,152). `UsableTokens` = window − system prompt − tool-strategy cost − reserve; a configuration below `MinUsableTokens = 4,096` refuses to start (`RequireTierForWindow`).
+Per-window budgets (all proportional, with floors/ceilings): system prompt 10% of window (floor 2,048, ceiling 32,768), reserve 10% (floor 2,048, ceiling 32,768), keep-recent 25% (floor 4,096, ceiling 100,000), tool output 12% (floor 2,048, ceiling 49,152), skills listing 1% (floor 256, ceiling 8,192). Each floor is itself capped at 125% of the share it protects, so a tiny window is not swallowed by its floors. `UsableTokens` = window − system prompt − skills listing − tool-strategy cost − reserve; a configuration below `MinUsableTokens = 4,096` refuses to start (`RequireTierForWindow`).
 
 ## 5. `settings.json`
 
@@ -250,9 +249,9 @@ Per-window budgets (all proportional, with floors/ceilings): system prompt 10% o
 4. `<cwd>/.claude/settings.local.json` (local — gitignored machine overrides)
 5. `<cwd>/.kiln/settings.local.json` (local, kiln's own: rules from "don't ask again" and `/permissions`; highest precedence)
 
-kiln reads Claude Code's `.claude` files exactly as Claude Code does and never writes them; everything it saves goes to the two `.kiln` files, which have the same JSON shape. Each kiln file sits right after Claude Code's file of the same scope: its rules are that scope's (a `/path` rule in `~/.kiln/settings.json` is anchored at `~/.kiln`, one in `.kiln/settings.local.json` at the primary working directory) and its scalars win over that file's. Deny still beats allow across every file. In a folder not yet trusted, the allow rules a repository can supply (the project file, and a local file that came with the repository) are held until the trust dialog is accepted (`Settings.HeldAllow`; see [Trust](#trust)). `--settings <file>` adds a further file, read last, tagged as local scope — so it wins over all of them for scalars and is unioned in for list fields. `--setting-sources user,project,local` restricts which scopes are read at all (kiln's files included). Malformed JSON at a scope: warning to stderr, that scope skipped, load continues; a missing file is silently skipped.
+kiln reads Claude Code's `.claude` files exactly as Claude Code does and never writes them. Everything it saves goes to the two `.kiln` files, which have the same JSON shape. Each kiln file sits right after Claude Code's file of the same scope: its rules are that scope's (a `/path` rule in `~/.kiln/settings.json` is anchored at `~/.kiln`, one in `.kiln/settings.local.json` at the primary working directory) and its scalars win over that file's. Deny still beats allow across every file. In a folder not yet trusted, the allow rules a repository can supply (the project file, and a local file that came with the repository) are held until the trust dialog is accepted (`Settings.HeldAllow`; see [Trust](#trust)). `--settings <file>` adds a further file, read last and tagged as local scope, so it wins over all of them for scalars and is unioned in for list fields. `--setting-sources user,project,local` restricts which scopes are read at all (kiln's files included). Malformed JSON at a scope prints a warning to stderr, skips that scope and continues loading. A missing file is skipped silently.
 
-**Changes mid-session.** As in Claude Code, kiln watches these files (and the `--settings` file) while it runs and, when one changes, re-reads the permission rules (`settings.WatchFiles`, polled every second; `internal/cli/settings_reload.go`). Rules from settings files are replaced by what the files now say, in one step (`permission.Gate.ReplaceSettingsRules`); `--allowed-tools`/`--disallowed-tools` rules stay. A change counts once the file has held still for a poll, so a half-written save is not read. If a file that exists does not parse, every rule stays as it was (dropping its deny rules would fail open), with a note. The reload reads what startup read, under the same trust gate, so it applies nothing a restart would not; accepting the trust dialog re-reads the files the same way. Only the rule lists reload: the mode, model, env, hooks, status line, sandbox and `autoMode` settings still need a restart.
+**Changes mid-session.** As in Claude Code, kiln watches these files (and the `--settings` file) while it runs and re-reads the permission rules when one changes (`settings.WatchFiles`, polled every second; `internal/cli/settings_reload.go`). Rules from settings files are replaced in one step by what the files now say (`permission.Gate.ReplaceSettingsRules`); `--allowed-tools`/`--disallowed-tools` rules stay. A change counts once the file has held still for a poll, so a half-written save is not read. If an existing file does not parse, every rule stays as it was (dropping its deny rules would fail open), and kiln shows a note. The reload reads what startup read, under the same trust gate, so it applies nothing a restart would not. Accepting the trust dialog re-reads the files the same way. Only the rule lists reload: the mode, model, env, hooks, status line, sandbox and `autoMode` settings still need a restart.
 
 ### Keys
 
@@ -263,7 +262,7 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 | `permissions.ask` | `[]string` | unioned |
 | `permissions.defaultMode` | `PermissionMode` | last non-empty wins |
 | `model` | `string` | last non-empty wins |
-| `effortLevel` | `string` | last non-empty wins (parsed, not currently wired to effort resolution — see §4) |
+| `effortLevel` | `string` | last non-empty wins; used when `--effort` is unset and the model is a Claude model (§4) |
 | `modelRoles` | `map[string]string` | shallow-merged per key; a scope overrides only the role names it sets |
 | `env` | `map[string]string` | shallow-merged per key, unconditionally (no empty check) |
 | `statusLine.type`, `statusLine.command`, `statusLine.padding` | `*StatusLineConfig` | replaced wholesale, only when the later scope's `command` is non-empty |
@@ -278,16 +277,16 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 
 - Bare tool name (no parens): case-insensitive exact match, e.g. `Read` matches any `Read` call regardless of argument.
 - MCP rules, as in Claude Code: `mcp__server` (or `mcp__server__*`) matches every tool of exactly that server, and `mcp__server__tool` that one tool. They are not string prefixes: `mcp__homelab` does not match the tools of a server named `homelab-kb`. MCP names match case-sensitively, unlike other tool names, and a server name containing `__` is read up to its first `__` (Claude Code has the same limit), so `mcp__a` also covers a server named `a__b`.
-- Paren form `Tool(pattern)`: tool name must match exactly (case-insensitive); `pattern` is glob-compiled (`*` → `.*`, everything else escaped) and anchored against the tool's primary argument. A `*` also matches newlines, as in Claude Code, so `Bash(git commit *)` covers a multi-line commit message and a `Bash(rm *)` deny covers `rm` with a quoted newline in an argument. A `Tool(cmd:*)` colon suffix is rewritten to `Tool(cmd *)` first. A pattern ending in a wildcard also matches the bare command with no arguments (e.g. `Bash(git *)` matches both `git status` and bare `git`).
+- Paren form `Tool(pattern)`: the tool name must match exactly (case-insensitive). `pattern` is glob-compiled (`*` becomes `.*`, everything else is escaped) and anchored against the tool's primary argument. A `*` also matches newlines, as in Claude Code, so `Bash(git commit *)` covers a multi-line commit message and a `Bash(rm *)` deny covers `rm` with a quoted newline in an argument. A `Tool(cmd:*)` colon suffix is rewritten to `Tool(cmd *)` first. A pattern ending in a wildcard also matches the bare command with no arguments (`Bash(git *)` matches both `git status` and bare `git`).
 - Examples: `Bash(git *)` matches `git status`, `git commit -m x`, and bare `git`. `mcp__homelab-kb` matches `mcp__homelab-kb__hk_search` and every other tool from that server, and nothing from `homelab`.
-- A malformed pattern fails closed (never matches) rather than erroring.
+- A malformed pattern fails closed: it never matches, and does not raise an error.
 - A bare `Edit` rule covers every edit tool (`edit`, `write`, …) and a bare `Read` every read tool; any other bare rule (`Write`) matches its own tool only.
 
 ### Bash commands (`bash_parse.go`, `bash_rules.go`, `readonly_bash.go`)
 
-A `bash` or `bash_background` command line is parsed with a real bash parser (`mvdan.cc/sh/v3/syntax`, bash dialect), never split by hand, following Claude Code's "Bash" section ([permissions docs](https://code.claude.com/docs/en/permissions)). `Bash(…)` rules govern both tools.
+A `bash` or `bash_background` command line is parsed with a real bash parser (`mvdan.cc/sh/v3/syntax`, bash dialect), never split by hand, as Claude Code's "Bash" section describes ([permissions docs](https://code.claude.com/docs/en/permissions)). `Bash(…)` rules govern both tools.
 
-- **Commands**: every simple command anywhere in the line is collected — in a list or pipeline (`&&`, `||`, `;`, `|`, `|&`, `&`, newlines), a subshell or `{ }` group, an `if`/`while`/`until`/`for`/`case` body or condition, a function body, `$(…)`, backticks, `<(…)`/`>(…)`, a substitution inside a parameter expansion or `[[ ]]`, and the substitutions in an unquoted heredoc. A heredoc or herestring fed to a shell (`bash`, `sh -s`, `bash -`, `/dev/stdin`, `/dev/fd/0`, `source /dev/stdin`, …), a `bash -c`/`sh -c` string and `eval`'s arguments are parsed in turn (8 levels deep at most). Brace expansion is applied first, as bash does (`{rm,-rf} x` is `rm -rf x`). Comments are comments: a `#` starts one only at a word start, as the parser reads it, and a backslash before a comment's newline continues nothing (kiln corrects the parser's reading of that case).
+- **Commands**: every simple command anywhere in the line is collected — in a list or pipeline (`&&`, `||`, `;`, `|`, `|&`, `&`, newlines), a subshell or `{ }` group, an `if`/`while`/`until`/`for`/`case` body or condition, a function body, `$(…)`, backticks, `<(…)`/`>(…)`, a substitution inside a parameter expansion or `[[ ]]`, and the substitutions in an unquoted heredoc. A heredoc or herestring fed to a shell (`bash`, `sh -s`, `bash -`, `/dev/stdin`, `/dev/fd/0`, `source /dev/stdin`, …), a `bash -c`/`sh -c` string and `eval`'s arguments are parsed in turn (8 levels deep at most). Brace expansion is applied first, as bash does (`{rm,-rf} x` is `rm -rf x`). A `#` starts a comment only at a word start, as the parser reads it, and a backslash before a comment's newline continues nothing (kiln corrects the parser's reading of that case).
 - **Unknown**: a command word that is an expansion (`$CMD`), a script read from a pipe or the terminal, `bash <(…)`, a shell run by `xargs`, a non-literal `eval`/`sh -c` string, nesting past the limit, and what bash 3.2 (macOS's `/bin/bash`, which kiln runs) reads differently from the parser or evaluates as code: any arithmetic (`$((…))`, `$[…]`, `((…))`, `let`, `for ((…))`, `[[ a -eq b ]]`), an array subscript in an expansion, assignment or literal argument (`unset 'a[$(cmd)]'` runs `cmd`), a `case` inside a substitution, and an expansion spanning lines in an unquoted heredoc. **Unparseable**: a syntax error, a dangling `&&`/`||`, an unclosed quote, substitution or heredoc, a carriage return anywhere (bash reads it as a word byte, the parser as a blank), or a line over 10,000 characters.
 - **Deny and ask rules** apply when they match any collected command — as written, with every leading assignment and every wrapper stripped (`timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, `noglob`, `xargs`, `sudo`, `doas`, `env`, `exec`, `watch`, `setsid`, `ionice`, `flock`, `rtk`, with their options), by its base name (`/bin/rm`), and the command `find -exec` runs — or the whole line, or a line of a heredoc body. On an unparseable line they match each piece between separators that parses. When the line is unparseable or runs something unknown while a Bash or Read/Edit deny or ask rule exists, the call asks at least (`Hits.Unsure`).
 - **Allow rules** approve a line only when it parses, nothing in it is unknown, and every command is covered: matched by an allow rule, or read-only and naming no path outside the working directory, with at least one matched by a rule. An allow rule sees the command with Claude Code's safe wrappers stripped (`timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command` except `command -v`, `builtin`, `noglob`, and a bare `xargs`) and leading assignments of safe variables with plain values (`NODE_ENV`, `RUST_LOG`, `RUST_BACKTRACE`, `GOOS`, `GOARCH`, `CGO_ENABLED`, `GO111MODULE`, `GOEXPERIMENT`, `PYTHONUNBUFFERED`, `PYTHONDONTWRITEBYTECODE`, `LANG`, `LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_TIME`, `TZ`, `TERM`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR`); any other assignment stops it. An exec wrapper (`watch`, `setsid`, `ionice`, `flock`, `sudo`, `doas`, `pkexec`, `env`, `exec`, `chroot`, `unshare`, `nsenter`) and `find` with `-exec`/`-execdir`/`-ok`/`-okdir`/`-delete` are approved only by an exact rule (no `*`). A bare `Bash` or `Bash(*)` approves any line that parses. A rule is tried on the words with quotes removed and as written, both stripped and as given (`Bash(timeout 3 pnpm start:*)` matches `timeout 3 pnpm start`; a command run by `xargs` is never matched as `xargs …`). No allow rule approves a line with an output redirect (`>`, `>>`, `&>`, `>|`, `<>`, `>&file`) to `~`, outside the working directory, or to a path that expands: Claude Code's "a rule … allows the command, not the target".
@@ -310,11 +309,22 @@ A `bash` or `bash_background` command line is parsed with a real bash parser (`m
 - **Tools**: Edit rules apply to `edit`, `write`, `multi_edit`, `notebook_edit`; Read rules to `read`, `grep`, `glob`, `ls`. A Read deny also blocks `edit`/`write`/`multi_edit` (not `notebook_edit`).
 - **`Write(...)`, `MultiEdit(...)`, `NotebookEdit(...)`, `Glob(...)`**: Claude Code accepts these path rules but never consults them, and warns at startup. kiln honours the deny and ask ones as `Edit(...)`/`Read(...)` (never weaker than the rule's evident intent), ignores the allow ones (never broader than Claude Code), and prints a startup warning for each naming the replacement (to stderr in print mode, as a startup note in the TUI; never to the model). A `Glob(...)` rule passed in `--allowed-tools` is not warned about, as in Claude Code.
 - **Bash** (`bash_paths.go`, `bash_words.go`, over the parsed command line of the section above): Read and Edit rules also apply to the files a `bash` or `bash_background` command names — a deny rule blocks, an ask rule asks: operands of recognised file commands (`cat`, `head`, `tail`, `sed`, `tee`, `cp`, `grep`, `dd if=/of=`, …) and redirection targets (`> f`, `>> f`, `>| f`, `< f`, `&> f`, `<> f`, `>&f`). Read rules check files read (and Read denies files written); Edit rules files written. Paths are checked both as written and as the shell's open(2) resolves them physically (`sshl/../x` with `sshl` a link). The scan follows `cd`/`pushd` (skipping their options), looks through wrappers and their option values (`sudo -u x`, `env -i A=1`, `env -C dir`, `env -S 'cmd'`, `timeout 5`, `nice -n 5`, `stdbuf`, `nohup`, `time -o f`, `command`, `exec`, `xargs -a f`), follows every command the parser finds (including a shell's heredoc or herestring script, after skipping its value options `-o`/`+o`/`-O`/`+O`/`--rcfile`/`--init-file`), decodes `$'…'` and `$"…"`, expands `~`, `$HOME`, braces (lists and sequences) and unquoted globs (every match, skipping dotfiles unless the pattern starts with `.`, capped at 1000 matches and 200 directory reads per command). When a named file cannot be known — another variable, a substitution used as an operand, `~user`, a relative path after `cd -`/`popd`, an over-budget glob, a command word that is itself an expansion (`$CMD`, `cat${IFS}f`) — the call asks (only ever lifting an Allow) whenever any Read/Edit path rule is in deny or ask. A file a command reads without naming it (`grep -r x .`) or that a script opens itself is not seen.
-- **Cost**: path rules are compiled once per rule set and working directory (`compiledFor`) and grouped per tool class; `BenchmarkDecideIn80Deny*` measures a decision with 80 deny rules. Nothing about the filesystem is cached across calls: each decision resolves the requested path and each rule anchor's real location afresh (one resolution per distinct directory), since a directory can be swapped for a link between two calls.
+- **Cost**: path rules are compiled once per rule set and working directory (`compiledFor`) and grouped per tool class; `BenchmarkDecideIn80Deny*` measures a decision with 80 deny rules. No filesystem state is cached across calls: each decision resolves the requested path and each rule anchor's real location afresh (one resolution per distinct directory), because a directory can be swapped for a link between two calls.
 
 ### `Decide` (`settings.go`)
 
-Order: deny rules first (absolute — deny wins even under `bypassPermissions`) → in `plan` mode, edit-family tools (`edit`, `write`, and the MultiEdit/NotebookEdit names) are denied whatever allow or ask rules say (Claude Code: "edits stay blocked until you approve the plan"; a deny rule's refusal still names the rules, not plan mode) → ask rules → `bypassPermissions` mode allows everything else → allow rules → mode default. This is Claude Code's order (permissions and permission-modes docs): a matching ask rule prompts even when a more specific allow rule also matches, and no mode auto-approves a call an explicit ask rule matches, `bypassPermissions` included; a print run has nobody to ask and refuses it. Last, a bash command that names a file kiln cannot resolve while Read/Edit path rules exist (`Hits.Unsure`) turns an Allow into an Ask; it never turns a Deny, plan mode's included, into a prompt. A "don't ask again" grant counts as an allow: the gate (`permission.Gate.CheckWithOutcome`) honours it only when no deny or ask rule matches the call, so a deny or ask rule added after the grant still applies; nor in `plan` mode for an edit (`settings.PlanOverridesAllow`). The prompt offers it only when it would be honoured (`permission.Request.Grantable`). For bash it saves allow rules, one per command still needing approval (`settings.BashDontAskRules`), to `.kiln/settings.local.json`.
+Order:
+
+1. Deny rules first. They are absolute: deny wins even under `bypassPermissions`.
+2. In `plan` mode, edit-family tools (`edit`, `write`, and the MultiEdit/NotebookEdit names) are denied whatever allow or ask rules say (Claude Code: "edits stay blocked until you approve the plan"). A deny rule's refusal still names the rules, not plan mode.
+3. Ask rules.
+4. `bypassPermissions` mode allows everything else.
+5. Allow rules.
+6. Mode default.
+
+This is Claude Code's order (permissions and permission-modes docs). A matching ask rule prompts even when a more specific allow rule also matches, and no mode auto-approves a call an explicit ask rule matches, `bypassPermissions` included. A print run has nobody to ask and refuses it. Last, a bash command that names a file kiln cannot resolve while Read/Edit path rules exist (`Hits.Unsure`) turns an Allow into an Ask. It never turns a Deny, plan mode's included, into a prompt.
+
+A "don't ask again" grant counts as an allow. The gate (`permission.Gate.CheckWithOutcome`) honours it only when no deny or ask rule matches the call, so a deny or ask rule added after the grant still applies. It is also not honoured for an edit in `plan` mode (`settings.PlanOverridesAllow`). The prompt offers the grant only when it would be honoured (`permission.Request.Grantable`). For bash it saves allow rules, one per command still needing approval (`settings.BashDontAskRules`), to `.kiln/settings.local.json`.
 
 | Mode | No explicit rule match |
 |---|---|
@@ -325,13 +335,13 @@ Order: deny rules first (absolute — deny wins even under `bypassPermissions`) 
 | `manual` | allow if read-only; otherwise ask |
 | (unrecognized) | ask |
 
-Read-only set: `read`, `glob`, `grep`, `session_search`, `tool_search`, `capability_search`, `bash_output`, `exit_plan_mode`, `todo_write`. `bash` is deliberately excluded — the gate can't tell `bash(ls)` from `bash(rm -rf)`, so it's never blanket-allowed by mode alone.
+Read-only set: `read`, `glob`, `grep`, `session_search`, `tool_search`, `capability_search`, `bash_output`, `exit_plan_mode`, `todo_write`. `bash` is deliberately excluded: the gate cannot tell `bash(ls)` from `bash(rm -rf)`, so no mode alone allows it blanket.
 
 ### Outside-workspace rule
 
 `internal/claude/permission/permission.go`. After `Decide` returns a verdict, if the call carries a path argument (`path`/`file_path`/`filePath`) that resolves outside the gate's registered roots, an otherwise-allowed call is forced to prompt (or denied, headless with no prompter) — unless the mode is `bypassPermissions`, which skips this check too. `WithinRoots` (`permission.go`) resolves the path as the tools do (`execenv.ResolveToolPath`: `@`, `~`, `file://`, relative to the first root) and rejects any `..`-escape. On macOS and Windows the comparison is case- and normalization-insensitive (`settings.CaseFoldPath`, the same folding deny rules use), so `/Users/me/PROJ/a.go` is inside the root `/Users/me/Proj`; on Linux it is exact.
 
-`GateOptions.ReadOnlyRoots` (`AddReadOnlyRoot`/`WithinReadOnlyRoots`) is a second, narrower set of roots: a path there escapes this check only for a tool in `settings.ReadOnly`, never for a mutating one — used for Claude Code's auto-memory directory (§7) so reading a topic file doesn't prompt while a write there is still gated exactly as any other outside-workspace path.
+`GateOptions.ReadOnlyRoots` (`AddReadOnlyRoot`/`WithinReadOnlyRoots`) is a second, narrower set of roots. A path there escapes this check only for a tool in `settings.ReadOnly`, never for a mutating one. It is used for Claude Code's auto-memory directory (§7), so reading a topic file does not prompt while a write there is gated like any other outside-workspace path.
 
 ### Protected paths
 
@@ -384,13 +394,13 @@ Not implemented from Claude Code's auto mode: `autoMode.classifyAllShell`, the t
 
 ### `task` role-crossing gate
 
-A `task` tool call itself has no `role` field in its JSON args (`subagent_type`, `description`, `prompt`, `model`) — a caller names a role through the `model` argument (e.g. `model: "heavy"`), which `internal/claude/agents` resolves against `modelRoles`. `internal/agent/dispatch.go` runs a **separate** gate check, scoped only to a dispatch that crosses onto a different, metered provider than the parent for a non-zero-cost model:
+A `task` tool call has no `role` field in its JSON args (`subagent_type`, `description`, `prompt`, `model`). A caller names a role through the `model` argument (e.g. `model: "heavy"`), which `internal/claude/agents` resolves against `modelRoles`. `internal/agent/dispatch.go` runs a **separate** gate check, only for a dispatch that crosses onto a different, metered provider than the parent for a non-zero-cost model:
 
 ```go
 d.Gate.Check(ctx, permission.Request{ToolName: "task", PrimaryArg: "role:" + requested})
 ```
 
-So a rule like `task(role:heavy)` matches this specific check via the paren-form syntax above. Same-provider role reuse, free models, and non-crossing dispatches never hit this gate — they're covered by the subagent's own tool calls being checked generically as they happen.
+A rule like `task(role:heavy)` matches this check through the paren-form syntax above. Same-provider role reuse, free models and non-crossing dispatches never hit this gate; the subagent's own tool calls are checked as they happen.
 
 ### Sandbox
 
@@ -437,7 +447,7 @@ What is matched and what is not: `docs/claude-code-parity.md`, "Bash sandbox".
 
 ### Permission modes
 
-`ModeManual`, `ModeAcceptEdits`, `ModeAuto`, `ModeDontAsk`, `ModeBypassPermissions`, `ModePlan` (`settings.go`) — exactly these six string values; see the `Decide` table above for what each auto-allows.
+`ModeManual`, `ModeAcceptEdits`, `ModeAuto`, `ModeDontAsk`, `ModeBypassPermissions`, `ModePlan` (`settings.go`): exactly these six string values. The `Decide` table above shows what each auto-allows.
 
 ### Hooks
 
@@ -445,9 +455,9 @@ What is matched and what is not: `docs/claude-code-parity.md`, "Bash sandbox".
 
 Events, exactly nine, keyed under the top-level `"hooks"` JSON key by event name: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `SubagentStop`, `Notification`, `PreCompact`.
 
-Shape: `{"hooks": {"<Event>": [{"matcher": "<regex or \"*\">", "hooks": [{"type": "command", "command": "...", "timeout": <seconds>}]}]}}`. `matcher` empty or `"*"` matches every tool; otherwise it's a case-insensitive anchored regex against the tool name (so `Bash` doesn't accidentally match `BashOutput`). `timeout` defaults to 60s if unset. `statusMessage` (optional) is what the busy row shows while a `Stop` or `SubagentStop` hook runs, in place of the default "running stop hook" ("running stop hooks… 1/2" for several).
+Shape: `{"hooks": {"<Event>": [{"matcher": "<regex or \"*\">", "hooks": [{"type": "command", "command": "...", "timeout": <seconds>}]}]}}`. `matcher` empty or `"*"` matches every tool; otherwise it is a case-insensitive anchored regex against the tool name (so `Bash` does not match `BashOutput`). `timeout` defaults to 60s if unset. `statusMessage` (optional) is what the busy row shows while a `Stop` or `SubagentStop` hook runs, in place of the default "running stop hook" ("running stop hooks… 1/2" for several).
 
-Unlike settings scalars, **hooks accumulate across scopes** — a project hook does not replace a user hook of the same event; both run.
+Unlike settings scalars, **hooks accumulate across scopes**: a project hook does not replace a user hook of the same event; both run.
 
 Payload on stdin (JSON), fields present depending on event: `session_id`, `transcript_path`, `cwd`, `hook_event_name` (always); `tool_name`, `tool_input` (Pre/PostToolUse); `tool_response` (PostToolUse, declared but not populated by the guard path); `prompt` (UserPromptSubmit); `stop_hook_active`, `last_assistant_message` (Stop/SubagentStop); `message`, `notification_type` (Notification); `trigger`, `custom_instructions` (PreCompact); `reason` (SessionEnd).
 
@@ -467,7 +477,7 @@ Exit-code / stdout contract, checked in this order:
 
 ### `internal/claude/writesettings`
 
-kiln's only settings writer, and it never writes a `.claude` file. `AddRule`/`RemoveRule` read-modify-write **`<cwd>/.kiln/settings.local.json`** (rules from "don't ask again" and `/permissions`), preserving unrelated keys; `/permissions` refuses to delete a rule that lives in a Claude Code file and names that file. `SetUserModel` writes `"model"` into **`~/.kiln/settings.json`** — the `/model` command's "set default" path; a model already in `~/.claude/settings.json` is still read, and kiln's wins over it. Writes are atomic (temp file + rename); creating `<cwd>/.kiln` also creates `.kiln/.gitignore` holding `*`, so kiln's files never show in `git status`.
+kiln's only settings writer; it never writes a `.claude` file. `AddRule`/`RemoveRule` read-modify-write **`<cwd>/.kiln/settings.local.json`** (rules from "don't ask again" and `/permissions`), preserving unrelated keys; `/permissions` refuses to delete a rule that lives in a Claude Code file and names that file. `SetUserModel` writes `"model"` into **`~/.kiln/settings.json`** — the `/model` command's "set default" path; a model already in `~/.claude/settings.json` is still read, and kiln's wins over it. Writes are atomic (temp file + rename); creating `<cwd>/.kiln` also creates `.kiln/.gitignore` holding `*`, so kiln's files never show in `git status`.
 
 ## 6. `modelRoles`
 
@@ -482,9 +492,9 @@ kiln's only settings writer, and it never writes a `.claude` file. `AddRule`/`Re
 3. `requested` contains `/` → treated as an explicit `provider/model` literal
 4. bare alias, lowercased: built-in aliases `haiku→fast`, `sonnet→structured`, `opus→heavy` resolve through the matching role **if that role is configured**; otherwise falls back to substring-matching `requested` against the parent's own provider's models only (never cross-provider, to avoid silently moving cost onto a different paid API)
 
-`ValidateRoles(roles, candidates)` reports (for diagnostics only — `doctor`, `kiln models`, startup warnings) every role whose value isn't `provider/model`-shaped or doesn't resolve to an available model; `ResolveModel` itself never errors, only falls back.
+`ValidateRoles(roles, candidates)` reports, for diagnostics only (`doctor`, `kiln models`, startup warnings), every role whose value is not `provider/model`-shaped or does not resolve to an available model. `ResolveModel` itself never errors; it falls back.
 
-A `task` call that crosses to a different, metered provider than the parent is separately gated by the permission system as `task(role:<name>)` — see §5. A model `kiln/auto` routes to is not gated: the user chose it in user settings (§6a).
+A `task` call that crosses to a different, metered provider than the parent is gated separately by the permission system as `task(role:<name>)` — see §5. A model `kiln/auto` routes to is not gated: the user chose it in user settings (§6a).
 
 ## 6a. `modelRouter`
 
@@ -513,17 +523,17 @@ A `task` call that crosses to a different, metered provider than the parent is s
 | `fallback` | what rates a request when the classifier is off, unavailable, or gives no answer: `"plan"` (pi's choice, the default: the request plans on `plan`, exactly as jev does without its classifier) or `"heuristic"`, kiln's own small heuristic (below) |
 
 - **Values are role names**, resolved against `modelRoles`; model names stay in `modelRoles`. A role must name a physical model in the registry whose provider has credentials (and, under `HARNESS_OFFLINE=1`, is local).
-- **Defaults.** With no `modelRouter` key, the roles above apply whenever user-scope `modelRoles` exist. An object without `roles` uses them too; a slot `roles` does not name keeps its own default from the table above (`RoleFor`) — you only need to list the slots you want to change, e.g. `{"roles": {"plan": "heavy"}}` changes `plan` alone and leaves `planComplex`/`implement`/`direct` on their defaults.
-- **A role that names no usable model** (not in `modelRoles`, or the model it names can't be reached right now — no credentials, unreachable, offline under `HARNESS_OFFLINE`, or simply missing) falls back along a chain instead: `planComplex → plan → implement`, `direct → implement`. Without an `implement` model there is no `kiln/auto`.
-- **One model per local server.** A self-hosted server (anything whose provider implements `provider.SelfHosted` — Ollama today) can usually hold only one of its models loaded at a time; routing between several on it makes the server swap on every switch, which is slow. After the slots above resolve, `internal/router/local.go`'s `CollapseLocal` checks each host: when `plan`, `planComplex`, `implement`, `direct` and `modelRoles.fast` resolve to two or more distinct models on the same host, it asks that host which are currently loaded (`Resident`, `/api/ps` for Ollama, its own 2s timeout, at most once per host) and collapses every slot (and `fast`) on it onto one — the first one already loaded, in the order implement, plan, planComplex, direct, fast, or just the first in that order if none is loaded or the host could not be asked. If every candidate on a host is already loaded, nothing changes: that is the opt-out, and it rests on evidence the server actually holds them all at once. Cloud slots are never touched. There is no `keep_alive` and no settings key for this — model names stay in `modelRoles`, and the server operator controls what is kept resident. The collapse is reported once, the same way as the fallback note above: `kiln/auto: the Ollama server at 192.168.3.168:11434 keeps one model loaded, so plan and planComplex use qwen3.8 (already loaded) instead of qwen3:30b-a3b and gpt-oss:20b. Keep all of them loaded to route between them.` `doctor` shows it once, on a `modelRouter local …` line (it is informational, not listed under problems); `/model`'s `kiln/auto` row appends `· one model per local server`.
-  - **No silent fallback.** A slot left at its own default role that `modelRoles` never mentions at all falls back quietly — you asked for neither a specific role on that slot nor defined the default one. Anything else — a role you named explicitly, or one you defined in `modelRoles` that just can't be used right now — gets exactly one combined startup note, grouped by provider and reason, naming where the affected slots went instead: `kiln/auto: anthropic has no credentials (kiln login anthropic), so plan and planComplex use ollama/qwen3.8 instead of anthropic/claude-sonnet-5-5 and anthropic/claude-opus-5-5.` It also covers the `modelRoles` entries it names: a separate "Model role ... " warning for one of them is not printed too, but the note itself adds "Subagents asking for `<role>` run on the current model." Interactively this is a startup note under the banner; in print mode (`-p`) it is one line on stderr. `doctor` repeats each reason on its own `modelRouter fallback …` line, and `/model`'s `kiln/auto` row appends `· fallback: <shortest reason>`.
+- **Defaults.** With no `modelRouter` key, the roles above apply whenever user-scope `modelRoles` exist. An object without `roles` uses them too; a slot `roles` does not name keeps its own default from the table above (`RoleFor`). List only the slots you want to change: `{"roles": {"plan": "heavy"}}` changes `plan` alone and leaves `planComplex`/`implement`/`direct` on their defaults.
+- **A role that names no usable model** (not in `modelRoles`, or its model cannot be reached right now: no credentials, unreachable, offline under `HARNESS_OFFLINE`, or missing) falls back along a chain: `planComplex → plan → implement`, `direct → implement`. Without an `implement` model there is no `kiln/auto`.
+- **One model per local server.** A self-hosted server (any provider that implements `provider.SelfHosted`; Ollama today) can usually hold only one of its models loaded at a time, so routing between several on it makes the server swap on every switch, which is slow. After the slots above resolve, `internal/router/local.go`'s `CollapseLocal` checks each host: when `plan`, `planComplex`, `implement`, `direct` and `modelRoles.fast` resolve to two or more distinct models on the same host, it asks that host which are currently loaded (`Resident`, `/api/ps` for Ollama, its own 2s timeout, at most once per host) and collapses every slot (and `fast`) on it onto one — the first one already loaded, in the order implement, plan, planComplex, direct, fast, or just the first in that order if none is loaded or the host could not be asked. If every candidate on a host is already loaded, nothing changes: that is the opt-out, and it rests on evidence the server actually holds them all at once. Cloud slots are never touched. There is no `keep_alive` and no settings key for this: model names stay in `modelRoles`, and the server operator controls what stays resident. The collapse is reported once, the same way as the fallback note above: `kiln/auto: the Ollama server at 192.168.3.168:11434 keeps one model loaded, so plan and planComplex use qwen3.8 (already loaded) instead of qwen3:30b-a3b and gpt-oss:20b. Keep all of them loaded to route between them.` `doctor` shows it once, on a `modelRouter local …` line (it is informational, not listed under problems); `/model`'s `kiln/auto` row appends `· one model per local server`.
+  - **No silent fallback.** A slot left at its own default role that `modelRoles` never mentions falls back quietly: you named no role for that slot and defined no default one. Anything else (a role you named explicitly, or one you defined in `modelRoles` that cannot be used right now) gets exactly one combined startup note, grouped by provider and reason, naming where the affected slots went instead: `kiln/auto: anthropic has no credentials (kiln login anthropic), so plan and planComplex use ollama/qwen3.8 instead of anthropic/claude-sonnet-5-5 and anthropic/claude-opus-5-5.` It also covers the `modelRoles` entries it names, so no separate "Model role ... " warning is printed for them, but the note itself adds "Subagents asking for `<role>` run on the current model." Interactively this is a startup note under the banner; in print mode (`-p`) it is one line on stderr. `doctor` repeats each reason on its own `modelRouter fallback …` line, and `/model`'s `kiln/auto` row appends `· fallback: <shortest reason>`.
 - **`"modelRouter": false`** turns it off.
 - **The classifier** (`internal/router/classify.go`) asks `modelRoles.fast`, with no tools and thinking off, exactly jev's question: "How demanding is the software engineering work requested in `prompt`?", with jev's own criteria (`standard`: "Ordinary features, fixes, reviews, or questions"; `complex`: "Subtle design, cross-cutting changes, or hard debugging"). It reads the last *typed* line (`KilnTyped`, so an `@file` expansion never reaches it), clipped to 16,000 characters, and requires one strict JSON object, `{"complexity":"standard"}` or `{"complexity":"complex"}`, on a clean stop within 20 seconds and 64 tokens — anything else (a duplicate key, trailing text, a cut-off answer, an unreadable value, a timeout, a disconnect) is "no answer", which goes to the fallback. Esc during the call aborts the turn, like any other model call; it never falls back on a cancelled request. Every call — answered or not — is a session usage row (`Harness.RecordSideUsage`, labelled `model router classifier · <provider>/<id>`), so it reaches the footer, `/cost` and a resumed session's total, and one line in the run log (`msg="model router classifier"`, with the decision, model, duration and tokens).
 - **The heuristic fallback** (`internal/router/heuristics.go`, off by default: `"fallback": "heuristic"`) is a pure function of the same typed text the classifier reads. A request counts as `complex` if any hold: it is at least 1,200 characters; it names at least 4 distinct path-like tokens; it has a fenced code block or a stack trace of at least 40 lines; or it matches one of a fixed set of stems (`architect`, `design`, `refactor`, `migrat`, `race`, `deadlock`, `concurren`, `root cause`, `investigat`, `flaky`, `performance`, `security`, `across the`), case-insensitively. The stems are English only.
 - **User scope only.** `modelRouter`, and the `modelRoles` it reads, come from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`; a project or local `modelRouter` is ignored with a startup warning, so a cloned repository cannot choose which paid model gets every request. Dynamic providers (Ollama) named by its roles are refreshed at startup.
 - **Its limits follow the model that answers** (pi: "limits follow the physical model that answered"). `kiln/auto` declares the `plan` target's context window and output cap, since a session's first request goes to `plan` or `planComplex`; its inputs are those every target accepts, and it reasons if any target does. Every budget kiln derives from the window — the system prompt's memory, auto memory and skills listing, the `task` tool's agent and role text, the compaction reserve and keep-recent share, the per-result tool-output cap and the `@`-mention budget — is re-sized whenever a request is routed to a model with a different window, synchronously, before that request is built (`harness.Hooks.OnRoute` → `agent.Retier`), retries and the overflow resend included; compaction summaries (`direct`) do not re-size. The prompt's tier-sized parts are loaded once per target window at startup and reused, so going A→B→A sends A the byte-identical prompt it had (no extra cache miss beyond the model change itself). Before each request the compaction threshold and the fit are checked against the routed model's window, so a switch to a smaller model compacts first. A resumed `kiln/auto` session starts sized for the target that answered it last.
 - **A target too small to run** (a window that fails the harness's own floor, `budget.RequireTierForWindow` — Ollama's 8,192-token fallback, say) is treated like any other unusable target: its slot falls back along the chain above, and the fallback note says why (`kiln/auto: ollama/tiny's 8,192-token window is too small to run, so planComplex use … instead of ollama/tiny.`). It never makes `kiln/auto` itself unselectable. A too-small `modelRoles.fast` still runs the classifier (a short prompt) but is not a candidate for the one-model-per-local-server collapse.
-- **`/model` re-sizes too.** Switching models with `/model` goes through the same `agent.Retier`, so the system prompt, memory, skills listing, `task` tool text and tool-output cap move to the new model's tier. (Before, `/model` moved only the compaction settings and the MCP tier; everything else stayed sized for the model the session started on.)
+- **`/model` re-sizes too.** Switching models with `/model` goes through the same `agent.Retier`, so the system prompt, memory, skills listing, `task` tool text and tool-output cap move to the new model's tier. (Before, `/model` moved only the compaction settings and the MCP tier; everything else stayed sized for the starting model.)
 - **Routing**, per request (`router.Auto.Route`):
   1. a compaction summary goes to `direct`;
   2. a session's first request plans on the planning model it already used, when the previous reply came from `plan` or `planComplex` (no cache miss); otherwise the classifier (then its fallback) rates it, and `complex` plans on `planComplex`, anything else on `plan`;
@@ -531,12 +541,12 @@ A `task` call that crosses to a different, metered provider than the parent is s
   4. otherwise the model its state names. The state (`{phase, model}`) is a `kiln.router.state` entry on the session branch, so it follows `/rewind`, forks and resumes. A state naming a model the settings no longer route to is re-derived from its phase.
   The thinking level passes through, clamped to the routed model.
 - **Subagents.** A `task` from a `kiln/auto` session inherits `kiln/auto` and routes on its own, from a fresh state; an explicit role or model still wins.
-- **Auto mode.** With `modelRoles.fast` unset, the auto mode classifier runs on `direct` rather than on the virtual model. (Auto mode's classifier and the model router's own are two different classifiers, on two different roles' worth of calls, each with its own usage row.)
+- **Auto mode.** With `modelRoles.fast` unset, the auto mode classifier runs on `direct` rather than on the virtual model. (The auto mode classifier and the model router's classifier are two different classifiers, each with its own calls and usage row.)
 - **UX.** The footer's model segment shows `auto → <model id>[ • <level>]` once the first request has routed (plain `auto` before that), and collapses to just the model id on a tight row; its context meter follows the routed model's window. `/cost` adds a `switches N · cache re-billed ~$X` line once the session has routed to more than one physical model. `/model` lists `kiln/auto` with a `plan→<model> · complex→<model> · implement→<model>` role summary, with `· fallback: <shortest reason>` appended when at least one slot fell back this run. `kiln models`, `kiln providers` and `kiln doctor` list `kiln/auto` when it resolves, and `doctor` reports `modelRouter` problems, ignored project/local keys, unresolved slots, and a `modelRouter fallback …` line per reason.
 
 ### Mods (`internal/mods`, `internal/cli/mods.go`, `internal/tui/mod*.go`)
 
-A Claude Code **mod** is a plugin whose `hooks/hooks.json` lists hooks modules: `{"modules": ["./register.tsx"]}`, paths relative to `hooks/` (code.claude.com/docs/en/plugins/mods). kiln runs the modules of every active plugin itself: each is bundled with esbuild (its own files only, plus the `claude-code` import; cached under `~/.harness/cache/mods`) and run in goja on one goroutine shared by all mods, as Claude Code runs them on one worker. A hook that throws or overruns its 10 s budget is skipped (or answered by its `.catch`); the session goes on. Mods are code that runs with your permissions, as in Claude Code. They start with the session in a trusted folder or print mode, and otherwise when the folder trust dialog is accepted, like plugin hooks. `register`'s options are the plugin's `userConfig` defaults overlaid with `pluginConfigs.<id>.options` from `~/.claude/settings.json`.
+A Claude Code **mod** is a plugin whose `hooks/hooks.json` lists hooks modules: `{"modules": ["./register.tsx"]}`, paths relative to `hooks/` (code.claude.com/docs/en/plugins/mods). kiln runs the modules of every active plugin itself: each is bundled with esbuild (its own files only, plus the `claude-code` import; cached under `~/.harness/cache/mods`) and run in goja on one goroutine shared by all mods, as Claude Code runs them on one worker. A hook that throws or overruns its 10 s budget is skipped (or answered by its `.catch`), and the session goes on. Mods are code that runs with your permissions, as in Claude Code. They start with the session in a trusted folder or in print mode, and otherwise when the folder trust dialog is accepted, like plugin hooks. `register`'s options are the plugin's `userConfig` defaults overlaid with `pluginConfigs.<id>.options` from `~/.claude/settings.json`.
 
 Supported in this version (what squad and savvy-progress use):
 
@@ -554,7 +564,7 @@ A mod's own tool (`mcp__<plugin>__<name>`) is answered by the mod and needs no p
 
 A plugin may declare **channels** in its manifest (`"channels": [{ "server": "<mcp-server>", "displayName": "…" }]`), each naming one of the plugin's own MCP servers. When a channel is on, that server's server-initiated `notifications/claude/channel` messages are injected into the session as `<channel source="…">` turns — queued behind a running turn, steered into one mid-flight, or started as a new turn when idle. It is the path the design studio uses to push a request straight into a session.
 
-Unlike Claude Code's `--channels` flag, kiln drives channels from `settings.json`, so one can be enabled globally in the user scope and overridden off for a single repo:
+Unlike Claude Code's `--channels` flag, kiln drives channels from `settings.json`, so you can enable one globally in the user scope and override it off for a single repo:
 
 ```json
 { "channels": { "design-studio@6cclab": true } }
@@ -577,23 +587,23 @@ The go-sdk `AuthorizationCodeHandler` runs the protocol; kiln opens the browser,
 
 `internal/claude/skills`, `internal/claude/commands`, `internal/claude/agents`, `internal/claude/memory`, `internal/claude/keybindings`, `internal/tui/keybindings.go`, `internal/claude/statusline`, `internal/claude/trust`
 
-All of skills/commands/agents/memory read the same two roots in precedence order (`paths.ClaudeRoots`, lowest first): `~/.claude` (user) then `<cwd>/.claude` (project) — project shadows user on a name collision.
+Skills, commands, agents and memory all read the same two roots, lowest precedence first (`paths.ClaudeRoots`): `~/.claude` (user), then `<cwd>/.claude` (project). Project shadows user on a name collision.
 
 ### Skills
 
-`~/.claude/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`. Frontmatter: `name` and `description` (both required, or the skill is dropped), `user-invocable` (bool, **defaults to `true`** if absent — this is what makes a skill become a slash command). Only `name`/`description`/`location` stay resident in the system prompt; the body loads on invocation.
+`~/.claude/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`. Frontmatter: `name` and `description` (both required, or the skill is dropped), `user-invocable` (bool, **defaults to `true`** if absent; this is what makes a skill a slash command). Only `name`/`description`/`location` stay resident in the system prompt; the body loads on invocation.
 
 ### Commands
 
-`~/.claude/commands/**/*.md` and `.claude/commands/**/*.md`, recursive. Frontmatter: `description`, `argument-hint`, `allowed-tools` (comma-string or YAML list), `model`. Malformed frontmatter doesn't drop the command — the body still runs without metadata.
+`~/.claude/commands/**/*.md` and `.claude/commands/**/*.md`, recursive. Frontmatter: `description`, `argument-hint`, `allowed-tools` (comma-string or YAML list), `model`. Malformed frontmatter does not drop the command: the body still runs without metadata.
 
-Argument substitution: `$ARGUMENTS` is replaced with the whole raw argument string verbatim; `$1`, `$2`, ... are whitespace-split positional words (an out-of-range index becomes empty string, not left literal). If the body uses neither, the raw args are appended after the body rather than discarded.
+Argument substitution: `$ARGUMENTS` is replaced with the whole raw argument string verbatim; `$1`, `$2`, ... are whitespace-split positional words (an out-of-range index becomes an empty string, not left literal). If the body uses neither, the raw args are appended after the body.
 
 Namespace: the relative path under `commands/` with `.md` stripped; every directory segment but the last joins with `:` (e.g. `commands/frontend/component.md` → `frontend:component`).
 
 ### Agents
 
-`~/.claude/agents/*.md` and `.claude/agents/*.md`, **flat, not recursive**. Frontmatter: `name` (optional, defaults to filename), `description` (**required** — absent frontmatter or missing description drops the agent entirely), `model` (a hint, see §6's `ResolveModel`), `tools` (list, comma-string, scalar, or omitted meaning "inherit parent's tools"). Unknown keys (`color`, `paths`, `role`, `skills`, etc.) are ignored, not rejected — there is no `Color` field modeled.
+`~/.claude/agents/*.md` and `.claude/agents/*.md`, **flat, not recursive**. Frontmatter: `name` (optional, defaults to filename), `description` (**required** — absent frontmatter or missing description drops the agent entirely), `model` (a hint, see §6's `ResolveModel`), `tools` (list, comma-string, scalar, or omitted meaning "inherit parent's tools"). Unknown keys (`color`, `paths`, `role`, `skills`, etc.) are ignored, not rejected; there is no `Color` field.
 
 ### Memory (`CLAUDE.md`)
 
@@ -605,7 +615,7 @@ Budget: `LoadMemory(cwd, budgetTokens)` estimates tokens as `ceil(len/4)`; the b
 
 ### Auto memory (Claude Code's `MEMORY.md`), read-only
 
-`internal/claude/memory/automemory.go`. kiln reads Claude Code's own auto-memory index — it never writes one; auto memory is otherwise Claude Code's feature, not kiln's (see `~/.claude/plans/kiln-self-improvement.md`'s "Claude Code parity" for the scope decision, and internal/learn for kiln's own, separate learned-preference store).
+`internal/claude/memory/automemory.go`. kiln reads Claude Code's own auto-memory index and never writes one; auto memory is Claude Code's feature, not kiln's (see `~/.claude/plans/kiln-self-improvement.md`'s "Claude Code parity" for the scope decision, and internal/learn for kiln's own, separate learned-preference store).
 
 **Location** (`ResolveAutoMemoryDir`): `~/.claude/projects/<project>/memory/MEMORY.md`, where `<project>` is the current git repository's root directory (resolved via `git rev-parse --git-common-dir`, not `--show-toplevel`, so every worktree of a repository — which each have their own toplevel but share one `.git` — and every subdirectory of it resolve to the same `<project>`) with every character that isn't an ASCII letter or digit replaced by `-`, one-for-one (`projectDirName`). Verified against real `~/.claude/projects/` directory names on the machine this was written on: `/` (`/Users/andrepato/projects/harness` -> `-Users-andrepato-projects-harness`) and `_` (this machine's own `$TMPDIR`, which has underscores, maps to a directory name with `-` in their place, not `_` — an earlier version of this function only replaced `/` and got `_` wrong). No real example with a `.` in the path was available to confirm `.` specifically, but it follows the same one-rule-for-every-punctuation-character pattern the `_` evidence already established. Outside a git repository, `<project>` is derived from cwd itself. The `autoMemoryDirectory` setting (below), when set and safe (see "Permissions" below), overrides this resolution outright.
 
@@ -616,7 +626,7 @@ Budget: `LoadMemory(cwd, budgetTokens)` estimates tokens as `ceil(len/4)`; the b
 - Trimmed further, past Claude Code's own cap, to fit what budget remains after CLAUDE.md — and skipped entirely (not merely trimmed) on the small context tier, which has no headroom to spare once CLAUDE.md content (which always loads in full) has claimed its share.
 - `/context` reports the outcome as `auto-memory   <loaded|trimmed|skipped> (...)`.
 
-**Disabling**: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` (env), or `autoMemoryEnabled: false` in `settings.json` (user or project scope — see §5's keys table; a project can turn off what the user's settings turned on, last-non-nil scope wins).
+**Disabling**: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` (env), or `autoMemoryEnabled: false` in `settings.json` (user or project scope; see §5's keys table). The last non-nil scope wins, so a project can turn off what the user's settings turned on.
 
 **`autoMemoryDirectory` safety** (`resolveAutoMemoryDir`, `trustedAutoMemoryDirectory` in `chat.go`): since the resolved directory becomes a read-only permission root (below), an `autoMemoryDirectory` value is trusted only under two conditions, both required:
 
@@ -647,7 +657,7 @@ An unrecognized action id is ignored. Global-router keys (`ctrl+o`, `shift+tab`,
 
 ### Trust
 
-`~/.harness/trusted.json` — the harness's own trust store, explicitly not a read of Claude Code's trust state. Flat JSON array of trusted absolute paths, written atomically at mode 0600. Trusting a directory trusts every descendant (`isAncestorOrSelf`); symlinks are not resolved. The dialog fires on TUI startup when the cwd isn't already trusted and `HARNESS_TRUST_ALL != "1"`.
+`~/.harness/trusted.json` is the harness's own trust store; it does not read Claude Code's trust state. Flat JSON array of trusted absolute paths, written atomically at mode 0600. Trusting a directory trusts every descendant (`isAncestorOrSelf`); symlinks are not resolved. The dialog fires on TUI startup when the cwd isn't already trusted and `HARNESS_TRUST_ALL != "1"`.
 
 What waits for trust, as in Claude Code (its docs: "Project allow rules and workspace trust" and "What runs before you trust a folder"):
 
@@ -668,7 +678,7 @@ User settings and `--settings` are never held. The same hold applies when a sett
 
 ### Plugins
 
-`internal/claude/plugins`. kiln reads the same files Claude Code's own `/plugin` writes — it does not install, enable or disable a plugin itself.
+`internal/claude/plugins`. kiln reads the same files Claude Code's own `/plugin` writes; it does not install, enable or disable a plugin itself.
 
 - **Installed:** `~/.claude/plugins/installed_plugins.json` — `{"version":2,"plugins":{"<plugin>@<marketplace>":[{"scope":"user"|"project","installPath":"<abs dir>","version":"...","projectPath":"<abs>"}]}}`. A `project`-scope install only applies when the current directory is `projectPath` or a descendant of it.
 - **Enabled:** `settings.json`'s `enabledPlugins` map (`"<plugin>@<marketplace>": true|false`), merged across the usual three scopes (later wins — `settings.LoadEnabledPlugins`). Absent or `false` both mean inactive: enabling is opt-in.
@@ -693,8 +703,8 @@ A plugin's install directory (`installPath`, `${CLAUDE_PLUGIN_ROOT}` in its own 
 
 ### Config files
 
-Three scopes, the same ones `claude mcp add --scope` uses, and kiln writes
-and reads the identical files - kiln has no MCP config file of its own (see
+There are three scopes, the same ones `claude mcp add --scope` uses. kiln reads
+and writes the identical files and has no MCP config file of its own (see
 `docs/claude-code-parity.md`'s divergence #7: settings are `.kiln`, MCP is
 shared):
 
@@ -713,7 +723,7 @@ keeping the file's permissions).
 
 Precedence on a name clash: `--mcp-config`, then local, then project, then
 user. A read/parse failure or missing file returns an empty server map
-rather than erroring — a broken config never blocks startup.
+instead of an error, so a broken config never blocks startup.
 
 Server entry (one struct covers both transports):
 
@@ -727,7 +737,7 @@ Server entry (one struct covers both transports):
 
 `type` is inferred when absent: explicit `type` if set, else `"http"` if `url` is set, else `"stdio"`.
 
-`--mcp-config <file>` **replaces** the server set entirely (reads only that file; never merges with any of the files above). `--strict-mcp-config` with no `--mcp-config` connects to **nothing** — it does not fall back to the default files.
+`--mcp-config <file>` **replaces** the server set entirely: kiln reads only that file and never merges it with the files above. `--strict-mcp-config` with no `--mcp-config` connects to **nothing**; it does not fall back to the default files.
 
 ### Connect timeout
 
@@ -735,7 +745,7 @@ Server entry (one struct covers both transports):
 
 ### Postures
 
-`internal/mcp/gating.go`. A posture restricts which servers' tools are indexed/searchable at all. A server that no built-in posture names is in scope for every posture (`InPosture`): the lists exist to keep the known noisy servers out of a coding session, not to hide a newly configured server until `/posture` is discovered.
+`internal/mcp/gating.go`. A posture restricts which servers' tools are indexed/searchable at all. A server that no built-in posture names is in scope for every posture (`InPosture`). The lists keep the known noisy servers out of a coding session; they do not hide a newly configured server until you discover `/posture`.
 
 | Posture | Description | Servers |
 |---|---|---|
@@ -745,11 +755,11 @@ Server entry (one struct covers both transports):
 
 Confirms the README's claim that `coding` excludes `grafana`/`proxmox`/`unifi-mcp`.
 
-`HARNESS_POSTURE` (`internal/cli/mcp.go`) sets the posture once at session start; falls back to `coding` if unset or unrecognized. The `/posture <name>` command changes it live for the rest of the session and clears admitted-tool state — it does not re-read the env var or persist back to it.
+`HARNESS_POSTURE` (`internal/cli/mcp.go`) sets the posture once at session start and falls back to `coding` if unset or unrecognized. The `/posture <name>` command changes it live for the rest of the session and clears admitted-tool state. It does not re-read the env var or write back to it.
 
 ### `tool_search`
 
-A real tool (`internal/tools/toolsearch.go`), present under `posture-index` and `full-index` tool strategies but **absent** under `full-schemas` (large-context tier, ≥ ~200k-token window), where every in-posture tool's full schema is loaded directly instead. It scores posture-scoped tools by keyword (name weighted over description), admits matches permanently for the session, and returns their full JSON schemas — schemas load on demand, not up front. Its searchable pool is filtered by the posture active when the tool was built (`ToolSearchTool`); `/posture` re-gates the lane's active set (`switchPosture` in `internal/cli/mcp.go`) but does not rebuild that pool.
+A real tool (`internal/tools/toolsearch.go`), present under the `posture-index` and `full-index` tool strategies but **absent** under `full-schemas`, where every in-posture tool's full schema is loaded directly. `StrategyForWindow` always picks `posture-index` (§4), so in practice the tool is always present. It scores posture-scoped tools by keyword (name weighted over description), admits matches permanently for the session, and returns their full JSON schemas, so schemas load on demand, not up front. Its searchable pool is filtered by the posture active when the tool was built (`ToolSearchTool`); `/posture` re-gates the lane's active set (`switchPosture` in `internal/cli/mcp.go`) but does not rebuild that pool.
 
 ## `HARNESS_OFFLINE`
 
@@ -760,14 +770,14 @@ a settings-file model override can never route a test to a paid endpoint.
 ### Skill discovery
 
 Kiln defaults to local, task-aware capability discovery. The startup prompt
-points to `capability_search` rather than listing every installed skill and
-MCP tool. It ranks eligible skills and posture-scoped MCP tools together by
+points to `capability_search` instead of listing every installed skill and
+MCP tool. The search ranks eligible skills and posture-scoped MCP tools together by
 name and description, with a bounded result count and response size. Results
-give the matched query terms and the exact action to take. Relevant metadata
+give the matched query terms and the exact action to take. Metadata
 suggestions for the latest user request are appended at the end of each model
-request, preserving earlier conversation text. Search and suggestions do
+request, so earlier conversation text is unchanged. Search and suggestions do
 not read skill bodies or call a model; `skill` loads full instructions only
-when invoked. Explicit `capability_search` admits returned MCP matches into
+when invoked. An explicit `capability_search` admits the returned MCP matches into
 the active tool set, so they are callable on the next step. Suggestions do not
 admit tools.
 
@@ -787,27 +797,27 @@ Configure `skillDiscovery` in Kiln settings (`~/.kiln/settings.json` or
 }
 ```
 
-`auto` supplies relevant suggestions and search; `search` supplies only search;
+`auto` supplies suggestions and search; `search` supplies only search;
 `catalog` keeps the previous startup catalog behavior. `unified` defaults to
 `true`; set it to `false` to restore the separate `skill_search` and
 `tool_search` discovery path. Both legacy tools remain callable. The description budget
-is the smaller of `budgetTokens` and the model tier's skills allowance. Accepted
-configured budgets range from 128 to 8192 estimated tokens. The default is 1024.
-Suggestion wrappers count toward the allowance. Fixed startup discovery
+is the smaller of `budgetTokens` and the model tier's skills allowance. Configured
+budgets accept 128 to 8192 estimated tokens; the default is 1024.
+Suggestion wrappers count toward the allowance. The fixed startup discovery
 instructions are additional overhead.
 
-Pins are selected first within the budget in auto mode. Exclusions remove skills
-from model discovery and invocation, but do not change the user's slash-command
+In auto mode, pins are selected first within the budget. Exclusions remove skills
+from model discovery and invocation but do not change the user's slash-command
 palette. Explicit empty arrays clear inherited lists. Other fields inherit
-independently through the existing settings hierarchy; untrusted settings remain
-subject to the existing trust gate. Unknown modes and invalid budgets leave the
-inherited value unchanged. The catalog is loaded at session startup; restart a
+independently through the existing settings hierarchy, and untrusted settings
+remain subject to the existing trust gate. Unknown modes and invalid budgets leave the
+inherited value unchanged. The catalog loads at session startup, so restart the
 session after changing these settings or installed skills.
 
-Unified search is lexical and returns at most 10 results; its default is five.
+Unified search is lexical and returns at most 10 results (default five).
 The MCP catalog refreshes after servers connect, and posture changes update
 which tools are eligible. Use specific topics or names to narrow results.
-Exact-name invocation remains available for skills omitted due to space.
+A skill omitted for space can still be invoked by exact name.
 Discovery covers project, user, and enabled plugin skills, dispatchable agents,
 and eligible MCP tools, including plugin-provided agents and MCP tools.
 `includeAgents` defaults to `true`; set it to `false` to omit agents from unified
@@ -831,10 +841,11 @@ corrects, or forgets a key through the permission gate. Writes are refused in
 plan mode. Memory records are absent from startup context. Relevant records are
 retrieved using the latest user request under a 512-token default allowance
 (`memoryRetrievalTokens`, configurable from 128 to 8192). Retrieval refreshes
-before each model request so permission changes and stale sources take effect
-immediately. The bounded block is appended after the conversation, rather than
-rewriting an earlier user message. Set `memoryAutoRetrieve: false` to use explicit
+before each model request, so permission changes and stale sources take effect
+immediately. The bounded block is appended after the conversation and does not
+rewrite an earlier user message. Set `memoryAutoRetrieve: false` to use explicit
 recall only.
+
 Model-written records remain attributed observations, not verified instructions.
 Kinds are preference, fact, procedure, and observation. Each record requires
 text and evidence; an optional Unix expiry timestamp removes it from recall
@@ -857,7 +868,7 @@ kiln memory global forget response-style
 kiln memory global restore 12
 ```
 
-The global scope accepts preferences only, without project file dependencies.
+The global scope accepts preferences only, with no project file dependencies.
 Model memory tools cannot write to it. Automatic retrieval searches project
 records first, then global preferences within the same record and token limits.
 A current project record with the same key overrides the global preference.
@@ -865,9 +876,9 @@ A current project record with the same key overrides the global preference.
 `memoryAutoRetrieve: false` disables their automatic injection. Explicit model
 recall remains project-scoped; the global export command provides full inspection.
 
-Disabling memory does not delete it; management commands remain available.
+Disabling memory does not delete it, and the management commands stay available.
 Forgetting removes database rows and search entries, not external backups or
-copies previously exported. For file-dependent observations,
+earlier exports. For file-dependent observations,
 `kiln memory remember <key> <text> [source-files...]` captures source
 fingerprints; recall checks them against the current worktree and excludes
 stale records. Model-written observations without source fingerprints remain
@@ -890,9 +901,9 @@ makes no model call and does not write Claude memory files.
 Use `kiln learning fact-candidates` to inspect candidates and
 `kiln learning dismiss-fact <id>` to remove one. Dismissal does not erase an
 already stored memory record; use `kiln memory forget <key>` for that. Derived
-records expire after 30 days and are rechecked against source bytes, file
-modes, directory membership and path absence on retrieval. User corrections retain their history. A user memory or
-learning opt-out takes precedence over project settings; a memory opt-out
+records expire after 30 days and are rechecked on retrieval against source bytes, file
+modes, directory membership and path absence. User corrections keep their history. A user memory or
+learning opt-out takes precedence over project settings. A memory opt-out
 keeps opted-in aggregate counts but stores no raw verification proofs or
 candidates. See [verified fact extraction](efficiency/fact-extraction.md) for
 eligibility, bounds and remaining limits.
@@ -912,12 +923,12 @@ eligibility, bounds and remaining limits.
 }
 ```
 
-These are the defaults. Depth counts a direct worker as one. Dispatch count is
-per running session, not reset for each prompt; restarting resets the counter.
-Timeout applies to each worker and its descendants. A full concurrency limit
-refuses new delegation immediately rather than blocking a nested worker behind
-its parent. The parent can finish other work before retrying. Limits use the
-normal settings precedence; positive upper bounds are 64 concurrent workers,
+These are the defaults. Depth counts a direct worker as one. The dispatch count
+is per running session and is not reset for each prompt; restarting resets it.
+The timeout applies to each worker and its descendants. At the concurrency limit,
+new delegation is refused immediately instead of blocking a nested worker behind
+its parent, so the parent can finish other work before retrying. Limits use the
+normal settings precedence. The upper bounds are 64 concurrent workers,
 10,000 dispatches, depth 8, and 86,400 seconds. Invalid values inherit.
 Model request ceilings are configured separately through `requestBudget`, described below.
 
@@ -930,10 +941,10 @@ comparative live evaluation. The default router retains its existing behavior.
 
 Run `kiln config` to print the effective efficiency settings as JSON, including
 a per-field `sources` map for the reported efficiency controls. Each source is
-a settings path, `default`, or `evaluated personal policy`; rejected overrides
-retain the preceding source. Explicit false, zero, and empty lists retain their
-own source. The report also lists files contributing settings. It intentionally
-omits provider credentials and environment values. `--settings <file>` applies
+a settings path, `default`, or `evaluated personal policy`; a rejected override
+keeps the preceding source. Explicit false, zero, and empty lists keep their
+own source. The report also lists the files contributing settings. It
+omits provider credentials and environment values on purpose. `--settings <file>` applies
 session overrides to this report as it does to a running session.
 
 ### Optional local runtime controls
@@ -961,8 +972,8 @@ limits accept 1–256 and stored-output byte limits accept 1024–67108864.
 
 `progressLimit` accepts 2–20 consecutive identical failed tool calls, or zero to
 disable. A repeated tool name, effective arguments and displayed error result stops the operation
-with an explicit error. Changed arguments/results or successful calls reset the
-counter, as does a new operation. Internal result metadata such as per-call IDs
+with an explicit error. Changed arguments or results, successful calls and a new operation
+reset the counter. Internal result metadata such as per-call IDs
 does not count as progress. It also applies to workers. This is a narrow
 repeated-error guard; successful but unproductive cycles are not detected.
 Invalid values inherit the preceding accepted setting.
@@ -1023,9 +1034,9 @@ All ceilings default to disabled (zero):
 
 Concurrent calls reserve capacity before dispatch. Token reservations use the
 model's full advertised context plus output allowance, deliberately more
-conservative than a tokenizer estimate. Requests can therefore be refused even
-when their likely actual usage would fit. Successful calls settle against
-reported usage; interrupted calls or missing usage retain the reservation.
+conservative than a tokenizer estimate, so a request can be refused even
+when its likely actual usage would fit. Successful calls settle against
+reported usage; interrupted calls and missing usage keep the reservation.
 Limits reset when the process restarts, including when resuming a session.
 
 The USD guard uses catalog pricing, including the highest configured price tier
@@ -1165,7 +1176,7 @@ started and no candidate becomes active. Inspect the plan, arrange held-out
 scenarios absent from its source evidence, and use the normal evaluation and
 promotion commands. Candidates can be discarded independently of active policies.
 
-Queued candidates can now be bound to concrete local held-out scenarios:
+A queued candidate can be bound to concrete local held-out scenarios:
 
 ```sh
 bin/kiln learning plan <candidate-id> eval/scenarios eval/fixtures > plan.json
@@ -1208,8 +1219,8 @@ loop or automatic harness-code editing.
 Successful `todo_write` results save the accepted list in session metadata.
 Resuming or navigating a session restores the latest accepted list on that
 branch. Failed calls do not replace it, and an empty list explicitly clears it.
-These checkpoints are available for calls made by this version onward; older
-transcripts retain their existing conversational history.
+These checkpoints exist only for calls made by this version or later; older
+transcripts keep their existing conversational history.
 
 When compaction hides the saved update, the next request receives a bounded
 reminder, prioritizing active and pending items and reporting omissions. No
@@ -1263,7 +1274,7 @@ roots. `verificationDirectoryFileLimit` defaults to 128 (maximum 512), and
 `verificationDirectoryByteLimit` defaults to 64 MiB (also its maximum).
 When combining file and directory declarations, explicit files count against
 those limits. Directory enumeration also stops at 512 total descendant entries,
-including subdirectories. A declaration exceeding its bounds produces no evidence; it is never partially
+including subdirectories. A declaration exceeding its bounds produces no evidence and is never partially
 recorded. Git metadata is excluded. These are opt-in tool arguments; existing
 file-only proofs continue to work.
 
@@ -1315,7 +1326,7 @@ Delegated workers own their shell commands. When a worker finishes or is
 cancelled, kiln stops its tracked process groups before reporting completion
 or exporting edits. Parent-session commands and other workers are unaffected;
 start long-lived development servers in the parent session. This cleanup is
-automatic and does not add a model call or a settings switch.
+automatic, with no model call and no settings switch.
 
 On Unix, this includes background jobs that stay in the command's process
 group after its shell exits. Processes that detach into another group and
@@ -1397,7 +1408,7 @@ artifacts need explicit review/rebase; use the batch command below to apply
 disjoint artifacts from one shared baseline together. Without `snapshotDirty`,
 untracked parent files are unsupported.
 Ignored build artifacts are excluded in either mode. A hard process kill may leave a worktree or
-integration lock requiring manual cleanup after confirming no worker is active.
+integration lock that needs manual cleanup once you have confirmed no worker is active.
 
 For offline comparisons with another harness, see
 [benchmark comparison](benchmark-comparison.md). Comparison commands do not
