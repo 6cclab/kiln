@@ -35,6 +35,10 @@ type SkillRecord struct {
 	// Render, when set, applies a legacy command's argument placeholders.
 	// Ordinary skills continue to append args after their body.
 	Render func(args string) string
+	// Frontmatter, Source, Plugin and Path say where the skill came from, for
+	// a rewrite hook (SkillToolWith). Source is "" for none.
+	Frontmatter          map[string]any
+	Source, Plugin, Path string
 }
 
 var skillParameters = json.RawMessage(`{
@@ -77,6 +81,13 @@ func SkillTool(records []SkillRecord) *tool.Tool {
 
 // SkillToolObserved reports a successful exact-name body invocation.
 func SkillToolObserved(records []SkillRecord, observe func(name string)) *tool.Tool {
+	return SkillToolWith(records, observe, nil)
+}
+
+// SkillToolWith is SkillToolObserved with rewrite, which sees the body text
+// the model is about to read (placeholders and args applied) and returns the
+// text to give it; nil leaves it.
+func SkillToolWith(records []SkillRecord, observe func(name string), rewrite func(ctx context.Context, r SkillRecord, text string) string) *tool.Tool {
 	byName := make(map[string]SkillRecord, len(records))
 	names := make([]string, 0, len(records))
 	for _, r := range records {
@@ -119,6 +130,9 @@ func SkillToolObserved(records []SkillRecord, observe func(name string)) *tool.T
 				body = record.Render(a.Args)
 			} else if a.Args != "" {
 				body = body + "\n\n" + a.Args
+			}
+			if rewrite != nil {
+				body = rewrite(ctx, record, body)
 			}
 			if observe != nil {
 				observe(a.Skill)

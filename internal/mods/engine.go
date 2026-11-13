@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,6 +59,17 @@ var supportedEvents = map[string]bool{
 	"prompt.compose":      true,
 	"prompt.attachment":   true,
 	"prompt.mention":      true,
+	"session.send":        true,
+	"session.receive":     true,
+	"session.measure":     true,
+	"config.set":          true,
+	"config.describe":     true,
+	"telemetry.log":       true,
+	"telemetry.mark":      true,
+	"skill.prompt":        true,
+	// session.attach and session.detach are left out on purpose: kiln has
+	// one local terminal and no remote client to attach, so a hook on them
+	// logs "kiln does not raise" and never runs.
 }
 
 // pinnedFields are the fields of each event a hook may not change on the
@@ -84,6 +97,12 @@ var pinnedFields = map[string][]string{
 	"prompt.compose":      {"model"},
 	"prompt.attachment":   {"type", "origin", "agentId"},
 	"prompt.mention":      {"mention", "agentId"},
+	"session.send":        {"origin", "agentId"},
+	"session.receive":     {"agentId"},
+	"config.set":          {"key", "previous", "provider", "origin"},
+	"config.describe":     {"key", "provider"},
+	"telemetry.log":       {"to"},
+	"skill.prompt":        {"skill", "frontmatterProblem", "source", "pluginName", "path"},
 }
 
 // gatingEvents must resolve to an object; anything else is a hook that
@@ -95,6 +114,8 @@ var gatingEvents = map[string]bool{
 	"prompt.submit": true, "prompt.fill": true, "prompt.suggest": true, "prompt.edit": true,
 	"prompt.change": true, "prompt.autocomplete": true, "prompt.section": true,
 	"prompt.compose": true, "prompt.attachment": true, "prompt.mention": true,
+	"session.send": true, "session.receive": true,
+	"config.set": true, "config.describe": true, "skill.prompt": true,
 }
 
 var nameRule = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -262,6 +283,10 @@ type Engine struct {
 	mu       sync.Mutex
 	commands []CommandSpec
 	tools    []ToolSpec
+
+	// measured is the context fill the last session.measure carried (guarded
+	// by mu), so the next one names the units that moved.
+	measured *measuredUsage
 }
 
 type plugin struct {
@@ -270,6 +295,8 @@ type plugin struct {
 	options goja.Value
 	timers  map[*timer]bool
 	loaded  bool
+	// rows are the /config rows of the plugin's userConfig fields.
+	rows []configRow
 }
 
 type hook struct {
@@ -456,7 +483,7 @@ func (e *Engine) evaluate(m Module, code string, opts map[string]any) error {
 	if _, dup := e.byName[m.Plugin]; dup {
 		return fmt.Errorf("a mod named %s is already loaded", m.Plugin)
 	}
-	p := &plugin{name: m.Plugin, root: m.Root, timers: map[*timer]bool{}}
+	p := &plugin{name: m.Plugin, root: m.Root, timers: map[*timer]bool{}, rows: pluginConfigRows(m.Plugin, m.Root, opts)}
 	prog, err := goja.Compile(m.Path, "(function (module, exports, require) {"+code+"\n})", true)
 	if err != nil {
 		return fmt.Errorf("compile: %w", err)
@@ -503,6 +530,27 @@ func (e *Engine) evaluate(m Module, code string, opts map[string]any) error {
 	return nil
 }
 
+// expandPattern is the events a pattern names: an event, or "noun.*" for every
+// event of that noun kiln raises ("telemetry.*"). A noun kiln raises none of
+// stays as written, so it logs like any event kiln does not raise.
+func expandPattern(pat string) []string {
+	noun, ok := strings.CutSuffix(pat, ".*")
+	if !ok {
+		return []string{pat}
+	}
+	var out []string
+	for ev := range supportedEvents {
+		if strings.HasPrefix(ev, noun+".") {
+			out = append(out, ev)
+		}
+	}
+	if len(out) == 0 {
+		return []string{pat}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // on is the mod's on(pattern, [matcher,] hook): it returns a registration
 // whose .catch(handler) sets the hook's error handler.
 func (e *Engine) on(p *plugin, pending *[]*hook, call goja.FunctionCall) goja.Value {
@@ -514,7 +562,7 @@ func (e *Engine) on(p *plugin, pending *[]*hook, call goja.FunctionCall) goja.Va
 	var events []string
 	switch pat := call.Argument(0).Export().(type) {
 	case string:
-		events = []string{pat}
+		events = expandPattern(pat)
 	case []any:
 		for _, x := range pat {
 			s, ok := x.(string)

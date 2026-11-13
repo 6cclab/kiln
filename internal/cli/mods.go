@@ -445,6 +445,11 @@ func (r *modsRuntime) attach(agentID, model string, h *harness.Harness) {
 		usage = addUsage(usage, u)
 		mu.Unlock()
 		finishStep(ts)
+		if agentID == "" {
+			// The response reported the context's fill: the measurement
+			// session.measure carries (the figure /context and the footer read).
+			r.get().SessionMeasure(ctx, u)
+		}
 		return nil
 	})
 	hooks.OnBeforeRunEnd(func(ctx context.Context, status string) error {
@@ -833,6 +838,14 @@ func (r *modsRuntime) services(base mods.Services) mods.Services {
 		return lane.Abort()
 	}
 	r.toolsFn = base.Tools
+	// kiln draws on its one local terminal while the TUI runs; a -p run
+	// draws nowhere. There are no remote surfaces to attach.
+	svc.Surfaces = func() []string {
+		if r.driver.Load() != nil {
+			return []string{"terminal"}
+		}
+		return nil
+	}
 	r.promptServices(&svc)
 	return svc
 }

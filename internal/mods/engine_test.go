@@ -517,7 +517,7 @@ func TestUnknownApiCallRejectsNotCrash(t *testing.T) {
 	logs := h.logs.String()
 	for _, want := range []string{
 		"unknown: $.audio.play is not available in kiln (mods v1)",
-		"unknown: kiln does not raise session.measure (mods v1); this hook never runs",
+		"unknown: kiln does not raise session.attach (mods v1); this hook never runs",
 	} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("log lacks %q:\n%s", want, logs)

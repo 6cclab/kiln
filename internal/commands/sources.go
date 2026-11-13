@@ -14,7 +14,11 @@ import (
 // hint says the whole point of the argument ("further instructions"), and
 // running one sends its body plus whatever the user typed, joined by a
 // blank line so the two are visually distinct in the prompt.
-func SkillSource(list []skills.Skill) Source {
+func SkillSource(list []skills.Skill) Source { return SkillSourceWith(list, nil) }
+
+// SkillSourceWith is SkillSource with rewrite, which sees the prompt a skill
+// command is about to send and returns the text to send; nil leaves it.
+func SkillSourceWith(list []skills.Skill, rewrite func(ctx context.Context, s skills.Skill, prompt string) string) Source {
 	return Source{
 		Origin: OriginSkill,
 		Load: func() ([]Command, error) {
@@ -33,6 +37,9 @@ func SkillSource(list []skills.Skill) Source {
 						prompt := s.Content
 						if args != "" {
 							prompt = s.Content + "\n\n" + args
+						}
+						if rewrite != nil {
+							prompt = rewrite(ctx, s, prompt)
 						}
 						return Result{Prompt: prompt}, nil
 					},

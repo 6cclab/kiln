@@ -179,5 +179,5 @@ func (e *Engine) answerPrompt(f *frame, name string, arg func(int) goja.Value) (
 				return map[string]any{"sections": sectionMaps(base)}, nil
 			}), true, nil
 	}
-	return nil, false, nil
+	return e.answerConfig(f, name, arg)
 }

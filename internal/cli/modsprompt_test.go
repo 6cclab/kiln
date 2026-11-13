@@ -141,6 +141,22 @@ func TestComposePromptWithoutModsJoinsNonEmpty(t *testing.T) {
 	}
 }
 
+// $.session.surfaces lists kiln's one local terminal while the TUI runs, and
+// nothing under -p (no driver).
+func TestSessionSurfacesFollowTheTUI(t *testing.T) {
+	r := promptRuntime(t)
+	svc := r.services(mods.Services{})
+	if got := svc.Surfaces(); len(got) != 0 {
+		t.Errorf("Surfaces under -p = %v, want none", got)
+	}
+	if r.newDriver() == nil {
+		t.Fatal("no driver")
+	}
+	if got := svc.Surfaces(); len(got) != 1 || got[0] != "terminal" {
+		t.Errorf("Surfaces with the TUI = %v, want [terminal]", got)
+	}
+}
+
 // Under -p there is no input line: the $.prompt.* methods answer that.
 func TestPromptServicesWithoutAComposer(t *testing.T) {
 	r := promptRuntime(t)

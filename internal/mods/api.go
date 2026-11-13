@@ -56,6 +56,9 @@ var implemented = map[string]bool{
 	"agent.register": true, "agent.spawn": true,
 	"prompt.compose": true, "prompt.fill": true, "prompt.media": true, "prompt.read": true,
 	"prompt.submit": true, "prompt.suggest": true,
+	"session.messages": true, "session.identity": true, "session.authorize": true,
+	"session.surfaces": true, "session.surface": true, "session.send": true,
+	"config.list": true, "config.set": true, "telemetry.log": true, "telemetry.mark": true,
 }
 
 // documented lists the rest of the mod API as Claude Code declares it, plus
@@ -63,11 +66,7 @@ var implemented = map[string]bool{
 // agent.spawn).
 var documented = []string{
 	"audio.play", "audio.speak",
-	"config.list", "config.set",
 	"mcp.connect", "process.spawn",
-	"session.authorize", "session.identity", "session.messages", "session.send",
-	"session.surface", "session.surfaces",
-	"telemetry.log", "telemetry.mark",
 	"ui.ask", "ui.blit", "ui.copy", "ui.focus", "ui.log", "ui.notice", "ui.notify",
 	"ui.scroll", "ui.selection", "ui.status",
 }
@@ -719,7 +718,7 @@ func (e *Engine) storeCall(plugin, name string, arg func(int) goja.Value) (any, 
 // goroutine (network must not block the engine's worker), resolving a promise
 // with { status, ok, headers, text }. It matches Claude Code's HttpResponse
 // (a text body only; headers lowercased). An auth handle is not supported:
-// kiln has no $.session.authorize to mint one.
+// $.session.authorize answers null in kiln, so a mod holds none to spend.
 func (e *Engine) httpFetch(arg func(int) goja.Value) (any, error) {
 	vm := e.w.vm
 	url := str(arg(0))

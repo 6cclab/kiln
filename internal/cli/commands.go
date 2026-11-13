@@ -56,6 +56,9 @@ type registryDeps struct {
 	Hooks    claudehooks.Config
 	Agents   []claudeagents.Definition
 	Skills   []claudeskills.Skill
+	// SkillPrompt, when set, sees the prompt a /skill command is about to
+	// send and returns the text to send (mods' skill.prompt).
+	SkillPrompt func(ctx context.Context, s claudeskills.Skill, prompt string) string
 	// Plugins is the active (installed and enabled) plugin set for this
 	// run, for /plugin's report.
 	Plugins []claudeplugins.Plugin
@@ -260,7 +263,7 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 	})
 	registry.Add(slashcommands.BindHelp(builtinSource, registry.List))
 
-	registry.Add(slashcommands.SkillSource(deps.Skills))
+	registry.Add(slashcommands.SkillSourceWith(deps.Skills, deps.SkillPrompt))
 
 	registry.Add(slashcommands.SessionCommands(slashcommands.SessionCommandDeps{
 		Lane:        started.Lane,

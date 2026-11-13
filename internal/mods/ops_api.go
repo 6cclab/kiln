@@ -30,6 +30,10 @@ type Services struct {
 	// both ids, when turnID is not the running turn's.
 	AbortTurn func(ctx context.Context, turnID string) error
 
+	// Surfaces lists what the session draws on, each once ("terminal" under
+	// the REPL); empty in a -p run. nil is empty.
+	Surfaces func() []string
+
 	// Tools lists the tools the model has, as the model names them.
 	Tools func() []ToolInfo
 	// CallTool runs a tool through kiln's permission gate (which may prompt
@@ -67,6 +71,10 @@ type Services struct {
 	// RebuildPrompt composes the system prompt again ($.ui.invalidate of
 	// prompt.section or prompt.compose).
 	RebuildPrompt func()
+
+	// Config lists kiln's own /config rows ($.config.list); plugin userConfig
+	// rows are the engine's. nil lists none.
+	Config func() []ConfigRow
 }
 
 // CompactResult is what a compaction left: the conversation after it and the

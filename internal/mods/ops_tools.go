@@ -237,7 +237,7 @@ func (e *Engine) answerTools(f *frame, name string, arg func(int) goja.Value) (o
 				}
 			}, nil), true, nil
 	}
-	return e.answerPrompt(f, name, arg)
+	return e.answerSession(f, name, arg)
 }
 
 // toolCheckCore is kiln's part of tool.check: what the permission gate would
