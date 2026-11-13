@@ -254,8 +254,8 @@ func (s *spawned) run(gate func(context.Context) (string, error), argv []string,
 	for name, r := range map[string]io.Reader{"stdout": stdout, "stderr": stderr} {
 		wg.Add(1)
 		go func(name string, r io.Reader) {
-			defer wg.Done()
 			defer crash.Guard()
+			defer wg.Done()
 			s.read(name, r)
 		}(name, r)
 	}
@@ -354,9 +354,9 @@ func (e *Engine) spawnProcess(f *frame, req goja.Value) goja.Value {
 		s.fail(errors.New("process.spawn is not available: kiln has no permission gate wired for it, and never runs a mod's process ungated"))
 	default:
 		plugin := f.plugin.name
-		go s.run(func(ctx context.Context) (string, error) {
-			return gateFn(ctx, plugin, argv, dir, env)
-		}, argv, dir, env, strOf(in, "input"))
+		gate := func(ctx context.Context) (string, error) { return gateFn(ctx, plugin, argv, dir, env) }
+		input := strOf(in, "input")
+		crash.Go(func() { s.run(gate, argv, dir, env, input) })
 	}
 
 	it := vm.NewObject()
