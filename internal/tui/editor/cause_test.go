@@ -17,7 +17,12 @@ func TestCauseNamesWhatChangedTheText(t *testing.T) {
 		{"SetValue empty", func() { m.SetValue("") }, "clear"},
 		{"Clear", func() { m.SetValue("x"); m.ClearCause(); m.Clear() }, "clear"},
 		{"ReplaceCursorLine", func() { m.SetValue("/mo"); m.ClearCause(); m.ReplaceCursorLine(0, 3, "/model ") }, "engine"},
-		{"history recall", func() { m.Clear(); m.SetHistory([]string{"earlier prompt"}); m.ClearCause(); m, _, _ = m.Update(named("up")) }, "history"},
+		{"history recall", func() {
+			m.Clear()
+			m.SetHistory([]string{"earlier prompt"})
+			m.ClearCause()
+			m, _, _ = m.Update(named("up"))
+		}, "history"},
 		{"SetCause", func() { m.SetCause("plugin:squad") }, "plugin:squad"},
 		{"submit", func() { m.SetValue("go"); m.ClearCause(); m, _, _ = m.Update(named("enter")) }, "clear"},
 	}
