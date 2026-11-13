@@ -62,6 +62,9 @@ func (b *Bridge) commitNote(text string, colour func(string) string) {
 	// rule, and the body it wraps, must redraw at the new width like every
 	// other block instead of keeping their old one indefinitely).
 	rebuild := func(w int) []string {
+		if rows := drawModRow("InfoNotice", rowID("notice", text), map[string]any{"text": text, "command": nil}, w); rows != nil {
+			return append([]string{""}, rows...)
+		}
 		if follows {
 			return noteBody(text, w, colour)
 		}

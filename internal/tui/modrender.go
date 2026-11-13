@@ -58,6 +58,8 @@ type ModButton struct {
 	Hotkey          string
 	Row, Col, Width int
 	Label           string
+	// Key is the Button's key prop, "" when it has none (ui.focus names it).
+	Key string
 }
 
 // modBox is one rendered element: lines already at `width` visible columns
@@ -728,6 +730,7 @@ func renderButton(el mods.Element, avail int) modBox {
 			Col:      0,
 			Width:    width,
 			Label:    label,
+			Key:      el.Key,
 		}},
 	}
 }

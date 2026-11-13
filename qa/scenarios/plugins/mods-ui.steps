@@ -1,0 +1,48 @@
+# Claude Code mods, ui.* surface: the uiprobe fixture mod (testdata/mods/uiprobe)
+# installed as a user plugin. /uiprobe pins a status line under the status row,
+# logs a transcript row and opens a focused pane of 5 rows over 20; Enter
+# presses its Button through the ui.press hook; Down scrolls it through the
+# ui.scroll hook; /uiask asks a question with $.ui.ask in kiln's own dialog.
+# Read the screenshots: the status line must sit dim under the status row, and
+# the log rows must read as dim system notices.
+@faux testdata/faux/hello.yaml
+@size 120x40
+@setup mkdir -p {HOME}/plugins/repos {HOME}/.claude/plugins && cp -R {ROOT}/testdata/mods/uiprobe {HOME}/plugins/repos/uiprobe
+@setup printf '{"version":2,"plugins":{"uiprobe@market":[{"scope":"user","installPath":"%s/plugins/repos/uiprobe","version":"1.0.0"}]}}' {HOME} > {HOME}/.claude/plugins/installed_plugins.json
+@setup printf '{"enabledPlugins":{"uiprobe@market":true}}' > {HOME}/.claude/settings.json
+
+WAITFOR /describe a task/ 20
+TYPE /uiprobe
+KEY enter
+WAITFOR /uiprobe opened\./ 20
+WAITFOR /uiprobe status: ready/ 20
+WAITFOR /uiprobe log: opened/ 20
+# The pane draws its first frame a moment after it opens; Enter presses the
+# button only once it is on screen.
+WAITFOR /\[ go \]/ 20
+SHOT status-and-pane
+KEY enter
+WAITFOR /pressed go/ 20
+WAITFOR /press hook saw go on Pane/ 20
+SHOT pressed
+KEY down
+WAITFOR /scroll hook saw person by 1/ 20
+WAITFOR /uiprobe row 1/ 20
+SHOT scrolled
+KEY esc
+TYPE /uiask
+KEY enter
+WAITFOR /Pick one\?/ 20
+SHOT asking
+KEY enter
+WAITFOR /asked: Alpha/ 20
+SHOT asked
+KEY esc
+TYPE ping mod
+KEY enter
+WAITFOR /modrow user said ping mod/ 20
+WAITFOR /modrow assistant said Hello from faux\./ 20
+SHOT mod-drawn-messages
+EXPECT /modrow user said ping mod/
+EXPECT /asked: Alpha/
+EXPECT_NOT /panic|goroutine/

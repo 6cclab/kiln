@@ -351,6 +351,40 @@ func TestRenderCommandResult_EmptyNameFallsBackToResult(t *testing.T) {
 	}
 }
 
+// A mod's ui.render tree for CommandOutput replaces the engine's block, and
+// gets the command's props.
+func TestBridge_CommitCommandResult_ModDrawsTheRow(t *testing.T) {
+	b := NewBridge("/tmp")
+	defer b.Stop()
+	f := &fakeSink{}
+	b.setSink(f)
+	var gotProps map[string]any
+	t.Cleanup(func() { b.SetRowDrawer(nil) })
+	b.SetRowDrawer(func(component, id string, props map[string]any, width int) []string {
+		gotProps = props
+		if component != "CommandOutput" || id != "status" {
+			return nil
+		}
+		return []string{"drawn by a mod"}
+	})
+	b.CommitCommandResult("status", []string{"model     faux/faux-1", "auth      configured"})
+	deadline := time.Now().Add(15 * time.Second)
+	var printed []string
+	for time.Now().Before(deadline) {
+		if printed, _ = f.snapshot(); len(printed) >= 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	joined := strings.Join(printed, "\n")
+	if !strings.Contains(joined, "drawn by a mod") || strings.Contains(joined, "faux/faux-1") {
+		t.Errorf("committed block = %q, want the mod's row in place of the engine's", joined)
+	}
+	if gotProps["command"] != "status" || gotProps["text"] != "model     faux/faux-1\nauth      configured" || gotProps["isErrored"] != false {
+		t.Errorf("props = %v", gotProps)
+	}
+}
+
 // TestBridge_CommitCommandResult_NoElbowGlyph drives the real committed
 // block through the bridge's queue (not just the pure renderer), checking
 // the printed text carries no "⎿" and is tagged as a synthetic for Ctrl+O

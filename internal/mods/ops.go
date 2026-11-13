@@ -176,14 +176,22 @@ func (e *Engine) objectOf(v goja.Value) map[string]any {
 }
 
 // Has reports whether any mod hooks event, so a call site can skip building
-// a payload nobody reads.
+// a payload nobody reads. It never waits on the worker: UI paths call it.
 func (e *Engine) Has(event string) bool {
 	if e == nil || e.closed.Load() {
 		return false
 	}
-	var n int
-	if !e.w.do(func() { n = len(e.hooks[event]) }) {
+	ix := e.hooked.Load()
+	return ix != nil && ix.events[event]
+}
+
+// RendersComponent reports whether a ui.render hook may draw component: one
+// whose matcher names it, or names no component. A transcript row asks before
+// it waits on a mod to draw it.
+func (e *Engine) RendersComponent(component string) bool {
+	if e == nil || e.closed.Load() {
 		return false
 	}
-	return n > 0
+	ix := e.hooked.Load()
+	return ix != nil && (ix.components[component] || ix.components[""])
 }

@@ -18,6 +18,7 @@ import (
 // isInteractive: true }) and waits for every hook: mods register their
 // commands and tools here, so Commands and Tools are complete when it returns.
 func (e *Engine) SessionStart(ctx context.Context) {
+	e.resolveTables(ctx)
 	_, err := await(ctx, e, func(send func(struct{})) {
 		input, err := e.toJS(map[string]any{"cwd": e.opts.Cwd, "surface": "terminal", "isInteractive": true})
 		if err != nil {
@@ -38,6 +39,73 @@ func (e *Engine) SessionStart(ctx context.Context) {
 	})
 	if err != nil {
 		e.log.Warn("mods: session.start did not settle", "err", err)
+	}
+}
+
+// renderComponents are the components claude-code.d.ts's RenderComponent names;
+// ui.resolve is raised for each.
+var renderComponents = []string{"AskUserQuestion", "UserMessage", "AssistantMessage", "ToolUse", "ToolResult",
+	"ToolGroup", "ToolProgress", "CommandOutput", "Spinner", "TurnDuration", "InfoNotice", "SessionMode",
+	"PromptHint", "AbovePrompt", "Pane"}
+
+// resolveTables raises ui.resolve once per plugin and component, as the
+// plugins load: { surface: "terminal", component }. Core answers the
+// terminal's element table; what the chain of the OTHER plugins' hooks leaves
+// (a hook restyling an element, or leaving a key out, which draws as a
+// fragment) is the table that plugin's $.ui.resolve(e) reads. A plugin's own
+// hook is skipped for its own table.
+func (e *Engine) resolveTables(ctx context.Context) {
+	if len(e.hooks["ui.resolve"]) == 0 {
+		return
+	}
+	_, err := await(ctx, e, func(send func(struct{})) {
+		type job struct {
+			p         *plugin
+			component string
+			hooks     []*hook
+			input     goja.Value
+		}
+		var jobs []job
+		for _, p := range e.plugins {
+			for _, comp := range renderComponents {
+				input, err := e.toJS(map[string]any{"surface": "terminal", "component": comp})
+				if err != nil {
+					continue
+				}
+				var hs []*hook
+				for _, h := range e.hooks["ui.resolve"] {
+					if h.plugin != p && e.matches(h, input) {
+						hs = append(hs, h)
+					}
+				}
+				if len(hs) > 0 {
+					jobs = append(jobs, job{p, comp, hs, input})
+				}
+			}
+		}
+		var run func(i int)
+		run = func(i int) {
+			if i == len(jobs) {
+				send(struct{}{})
+				return
+			}
+			j := jobs[i]
+			c := &chain{e: e, event: "ui.resolve", hooks: j.hooks, core: func(goja.Value) goja.Value { return e.js.table }}
+			e.runChain(c, j.input, func(v goja.Value, err error) {
+				if err != nil {
+					e.log.Warn(fmt.Sprintf("mods: ui.resolve for %s %s failed; it reads kiln's table: %v", j.p.name, j.component, err), "plugin", j.p.name)
+				} else if e.js.resolve != nil {
+					if t, rerr := e.js.resolve(goja.Undefined(), v); rerr == nil {
+						e.tables[j.p.name+"\x00"+j.component] = t
+					}
+				}
+				run(i + 1)
+			})
+		}
+		run(0)
+	})
+	if err != nil {
+		e.log.Warn("mods: ui.resolve did not settle", "err", err)
 	}
 }
 
@@ -741,8 +809,12 @@ func (e *Engine) Render(ctx context.Context, site Site) []Drawing {
 				if err != nil {
 					e.log.Warn(fmt.Sprintf("%s: ui.render failed: %v", p.name, err), "plugin", p.name)
 				} else {
-					d := &decoder{vm: e.w.vm, elementSym: e.js.elementSym, textLeft: MaxTreeText,
-						addCallback: func(fn goja.Callable) Callback { return e.addCallback(siteKey, p, fn) }}
+					var d *decoder
+					d = &decoder{vm: e.w.vm, elementSym: e.js.elementSym, textLeft: MaxTreeText,
+						addCallback: func(fn goja.Callable) Callback {
+							return e.addCallback(siteKey, callbackEntry{plugin: p, fn: fn, element: d.elemKey,
+								component: site.Component, requestID: site.RequestID, surface: surfaceOf(site)})
+						}}
 					tree, derr := d.decodeTree(v)
 					if derr != nil {
 						e.dropCallbacks(siteKey)
@@ -764,6 +836,13 @@ func (e *Engine) Render(ctx context.Context, site Site) []Drawing {
 	return got
 }
 
+func surfaceOf(site Site) string {
+	if site.Surface == "" {
+		return "terminal"
+	}
+	return site.Surface
+}
+
 func renderEvent(site Site) map[string]any {
 	view := map[string]any{}
 	if site.ViewAgentID != "" {
@@ -772,21 +851,23 @@ func renderEvent(site Site) map[string]any {
 	scroll := map[string]any{"offset": 0, "bodyRows": site.BodyRows}
 	var props map[string]any
 	switch site.Component {
+	case "Pane":
+		props = map[string]any{
+			"title": site.Title, "isFocused": site.IsFocused, "bodyColumns": site.BodyColumns,
+			"placement": "dock", "scroll": scroll, "view": view,
+		}
 	case "AbovePrompt":
 		props = map[string]any{
 			"hasSurvey": false, "isWorking": site.IsWorking, "maxRows": site.BodyRows,
 			"bodyColumns": site.BodyColumns, "scroll": scroll, "view": view,
 		}
 	default:
-		props = map[string]any{
-			"title": site.Title, "isFocused": site.IsFocused, "bodyColumns": site.BodyColumns,
-			"placement": "dock", "scroll": scroll, "view": view,
+		props = site.Props
+		if props == nil {
+			props = map[string]any{}
 		}
 	}
-	surface := site.Surface
-	if surface == "" {
-		surface = "terminal"
-	}
+	surface := surfaceOf(site)
 	return map[string]any{
 		"surface":   surface,
 		"component": site.Component,
@@ -795,10 +876,10 @@ func renderEvent(site Site) map[string]any {
 	}
 }
 
-func (e *Engine) addCallback(siteKey string, p *plugin, fn goja.Callable) Callback {
+func (e *Engine) addCallback(siteKey string, entry callbackEntry) Callback {
 	e.nextCallback++
 	id := e.nextCallback
-	e.callbacks[id] = callbackEntry{plugin: p, fn: fn}
+	e.callbacks[id] = entry
 	e.siteCallbacks[siteKey] = append(e.siteCallbacks[siteKey], id)
 	return Callback{ID: id}
 }
@@ -811,8 +892,9 @@ func (e *Engine) dropCallbacks(siteKey string) {
 }
 
 // Press runs a Button's onPress (or any function prop) from the latest
-// drawing it came from. It does not wait for the function; a callback from
-// a drawing since replaced does nothing.
+// drawing it came from, through the ui.press hooks: core is the element's own
+// closure. It does not wait for the function; a callback from a drawing since
+// replaced does nothing.
 func (e *Engine) Press(cb Callback) {
 	if e.closed.Load() {
 		return
@@ -823,13 +905,27 @@ func (e *Engine) Press(cb Callback) {
 			e.log.Debug("mods: press of a callback no drawing holds", "id", cb.ID)
 			return
 		}
-		ret, err := entry.fn(goja.Undefined())
+		ev := map[string]any{"plugin": entry.plugin.name, "element": entry.element,
+			"component": entry.component, "requestId": entry.requestID, "surface": entry.surface}
+		input, err := e.toJS(ev)
 		if err != nil {
-			e.log.Warn(fmt.Sprintf("%s: onPress threw %v", entry.plugin.name, jsErr(err)), "plugin", entry.plugin.name)
 			return
 		}
-		e.then(ret, func(goja.Value) {}, func(r goja.Value) {
-			e.log.Warn(fmt.Sprintf("%s: onPress failed: %s", entry.plugin.name, reasonText(r)), "plugin", entry.plugin.name)
+		core := func(_ map[string]any, done func(map[string]any, error)) {
+			ret, err := entry.fn(goja.Undefined())
+			if err != nil {
+				e.log.Warn(fmt.Sprintf("%s: onPress threw %v", entry.plugin.name, jsErr(err)), "plugin", entry.plugin.name)
+				done(map[string]any{"element": entry.element}, nil)
+				return
+			}
+			e.then(ret, func(goja.Value) { done(map[string]any{"element": entry.element}, nil) }, func(r goja.Value) {
+				e.log.Warn(fmt.Sprintf("%s: onPress failed: %s", entry.plugin.name, reasonText(r)), "plugin", entry.plugin.name)
+				done(map[string]any{"element": entry.element}, nil)
+			})
+		}
+		p := e.startOp(context.Background(), "ui.press", input, nil, core)
+		e.then(p, func(goja.Value) {}, func(r goja.Value) {
+			e.log.Warn("mods: ui.press chain failed: "+reasonText(r), "plugin", entry.plugin.name)
 		})
 	})
 }

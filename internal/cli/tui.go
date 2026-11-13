@@ -185,8 +185,11 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	// Notification fires when the user is about to be asked for
 	// permission, before the prompt paints, as Claude Code's
 	// permission_prompt notification does.
+	deps.Mods.setNotifyHooks(notificationHooks(deps.Hooks, deps.Started.SessionID, deps.Started.TranscriptPath, deps.Cwd, bridge.HookNotice))
 	prompter := bridge.Prompter(deps.Cwd)
 	deps.Gate.SetPrompter(func(ctx context.Context, req permission.Request) (permission.PromptChoice, error) {
+		deps.Mods.dialogOpen(req.CallID, true)
+		defer deps.Mods.dialogOpen(req.CallID, false)
 		claudehooks.RunHooks(claudehooks.RunOptions{
 			Config: deps.Hooks(),
 			Event:  claudehooks.Notification,
@@ -295,6 +298,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		}
 	}
 	if modsDriver != nil {
+		bridge.SetRowDrawer(modsDriver.DrawRow)
 		modsDriver.SetSend(bridge.SendAsync, func(_, text string) {
 			bridge.SendAsync(tui.MsgFooterNote{Text: text})
 		})

@@ -58,7 +58,9 @@ func renderQuestionTabs(headers []string, current int) string {
 // there is nothing separate to mark.
 func askUserOptionLabel(opt AskUserOptionView, multiSelect, checked bool) string {
 	label := opt.Label
-	if opt.Description != "" {
+	// A description that only repeats the label ($.ui.ask fills it so,
+	// since the tool requires one) adds nothing.
+	if opt.Description != "" && opt.Description != opt.Label {
 		label += " — " + opt.Description
 	}
 	if !multiSelect {

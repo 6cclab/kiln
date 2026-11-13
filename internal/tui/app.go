@@ -853,6 +853,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cfg.Bridge != nil {
 			m = m.commitReconnectNote()
 			lines := append([]string{""}, RenderAssistantText(transcriptRenderer(m.contentWidth()).Render(msg.Text))...)
+			if rows := modAssistantRows(msg.Text, m.contentWidth()); rows != nil {
+				lines = append([]string{""}, rows...)
+			}
 			m.commit(lines)
 		}
 		return m, nil
@@ -963,6 +966,21 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgModsRedraw:
 		return m, nil
+
+	case MsgModsLog:
+		m.commitNote(msg.Text)
+		return m, nil
+
+	case MsgModsNotify:
+		return m, tea.Raw(msg.Seq)
+
+	case MsgModsCopy:
+		return m, copyToClipboardThen(msg.Text, func(err error) {
+			select {
+			case msg.Reply <- err:
+			default:
+			}
+		})
 
 	case MsgRefreshMode:
 		return m.refreshMode(), nil
@@ -3137,6 +3155,9 @@ func (m Model) liveTail(width int) []string {
 		// or 3", then the status line. Plan approval uses the same
 		// block anatomy, so it gets no chrome of its own here.
 		lines = append(lines, m.prompt.Render(width)...)
+		if m.cfg.Mods != nil {
+			lines = append(lines, m.cfg.Mods.NoticeLines(m.prompt.PendingCallID(), width)...)
+		}
 		lines = append(lines, "")
 	}
 
@@ -3246,6 +3267,8 @@ func (m Model) chromeLines(width, tailLen int) (lines []string, editorTop int, r
 			// removed entirely — there is no opt-in setting yet to bring it
 			// back, so a configured command is now silently unused.
 			lines = append(lines, m.renderStatusRow(width))
+			// A mod's pinned lines ($.ui.status) sit under it, dim.
+			lines = append(lines, m.cfg.Mods.StatusLines(width)...)
 		}
 	}
 

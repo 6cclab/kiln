@@ -34,6 +34,8 @@ const httpMaxBytes = 16 << 20
 var implemented = map[string]bool{
 	"ui.open": true, "ui.close": true, "ui.panes": true, "ui.toast": true, "ui.invalidate": true,
 	"ui.resolve": true, "ui.view": true,
+	"ui.ask": true, "ui.blit": true, "ui.copy": true, "ui.focus": true, "ui.log": true,
+	"ui.notice": true, "ui.notify": true, "ui.scroll": true, "ui.selection": true, "ui.status": true,
 	"state.get": true, "state.set": true,
 	"clock.now": true, "clock.every": true, "clock.after": true, "clock.sleep": true,
 	"env.get": true, "settings.read": true,
@@ -67,8 +69,6 @@ var implemented = map[string]bool{
 var documented = []string{
 	"audio.play", "audio.speak",
 	"mcp.connect", "process.spawn",
-	"ui.ask", "ui.blit", "ui.copy", "ui.focus", "ui.log", "ui.notice", "ui.notify",
-	"ui.scroll", "ui.selection", "ui.status",
 }
 
 func apiNames() []string {
@@ -111,6 +111,13 @@ func (e *Engine) apiCall(call goja.FunctionCall) goja.Value {
 	}
 	switch name {
 	case "ui.resolve":
+		// The table the other plugins' ui.resolve hooks left for this
+		// plugin's component (its own hook is skipped); kiln's when none did.
+		if o := exportMap(arg(0)); o != nil {
+			if t, ok := e.tables[p.name+"\x00"+strOf(o, "component")]; ok {
+				return t
+			}
+		}
 		return e.js.table
 	case "clock.every", "clock.after":
 		return e.startTimer(f, name == "clock.every", arg(0), arg(1))

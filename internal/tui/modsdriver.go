@@ -17,6 +17,15 @@ type ModsEngine interface {
 	Render(ctx context.Context, site mods.Site) []mods.Drawing
 	Press(cb mods.Callback)
 
+	// Has reports whether a mod hooks event; PersonScroll and PersonFocus raise
+	// ui.scroll and ui.focus for the person's keys on a pane (see mods.Engine).
+	Has(event string) bool
+	// RendersComponent reports whether a ui.render hook may draw component,
+	// so a transcript row waits on a mod only when one could draw it.
+	RendersComponent(component string) bool
+	PersonScroll(ctx context.Context, ev map[string]any) (offset int, moved bool)
+	PersonFocus(ctx context.Context, ev map[string]any) (element string, moved bool)
+
 	// The prompt events, raised for what the person does in the box.
 	PromptEdit(ctx context.Context, before mods.PromptBox, start, end int, inputText string)
 	PromptChange(ctx context.Context, box mods.PromptBox, origin map[string]any)
@@ -44,6 +53,11 @@ type ModsDriver struct {
 	width  int
 	band   []mods.Drawing
 	toasts func(plugin, text string)
+	// statuses are the plugins' pinned lines, notices the lines under an open
+	// dialog by tool call, selection the person's last mouse selection.
+	statuses  []modStatus
+	notices   map[string]string
+	selection string
 
 	// box is the prompt box as the TUI last published it ($.prompt.read).
 	box mods.PromptBox
@@ -209,6 +223,9 @@ func (d *ModsDriver) FocusNext() bool {
 // HandleKey routes a key to the focused pane; a pressed button runs off
 // the Bubble Tea goroutine.
 func (d *ModsDriver) HandleKey(msg tea.KeyPressMsg) bool {
+	if d.Focused() && d.handlePersonMove(msg.String()) {
+		return true
+	}
 	handled, press := d.panes.HandleKey(msg)
 	if press != nil {
 		cb := *press

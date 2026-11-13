@@ -7,6 +7,8 @@ const EVENTS = [
   'prompt.autocomplete', 'prompt.section', 'prompt.compose', 'prompt.attachment', 'prompt.mention',
   'session.send', 'session.receive', 'session.measure',
   'config.set', 'config.describe', 'telemetry.log', 'telemetry.mark', 'skill.prompt', 'attribution.text',
+  'ui.press', 'ui.scroll', 'ui.focus', 'ui.status', 'ui.log', 'ui.notice', 'ui.notify', 'ui.copy',
+  'ui.selection', 'ui.blit',
 ]
 
 export const register = (on: any) => {

@@ -357,6 +357,15 @@ func (p *PromptState) Active() bool {
 	return p.pending != nil || p.plan != nil || p.question != nil
 }
 
+// PendingCallID is the tool call id of the permission prompt that is up, ""
+// for any other prompt.
+func (p *PromptState) PendingCallID() string {
+	if p.pending == nil {
+		return ""
+	}
+	return p.pending.request.CallID
+}
+
 // AskTool arms a tool-permission prompt. reply is buffered by 1 so the
 // caller (the gate's prompter, blocked on <-reply) is released the instant
 // HandleKey answers, with no risk of the send blocking should the caller

@@ -41,6 +41,7 @@ var supportedEvents = map[string]bool{
 	"turn.step":           true,
 	"turn.complete":       true,
 	"ui.render":           true,
+	"ui.resolve":          true,
 	"session.end":         true,
 	"session.compact":     true,
 	"session.append":      true,
@@ -67,6 +68,16 @@ var supportedEvents = map[string]bool{
 	"telemetry.log":       true,
 	"telemetry.mark":      true,
 	"skill.prompt":        true,
+	"ui.press":            true,
+	"ui.scroll":           true,
+	"ui.focus":            true,
+	"ui.status":           true,
+	"ui.log":              true,
+	"ui.notice":           true,
+	"ui.notify":           true,
+	"ui.copy":             true,
+	"ui.selection":        true,
+	"ui.blit":             true,
 	// session.attach and session.detach are left out on purpose: kiln has
 	// one local terminal and no remote client to attach, so a hook on them
 	// logs "kiln does not raise" and never runs.
@@ -87,6 +98,7 @@ var pinnedFields = map[string][]string{
 	"command.describe":    {"command", "immediate", "provider"},
 	"agent.offer":         {"agent", "description", "source", "provider"},
 	"ui.render":           {"surface", "component", "requestId"},
+	"ui.resolve":          {"surface", "component"},
 	"prompt.submit":       {"origin", "command", "isMeta", "attachments"},
 	"prompt.fill":         {"origin"},
 	"prompt.suggest":      {"origin"},
@@ -102,6 +114,9 @@ var pinnedFields = map[string][]string{
 	"config.set":          {"key", "previous", "provider", "origin"},
 	"config.describe":     {"key", "provider"},
 	"telemetry.log":       {"to"},
+	"ui.press":            {"plugin", "element", "component", "requestId", "surface"},
+	"ui.scroll":           {"component", "requestId", "by", "bodyRows", "contentRows", "origin"},
+	"ui.focus":            {"component", "requestId", "plugin", "origin"},
 	"skill.prompt":        {"skill", "frontmatterProblem", "source", "pluginName", "path"},
 }
 
@@ -242,6 +257,11 @@ type Engine struct {
 	closed atomic.Bool
 	init   error
 
+	// hooked is what the hook table holds, published by the worker each time
+	// a mod loads (hooks are only added then), so Has and RendersComponent
+	// answer from any goroutine without waiting on a busy worker.
+	hooked atomic.Pointer[hookIndex]
+
 	// mediaItems are the attachments of the prompt submissions in flight.
 	mediaItems mediaStore
 
@@ -249,6 +269,7 @@ type Engine struct {
 	js struct {
 		elementSym  *goja.Symbol
 		table       goja.Value
+		resolve     goja.Callable
 		claudeCode  goja.Value
 		deepFreeze  goja.Callable
 		then        goja.Callable
@@ -271,9 +292,12 @@ type Engine struct {
 	hooks         map[string][]*hook
 	callbacks     map[int]callbackEntry
 	siteCallbacks map[string][]int
-	nextCallback  int
-	paneOwner     map[string]string
-	paneTitle     map[string]string
+	// tables are the element tables the ui.resolve chains left, by plugin and
+	// component ("plugin\x00Component"); a plugin with none reads the terminal's.
+	tables       map[string]goja.Value
+	nextCallback int
+	paneOwner    map[string]string
+	paneTitle    map[string]string
 	// warnedUnimpl remembers the plugin+call pairs an unimplemented $ call
 	// already logged, so a mod that polls one (squad calls $.session.id and
 	// $.fs.* every few seconds) warns once, not on every tick.
@@ -310,6 +334,9 @@ type hook struct {
 type callbackEntry struct {
 	plugin *plugin
 	fn     goja.Callable
+	// element is the key of the element the function was a prop of; component,
+	// requestID and surface name the site (ui.press's event).
+	element, component, requestID, surface string
 }
 
 // New starts an engine. It loads nothing until Load.
@@ -324,6 +351,7 @@ func New(host Host, opts Options) *Engine {
 		hooks:         map[string][]*hook{},
 		callbacks:     map[int]callbackEntry{},
 		siteCallbacks: map[string][]int{},
+		tables:        map[string]goja.Value{},
 		paneOwner:     map[string]string{},
 		paneTitle:     map[string]string{},
 		warnedUnimpl:  map[string]bool{},
@@ -387,6 +415,9 @@ func (e *Engine) setup() error {
 	}
 	e.js.elementSym = sym
 	e.js.table = h.Get("terminalTable")
+	if f, ok := goja.AssertFunction(h.Get("resolveTable")); ok {
+		e.js.resolve = f
+	}
 	e.js.claudeCode = h.Get("claudeCode")
 	for name, dst := range map[string]*goja.Callable{
 		"deepFreeze": &e.js.deepFreeze, "then": &e.js.then, "isAsyncIterator": &e.js.isAsyncIter,
@@ -527,7 +558,58 @@ func (e *Engine) evaluate(m Module, code string, opts map[string]any) error {
 	for _, h := range pending {
 		e.hooks[h.event] = append(e.hooks[h.event], h)
 	}
+	e.hooked.Store(indexHooks(e.hooks))
 	return nil
+}
+
+// hookIndex is a snapshot of the hook table: the events with a hook, and the
+// components ui.render hooks name ("" for a hook that may match any).
+type hookIndex struct {
+	events     map[string]bool
+	components map[string]bool
+}
+
+func indexHooks(hooks map[string][]*hook) *hookIndex {
+	ix := &hookIndex{events: map[string]bool{}, components: map[string]bool{}}
+	for ev, hs := range hooks {
+		if len(hs) > 0 {
+			ix.events[ev] = true
+		}
+	}
+	for _, h := range hooks["ui.render"] {
+		for _, c := range namedComponents(h.matcher) {
+			ix.components[c] = true
+		}
+	}
+	return ix
+}
+
+// namedComponents is the components a ui.render matcher names by string, one
+// or an any-of array of them; [""] when it names none or uses a pattern
+// (a RegExp) that may match any.
+func namedComponents(m *goja.Object) []string {
+	if m == nil {
+		return []string{""}
+	}
+	v := m.Get("component")
+	if v == nil {
+		return []string{""}
+	}
+	switch x := v.Export().(type) {
+	case string:
+		return []string{x}
+	case []any:
+		var out []string
+		for _, el := range x {
+			s, ok := el.(string)
+			if !ok {
+				return []string{""}
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	return []string{""}
 }
 
 // expandPattern is the events a pattern names: an event, or "noun.*" for every
@@ -1003,6 +1085,23 @@ func (e *Engine) matchValue(want, got goja.Value) bool {
 			}
 			r, err := test(wo, got)
 			return err == nil && r.ToBoolean()
+		case "Object":
+			// { props: { kind: "x" } } matches on the nested field, as the
+			// d.ts's ToolProgress example does.
+			gotObj, ok := got.(*goja.Object)
+			if !ok {
+				return false
+			}
+			for _, k := range wo.Keys() {
+				g := gotObj.Get(k)
+				if g == nil {
+					g = goja.Undefined()
+				}
+				if !e.matchValue(wo.Get(k), g) {
+					return false
+				}
+			}
+			return true
 		}
 	}
 	return want.StrictEquals(got)

@@ -97,9 +97,13 @@ type modsRuntime struct {
 
 	mu      sync.Mutex
 	pending map[string]mods.ToolHandle // agentID + "\x00" + tool call id
-	agents  map[string]*mods.AgentInfo
-	order   []string
-	turnSeq atomic.Int64
+	// dialogs are the tool calls whose permission dialog is up.
+	dialogs map[string]bool
+	// notifyHooks runs the person's Notification hooks for $.ui.notify (the TUI wires it).
+	notifyHooks func(ctx context.Context, title, text string)
+	agents      map[string]*mods.AgentInfo
+	order       []string
+	turnSeq     atomic.Int64
 
 	// mainTurn is the id of the main loop's running turn ("" between turns);
 	// $.turn.abort checks it. lane aborts it. stops end the per-conversation
@@ -355,15 +359,25 @@ func (r *modsRuntime) commands() []slashcommands.Command {
 			Description:  spec.Description,
 			ArgumentHint: spec.ArgumentHint,
 			Origin:       slashcommands.OriginPlugin,
-			Run: func(ctx context.Context, args string) (slashcommands.Result, error) {
-				text, ok, err := e.RunCommand(ctx, name, args)
-				if err != nil {
-					return slashcommands.Result{}, err
-				}
-				if !ok || text == "" {
-					return slashcommands.Result{}, nil
-				}
-				return slashcommands.Result{Output: strings.Split(strings.TrimRight(text, "\n"), "\n")}, nil
+			// The command.run hook may wait on the person ($.ui.ask, a
+			// permission prompt for $.tool.call), whose dialog the TUI's
+			// event loop draws, so it runs off that loop as Background
+			// (print mode runs it inline); Esc cancels it.
+			Run: func(_ context.Context, args string) (slashcommands.Result, error) {
+				return slashcommands.Result{
+					BusyLabel:  "Running /" + name,
+					CancelNote: "/" + name + " cancelled.",
+					Background: func(ctx context.Context) (slashcommands.Result, error) {
+						text, ok, err := e.RunCommand(ctx, name, args)
+						if err != nil {
+							return slashcommands.Result{}, err
+						}
+						if !ok || text == "" {
+							return slashcommands.Result{}, nil
+						}
+						return slashcommands.Result{Output: strings.Split(strings.TrimRight(text, "\n"), "\n")}, nil
+					},
+				}, nil
 			},
 		})
 	}
@@ -847,5 +861,6 @@ func (r *modsRuntime) services(base mods.Services) mods.Services {
 		return nil
 	}
 	r.promptServices(&svc)
+	r.uiServices(&svc)
 	return svc
 }

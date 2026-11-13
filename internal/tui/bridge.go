@@ -62,6 +62,9 @@ type sink interface {
 }
 
 type Bridge struct {
+	// drawRow lets a mod draw a transcript row in the engine's place
+	// (SetRowDrawer); nil draws the engine's.
+	drawRow func(component, requestID string, props map[string]any, width int) []string
 	// lastFault is the last EventFault message committed as an error
 	// block; see FaultCommitted.
 	lastFault string
@@ -634,9 +637,26 @@ func (b *Bridge) CommitCommandResult(name string, lines []string) {
 		return
 	}
 	rebuild := func(w int) []string {
+		if b.drawRow != nil {
+			props := map[string]any{"command": name, "args": "", "text": strings.Join(lines, "\n"), "isErrored": false}
+			if rows := b.drawRow("CommandOutput", name, props, w); rows != nil {
+				return append([]string{""}, rows...)
+			}
+		}
 		return append([]string{""}, RenderCommandResult(name, lines, w)...)
 	}
 	b.CommitSyntheticRebuild(rebuild(ruleWidth()), rebuild)
+}
+
+// SetRowDrawer binds the mods' drawing of transcript rows: it returns the
+// rows a mod's ui.render tree drew for the component, nil when none did.
+func (b *Bridge) SetRowDrawer(f RowDrawFunc) {
+	b.drawRow = f
+	if f == nil {
+		modRowDrawer.Store(nil)
+		return
+	}
+	modRowDrawer.Store(&f)
 }
 
 // Send delivers msg to the program's Update loop. tea.Program.Send already
@@ -1718,6 +1738,7 @@ func (b *Bridge) Prompter(cwd string) permission.Prompter {
 		reply := make(chan PromptChoice, 1)
 		b.Send(MsgPermissionPrompt{
 			Request: PermissionRequest{
+				CallID:           req.CallID,
 				ToolName:         req.ToolName,
 				PrimaryArg:       req.PrimaryArg,
 				OutsideWorkspace: req.OutsideWorkspace,

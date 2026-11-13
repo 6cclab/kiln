@@ -67,12 +67,13 @@ are out of scope here.)
 | `skill.prompt` | a skill's prompt is expanded for the model | ⚠️ raised where the `skill` tool returns a skill's body (skills, plus the custom commands the tool also serves) and where a `/skill` command builds its prompt, with the text after args are applied; a hook's `{text}` is what the model reads, a failed chain leaves it. `frontmatter` is every key the SKILL.md declares (`__proto__`, `constructor`, `prototype` left out, named in `frontmatterProblem`); `source` is `userSettings`, `projectSettings` or `plugin` (a command served by the tool has none, so reads `built-in`); `skill`, `source`, `pluginName`, `path`, `frontmatterProblem` pinned. Not raised for a custom `.claude/commands` slash command, nor for skills preloaded into a subagent (kiln has no preload) |
 | `attribution.text` | a commit / PR text is composed | ➖ never raised: kiln composes no commit trailer, PR footer, pre-ship mandate or commit-gate text (it has no `includeCoAuthoredBy` / attribution setting and no commit skills of its own), so there is nothing for the event to carry. A hook on it registers and logs "kiln does not raise …" |
 | `plugin.register` | a hooks module joins the chain | ➖ |
-| `ui.render` | before a component is drawn | ⚠️ `Pane` + `AbovePrompt` only |
-| `ui.resolve` | at load, per surface element table | ✅ |
-| `ui.press` | a Button or Markdown link is pressed | ⚠️ callback invoked; no hook chain |
-| `ui.input` / `ui.select` | an Input / Select changes | ➖ (no Input/Select elements) |
-| `ui.message` | a Client surface module posts data | ➖ |
-| `ui.scroll` / `ui.focus` | before a site's window / focus ring moves | ➖ |
+| `ui.render` | before a component is drawn | ⚠️ tree replacement only (a hook that rewrites `props` and calls `next` draws the engine's own row, and a `next`-less `{props}` is ignored). Drawn: `Pane`, `AbovePrompt`; `CommandOutput` (a multi-line slash command result); `UserMessage` (every "you" block: typed prompt, command echo, channel message; `origin` is always `{kind:"composer"}`, `isExpanded` true; no `task` / `from` / `onScreen`); `AssistantMessage` (a committed reply: `isFirstOfReply` always true, no `isSummary`); `ToolUse` (a call's block: `input` is the one identifying argument, not the whole tool input; `output` the result summary lines; `isInterrupted` false); `ToolGroup` (the collapsed read group: `calls` carry the same trimmed `tool`/`input`; `isActive` false, `isExpanded` false); `InfoNotice` (a one-line note: interrupt, decline, a one-line command result; `command` null). On a transcript row `requestId` is a stable hash of the row's text (`user-…`, `assistant-…`, `tool-…`, `group-…`, `notice-…`; the same in the live transcript and a replay), since kiln keeps no message or tool-call id on a rendered row. Rows are drawn once at commit, and again when a resize or Ctrl+O replays them. **No kiln counterpart, never raised:** `ToolResult` (kiln draws a call and its result as one block, so the result rides in `ToolUse.output`); `ToolProgress` (no `background_hint` row); `TurnDuration` (kiln draws no "worked for" row); `AskUserQuestion` (the dialog owns its keys and its answer, and a tree drawn over it would drop both; `$.ui.ask` still runs through `tool.call`); `Spinner` (the busy line is redrawn every tick from the Bubble Tea loop, which must not wait on a hook); `SessionMode` and `PromptHint` (kiln's footer and shortcut hint are one status row rebuilt per frame, not a component) |
+| `ui.resolve` | at load, per surface element table | ✅ raised once per plugin and component (all fifteen, surface `terminal`) when `session.start` is raised, through the OTHER plugins' hooks (a plugin's own hook is skipped for its own table); core answers kiln's table (Box, Text, Button, Raster, Image, Link, Markdown). A returned function replaces that element for the plugin, a key left out draws as a fragment, a non-object leaves kiln's table; `$.ui.resolve(e)` reads the result by `e.component`. A hook that restyles an element (a wrapper function) also changes it in every other plugin's trees |
+| `ui.press` | a Button or Markdown link is pressed | ✅ raised with `{ plugin, element (the Button's key), component, requestId, surface }`, all pinned; core runs the element's own `onPress`. A hook that answers without `next` takes the press |
+| `ui.input` / `ui.select` | an Input / Select changes | ➖ never raised: kiln draws no `Input` or `Select` element (only Box, Text, Button, Raster, Image, Link, Markdown), so nothing can change. A hook on them registers and logs "kiln does not raise …" |
+| `ui.message` / `ui.fault` | a `Client` posts data / fails on a surface | ➖ never raised: kiln has no `Client` element and no surface module to load, so none can post or fail |
+| `ui.scroll` / `ui.focus` | before a site's window / focus ring moves | ⚠️ raised for a `Pane` body (the person's Up/Down, Tab/Shift+Tab while it holds the keys; `$.ui.scroll` / `$.ui.focus` with origin `plugin`). Core moves to `e.offset` / lands on `e.element`; an answer without `next` leaves it. kiln's band above the prompt is not a scrollable window and has no focus ring, so nothing is raised for `AbovePrompt`; the mouse wheel does not scroll a pane, so no wheel event. Pinned: everything but `offset` / `element`; `pointer` is never set |
+| `ui.status` / `ui.log` / `ui.notice` / `ui.notify` / `ui.copy` / `ui.selection` / `ui.blit` | op events of the `$.ui.*` calls | ✅ raised by the call, every hook but the calling one, then core |
 
 ---
 
@@ -117,12 +118,16 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `ui.toast` | `(text, options?) => void` | ✅ |
 | `ui.invalidate` | `(event) => void` | ✅ |
 | `ui.resolve` | `(e) => Elements` | ✅ |
-| `ui.status` | `(text?) => void` | 🚫 |
-| `ui.log` | `(text, options?) => void` | 🚫 |
-| `ui.notice` | `(tool_use_id, text?) => void` | 🚫 |
-| `ui.blit` | `(args) => Promise<UiBlitResult>` | 🚫 |
-| `ui.ask` | `(question, options?) => Promise<string>` | ❌ |
-| `ui.scroll` / `ui.focus` | `(args) => Promise<…>` | ❌ |
+| `ui.status` | `(text?) => void` | ✅ one dim line per plugin under kiln's status row (first 2000 chars); `undefined` clears it |
+| `ui.log` | `(text, options?) => void` | ✅ `transcript` appends a dim system-notice row; `debug` goes to kiln's debug log only; a hook may rewrite `e.to` |
+| `ui.notice` | `(tool_use_id, text?) => void` | ✅ one dim line under the open permission dialog of that call; refused when no dialog is open for the id. Not refused for another plugin's `$.tool.call` run (kiln does not track who made it) |
+| `ui.blit` | `(args) => Promise<UiBlitResult>` | ⚠️ repaints a keyed `Raster` the plugin drew in its pane (`cells`); an `Image` source answers `{ deny }`: kiln draws an Image as its alt text |
+| `ui.ask` | `(question, options?) => Promise<string>` | ✅ a `tool.call` of `AskUserQuestion` through every hook but the calling one, answered by kiln's question dialog; the label chosen (multi-select comma-joined) or the text typed under Other. Rejects when dismissed and in a `-p` run. Option labels double as descriptions |
+| `ui.scroll` | `(args) => Promise<{ deny? }>` | ⚠️ `to: 'start' \| 'end'` with `in`, or `{ key }` of a Button, in this plugin's pane; `block` honoured. `{ requestId }` of a transcript row answers `{ deny }`: kiln moves none. Only a Button can be located by `key` |
+| `ui.focus` | `(args) => Promise<{ deny? }>` | ⚠️ lands the focus ring of a pane that holds the keys on a keyed Button; any other element is `{ deny }` (kiln's ring walks Buttons) |
+| `ui.copy` | `(args) => Promise<UiCopyResult>` | ✅ written as the mouse selection is (OSC 52 plus the local clipboard tool); `no-clipboard` when that tool fails |
+| `ui.selection` | `() => Promise<UiSelection \| undefined>` | ⚠️ the text of the last mouse selection (fullscreen only); no `requestId`, since kiln keeps no row identity for it. Cleared by the next click |
+| `ui.notify` | `(text, options?) => Promise<UiNotifyResult>` | ⚠️ writes the escape sequence of `preferredNotifChannel` (`auto` picks iTerm2, Kitty, Ghostty, else the bell), once the person's `Notification` hooks have run (`notification_type` `plugin_notification`, `message` the text, `title` the heading; a matcher is tested against the type, so a `permission_prompt` hook does not run). They run only under the TUI (a `-p` run has no notification wiring) |
 | `ui.view` | (kiln-only name) | ✅ always refuses — kiln has no per-agent transcript view |
 
 ### clock

@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/andrepato/harness/internal/agent"
 	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
+	slashcommands "github.com/andrepato/harness/internal/commands"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/mods"
 	"github.com/andrepato/harness/internal/msg"
@@ -264,9 +266,13 @@ func TestModsRuntime_ToolsAndCommands(t *testing.T) {
 	if len(cmds) != 1 || cmds[0].Name != "hi" {
 		t.Fatalf("commands() = %v, want one command named hi", cmds)
 	}
-	cmdRes, err := cmds[0].Run(context.Background(), "")
+	ran, err := cmds[0].Run(context.Background(), "")
 	if err != nil {
 		t.Fatalf("command Run error: %v", err)
+	}
+	cmdRes, err := slashcommands.RunBackground(context.Background(), &ran)
+	if err != nil {
+		t.Fatalf("command Background error: %v", err)
 	}
 	if len(cmdRes.Output) != 0 {
 		t.Fatalf("command Run output = %v, want none (no command.run hook)", cmdRes.Output)
@@ -501,4 +507,77 @@ func TestModsRuntime_RenderPressWithoutEngine(t *testing.T) {
 		t.Fatalf("Render() before start = %v, want nil", got)
 	}
 	r.Press(mods.Callback{}) // must not panic
+}
+
+// waitPluginSource's /wait command never settles, as one waiting on the
+// person ($.ui.ask) does until the TUI draws the dialog.
+const waitPluginSource = `
+export const register = (on) => {
+  on('session.start', async ($, e, next) => {
+    await $.command.register({ name: 'wait', description: 'Waits for the person' });
+    return next(e);
+  });
+  on('command.run', { command: 'wait' }, () => new Promise(() => {}));
+};
+`
+
+// TestModCommandRunsOffTheEventLoop: the TUI calls a command's Run on its
+// event loop, so a mod's command must hand its command.run hook to
+// Background: a hook waiting on a dialog the loop draws would otherwise
+// freeze kiln for good. Cancelling (Esc) ends the wait.
+func TestModCommandRunsOffTheEventLoop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	hooksDir := filepath.Join(root, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), []byte(`{"modules":["./register.js"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksDir, "register.js"), []byte(waitPluginSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := newModsRuntime([]claudeplugins.Plugin{{Key: "waiter@mp", Name: "waiter", Root: root}}, "model-x", 2000)
+	if errs := r.start(context.Background(), t.TempDir(), "test-session", egressDeps{}); len(errs) != 0 {
+		t.Fatalf("start() errors: %v", errs)
+	}
+	t.Cleanup(r.close)
+	cmds := r.commands()
+	if len(cmds) != 1 || cmds[0].Name != "wait" {
+		t.Fatalf("commands() = %v, want /wait", cmds)
+	}
+
+	type ran struct {
+		res slashcommands.Result
+		err error
+	}
+	got := make(chan ran, 1)
+	go func() {
+		res, err := cmds[0].Run(context.Background(), "")
+		got <- ran{res, err}
+	}()
+	var res slashcommands.Result
+	select {
+	case r := <-got:
+		if r.err != nil {
+			t.Fatalf("Run error: %v", r.err)
+		}
+		res = r.res
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run waited on the mod's command.run hook: the TUI's event loop would freeze")
+	}
+	if res.Background == nil || res.BusyLabel == "" {
+		t.Fatalf("Run = %+v, want the hook as Background with a BusyLabel", res)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := res.Background(ctx); done <- err }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelling did not end the wait on the hook")
+	}
 }
