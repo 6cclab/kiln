@@ -57,14 +57,15 @@ func discoveryIndex(list []skills.Skill, config claudesettings.SkillDiscovery, t
 }
 
 // Suggestions are derived from the latest user request, not tool output or
-// other runtime context. Append them without rewriting the conversation.
+// other runtime context, and go only into the request answering it
+// (answeringUser). Append them without rewriting the conversation.
 func skillDiscoveryContext(records []tools.SkillRecord, config claudesettings.SkillDiscovery, budget func() int) func(context.Context, []msg.Message) ([]msg.Message, error) {
 	return skillDiscoveryContextObserved(records, config, budget, nil)
 }
 
 func skillDiscoveryContextObserved(records []tools.SkillRecord, config claudesettings.SkillDiscovery, budget func() int, observe func(name, reason string, included bool)) func(context.Context, []msg.Message) ([]msg.Message, error) {
 	return func(_ context.Context, transcript []msg.Message) ([]msg.Message, error) {
-		if config.Mode == "search" || config.Mode == "catalog" {
+		if config.Mode == "search" || config.Mode == "catalog" || !answeringUser(transcript) {
 			return transcript, nil
 		}
 		for i := len(transcript) - 1; i >= 0; i-- {
@@ -112,8 +113,8 @@ func skillDiscoveryContextObserved(records []tools.SkillRecord, config claudeset
 					}
 				}
 			}
-			ranked := tools.SearchSkills(rest, query, 20)
-			matched := tools.SkillSearchText(rest, query, remaining)
+			ranked := tools.SuggestSkills(rest, query, 20)
+			matched := tools.SkillSuggestionText(rest, query, remaining)
 			if observe != nil {
 				for _, r := range ranked {
 					included := strings.Contains("\n"+matched, "\n"+r.Name+": ")

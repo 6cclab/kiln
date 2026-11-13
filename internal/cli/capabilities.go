@@ -51,14 +51,15 @@ func capabilitySearchBudget(config claudesettings.SkillDiscovery, session *mcpSe
 }
 
 // capabilitySuggestionContext appends bounded metadata matches for the latest
-// user request. It does not admit MCP tools; explicit capability_search does.
+// user request, to the request answering it only (answeringUser). It does
+// not admit MCP tools; explicit capability_search does.
 func capabilitySuggestionContext(catalog tools.CapabilityCatalogFunc, config claudesettings.SkillDiscovery, budget func() int) func(context.Context, []msg.Message) ([]msg.Message, error) {
 	return capabilitySuggestionContextObserved(catalog, config, budget, nil)
 }
 
 func capabilitySuggestionContextObserved(catalog tools.CapabilityCatalogFunc, config claudesettings.SkillDiscovery, budget func() int, observe func(kind, name, reason string, included bool)) func(context.Context, []msg.Message) ([]msg.Message, error) {
 	return func(ctx context.Context, transcript []msg.Message) ([]msg.Message, error) {
-		if config.Mode == "search" || config.Mode == "catalog" {
+		if config.Mode == "search" || config.Mode == "catalog" || !answeringUser(transcript) {
 			return transcript, nil
 		}
 		for i := len(transcript) - 1; i >= 0; i-- {
@@ -105,7 +106,7 @@ func capabilitySuggestionContextObserved(catalog tools.CapabilityCatalogFunc, co
 					seen[key] = true
 				}
 			}
-			for _, h := range tools.SearchCapabilities(c, query, 5) {
+			for _, h := range tools.SuggestCapabilities(c, query, 5) {
 				if seen[h.Kind+"\x00"+h.Name] {
 					continue
 				}

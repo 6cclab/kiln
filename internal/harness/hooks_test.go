@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/tool"
 )
 
 // TestBeforeToolBlocksWithoutExecuting asserts an OnBeforeTool handler
@@ -277,6 +279,37 @@ steps:
 	want := `tool "bash" is not available to this agent: it is not in the active tool set`
 	if got != want {
 		t.Fatalf("toolResult content = %q, want %q", got, want)
+	}
+}
+
+// TestDeferredMCPToolRefusalNamesToolSearch: a registered MCP tool the
+// model calls before enabling it (it knows the name from the index) is
+// refused with the one-step recovery: tool_search on its exact name.
+func TestDeferredMCPToolRefusalNamesToolSearch(t *testing.T) {
+	const name = "mcp__studio__read_file"
+	rig := newTestRig(t, `
+model: faux-1
+steps:
+  - tool_call: {name: `+name+`, args: {}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "done"
+`, []string{"read", "tool_search"})
+	noop := func(context.Context, json.RawMessage, tool.Update, tool.Invocation) (tool.Result, error) {
+		return tool.Text("ok"), nil
+	}
+	rig.H.AddTools(
+		&tool.Tool{Name: "tool_search", Parameters: json.RawMessage(`{"type":"object"}`), Execute: noop},
+		&tool.Tool{Name: name, Parameters: json.RawMessage(`{"type":"object"}`), Execute: noop},
+	)
+	lane := rig.mustLane("main")
+	if _, err := lane.Prompt(context.Background(), "go", nil); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	tr := findToolResult(t, lane, "tc1")
+	got := msg.TextOf(tr.Content)
+	if !tr.IsError || !strings.Contains(got, "Enable it with tool_search, query \""+name+"\"") {
+		t.Fatalf("toolResult = %q (IsError %v), want the tool_search recovery", got, tr.IsError)
 	}
 }
 

@@ -181,7 +181,7 @@ func TestMapToolNameSnakeCaseTitleCased(t *testing.T) {
 		"exit_plan_mode":     "Plan",
 		"session_search":     "Session search",
 		"todo_write":         "Todo write",
-		"mcp__fixture__echo": "Mcp fixture echo",
+		"mcp__fixture__echo": "fixture · echo",
 	}
 	for name, want := range cases {
 		if got := MapToolName(name); got != want {
@@ -388,6 +388,9 @@ func TestSummarizeLinesDropsLeadingBlankLines(t *testing.T) {
 }
 
 func TestCollapsedSummaryHidesModelInstructions(t *testing.T) {
+	prev := renderWidth
+	t.Cleanup(func() { renderWidth = prev })
+	SetRenderWidth(120) // these summaries fit one row; wrapping is tested in bridge_blocks_test.go
 	bg := collapsedSummary("bash_background", []string{"Started bash_1: npm run dev", `Read it with bash_output({id: "bash_1"}).`}, false, false)
 	if len(bg) != 1 || bg[0] != "running in the background as bash_1 · /bashes to check on it" {
 		t.Errorf("bash_background summary = %q", bg)
@@ -404,6 +407,9 @@ func TestCollapsedSummaryHidesModelInstructions(t *testing.T) {
 // An answered ask_user_question block reads as the questions and answers,
 // not the model-facing "User has answered your questions: ..." string.
 func TestCollapsedSummaryShowsAnsweredQuestions(t *testing.T) {
+	prev := renderWidth
+	t.Cleanup(func() { renderWidth = prev })
+	SetRenderWidth(120)
 	result := `User has answered your questions: "Which scope should I take?"="Everything", "Which checks should block the merge?"="Lint, E2E"`
 	got := collapsedSummary("ask_user_question", []string{result}, false, false)
 	want := []string{"Which scope should I take? → Everything", "Which checks should block the merge? → Lint, E2E"}
@@ -417,5 +423,26 @@ func TestCollapsedSummaryShowsAnsweredQuestions(t *testing.T) {
 	decline := []string{"The user declined to answer."}
 	if got := collapsedSummary("ask_user_question", decline, false, false); got[0] != decline[0] {
 		t.Errorf("decline = %q", got)
+	}
+}
+
+// An MCP tool's label names the server once and the tool, not the raw
+// qualified id: a plugin server is qualified plugin_<plugin>_<server>, so
+// "mcp__plugin_design-studio_design-studio__list_frames" read as "mcp
+// plugin design-studio design-studio list frames".
+func TestMapToolName_MCPTools(t *testing.T) {
+	for id, want := range map[string]string{
+		"mcp__plugin_design-studio_design-studio__list_frames": "design-studio · list frames",
+		"mcp__plugin_tools_github__create_issue":               "tools:github · create issue",
+		"mcp__incidents__list_incidents":                       "incidents · list incidents",
+		"mcp__broken":                                          "Mcp broken",
+		"bash":                                                 "Bash",
+	} {
+		if got := MapToolName(id); got != want {
+			t.Errorf("MapToolName(%q) = %q, want %q", id, got, want)
+		}
+	}
+	if got := promptToolName("mcp__plugin_design-studio_design-studio__list_frames"); got != "list_frames from the design-studio MCP server" {
+		t.Errorf("promptToolName = %q", got)
 	}
 }

@@ -365,3 +365,20 @@ func TestLiveDB(t *testing.T) {
 	}
 	t.Logf("live db query hit count: %d", n)
 }
+
+// A row an older indexer wrote with a REAL timestamp (1790093573280.0) is
+// still found: it failed every search that hit it with "Scan error on
+// column index 2, name \"timestamp\"".
+func TestSearchEntriesReadsRealTimestamps(t *testing.T) {
+	s := openTestSearch(t)
+	if _, err := s.db.Exec("INSERT INTO entries(session_id, entry_id, timestamp, role, text) VALUES ('s1', 'e1', 1790093573280.0, 'user', 'fantasy reactions')"); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := s.SearchEntries(context.Background(), "fantasy", 5)
+	if err != nil {
+		t.Fatalf("SearchEntries: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Timestamp != 1790093573280 {
+		t.Fatalf("hits = %+v, want the one entry with timestamp 1790093573280", hits)
+	}
+}

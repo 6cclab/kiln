@@ -62,6 +62,11 @@ type sink interface {
 }
 
 type Bridge struct {
+	// contextTokens re-measures the context from the session
+	// (Lane.ContextTokens) when a response's usage row is not a
+	// measurement of it (compaction.TokensFromUsage returns 0); set by
+	// Wire, nil in tests that drive handleEvent directly.
+	contextTokens func() (int, error)
 	// drawRow lets a mod draw a transcript row in the engine's place
 	// (SetRowDrawer); nil draws the engine's.
 	drawRow func(component, requestID string, props map[string]any, width int) []string
@@ -1060,6 +1065,9 @@ type MsgStreamText struct{ Text string }
 // (max(3, ToolOutputTokens/400), app.ts's own formula).
 func (b *Bridge) Wire(started *agent.Started, toolOutputTokens int) func() {
 	b.ts = &turnState{toolStarts: map[string]toolStart{}}
+	if started.Lane != nil {
+		b.contextTokens = started.Lane.ContextTokens
+	}
 	events := started.Harness.Events()
 
 	unsub := events.OnAll(func(ev harness.Event) {
@@ -1356,15 +1364,30 @@ func (b *Bridge) handleEvent(ev harness.Event, ts *turnState, toolOutputTokens i
 			// Everything the request carried is in context, cached or not.
 			// Counting only uncached input read ~0% once the conversation
 			// is served from the prompt cache.
-			u := ev.UsageRow
+			u := *ev.UsageRow
 			v := u.Input + u.CacheRead + u.CacheWrite + u.Output
-			contextUsed = &v
-			// The busy line's figure is the same quantity (design: "58k
-			// tokens" beside a 29% meter), so both read one number. It
-			// used to be the session's Input+Output, which collapses to
-			// tens of tokens once the conversation is cached.
-			ts.lastContext = v
-			tokens = &v
+			// A response that ran a server tool (web search) reports every
+			// sampling pass added together, not the context: it pushed the
+			// meter from 7% to 23% and back to 12% on the next request.
+			// Measure from the session instead, or leave the meter be.
+			measured := true
+			if compaction.TokensFromUsage(u) == 0 && v > 0 {
+				measured = false
+				if b.contextTokens != nil {
+					if n, err := b.contextTokens(); err == nil && n > 0 {
+						v, measured = n, true
+					}
+				}
+			}
+			if measured {
+				contextUsed = &v
+				// The busy line's figure is the same quantity (design: "58k
+				// tokens" beside a 29% meter), so both read one number. It
+				// used to be the session's Input+Output, which collapses to
+				// tens of tokens once the conversation is cached.
+				ts.lastContext = v
+				tokens = &v
+			}
 		}
 		if ev.UsageTotals != nil {
 			c := ev.UsageTotals.Cost.Total

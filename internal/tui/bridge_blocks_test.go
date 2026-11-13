@@ -9,6 +9,7 @@ import (
 	"github.com/andrepato/harness/internal/claude/permission"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // waitForOneSent polls f.snapshot() until at least one message has been
@@ -227,7 +228,7 @@ func TestBusyLabelForToolStart_Verbs(t *testing.T) {
 		{"edit", "edit", map[string]any{"path": "src/math.js"}, "Editing math.js"},
 		{"write", "write", map[string]any{"path": "new/deep/file.txt"}, "Writing file.txt"},
 		{"todo_write", "todo_write", nil, "Planning"},
-		{"mcp tool", "mcp__grafana__query_prometheus", nil, "Running Mcp grafana query prometheus"},
+		{"mcp tool", "mcp__grafana__query_prometheus", nil, "Running grafana · query prometheus"},
 		{"unmapped tool falls back to Running <Name>", "some_custom_tool", nil, "Running Some custom tool"},
 	}
 	for _, c := range cases {
@@ -508,5 +509,87 @@ func TestHookNotice_RewriteStaysOutOfTranscript(t *testing.T) {
 			t.Fatal("a hook's own message was not committed")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A tool result that is one long line (a minified JSON MCP result) is
+// clipped by the screen rows it wraps to, not by its line count: it used
+// to fill the screen because it was only one line. Expanding (verbose)
+// still shows all of it.
+func TestBridge_ToolEnd_LongSingleLineResultCollapsesByRows(t *testing.T) {
+	prev := renderWidth
+	t.Cleanup(func() { renderWidth = prev })
+	const width = 80
+	SetRenderWidth(width)
+
+	long := `{"slug":"ynm","ties":[` + strings.Repeat(`{"id":"90f5a51b-b9ee-4183","heading":"Users and login"},`, 40) + `{}]}`
+	render := func(verbose bool) []string {
+		b := NewBridge("/tmp")
+		defer b.Stop()
+		b.SetVerbose(verbose)
+		f := &fakeSink{}
+		b.setSink(f)
+		ts := &turnState{toolStarts: map[string]toolStart{}}
+		b.handleEvent(harness.Event{
+			Type: harness.EventToolEnd, ToolCallID: "t1", ToolName: "mcp__design-studio__read_spec",
+			ToolResult: &msg.ToolResultMessage{Content: msg.Blocks{msg.Text("status: revised\n" + long)}},
+		}, ts, 4000)
+		call, ok := waitForOneSent(t, f).(msgCommitToolCall)
+		if !ok {
+			t.Fatal("want a tool block")
+		}
+		return FitLines(RenderToolCall(call.View), width, "     ")
+	}
+
+	collapsed := render(false)
+	// Label rule, then 3 result rows, then the expand hint.
+	if len(collapsed) != 5 {
+		t.Fatalf("collapsed block is %d rows, want 5:\n%s", len(collapsed), strings.Join(collapsed, "\n"))
+	}
+	if hint := ansi.Strip(collapsed[4]); !strings.Contains(hint, "lines (ctrl+o to expand)") {
+		t.Errorf("last row = %q, want the expand hint", hint)
+	}
+	if row := ansi.Strip(collapsed[3]); !strings.HasPrefix(row, "     ") {
+		t.Errorf("wrapped row = %q, want the 5-column hanging indent", row)
+	}
+	full := strings.Join(render(true), "")
+	if !strings.Contains(strings.ReplaceAll(ansi.Strip(full), " ", ""), `{}]}`) {
+		t.Error("verbose block lost the end of the result")
+	}
+}
+
+// A web search response's usage adds up every sampling pass, so it is not
+// the context: the meter takes the session's own measure instead
+// (Lane.ContextTokens), or holds its last figure, while cost still updates.
+// It jumped from 7% to 23% and back to 12% on the next request.
+func TestBridge_UsageFromWebSearchDoesNotInflateContext(t *testing.T) {
+	row := &msg.Usage{Input: 4, CacheRead: 173578, CacheWrite: 53056, Output: 3983, TotalTokens: 230621,
+		ServerToolUse: &msg.ServerToolUse{WebSearchRequests: 1}}
+	totals := &msg.Usage{}
+	totals.Cost.Total = 1.84
+	usage := func(measure func() (int, error)) MsgUsage {
+		b := NewBridge("/tmp")
+		defer b.Stop()
+		b.contextTokens = measure
+		f := &fakeSink{}
+		b.setSink(f)
+		b.handleEvent(harness.Event{Type: harness.EventUsage, UsageRow: row, UsageTotals: totals}, &turnState{toolStarts: map[string]toolStart{}}, 4000)
+		got, ok := waitForOneSent(t, f).(MsgUsage)
+		if !ok {
+			t.Fatalf("sent %#v, want MsgUsage", got)
+		}
+		return got
+	}
+
+	got := usage(func() (int, error) { return 121000, nil })
+	if got.ContextUsed == nil || *got.ContextUsed != 121000 {
+		t.Errorf("ContextUsed = %v, want the session's measure 121000, not the summed 230621", got.ContextUsed)
+	}
+	got = usage(nil)
+	if got.ContextUsed != nil {
+		t.Errorf("ContextUsed = %d with nothing to measure from, want nil (the meter holds)", *got.ContextUsed)
+	}
+	if got.Cost == nil || *got.Cost != 1.84 {
+		t.Errorf("Cost = %v, want 1.84: the cost still updates", got.Cost)
 	}
 }

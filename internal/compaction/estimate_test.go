@@ -159,3 +159,25 @@ func TestShouldCompact(t *testing.T) {
 		})
 	}
 }
+
+// A response that ran a web search reports the input of every sampling
+// pass added together (a real session: 226,634 input tokens on a request
+// whose next request, containing all of it, was 122,184), so it is not a
+// context measurement: the count falls back to the request before it and
+// estimates the rest, instead of jumping to the inflated sum.
+func TestCalculateContextTokensSkipsServerToolUsage(t *testing.T) {
+	before := msg.AssistantMessage{StopReason: msg.StopToolUse, Usage: msg.Usage{Input: 4, CacheWrite: 64886, Output: 193, TotalTokens: 65083}}
+	result := msg.ToolResultMessage{Content: msg.Blocks{msg.Text("spec text")}}
+	searched := msg.AssistantMessage{StopReason: msg.StopStop, Content: msg.Blocks{msg.Text("found it")}, Usage: msg.Usage{
+		Input: 4, CacheRead: 173578, CacheWrite: 53056, Output: 3983, TotalTokens: 230621,
+		ServerToolUse: &msg.ServerToolUse{WebSearchRequests: 1},
+	}}
+	if got := TokensFromUsage(searched.Usage); got != 0 {
+		t.Fatalf("TokensFromUsage(web search response) = %d, want 0 (not a measurement)", got)
+	}
+	got := estimateContextTokens([]msg.Message{msg.UserMessage{Content: msg.Blocks{msg.Text("hi")}}, before, result, searched})
+	want := 65083 + EstimateTokens(result) + EstimateTokens(searched)
+	if got.Tokens != want {
+		t.Fatalf("Tokens = %d, want %d (the earlier request plus an estimate of what followed it)", got.Tokens, want)
+	}
+}

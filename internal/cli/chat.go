@@ -1647,6 +1647,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 
 	if dir := setupScratchpad(gate, cwd, started.SessionID); dir != "" {
 		sizing.setScratchpad(scratchpadInstructions(dir))
+		hub.SetResultDir(dir)
 	}
 	if resumedOnTarget {
 		sizeForResumedTarget(ctx, started, resumedLastTarget)

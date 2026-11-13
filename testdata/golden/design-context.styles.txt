@@ -7,7 +7,6 @@
   [fg=#3f372c]■[/] [fg=#ece4d4]Free[/]                                                                              [fg=#a39781]123.2k[/] [fg=#a39781]  96%[/]  
                                                                                                     
   [fg=#a39781]Selection[/]                                                                                         
-  scout agent · metadata included · suggested by metadata match                                     
   scout agent · result included · exact-name invocation                                             
                                                                                                     
   [fg=#a39781]Settings[/]                                                                                          

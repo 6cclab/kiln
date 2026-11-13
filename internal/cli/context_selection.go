@@ -84,11 +84,17 @@ func lastTypedUser(transcript []msg.Message) string {
 	return ""
 }
 
+// BeginRequest starts a fresh set of transient decisions when the typed
+// request changed. Steps of the same request's tool loop keep them:
+// suggestions go only into the first step (answeringUser), and /context
+// still reports them for the whole request.
 func (l *contextSelectionLedger) BeginRequest(transcript []msg.Message) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.transient = map[string]slashcommands.ContextSelection{}
-	l.requestUser = lastTypedUser(transcript)
+	if user := lastTypedUser(transcript); user != l.requestUser {
+		l.transient = map[string]slashcommands.ContextSelection{}
+		l.requestUser = user
+	}
 }
 
 // Record is called only by context transforms that add this request's

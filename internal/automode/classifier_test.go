@@ -484,3 +484,44 @@ func TestResolver_FastRoleElseSession(t *testing.T) {
 		t.Error("unknown session provider: want an error")
 	}
 }
+
+// TestAutoModeResolver_ClaudeCodeOrder: auto mode's classifier runs where
+// Claude Code's does: CLAUDE_CODE_AUTO_MODE_MODEL, then the fast role, then
+// Claude Sonnet on the session's provider, then the session model (a
+// provider with no Sonnet, such as a local one).
+func TestAutoModeResolver_ClaudeCodeOrder(t *testing.T) {
+	reg := fakeRegistry{
+		models: map[string]provider.Model{
+			"anthropic/claude-sonnet-5":   {ID: "claude-sonnet-5", Provider: "anthropic"},
+			"anthropic/claude-sonnet-4-6": {ID: "claude-sonnet-4-6", Provider: "anthropic"},
+			"anthropic/claude-opus-5-5":   {ID: "claude-opus-5-5", Provider: "anthropic"},
+			"local/small":                 {ID: "small", Provider: "local"},
+		},
+		providers: map[string]provider.Provider{"anthropic": nil, "local": nil},
+	}
+	opus := func() provider.Model { return provider.Model{ID: "claude-opus-5-5", Provider: "anthropic"} }
+	local := func() provider.Model { return provider.Model{ID: "big", Provider: "local"} }
+
+	check := func(name string, got provider.Model, err error, want string) {
+		t.Helper()
+		if err != nil || got.Provider+"/"+got.ID != want {
+			t.Errorf("%s: model %s/%s err %v, want %s", name, got.Provider, got.ID, err, want)
+		}
+	}
+	_, m, err := AutoModeResolver(reg, "", opus)()
+	check("default", m, err, "anthropic/claude-sonnet-5")
+	_, m, err = AutoModeResolver(reg, "local/small", opus)()
+	check("fast role", m, err, "local/small")
+	_, m, err = AutoModeResolver(reg, "", local)()
+	check("no sonnet on provider", m, err, "local/big")
+
+	t.Setenv(AutoModeModelEnv, "claude-sonnet-4-6")
+	_, m, err = AutoModeResolver(reg, "local/small", opus)()
+	check("env model id", m, err, "anthropic/claude-sonnet-4-6")
+	t.Setenv(AutoModeModelEnv, "local/small")
+	_, m, err = AutoModeResolver(reg, "", opus)()
+	check("env provider/model", m, err, "local/small")
+	t.Setenv(AutoModeModelEnv, "nope")
+	_, m, err = AutoModeResolver(reg, "", opus)()
+	check("unknown env model", m, err, "anthropic/claude-sonnet-5")
+}

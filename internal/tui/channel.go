@@ -41,10 +41,12 @@ func frameChannelEvent(source, content string, meta map[string]any) string {
 // as a turn, routed exactly as a submitted prompt is: queued behind a waiting
 // permission prompt or a background command, steered into a running turn, or
 // started as a fresh turn when idle. Unlike handleSubmit it does no command
-// or history handling — a channel push is always model-bound prose.
+// or history handling — a channel push is always model-bound prose. A queued
+// push is shown only by the live region's m.queued rows, until the lane's
+// drain commits it (MsgQueue{Len:0}), as a typed follow-up is; committing a
+// "queued" block here as well showed every push twice.
 func (m Model) injectChannelEvent(ev MsgChannelEvent) (tea.Model, tea.Cmd) {
 	framed := frameChannelEvent(ev.Source, ev.Content, ev.Meta)
-	width := m.contentWidth()
 	switch {
 	case m.prompt.Active(), m.background != nil:
 		// A prompt is waiting on an answer, or a background command is up
@@ -52,7 +54,6 @@ func (m Model) injectChannelEvent(ev MsgChannelEvent) (tea.Model, tea.Cmd) {
 		// (same as handleSubmit's background branch).
 		m.queued = append(m.queued, framed)
 		m.spinner.SetQueueLen(len(m.queued))
-		m.commit(RenderQueuedFollowUp(framed, width))
 		return m, nil
 	case m.busy:
 		m.queued = append(m.queued, framed)
@@ -61,10 +62,9 @@ func (m Model) injectChannelEvent(ev MsgChannelEvent) (tea.Model, tea.Cmd) {
 				m.commit(RenderError(err.Error()))
 			}
 		}
-		m.commit(RenderQueuedFollowUp(framed, width))
 		return m, nil
 	default:
-		m.commit(RenderUserMessage(framed, width))
+		m.commit(RenderUserMessage(framed, m.contentWidth()))
 		return m.beginTurn(framed, framed, nil)
 	}
 }

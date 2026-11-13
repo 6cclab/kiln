@@ -42,23 +42,30 @@ func TestRuntimeContextPreservesRequestPrefix(t *testing.T) {
 		return tools.CapabilityCatalog{Skills: []tools.SkillRecord{{Name: "database", Description: description}}}
 	}
 	records := []tools.SkillRecord{{Name: "database", Description: description}}
+	// Suggestions go only into the request answering the user
+	// (answeringUser), so their input ends at the user's message; the rest
+	// refresh on every step of a tool loop.
 	for _, tc := range []struct {
-		name   string
-		apply  transform
-		change func()
+		name       string
+		apply      transform
+		change     func()
+		answerOnly bool
 	}{
-		{"memory", memoryContext(store, "project", func() bool { return true }), func() { putMemory("database after") }},
-		{"capabilities", capabilitySuggestionContext(catalog, settings.SkillDiscovery{}, func() int { return 256 }), func() { description = "database after" }},
-		{"skills", skillDiscoveryContext(records, settings.SkillDiscovery{}, func() int { return 256 }), func() { records[0].Description = "database after" }},
+		{"memory", memoryContext(store, "project", func() bool { return true }), func() { putMemory("database after") }, false},
+		{"capabilities", capabilitySuggestionContext(catalog, settings.SkillDiscovery{}, func() int { return 256 }), func() { description = "database after" }, true},
+		{"skills", skillDiscoveryContext(records, settings.SkillDiscovery{}, func() int { return 256 }), func() { records[0].Description = "database after" }, true},
 		{"task state", state.transform(256), func() {
 			state.accept(savedTodos(t, "second", tools.TodoItem{Content: "database after", Status: tools.TodoInProgress}))
-		}},
+		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := []msg.Message{
 				msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("database")}},
 				msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.NewToolCall("read-1", "read", map[string]any{"path": "schema.sql"})}},
 				msg.ToolResultMessage{Role: msg.RoleToolResult, ToolCallID: "read-1", ToolName: "read", Content: msg.Blocks{msg.Text("existing schema")}},
+			}
+			if tc.answerOnly {
+				input = input[:1]
 			}
 			encode := func(v any) string {
 				t.Helper()
@@ -116,6 +123,48 @@ func TestRuntimeContextDoesNotBecomeDiscoveryQuery(t *testing.T) {
 			}
 			if len(got) != len(input) {
 				t.Fatal("derived memory was searched as if it were the user's request")
+			}
+		})
+	}
+}
+
+// Skill and capability suggestions go into the request answering the user,
+// not into every step of the tool loop that follows: appended after each
+// tool result, they were the newest thing the model saw, so it answered them
+// on every step ("these suggestions only matched on 'ok, go'").
+func TestSuggestionsOnlyAnswerTheUser(t *testing.T) {
+	records := []tools.SkillRecord{{Name: "database", Description: "database work"}}
+	catalog := func() tools.CapabilityCatalog { return tools.CapabilityCatalog{Skills: records} }
+	user := msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("database")}}
+	call := msg.AssistantMessage{Role: msg.RoleAssistant, Content: msg.Blocks{msg.NewToolCall("read-1", "read", map[string]any{"path": "schema.sql"})}}
+	result := msg.ToolResultMessage{Role: msg.RoleToolResult, ToolCallID: "read-1", ToolName: "read", Content: msg.Blocks{msg.Text("existing schema")}}
+	memory := msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("<memory>…</memory>")}, KilnHook: "RuntimeContext"}
+	steer := msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text("database again")}}
+	for _, tc := range []struct {
+		name  string
+		apply func(context.Context, []msg.Message) ([]msg.Message, error)
+	}{
+		{"skills", skillDiscoveryContext(records, settings.SkillDiscovery{}, func() int { return 256 })},
+		{"capabilities", capabilitySuggestionContext(catalog, settings.SkillDiscovery{}, func() int { return 256 })},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, step := range []struct {
+				name  string
+				input []msg.Message
+				want  bool
+			}{
+				{"answering the user", []msg.Message{user}, true},
+				{"after derived memory", []msg.Message{user, memory}, true},
+				{"a tool step", []msg.Message{user, call, result}, false},
+				{"a steered message", []msg.Message{user, call, result, steer}, true},
+			} {
+				got, err := tc.apply(context.Background(), step.input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if added := len(got) > len(step.input); added != step.want {
+					t.Errorf("%s: suggestions added = %v, want %v", step.name, added, step.want)
+				}
 			}
 		})
 	}

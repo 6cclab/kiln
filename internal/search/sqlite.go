@@ -550,8 +550,11 @@ func (s *Search) SearchEntries(ctx context.Context, query string, limit int) ([]
 		limit = defaultLimit
 	}
 
+	// FTS5 columns are untyped: rows an older indexer wrote hold REAL
+	// timestamps (1790093573280.0), which Scan cannot put in an int64, so
+	// one such row failed every search that hit it.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT session_id, entry_id, timestamp,
+		SELECT session_id, entry_id, CAST(timestamp AS INTEGER),
 		       snippet(entries, 4, char(171), char(187), char(8230), ?) AS snip,
 		       rank
 		FROM entries WHERE entries MATCH ? ORDER BY rank LIMIT ?

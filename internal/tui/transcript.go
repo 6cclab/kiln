@@ -187,7 +187,36 @@ func MapToolName(id string) string {
 	if strings.EqualFold(id, "ask_user_question") {
 		return "Question"
 	}
+	if server, tool, ok := splitMCPToolName(id); ok {
+		// "mcp__plugin_design-studio_design-studio__list_frames" read as
+		// "mcp plugin design-studio design-studio list frames".
+		return server + " · " + strings.Join(strings.Fields(strings.ReplaceAll(tool, "_", " ")), " ")
+	}
 	return titleCase(id)
+}
+
+// splitMCPToolName splits an MCP tool's qualified id
+// (mcp__<server>__<tool>) into a readable server name and the tool. A
+// plugin's server is qualified as plugin_<plugin>_<server>
+// (plugins.MCPServers); it reads as the server alone when the two names
+// match, as they usually do, and as <plugin>:<server> otherwise.
+func splitMCPToolName(id string) (server, tool string, ok bool) {
+	rest, ok := strings.CutPrefix(id, "mcp__")
+	if !ok {
+		return "", "", false
+	}
+	server, tool, ok = strings.Cut(rest, "__")
+	if !ok || server == "" || tool == "" {
+		return "", "", false
+	}
+	if qualified, isPlugin := strings.CutPrefix(server, "plugin_"); isPlugin {
+		if n := len(qualified); n%2 == 1 && qualified[n/2] == '_' && qualified[:n/2] == qualified[n/2+1:] {
+			server = qualified[:n/2]
+		} else if p, s, cut := strings.Cut(qualified, "_"); cut && p != "" && s != "" {
+			server = p + ":" + s
+		}
+	}
+	return server, tool, true
 }
 
 // toolStatusColor picks the kiln status colour for a tool call's label and
@@ -286,10 +315,45 @@ func diffCountsRow(d *ToolDiff) string {
 // model, not output for the reader: it reads "loaded · N lines" (ctrl+o
 // shows it all). Everything else is unchanged. The live and replay block
 // builders both call this, so a toggle renders the same block.
+//
+// The result comes back as screen rows, not logical lines, so the
+// collapsed cap (collapsedResultLines) and its "… +N lines" hint count
+// what the reader actually sees: a minified JSON MCP result is one line
+// but filled the whole screen, since only whole lines were ever clipped.
 func collapsedSummary(toolName string, summary []string, failed, verbose bool) []string {
-	if verbose || failed || len(summary) == 0 {
+	if verbose || len(summary) == 0 {
 		return summary
 	}
+	if !failed {
+		summary = readerSummary(toolName, summary)
+	}
+	return wrapResultRows(summary, ruleWidth())
+}
+
+// wrapResultRows wraps each result line to the rows RenderToolCall gives
+// it under the "→ " arrow and the continuation indent. A wrapped part gets
+// the same 5-column hanging indent the commit's FitLines(…, "     ")
+// gives it, so a collapsed block looks the same as before, only shorter.
+func wrapResultRows(lines []string, width int) []string {
+	lead := VisibleWidth(G().Action) + 1
+	if c := VisibleWidth(continuationIndent); c > lead {
+		lead = c
+	}
+	if width-lead < 20 {
+		return lines // too narrow to wrap usefully; FitLines still wraps at commit
+	}
+	// Every wrapped part lands after continuationIndent in RenderToolCall.
+	hang := strings.Repeat(" ", 5-VisibleWidth(continuationIndent))
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, FitLines([]string{line}, width-lead, hang)...)
+	}
+	return out
+}
+
+// readerSummary rewrites a successful result whose text is for the model
+// into what the reader needs from it.
+func readerSummary(toolName string, summary []string) []string {
 	switch strings.ToLower(toolName) {
 	case "skill":
 		return []string{fmt.Sprintf("loaded · %d lines", len(summary))}

@@ -715,6 +715,12 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.modeHintText = copiedNote(msg)
 		return m, tea.Tick(copiedNoteDuration, func(time.Time) tea.Msg { return msgClearModeHint{gen: gen} })
 
+	case msgOpened:
+		m.modeHintGen++
+		gen := m.modeHintGen
+		m.modeHintText = openedNote(msg)
+		return m, tea.Tick(copiedNoteDuration, func(time.Time) tea.Msg { return msgClearModeHint{gen: gen} })
+
 	case tea.MouseWheelMsg:
 		if !m.fullscreen {
 			return m, nil

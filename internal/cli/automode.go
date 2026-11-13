@@ -15,18 +15,16 @@ import (
 
 // wireAutoMode binds kiln's auto mode classifier (internal/automode) to the
 // gate, whatever mode the session starts in: Shift+Tab can enter auto mode
-// later. The classifier runs on cfg.FastRole — modelRoles.fast from user
-// settings or --settings only, never a repository's — when it resolves,
-// else on the session's current model. A virtual session model (kiln/auto)
+// later. The classifier runs on CLAUDE_CODE_AUTO_MODE_MODEL, else
+// cfg.FastRole — modelRoles.fast from user settings or --settings only,
+// never a repository's — else Claude Sonnet on the session's provider, as
+// in Claude Code, else on the session's current model
+// (automode.AutoModeResolver). A virtual session model (kiln/auto)
 // is never streamed, so then it runs on the router's direct target, which
 // virtualDirect reports.
 func wireAutoMode(gate *permission.Gate, reg *provider.Registry, started *agent.Started, memoryText string, cfg claudesettings.AutoModeConfig, virtualDirect func() (provider.Model, bool)) {
-	var roles map[string]string
-	if cfg.FastRole != "" {
-		roles = map[string]string{"fast": cfg.FastRole}
-	}
 	gate.SetClassifier(&automode.Classifier{
-		Resolve: automode.Resolver(reg, roles, func() provider.Model { return classifierSessionModel(started.Model, virtualDirect) }),
+		Resolve: automode.AutoModeResolver(reg, cfg.FastRole, func() provider.Model { return classifierSessionModel(started.Model, virtualDirect) }),
 		Config:  cfg,
 		Memory:  memoryText,
 		// The classifier's calls are part of what the session costs: they

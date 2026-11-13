@@ -107,10 +107,25 @@ func agentCapabilityAction(name string) string {
 // reads skill bodies, agent prompts or MCP schemas, and only includes MCP
 // tools in the active scope.
 func SearchCapabilities(c CapabilityCatalog, query string, limit int) []CapabilityHit {
+	return searchCapabilities(c, capabilityTerms(query), limit, capabilityScore)
+}
+
+// SuggestCapabilities is SearchCapabilities for the suggestions kiln adds
+// on its own to a typed request: only entries whose metadata carries
+// enough of the request's content words (suggestionScore), none for an
+// acknowledgement like "ok go ahead".
+func SuggestCapabilities(c CapabilityCatalog, query string, limit int) []CapabilityHit {
+	terms := suggestionTerms(query)
+	if len(terms) == 0 {
+		return nil
+	}
+	return searchCapabilities(c, terms, limit, suggestionScore)
+}
+
+func searchCapabilities(c CapabilityCatalog, terms []string, limit int, capabilityScore func(name, description string, terms []string) (int, string)) []CapabilityHit {
 	if limit <= 0 || limit > 10 {
 		limit = 5
 	}
-	terms := capabilityTerms(query)
 	var hits []CapabilityHit
 	// The skill tool resolves the last record with a qualified name. Search
 	// must describe that same record when catalogs contain duplicates.

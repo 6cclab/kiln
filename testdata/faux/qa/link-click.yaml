@@ -1,0 +1,3 @@
+model: faux-1
+steps:
+  - text: "See [PR 45](https://github.com/6cclab/ynm/pull/45) or plain https://example.com/x done"
