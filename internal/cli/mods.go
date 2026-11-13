@@ -15,10 +15,12 @@ import (
 	"github.com/andrepato/harness/internal/agent"
 	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	slashcommands "github.com/andrepato/harness/internal/commands"
+	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/mods"
 	"github.com/andrepato/harness/internal/msg"
+	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/tool"
 	"github.com/andrepato/harness/internal/tui"
 )
@@ -92,6 +94,17 @@ type modsRuntime struct {
 	agents  map[string]*mods.AgentInfo
 	order   []string
 	turnSeq atomic.Int64
+
+	// mainTurn is the id of the main loop's running turn ("" between turns);
+	// $.turn.abort checks it. lane aborts it. stops end the per-conversation
+	// watchers attach started.
+	mainTurn  atomic.Value // string
+	lane      atomic.Pointer[harness.Lane]
+	stops     []func()
+	sessionID string
+	// endReason is session.end's reason: "prompt_input_exit" leaving the
+	// interactive UI, "other" when a -p run finishes.
+	endReason string
 }
 
 // newModsRuntime collects the hooks modules of the active plugins; nil
@@ -118,6 +131,8 @@ func newModsRuntime(plugins []claudeplugins.Plugin, model string, window int) *m
 		window:  window,
 		pending: map[string]mods.ToolHandle{},
 		agents:  map[string]*mods.AgentInfo{},
+
+		endReason: "prompt_input_exit",
 	}
 	r.host = &modsHost{r: r}
 	return r
@@ -164,6 +179,9 @@ type egressDeps struct {
 	turns    func(ctx context.Context) (int, error)
 	complete func(ctx context.Context, req mods.ModelRequest) (map[string]any, error)
 	fork     func(ctx context.Context, prompt string) (map[string]any, error)
+	// services are the conversation-reaching $ methods (compaction, append,
+	// messages); start adds the ones that need the runtime itself.
+	services mods.Services
 }
 
 // start loads every module and runs session.start; then the mods' tools
@@ -180,7 +198,9 @@ func (r *modsRuntime) start(ctx context.Context, cwd, sessionID string, dep egre
 		McpCall: dep.mcpCall, Classify: dep.classify,
 		Version: dep.version, Repo: dep.repo, Turns: dep.turns,
 		Complete: dep.complete, Fork: dep.fork,
+		Services: r.services(dep.services),
 	})
+	r.sessionID = sessionID
 	errs := e.Load(r.modules)
 	for _, err := range errs {
 		diag.L().Warn("mods: module failed to load", "error", err)
@@ -201,6 +221,10 @@ func (r *modsRuntime) get() *mods.Engine {
 
 func (r *modsRuntime) close() {
 	if e := r.get(); e != nil {
+		e.SessionEnd(r.endReason, r.sessionID, "")
+		for _, stop := range r.stops {
+			stop()
+		}
 		e.Close()
 	}
 	if r != nil {
@@ -364,6 +388,9 @@ func (r *modsRuntime) attach(agentID, model string, h *harness.Harness) {
 		started, index, answer, usage = time.Now(), 0, "", mods.Usage{}
 		id := turnID
 		mu.Unlock()
+		if agentID == "" {
+			r.mainTurn.Store(id)
+		}
 		e.TurnStart(agentID, id)
 		return nil
 	})
@@ -414,9 +441,43 @@ func (r *modsRuntime) attach(agentID, model string, h *harness.Harness) {
 			Usage: usage, Answer: answer, Model: model,
 			IsAborted: status == harness.StatusAborted, IsFailed: status == harness.StatusFailed}
 		mu.Unlock()
+		if agentID == "" {
+			r.mainTurn.Store("")
+		}
 		e.TurnComplete(end)
 		return nil
 	})
+	// Chunks of the response stream to the hooks of the step it belongs to.
+	h.Events().On(harness.EventMessageUpdate, func(ev harness.Event) {
+		if ev.StreamEvent == nil {
+			return
+		}
+		chunk := stepChunk(*ev.StreamEvent)
+		if chunk == nil {
+			return
+		}
+		mu.Lock()
+		s := step
+		mu.Unlock()
+		if s != nil {
+			s.Chunk(chunk)
+		}
+	})
+	// A compaction asks the session.compact hooks first.
+	hooks.OnCompactDecision(func(ctx context.Context, info harness.CompactInfo) (harness.CompactVerdict, error) {
+		e := r.get()
+		if e == nil || mods.IsRaised(ctx, "session.compact") {
+			return harness.CompactVerdict{}, nil
+		}
+		d := e.SessionCompact(ctx, agentID, info.Trigger, info.Instructions, modsMessages(info.Messages, false))
+		v := harness.CompactVerdict{Skip: d.Skip}
+		if d.Rewritten {
+			ins := d.Instructions
+			v.Instructions = &ins
+		}
+		return v, nil
+	})
+	r.watchRows(agentID, h)
 	hooks.OnBeforeTool(func(ctx context.Context, call msg.ToolCall) (harness.BeforeToolResult, error) {
 		e := r.get()
 		if e == nil || r.isModTool(call.Name) {
@@ -616,4 +677,112 @@ func (r *modsRuntime) newDriver() *tui.ModsDriver {
 	d := tui.NewModsDriver(r)
 	r.driver.Store(d)
 	return d
+}
+
+// stepChunk maps one provider stream event to claude-code.d.ts's
+// TurnStepChunk, nil for an event that is no chunk (start/end markers).
+func stepChunk(ev msg.StreamEvent) mods.StepChunk {
+	switch ev.Type {
+	case msg.EventTextDelta:
+		return mods.StepChunk{"kind": "text", "index": ev.ContentIndex, "text": ev.Delta}
+	case msg.EventThinkingDelta:
+		return mods.StepChunk{"kind": "thinking", "index": ev.ContentIndex, "text": ev.Delta}
+	case msg.EventToolCallStart:
+		c := mods.StepChunk{"kind": "tool", "index": ev.ContentIndex, "id": "", "name": ""}
+		if ev.Partial != nil && ev.ContentIndex < len(ev.Partial.Content) {
+			if tc, ok := ev.Partial.Content[ev.ContentIndex].(msg.ToolCall); ok {
+				c["id"], c["name"] = tc.ID, claudeToolName(tc.Name)
+			}
+		}
+		return c
+	case msg.EventToolCallDelta:
+		return mods.StepChunk{"kind": "input", "index": ev.ContentIndex, "json": ev.Delta}
+	case msg.EventDone, msg.EventError:
+		return mods.StepChunk{"kind": "stop", "stopReason": string(ev.Reason), "usage": nil}
+	}
+	return nil
+}
+
+// watchRows raises session.append for each row the conversation commits, until
+// the runtime closes.
+func (r *modsRuntime) watchRows(agentID string, h *harness.Harness) {
+	lane, err := h.Lane("main")
+	if err != nil {
+		return
+	}
+	_, updates, unsub := lane.Watch()
+	r.mu.Lock()
+	r.stops = append(r.stops, unsub)
+	r.mu.Unlock()
+	crash.Go(func() {
+		for en := range updates {
+			e := r.get()
+			if e == nil {
+				continue
+			}
+			if row, ok := appendRow(agentID, en); ok {
+				e.SessionAppend(row)
+			}
+		}
+	})
+}
+
+// appendRow describes a committed entry as a session.append row.
+func appendRow(agentID string, en session.Entry) (mods.AppendRow, bool) {
+	row := mods.AppendRow{UUID: en.ID, AgentID: agentID}
+	switch en.Type {
+	case session.EntryCompaction:
+		row.Type, row.Door = "system", "compaction"
+		row.Content = []any{map[string]any{"type": "text", "text": en.Summary}}
+		return row, true
+	case session.EntryMessage:
+	default:
+		return row, false
+	}
+	switch m := derefMessage(en.Message).(type) {
+	case msg.UserMessage:
+		row.Type, row.Role = "user", "user"
+		row.Content = apiBlocks(m.Content)
+		switch {
+		case m.KilnHook != "":
+			row.Door, row.Origin = "hook-context", map[string]any{"kind": "engine"}
+		case m.KilnTyped != "":
+			row.Door, row.Origin = "prompt", map[string]any{"kind": "user"}
+		default:
+			row.Door = "delivery"
+		}
+	case msg.AssistantMessage:
+		row.Type, row.Role, row.Door = "assistant", "assistant", "response"
+		row.Content = apiBlocks(m.Content)
+		row.Origin = map[string]any{"kind": "model", "model": m.Model}
+	case msg.ToolResultMessage:
+		row.Type, row.Role, row.Door = "user", "user", "tool-result"
+		block := map[string]any{"type": "tool_result", "tool_use_id": m.ToolCallID, "content": apiBlocks(m.Content)}
+		if m.IsError {
+			block["is_error"] = true
+		}
+		row.Content = []any{block}
+	default:
+		return row, false
+	}
+	return row, true
+}
+
+// services are the conversation-reaching $ methods: what the caller wired
+// (messages, compaction) plus the ones the runtime answers itself (the
+// running turn, queuing a row).
+func (r *modsRuntime) services(base mods.Services) mods.Services {
+	svc := base
+	svc.AbortTurn = func(_ context.Context, turnID string) error {
+		running, _ := r.mainTurn.Load().(string)
+		if running == "" || running != turnID {
+			return fmt.Errorf("turn %q is not the running turn (%q)", turnID, running)
+		}
+		lane := r.lane.Load()
+		if lane == nil {
+			return fmt.Errorf("no running turn to abort")
+		}
+		return lane.Abort()
+	}
+	return svc
 }

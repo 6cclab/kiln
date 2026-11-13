@@ -1312,6 +1312,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Claude Code. They start now in a trusted folder or print mode, and
 	// otherwise once the trust dialog is accepted, like plugin hooks.
 	modsRT.attach("", modelID, started.Harness)
+	if modsRT != nil {
+		modsRT.lane.Store(started.Lane)
+		if args.Print {
+			modsRT.endReason = "other"
+		}
+	}
 	var registryRef *slashcommands.Registry
 	startMods := func() {
 		if modsRT == nil {
@@ -1467,6 +1473,35 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				}
 				transcript := append(append([]msg.Message{}, branch...), userMsg(prompt))
 				return runModel(ctx, "mod · model.fork", strm, m, "", transcript, maxTokens, ""), nil
+			},
+			services: mods.Services{
+				Messages: func(ctx context.Context, agentID string, api bool) ([]any, error) {
+					if agentID != "" {
+						return nil, fmt.Errorf("kiln keeps a subagent's conversation to itself: no transcript for %s", agentID)
+					}
+					return modsMessages(automode.BranchMessages(ctx, started.Lane), api), nil
+				},
+				Compact: func(ctx context.Context, instructions string) (mods.CompactResult, error) {
+					before, _ := started.Lane.EstimateConversationTokens()
+					var custom *string
+					if instructions != "" {
+						custom = &instructions
+					}
+					if err := started.Lane.Compact(harness.WithCompactTrigger(ctx, "plugin"), custom); err != nil {
+						return mods.CompactResult{}, err
+					}
+					after, _ := started.Lane.EstimateConversationTokens()
+					return mods.CompactResult{
+						Messages:     modsMessages(automode.BranchMessages(ctx, started.Lane), false),
+						TokensBefore: before, TokensAfter: after,
+					}, nil
+				},
+				Append: func(_ context.Context, agentID, text string) (string, error) {
+					if agentID != "" {
+						return "", fmt.Errorf("kiln keeps a subagent's conversation to itself")
+					}
+					return started.Lane.SteerEntry(text, "")
+				},
 			},
 			root: root,
 			model: func() string {

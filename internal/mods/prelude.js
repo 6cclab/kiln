@@ -189,35 +189,74 @@
       typeof v[Symbol.asyncIterator] === 'function'
   }
 
-  // Runs a streaming hook's generator to its end; chunks it yields go nowhere
-  // (kiln streams none through mods), its return value is the step's result.
-  function drain(gen) {
+  // A feed carries the chunks of one stage of a streaming chain (the hooks
+  // beneath, or core) to the hook above, which reads them with next(e).
+  // discard feeds keep nothing: nobody reads the outermost stage's.
+  function makeFeed(discard) {
+    return { q: [], waiters: [], discard: !!discard }
+  }
+  function feedPush(feed, chunk) {
+    if (feed.discard) return
+    feed.q.push(chunk)
+    var w = feed.waiters.splice(0)
+    for (var i = 0; i < w.length; i++) w[i]()
+  }
+
+  // Runs a streaming hook's generator to its end; the chunks it yields go to
+  // its stage's feed (the hook above reads them), its return value is the
+  // stage's result.
+  function drain(gen, feed) {
     return new Promise(function (resolve, reject) {
       function step(r) {
         if (r.done) return resolve(r.value)
+        feedPush(feed, r.value)
         gen.next().then(step, reject)
       }
       gen.next().then(step, reject)
     })
   }
 
-  // What next(e) returns on a streaming event: an async iterator that yields
-  // nothing and returns what the rest of the chain resolves to.
-  function streamOf(p) {
-    var done = false
+  // What next(e) returns on a streaming event: an async iterator over the
+  // stage beneath. It yields that stage's chunks as they come, then returns
+  // what the rest of the chain resolves to.
+  function streamOf(p, feed) {
+    var settled = false
+    var failed = false
+    var value
+    var err
+    var finished = false
+    function wake() {
+      if (!feed) return
+      var w = feed.waiters.splice(0)
+      for (var i = 0; i < w.length; i++) w[i]()
+    }
+    Promise.resolve(p).then(
+      function (v) { settled = true; value = v; wake() },
+      function (e) { settled = true; failed = true; err = e; wake() }
+    )
     var it = {
       next: function () {
-        if (done) return Promise.resolve({ done: true, value: undefined })
-        done = true
-        return Promise.resolve(p).then(function (v) { return { done: true, value: v } })
+        if (finished) return Promise.resolve({ done: true, value: undefined })
+        return new Promise(function (resolve, reject) {
+          function attempt() {
+            if (feed && feed.q.length > 0) return resolve({ done: false, value: feed.q.shift() })
+            if (settled) {
+              finished = true
+              return failed ? reject(err) : resolve({ done: true, value: value })
+            }
+            if (feed) feed.waiters.push(attempt)
+            else Promise.resolve(p).then(function () { attempt() }, function () { attempt() })
+          }
+          attempt()
+        })
       },
       return: function (v) {
-        done = true
+        finished = true
         return Promise.resolve({ done: true, value: v })
       },
-      throw: function (err) {
-        done = true
-        return Promise.reject(err)
+      throw: function (e) {
+        finished = true
+        return Promise.reject(e)
       },
     }
     it[Symbol.asyncIterator] = function () { return it }
@@ -274,6 +313,8 @@
     isAsyncIterator: isAsyncIterator,
     drain: drain,
     streamOf: streamOf,
+    makeFeed: makeFeed,
+    feedPush: feedPush,
     rejected: rejected,
     makeDollar: makeDollar,
     assign: assign,

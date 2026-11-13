@@ -326,9 +326,16 @@ func (l *Lane) Steer(text string) error {
 // SteerAs is Steer for a follow-up the user typed, recorded as typed
 // (msg.UserMessage.KilnTyped); see PromptAs.
 func (l *Lane) SteerAs(text, typed string) error {
+	_, err := l.SteerEntry(text, typed)
+	return err
+}
+
+// SteerEntry is SteerAs returning the id of the entry it queued, which is the
+// row's uuid once the run loop drains it onto the branch.
+func (l *Lane) SteerEntry(text, typed string) (string, error) {
 	st, err := l.laneState()
 	if err != nil {
-		return err
+		return "", err
 	}
 	entryID := l.newID()
 	entryWrite := session.EntryWrite{Entry: session.Entry{
@@ -339,13 +346,13 @@ func (l *Lane) SteerAs(text, typed string) error {
 	st.Inbox = append(st.Inbox, session.InboxItem{EntryID: entryID, Kind: "steer"})
 	w, err := session.SetValue(session.LaneStateValue(l.name), st)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := l.h.opts.Storage.Commit([]session.Write{entryWrite, w}); err != nil {
-		return err
+		return "", err
 	}
 	l.postQueueUpdate()
-	return nil
+	return entryID, nil
 }
 
 // ClearInbox withdraws every follow-up queued via Steer that the run loop

@@ -52,6 +52,7 @@ type Hooks struct {
 	beforeTool       []func(ctx context.Context, call msg.ToolCall) (BeforeToolResult, error)
 	afterTool        []func(ctx context.Context, call msg.ToolCall, result *msg.ToolResultMessage) error
 	beforeCompaction []func(ctx context.Context) error
+	compactDecision  []func(ctx context.Context, info CompactInfo) (CompactVerdict, error)
 	beforeNavigation []func(ctx context.Context, targetID *string) error
 }
 
@@ -366,4 +367,41 @@ func (l *Lane) invokeAfterResponse(ctx context.Context, m *msg.AssistantMessage)
 			l.h.events.Emit(Event{Type: EventHandlerError, Lane: l.name, HookName: "after_response", Err: err})
 		}
 	}
+}
+
+// CompactInfo describes a compaction about to summarise: why it runs, the
+// instructions steering the summary, and the conversation it reads.
+type CompactInfo struct {
+	// Trigger is "manual" (/compact), "auto" (the threshold or an overflow) or
+	// "plugin" (a caller that named itself with WithCompactTrigger).
+	Trigger      string
+	Instructions string
+	Messages     []msg.Message
+}
+
+// CompactVerdict is an OnCompactDecision handler's answer: a non-empty Skip
+// leaves the conversation as it is, and Instructions (when non-nil) replace
+// the ones the compaction was asked with.
+type CompactVerdict struct {
+	Skip         string
+	Instructions *string
+}
+
+// OnCompactDecision registers a handler consulted before a compaction
+// calls its summariser, once it is known there is something to summarise.
+// The first handler that returns a Skip wins; Instructions rewrites compose
+// in registration order.
+func (h *Hooks) OnCompactDecision(fn func(ctx context.Context, info CompactInfo) (CompactVerdict, error)) func() {
+	h.compactDecision = append(h.compactDecision, fn)
+	i := len(h.compactDecision) - 1
+	return func() { h.compactDecision[i] = nil }
+}
+
+type compactTriggerKey struct{}
+
+// WithCompactTrigger names who asked for a compaction made under ctx, so the
+// OnCompactDecision handlers report it ("plugin" for a mod's
+// $.session.compact) instead of "manual".
+func WithCompactTrigger(ctx context.Context, trigger string) context.Context {
+	return context.WithValue(ctx, compactTriggerKey{}, trigger)
 }

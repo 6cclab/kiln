@@ -32,14 +32,14 @@ are out of scope here.)
 | event | Claude Code fires when | kiln |
 |---|---|---|
 | `session.start` | once per plugin load, before first prompt | ✅ |
-| `session.end` | session ends (exit, clear, resume, logout) | ➖ |
+| `session.end` | session ends (exit, clear, resume, logout) | ⚠️ raised on kiln's exit (`prompt_input_exit`) and when a `-p` run finishes (`other`), within a 2 s bound; no clear/resume/logout reasons (kiln has no such session transitions) |
 | `session.receive` | an inbound delivery reaches the session | ➖ |
-| `session.append` | a conversation row is about to be stored | ➖ |
-| `session.compact` | the conversation is about to be compacted | ➖ |
+| `session.append` | a conversation row is about to be stored | ⚠️ raised right after each row is committed (observe-only: a rewrite of the row is not applied); doors prompt, hook-context, delivery, response, tool-result, compaction |
+| `session.compact` | the conversation is about to be compacted | ⚠️ raised before every compaction (trigger manual/auto/plugin); `{skip}` and rewritten `instructions` are honoured; `{messages}` of a hook's own are not (kiln summarises the conversation it holds) |
 | `session.attach` / `session.detach` | a remote client joins / leaves the surface roster | ➖ |
 | `session.measure` | session usage measured, a unit moved | ➖ |
 | `turn.start` | a model turn begins | ✅ |
-| `turn.step` | a model request is about to be sent (streams) | ⚠️ fired, but chunks not streamed |
+| `turn.step` | a model request is about to be sent (streams) | ✅ chunks (text, thinking, tool, input, stop) stream through the hook chain in order, then the result |
 | `turn.complete` | a model turn ended | ✅ |
 | `tool.call` | before the engine runs a tool | ✅ |
 | `tool.check` | before a tool's permission verdict settles | ➖ |
@@ -86,8 +86,8 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `session.turns` | `() => Promise<number>` | ✅ user-typed prompts (KilnTyped) |
 | `session.repo` | `() => Promise<SessionRepo\|null>` | ✅ git root + push URL; internal:false, name:null |
 | `session.version` | `() => Promise<SessionVersion>` | ⚠️ `{version}` only (no base/builtAt: kiln's version is a git sha) |
-| `session.compact` | `(input?) => Promise<…>` | 🚫 |
-| `session.append` | `(args) => Promise<…>` | 🚫 |
+| `session.compact` | `(input?) => Promise<…>` | ✅ runs the session.compact chain (trigger `plugin`) then kiln's compaction; resolves `{messages, tokensBefore, tokensAfter}` or `{skip}` |
+| `session.append` | `(args) => Promise<…>` | ⚠️ queues a user text row for the main conversation (string or text blocks); other types or blocks resolve `{deny}`; a subagent id resolves `{deny}` |
 | `session.authorize` | `() => Promise<SessionAuthorization>` | 🚫 |
 | `session.surfaces` / `session.surface` | `() => Promise<…>` | 🚫 (`surface` deprecated) |
 | `session.identity` | `() => Promise<SessionIdentity>` | ❌ |
@@ -164,7 +164,7 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `prompt.read` | `() => Promise<PromptBox>` | 🚫 |
 | `prompt.submit` | `(input) => Promise<…>` | 🚫 |
 | `prompt.fill` / `suggest` / `compose` | | ❌ |
-| `turn.abort` | `(input) => Promise<void>` | 🚫 |
+| `turn.abort` | `(input) => Promise<void>` | ✅ raises `turn.abort`, then aborts the running main turn; rejects when `turnId` is not the running turn |
 
 ### state (kiln-only)
 Claude Code backs reactive state with `atom`/`read`/`update` imported from
@@ -186,14 +186,10 @@ recovered (CC 2.1.302): **`model.complete`** and **`model.fork`** on the
 getters (user decision 2026-11-09: build these, revisiting the earlier
 classify-only call). The deliberate stops left:
 
-1. **`session.end`** (➖ event) — the only lifecycle hook for a mod to flush or
-   clean up on exit. Nothing kiln runs needs it yet, but it is the most common
-   "real mod" expectation after `session.start`. Needs a shutdown event kiln does
-   not raise.
+1. **`session.end`** — landed (see the events table).
 2. **`audio.play` / `audio.speak`** — no audio playback or capture in kiln (user
    decision 2026-11-09).
-3. **`turn.step` streaming** (⚠️) — kiln fires the event but not the chunk stream,
-   so a live-token mod sees only the final step.
+3. **`turn.step` streaming** — landed.
 4. **Simplifications in the tiers that did land:** `model.complete`/`fork` ignore a
    text block's `cache` flag (kiln's `StreamOptions` has no per-block prompt-cache
    breakpoint) and report an API error as the honest `unknown` kind with a null
