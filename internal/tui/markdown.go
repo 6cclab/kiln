@@ -178,8 +178,11 @@ func chromaColor(c string) *string {
 func chromaFromTheme(tx TextHex) *glansi.Chroma {
 	dim := func() glansi.StylePrimitive { return glansi.StylePrimitive{Color: chromaColor(tx.Dim)} }
 	return &glansi.Chroma{
-		Text:                glansi.StylePrimitive{},
-		Error:               glansi.StylePrimitive{Color: chromaColor(tx.Red)},
+		Text: glansi.StylePrimitive{},
+		// Error draws as text: chroma also emits it for a rune whose regex
+		// hit its 250ms timeout, so under load a colour here marks random
+		// characters of valid code.
+		Error:               glansi.StylePrimitive{},
 		Comment:             dim(),
 		CommentPreproc:      dim(),
 		Keyword:             glansi.StylePrimitive{Color: chromaColor(tx.Blue)},

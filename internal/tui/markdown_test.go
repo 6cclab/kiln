@@ -111,6 +111,21 @@ func TestMarkdownFencedCodeBlock(t *testing.T) {
 	}
 }
 
+// TestMarkdownCodeErrorTokenUnstyled: chroma emits an Error token for any
+// rune none of its regexes matched, and a regex that runs past chroma's
+// 250ms wall-clock timeout counts as no match. Under load that turns a
+// random character of an ordinary code block into an Error token, so a
+// coloured Error token draws stray red characters (a CI race run did this
+// to the first space of a line). The "@" here is a real lexer error, which
+// draws the same way as text, the only way a timeout cannot show.
+func TestMarkdownCodeErrorTokenUnstyled(t *testing.T) {
+	withRenderEnv(t, 80)
+	out := NewMarkdownRenderer(80, false).render("```json\n{\"a\": @}\n```\n")
+	if len(out) != 1 || !strings.Contains(out[0], ": @}") {
+		t.Errorf("the Error token is styled: %q", out)
+	}
+}
+
 // Regression for the ordered-list marker bug: glamour's ItemElement.Render
 // (ansi/listitem.go) writes the numeral as its own unstyled Prefix and, with
 // no Enumeration style configured, nothing separates it from the item text
