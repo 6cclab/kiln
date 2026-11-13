@@ -18,6 +18,7 @@ import (
 // isInteractive: true }) and waits for every hook: mods register their
 // commands and tools here, so Commands and Tools are complete when it returns.
 func (e *Engine) SessionStart(ctx context.Context) {
+	e.resolveTables(ctx)
 	_, err := await(ctx, e, func(send func(struct{})) {
 		input, err := e.toJS(map[string]any{"cwd": e.opts.Cwd, "surface": "terminal", "isInteractive": true})
 		if err != nil {
@@ -38,6 +39,73 @@ func (e *Engine) SessionStart(ctx context.Context) {
 	})
 	if err != nil {
 		e.log.Warn("mods: session.start did not settle", "err", err)
+	}
+}
+
+// renderComponents are the components claude-code.d.ts's RenderComponent names;
+// ui.resolve is raised for each.
+var renderComponents = []string{"AskUserQuestion", "UserMessage", "AssistantMessage", "ToolUse", "ToolResult",
+	"ToolGroup", "ToolProgress", "CommandOutput", "Spinner", "TurnDuration", "InfoNotice", "SessionMode",
+	"PromptHint", "AbovePrompt", "Pane"}
+
+// resolveTables raises ui.resolve once per plugin and component, as the
+// plugins load: { surface: "terminal", component }. Core answers the
+// terminal's element table; what the chain of the OTHER plugins' hooks leaves
+// (a hook restyling an element, or leaving a key out, which draws as a
+// fragment) is the table that plugin's $.ui.resolve(e) reads. A plugin's own
+// hook is skipped for its own table.
+func (e *Engine) resolveTables(ctx context.Context) {
+	if len(e.hooks["ui.resolve"]) == 0 {
+		return
+	}
+	_, err := await(ctx, e, func(send func(struct{})) {
+		type job struct {
+			p         *plugin
+			component string
+			hooks     []*hook
+			input     goja.Value
+		}
+		var jobs []job
+		for _, p := range e.plugins {
+			for _, comp := range renderComponents {
+				input, err := e.toJS(map[string]any{"surface": "terminal", "component": comp})
+				if err != nil {
+					continue
+				}
+				var hs []*hook
+				for _, h := range e.hooks["ui.resolve"] {
+					if h.plugin != p && e.matches(h, input) {
+						hs = append(hs, h)
+					}
+				}
+				if len(hs) > 0 {
+					jobs = append(jobs, job{p, comp, hs, input})
+				}
+			}
+		}
+		var run func(i int)
+		run = func(i int) {
+			if i == len(jobs) {
+				send(struct{}{})
+				return
+			}
+			j := jobs[i]
+			c := &chain{e: e, event: "ui.resolve", hooks: j.hooks, core: func(goja.Value) goja.Value { return e.js.table }}
+			e.runChain(c, j.input, func(v goja.Value, err error) {
+				if err != nil {
+					e.log.Warn(fmt.Sprintf("mods: ui.resolve for %s %s failed; it reads kiln's table: %v", j.p.name, j.component, err), "plugin", j.p.name)
+				} else if e.js.resolve != nil {
+					if t, rerr := e.js.resolve(goja.Undefined(), v); rerr == nil {
+						e.tables[j.p.name+"\x00"+j.component] = t
+					}
+				}
+				run(i + 1)
+			})
+		}
+		run(0)
+	})
+	if err != nil {
+		e.log.Warn("mods: ui.resolve did not settle", "err", err)
 	}
 }
 

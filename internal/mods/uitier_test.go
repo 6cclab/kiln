@@ -327,6 +327,46 @@ func TestUIPressHookCanTakeThePress(t *testing.T) {
 	}
 }
 
+// ui.resolve is raised per plugin and component as the plugins load: the other
+// plugins' hooks restyle (or leave out) elements, and the plugin's own hook is
+// skipped for its own table.
+func TestUIResolveHooksRestyleTheTableOfOtherPlugins(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.load(t, "rowdrawer", "restyler")
+	ctx := ctxT(t)
+	h.e.SessionStart(ctx)
+	site := Site{Component: "CommandOutput", RequestID: "status", BodyColumns: 60,
+		Props: map[string]any{"command": "status", "args": "", "text": "ok", "isErrored": false}}
+	ds := h.e.Render(ctx, site)
+	if len(ds) != 1 || ds[0].Tree == nil {
+		t.Fatalf("Render = %+v\n%s", ds, h.logs)
+	}
+	if got := joined(ds[0].Tree); got != "[restyled] mod row for status: ok (status)" {
+		t.Errorf("row = %q, want the other plugin's restyled Text", got)
+	}
+	own := h.e.Render(ctx, Site{Component: "CommandOutput", RequestID: "own", BodyColumns: 60, Props: map[string]any{"command": "x"}})
+	if len(own) != 1 || own[0].Tree == nil || joined(own[0].Tree) != "own row" {
+		t.Errorf("the restyling plugin's own drawing = %+v, want the plain table (its own hook is skipped)", own)
+	}
+	notice := h.e.Render(ctx, Site{Component: "InfoNotice", RequestID: "n1", BodyColumns: 60, Props: map[string]any{"text": "hi"}})
+	if len(notice) != 1 || notice[0].Tree == nil || notice[0].Tree.Type != "Box" || joined(notice[0].Tree) != "notice hi" {
+		t.Errorf("a Text left out of the table = %+v, want a fragment (a Box around the children)", notice)
+	}
+}
+
+// With no ui.resolve hook loaded, $.ui.resolve(e) is the terminal's own table.
+func TestUIResolveWithoutHooksReadsKilnsTable(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.load(t, "rowdrawer")
+	ctx := ctxT(t)
+	h.e.SessionStart(ctx)
+	ds := h.e.Render(ctx, Site{Component: "CommandOutput", RequestID: "status", BodyColumns: 60,
+		Props: map[string]any{"command": "status", "args": "", "text": "ok", "isErrored": false}})
+	if len(ds) != 1 || joined(ds[0].Tree) != "mod row for status: ok (status)" {
+		t.Errorf("row = %+v, want the plain Text with no ui.resolve hook loaded", ds)
+	}
+}
+
 // ui.input, ui.select, ui.message and ui.fault are about elements kiln does
 // not draw (Input, Select, Client): a hook on them registers and kiln says it
 // never raises them.

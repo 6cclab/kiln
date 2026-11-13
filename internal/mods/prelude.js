@@ -79,6 +79,21 @@
     Markdown: constructor('Markdown'),
   })
 
+  // What a ui.resolve chain left, as the frozen table a plugin reads: a name
+  // the hooks answered with a function is theirs, one they left out is a
+  // fragment (the children alone), and a name the terminal does not draw is
+  // dropped. Anything but an object is the terminal's own table.
+  function resolveTable(r) {
+    if (r === null || typeof r !== 'object') return terminalTable
+    var out = {}
+    var names = Object.keys(terminalTable)
+    for (var i = 0; i < names.length; i++) {
+      var f = r[names[i]]
+      out[names[i]] = typeof f === 'function' ? f : Fragment
+    }
+    return Object.freeze(out)
+  }
+
   // --- web APIs the worker has ----------------------------------------------
 
   function TextEncoder() {}
@@ -307,6 +322,7 @@
   return {
     ELEMENT: ELEMENT,
     terminalTable: terminalTable,
+    resolveTable: resolveTable,
     claudeCode: claudeCode,
     deepFreeze: deepFreeze,
     then: then,

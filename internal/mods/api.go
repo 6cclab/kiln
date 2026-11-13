@@ -111,6 +111,13 @@ func (e *Engine) apiCall(call goja.FunctionCall) goja.Value {
 	}
 	switch name {
 	case "ui.resolve":
+		// The table the other plugins' ui.resolve hooks left for this
+		// plugin's component (its own hook is skipped); kiln's when none did.
+		if o := exportMap(arg(0)); o != nil {
+			if t, ok := e.tables[p.name+"\x00"+strOf(o, "component")]; ok {
+				return t
+			}
+		}
 		return e.js.table
 	case "clock.every", "clock.after":
 		return e.startTimer(f, name == "clock.every", arg(0), arg(1))

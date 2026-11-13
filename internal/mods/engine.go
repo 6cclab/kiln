@@ -41,6 +41,7 @@ var supportedEvents = map[string]bool{
 	"turn.step":           true,
 	"turn.complete":       true,
 	"ui.render":           true,
+	"ui.resolve":          true,
 	"session.end":         true,
 	"session.compact":     true,
 	"session.append":      true,
@@ -97,6 +98,7 @@ var pinnedFields = map[string][]string{
 	"command.describe":    {"command", "immediate", "provider"},
 	"agent.offer":         {"agent", "description", "source", "provider"},
 	"ui.render":           {"surface", "component", "requestId"},
+	"ui.resolve":          {"surface", "component"},
 	"prompt.submit":       {"origin", "command", "isMeta", "attachments"},
 	"prompt.fill":         {"origin"},
 	"prompt.suggest":      {"origin"},
@@ -262,6 +264,7 @@ type Engine struct {
 	js struct {
 		elementSym  *goja.Symbol
 		table       goja.Value
+		resolve     goja.Callable
 		claudeCode  goja.Value
 		deepFreeze  goja.Callable
 		then        goja.Callable
@@ -284,9 +287,12 @@ type Engine struct {
 	hooks         map[string][]*hook
 	callbacks     map[int]callbackEntry
 	siteCallbacks map[string][]int
-	nextCallback  int
-	paneOwner     map[string]string
-	paneTitle     map[string]string
+	// tables are the element tables the ui.resolve chains left, by plugin and
+	// component ("plugin\x00Component"); a plugin with none reads the terminal's.
+	tables       map[string]goja.Value
+	nextCallback int
+	paneOwner    map[string]string
+	paneTitle    map[string]string
 	// warnedUnimpl remembers the plugin+call pairs an unimplemented $ call
 	// already logged, so a mod that polls one (squad calls $.session.id and
 	// $.fs.* every few seconds) warns once, not on every tick.
@@ -340,6 +346,7 @@ func New(host Host, opts Options) *Engine {
 		hooks:         map[string][]*hook{},
 		callbacks:     map[int]callbackEntry{},
 		siteCallbacks: map[string][]int{},
+		tables:        map[string]goja.Value{},
 		paneOwner:     map[string]string{},
 		paneTitle:     map[string]string{},
 		warnedUnimpl:  map[string]bool{},
@@ -403,6 +410,9 @@ func (e *Engine) setup() error {
 	}
 	e.js.elementSym = sym
 	e.js.table = h.Get("terminalTable")
+	if f, ok := goja.AssertFunction(h.Get("resolveTable")); ok {
+		e.js.resolve = f
+	}
 	e.js.claudeCode = h.Get("claudeCode")
 	for name, dst := range map[string]*goja.Callable{
 		"deepFreeze": &e.js.deepFreeze, "then": &e.js.then, "isAsyncIterator": &e.js.isAsyncIter,
