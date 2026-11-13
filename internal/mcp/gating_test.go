@@ -284,3 +284,15 @@ func TestIndexScope_FullStrategiesIgnorePosture(t *testing.T) {
 		t.Error("full-schemas must include every server")
 	}
 }
+
+// TestScoreExactQualifiedName: the refusal for a deferred tool tells the
+// model to search its exact mcp__server__tool name; that name must rank
+// that tool above every same-named tool on other servers.
+func TestScoreExactQualifiedName(t *testing.T) {
+	studio := mkTool("studio", "read_file", "read a design file")
+	other := mkTool("fs", "read_file", "read a file")
+	terms := []string{strings.ToLower(studio.QualifiedName)}
+	if s, o := mcpgate.Score(studio, terms), mcpgate.Score(other, terms); s <= o || o != 0 {
+		t.Errorf("Score(studio)=%d Score(other)=%d; want the exact name to match only its own tool", s, o)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/andrepato/harness/internal/crash"
@@ -1052,6 +1053,11 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		// tool_search before it executes. Refusing here, not just in the
 		// schema, is what makes an allowlist an allowlist.
 		r := tool.Errorf("tool %q is not available to this agent: it is not in the active tool set", call.Name)
+		if _, searchable := tools.Get("tool_search"); searchable && strings.HasPrefix(call.Name, "mcp__") {
+			// A deferred MCP tool: the model knows its name from the
+			// index but has not loaded it. Name the one-step recovery.
+			r = tool.Errorf("Tool %s is not enabled yet, so the call did not run. Enable it with tool_search, query %q (several names may go in one query, separated by spaces), then call it again.", call.Name, call.Name)
+		}
 		refusal = &r
 	}
 

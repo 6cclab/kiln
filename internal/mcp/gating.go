@@ -167,6 +167,10 @@ func Score(t McpTool, terms []string) int {
 		// vs the tool's "dashboard"), and is not worth a stemmer.
 		stem := strings.TrimSuffix(term, "s")
 		switch {
+		case strings.ToLower(t.QualifiedName) == term:
+			// The exact mcp__server__tool name, as the refusal for a
+			// deferred tool suggests: that tool and no other.
+			total += 100
 		case name == term || name == stem:
 			total += 10
 		case strings.Contains(name, stem):
