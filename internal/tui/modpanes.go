@@ -65,6 +65,9 @@ type modPane struct {
 	// cycles through all of them regardless of scroll; a selection that
 	// scrolls out of view is a known gap, not a crash).
 	lastButtons []ModButton
+	// contentRows and bodyRows are the tree's height and the window over it as
+	// the last Render drew them (ui.scroll's contentRows and bodyRows).
+	contentRows, bodyRows int
 }
 
 // ModPanes is kiln's mod pane registry: every pane any mod has opened,
@@ -322,6 +325,7 @@ func (p *ModPanes) Render(width int) []string {
 			rows = defaultPaneBodyRows
 		}
 		lines := rendered.Lines
+		pane.contentRows, pane.bodyRows = len(lines), rows
 		maxStart := max(0, len(lines)-rows)
 		pane.scroll = clamp(pane.scroll, 0, maxStart)
 		end := min(len(lines), pane.scroll+rows)

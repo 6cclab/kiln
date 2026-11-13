@@ -22,6 +22,9 @@ type decoder struct {
 	elementSym  *goja.Symbol
 	textLeft    int
 	addCallback func(fn goja.Callable) Callback
+	// elemKey is the key of the element whose props are being decoded: the
+	// element a callback prop belongs to (ui.press names it).
+	elemKey string
 }
 
 // decodeTree decodes a hook's return value: nil for null/undefined (the
@@ -61,6 +64,9 @@ func (d *decoder) decodeNode(v goja.Value, depth int) (Element, error) {
 	if k := obj.Get("key"); k != nil && !goja.IsUndefined(k) {
 		el.Key = k.String()
 	}
+	outerKey := d.elemKey
+	d.elemKey = el.Key
+	defer func() { d.elemKey = outerKey }()
 	if p, ok := obj.Get("props").(*goja.Object); ok {
 		keys := p.Keys()
 		if len(keys) > 0 {

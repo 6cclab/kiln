@@ -75,6 +75,9 @@ type Services struct {
 	// Config lists kiln's own /config rows ($.config.list); plugin userConfig
 	// rows are the engine's. nil lists none.
 	Config func() []ConfigRow
+
+	// UI is what the screen lends the ui.* methods.
+	UI UIServices
 }
 
 // CompactResult is what a compaction left: the conversation after it and the

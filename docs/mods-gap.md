@@ -69,10 +69,11 @@ are out of scope here.)
 | `plugin.register` | a hooks module joins the chain | ➖ |
 | `ui.render` | before a component is drawn | ⚠️ `Pane` + `AbovePrompt` only |
 | `ui.resolve` | at load, per surface element table | ✅ |
-| `ui.press` | a Button or Markdown link is pressed | ⚠️ callback invoked; no hook chain |
-| `ui.input` / `ui.select` | an Input / Select changes | ➖ (no Input/Select elements) |
-| `ui.message` | a Client surface module posts data | ➖ |
-| `ui.scroll` / `ui.focus` | before a site's window / focus ring moves | ➖ |
+| `ui.press` | a Button or Markdown link is pressed | ✅ raised with `{ plugin, element (the Button's key), component, requestId, surface }`, all pinned; core runs the element's own `onPress`. A hook that answers without `next` takes the press |
+| `ui.input` / `ui.select` | an Input / Select changes | ➖ never raised: kiln draws no `Input` or `Select` element (only Box, Text, Button, Raster, Image, Link, Markdown), so nothing can change. A hook on them registers and logs "kiln does not raise …" |
+| `ui.message` / `ui.fault` | a `Client` posts data / fails on a surface | ➖ never raised: kiln has no `Client` element and no surface module to load, so none can post or fail |
+| `ui.scroll` / `ui.focus` | before a site's window / focus ring moves | ⚠️ raised for a `Pane` body (the person's Up/Down, Tab/Shift+Tab while it holds the keys; `$.ui.scroll` / `$.ui.focus` with origin `plugin`). Core moves to `e.offset` / lands on `e.element`; an answer without `next` leaves it. kiln's band above the prompt is not a scrollable window and has no focus ring, so nothing is raised for `AbovePrompt`; the mouse wheel does not scroll a pane, so no wheel event. Pinned: everything but `offset` / `element`; `pointer` is never set |
+| `ui.status` / `ui.log` / `ui.notice` / `ui.notify` / `ui.copy` / `ui.selection` / `ui.blit` | op events of the `$.ui.*` calls | ✅ raised by the call, every hook but the calling one, then core |
 
 ---
 
@@ -117,12 +118,16 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `ui.toast` | `(text, options?) => void` | ✅ |
 | `ui.invalidate` | `(event) => void` | ✅ |
 | `ui.resolve` | `(e) => Elements` | ✅ |
-| `ui.status` | `(text?) => void` | 🚫 |
-| `ui.log` | `(text, options?) => void` | 🚫 |
-| `ui.notice` | `(tool_use_id, text?) => void` | 🚫 |
-| `ui.blit` | `(args) => Promise<UiBlitResult>` | 🚫 |
-| `ui.ask` | `(question, options?) => Promise<string>` | ❌ |
-| `ui.scroll` / `ui.focus` | `(args) => Promise<…>` | ❌ |
+| `ui.status` | `(text?) => void` | ✅ one dim line per plugin under kiln's status row (first 2000 chars); `undefined` clears it |
+| `ui.log` | `(text, options?) => void` | ✅ `transcript` appends a dim system-notice row; `debug` goes to kiln's debug log only; a hook may rewrite `e.to` |
+| `ui.notice` | `(tool_use_id, text?) => void` | ✅ one dim line under the open permission dialog of that call; refused when no dialog is open for the id. Not refused for another plugin's `$.tool.call` run (kiln does not track who made it) |
+| `ui.blit` | `(args) => Promise<UiBlitResult>` | ⚠️ repaints a keyed `Raster` the plugin drew in its pane (`cells`); an `Image` source answers `{ deny }`: kiln draws an Image as its alt text |
+| `ui.ask` | `(question, options?) => Promise<string>` | ✅ a `tool.call` of `AskUserQuestion` through every hook but the calling one, answered by kiln's question dialog; the label chosen (multi-select comma-joined) or the text typed under Other. Rejects when dismissed and in a `-p` run. Option labels double as descriptions |
+| `ui.scroll` | `(args) => Promise<{ deny? }>` | ⚠️ `to: 'start' \| 'end'` with `in`, or `{ key }` of a Button, in this plugin's pane; `block` honoured. `{ requestId }` of a transcript row answers `{ deny }`: kiln moves none. Only a Button can be located by `key` |
+| `ui.focus` | `(args) => Promise<{ deny? }>` | ⚠️ lands the focus ring of a pane that holds the keys on a keyed Button; any other element is `{ deny }` (kiln's ring walks Buttons) |
+| `ui.copy` | `(args) => Promise<UiCopyResult>` | ✅ written as the mouse selection is (OSC 52 plus the local clipboard tool); `no-clipboard` when that tool fails |
+| `ui.selection` | `() => Promise<UiSelection \| undefined>` | ⚠️ the text of the last mouse selection (fullscreen only); no `requestId`, since kiln keeps no row identity for it. Cleared by the next click |
+| `ui.notify` | `(text, options?) => Promise<UiNotifyResult>` | ⚠️ writes the escape sequence of `preferredNotifChannel` (`auto` picks iTerm2, Kitty, Ghostty, else the bell). kiln does not run the person's `Notification` hooks for it first |
 | `ui.view` | (kiln-only name) | ✅ always refuses — kiln has no per-agent transcript view |
 
 ### clock

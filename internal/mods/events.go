@@ -741,8 +741,12 @@ func (e *Engine) Render(ctx context.Context, site Site) []Drawing {
 				if err != nil {
 					e.log.Warn(fmt.Sprintf("%s: ui.render failed: %v", p.name, err), "plugin", p.name)
 				} else {
-					d := &decoder{vm: e.w.vm, elementSym: e.js.elementSym, textLeft: MaxTreeText,
-						addCallback: func(fn goja.Callable) Callback { return e.addCallback(siteKey, p, fn) }}
+					var d *decoder
+					d = &decoder{vm: e.w.vm, elementSym: e.js.elementSym, textLeft: MaxTreeText,
+						addCallback: func(fn goja.Callable) Callback {
+							return e.addCallback(siteKey, callbackEntry{plugin: p, fn: fn, element: d.elemKey,
+								component: site.Component, requestID: site.RequestID, surface: surfaceOf(site)})
+						}}
 					tree, derr := d.decodeTree(v)
 					if derr != nil {
 						e.dropCallbacks(siteKey)
@@ -764,6 +768,13 @@ func (e *Engine) Render(ctx context.Context, site Site) []Drawing {
 	return got
 }
 
+func surfaceOf(site Site) string {
+	if site.Surface == "" {
+		return "terminal"
+	}
+	return site.Surface
+}
+
 func renderEvent(site Site) map[string]any {
 	view := map[string]any{}
 	if site.ViewAgentID != "" {
@@ -783,10 +794,7 @@ func renderEvent(site Site) map[string]any {
 			"placement": "dock", "scroll": scroll, "view": view,
 		}
 	}
-	surface := site.Surface
-	if surface == "" {
-		surface = "terminal"
-	}
+	surface := surfaceOf(site)
 	return map[string]any{
 		"surface":   surface,
 		"component": site.Component,
@@ -795,10 +803,10 @@ func renderEvent(site Site) map[string]any {
 	}
 }
 
-func (e *Engine) addCallback(siteKey string, p *plugin, fn goja.Callable) Callback {
+func (e *Engine) addCallback(siteKey string, entry callbackEntry) Callback {
 	e.nextCallback++
 	id := e.nextCallback
-	e.callbacks[id] = callbackEntry{plugin: p, fn: fn}
+	e.callbacks[id] = entry
 	e.siteCallbacks[siteKey] = append(e.siteCallbacks[siteKey], id)
 	return Callback{ID: id}
 }
@@ -811,8 +819,9 @@ func (e *Engine) dropCallbacks(siteKey string) {
 }
 
 // Press runs a Button's onPress (or any function prop) from the latest
-// drawing it came from. It does not wait for the function; a callback from
-// a drawing since replaced does nothing.
+// drawing it came from, through the ui.press hooks: core is the element's own
+// closure. It does not wait for the function; a callback from a drawing since
+// replaced does nothing.
 func (e *Engine) Press(cb Callback) {
 	if e.closed.Load() {
 		return
@@ -823,13 +832,27 @@ func (e *Engine) Press(cb Callback) {
 			e.log.Debug("mods: press of a callback no drawing holds", "id", cb.ID)
 			return
 		}
-		ret, err := entry.fn(goja.Undefined())
+		ev := map[string]any{"plugin": entry.plugin.name, "element": entry.element,
+			"component": entry.component, "requestId": entry.requestID, "surface": entry.surface}
+		input, err := e.toJS(ev)
 		if err != nil {
-			e.log.Warn(fmt.Sprintf("%s: onPress threw %v", entry.plugin.name, jsErr(err)), "plugin", entry.plugin.name)
 			return
 		}
-		e.then(ret, func(goja.Value) {}, func(r goja.Value) {
-			e.log.Warn(fmt.Sprintf("%s: onPress failed: %s", entry.plugin.name, reasonText(r)), "plugin", entry.plugin.name)
+		core := func(_ map[string]any, done func(map[string]any, error)) {
+			ret, err := entry.fn(goja.Undefined())
+			if err != nil {
+				e.log.Warn(fmt.Sprintf("%s: onPress threw %v", entry.plugin.name, jsErr(err)), "plugin", entry.plugin.name)
+				done(map[string]any{"element": entry.element}, nil)
+				return
+			}
+			e.then(ret, func(goja.Value) { done(map[string]any{"element": entry.element}, nil) }, func(r goja.Value) {
+				e.log.Warn(fmt.Sprintf("%s: onPress failed: %s", entry.plugin.name, reasonText(r)), "plugin", entry.plugin.name)
+				done(map[string]any{"element": entry.element}, nil)
+			})
+		}
+		p := e.startOp(context.Background(), "ui.press", input, nil, core)
+		e.then(p, func(goja.Value) {}, func(r goja.Value) {
+			e.log.Warn("mods: ui.press chain failed: "+reasonText(r), "plugin", entry.plugin.name)
 		})
 	})
 }

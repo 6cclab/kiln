@@ -67,6 +67,16 @@ var supportedEvents = map[string]bool{
 	"telemetry.log":       true,
 	"telemetry.mark":      true,
 	"skill.prompt":        true,
+	"ui.press":            true,
+	"ui.scroll":           true,
+	"ui.focus":            true,
+	"ui.status":           true,
+	"ui.log":              true,
+	"ui.notice":           true,
+	"ui.notify":           true,
+	"ui.copy":             true,
+	"ui.selection":        true,
+	"ui.blit":             true,
 	// session.attach and session.detach are left out on purpose: kiln has
 	// one local terminal and no remote client to attach, so a hook on them
 	// logs "kiln does not raise" and never runs.
@@ -102,6 +112,9 @@ var pinnedFields = map[string][]string{
 	"config.set":          {"key", "previous", "provider", "origin"},
 	"config.describe":     {"key", "provider"},
 	"telemetry.log":       {"to"},
+	"ui.press":            {"plugin", "element", "component", "requestId", "surface"},
+	"ui.scroll":           {"component", "requestId", "by", "bodyRows", "contentRows", "origin"},
+	"ui.focus":            {"component", "requestId", "plugin", "origin"},
 	"skill.prompt":        {"skill", "frontmatterProblem", "source", "pluginName", "path"},
 }
 
@@ -310,6 +323,9 @@ type hook struct {
 type callbackEntry struct {
 	plugin *plugin
 	fn     goja.Callable
+	// element is the key of the element the function was a prop of; component,
+	// requestID and surface name the site (ui.press's event).
+	element, component, requestID, surface string
 }
 
 // New starts an engine. It loads nothing until Load.

@@ -34,6 +34,8 @@ const httpMaxBytes = 16 << 20
 var implemented = map[string]bool{
 	"ui.open": true, "ui.close": true, "ui.panes": true, "ui.toast": true, "ui.invalidate": true,
 	"ui.resolve": true, "ui.view": true,
+	"ui.ask": true, "ui.blit": true, "ui.copy": true, "ui.focus": true, "ui.log": true,
+	"ui.notice": true, "ui.notify": true, "ui.scroll": true, "ui.selection": true, "ui.status": true,
 	"state.get": true, "state.set": true,
 	"clock.now": true, "clock.every": true, "clock.after": true, "clock.sleep": true,
 	"env.get": true, "settings.read": true,
@@ -67,8 +69,6 @@ var implemented = map[string]bool{
 var documented = []string{
 	"audio.play", "audio.speak",
 	"mcp.connect", "process.spawn",
-	"ui.ask", "ui.blit", "ui.copy", "ui.focus", "ui.log", "ui.notice", "ui.notify",
-	"ui.scroll", "ui.selection", "ui.status",
 }
 
 func apiNames() []string {

@@ -97,6 +97,8 @@ type modsRuntime struct {
 
 	mu      sync.Mutex
 	pending map[string]mods.ToolHandle // agentID + "\x00" + tool call id
+	// dialogs are the tool calls whose permission dialog is up.
+	dialogs map[string]bool
 	agents  map[string]*mods.AgentInfo
 	order   []string
 	turnSeq atomic.Int64
@@ -847,5 +849,6 @@ func (r *modsRuntime) services(base mods.Services) mods.Services {
 		return nil
 	}
 	r.promptServices(&svc)
+	r.uiServices(&svc)
 	return svc
 }

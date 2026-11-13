@@ -1718,6 +1718,7 @@ func (b *Bridge) Prompter(cwd string) permission.Prompter {
 		reply := make(chan PromptChoice, 1)
 		b.Send(MsgPermissionPrompt{
 			Request: PermissionRequest{
+				CallID:           req.CallID,
 				ToolName:         req.ToolName,
 				PrimaryArg:       req.PrimaryArg,
 				OutsideWorkspace: req.OutsideWorkspace,

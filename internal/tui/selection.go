@@ -105,32 +105,47 @@ type msgCopied struct {
 // tool when there is one (iTerm2 refuses OSC 52 unless its "applications
 // may access clipboard" option is on).
 func copyToClipboard(text string) tea.Cmd {
+	return copyToClipboardThen(text, nil)
+}
+
+// copyToClipboardThen is copyToClipboard that also tells done whether the
+// local clipboard tool took the text.
+func copyToClipboardThen(text string, done func(error)) tea.Cmd {
 	return tea.Batch(tea.SetClipboard(text), func() tea.Msg {
 		chars := len([]rune(text))
-		var cmd *exec.Cmd
-		if custom := os.Getenv("HARNESS_CLIPBOARD_CMD"); custom != "" {
-			// A shell command reading the text on stdin; tests use it to
-			// avoid touching the real clipboard.
-			cmd = exec.Command("/bin/sh", "-c", custom)
+		res := copyLocal(text, chars)
+		if done != nil {
+			done(res.err)
 		}
-		switch {
-		case cmd != nil:
-		case runtime.GOOS == "darwin":
-			cmd = exec.Command("pbcopy")
-		case runtime.GOOS == "linux":
-			for _, c := range [][]string{{"wl-copy"}, {"xclip", "-selection", "clipboard"}, {"xsel", "--clipboard", "--input"}} {
-				if _, err := exec.LookPath(c[0]); err == nil {
-					cmd = exec.Command(c[0], c[1:]...)
-					break
-				}
+		return res
+	})
+}
+
+// copyLocal hands text to the local clipboard tool, when there is one.
+func copyLocal(text string, chars int) msgCopied {
+	var cmd *exec.Cmd
+	if custom := os.Getenv("HARNESS_CLIPBOARD_CMD"); custom != "" {
+		// A shell command reading the text on stdin; tests use it to
+		// avoid touching the real clipboard.
+		cmd = exec.Command("/bin/sh", "-c", custom)
+	}
+	switch {
+	case cmd != nil:
+	case runtime.GOOS == "darwin":
+		cmd = exec.Command("pbcopy")
+	case runtime.GOOS == "linux":
+		for _, c := range [][]string{{"wl-copy"}, {"xclip", "-selection", "clipboard"}, {"xsel", "--clipboard", "--input"}} {
+			if _, err := exec.LookPath(c[0]); err == nil {
+				cmd = exec.Command(c[0], c[1:]...)
+				break
 			}
 		}
-		if cmd == nil {
-			return msgCopied{chars: chars} // OSC 52 only
-		}
-		cmd.Stdin = strings.NewReader(text)
-		return msgCopied{chars: chars, err: cmd.Run()}
-	})
+	}
+	if cmd == nil {
+		return msgCopied{chars: chars} // OSC 52 only
+	}
+	cmd.Stdin = strings.NewReader(text)
+	return msgCopied{chars: chars, err: cmd.Run()}
 }
 
 // handleMouseSelect handles a left-button press, drag or release over the
@@ -146,6 +161,9 @@ func (m Model) handleMouseSelect(msg tea.Msg) (Model, tea.Cmd, bool) {
 	case tea.MouseClickMsg:
 		if msg.Button != tea.MouseLeft || msg.Y >= vpHeight {
 			m.sel = nil
+			if m.cfg.Mods != nil && msg.Button == tea.MouseLeft {
+				m.cfg.Mods.SetSelection("")
+			}
 			return m, nil, msg.Button == tea.MouseLeft
 		}
 		m.sel = &selection{anchorLine: line(msg.Y), anchorCol: msg.X, endLine: line(msg.Y), endCol: msg.X, dragging: true}
@@ -169,6 +187,9 @@ func (m Model) handleMouseSelect(msg tea.Msg) (Model, tea.Cmd, bool) {
 		text := selectionText(m.selectionContent(), *m.sel, m.width, m.margin())
 		if text == "" {
 			return m, nil, true
+		}
+		if m.cfg.Mods != nil {
+			m.cfg.Mods.SetSelection(text)
 		}
 		return m, copyToClipboard(text), true
 	}

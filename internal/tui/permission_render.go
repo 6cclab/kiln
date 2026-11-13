@@ -19,6 +19,8 @@ import (
 
 // PermissionRequest is what a permission prompt is asking about.
 type PermissionRequest struct {
+	// CallID is the tool call's id (a mod's $.ui.notice names the dialog by it).
+	CallID           string
 	ToolName         string
 	PrimaryArg       string
 	OutsideWorkspace bool

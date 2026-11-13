@@ -187,6 +187,8 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	// permission_prompt notification does.
 	prompter := bridge.Prompter(deps.Cwd)
 	deps.Gate.SetPrompter(func(ctx context.Context, req permission.Request) (permission.PromptChoice, error) {
+		deps.Mods.dialogOpen(req.CallID, true)
+		defer deps.Mods.dialogOpen(req.CallID, false)
 		claudehooks.RunHooks(claudehooks.RunOptions{
 			Config: deps.Hooks(),
 			Event:  claudehooks.Notification,

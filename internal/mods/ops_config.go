@@ -251,7 +251,7 @@ func (e *Engine) answerConfig(f *frame, name string, arg func(int) goja.Value) (
 		}
 		return e.telemetryCall(f, "telemetry.mark", ev), true, nil
 	}
-	return nil, false, nil
+	return e.answerUI(f, name, arg)
 }
 
 // telemetryCall raises a telemetry event for a $ call. kiln has no analytics
