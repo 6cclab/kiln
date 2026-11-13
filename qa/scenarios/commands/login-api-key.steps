@@ -1,0 +1,35 @@
+# /login <provider> runs the real login inside the session: an API-key
+# provider asks for the key in a masked field, stores it in the scratch HOME's
+# credentials file, and the key is never on screen. /logout then removes it.
+@faux testdata/faux/qa/commands-baseline.yaml
+@env GROQ_API_KEY=
+@env OLLAMA_HOST=
+
+WAITFOR /describe a task/ 20
+TYPE /login groq
+KEY enter
+WAITFOR /Enter Groq API key/ 20
+SHOT key-prompt
+EXPECT /Enter Groq API key/
+EXPECT /enter to send · esc to cancel/
+TYPE sk-qa-FAKEKEY-0123456789
+SHOT key-typed
+EXPECT />\s+•{22}/
+EXPECT_NOT /FAKEKEY/
+EXPECT_NOT /sk-qa/
+KEY enter
+WAITFOR /Logged in to groq\./ 20
+SHOT logged-in
+EXPECT /Logged in to groq\./
+EXPECT_NOT /FAKEKEY/
+EXPECT_NOT /sk-qa/
+RUN grep -q 'sk-qa-FAKEKEY-0123456789' {HOME}/.harness/credentials.json
+
+TYPE /logout groq
+KEY enter
+WAITFOR /Logged out of groq\./ 20
+SHOT logged-out
+EXPECT /Logged out of groq\./
+EXPECT_NOT /FAKEKEY/
+RUN ! grep -q 'sk-qa-FAKEKEY' {HOME}/.harness/credentials.json
+EXPECT_NOT /panic|goroutine/

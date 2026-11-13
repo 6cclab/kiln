@@ -217,8 +217,8 @@ is won by the later one — see precedence below).
 
 | Command | Args | Effect |
 |---|---|---|
-| `/login` | `[provider]` | auth status, or how to log in |
-| `/logout` | `<provider>` | how to log out |
+| `/login` | `[provider]` | log in to a provider inside the session (asks which one without an argument); `-p` shows auth status instead |
+| `/logout` | `<provider>` | remove a provider's stored credential |
 | `/terminal-setup` | — | check terminal capabilities |
 
 **Inline**

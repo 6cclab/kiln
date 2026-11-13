@@ -234,6 +234,10 @@ func (t *terminalInteraction) Notify(e Event) {
 	}
 }
 
+// OpenBrowser is openBrowser for a caller outside this package (the TUI's
+// in-session login, which prints the URL itself).
+func OpenBrowser(url string) { openBrowser(url) }
+
 // openBrowser is a best-effort browser open. Never blocks the caller on
 // failure: the URL is always printed as well.
 func openBrowser(url string) {

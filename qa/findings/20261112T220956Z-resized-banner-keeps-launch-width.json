@@ -1,0 +1,34 @@
+{
+ "id": "20261112T220956Z-resized-banner-keeps-launch-width",
+ "found_at": "2026-11-12T22:09:56Z",
+ "scenario": "resize/resize-tiny",
+ "step": "tiny-40x12",
+ "terminals": [
+  "iterm-dark",
+  "terminal"
+ ],
+ "category": "bug",
+ "severity": "medium",
+ "title": "Shrinking a wide window retains the large banner and clips its identity",
+ "observed": "After a real-terminal resize from 120x40 to 40x12 and the scenario settle delay, the banner still uses its launch-time art-plus-text layout. The wordmark scrolls out, the repo line is truncated beside the furnace, and decorative rows occupy most of the visible area. Growing back recovers. newBanner captures art and textWidth once; the no-argument BannerFunc only restyles it, while Model.bannerRows clips those launch-width rows. Cross-checked in Terminal.app: the same visual defect is present.",
+ "expected": "Recompute banner layout from the current content width on resize, switching to the compact text banner at narrow widths. At short heights keep input and useful identity visible rather than retaining launch-width artwork.",
+ "design_ref": "internal/cli/tui.go:newBanner; internal/tui/app.go:bannerRows; docs/kiln-design-handoff/Terminal.dc.html:banner",
+ "evidence": [
+  "qa/runs/ui-polish-review-20261112/color/iterm-dark/resize-resize-tiny-120x40/02-tiny-40x12.png",
+  "qa/runs/ui-polish-review-20261112/color/iterm-dark/resize-resize-tiny-120x40/03-back-120x40.png",
+  "qa/runs/ui-polish-review-20261112/crosscheck/terminal/resize-resize-tiny-120x40/02-tiny-40x12.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/cli/tui.go",
+   "internal/tui/app.go"
+  ],
+  "regression_test": "TestBanner_LaysOutForTheWidthItIsDrawnAt,TestBannerRows_DrawnAtTheCurrentWidth",
+  "after_evidence": [
+   "qa/runs/fixbg/terminal/resize-resize-tiny-120x40/02-tiny-40x12.png"
+  ],
+  "note": "BannerFunc takes the current content width; the art drops out below 58 columns. Height is not considered (no design rule for it). Verified in Terminal.app on the Mac mini",
+  "updated_at": "2026-11-12T23:34:47Z"
+ }
+}
