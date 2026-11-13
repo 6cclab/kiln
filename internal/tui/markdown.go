@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"fmt"
+	"hash/crc32"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,6 +15,8 @@ import (
 
 	"charm.land/glamour/v2"
 	glansi "charm.land/glamour/v2/ansi"
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/styles"
 )
 
 // Assistant prose rendering, ported from markdownTheme (app.ts:67-84).
@@ -123,7 +128,7 @@ func buildStyle(plain bool) glansi.StyleConfig {
 			StyleBlock: glansi.StyleBlock{
 				Indent: uintPtr(2),
 			},
-			Chroma: chromaFromTheme(tx),
+			Theme: codeTheme(chromaFromTheme(tx)),
 		},
 		// quote: (t) => dim(t), quoteBorder: (t) => gray(t) — glamour's
 		// nearest equivalent to a drawn quote border is the block's
@@ -173,6 +178,88 @@ func chromaColor(c string) *string {
 		return nil
 	}
 	return &hex
+}
+
+// codeThemes guards kiln's registrations in chroma's global style registry.
+var codeThemes sync.Mutex
+
+// codeTheme registers the code-block palette c with chroma under a name made
+// from its colours, and returns the name for StyleCodeBlock.Theme. Handing
+// glamour the palette as StyleCodeBlock.Chroma instead registers it once per
+// process under the fixed name "charm" (glamour ansi/codeblock.go), so code
+// would keep the colours of the first block ever drawn after the terminal
+// background changed the palette.
+func codeTheme(c *glansi.Chroma) string {
+	entry := func(p glansi.StylePrimitive) string {
+		var parts []string
+		if p.Color != nil {
+			parts = append(parts, *p.Color)
+		}
+		if p.BackgroundColor != nil {
+			parts = append(parts, "bg:"+*p.BackgroundColor)
+		}
+		for _, f := range []struct {
+			on   *bool
+			name string
+		}{{p.Italic, "italic"}, {p.Bold, "bold"}, {p.Underline, "underline"}} {
+			if f.on != nil && *f.on {
+				parts = append(parts, f.name)
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+	// The token types glamour maps from glansi.Chroma.
+	entries := chroma.StyleEntries{
+		chroma.Text:                entry(c.Text),
+		chroma.Error:               entry(c.Error),
+		chroma.Comment:             entry(c.Comment),
+		chroma.CommentPreproc:      entry(c.CommentPreproc),
+		chroma.Keyword:             entry(c.Keyword),
+		chroma.KeywordReserved:     entry(c.KeywordReserved),
+		chroma.KeywordNamespace:    entry(c.KeywordNamespace),
+		chroma.KeywordType:         entry(c.KeywordType),
+		chroma.Operator:            entry(c.Operator),
+		chroma.Punctuation:         entry(c.Punctuation),
+		chroma.Name:                entry(c.Name),
+		chroma.NameBuiltin:         entry(c.NameBuiltin),
+		chroma.NameTag:             entry(c.NameTag),
+		chroma.NameAttribute:       entry(c.NameAttribute),
+		chroma.NameClass:           entry(c.NameClass),
+		chroma.NameConstant:        entry(c.NameConstant),
+		chroma.NameDecorator:       entry(c.NameDecorator),
+		chroma.NameException:       entry(c.NameException),
+		chroma.NameFunction:        entry(c.NameFunction),
+		chroma.NameOther:           entry(c.NameOther),
+		chroma.Literal:             entry(c.Literal),
+		chroma.LiteralNumber:       entry(c.LiteralNumber),
+		chroma.LiteralDate:         entry(c.LiteralDate),
+		chroma.LiteralString:       entry(c.LiteralString),
+		chroma.LiteralStringEscape: entry(c.LiteralStringEscape),
+		chroma.GenericDeleted:      entry(c.GenericDeleted),
+		chroma.GenericEmph:         entry(c.GenericEmph),
+		chroma.GenericInserted:     entry(c.GenericInserted),
+		chroma.GenericStrong:       entry(c.GenericStrong),
+		chroma.GenericSubheading:   entry(c.GenericSubheading),
+		chroma.Background:          entry(c.Background),
+	}
+	types := make([]chroma.TokenType, 0, len(entries))
+	for t := range entries {
+		types = append(types, t)
+	}
+	slices.Sort(types)
+	var key strings.Builder
+	for _, t := range types {
+		key.WriteString(entries[t])
+		key.WriteByte(';')
+	}
+	name := fmt.Sprintf("kiln-%08x", crc32.ChecksumIEEE([]byte(key.String())))
+
+	codeThemes.Lock()
+	defer codeThemes.Unlock()
+	if _, ok := styles.Registry[name]; !ok {
+		styles.Register(chroma.MustNewStyle(name, entries))
+	}
+	return name
 }
 
 func chromaFromTheme(tx TextHex) *glansi.Chroma {
