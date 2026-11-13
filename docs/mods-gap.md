@@ -33,11 +33,12 @@ are out of scope here.)
 |---|---|---|
 | `session.start` | once per plugin load, before first prompt | ✅ |
 | `session.end` | session ends (exit, clear, resume, logout) | ⚠️ raised on kiln's exit (`prompt_input_exit`) and when a `-p` run finishes (`other`), within a 2 s bound; no clear/resume/logout reasons (kiln has no such session transitions) |
-| `session.receive` | an inbound delivery reaches the session | ➖ |
+| `session.receive` | an inbound delivery reaches the session | ⚠️ raised for an MCP channel event (origin `task-notification`) before it is queued; `{consumed}` drops it and a rewritten `text` is what is queued. kiln has no peers, bridge client or agent mailbox, so no other origin ever arrives |
 | `session.append` | a conversation row is about to be stored | ⚠️ raised right after each row is committed (observe-only: a rewrite of the row is not applied); doors prompt, hook-context, delivery, response, tool-result, compaction |
 | `session.compact` | the conversation is about to be compacted | ⚠️ raised before every compaction (trigger manual/auto/plugin); `{skip}` and rewritten `instructions` are honoured; `{messages}` of a hook's own are not (kiln summarises the conversation it holds) |
-| `session.attach` / `session.detach` | a remote client joins / leaves the surface roster | ➖ |
-| `session.measure` | session usage measured, a unit moved | ➖ |
+| `session.send` | a message is about to leave for another agent or session | ⚠️ raised only by a mod's `$.session.send` (kiln's model has no SendMessage tool); `origin` is pinned; nothing is ever delivered |
+| `session.attach` / `session.detach` | a remote client joins / leaves the surface roster | ➖ never raised: kiln has one local terminal and no remote attach. A hook on them registers and logs "kiln does not raise …" |
+| `session.measure` | session usage measured, a unit moved | ⚠️ raised after each main-loop response when the context fill (the figure `/context` and the footer read) differs from the last one raised; `changed` is `["context"]`, `rateLimits` is `[]`, `cost` is absent (kiln reads no rate-limit windows and keeps no priced ledger for the event) |
 | `turn.start` | a model turn begins | ✅ |
 | `turn.step` | a model request is about to be sent (streams) | ✅ chunks (text, thinking, tool, input, stop) stream through the hook chain in order, then the result |
 | `turn.complete` | a model turn ended | ✅ |
@@ -83,7 +84,7 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `session.id` | `() => Promise<string>` | ✅ |
 | `session.cwd` | `() => Promise<string>` | ✅ |
 | `session.usage` | `(args?) => Promise<SessionUsage>` | ⚠️ context fill only; no cost/limits |
-| `session.messages` | `() => Promise<SessionMessage[]>` | 🚫 |
+| `session.messages` | `(args?) => Promise<…>` | ⚠️ main conversation as rows, or `{as:"api"}` as ApiMessage; newest 4096 (the API form opens on a user message). `{agentId}` resolves `{deny}`: kiln keeps a subagent's conversation to itself. No `toolResults` on user rows (a result is folded into its `toolUses` entry) |
 | `session.root` | `() => Promise<string>` | ✅ repo root (gitfiles) |
 | `session.model` | `() => Promise<string>` | ✅ live lane model |
 | `session.turns` | `() => Promise<number>` | ✅ user-typed prompts (KilnTyped) |
@@ -91,10 +92,11 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `session.version` | `() => Promise<SessionVersion>` | ⚠️ `{version}` only (no base/builtAt: kiln's version is a git sha) |
 | `session.compact` | `(input?) => Promise<…>` | ✅ runs the session.compact chain (trigger `plugin`) then kiln's compaction; resolves `{messages, tokensBefore, tokensAfter}` or `{skip}` |
 | `session.append` | `(args) => Promise<…>` | ⚠️ queues a user text row for the main conversation (string or text blocks); other types or blocks resolve `{deny}`; a subagent id resolves `{deny}` |
-| `session.authorize` | `() => Promise<SessionAuthorization>` | 🚫 |
-| `session.surfaces` / `session.surface` | `() => Promise<…>` | 🚫 (`surface` deprecated) |
-| `session.identity` | `() => Promise<SessionIdentity>` | ❌ |
-| `session.receive` / `attach` / `detach` / `measure` / `end` / `start` | event-call forms | ❌ |
+| `session.authorize` | `() => Promise<SessionAuthorization>` | ⚠️ always `null`, the d.ts answer for "no first-party credential". A handle would let a mod spend the person's Anthropic key at a host (`$.http.fetch` `auth`) with no approval from them, which is more than the permission gate granted the mod, so kiln lends none even when the session holds a key |
+| `session.surfaces` / `session.surface` | `() => Promise<…>` | ⚠️ `["terminal"]` / `"terminal"` while the TUI runs; `[]` / `null` in a `-p` run. Never a remote surface (`surface` deprecated) |
+| `session.identity` | `() => Promise<SessionIdentity>` | ⚠️ always `{deny}`: the d.ts answers an account only to a mod managed settings install, and kiln installs none that way (it holds no login either) |
+| `session.send` | `({to, text}) => Promise<{isDelivered, reason?}>` | ⚠️ runs the `session.send` chain (origin `{kind:"plugin", name}`; `to` as a string or `{sessionId}`/`{agentId}`), then kiln's core: `{isDelivered:false}` with a reason, because kiln has no SendMessage tool and no inbox for another agent or session. A hook's own refusal reason wins |
+| `session.receive` / `attach` / `detach` / `measure` / `end` / `start` | event-call forms | see the events table |
 
 ### fs
 | call | signature | kiln |

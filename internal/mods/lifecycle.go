@@ -119,3 +119,67 @@ func (e *Engine) SessionAppend(row AppendRow) {
 	}
 	e.raise("session.append", ev, ev)
 }
+
+// measuredUsage is the context figures a session.measure carried.
+type measuredUsage struct{ tokens, window int }
+
+// SessionMeasure raises session.measure ({ context, rateLimits, cost?,
+// changed }) when the context fill kiln just measured differs from the last
+// one a hook saw (the first measurement always raises). kiln measures the
+// fill from each main-loop response's reported input, as /context and the
+// footer do; it reads no rate-limit windows and keeps no priced ledger, so
+// rateLimits is empty and cost absent. The hook observes: core echoes
+// { changed }.
+func (e *Engine) SessionMeasure(ctx context.Context, u Usage) {
+	if e == nil || (u.ContextWindow <= 0 && u.ContextTokens <= 0) || !e.Has("session.measure") {
+		return
+	}
+	now := &measuredUsage{tokens: u.ContextTokens, window: u.ContextWindow}
+	e.mu.Lock()
+	prev := e.measured
+	e.measured = now
+	e.mu.Unlock()
+	if prev != nil && *prev == *now {
+		return
+	}
+	cx := map[string]any{"window": u.ContextWindow}
+	if u.ContextTokens > 0 {
+		cx["tokens"] = u.ContextTokens
+		if u.ContextWindow > 0 {
+			cx["percent"] = float64(u.ContextTokens * 100 / u.ContextWindow)
+		}
+	}
+	ev := map[string]any{"context": cx, "rateLimits": []any{}, "changed": []any{"context"}}
+	if _, err := e.Raise(ctx, "session.measure", ev, OpResult(func(in map[string]any) (map[string]any, error) {
+		return map[string]any{"changed": in["changed"]}, nil
+	})); err != nil && err != ErrClosed {
+		e.log.Warn("mods: session.measure did not settle", "err", err)
+	}
+}
+
+// SessionReceive raises session.receive ({ origin, text }) for an inbound
+// delivery before kiln queues it. It returns the text to queue, or the
+// reason a hook consumed it (queue nothing). A chain that fails queues the
+// delivery as it arrived. In kiln the deliveries are an MCP channel's pushed
+// events (origin kind task-notification); there are no peers.
+func (e *Engine) SessionReceive(ctx context.Context, origin map[string]any, text string) (out string, consumed string) {
+	if e == nil || !e.Has("session.receive") {
+		return text, ""
+	}
+	ev := map[string]any{"origin": origin, "text": text}
+	res, err := e.Raise(ctx, "session.receive", ev, OpResult(func(in map[string]any) (map[string]any, error) {
+		t, _ := in["text"].(string)
+		return map[string]any{"text": t}, nil
+	}))
+	if err != nil {
+		e.log.Warn("mods: session.receive chain failed; queuing the delivery as it came", "err", err)
+		return text, ""
+	}
+	if c, ok := res["consumed"].(string); ok && c != "" {
+		return "", c
+	}
+	if t, ok := res["text"].(string); ok {
+		return t, ""
+	}
+	return text, ""
+}

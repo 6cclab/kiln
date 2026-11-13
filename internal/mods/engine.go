@@ -57,6 +57,12 @@ var supportedEvents = map[string]bool{
 	"prompt.compose":      true,
 	"prompt.attachment":   true,
 	"prompt.mention":      true,
+	"session.send":        true,
+	"session.receive":     true,
+	"session.measure":     true,
+	// session.attach and session.detach are left out on purpose: kiln has
+	// one local terminal and no remote client to attach, so a hook on them
+	// logs "kiln does not raise" and never runs.
 }
 
 // pinnedFields are the fields of each event a hook may not change on the
@@ -84,6 +90,8 @@ var pinnedFields = map[string][]string{
 	"prompt.compose":      {"model"},
 	"prompt.attachment":   {"type", "origin", "agentId"},
 	"prompt.mention":      {"mention", "agentId"},
+	"session.send":        {"origin", "agentId"},
+	"session.receive":     {"agentId"},
 }
 
 // gatingEvents must resolve to an object; anything else is a hook that
@@ -95,6 +103,7 @@ var gatingEvents = map[string]bool{
 	"prompt.submit": true, "prompt.fill": true, "prompt.suggest": true, "prompt.edit": true,
 	"prompt.change": true, "prompt.autocomplete": true, "prompt.section": true,
 	"prompt.compose": true, "prompt.attachment": true, "prompt.mention": true,
+	"session.send": true, "session.receive": true,
 }
 
 var nameRule = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -262,6 +271,10 @@ type Engine struct {
 	mu       sync.Mutex
 	commands []CommandSpec
 	tools    []ToolSpec
+
+	// measured is the context fill the last session.measure carried (guarded
+	// by mu), so the next one names the units that moved.
+	measured *measuredUsage
 }
 
 type plugin struct {

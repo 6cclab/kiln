@@ -30,6 +30,10 @@ type Services struct {
 	// both ids, when turnID is not the running turn's.
 	AbortTurn func(ctx context.Context, turnID string) error
 
+	// Surfaces lists what the session draws on, each once ("terminal" under
+	// the REPL); empty in a -p run. nil is empty.
+	Surfaces func() []string
+
 	// Tools lists the tools the model has, as the model names them.
 	Tools func() []ToolInfo
 	// CallTool runs a tool through kiln's permission gate (which may prompt

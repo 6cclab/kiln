@@ -5,6 +5,7 @@ const EVENTS = [
   'tool.call', 'tool.check', 'agent.spawn', 'agent.register', 'agent.offer',
   'prompt.submit', 'prompt.fill', 'prompt.suggest', 'prompt.edit', 'prompt.change',
   'prompt.autocomplete', 'prompt.section', 'prompt.compose', 'prompt.attachment', 'prompt.mention',
+  'session.send', 'session.receive', 'session.measure',
 ]
 
 export const register = (on: any) => {

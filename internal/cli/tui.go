@@ -173,7 +173,12 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	// MCP connect (below) so a channel server's first push has a sink.
 	if deps.InstallChannelSink != nil {
 		deps.InstallChannelSink(func(server, source string, ev mcpgate.ChannelEvent) {
-			bridge.SendAsync(tui.MsgChannelEvent{Source: source, Content: ev.Content, Meta: ev.Meta})
+			content, consumed := deps.Mods.get().SessionReceive(ctx, map[string]any{"kind": "task-notification"}, ev.Content)
+			if consumed != "" {
+				diag.L().Info("mods: session.receive consumed a channel event", "source", source, "reason", consumed)
+				return
+			}
+			bridge.SendAsync(tui.MsgChannelEvent{Source: source, Content: content, Meta: ev.Meta})
 		})
 	}
 
