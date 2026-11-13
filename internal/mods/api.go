@@ -50,6 +50,7 @@ var implemented = map[string]bool{
 	"session.version": true, "session.repo": true, "session.turns": true,
 	"agent.list":       true,
 	"command.register": true, "tool.register": true,
+	"session.compact": true, "session.append": true, "turn.abort": true,
 }
 
 // documented lists the rest of the mod API as Claude Code declares it, plus
@@ -57,12 +58,15 @@ var implemented = map[string]bool{
 // agent.spawn).
 var documented = []string{
 	"agent.register", "agent.spawn", "audio.play", "audio.speak",
-	"command.list", "config.list",
-	"prompt.read", "prompt.submit",
-	"session.append", "session.authorize", "session.compact", "session.messages",
+	"command.list", "command.run", "config.list", "config.set",
+	"mcp.connect", "process.spawn",
+	"prompt.compose", "prompt.fill", "prompt.media", "prompt.read", "prompt.submit", "prompt.suggest",
+	"session.authorize", "session.identity", "session.messages", "session.send",
 	"session.surface", "session.surfaces",
-	"tool.call", "tool.list", "turn.abort",
-	"ui.blit", "ui.log", "ui.notice", "ui.status",
+	"telemetry.log", "telemetry.mark",
+	"tool.call", "tool.check", "tool.list",
+	"ui.ask", "ui.blit", "ui.copy", "ui.focus", "ui.log", "ui.notice", "ui.notify",
+	"ui.scroll", "ui.selection", "ui.status",
 }
 
 func apiNames() []string {
@@ -118,6 +122,9 @@ func (e *Engine) apiCall(call goja.FunctionCall) goja.Value {
 
 // answer runs one asynchronous $ method; its value becomes the promise's.
 func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, error) {
+	if v, handled, err := e.answerOps(f, name, arg); handled {
+		return v, err
+	}
 	p := f.plugin
 	vm := e.w.vm
 	switch name {

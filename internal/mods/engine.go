@@ -31,14 +31,18 @@ var ErrClosed = errors.New("mods: engine closed")
 // supportedEvents are the events kiln raises in v1. A hook on any other
 // event registers (so the module loads) but never runs; Load logs it.
 var supportedEvents = map[string]bool{
-	"session.start": true,
-	"command.run":   true,
-	"tool.call":     true,
-	"agent.spawn":   true,
-	"turn.start":    true,
-	"turn.step":     true,
-	"turn.complete": true,
-	"ui.render":     true,
+	"session.start":   true,
+	"command.run":     true,
+	"tool.call":       true,
+	"agent.spawn":     true,
+	"turn.start":      true,
+	"turn.step":       true,
+	"turn.complete":   true,
+	"ui.render":       true,
+	"session.end":     true,
+	"session.compact": true,
+	"session.append":  true,
+	"turn.abort":      true,
 }
 
 // pinnedFields are the fields of each event a hook may not change on the
@@ -132,6 +136,8 @@ type Options struct {
 	// the session model and return the ModelCompleteResult as a map. nil rejects
 	// model.fork. Called from a background goroutine, so it may block.
 	Fork func(ctx context.Context, prompt string) (map[string]any, error)
+	// Services are what kiln lends the $ methods that reach beyond the engine.
+	Services Services
 	// HookBudget and CatchBudget override DefaultHookBudget and
 	// DefaultCatchBudget (tests shorten them).
 	HookBudget  time.Duration
@@ -193,6 +199,8 @@ type Engine struct {
 		isAsyncIter goja.Callable
 		drain       goja.Callable
 		streamOf    goja.Callable
+		makeFeed    goja.Callable
+		feedPush    goja.Callable
 		makeDollar  goja.Callable
 		assign      goja.Callable
 		parse       goja.Callable
@@ -320,7 +328,7 @@ func (e *Engine) setup() error {
 	e.js.claudeCode = h.Get("claudeCode")
 	for name, dst := range map[string]*goja.Callable{
 		"deepFreeze": &e.js.deepFreeze, "then": &e.js.then, "isAsyncIterator": &e.js.isAsyncIter,
-		"drain": &e.js.drain, "streamOf": &e.js.streamOf, "makeDollar": &e.js.makeDollar, "assign": &e.js.assign,
+		"drain": &e.js.drain, "streamOf": &e.js.streamOf, "makeFeed": &e.js.makeFeed, "feedPush": &e.js.feedPush, "makeDollar": &e.js.makeDollar, "assign": &e.js.assign,
 	} {
 		f, ok := goja.AssertFunction(h.Get(name))
 		if !ok {
@@ -564,6 +572,24 @@ type chain struct {
 	hooks     []*hook
 	streaming bool
 	core      func(input goja.Value) goja.Value
+	feeds     map[int]goja.Value
+}
+
+// feedFor is the chunk feed of stage i of a streaming chain: the hook at index
+// i, or core at len(hooks). The outermost stage's feed keeps nothing.
+func (c *chain) feedFor(i int) goja.Value {
+	if f, ok := c.feeds[i]; ok {
+		return f
+	}
+	if c.feeds == nil {
+		c.feeds = map[int]goja.Value{}
+	}
+	f, err := c.e.js.makeFeed(goja.Undefined(), c.e.w.vm.ToValue(i == 0))
+	if err != nil {
+		f = goja.Undefined()
+	}
+	c.feeds[i] = f
+	return f
 }
 
 // frame is one hook's run within a chain (or its .catch handler's).
@@ -634,7 +660,7 @@ func (f *frame) start(fn goja.Callable) {
 	}
 	if f.c.streaming {
 		if is, _ := e.js.isAsyncIter(goja.Undefined(), ret); is != nil && is.ToBoolean() {
-			ret, err = e.js.drain(goja.Undefined(), ret)
+			ret, err = e.js.drain(goja.Undefined(), ret, f.c.feedFor(f.i))
 			if err != nil {
 				f.fail(failKind(err), jsErr(err).Error())
 				return
@@ -787,7 +813,11 @@ func (f *frame) wrapNext(p goja.Value) goja.Value {
 	if !f.c.streaming {
 		return p
 	}
-	it, err := f.c.e.js.streamOf(goja.Undefined(), p)
+	next := f.i + 1
+	for next < len(f.c.hooks) && !f.c.e.matches(f.c.hooks[next], f.input) {
+		next++
+	}
+	it, err := f.c.e.js.streamOf(goja.Undefined(), p, f.c.feedFor(next))
 	if err != nil {
 		return p
 	}

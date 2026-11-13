@@ -151,6 +151,11 @@ func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, s
 	if len(prep.MessagesToSummarize) == 0 && len(prep.TurnPrefixMessages) == 0 {
 		return nil // everything is recent and kept verbatim: no summary call to pay for
 	}
+	if skip, rewritten := l.compactDecision(ctx, pathEntries, customInstructions, trigger); skip {
+		return nil
+	} else if rewritten != nil {
+		customInstructions = rewritten
+	}
 	p, ok := l.h.opts.Registry.Provider(summariser.Provider)
 	if !ok {
 		return fmt.Errorf("harness: unknown provider %q", summariser.Provider)
@@ -422,4 +427,48 @@ func latestTurnTokens(entries []session.Entry) int {
 		}
 	}
 	return n
+}
+
+// compactDecision asks the OnCompactDecision handlers whether the compaction
+// about to summarise pathEntries goes ahead: skip is true when one refused it,
+// and rewritten is the instructions a handler changed (nil when none did).
+func (l *Lane) compactDecision(ctx context.Context, pathEntries []session.Entry, custom *string, trigger string) (skip bool, rewritten *string) {
+	if len(l.h.hooks.compactDecision) == 0 {
+		return false, nil
+	}
+	info := CompactInfo{Trigger: TriggerManual}
+	switch {
+	case trigger == TriggerAuto || trigger == TriggerOverflow:
+		info.Trigger = "auto"
+	}
+	if t, ok := ctx.Value(compactTriggerKey{}).(string); ok && t != "" {
+		info.Trigger = t
+	}
+	if custom != nil {
+		info.Instructions = *custom
+	}
+	info.Messages = entriesToTranscript(pathEntries)
+	for _, fn := range l.h.hooks.compactDecision {
+		if fn == nil {
+			continue
+		}
+		var v CompactVerdict
+		err := runGuarded(func() error {
+			var err error
+			v, err = fn(ctx, info)
+			return err
+		})
+		if err != nil {
+			l.h.events.Emit(Event{Type: EventHandlerError, Lane: l.name, HookName: "compact_decision", Err: err})
+			continue
+		}
+		if v.Skip != "" {
+			return true, nil
+		}
+		if v.Instructions != nil {
+			rewritten = v.Instructions
+			info.Instructions = *v.Instructions
+		}
+	}
+	return false, rewritten
 }

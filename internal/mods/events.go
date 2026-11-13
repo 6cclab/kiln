@@ -528,6 +528,30 @@ type StepHandle interface {
 	// (every hook's yield* next(e)), and returns once the chain settled
 	// (bounded by the hooks' budgets). A second call does nothing.
 	Finish(TurnStep)
+	// Chunk delivers one piece of the response as it streams, in claude-code.d.ts's
+	// TurnStepChunk shape ({ kind: "text"|"thinking"|"tool"|"input"|"stop", ... }):
+	// the hooks read it from next(e). A chunk after Finish, or before the chain
+	// reached core, is dropped.
+	Chunk(StepChunk)
+}
+
+// StepChunk is one TurnStepChunk, as JSON-shaped data.
+type StepChunk map[string]any
+
+func (h *stepHandle) Chunk(c StepChunk) {
+	if h == nil || h.e == nil || c == nil {
+		return
+	}
+	h.e.w.post(func() {
+		if !h.reached || h.finished || h.feed == nil {
+			return
+		}
+		v, err := h.e.toJS(c)
+		if err != nil {
+			return
+		}
+		_, _ = h.e.js.feedPush(goja.Undefined(), h.feed, v)
+	})
 }
 
 type stepHandle struct {
@@ -540,7 +564,9 @@ type stepHandle struct {
 	finished bool
 	resolve  func(any) error
 	core     goja.Value
+	feed     goja.Value
 	stopCtx  func() bool
+	chain    *chain
 }
 
 func (h *stepHandle) Finish(step TurnStep) {
@@ -603,8 +629,9 @@ func (h *stepHandle) finish(step *TurnStep) {
 // messageCount, agentId? }) before a model request and returns once every
 // hook's code before its yield* next(e) has run, that is when the chain
 // reached core. kiln then makes the request and calls Finish with what came
-// back. Chunks are not streamed through mods in v1: next(e) yields nothing
-// and returns the whole result. If ctx ends before Finish, core resolves as
+// back. Chunks stream: kiln calls StepHandle.Chunk as the response
+// arrives and each hook reads them from next(e), then gets the whole result.
+// What a hook yields is not applied to what the person sees. If ctx ends before Finish, core resolves as
 // a request with no response (stopReason and usage null).
 func (e *Engine) BeginStep(ctx context.Context, start StepStart) StepHandle {
 	h := &stepHandle{e: e, settled: make(chan struct{}), start: start}
@@ -643,12 +670,14 @@ func (e *Engine) BeginStep(ctx context.Context, start StepStart) StepHandle {
 			p, resolve, _ := vm.NewPromise()
 			h.resolve = resolve
 			h.core = vm.ToValue(p)
+			h.feed = h.chain.feedFor(len(h.chain.hooks))
 			h.stopCtx = context.AfterFunc(ctx, func() {
 				e.w.post(func() { h.finish(nil) })
 			})
 			signal()
 			return h.core
 		})
+		h.chain = c
 		e.runChain(c, input, func(_ goja.Value, err error) {
 			if err != nil {
 				e.log.Warn("mods: turn.step chain rejected", "err", err)
