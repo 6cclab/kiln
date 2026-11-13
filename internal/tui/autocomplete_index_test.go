@@ -27,8 +27,8 @@ func buildPopupSync(reg *commands.Registry, cwd, line string, col int) *Popup {
 	return p
 }
 
-// typeText feeds s to the model one key at a time, the way the terminal does.
-func typeText(m Model, s string) (Model, []tea.Cmd) {
+// typeIntoModel feeds s to the model one key at a time, the way the terminal does.
+func typeIntoModel(m Model, s string) (Model, []tea.Cmd) {
 	var cmds []tea.Cmd
 	for _, r := range s {
 		next, cmd := m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -52,7 +52,7 @@ func TestRefreshPopup_NeverWaitsOnTheWalk(t *testing.T) {
 	}
 
 	start := time.Now()
-	m, cmds := typeText(m, "@fo")
+	m, cmds := typeIntoModel(m, "@fo")
 	if d := time.Since(start); d > 500*time.Millisecond {
 		t.Fatalf("typing took %v with the walk blocked; Update must not wait on it", d)
 	}
@@ -168,7 +168,7 @@ func BenchmarkAtKeystroke(b *testing.B) {
 	makeTree(b, dir, 250, 200)
 	m := newTestModel()
 	m.cfg.Cwd = dir
-	m, cmds := typeText(m, "@")
+	m, cmds := typeIntoModel(m, "@")
 	for _, c := range cmds {
 		if c != nil {
 			next, _ := m.Update(c())
