@@ -8,8 +8,8 @@ SHOT idle
 # design: Terminal.dc.html:222 (MODES[1] "auto-edit")
 EXPECT /auto-edit/
 KEY shift+tab
-SHOT after-shift-tab
 # acceptEdits -> plan (permissionModeRing in internal/tui/app.go)
-EXPECT /plan only/
+WAITFOR /plan only/ 5
+SHOT after-shift-tab
 EXPECT_NOT /auto-edit/
 EXPECT_NOT /panic|goroutine/

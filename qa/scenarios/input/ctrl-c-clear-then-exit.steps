@@ -10,8 +10,10 @@ TYPE this will be cleared
 SHOT before-ctrl-c
 EXPECT /this will be cleared/
 KEY ctrl+c
+# The hint lasts DoublePress (1s, internal/tui/keys.go); a real-terminal
+# SHOT can take that long, so catch it before the screenshot.
+WAITFOR /Press Ctrl-C again to exit/ 1
 SHOT after-first-ctrl-c
-EXPECT /Press Ctrl-C again to exit/
 EXPECT_NOT /this will be cleared/
 KEY ctrl+c
 WAIT 1
