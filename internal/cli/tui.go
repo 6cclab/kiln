@@ -271,6 +271,24 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		}
 	}
 	modsDriver := deps.Mods.newDriver()
+	// kiln's own guess at the next prompt goes through prompt.suggest; a
+	// hook that drops it leaves the box without one.
+	var promptSubmit tui.PromptSubmitFunc
+	var attachment tui.AttachmentFunc
+	if deps.Mods != nil {
+		promptSubmit, attachment = deps.Mods.submit, deps.Mods.promptAttachment
+	}
+	suggestNext := deps.SuggestNextPrompt
+	if deps.Mods != nil && suggestNext != nil {
+		inner := suggestNext
+		suggestNext = func(ctx context.Context) (string, error) {
+			text, err := inner(ctx)
+			if err != nil || text == "" {
+				return text, err
+			}
+			return deps.Mods.suggestNext(ctx, text), nil
+		}
+	}
 	if modsDriver != nil {
 		modsDriver.SetSend(bridge.SendAsync, func(_, text string) {
 			bridge.SendAsync(tui.MsgFooterNote{Text: text})
@@ -300,7 +318,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			// The tier the session is sized for now: /model and, on
 			// kiln/auto, each route to a model with another window move it.
 			tier := deps.Started.CurrentTier()
-			resolved, err := ResolveMentions(line, Options{Cwd: deps.Cwd, Tier: &tier, Roots: deps.Gate.Roots()})
+			resolved, err := ResolveMentions(line, Options{Cwd: deps.Cwd, Tier: &tier, Roots: deps.Gate.Roots(), Mods: deps.Mods})
 			if err != nil || len(resolved.Mentions) == 0 {
 				return line, nil, nil
 			}
@@ -324,7 +342,9 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 			return "", outcome.Context
 		},
 		GitStatus:         readGitStatus,
-		SuggestNextPrompt: deps.SuggestNextPrompt,
+		PromptSubmit:      promptSubmit,
+		Attachment:        attachment,
+		SuggestNextPrompt: suggestNext,
 
 		HistoryPath:    historyPath,
 		StartupHistory: history,

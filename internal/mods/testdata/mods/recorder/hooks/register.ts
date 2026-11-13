@@ -3,6 +3,8 @@ const seen: any[] = []
 const EVENTS = [
   'session.end', 'session.compact', 'session.append', 'turn.abort',
   'tool.call', 'tool.check', 'agent.spawn', 'agent.register', 'agent.offer',
+  'prompt.submit', 'prompt.fill', 'prompt.suggest', 'prompt.edit', 'prompt.change',
+  'prompt.autocomplete', 'prompt.section', 'prompt.compose', 'prompt.attachment', 'prompt.mention',
 ]
 
 export const register = (on: any) => {

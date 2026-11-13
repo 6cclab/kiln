@@ -66,6 +66,7 @@ import (
 	"github.com/andrepato/harness/internal/session/jsonl"
 	"github.com/andrepato/harness/internal/tool"
 	"github.com/andrepato/harness/internal/tools"
+	"github.com/andrepato/harness/internal/tui"
 )
 
 // defaultModel is cli.ts's own default: qwen3.8 pinned resident on the GPU
@@ -1106,6 +1107,9 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		planLedgerText = ledgerPrompt(experimentLedgerPath)
 	}
 	reminders := newModeReminders(gate.Mode, planLedgerText)
+	if modsRT != nil {
+		reminders.attach = func(typ, text string) (string, bool) { return modsRT.attachment(typ, text, nil) }
+	}
 
 	// baseEffort is what --effort/the settings file asked for; startEffort
 	// is what the session actually starts at, which HARNESS_EXP_PLAN_EFFORT
@@ -1221,14 +1225,26 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if systemPromptBase == "" {
 			systemPromptBase = defaultSystemPrompt
 		}
-		promptParts := []string{systemPromptBase, envBlock, args.AppendSystemPrompt}
+		// Each part is a section the mods' prompt.section and prompt.compose
+		// hooks can reshape; without mods they join exactly as before.
+		sections := []mods.PromptSection{
+			{ID: "base", Text: systemPromptBase, Scope: "shared"},
+			{ID: "environment", Text: envBlock, Scope: "session"},
+			{ID: "append", Text: args.AppendSystemPrompt, Scope: "session"},
+		}
 		// HARNESS_EXP_REVIEW (switch 3, experiments.go): a reviewer subagent
 		// before finishing, regardless of plan mode.
 		if reviewEnabled() {
-			promptParts = append(promptParts, reviewPrompt)
+			sections = append(sections, mods.PromptSection{ID: "review", Text: reviewPrompt, Scope: "session"})
 		}
-		promptParts = append(promptParts, scratchpadPrompt, tp.Memory, tp.AutoMemory, tp.Skills, mcpIndexText)
-		return strings.Join(nonEmpty(promptParts), "\n\n")
+		sections = append(sections,
+			mods.PromptSection{ID: "scratchpad", Text: scratchpadPrompt, Scope: "session"},
+			mods.PromptSection{ID: "memory", Text: tp.Memory, Scope: "session"},
+			mods.PromptSection{ID: "auto_memory", Text: tp.AutoMemory, Scope: "session"},
+			mods.PromptSection{ID: "skills", Text: tp.Skills, Scope: "session"},
+			mods.PromptSection{ID: "mcp_index", Text: mcpIndexText, Scope: "session"},
+		)
+		return modsRT.composePrompt(sections)
 	}
 	// sizing rebuilds the prompt, the task tool's text and the MCP
 	// session's tier when the tier moves (/model, or a kiln/auto route to
@@ -1316,6 +1332,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		modsRT.lane.Store(started.Lane)
 		if args.Print {
 			modsRT.endReason = "other"
+			modsRT.print = true
 		}
 	}
 	var registryRef *slashcommands.Registry
@@ -1475,6 +1492,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				return runModel(ctx, "mod · model.fork", strm, m, "", transcript, maxTokens, ""), nil
 			},
 			services: mods.Services{
+				RebuildPrompt: func() { sizing.refresh(nil) },
 				Messages: func(ctx context.Context, agentID string, api bool) ([]any, error) {
 					if agentID != "" {
 						return nil, fmt.Errorf("kiln keeps a subagent's conversation to itself: no transcript for %s", agentID)
@@ -1581,6 +1599,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		gate.SetModTools(names)
 		started.Harness.AddTools(modsRT.tools("")...)
 		modsRT.describeTools(ctx, started.Harness)
+		// Mods start after the first system prompt was built, so a mod that
+		// shapes it (prompt.section, prompt.compose) is applied now.
+		if modsRT.hasPromptHooks() {
+			sizing.refresh(nil)
+		}
 		mcpSess.addResident(names...)
 		if err := mcpSess.regate(); err != nil {
 			diag.L().Warn("mods: regate failed", "err", err)
@@ -2371,7 +2394,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		return exitCode
 	}
 
-	exitCode := runPrintMode(ctx, args, started, gate, resolved, hooks.get(), sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry, reminders)
+	exitCode := runPrintMode(ctx, args, started, gate, resolved, hooks.get(), sessionStart, cwd, stdout, stderr, stdin, getBlocked, registry, reminders, modsRT)
 
 	// Nothing outlives the session: a background shell started during this
 	// run must not hold a port open after the process exits. Killed BEFORE
@@ -2415,7 +2438,7 @@ func readStdin(r io.Reader) string {
 // wrapping here, in print mode, rather than leaving it absent until phase 7.
 // That is the one place this implementation intentionally diverges from
 // cli.ts's control flow instead of following it.
-func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry, reminders *modeReminders) int {
+func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *permission.Gate, resolved provider.Resolved, hookConfig claudehooks.Config, sessionStart claudehooks.Outcome, cwd string, stdout, stderr io.Writer, stdin io.Reader, getBlocked func() []string, registry *slashcommands.Registry, reminders *modeReminders, modsRT *modsRuntime) int {
 	if args.MaxTurnsErr != "" {
 		fmt.Fprintln(stderr, args.MaxTurnsErr)
 		return 1
@@ -2440,6 +2463,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 	// `resolveMentions(handledCommand?.prompt ?? promptText, ...)`. A
 	// command with no Prompt (the common case: a report or a modal's text
 	// fallback) prints its Output and returns without running a turn.
+	var command *mods.PromptCommand
 	if strings.HasPrefix(strings.TrimSpace(promptText), "/") {
 		result, err := registry.Execute(ctx, strings.TrimSpace(promptText))
 		if err == nil {
@@ -2461,8 +2485,26 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 				}
 				return 0
 			}
+			name, cmdArgs, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(promptText), "/"), " ")
+			command = &mods.PromptCommand{Name: name, Args: strings.TrimSpace(cmdArgs)}
 			promptText = result.Prompt
 		}
+	}
+
+	// prompt.submit: the mods may rewrite the prompt, add context for the
+	// model, or drop it. The run's one prompt carries origin sdk, since no
+	// person typed it into a box. A command's expansion keeps its text.
+	var modContext []string
+	if modsRT != nil {
+		text, blocks, drop := modsRT.submit(ctx, tui.PromptSubmission{Text: promptText, Command: command})
+		if drop != "" {
+			fmt.Fprintf(stderr, "prompt dropped by a mod: %s\n", drop)
+			return 1
+		}
+		if command == nil {
+			promptText = text
+		}
+		modContext = blocks
 	}
 
 	notice := hookNoticeSink(stderr)
@@ -2485,6 +2527,16 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 
 	hookContext := append([]string{}, sessionStart.Context...)
 	hookContext = append(hookContext, promptHooks.Context...)
+	hookContext = append(hookContext, modContext...)
+	if modsRT != nil {
+		var kept []string
+		for _, b := range hookContext {
+			if t, keep := modsRT.attachment("hook_additional_context", b, map[string]any{"kind": "hook", "event": "UserPromptSubmit"}); keep {
+				kept = append(kept, t)
+			}
+		}
+		hookContext = kept
+	}
 
 	// `@path` inlines files here too. A prompt that behaves differently
 	// under -p than it does interactively is a trap.
@@ -2492,6 +2544,7 @@ func runPrintMode(ctx context.Context, args Args, started *agent.Started, gate *
 		Cwd:   cwd,
 		Tier:  &resolved.Tier,
 		Roots: gate.Roots(),
+		Mods:  modsRT,
 	})
 	for _, m := range resolvedMentions.Mentions {
 		if m.Skipped != "" {

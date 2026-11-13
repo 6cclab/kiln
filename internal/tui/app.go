@@ -23,6 +23,7 @@ import (
 	"github.com/andrepato/harness/internal/execenv"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/imgpath"
+	"github.com/andrepato/harness/internal/mods"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/session"
 	"github.com/andrepato/harness/internal/tui/editor"
@@ -90,7 +91,13 @@ type Config struct {
 
 	ResolveMentions ResolveMentionsFunc
 	RunPromptHooks  RunPromptHooksFunc
-	GitStatus       GitStatusFunc
+	// PromptSubmit raises the mods' prompt.submit for a prompt about to
+	// start (or be steered into) a turn; nil without mods.
+	PromptSubmit PromptSubmitFunc
+	// Attachment raises the mods' prompt.attachment for the hook context
+	// kiln hands the model; nil without mods.
+	Attachment AttachmentFunc
+	GitStatus  GitStatusFunc
 	// SuggestNextPrompt returns a short "what you might ask next" line to
 	// show as dim ghost text in the empty input box after a completed turn
 	// (Claude Code's prompt suggestion, Tab to accept). It makes a cheap
@@ -235,6 +242,9 @@ type Model struct {
 	// run for real, through the normal command path, once the turn ends
 	// (finishTurn's drainDeferredCommands).
 	deferredCmds []string
+	// pluginPrompts are prompts mods submitted ($.prompt.submit) that wait
+	// for the session to be idle.
+	pluginPrompts []pluginPrompt
 	// pendingImages holds images already resolved and placeholder-
 	// substituted by a prior bracketed paste of a dragged/pasted image
 	// path (tea.PasteMsg's imgpath.Resolve call) for the message still
@@ -653,11 +663,17 @@ type msgSuggestion struct {
 // update's own cases never have to remember to call layoutViewport
 // themselves.
 func (m Model) Update(tm tea.Msg) (tea.Model, tea.Cmd) {
+	var before promptSnap
+	if m.cfg.Mods != nil {
+		before = m.promptSnap()
+	}
+	m.editor.ClearCause()
 	next, cmd := m.update(tm)
 	nm, ok := next.(Model)
 	if !ok {
 		return next, cmd
 	}
+	nm.afterPrompt(before, tm)
 	if nm.fullscreen {
 		nm = nm.layoutViewport()
 	}
@@ -1162,6 +1178,18 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.editor.SetSuggestion(msg.text)
 		return m, nil
 
+	case MsgModsFill:
+		return m.modsFill(msg)
+
+	case MsgModsSuggest:
+		return m.modsSuggest(msg), nil
+
+	case MsgModsSubmit:
+		return m.modsSubmit(msg)
+
+	case msgModsAutocomplete:
+		return m.applyModAutocomplete(msg), nil
+
 	case msgBackgroundDone:
 		return m.finishBackground(msg)
 
@@ -1427,10 +1455,13 @@ func (m Model) finishTurn(msg msgTurnResult) (Model, tea.Cmd) {
 		msg.result.Status == harness.StatusCompleted &&
 		len(m.queued) == 0 &&
 		len(m.deferredCmds) == 0 &&
+		len(m.pluginPrompts) == 0 &&
 		m.editor.Value() == "" &&
 		!m.inPlanMode() // Claude Code skips suggestions in plan mode
 
 	mm, cmd := m.drainDeferredCommands()
+	mm, pcmd := mm.drainPluginPrompts()
+	cmd = tea.Batch(cmd, pcmd)
 	if suggest {
 		return mm, tea.Batch(cmd, mm.suggestCmd())
 	}
@@ -2054,8 +2085,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			line, _ := m.editor.CursorLine()
 			replacement, _ := m.popup.Accept()
 			accepted := line
-			if m.popup.Start >= 0 && m.popup.Start <= m.popup.End && m.popup.End <= len(line) {
-				accepted = line[:m.popup.Start] + replacement + line[m.popup.End:]
+			if ps, pe := m.popup.Range(); ps >= 0 && ps <= pe && pe <= len(line) {
+				accepted = line[:ps] + replacement + line[pe:]
 			}
 			if msg.String() == "enter" && hasItem && (strings.TrimSpace(line) == "/"+item.Value ||
 				strings.TrimRight(accepted, " ") == strings.TrimRight(line, " ")) {
@@ -2064,9 +2095,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				// Fall through to the editor's submit pipeline below.
 			} else {
 				replacement, _ := m.popup.Accept()
-				m.editor.ReplaceCursorLine(m.popup.Start, m.popup.End, replacement)
+				ps, pe := m.popup.Range()
+				fromMod := false
+				if it, ok := m.popup.SelectedItem(); ok {
+					fromMod = it.Mod
+				}
+				m.editor.ReplaceCursorLine(ps, pe, replacement)
 				m.popup = nil
 				m.editor.PopupActive = false
+				if fromMod {
+					// The box's new token is asked of the mods again.
+					return m, m.modAutocompleteCmd()
+				}
 				return m, nil
 			}
 		case "esc":
@@ -2378,7 +2418,7 @@ func (m Model) refreshPopup() (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.popup, cmd = BuildPopup(m.cfg.Registry, m.cfg.Cwd, line, col, m.files)
 	m.editor.PopupActive = m.popup != nil
-	return m, cmd
+	return m, tea.Batch(cmd, m.modAutocompleteCmd())
 }
 
 // cycleMode advances the permission mode one step around Claude Code's
@@ -2477,6 +2517,15 @@ func (m Model) routeSubmit(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 			m.editor.SetValue("")
 			return m, nil
 		default:
+			if m.cfg.PromptSubmit != nil {
+				text, _, drop := m.cfg.PromptSubmit(context.Background(), PromptSubmission{Text: line, Busy: true})
+				if drop != "" {
+					m.editor.SetValue("")
+					m.commit(RenderError("dropped by a mod: " + drop))
+					return m, nil
+				}
+				line = text
+			}
 			m.queued = append(m.queued, line)
 			if m.cfg.Lane != nil {
 				if err := m.cfg.Lane.SteerAs(line, line); err != nil {
@@ -2598,6 +2647,25 @@ func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 
 	prompt := line
 	images := embeddedImages
+	// prompt.submit: the prompt as typed (a command's expansion is only
+	// dropped or given context), before mentions and hooks read it.
+	var submitContext []string
+	if m.cfg.PromptSubmit != nil {
+		in := PromptSubmission{Text: line, Images: embeddedImages}
+		if handled != nil && handled.Prompt != "" {
+			name, args, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "/"), " ")
+			in.Command = &mods.PromptCommand{Name: name, Args: strings.TrimSpace(args)}
+		}
+		text, blocks, drop := m.cfg.PromptSubmit(ctx, in)
+		if drop != "" {
+			m.commit(RenderError("dropped by a mod: " + drop))
+			return m, nil
+		}
+		if in.Command == nil {
+			line, prompt = text, text
+		}
+		submitContext = blocks
+	}
 	if handled != nil && handled.Prompt != "" {
 		prompt = handled.Prompt
 	} else if m.cfg.ResolveMentions != nil {
@@ -2619,6 +2687,17 @@ func (m Model) executeLine(line string, pathLeading bool) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		hookContext = hctx
+	}
+	if m.cfg.Attachment != nil {
+		hookContext = m.attach(hookContext, "UserPromptSubmit")
+		m.startupContext = m.attach(m.startupContext, "SessionStart")
+		for _, b := range submitContext {
+			if t, keep := m.cfg.Attachment(ctx, "hook_additional_context", b, map[string]any{"kind": "plugin", "event": "prompt.submit"}); keep {
+				hookContext = append(hookContext, t)
+			}
+		}
+	} else {
+		hookContext = append(hookContext, submitContext...)
 	}
 	if len(m.startupContext) > 0 {
 		hookContext = append(append([]string{}, m.startupContext...), hookContext...)

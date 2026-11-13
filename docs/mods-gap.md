@@ -50,14 +50,17 @@ are out of scope here.)
 | `config.describe` | a /config row is listed | ➖ |
 | `agent.spawn` | before the Agent tool starts a subagent | ✅ |
 | `agent.offer` | an agent type is offered to the model | ⚠️ raised at dispatch (the model naming a `subagent_type`); `isOffered: false` refuses the dispatch with a reason; the task tool's static listing of agent types is built before mods start and is not filtered; a plugin's own `$.agent.spawn` is no offer |
-| `prompt.submit` | a prompt is submitted, before the turn | ➖ (registers, never runs) |
-| `prompt.fill` | text is about to enter the prompt box | ➖ |
-| `prompt.suggest` | text proposed as a prompt suggestion | ➖ |
-| `prompt.edit` | the person edits the prompt box | ➖ |
-| `prompt.compose` | a system prompt is rendered | ➖ |
-| `prompt.section` | a named system-prompt section is assembled | ➖ |
-| `prompt.context` | first message's context blocks computed | ➖ |
-| `prompt.attachment` | an injected model message is carried | ➖ |
+| `prompt.submit` | a prompt is submitted, before the turn | ⚠️ raised in the TUI at Enter (busy: at Enter with the running turn's id) and by `$.prompt.submit`, before mentions and UserPromptSubmit hooks; under `-p` once, with origin `{kind:'sdk'}`; a rewrite of `text`, added `context` and `drop` apply; a slash command's expansion gets `drop` and `context` only (its text is not rewritten); `wait` is always false (kiln has no queue-submit chord); image attachments are served through `$.prompt.media` |
+| `prompt.fill` | text is about to enter the prompt box | ⚠️ raised for `$.prompt.fill`; a rewritten `text` is what the box takes; `decorations` are passed on but not drawn; under `-p` the answer is refusal `no_composer` |
+| `prompt.suggest` | text proposed as a prompt suggestion | ⚠️ raised for `$.prompt.suggest` and for kiln's own next-prompt guess (origin `{kind:'suggestion'}`); a rewritten `text` is shown, `isShown:false` drops it; under `-p` `isShown` is false |
+| `prompt.edit` | the person edits the prompt box | ⚠️ raised once per key or paste that changes the text, with `{start, end, inputText}` as a splice in UTF-16 units and the box before; observe-only (a hook's rewrite is not applied); carries no `key`; a pure cursor move raises nothing; never fires under `-p` (no input line) |
+| `prompt.change` | the prompt box text changed | ⚠️ raised when something other than a key changed the text (history recall, clear/submit, kiln's own edit, a plugin's fill: origin `history`, `clear`, `engine`, `plugin`); observe-only; never fires under `-p` |
+| `prompt.autocomplete` | typeahead for the token at the cursor | ⚠️ raised on each popup refresh for the token before the cursor; the hooks' `suggestions` rows (`text`, `label`, `description`) join the popup beneath kiln's own, and accepting one replaces the token; never fires under `-p` |
+| `prompt.mention` | an `@path` is read | ⚠️ raised in `ResolveMentions` (TUI and `-p`) after the path resolves to an existing non-directory file; `deny` refuses it, a redirected `path` is re-checked against the roots, `context` blocks follow the files; not raised for a missing file or a directory; no line-range `offset`/`limit` |
+| `prompt.compose` | a system prompt is rendered | ⚠️ raised each time kiln builds the system prompt (start, `/model`, tier change, MCP index, scratchpad, `$.ui.invalidate('prompt.compose')`) over kiln's sections; a rewritten list (valid ids, shared before session) replaces it, a bad list is refused and the prompt stands; mods start after the first build, so the prompt is rebuilt once they are up |
+| `prompt.section` | a named system-prompt section is assembled | ⚠️ raised per section: `base` (shared), `environment`, `append`, `review`, `scratchpad`, `memory`, `auto_memory`, `skills`, `mcp_index` (session); `text:null` drops one; kiln has no output-style, git-status or tools sections of its own, so those ids do not appear |
+| `prompt.context` | first message's context blocks computed | ➖ never raised: kiln sends no first-user-message context blocks (CLAUDE.md, env and date live in the system prompt; use `prompt.section` `memory` / `environment`) |
+| `prompt.attachment` | an injected model message is carried | ⚠️ raised for types `plan_mode`, `plan_mode_exit` (mode reminders, no detail), `hook_additional_context` (hook or plugin context) and `file` (an `@mention`'s content); `text:null` leaves the message out; other types (queued commands, todo/task reminders, diagnostics, …) are not raised |
 | `skill.prompt` | a skill's prompt is expanded for the model | ➖ |
 | `attribution.text` | a commit / PR text is composed | ➖ |
 | `plugin.register` | a hooks module joins the chain | ➖ |
@@ -161,9 +164,11 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `store.get` / `set` / `delete` / `keys` | plugin key-value store | 🚫 |
 | `config.list` | `() => Promise<ConfigRow[]>` | 🚫 |
 | `config.set` / `config.describe` | | ❌ |
-| `prompt.read` | `() => Promise<PromptBox>` | 🚫 |
-| `prompt.submit` | `(input) => Promise<…>` | 🚫 |
-| `prompt.fill` / `suggest` / `compose` | | ❌ |
+| `prompt.read` | `() => Promise<PromptBox>` | ✅ the box as the TUI last published it, cursor in UTF-16 units; under `-p` `{text:'', cursor:0}` |
+| `prompt.submit` | `(input) => Promise<…>` | ✅ raises `prompt.submit`, then starts a turn once idle (queued behind a running one); under `-p` it answers `{drop: "kiln -p runs the one prompt it was given: there is no idle session to submit into"}` |
+| `prompt.fill` / `suggest` | | ✅ raise their events, then reach the box through the TUI; `fill` refuses with `no_composer` under `-p` and `dialog` while a dialog holds the keys; `suggest` shows only in an idle empty box |
+| `prompt.compose` | `(args) => Promise<…>` | ✅ the sections kiln composes for the args (facts: model, promptModel, surfaces, tools, outputStyle:null, traits), after `prompt.section` |
+| `prompt.media` | `({id, offset?}) => Promise<…>` | ✅ a 4 MiB slice of an image attached to a submission in flight; images only; answered for any mod (kiln has no managed-settings notion) |
 | `turn.abort` | `(input) => Promise<void>` | ✅ raises `turn.abort`, then aborts the running main turn; rejects when `turnId` is not the running turn |
 
 ### state (kiln-only)
@@ -197,7 +202,7 @@ classify-only call). The deliberate stops left:
    `session.version` returns `{version}` only (no `base`/`builtAt` — kiln's version
    is a git sha); `session.repo` reports `internal:false`, `name:null` (kiln has no
    own-org notion).
-5. Everything under `prompt.*`, `config.*`,
+5. Everything under `config.*`,
    `skill.prompt`, `attribution.text` — deep integration points; no consumer, low
    priority.
 

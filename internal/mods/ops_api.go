@@ -48,6 +48,25 @@ type Services struct {
 	// as the hooks left them) and returns once it started. The context is
 	// marked as having raised agent.spawn.
 	SpawnAgent func(ctx context.Context, in map[string]any) (AgentStarted, error)
+
+	// PromptRead is the person's prompt box as it stands; ok is false where
+	// kiln draws none (a -p run).
+	PromptRead func() (box PromptBox, ok bool)
+	// PromptFill puts text in the box by mode (replace, append, insert).
+	PromptFill func(ctx context.Context, text, mode, plugin string) PromptFillAnswer
+	// PromptSuggest proposes text as the box's dim suggestion and reports
+	// whether it is shown.
+	PromptSuggest func(ctx context.Context, text string) bool
+	// PromptSubmit starts a turn of its own from a plugin's text, once the
+	// session is idle, and returns when it started or was queued.
+	PromptSubmit func(ctx context.Context, text string, context []string, plugin string, asUser bool) error
+	// PromptCompose is what the system prompt is composed from for args
+	// (claude-code.d.ts's PromptComposeArgs): the facts, each one left out
+	// read off the session, and the engine's own sections.
+	PromptCompose func(ctx context.Context, args map[string]any) (facts map[string]any, sections []PromptSection)
+	// RebuildPrompt composes the system prompt again ($.ui.invalidate of
+	// prompt.section or prompt.compose).
+	RebuildPrompt func()
 }
 
 // CompactResult is what a compaction left: the conversation after it and the
