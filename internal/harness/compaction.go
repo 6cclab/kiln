@@ -181,7 +181,7 @@ func (l *Lane) runCompaction(ctx context.Context, pathEntries []session.Entry, s
 	// Snapshot again: the before_compaction hooks above may have changed
 	// the system prompt or tools, and the fast path must match the request
 	// the loop would send next.
-	liveStreamOpts := buildStreamOptions(l.h.requestOptions(), cfg)
+	liveStreamOpts := buildStreamOptions(l.h.requestOptions(), cfg, summariser.Api)
 	fastPath := &compaction.FastPathInput{
 		SystemPrompt: liveStreamOpts.SystemPrompt,
 		Tools:        liveStreamOpts.Tools,

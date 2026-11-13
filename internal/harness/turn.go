@@ -756,7 +756,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		return nil, target, tip, fmt.Errorf("harness: unknown provider %q", target.Model.Provider)
 	}
 	m := target.Model
-	opts := buildStreamOptions(l.h.requestOptions(), target.streamConfig(cfg))
+	opts := buildStreamOptions(l.h.requestOptions(), target.streamConfig(cfg), target.Model.Api)
 
 	responseEntryID := ""
 	if raw, _, ok := l.h.opts.Storage.GetValue(session.NamespaceOpState, operationID); ok {
@@ -793,7 +793,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 				}
 				promptTokens = l.requestTokens(transcript)
 			}
-			target, m, opts = next, next.Model, buildStreamOptions(l.h.requestOptions(), next.streamConfig(cfg))
+			target, m, opts = next, next.Model, buildStreamOptions(l.h.requestOptions(), next.streamConfig(cfg), next.Model.Api)
 		}
 		reqCtx, cancelReq := context.WithCancelCause(ctx)
 		first, idle := l.h.opts.stallLimits(promptTokens)
@@ -876,7 +876,11 @@ func mustMarshal(v any) []byte {
 	return b
 }
 
-func buildStreamOptions(opts Options, cfg session.LaneConfiguration) provider.StreamOptions {
+// buildStreamOptions builds the request options for a request to a model
+// served over api. A server tool marked ServerToolFallback is declared as
+// a plain function tool (no ServerTool) to any api but Anthropic
+// Messages, whose clients would otherwise omit it.
+func buildStreamOptions(opts Options, cfg session.LaneConfiguration, api provider.Api) provider.StreamOptions {
 	thinking := cfg.ThinkingLevel
 	if thinking == "" {
 		thinking = opts.ThinkingLevel
@@ -887,7 +891,11 @@ func buildStreamOptions(opts Options, cfg session.LaneConfiguration) provider.St
 		if !ok {
 			continue
 		}
-		toolDefs = append(toolDefs, provider.ToolDef{Name: t.Name, Description: t.Description, Parameters: t.Parameters, ServerTool: t.ServerTool})
+		def := provider.ToolDef{Name: t.Name, Description: t.Description, Parameters: t.Parameters, ServerTool: t.ServerTool}
+		if t.ServerToolFallback && api != provider.ApiAnthropicMessages {
+			def.ServerTool = nil
+		}
+		toolDefs = append(toolDefs, def)
 	}
 	return provider.StreamOptions{
 		ThinkingLevel: provider.ThinkingLevel(thinking),
