@@ -1,0 +1,23 @@
+# Fullscreen reports clicks to kiln, so the terminal cannot open links;
+# kiln opens the link under a click that did not drag. A real terminal's
+# mouse encoder sends the click; HARNESS_OPEN_CMD records the URL instead of
+# launching a browser. CLICK points are for the 120x40 headless xterm
+# (9 px cells after an 8 px left pad, 17.4 px rows): the reply is row 18,
+# "PR 45" starts at column 6 and the bare URL at column 59.
+@faux testdata/faux/qa/link-click.yaml
+@size 120x40
+@args --fullscreen
+@env HARNESS_OPEN_CMD=printf '%s\n' "$1" >> {HOME}/opened.txt
+
+WAITFOR /describe a task/ 20
+TYPE show me the links
+KEY enter
+WAITFOR /PR 45/ 20
+SHOT reply
+CLICK 76 322
+WAITFOR /opened https:\/\/github\.com\/6cclab\/ynm\/pull\/45/ 5
+SHOT opened-markdown-link
+CLICK 570 322
+WAITFOR /opened https:\/\/example\.com\/x/ 5
+SHOT opened-bare-url
+EXPECT_NOT /panic|goroutine|open failed/

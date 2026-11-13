@@ -60,3 +60,51 @@ func TestTUI_FullscreenDragCopiesSelection(t *testing.T) {
 		t.Errorf("selected cell (%d,%d) is not highlighted", row, col)
 	}
 }
+
+// TestTUI_FullscreenClickOpensLink: fullscreen reports clicks to kiln, so
+// the terminal cannot open links (and a Cmd-click arrives without its
+// modifier). A click that does not drag opens the link under it: a
+// markdown link's label (OSC 8) or a bare URL.
+func TestTUI_FullscreenClickOpensLink(t *testing.T) {
+	home, sessDir := scratchHome(t)
+	proj := scratchProject(t)
+	opened := filepath.Join(t.TempDir(), "opened.txt")
+	tuiExtraOpts = []screen.Option{screen.WithEnv("HARNESS_OPEN_CMD", `printf '%s\n' "$1" >> `+opened)}
+	t.Cleanup(func() { tuiExtraOpts = nil })
+	addr, _ := startFaux(t, "model: faux-1\nsteps:\n  - text: \"See [PR 45](https://github.com/6cclab/ynm/pull/45) or plain https://example.com/x done\"\n")
+	s := startTUI(t, 120, 30, proj, home, sessDir, addr, "--fullscreen")
+	defer s.Close()
+	waitReady(t, s)
+	s.Send("hi")
+	s.SendKey("enter")
+	if err := s.WaitFor("PR 45", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	waitTurnSettled(t, s)
+
+	click := func(text string) {
+		t.Helper()
+		for i, r := range s.Rows() {
+			if c := strings.Index(r, text); c >= 0 {
+				col := len([]rune(r[:c])) + 1
+				s.Send(fmt.Sprintf("\x1b[<0;%d;%dM", col+1, i+1))
+				s.Send(fmt.Sprintf("\x1b[<0;%d;%dm", col+1, i+1))
+				return
+			}
+		}
+		t.Fatalf("%q not on screen:\n%s", text, strings.Join(s.Rows(), "\n"))
+	}
+	click("PR 45")
+	if err := s.WaitFor("opened https://github.com/6cclab/ynm/pull/45", 3*time.Second); err != nil {
+		t.Fatalf("no open note: %v\n%s", err, strings.Join(s.Rows(), "\n"))
+	}
+	click("example.com/x")
+	if err := s.WaitFor("opened https://example.com/x", 3*time.Second); err != nil {
+		t.Fatalf("no open note: %v\n%s", err, strings.Join(s.Rows(), "\n"))
+	}
+	got, err := os.ReadFile(opened)
+	want := "https://github.com/6cclab/ynm/pull/45\nhttps://example.com/x\n"
+	if err != nil || string(got) != want {
+		t.Errorf("opened = %q (%v), want %q", got, err, want)
+	}
+}

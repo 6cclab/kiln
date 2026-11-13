@@ -15,7 +15,8 @@ import (
 // Fullscreen mode reports mouse events to kiln (the wheel scrolls the
 // transcript), which takes click-and-drag away from the terminal's own
 // selection. kiln selects instead: dragging over the transcript highlights
-// cells, and releasing copies them to the clipboard. Inline mode leaves
+// cells, and releasing copies them to the clipboard; a click without a drag
+// opens the link under it (linkAt). Inline mode leaves
 // the mouse to the terminal and never gets here.
 
 // selection is a drag over the fullscreen transcript, in content
@@ -181,7 +182,17 @@ func (m Model) handleMouseSelect(msg tea.Msg) (Model, tea.Cmd, bool) {
 		}
 		m.sel.dragging = false
 		if m.sel.empty() {
+			// A click that did not drag opens the link under it. The
+			// terminal cannot: it reports the click to kiln instead, and
+			// sends no Cmd modifier with it, so a Cmd-click arrives as
+			// this same plain click.
+			at := *m.sel
 			m.sel = nil
+			if lines := m.selectionContent(); at.anchorLine >= 0 && at.anchorLine < len(lines) {
+				if u := linkAt(lines[at.anchorLine], at.anchorCol); u != "" {
+					return m, openURL(u), true
+				}
+			}
 			return m, nil, true
 		}
 		text := selectionText(m.selectionContent(), *m.sel, m.width, m.margin())
