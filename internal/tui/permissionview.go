@@ -54,7 +54,7 @@ type PromptState struct {
 	// the same note.
 	lastDeniedFeedback string
 	// switchMode is set by chooseOption when the option picked is "switch
-	// to <mode> then allow" (Bash's "switch to auto mode", Edit/Write's
+	// to <mode> then allow" (Bash's "use auto mode", Edit/Write's
 	// "switch to accept edits"). app.go's handleKey reads it right after
 	// routing the key that set it (same pattern as lastDenied), applies
 	// it to the real permission gate (which PromptState has no reference

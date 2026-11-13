@@ -76,8 +76,8 @@ func TestRenderGolden_StatusLineAutoRoutedTightCollapsesToModel(t *testing.T) {
 		Cwd: "~/src/a-rather-long/project/path/relay-api", Git: &GitStatus{Branch: "main"},
 		ContextWindow: 32_768, Cost: 1.23, ContextUsed: intPtr(1000),
 	}
-	out := RenderStatusLine(s, 60)
-	if VisibleWidth(stripANSI(out)) > 60 {
+	out := RenderStatusLine(s, 48)
+	if VisibleWidth(stripANSI(out)) > 48 {
 		t.Fatalf("overflowed: %q", out)
 	}
 	if plain := stripANSI(out); !strings.Contains(plain, "faux-2") || strings.Contains(plain, "auto") {

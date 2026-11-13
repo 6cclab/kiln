@@ -116,7 +116,7 @@ func TestRenderContextSelectionReasons(t *testing.T) {
 		{Kind: "mcp", Name: "mcp__fixture__search", Reason: "excluded"},
 	}}
 	plain := ansi.Strip(strings.Join(RenderContext(b, 80), "\n"))
-	for _, want := range []string{"Selection", "in skill body review · exact-name invocation", "out mcp metadata mcp__fixture__search · excluded"} {
+	for _, want := range []string{"Selection", "review skill · body included · exact-name invocation", "mcp__fixture__search MCP tool · metadata left out · excluded"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("missing %q in:\n%s", want, plain)
 		}
@@ -126,7 +126,7 @@ func TestRenderContextSelectionReasons(t *testing.T) {
 func TestRenderContextSettingSources(t *testing.T) {
 	b := commands.ContextBreakdown{Window: 100, Segments: []commands.ContextSegment{{Label: "Free", Tokens: 100}}, Settings: []commands.ContextSetting{{Name: "model", Value: "faux/faux-2", Source: "--model"}, {Name: "permission", Value: "plan", Source: "--permission-mode"}}}
 	plain := ansi.Strip(strings.Join(RenderContext(b, 80), "\n"))
-	for _, want := range []string{"Settings", "model faux/faux-2 · --model", "permission plan · --permission-mode"} {
+	for _, want := range []string{"Settings", "model: faux/faux-2 · --model", "permission: plan · --permission-mode"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("missing %q from %s", want, plain)
 		}

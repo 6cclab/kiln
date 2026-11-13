@@ -7,13 +7,13 @@
 [38;2;63;55;44m■[m [38;2;236;228;212mFree[m                                                              [38;2;163;151;129m124.0k[m [38;2;163;151;129m  62%[m
 
 [38;2;163;151;129mSelection[m
-in skill metadata review · pinned
-in agent metadata scout · suggested by metadata match
-out mcp metadata mcp__fixture__search · budget-dropped
-in memory record project:style · search hit
+review skill · metadata included · pinned
+scout agent · metadata included · suggested by metadata match
+mcp__fixture__search MCP tool · metadata left out · budget-dropped
+project:style memory · record included · search hit
 
 [38;2;163;151;129mSettings[m
-model kiln-large · --model
-effort high · --effort
-permission plan · --permission-mode
-auto-memory dir default project directory · default
+model: kiln-large · set by --model
+effort: high · set by --effort
+permission: plan only · set by --permission-mode
+auto-memory dir: default project directory

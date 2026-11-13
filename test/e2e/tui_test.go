@@ -385,7 +385,7 @@ func normalizeSpinnerGlyph(rows []string) []string {
 
 func maskStatusRowCwd(r string) (string, bool) {
 	if statusRowCwdPattern.MatchString(r) {
-		return statusRowCwdPattern.ReplaceAllString(r, "⇧⇥  <cwd>${1} ctx"), true
+		return statusRowCwdPattern.ReplaceAllString(r, "${1}<cwd>${2} ctx"), true
 	}
 	return "", false
 }
@@ -577,7 +577,9 @@ const bannerCwdMarker = " · model "
 // flap between otherwise-identical runs. Narrower widths either drop this
 // segment entirely (nothing to mask) or truncate it with "…", which
 // normalizeBannerCwdRow's other cases already stabilize.
-var statusRowCwdPattern = regexp.MustCompile(`⇧⇥ {2}\S+( {2}\S+)?\s+ctx`)
+// The path follows the "⇧⇥" hint, or, once the hint has dropped (it drops
+// before the folder), the mode label itself.
+var statusRowCwdPattern = regexp.MustCompile(`(⇧⇥ {2}|● \S[^…/~]*? {2})[…/~]\S*( {2}\S+)?\s+ctx`)
 
 // bannerCwdPrefix is what precedes the path on the banner's repo row: the
 // kiln art beside it, when the banner draws it (the art has no "/", "~" or
@@ -606,7 +608,7 @@ func normalizeBannerCwdRow(rows []string) []string {
 		case statusRowCwdPattern.MatchString(r):
 			// The status line's own location segment, wide enough to show
 			// the full scratch path un-truncated.
-			out[i] = statusRowCwdPattern.ReplaceAllString(r, "⇧⇥  <cwd>${1} ctx")
+			out[i] = statusRowCwdPattern.ReplaceAllString(r, "${1}<cwd>${2} ctx")
 		default:
 			out[i] = r
 		}
@@ -751,7 +753,7 @@ func maskBannerCwdRowStyled(r string) (string, bool) {
 	case (strings.HasPrefix(r, "/") || strings.HasPrefix(r, "~")) && !strings.Contains(r, "commands"):
 		return "<cwd>…", true
 	case statusRowCwdPattern.MatchString(r):
-		return statusRowCwdPattern.ReplaceAllString(r, "⇧⇥  <cwd>${1} ctx"), true
+		return statusRowCwdPattern.ReplaceAllString(r, "${1}<cwd>${2} ctx"), true
 	default:
 		return "", false
 	}

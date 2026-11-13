@@ -10,7 +10,7 @@
 [38;2;236;228;212;48;2;36;31;24m    make build *,                                                               [m
 [38;2;236;228;212;48;2;36;31;24m    go vet *,                                                                   [m
 [38;2;236;228;212;48;2;36;31;24m    cargo fmt *                                                                 [m
- [38;2;125;114;98m3[m  [38;2;163;151;129mYes, and switch to auto mode · auto mode handles these prompts for you[m
+ [38;2;125;114;98m3[m  [38;2;163;151;129mYes, and use auto mode[m
  [38;2;125;114;98m4[m  [38;2;163;151;129mNo[m
 
  [38;2;163;151;129m↑↓ select · enter confirm · esc decline · tab to amend[m

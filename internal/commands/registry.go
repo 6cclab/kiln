@@ -198,6 +198,17 @@ type ContextBreakdown struct {
 // ContextSetting is one effective runtime value and its accepted source.
 type ContextSetting struct{ Name, Value, Source string }
 
+// Line reads "permission: ask before edits · set by --permission-mode". A
+// "default" source is left out when the value already says it is a default
+// ("effort: model default").
+func (s ContextSetting) Line() string {
+	line := s.Name + ": " + s.Value
+	if s.Source != "" && !(s.Source == "default" && strings.Contains(s.Value, "default")) {
+		line += " · " + s.Source
+	}
+	return line
+}
+
 // ContextSelection is an observed request decision. Included describes the
 // current request; a search hit may instead be available for the next one.
 type ContextSelection struct {
@@ -206,6 +217,25 @@ type ContextSelection struct {
 	Material string
 	Included bool
 	Reason   string
+}
+
+// Line words the decision for a reader, name first: "review skill · metadata
+// included · pinned". The name is passed in so a renderer can fit it to the
+// row; Line("") is the width everything but the name takes.
+func (s ContextSelection) Line(name string) string {
+	kind := s.Kind
+	if kind == "mcp" {
+		kind = "MCP tool"
+	}
+	material := s.Material
+	if material == "" {
+		material = "metadata"
+	}
+	state := "left out"
+	if s.Included {
+		state = "included"
+	}
+	return name + " " + kind + " · " + material + " " + state + " · " + s.Reason
 }
 
 // ContextSegment is one source of context-window usage: system prompt,

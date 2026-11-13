@@ -8,6 +8,7 @@ import (
 	claudememory "github.com/andrepato/harness/internal/claude/memory"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	slashcommands "github.com/andrepato/harness/internal/commands"
+	"github.com/andrepato/harness/internal/tui"
 )
 
 // contextRuntimeSettings describes values the next request would use. Sources
@@ -105,10 +106,10 @@ func (r contextRuntimeSettings) entries() []slashcommands.ContextSetting {
 		dirValue = "default project directory"
 	}
 	return []slashcommands.ContextSetting{
-		{Name: "model", Value: r.Model, Source: r.Sources["model"]},
-		{Name: "effort", Value: valueOrDefault(r.Effort), Source: r.Sources["effortLevel"]},
-		{Name: "permission", Value: r.Permission, Source: r.Sources["permissions.defaultMode"]},
-		{Name: "auto-memory dir", Value: dirValue, Source: r.Sources["autoMemoryDirectory"]},
+		{Name: "model", Value: r.Model, Source: sourcePhrase(r.Sources["model"])},
+		{Name: "effort", Value: valueOrDefault(r.Effort), Source: sourcePhrase(r.Sources["effortLevel"])},
+		{Name: "permission", Value: tui.PermissionLabel(r.Permission), Source: sourcePhrase(r.Sources["permissions.defaultMode"])},
+		{Name: "auto-memory dir", Value: dirValue, Source: sourcePhrase(r.Sources["autoMemoryDirectory"])},
 	}
 }
 
@@ -117,4 +118,35 @@ func valueOrDefault(value string) string {
 		return "model default"
 	}
 	return value
+}
+
+// sourcePhrase says where a /context setting came from in plain words: a
+// flag or environment variable "set by" it, a settings file "from" its path,
+// a /model or mode change "changed this session".
+func sourcePhrase(source string) string {
+	switch {
+	case source == "" || source == "default":
+		return source
+	case source == "session override":
+		return "changed this session"
+	case source == "resumed session":
+		return "from the resumed session"
+	case strings.HasPrefix(source, "--") || isEnvName(source):
+		return "set by " + source
+	case strings.ContainsRune(source, os.PathSeparator):
+		if home, err := os.UserHomeDir(); err == nil {
+			source = tui.AbbrevHome(source, home)
+		}
+		return "from " + source
+	}
+	return source
+}
+
+func isEnvName(s string) bool {
+	for _, r := range s {
+		if !(r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_') {
+			return false
+		}
+	}
+	return s != ""
 }

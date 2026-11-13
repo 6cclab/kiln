@@ -99,7 +99,7 @@ func TestRenderBashPermissionPrompt_MatchesReference(t *testing.T) {
 		"",
 		" 1  Yes",
 		" 2  Yes, and don\u2019t ask again for: openssl rand *",
-		" 3  Yes, and switch to auto mode \u00b7 auto mode handles these prompts for you",
+		" 3  Yes, and use auto mode",
 		" 4  No",
 		"",
 		" \u2191\u2193 select \u00b7 enter confirm \u00b7 esc decline \u00b7 tab to amend",
@@ -691,4 +691,29 @@ func TestPromptStateCachesEditHunksAtArmTime(t *testing.T) {
 	}
 
 	p.finishTool(PromptChoice{Kind: ChoiceDeny})
+}
+
+// TestRenderBashPermissionPrompt_AutoModeExplainedOnlyWhenSelected: the auto
+// mode option reads "Yes, and use auto mode"; its explanation is a second row
+// shown only while that option is selected, so the unselected list stays one
+// short line per option (Codex polish finding, permission copy).
+func TestRenderBashPermissionPrompt_AutoModeExplainedOnlyWhenSelected(t *testing.T) {
+	withRenderEnv(t, 100)
+	req := BashPermissionRequest{Command: "openssl rand -hex 4", Grantable: true, DontAskRules: []string{"openssl rand *"}}
+	plain := func(selected int) string {
+		return stripANSI(strings.Join(RenderBashPermissionPrompt(req, 100, selected), "\n"))
+	}
+
+	for _, sel := range []int{0, 1, 3} {
+		got := plain(sel)
+		if !strings.Contains(got, "3  Yes, and use auto mode") {
+			t.Errorf("selected=%d: no \"Yes, and use auto mode\" option:\n%s", sel, got)
+		}
+		if strings.Contains(got, autoModeExplanation) {
+			t.Errorf("selected=%d: explanation shown while the auto option is not selected:\n%s", sel, got)
+		}
+	}
+	if got := plain(2); !strings.Contains(got, autoModeExplanation) {
+		t.Errorf("auto option selected: explanation missing:\n%s", got)
+	}
 }

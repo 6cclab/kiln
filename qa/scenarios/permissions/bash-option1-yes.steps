@@ -10,7 +10,7 @@ EXPECT /Allow kiln to run this command\?/
 EXPECT /echo approved/
 EXPECT /Yes/
 EXPECT /Yes, and don.t ask again for: sh/
-EXPECT /Yes, and switch to auto mode/
+EXPECT /Yes, and use auto mode/
 EXPECT /No/
 EXPECT /tab to amend/
 KEY 1

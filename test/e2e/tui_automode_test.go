@@ -64,7 +64,7 @@ func TestTUI_AutoMode_BlocksThenPausesToAsk(t *testing.T) {
 		t.Errorf("want the note after the blocked calls and before the prompt (block %d, note %d, prompt %d):\n%s", lastBlock, note, prompt, joined)
 	}
 	// Auto mode is already on, so the prompt does not offer to switch to it.
-	if strings.Contains(joined, "switch to auto mode") {
+	if strings.Contains(joined, "use auto mode") {
 		t.Errorf("the prompt offers to switch to the mode already on:\n%s", joined)
 	}
 	s.SendKey("1")

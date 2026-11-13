@@ -6,7 +6,7 @@ approval needed ─────────────────────�
 
  1  Yes
  2  Yes, and don’t ask again for: npm test *, make build *                      
- 3  Yes, and switch to auto mode · auto mode handles these prompts for you
+ 3  Yes, and use auto mode
  4  No
 
  ↑↓ select · enter confirm · esc decline · tab to amend

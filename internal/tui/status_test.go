@@ -274,7 +274,9 @@ func TestRenderStatusLine_LongCwdKeepsBranchAt120Cols(t *testing.T) {
 		if !strings.Contains(out, "feature/long-branch-name*") {
 			t.Errorf("width %d: branch/dirty marker missing from %q", width, out)
 		}
-		if !strings.Contains(out, "…") {
+		// At 80 the folder, too long to show readably, drops before the
+		// branch (its name would be cut); at 120 it shows, shortened from the left.
+		if width == 120 && !strings.Contains(out, "…") {
 			t.Errorf("width %d: expected the cwd to be left-truncated with an ellipsis in %q", width, out)
 		}
 	}
@@ -341,62 +343,64 @@ func TestRenderStatusLine_ModelFollowsSwitch(t *testing.T) {
 	}
 }
 
-// TestRenderStatusLine_ModelDropOrder: as the row narrows, cost goes
-// first (the model stays), then the model, and only then the location.
-// The order is fixed and monotonic — once a segment is gone it never
-// comes back at a narrower width (qa/findings/20261004T204953Z-narrow-
-// footer-and-panel-clipping.json: the old code let cost come back by
-// dropping the model instead once the model no longer fit on its own,
-// so a wider terminal could show fewer segments than a narrower one).
-// The row never overflows.
-func TestRenderStatusLine_ModelDropOrder(t *testing.T) {
+// TestRenderStatusLine_DropOrder: as the row narrows, segments drop in a
+// fixed order (cost, the ⇧⇥ hint, the folder, the branch, the context bar,
+// the model's provider prefix) and never come back at a narrower width
+// (qa/findings/20261004T204953Z-narrow-footer-and-panel-clipping.json).
+// Mode, model and the context percentage hold down to 40 columns. The row
+// never overflows.
+func TestRenderStatusLine_DropOrder(t *testing.T) {
 	s := baseState()
 	s.Cwd = "~/src/a-rather-long/project/path/relay-api"
 	s.Git = &GitStatus{Branch: "main"}
 	s.Cost = 1.23
 	s.ContextUsed = intPtr(1000)
-	costGone, modelGone, locGone := false, false, false
-	sawModelNoCost := false
+	// In the order they drop as the row narrows (Andre's call, 2026-11-12:
+	// the hint before the folder, the folder before the branch; mode, model
+	// and context percentage outlast them all).
+	segs := []struct{ name, text string }{
+		{"cost", "$1.23"},
+		{"hint", "⇧⇥"},
+		{"folder", "/"},
+		{"branch", "main"},
+		{"context bar", "─"},
+		{"provider prefix", "ollama/"},
+	}
+	gone := make([]bool, len(segs))
 	for w := 140; w >= 20; w-- {
 		out := stripANSI(RenderStatusLine(s, w))
 		if VisibleWidth(out) > w {
 			t.Fatalf("width %d: overflowed: %q", w, out)
 		}
-		hasModel := strings.Contains(out, "ollama/qwen3.8")
-		hasCost := strings.Contains(out, "$1.23")
-		hasLoc := strings.Contains(out, "main")
-
-		if hasCost && costGone {
-			t.Fatalf("width %d: cost came back after it dropped: %q", w, out)
-		}
-		if hasModel && modelGone {
-			t.Fatalf("width %d: the model came back after it dropped: %q", w, out)
-		}
-		if hasLoc && locGone {
-			t.Fatalf("width %d: the location came back after it dropped: %q", w, out)
-		}
-		// Fixed order: cost must already be gone by the time the model
-		// drops, and the model must already be gone by the time the
-		// location drops.
-		if !hasCost && hasModel {
-			costGone = true
-		}
-		if !hasModel {
-			if hasCost {
-				t.Fatalf("width %d: cost outlived the model: %q", w, out)
+		for i, sg := range segs {
+			has := strings.Contains(out, sg.text)
+			if sg.name == "folder" {
+				has = strings.Contains(out, " · main") // the branch has a " · " only after a folder
 			}
-			modelGone = true
-		}
-		if !hasLoc {
-			if hasModel {
-				t.Fatalf("width %d: the model outlived the location: %q", w, out)
+			if has && gone[i] {
+				t.Fatalf("width %d: %s came back after it dropped: %q", w, sg.name, out)
 			}
-			locGone = true
+			if !has {
+				for j := 0; j < i; j++ {
+					if !gone[j] {
+						t.Fatalf("width %d: %s dropped before %s: %q", w, sg.name, segs[j].name, out)
+					}
+				}
+				gone[i] = true
+			}
 		}
-		sawModelNoCost = sawModelNoCost || (hasModel && !hasCost && hasLoc)
+		if w >= 40 {
+			for _, want := range []string{"auto mode", "qwen", "%"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("width %d: %q is gone, want mode, model and context %% down to 40 columns: %q", w, want, out)
+				}
+			}
+		}
 	}
-	if !sawModelNoCost || !modelGone || !locGone {
-		t.Errorf("drop stages not all reached: model-without-cost=%v model-dropped=%v location-dropped=%v", sawModelNoCost, modelGone, locGone)
+	for i, g := range gone {
+		if !g {
+			t.Errorf("never dropped %s by 20 columns", segs[i].name)
+		}
 	}
 }
 
@@ -408,5 +412,25 @@ func TestRenderStatusLine_NoModelLabel(t *testing.T) {
 	with := baseState()
 	if a, b := stripANSI(RenderStatusLine(s, 120)), stripANSI(RenderStatusLine(with, 120)); a == b || strings.Contains(a, "qwen") {
 		t.Errorf("empty label rendered %q", a)
+	}
+}
+
+// TestRenderStatusLine_FolderNameNeverCut: as the row narrows, the folder
+// shortens from the left by whole components, keeping its own name whole;
+// once even that does not fit, it drops. A 60-column footer used to show
+// the folder as "…01", which names nothing (Codex polish finding, narrow
+// footer).
+func TestRenderStatusLine_FolderNameNeverCut(t *testing.T) {
+	withRenderEnv(t, 80)
+	cwd := "~/src/a-rather-long/project/path/relay-api"
+	s := StatusState{Mode: "manual", ModelLabel: "faux/faux-1", Cwd: cwd, ContextWindow: 200_000}
+	for w := 20; w <= 120; w++ {
+		for _, seg := range strings.Split(stripANSI(RenderStatusLine(s, w)), "  ") {
+			seg = strings.TrimSpace(seg)
+			tail, cut := strings.CutPrefix(seg, "…")
+			if cut && tail != "" && strings.HasSuffix(cwd, tail) && !strings.HasPrefix(tail, "/") && tail != "relay-api" {
+				t.Errorf("width %d: folder shortened to %q, cutting its name; want it whole or dropped", w, seg)
+			}
+		}
 	}
 }

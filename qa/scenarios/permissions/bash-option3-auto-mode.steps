@@ -1,4 +1,4 @@
-# Bash prompt, option 3 ("switch to auto mode"): approves this call and
+# Bash prompt, option 3 ("use auto mode"): approves this call and
 # switches the permission mode, so an unrelated second bash call runs
 # without a prompt too.
 @faux testdata/faux/qa/permissions-bash-option3.yaml

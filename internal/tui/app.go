@@ -2212,7 +2212,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// itself, so a scripted line would put words in its mouth (it
 		// said "run" of an edit, and landed before the real reply).
 	}
-	// "Yes, and switch to auto mode" (Bash) / "Yes, and switch to accept
+	// "Yes, and use auto mode" (Bash) / "Yes, and switch to accept
 	// edits" (Edit/Write) both allow the pending call AND change the
 	// permission mode going forward — PromptState has no reference to the
 	// gate, so it leaves the requested mode on switchMode (same
@@ -2291,7 +2291,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // syncPromptPlaceholder sets the editor's placeholder for the current
 // prompt/busy state (docs/kiln-design-handoff/README.md "Interactions"):
 // "press 1, 2 or 3" while a tool-permission or plan prompt is up (4 options
-// for the Bash prompt's extra "switch to auto mode" choice), the busy text
+// for the Bash prompt's extra "use auto mode" choice), the busy text
 // while a turn is running, otherwise the idle default. Called after every
 // keystroke the router may have changed prompt state on, and on prompt
 // open (MsgPermissionPrompt/MsgPlanPrompt).
@@ -2362,7 +2362,7 @@ func (m Model) restoreLabelAfterPrompt(declined bool) Model {
 
 // placeholderForOptionCount renders the "press 1, 2[, 3] or N" hint for a
 // prompt's actual option count (3 for generic/edit/write, 4 for Bash's
-// extra "switch to auto mode" choice) rather than a hardcoded tool-name
+// extra "use auto mode" choice) rather than a hardcoded tool-name
 // check, so any future variant with a different count is covered for
 // free.
 func placeholderForOptionCount(n int) string {
