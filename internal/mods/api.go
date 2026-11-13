@@ -58,6 +58,7 @@ var implemented = map[string]bool{
 	"prompt.submit": true, "prompt.suggest": true,
 	"session.messages": true, "session.identity": true, "session.authorize": true,
 	"session.surfaces": true, "session.surface": true, "session.send": true,
+	"config.list": true, "config.set": true, "telemetry.log": true, "telemetry.mark": true,
 }
 
 // documented lists the rest of the mod API as Claude Code declares it, plus
@@ -65,9 +66,7 @@ var implemented = map[string]bool{
 // agent.spawn).
 var documented = []string{
 	"audio.play", "audio.speak",
-	"config.list", "config.set",
 	"mcp.connect", "process.spawn",
-	"telemetry.log", "telemetry.mark",
 	"ui.ask", "ui.blit", "ui.copy", "ui.focus", "ui.log", "ui.notice", "ui.notify",
 	"ui.scroll", "ui.selection", "ui.status",
 }

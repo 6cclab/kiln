@@ -71,6 +71,10 @@ type Services struct {
 	// RebuildPrompt composes the system prompt again ($.ui.invalidate of
 	// prompt.section or prompt.compose).
 	RebuildPrompt func()
+
+	// Config lists kiln's own /config rows ($.config.list); plugin userConfig
+	// rows are the engine's. nil lists none.
+	Config func() []ConfigRow
 }
 
 // CompactResult is what a compaction left: the conversation after it and the

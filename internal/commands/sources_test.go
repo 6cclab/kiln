@@ -34,6 +34,20 @@ func TestSkillSourceOnlyUserInvocable(t *testing.T) {
 	}
 }
 
+func TestSkillSourceWithRewritesThePrompt(t *testing.T) {
+	list := []skills.Skill{{Name: "greet", Description: "d", Content: "Hello.", UserInvocable: true}}
+	cmds, err := SkillSourceWith(list, func(_ context.Context, s skills.Skill, prompt string) string {
+		return s.Name + ": " + prompt + "!"
+	}).Load()
+	if err != nil || len(cmds) != 1 {
+		t.Fatalf("Load = %v, %v", cmds, err)
+	}
+	res, err := cmds[0].Run(context.Background(), "x")
+	if err != nil || res.Prompt != "greet: Hello.\n\nx!" {
+		t.Errorf("Run = %q, %v, want the rewritten prompt", res.Prompt, err)
+	}
+}
+
 func TestClaudeCommandSourcesPersonalThenProject(t *testing.T) {
 	cwd := t.TempDir()
 	// A fake HOME so the personal scope resolves inside the test dir too.

@@ -830,18 +830,24 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		if s.DisableModelInvocation {
 			continue
 		}
+		in := skillPromptInput(s.Name, "", s.Frontmatter, s.Scope, s.FilePath)
 		skillRecords = append(skillRecords, tools.SkillRecord{
 			Name:        s.Name,
 			Description: s.Description,
 			Body:        s.Content,
 			Dir:         tools.SkillDir(s.FilePath),
+			Frontmatter: s.Frontmatter, Source: in.Source, Plugin: in.Plugin, Path: in.Path,
 		})
 	}
+	// skillMods is set once the mods runtime exists (below); skill.prompt
+	// hooks see every expansion after that.
+	var skillMods *modsRuntime
+	skillModsFn := func() *modsRuntime { return skillMods }
 	skillRecords = commandSkillRecords(skillRecords, append(claudecommands.LoadCommands(cwd), pluginCommands...))
 	selections := newContextSelectionLedger()
 	selections.ExcludeConfiguredSkills(skillRecords, settings.SkillDiscovery.Excluded)
 	skillRecords = discoveryRecords(skillRecords, settings.SkillDiscovery)
-	skillTool := tools.SkillTool(skillRecords)
+	skillTool := tools.SkillToolWith(skillRecords, nil, skillRewriter(skillModsFn))
 
 	permissionMode := resolvePermissionMode(args, settings)
 	perms := settings.Permissions
@@ -1074,6 +1080,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// Claude Code mods among the active plugins (hooks modules, run by
 	// internal/mods). Nil when none has one.
 	modsRT := newModsRuntime(activePlugins, modelID, resolved.Model.ContextWindow)
+	skillMods = modsRT
 	if modsRT != nil {
 		dispatcher.Hooks = modsRT
 		defer modsRT.close()
@@ -1945,6 +1952,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Hooks:              hookConfig,
 		Agents:             agentsList,
 		Skills:             allSkills,
+		SkillPrompt:        skillSlashRewriter(skillModsFn),
 		Plugins:            activePlugins,
 		PluginCommands:     pluginCommands,
 		MCP:                mcpSess,

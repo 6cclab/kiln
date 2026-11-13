@@ -66,6 +66,26 @@ func TestSkillToolObservedExactNameOnlyOnSuccess(t *testing.T) {
 	}
 }
 
+func TestSkillToolWithRewriteSeesTheFinalBody(t *testing.T) {
+	rec := SkillRecord{Name: "greet", Body: "Hello.", Dir: "/d", Source: "plugin", Plugin: "p"}
+	var seen SkillRecord
+	var seenText string
+	tl := SkillToolWith([]SkillRecord{rec}, nil, func(_ context.Context, r SkillRecord, text string) string {
+		seen, seenText = r, text
+		return text + " (rewritten)"
+	})
+	res, err := tl.Execute(context.Background(), json.RawMessage(`{"skill":"greet","args":"in French"}`), nil, tool.Invocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen.Plugin != "p" || seenText != "Hello.\n\nin French" {
+		t.Errorf("rewrite saw %+v %q, want the record and the body with its args", seen, seenText)
+	}
+	if got := msg.TextOf(res.Content); got != "Base directory for this skill: /d\n\nHello.\n\nin French (rewritten)" {
+		t.Errorf("tool result = %q", got)
+	}
+}
+
 func TestSkillTool_InvokeAppendsArgs(t *testing.T) {
 	tl := SkillTool([]SkillRecord{{Name: "greet", Description: "says hi", Body: "Hello.", Dir: "/d"}})
 	res, err := tl.Execute(context.Background(), json.RawMessage(`{"skill":"greet","args":"in French"}`), func(tool.Result) {}, tool.Invocation{})

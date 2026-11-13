@@ -72,6 +72,14 @@ func commandSource(o slashcommands.Origin) string {
 
 // fill sets the tool, command and agent services on s.
 func (d modsToolDeps) fill(s *mods.Services) {
+	s.Config = func() []mods.ConfigRow {
+		var model func() string
+		if d.rt != nil {
+			model = d.rt.modelFn
+		}
+		return modsConfigRows(model, d.gate)
+	}
+
 	s.Tools = func() []mods.ToolInfo {
 		set := d.harness.Tools()
 		var out []mods.ToolInfo

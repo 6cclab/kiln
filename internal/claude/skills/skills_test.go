@@ -153,3 +153,16 @@ func TestParseSkill(t *testing.T) {
 		t.Error("ParseSkill accepted a skill without a description")
 	}
 }
+
+func TestParseSkillKeepsEveryFrontmatterKey(t *testing.T) {
+	sk, ok := ParseSkill("---\nname: n\ndescription: d\nallowed-tools: [Read]\nmodel: opus\n---\nbody", "f", paths.ScopeUser)
+	if !ok {
+		t.Fatal("ParseSkill rejected a valid skill")
+	}
+	if sk.Frontmatter["model"] != "opus" || sk.Frontmatter["name"] != "n" {
+		t.Errorf("Frontmatter = %v, want every key the file declares", sk.Frontmatter)
+	}
+	if tools, _ := sk.Frontmatter["allowed-tools"].([]any); len(tools) != 1 || tools[0] != "Read" {
+		t.Errorf("allowed-tools = %v", sk.Frontmatter["allowed-tools"])
+	}
+}

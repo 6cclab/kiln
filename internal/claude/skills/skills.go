@@ -28,6 +28,10 @@ type Skill struct {
 	// two are independent axes (Claude Code's skill frontmatter has both).
 	DisableModelInvocation bool
 	Scope                  paths.Scope
+	// Frontmatter is every key the file declares, as YAML read it (nil when
+	// the frontmatter is not a map of string keys). Mods read it at
+	// skill.prompt.
+	Frontmatter map[string]any
 }
 
 type frontmatter struct {
@@ -71,7 +75,12 @@ func parseSkill(source, filePath string, scope paths.Scope) (Skill, bool) {
 	if data.DisableModelInvocation != nil {
 		disableModelInvocation = *data.DisableModelInvocation
 	}
+	var all map[string]any
+	if yaml.Unmarshal([]byte(m[1]), &all) != nil {
+		all = nil
+	}
 	return Skill{
+		Frontmatter:            all,
 		Name:                   name,
 		Description:            description,
 		Content:                strings.TrimSpace(m[2]),
