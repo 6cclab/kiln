@@ -1168,7 +1168,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	mcpExtras, mcpIndexText := buildMCPExtras(mcpTools)
 	extraTools := make([]*tool.Tool, 0, len(mcpExtras)+7)
 	extraTools = append(extraTools, mcpExtras...)
-	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool, tools.SkillSearchTool(skillRecords, settings.SkillDiscovery.Budget(resolved.Tier.SkillsListingTokens)), tools.WebSearchTool(), tools.AskUserQuestionTool())
+	extraTools = append(extraTools, todoWrite, taskTool, exitPlanModeTool, skillTool, tools.SkillSearchTool(skillRecords, settings.SkillDiscovery.Budget(resolved.Tier.SkillsListingTokens)), tools.WebSearchTool(settings.WebSearch.SearxngURL), tools.AskUserQuestionTool())
 	mcpSess.addResident("skill_search")
 	unifiedDiscovery := settings.SkillDiscovery.Unified == nil || *settings.SkillDiscovery.Unified
 	capabilities := capabilityCatalogWithAgents(func() []tools.SkillRecord { return skillRecords }, agentsList, settings.SkillDiscovery.IncludeAgents == nil || *settings.SkillDiscovery.IncludeAgents, mcpSess)

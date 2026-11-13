@@ -74,9 +74,18 @@ type Tool struct {
 	// client for that provider; every other provider's client omits the
 	// tool entirely. Execute is still required to satisfy the Tool
 	// contract and as a defensive fallback, but must never legitimately
-	// run: a provider that actually offered this tool always resolves the
-	// call itself and never emits a client-side msg.ToolCall for it.
+	// run unless ServerToolFallback is set: a provider that actually
+	// offered this tool always resolves the call itself and never emits a
+	// client-side msg.ToolCall for it.
 	ServerTool json.RawMessage
+
+	// ServerToolFallback marks a ServerTool whose Execute is a working
+	// client-side implementation. A request to a model that is not
+	// served over the Anthropic Messages API then declares the tool as an
+	// ordinary function tool (Name, Description, Parameters) instead of
+	// omitting it, and the turn loop runs Execute when the model calls it
+	// (web_search backed by SearXNG; see internal/tools/websearch.go).
+	ServerToolFallback bool
 
 	// PassThroughArgs marks a tool whose input is forwarded to something
 	// that owns its own schema (an MCP server), so CheckArgs allows keys
