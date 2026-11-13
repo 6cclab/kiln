@@ -20,6 +20,9 @@ type ModsEngine interface {
 	// Has reports whether a mod hooks event; PersonScroll and PersonFocus raise
 	// ui.scroll and ui.focus for the person's keys on a pane (see mods.Engine).
 	Has(event string) bool
+	// RendersComponent reports whether a ui.render hook may draw component,
+	// so a transcript row waits on a mod only when one could draw it.
+	RendersComponent(component string) bool
 	PersonScroll(ctx context.Context, ev map[string]any) (offset int, moved bool)
 	PersonFocus(ctx context.Context, ev map[string]any) (element string, moved bool)
 

@@ -19,6 +19,12 @@ func (r *modsRuntime) Has(event string) bool {
 	return e != nil && e.Has(event)
 }
 
+// RendersComponent reports whether a mod's ui.render hook may draw component.
+func (r *modsRuntime) RendersComponent(component string) bool {
+	e := r.get()
+	return e != nil && e.RendersComponent(component)
+}
+
 // PersonScroll and PersonFocus run the ui.scroll and ui.focus hooks for the
 // person's keys on a pane; with no engine the move stands.
 func (r *modsRuntime) PersonScroll(ctx context.Context, ev map[string]any) (int, bool) {

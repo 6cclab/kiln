@@ -234,7 +234,7 @@ const rowBudget = 300 * time.Millisecond
 // tree replaces the row; a hook that rewrites `props` and calls next draws the
 // engine's own row.
 func (d *ModsDriver) DrawRow(component, requestID string, props map[string]any, width int) []string {
-	if d == nil || !d.engine.Has("ui.render") {
+	if d == nil || !d.engine.RendersComponent(component) {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), rowBudget)

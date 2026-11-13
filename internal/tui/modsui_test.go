@@ -202,6 +202,9 @@ type rowEngine struct {
 }
 
 func (r *rowEngine) Has(ev string) bool { return ev == "ui.render" }
+
+// RendersComponent: the engine's hooks name CommandOutput only.
+func (r *rowEngine) RendersComponent(c string) bool { return c == "CommandOutput" }
 func (r *rowEngine) Render(_ context.Context, s mods.Site) []mods.Drawing {
 	r.site = s
 	if r.none {
@@ -224,6 +227,11 @@ func TestDrawRowRendersTheFirstTreeAtWidth(t *testing.T) {
 	eng.none = true
 	if rows := d.DrawRow("CommandOutput", "status", nil, 40); rows != nil {
 		t.Errorf("a hook that drew nothing gave rows %q", rows)
+	}
+	// A component no hook names never waits on the engine.
+	eng.none, eng.site = false, mods.Site{}
+	if rows := d.DrawRow("UserMessage", "u1", nil, 40); rows != nil || eng.site.Component != "" {
+		t.Errorf("UserMessage, which no hook names, was rendered: rows %q, site %+v", rows, eng.site)
 	}
 	var nilDriver *ModsDriver
 	if nilDriver.DrawRow("CommandOutput", "s", nil, 40) != nil {

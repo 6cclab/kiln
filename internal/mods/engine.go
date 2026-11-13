@@ -257,6 +257,11 @@ type Engine struct {
 	closed atomic.Bool
 	init   error
 
+	// hooked is what the hook table holds, published by the worker each time
+	// a mod loads (hooks are only added then), so Has and RendersComponent
+	// answer from any goroutine without waiting on a busy worker.
+	hooked atomic.Pointer[hookIndex]
+
 	// mediaItems are the attachments of the prompt submissions in flight.
 	mediaItems mediaStore
 
@@ -553,7 +558,58 @@ func (e *Engine) evaluate(m Module, code string, opts map[string]any) error {
 	for _, h := range pending {
 		e.hooks[h.event] = append(e.hooks[h.event], h)
 	}
+	e.hooked.Store(indexHooks(e.hooks))
 	return nil
+}
+
+// hookIndex is a snapshot of the hook table: the events with a hook, and the
+// components ui.render hooks name ("" for a hook that may match any).
+type hookIndex struct {
+	events     map[string]bool
+	components map[string]bool
+}
+
+func indexHooks(hooks map[string][]*hook) *hookIndex {
+	ix := &hookIndex{events: map[string]bool{}, components: map[string]bool{}}
+	for ev, hs := range hooks {
+		if len(hs) > 0 {
+			ix.events[ev] = true
+		}
+	}
+	for _, h := range hooks["ui.render"] {
+		for _, c := range namedComponents(h.matcher) {
+			ix.components[c] = true
+		}
+	}
+	return ix
+}
+
+// namedComponents is the components a ui.render matcher names by string, one
+// or an any-of array of them; [""] when it names none or uses a pattern
+// (a RegExp) that may match any.
+func namedComponents(m *goja.Object) []string {
+	if m == nil {
+		return []string{""}
+	}
+	v := m.Get("component")
+	if v == nil {
+		return []string{""}
+	}
+	switch x := v.Export().(type) {
+	case string:
+		return []string{x}
+	case []any:
+		var out []string
+		for _, el := range x {
+			s, ok := el.(string)
+			if !ok {
+				return []string{""}
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	return []string{""}
 }
 
 // expandPattern is the events a pattern names: an event, or "noun.*" for every

@@ -35,6 +35,7 @@ func newFakePromptEngine() *fakePromptEngine {
 func (f *fakePromptEngine) Render(context.Context, mods.Site) []mods.Drawing { return nil }
 func (f *fakePromptEngine) Press(mods.Callback)                              {}
 func (f *fakePromptEngine) Has(string) bool                                  { return false }
+func (f *fakePromptEngine) RendersComponent(string) bool                     { return false }
 func (f *fakePromptEngine) PersonScroll(context.Context, map[string]any) (int, bool) {
 	return 0, false
 }
