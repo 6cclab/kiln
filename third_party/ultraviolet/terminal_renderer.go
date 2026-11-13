@@ -1308,9 +1308,20 @@ func (s *TerminalRenderer) Render(newbuf *RenderBuffer) {
 		// the model has already been resized to a shorter frame, move()
 		// clamps s.cur.Y to newHeight-1 and the erase starts too low,
 		// leaving the taller frame's rows on screen (inline mode only).
+		//
+		// Only a shorter inline frame needs that. When the model is
+		// growing, or in fullscreen, resize first: clearUpdate's
+		// transformLine writes each row into s.curbuf, and a row past the
+		// old height has no line to write into, so the model would stay
+		// blank over cells the terminal now shows (the next diff then
+		// skips clearing them).
+		if (curWidth != newWidth || curHeight != newHeight) &&
+			(s.flags.Contains(tFullscreen) || newHeight >= curHeight) {
+			s.curbuf.Resize(newWidth, newHeight)
+		}
 		s.clearUpdate(newbuf)
 		s.clear = false
-		if curWidth != newWidth || curHeight != newHeight {
+		if s.curbuf.Width() != newWidth || s.curbuf.Height() != newHeight {
 			s.curbuf.Resize(newWidth, newHeight)
 		}
 	} else if curWidth != newWidth || curHeight != newHeight {
