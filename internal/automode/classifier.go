@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -287,5 +288,48 @@ func Resolver(reg Registry, roles map[string]string, session func() provider.Mod
 			return nil, provider.Model{}, fmt.Errorf("unknown provider %q", m.Provider)
 		}
 		return p, m, nil
+	}
+}
+
+// AutoModeModelEnv is Claude Code's CLAUDE_CODE_AUTO_MODE_MODEL: the model
+// auto mode's classifier requests go to, as a model ID ("claude-sonnet-4-6",
+// looked up on the session's provider) or provider/model.
+const AutoModeModelEnv = "CLAUDE_CODE_AUTO_MODE_MODEL"
+
+// defaultClassifierModels is Claude Code's default classifier model, Claude
+// Sonnet 5 (code.claude.com/docs/en/permission-modes.md), then the Sonnets
+// after and before it, looked up on the session's provider. A provider
+// that serves none of them (a local model) keeps the session's model.
+var defaultClassifierModels = []string{"claude-sonnet-5", "claude-sonnet-5-5", "claude-sonnet-4-6"}
+
+// AutoModeResolver picks auto mode's classifier model for each call, as
+// Claude Code does: CLAUDE_CODE_AUTO_MODE_MODEL, then kiln's "fast" model
+// role (modelRoles.fast), then Claude Sonnet on the session's provider,
+// then the session's own model. Read at call time, so /model applies.
+func AutoModeResolver(reg Registry, fast string, session func() provider.Model) func() (Streamer, provider.Model, error) {
+	return func() (Streamer, provider.Model, error) {
+		sess := session()
+		var candidates []string
+		if v := strings.TrimSpace(os.Getenv(AutoModeModelEnv)); v != "" {
+			candidates = append(candidates, sess.Provider+"/"+v, v)
+		}
+		if fast != "" {
+			candidates = append(candidates, fast)
+		}
+		for _, id := range defaultClassifierModels {
+			candidates = append(candidates, sess.Provider+"/"+id)
+		}
+		for _, c := range candidates {
+			i := strings.IndexByte(c, '/')
+			if i <= 0 || i == len(c)-1 {
+				continue
+			}
+			if m, ok := reg.GetModel(c[:i], c[i+1:]); ok {
+				if p, ok := reg.Provider(m.Provider); ok {
+					return p, m, nil
+				}
+			}
+		}
+		return Resolver(reg, nil, func() provider.Model { return sess })()
 	}
 }
