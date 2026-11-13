@@ -74,7 +74,7 @@ func TestBannerRows_StyledAfterBackgroundReply(t *testing.T) {
 
 	m := newTestModel()
 	m.cfg.Banner = []string{Ink("seed a prior session")}
-	m.cfg.BannerFunc = func() []string { return []string{Ink("seed a prior session")} }
+	m.cfg.BannerFunc = func(int) []string { return []string{Ink("seed a prior session")} }
 	startup := m.cfg.Banner[0]
 
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{R: 0xf7, G: 0xf4, B: 0xee, A: 0xff}})
@@ -85,5 +85,24 @@ func TestBannerRows_StyledAfterBackgroundReply(t *testing.T) {
 	}
 	if want := Ink("seed a prior session"); !strings.Contains(got, want) {
 		t.Errorf("banner row = %q, want the light-background ink %q", got, want)
+	}
+}
+
+// TestBannerRows_DrawnAtTheCurrentWidth: the resize replay draws the banner
+// for the window it now has, not the one kiln launched in (finding
+// 20261112T220956Z-resized-banner-keeps-launch-width).
+func TestBannerRows_DrawnAtTheCurrentWidth(t *testing.T) {
+	m := newTestModel()
+	var widths []int
+	m.cfg.Banner = []string{"banner"}
+	m.cfg.BannerFunc = func(w int) []string { widths = append(widths, w); return []string{"banner"} }
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = next.(Model)
+	m.bannerRows()
+	next, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	m = next.(Model)
+	m.bannerRows()
+	if len(widths) < 2 || widths[len(widths)-1] != m.contentWidth() || widths[len(widths)-1] >= widths[0] {
+		t.Errorf("banner drawn at widths %v; want the last at the 40-column content width %d", widths, m.contentWidth())
 	}
 }

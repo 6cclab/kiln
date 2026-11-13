@@ -797,10 +797,18 @@ func labelRule(label string, labelColor func(string) string, meta string, width 
 // selected dialog row showed the highlight on its first cell or two
 // only; this re-applies it after every reset.
 func RaiseRow(row string, width int) string {
-	row = padTo(row, width)
-	on, off, ok := strings.Cut(OnRaise("\x00"), "\x00")
+	return onRow(OnRaise, padTo(row, width))
+}
+
+// onRow puts an already-coloured row on a background surface (OnRaise,
+// OnPanel, OnDiffAdd, ...). Wrapping it in bg alone loses the background
+// at the row's first colour reset, so the tint stops after the first
+// styled span; this re-applies it after every reset. The caller pads row
+// to the width the tint should cover.
+func onRow(bg func(string) string, row string) string {
+	on, off, ok := strings.Cut(bg("\x00"), "\x00")
 	if !ok || on == "" {
-		return OnRaise(row)
+		return bg(row)
 	}
 	for _, reset := range []string{"\x1b[0m", "\x1b[m", "\x1b[49m"} {
 		row = strings.ReplaceAll(row, reset, reset+on)

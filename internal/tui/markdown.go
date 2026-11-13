@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
@@ -222,10 +223,39 @@ func chromaFromTheme(tx TextHex) *glansi.Chroma {
 type MarkdownRenderer struct {
 	width int
 	plain bool
+	// maxBytes, when set, bounds the cache: past it the cache starts over.
+	maxBytes int
 
-	mu       sync.Mutex
-	cache    map[string][]string
-	cacheGen int
+	mu        sync.Mutex
+	cache     map[string][]string
+	cacheGen  int
+	cacheSize int
+}
+
+// transcriptCacheBytes bounds the shared transcript renderer's cache (the
+// rendered rows' bytes): a long session's prose fits several times over,
+// and a pathological one starts over rather than grow without limit.
+const transcriptCacheBytes = 32 << 20
+
+// transcriptMD is the renderer the reply commit and every transcript replay
+// share. Each used to build its own, so the cache never outlived one call
+// and every Ctrl+O, Ctrl+F or resize redraw re-rendered all of a session's
+// prose: 280 ms for 200 turns, on the event loop. It holds one width and
+// mode; a resize replaces it.
+var transcriptMD struct {
+	mu sync.Mutex
+	r  *MarkdownRenderer
+}
+
+// transcriptRenderer is the shared renderer for width in the current mode.
+func transcriptRenderer(width int) *MarkdownRenderer {
+	plain := IsPlain()
+	transcriptMD.mu.Lock()
+	defer transcriptMD.mu.Unlock()
+	if r := transcriptMD.r; r == nil || r.width != width || r.plain != plain {
+		transcriptMD.r = &MarkdownRenderer{width: width, plain: plain, maxBytes: transcriptCacheBytes, cache: make(map[string][]string)}
+	}
+	return transcriptMD.r
 }
 
 // NewMarkdownRenderer builds a renderer for a fixed width. plain mirrors
@@ -246,6 +276,7 @@ func (m *MarkdownRenderer) Render(text string) []string {
 		// track staleness per entry.
 		m.cache = make(map[string][]string)
 		m.cacheGen = gen
+		m.cacheSize = 0
 	}
 	if lines, ok := m.cache[text]; ok {
 		m.mu.Unlock()
@@ -257,13 +288,26 @@ func (m *MarkdownRenderer) Render(text string) []string {
 
 	m.mu.Lock()
 	if m.cacheGen == gen {
+		size := len(text)
+		for _, l := range lines {
+			size += len(l)
+		}
+		if m.maxBytes > 0 && m.cacheSize+size > m.maxBytes {
+			m.cache = make(map[string][]string)
+			m.cacheSize = 0
+		}
 		m.cache[text] = lines
+		m.cacheSize += size
 	}
 	m.mu.Unlock()
 	return lines
 }
 
+// markdownRenders counts glamour renders (cache misses), for tests.
+var markdownRenders atomic.Int64
+
 func (m *MarkdownRenderer) render(text string) []string {
+	markdownRenders.Add(1)
 	width := m.width
 	if width < 1 {
 		width = 1
