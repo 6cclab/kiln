@@ -111,6 +111,38 @@ func TestMarkdownFencedCodeBlock(t *testing.T) {
 	}
 }
 
+// TestMarkdownCodeColoursFollowThemeChange: glamour registers the code
+// block's chroma style once per process under one name, so without a fresh
+// name per palette the colours of the first code block ever drawn stay for
+// the whole session, whatever the terminal background turns out to be.
+func TestMarkdownCodeColoursFollowThemeChange(t *testing.T) {
+	prevEnabled := enabled
+	t.Cleanup(func() {
+		SetColorEnabled(prevEnabled)
+		resetSurfaceTokensToDesign()
+		resetTextTokensToDesign()
+		themeGenerationBump()
+	})
+	SetColorEnabled(true)
+	resetSurfaceTokensToDesign()
+	resetTextTokensToDesign()
+	themeGenerationBump()
+
+	const code = "```go\nfunc main() { return \"s\" }\n```"
+	before := strings.Join(NewMarkdownRenderer(80, false).Render(code), "\n")
+	SetTerminalBackground(color.RGBA{R: 0xf7, G: 0xf4, B: 0xee, A: 0xff})
+	after := strings.Join(NewMarkdownRenderer(80, false).Render(code), "\n")
+	if before == after {
+		t.Fatalf("code block colours unchanged after a light background: %q", after)
+	}
+	resetSurfaceTokensToDesign()
+	resetTextTokensToDesign()
+	themeGenerationBump()
+	if again := strings.Join(NewMarkdownRenderer(80, false).Render(code), "\n"); again != before {
+		t.Errorf("back on the design palette, code renders %q, want the first render %q", again, before)
+	}
+}
+
 // TestMarkdownCodeErrorTokenUnstyled: chroma emits an Error token for any
 // rune none of its regexes matched, and a regex that runs past chroma's
 // 250ms wall-clock timeout counts as no match. Under load that turns a
