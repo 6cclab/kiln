@@ -359,15 +359,25 @@ func (r *modsRuntime) commands() []slashcommands.Command {
 			Description:  spec.Description,
 			ArgumentHint: spec.ArgumentHint,
 			Origin:       slashcommands.OriginPlugin,
-			Run: func(ctx context.Context, args string) (slashcommands.Result, error) {
-				text, ok, err := e.RunCommand(ctx, name, args)
-				if err != nil {
-					return slashcommands.Result{}, err
-				}
-				if !ok || text == "" {
-					return slashcommands.Result{}, nil
-				}
-				return slashcommands.Result{Output: strings.Split(strings.TrimRight(text, "\n"), "\n")}, nil
+			// The command.run hook may wait on the person ($.ui.ask, a
+			// permission prompt for $.tool.call), whose dialog the TUI's
+			// event loop draws, so it runs off that loop as Background
+			// (print mode runs it inline); Esc cancels it.
+			Run: func(_ context.Context, args string) (slashcommands.Result, error) {
+				return slashcommands.Result{
+					BusyLabel:  "Running /" + name,
+					CancelNote: "/" + name + " cancelled.",
+					Background: func(ctx context.Context) (slashcommands.Result, error) {
+						text, ok, err := e.RunCommand(ctx, name, args)
+						if err != nil {
+							return slashcommands.Result{}, err
+						}
+						if !ok || text == "" {
+							return slashcommands.Result{}, nil
+						}
+						return slashcommands.Result{Output: strings.Split(strings.TrimRight(text, "\n"), "\n")}, nil
+					},
+				}, nil
 			},
 		})
 	}

@@ -1,0 +1,20 @@
+{
+ "id": "20261113T162456Z-mod-command-freezes-event-loop",
+ "found_at": "2026-11-13T16:24:56Z",
+ "scenario": "qa/scenarios/plugins/mods-ui.steps",
+ "step": "line 32: /uiask",
+ "terminals": [
+  "terminal"
+ ],
+ "category": "bug",
+ "severity": "high",
+ "title": "A mod slash command that waits on the person freezes kiln",
+ "observed": "Enter on /uiask hung the TUI: the prompt kept /uiask, no dialog opened, and SIGTERM logged 'event loop did not stop'. app.go executeLine calls Registry.Execute on the event loop, and the mod command's Run waited on its command.run hook, which waited on $.ui.ask's dialog, which the blocked event loop draws.",
+ "expected": "The mod's command.run hook runs off the event loop (Result.Background, as /compact does), so $.ui.ask's dialog opens and Esc cancels the wait.",
+ "design_ref": null,
+ "evidence": [
+  "mini run qa/runs/t6ui2 (kiln 8fc131d), harness log 11:22:51 'signal: event loop did not stop'; regression test internal/cli TestModCommandRunsOffTheEventLoop"
+ ],
+ "status": "open",
+ "fix": null
+}
