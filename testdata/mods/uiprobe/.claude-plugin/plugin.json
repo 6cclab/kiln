@@ -1,0 +1,5 @@
+{
+  "name": "uiprobe",
+  "version": "1.0.0",
+  "description": "kiln QA fixture: a Claude Code mod that drives the ui.* surface"
+}
