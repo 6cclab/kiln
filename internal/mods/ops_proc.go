@@ -19,7 +19,7 @@ import (
 
 // $.process.spawn and $.mcp.connect.
 //
-// A mod's child process never runs ungated: spawn asks Services.GateProcess,
+// A mod's child process never runs ungated: spawn (like process.run) asks Services.GateProcess,
 // which kiln answers with the permission gate the Bash tool goes through (the
 // argument vector as the command it would be), and with no gate wired the
 // stream rejects its first pull without starting anything. mcp.connect starts
