@@ -1,8 +1,8 @@
 # Readiness snapshot: review fixes
 
-The preserved snapshot remains in commits `966fb18` and `ceab8c0`. This round
-fixes review findings 1, 3, and 4 on `anpato/readiness-candidate`; it does not
-alter the original `/Users/andrepato/projects/harness-kiln` checkout.
+The preserved snapshot stays in commits `966fb18` and `ceab8c0`. This round fixes
+review findings 1, 3, and 4 on `anpato/readiness-candidate` and leaves the original
+`/Users/andrepato/projects/harness-kiln` checkout untouched.
 
 ## Changes
 
@@ -14,14 +14,14 @@ alter the original `/Users/andrepato/projects/harness-kiln` checkout.
 
 ## Regression proof
 
-The four new tests were first run against the unfixed candidate and failed at
-their asserted behavior. A second proof used Go's read-only `-overlay` to map
+The four new tests first failed against the unfixed candidate, at their asserted
+behavior. A second proof used Go's read-only `-overlay` to map
 `internal/cli/chat.go`, `internal/learning/proposals.go`, and
-`internal/memory/store.go` to their `ceab8c0` contents while leaving the new
-tests in place. All four tests failed for the same reasons: command search had
-no match, the observer stored budget 0, and proposals retained the old cohort
-and survived loss of supporting evidence. Removing the overlay restored the
-working code without resetting the worktree; all four tests passed.
+`internal/memory/store.go` to their `ceab8c0` contents, with the new tests in
+place. All four failed for the same reasons: command search had no match, the
+observer stored budget 0, and proposals kept the old cohort and survived loss of
+supporting evidence. Removing the overlay restored the working code without
+resetting the worktree, and all four tests passed.
 
 | Evidence | Result | Log SHA-256 |
 |---|---|---|
@@ -31,14 +31,13 @@ working code without resetting the worktree; all four tests passed.
 | `make check` | Passed: gofmt, vet, staticcheck 2026.2.2, unit tests, e2e-tag vet; `/private/tmp/kiln-readiness-fixes-check.log` | `518d5002ae778252ea5c101f24a58613387a24015ca70be5bc1f704ca6dc57cd` |
 | `make e2e` | Passed: `test/e2e` in 245.805s; `/private/tmp/kiln-readiness-fixes-e2e.log` | `1c631396c3821609ff7681ef522bd5fc2093bbe3b8b35d1303440d5f825bd9a9` |
 
-The gates used a scratch `GOCACHE`; no paid evaluations or real model calls
-were made. The first `make check` attempt with `GOPROXY=off` could not resolve
-the pinned staticcheck command, so the exact gate was rerun successfully with
-network access.
+The gates used a scratch `GOCACHE`; no paid evaluations or real model calls were
+made. The first `make check` attempt with `GOPROXY=off` could not resolve the
+pinned staticcheck command, so the gate was rerun with network access and passed.
 
 ## Remaining work
 
 Review finding 2, automatic worker integration, is assigned to T6
 (`task_dcb37c2eb808`). This round did not wire `autoIntegrate`, change its trust
-policy, or add a batch call site. Plugin hooks and broader instruction types
-also remain outside this fix round. No push, PR, or merge was made.
+policy, or add a batch call site. Plugin hooks and broader instruction types are
+also outside this round. No push, PR, or merge was made.

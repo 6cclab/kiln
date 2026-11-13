@@ -2,8 +2,8 @@
 
 This batch fixes concrete request-construction and context-delivery defects found
 after the GPT-6-Sol comparison. It does not claim a measured cost or generated-code
-quality improvement. Live comparison is deferred until the implementation work
-is ready, as requested.
+quality improvement. As requested, live comparison is deferred until the
+implementation work is ready.
 
 ## Preserve conversation prefixes
 
@@ -17,9 +17,9 @@ so later retrieval hooks cannot treat it as a typed user query.
 Retrieval still runs before each request: permission changes, changed source
 files, corrected memory and current verification status remain visible. Existing
 memory, discovery and task-state settings still control inclusion and budgets.
-Nothing is frozen merely to preserve cache reuse. Later requests can still
-stop sharing a prefix at the previous transient context tail; this change does
-not guarantee a full cache hit. OpenAI documents the importance of stable
+Nothing is frozen merely to preserve cache reuse. Later requests can still stop
+sharing a prefix at the previous transient context tail, so this change does not
+guarantee a full cache hit. OpenAI documents the importance of stable
 prefixes in its [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching).
 
 The new four-case regression failed against the old transforms and passes after
@@ -51,10 +51,9 @@ API/provider/model identity and a digest of the text. Replay retains it only for
 the matching origin and unchanged text; older, edited or foreign messages use
 the existing synthesized-ID fallback without inventing a phase.
 
-Completed and interrupted text streams retain available metadata. Hashing is
-done when the item or stream ends, not on every token delta. This preserves the
-provider's distinction between commentary and answers on subsequent requests;
-it does not change the harness's stop-reason mapping. The OpenAI SDK explicitly
+Completed and interrupted text streams retain available metadata. Hashing happens when the item or stream ends, not on every token delta. This preserves the
+provider's distinction between commentary and answers on later requests; it does
+not change the harness's stop-reason mapping. The OpenAI SDK explicitly
 requires preserving and resending phase in
 [ResponseOutputMessage](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_output_message.py).
 

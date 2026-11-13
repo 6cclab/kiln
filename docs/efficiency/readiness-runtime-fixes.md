@@ -3,7 +3,7 @@
 This change repairs crash recovery in ordinary coding sessions and makes print
 mode stop when an incomplete operation cannot be resumed. It follows the
 read-only readiness audit at HEAD
-`5a7150f`; it does not implement optional efficiency controls.
+`5a7150f` and does not implement optional efficiency controls.
 
 ## What changed
 
@@ -33,8 +33,8 @@ read-only readiness audit at HEAD
   missing, extra, duplicate, or mismatched tool results and survives a JSONL
   reopen. Manual compaction uses the same guard before its summarizer call.
   The existing `/rewind` path can select a valid ancestor, or the
-  person can start a new session; the corrupt entries remain available for
-  inspection without being sent to a provider.
+  person can start a new session. The corrupt entries stay available for
+  inspection and are never sent to a provider.
 
 ## Regression evidence
 
@@ -63,9 +63,9 @@ batch test invokes production commit methods to create the intermediate
 state. The malformed payload case uses valid JSON with an invalid payload
 shape, which can be committed through the JSONL store.
 `TestReadinessResumeAlreadyCommittedResultIsNotDuplicated` and
-`TestReadinessResumeCancellationDuringToolIsAborted` add defensive coverage;
-they also passed on the original code, so they are not claimed as
-independently red regressions.
+`TestReadinessResumeCancellationDuringToolIsAborted` add defensive coverage. They
+also passed on the original code, so they are not claimed as independently red
+regressions.
 
 Green verification after the implementation:
 
@@ -149,6 +149,6 @@ this branch.
 The coordinator's baseline `make check` once failed in
 `TestKillLeavesNoProcessBehind`; ten isolated repeats and two full agent
 package runs in the audit, and this branch's clean `make check`, passed.
-That intermittent process-cleanup failure has no confirmed root cause and
-remains a separate investigation. No `internal/agent` or `internal/execenv`
+The root cause of that intermittent process-cleanup failure is unconfirmed and
+still under separate investigation. No `internal/agent` or `internal/execenv`
 change was made.

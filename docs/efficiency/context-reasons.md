@@ -8,15 +8,15 @@ search hits are reconstructed from tool-call IDs and results in the same
 compaction-projected branch used for the next request. Restored sessions show
 committed results; compacted-away results disappear. Search budget drops are
 kept by committed call ID. Current-turn suggestions and personal-memory
-retrieval decisions belong to the last typed request and are replaced by the
-next one. All of these survive a restart (see "Persistence" below). The ledger
-retains at most 64 drop call IDs and displays at most 64 rows.
+retrieval decisions belong to the last typed request, and the next one replaces
+them. All of these survive a restart (see "Persistence" below). The ledger keeps
+at most 64 drop call IDs and displays at most 64 rows.
 
 Catalog-mode skill metadata is checked against the active system prompt, and
 configured exclusions are shown only for loaded, model-invocable skills.
 Claude instruction files (`CLAUDE.md` and rules) and Claude auto-memory
-`MEMORY.md` appear as system-prompt memory material with their own labels;
-they are distinct from retrieved personal-memory records. Project and global
+`MEMORY.md` appear as system-prompt memory material with their own labels,
+distinct from retrieved personal-memory records. Project and global
 personal-memory retrieval still reports each search hit or budget drop at the
 retrieval point for the current request.
 
@@ -24,8 +24,8 @@ The `/context` settings section and `kiln config` `contextSettings` report
 the effective model, effort, permission mode, and accepted auto-memory
 directory. Their sources reflect CLI flags, environment, resumed session,
 accepted settings files, or defaults. The `configuredSettings` object in
-`kiln config` explicitly contains static file configuration, including model
-roles and enablement flags. These paths call the existing runtime resolvers
+`kiln config` holds static file configuration, including model roles and
+enablement flags. These paths call the existing runtime resolvers
 for model, effort, permission mode, workspace trust, and unsafe auto-memory
 directory rejection.
 
@@ -51,8 +51,8 @@ before.
 
 ## Limits
 
-A search drop made after the final request of a turn cannot exist: the result
-always precedes another request, which commits it. A crash between a request
+A search drop cannot occur after the final request of a turn: the result always
+precedes another request, which commits it. A crash between a request
 being sent and its commit loses only that request's decisions. Only the last
 request is kept; earlier requests' transient decisions are not recoverable.
 The displayed row limit can omit later alphabetically sorted entries in
@@ -113,5 +113,5 @@ overlay removed; repository source was never changed by these probes:
 
 `make check` passed (gofmt, vet, staticcheck, unit tests, and e2e vet).
 Full `make e2e` passed (`test/e2e`, 231.898s). The named render and PTY
-goldens passed after their narrow updates. `git diff --check`, excluding
-the two styled goldens' intentional terminal padding, passed.
+goldens passed after their narrow updates. `git diff --check` passed, excluding the two styled goldens' intentional
+terminal padding.

@@ -1,6 +1,6 @@
 # Worker confinement and verification discovery
 
-This tranche strengthens existing isolated editing workers and adds an opt-in
+This tranche strengthens the existing isolated editing workers and adds an opt-in
 way to capture inputs for a narrow family of Go checks. It does not enable
 isolated shell workers or establish generated-code quality parity.
 
@@ -13,11 +13,11 @@ linked files are refused. Writes replace directory entries rather than
 truncating existing inodes, preserving an existing file's permissions.
 Directory descriptors are closed on exec so they cannot leak into subprocesses.
 
-Nested workers get separate file scopes. Closing one cannot close its parent,
-and operations after closure fail instead of falling back to ordinary file
-access. Worker commands stop before file-scope and worktree cleanup. Windows
-isolated editing fails explicitly until an equivalent implementation exists;
-normal sessions retain their existing filesystem behavior.
+Nested workers get separate file scopes. Closing one cannot close its parent, and
+operations after closure fail instead of falling back to ordinary file access.
+Worker commands stop before file-scope and worktree cleanup. Windows isolated
+editing fails explicitly until an equivalent implementation exists. Normal
+sessions keep their existing filesystem behavior.
 
 ## Worker sandbox foundation
 
@@ -44,7 +44,7 @@ another command. Shell expansions, flags, compound commands and whole-repository
 `./...` discovery are unsupported. Explicit input declarations can supplement
 the discovered set under the existing shared limits.
 
-Optional metadata absence is saved too: adding `go.work`, for example, changes
+Absence of optional metadata is saved too: adding `go.work`, for example, changes
 verification status and produces a rerun suggestion. Discovery provenance and
 absence snapshots survive branch restoration. Unsupported, denied or oversized
 input sets produce no partial proof and do not suppress the requested command.

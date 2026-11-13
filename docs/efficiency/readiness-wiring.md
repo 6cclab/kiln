@@ -4,13 +4,13 @@
 
 T1 foundation `858abd5`, T3 foundation `57cb696`, and original wiring `96abf69` remain in this child. The review found a live `setsid()` descendant after confined dispatch cleanup, so `orchestration.isolatedShell` now refuses activation on every platform before starting a child. This is an intentional fail-closed safety state, not T1 general-purpose shell delivery. File-only isolated workers remain the default and continue to work on macOS and Linux. `internal/sandbox/worker.go` and `enableWorkerShellForOS` remain tested foundations, but their direct profile tests do not establish safe worker lifetime ownership. [The T1 report](sandbox-shell.md) gives the platform mechanism and unresolved limitation.
 
-Dispatch also keeps Bash out of every isolated worker's active tool set and
-retains the parent-sandbox conflict check. The unsafe helper is no longer
-called from dispatch, so removing only the refusal branch cannot enable Bash.
+Dispatch also keeps Bash out of every isolated worker's active tool set and keeps
+the parent-sandbox conflict check. Dispatch no longer calls the unsafe helper, so
+removing only the refusal branch cannot enable Bash.
 
-The shared parent permission gate now checks final Bash arguments in an ordinary dispatched child after all before-tool rewrites. Isolated workers reject a nonempty unsupported `tools` allowlist rather than falling back to all built-ins. T3 now notices repeated successful, conservatively read-only Bash sequences when tool output and a bounded worktree snapshot are unchanged; changed or unobservable state resets that sequence. The limit and per-field provenance still reach nested workers, preserve user opt-out and default-off behavior, and produce at most one corrective notice before escalation of the same pattern.
+The shared parent permission gate now checks final Bash arguments in an ordinary dispatched child after all before-tool rewrites. Isolated workers reject a nonempty unsupported `tools` allowlist rather than falling back to all built-ins. T3 now notices repeated successful, conservatively read-only Bash sequences when tool output and a bounded worktree snapshot are unchanged; changed or unobservable state resets that sequence. The limit and per-field provenance still reach nested workers, preserve user opt-out and default-off behavior, and produce at most one corrective notice before the same pattern escalates.
 
-The design-agents golden samples text and styles from one emulator-locked frame only after the panel anchor, editor placeholder and status row are present together. The captured full-suite failure showed those latter rows cleared between PTY reads while the panel remained, consistent with a partial paint; the new gate samples a complete frame rather than changing the golden or lengthening a settle timeout.
+The design-agents golden samples text and styles from one emulator-locked frame only after the panel anchor, editor placeholder and status row are present together. The captured full-suite failure showed the editor and status rows cleared between PTY reads while the panel remained, consistent with a partial paint. The new gate samples a complete frame instead of changing the golden or lengthening a settle timeout.
 
 ## Regressions and logs
 

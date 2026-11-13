@@ -1,6 +1,6 @@
 # Independent review: safe memory import
 
-I reviewed candidate 01 before candidate 02, using only the supplied task, rubric, patches, source, and completed evaluator evidence. Scores are 0–4. A passing suite is evidence for the tested cases, not proof of all contract behavior.
+I reviewed candidate 01 before candidate 02, using only the supplied task, rubric, patches, source, and completed evaluator evidence. Scores are 0–4. A passing suite is evidence for the tested cases only.
 
 | Candidate | Correctness and robustness | Security and privacy | Design and maintainability | Test quality | Scope and usability | Readiness |
 |---|---:|---:|---:|---:|---:|---|
@@ -25,4 +25,4 @@ The core import validates a destination-scoped copy, historical rows and IDs, an
 
 ## Comparison and uncertainty
 
-Candidate 02 handles imported scope as the task specifies and therefore passes two acceptance cases candidate 01 fails. Candidate 01 prechecks nonregular source files and returns promptly on a FIFO, while candidate 02 can hang indefinitely. I favor candidate 01 as the safer starting point because its observed defect is a localized rejection of unusual input; candidate 02's observed defect is an availability failure on an expressly rejected source type. Neither is ready unchanged. A maintainer should confirm whether “existing Put field/kind limits” was intended to apply the *input* scope's global restriction; the explicit “do not trust imported scope” and “global import accepts” language supports the destination-scope interpretation used here. The two observed issues are independent of the common macOS path-spelling test defect. No candidate source was modified.
+Candidate 02 handles imported scope as the task specifies and therefore passes two acceptance cases candidate 01 fails. Candidate 01 prechecks nonregular source files and returns promptly on a FIFO, while candidate 02 can hang indefinitely. I favor candidate 01 as the safer starting point because its observed defect is a localized rejection of unusual input; candidate 02's observed defect is an availability failure on an expressly rejected source type. Neither is ready unchanged. A maintainer should confirm whether “existing Put field/kind limits” was intended to apply the *input* scope's global restriction; the explicit “do not trust imported scope” and “global import accepts” language supports the destination-scope interpretation used here. The two observed issues are independent of the shared macOS path-spelling test defect. No candidate source was modified.

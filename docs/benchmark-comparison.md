@@ -1,11 +1,11 @@
 # Comparing kiln with an external coding harness
 
-The [2026-11-11 offline evaluation](offline-evaluation-report.md) exercised 12 scripted faux scenarios and is reproducible without paid model calls. It supplies harness regression evidence only. No Claude Code results were collected for that run, so it does not support a cross-harness quality, speed, token, or cost claim.
+The [2026-11-11 offline evaluation](offline-evaluation-report.md) ran 12 scripted faux scenarios and is reproducible without paid model calls. It is harness regression evidence only. It collected no Claude Code results, so it supports no cross-harness claim about quality, speed, tokens, or cost.
 
 ## Offline plan for Claude Code
 
 Generate a manifest before spending money. This command fingerprints both
-local binaries, asks each binary for `--version`, and hashes the selected
+local binaries, asks each for `--version`, and hashes the selected
 scenario definitions and fixture trees. It makes no model requests:
 
 ```sh
@@ -29,11 +29,10 @@ missing fixtures, and checks that cannot be compared mechanically. The
 judge rubric in a scenario is retained in its dataset fingerprint, but
 the comparison scores only mechanical checks.
 
-The selected `claude-opus-4-8` ID is a requested model, not proof of the
-model version that actually answered. Check the Claude result's reported
-model version and retain it with the raw trace. A Claude model alias such
-as `opus` is rejected by the planner. If the two harnesses use different
-physical models, this plan cannot attribute an outcome difference to the
+The `claude-opus-4-8` ID is a requested model, not proof of the
+model version that answered. Check the model version in the Claude result and keep it with the raw trace. The planner rejects a Claude model alias such
+as `opus`. If the two harnesses use different
+physical models, an outcome difference cannot be attributed to the
 harnesses, so the planner requires the same explicit model ID in both.
 
 The manifest allocates half the stated allowance to Claude Code and shows
@@ -55,16 +54,16 @@ Claude Code. Its local `--help` supports `-p`, `--output-format stream-json`,
 `--verbose`, `--include-partial-messages`, `--forward-subagent-text`,
 `--no-session-persistence`, `--model`, `--permission-mode`,
 `--setting-sources`, `--strict-mcp-config`, and `--max-budget-usd`.
-Capture raw output privately. Run in a trusted scratch directory: `-p`
-skips the trust dialog, and settings validation failures can be silent.
+Capture raw output privately. Run in a trusted scratch directory, because `-p`
+skips the trust dialog and settings validation failures can be silent.
 Use the manifest's fixed setup flags and check `system/init` for the
 selected model and loaded tools. The manifest's `claudeSetupHash` records
 the fixed flags, settings-file bytes when provided, binary hash, model ID,
 version, and Claude per-run budget. It does not pin the scratch home,
 effective permissions, environment variables, other settings files,
 additional flags, or loaded tools. Save these with each raw trace and audit
-them before claiming that the harness setups were equivalent. The manifest
-is an input plan and a result consistency check; it is not a complete
+them before claiming the harness setups were equivalent. The manifest
+is an input plan and a result consistency check, not a complete
 execution recipe.
 
 The [Claude Code programmatic-run guide](https://code.claude.com/docs/en/headless)
@@ -106,8 +105,8 @@ External record schema, version 1:
 {"schema_version":1,"harness":"claude-code","harness_version":"2.0","model":"claude-sonnet","model_version":"2026-01","setup_hash":"sha256-of-harness-config","scenario":"fix-bug","repeat":1,"dataset_hash":"same-hash-as-kiln-record","ok":true,"duration_ms":1200,"checks":[{"name":"test","type":"command","pass":true}],"usage":{"direct":{"input":100,"output":20,"cache_read":0,"cache_write":0},"nested":{"input":30,"output":5,"cache_read":0,"cache_write":0},"retry":{"input":10,"output":2,"cache_read":0,"cache_write":0}},"cost_usd":0.012}
 ```
 
-Use the exact `dataset_hash` from the corresponding kiln result only if the
-external run used the same scenario, fixture and check definitions. Retain the
+Use the exact `dataset_hash` from the corresponding kiln result, and only if the
+external run used the same scenario, fixture and check definitions. Keep the
 scenario workspace and raw harness trace separately for audit. `setup_hash`
 should hash the external harness configuration, including permissions, tools,
 system instructions and model routing. Record the actual harness and model
@@ -134,9 +133,9 @@ LLM judge scores are excluded because judges and rubrics may differ. The
 report shows mean quality, elapsed milliseconds, tokens and mean cost over
 pairs where both costs are known. Individual and paired known-cost counts
 accompany cost means. Inspect the
-per-pair JSON for the actual observations and cost gaps. These descriptive
+per-pair JSON for the observations and cost gaps. These descriptive
 numbers do not establish statistical superiority.
 
 The external format intentionally has no kiln policy, binary or internal run
-provenance fields. It is rejected by the personal-policy promotion gate's
-required provenance checks and cannot be imported as a kiln eval record.
+provenance fields. The personal-policy promotion gate's
+required provenance checks reject it, and it cannot be imported as a kiln eval record.

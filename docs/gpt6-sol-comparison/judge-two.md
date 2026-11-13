@@ -1,6 +1,6 @@
 # Independent patch review
 
-Reviewed candidate-02, then candidate-01, against `task.md` and the unchanged five-dimension rubric. This assessment uses only the anonymous bundles and completed grading evidence. Scores are 0–4.
+Reviewed candidate-02, then candidate-01, against `task.md` and the unchanged five-dimension rubric. It uses only the anonymous bundles and completed grading evidence. Scores are 0–4.
 
 | Candidate | Correctness | Security and privacy | Design and maintainability | Test quality | Scope and usability | Readiness |
 |---|---:|---:|---:|---:|---:|---|

@@ -29,13 +29,13 @@ implementations**.
 The real-work attempts reported **$16.625258** combined. Including the earlier
 $1.1484105 small-fixture cohort, total reported spend is **$17.7736685 of the
 $50 authorized allowance**. These are reported/catalog estimates, not an
-invoice. Reviewer-agent usage is separate and is not available as provider
-billing in this external Opus comparison ledger.
+invoice. Reviewer-agent usage is separate, and provider billing for it is not
+available for this external Opus comparison ledger.
 
 Claude Code attempt 2 emitted intermediate success results at cumulative
 $4.3407525 and $5.348418, continued handling background test activity, then
 emitted `error_max_budget_usd` at cumulative $6.008204. Those totals belong to
-one session and must not be added together. The runner stopped all paid work
+one session and must not be added. The runner stopped all paid work
 on process exit 1. The table uses the full process duration and final patch;
 there was no snapshot at the first success event and no replacement attempt.
 Its $6 soft cap was slightly exceeded by the final request. The different
@@ -54,8 +54,8 @@ budget admission mechanisms limit interpretation of its incomplete outcome.
 `sourceDigest` helper, which opens the destination path before checking that it
 is regular. A named pipe with no writer blocks in `os.Open`; the bounded probe
 terminated each CLI after three seconds. The requirement explicitly rejects
-nonregular sources. This is a defect in how the new feature relies on an
-existing helper, rather than a new bug in the helper itself. The probe shows
+nonregular sources. The defect is in how the new feature relies on an
+existing helper, not a new bug in the helper itself. The probe shows
 blocking behavior, not data loss or remote code execution.
 
 **Dry-run writes, Kiln 2 and Claude 2:** both perform SQL updates/inserts and
@@ -97,7 +97,7 @@ that could hide a blocker.
 | Claude 1 / 04 | 3, 2, 3, 3, 3 | 3, 2, 4, 3, 4 |
 | Claude 2 / 03 | 2, 2, 2, 3, 2 | 2, 2, 3, 3, 2 |
 
-Both reviewers found substantial useful implementation and test work. Claude 1
+Both reviewers found substantial implementation and test work. Claude 1
 reuses a transactional insertion helper with existing Put and adds a
 real-binary e2e test. Kiln 1 keeps validation and import in a cohesive store path,
 but duplicates some insertion logic. Reviewer 2 preferred Claude 1's reuse;
@@ -125,8 +125,8 @@ release-name resolution, and a Unix socket path too long under the grader's
 temporary directory. The cached canonical staticcheck module was verified as
 version 2026.2.2 and passed for every candidate. Shortening the temporary path
 resolved the socket failure but exposed an unchanged TUI test failure in the
-full unit suite. Original failures and reruns are retained; full unit results
-must not be represented as an all-green candidate suite. A clean baseline clone
+full unit suite. Original failures and reruns are retained; the full unit results
+must not be presented as an all-green candidate suite. A clean baseline clone
 reproduced that focused TUI failure under the short temporary path and passed
 under the native environment. Path-dependent wrapping is the likely mechanism,
 inferred from the rendering code. The final full-unit status is
@@ -149,8 +149,8 @@ not filesystem-enforced read-only.
 Native tool behavior and budgeting were preserved: Claude Code 2.1.319 had a
 $6 soft per-run cap; Kiln used request admission with a conservative full-context
 reservation and a larger ceiling. Claude reported one-hour cache writes;
-Kiln's isolated configuration used its default five-minute cache policy. Thus
-reported cost differences include native cache policy. Claude also reported a
+Kiln's isolated configuration used its default five-minute cache policy.
+Reported cost differences therefore include native cache policy. Claude also reported a
 system-wide managed-settings warning despite its scratch personal config.
 This was not a fully hermetic or pure same-settings experiment.
 

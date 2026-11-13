@@ -19,15 +19,15 @@ superiority.
 | **Kiln total** | | | | **19m45s** | **$6.477431** |
 | **Claude Code total** | | | | **34m28s** | **$9.602531** |
 
-This follow-up used $16.07996175. Including the previous $17.7736685, cumulative
+This follow-up used $16.07996175. With the previous $17.7736685, cumulative
 reported comparison cost is **$33.85363025 of the authorized $50**. These are
 provider/catalog reports, not invoices. Agent-judge billing is unavailable and
 excluded from this external Opus comparison ledger, as in the previous cohort.
 
 Claude attempt 2 exited zero and emitted two successful result events from the
 same session: cumulative totals $4.962802 and $5.137207. The runner expected
-exactly one result and stopped during parsing after the final process had ended.
-The final cumulative total is counted once. Original attempt metadata, parser
+exactly one result and stopped parsing after the final process had ended.
+The final cumulative total is counted once. The original attempt metadata, parser
 failure, and accounting adjudication are preserved; no paid retry or patch repair
 was performed. This differs from the previous cohort's budget-stopped attempt.
 
@@ -130,7 +130,7 @@ Reports: [judge 1](fidelity-comparison/judge-one.md),
 timings, binary/task/patch hashes, per-case results, grading outcomes, native
 delegation, the parser adjudication, and source-integrity checks. The directory
 also contains all four frozen patches and each judge's structured scores.
-Raw model traces and grading logs remain local under `/tmp/kiln-fidelity-cohort`
+Raw model traces and grading logs stay local under `/tmp/kiln-fidelity-cohort`
 and `/tmp/kfr-review`; they are not published. Candidate patches were not merged.
 
 The follow-up runner is

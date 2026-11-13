@@ -13,11 +13,11 @@ comparison exposes different harness outcomes, not a general quality winner.
 | Codex 0.167.1 | candidate-01 | Completed | 11m30s | $1.281160 |
 | Kiln d4d870d | candidate-02 | Completed | 13m20s | $2.221556 |
 
-Both ran concurrently on the same machine, with GPT-6-Sol at high effort,
-272,000-token context configuration, the same task and original baseline
+Both ran concurrently on the same machine with GPT-6-Sol at high effort,
+a 272,000-token context configuration, the same task and original baseline
 `40e9464`, scratch homes, and delegation disabled. There was no corrective
-feedback. Both patches were frozen before grading. Their wall times include
-startup, model calls, tools, and self-directed tests, plus shared-machine
+feedback, and both patches were frozen before grading. Wall times include
+startup, model calls, tools, self-directed tests, and shared-machine
 contention. One paired task cannot establish parity or general superiority.
 
 ## Correctness and test quality
@@ -48,13 +48,13 @@ trailing JSON, preserve help, accept exactly 1000 rows, and avoid attempted memo
 writes during dry-run. Both contain meaningful transaction/rollback tests.
 
 Both sets of new tests also compare temporary paths without normalizing macOS's
-`/tmp` to `/private/tmp` alias. Their original unit and race runs fail those exact
-path assumptions. With only TMPDIR canonicalized, the unchanged source passes
+`/tmp` to `/private/tmp` alias, so their original unit and race runs fail on
+those path assumptions. With only TMPDIR canonicalized, the unchanged source passes
 both targeted unit and race suites. These are test-portability defects, not
 additional importer runtime failures. The full unit runs also fail the unchanged
 TUI test `TestHandleSubmit_LeadingPathIsNotACommand`; an earlier unmodified
 same-baseline control reproduced that failure under the same grader environment.
-Original failures are retained, and the full suites are not reported as passing.
+The original failures are retained, and the full suites are not reported as passing.
 
 ## Three independent judges
 
@@ -99,10 +99,10 @@ conversation/tool behavior, and provider cache state need separate inspection.
 There were 66 observed Codex usage increments and 43 Kiln usage records; these
 are recorded usage events, not evidence about unreported retries.
 
-Both used the same ChatGPT-authenticated account and only GPT-6-Sol was observed.
+Both used the same ChatGPT-authenticated account, and only GPT-6-Sol was observed.
 No delegated session was observed. Cost uses the recorded token categories and
 catalog rates, not an invoice or a subscription charge. Cached input is included
-in Codex's total input but separate from Kiln's uncached input; reasoning is
+in Codex's total input but separate from Kiln's uncached input, and reasoning is
 already included in output. Neither is double counted. Model/rate reference:
 [OpenAI GPT-6-Sol documentation](https://developers.openai.com/api/docs/models/gpt-6-sol).
 
