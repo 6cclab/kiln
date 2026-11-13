@@ -11,13 +11,13 @@ PR 68 merged at `64f834b` with two red CI gates, and the next main run
 - `race`: `TestRunWorkerBatchAutomaticIntegration/disjoint` detected a data race
   in `subagentEventSink` (`internal/cli/chat.go`).
 
-Isolated worker Bash stays refused by dispatch on every platform, because
-detached descendants cannot yet be owned safely. Nothing here enables it.
+Dispatch still refuses isolated worker Bash on every platform, because detached
+descendants cannot yet be owned safely. Nothing here enables it.
 
 ## Change
 
-- `enableWorkerShell` is deleted. Its only caller was the macOS live Seatbelt test,
-  which now calls `enableWorkerShellForOS(..., runtime.GOOS)`. That function still
+- `enableWorkerShell` is deleted. Its only caller, the macOS live Seatbelt test,
+  now calls `enableWorkerShellForOS(..., runtime.GOOS)`. That function still
   rejects Linux, Windows, and a claimed macOS target on a non-macOS host before a
   shell can start.
 - `subagentEventSink` serialises its stderr writes. Concurrent workers report
@@ -51,7 +51,7 @@ detached descendants cannot yet be owned safely. Nothing here enables it.
 
 The original `feat/efficient-orchestration-memory` checkout was checkpointed
 unchanged in `a9f1eae` (parent `5a7150f`; draft PR 71). Its 22 source files were
-already byte-identical to readiness ancestor `966fb18`, so main has newer
-reviewed versions of all of them. Its two documents are on main: the AGENTS.md
+already byte-identical to readiness ancestor `966fb18`, so main has newer reviewed
+versions of all of them. Its two documents are on main: the AGENTS.md
 shared-cache rule (#70) and `scripts/orca/efficiency-coordinator.md` (this change).
 The crash-test temp-dir cleanup (`098a7cf`) merged separately as #69.

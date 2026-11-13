@@ -16,13 +16,13 @@ Read first: the docstring of `scripts/qa/drive.py` (every directive and step ver
 
 1. `make build` (builds `bin/kiln`, installs `~/go/bin/kiln`) and `go build -o bin/faux ./cmd/faux`.
 2. Tell the user a drive is starting and not to type or move the pointer until it ends.
-3. One or a few scenarios:
+3. Run one or a few scenarios:
    `python3 scripts/qa/drive.py --terminal iterm-dark --out qa/runs/<label>-<UTC stamp> <steps...>`
-   The smoke set: `make qa` (`TERMINAL=iterm-light|terminal|warp`, `SCENARIO=<area>/<name>`)
-   runs the scenarios marked `@smoke`, the ones headless CI cannot check. `ALL=1` runs every
+   The smoke set is `make qa` (`TERMINAL=iterm-light|terminal|warp`, `SCENARIO=<area>/<name>`).
+   It runs the scenarios marked `@smoke`, the ones headless CI cannot check. `ALL=1` runs every
    faux scenario (about 25 minutes: run it in the background and do not rebuild until it
-   ends); `REAL=1` adds qa/scenarios/real. Prefer `make qa-headless` (see "Terminals" below)
-   for everything else: it doesn't take over the user's screen.
+   ends); `REAL=1` adds qa/scenarios/real. For everything else prefer `make qa-headless`
+   (see "Terminals" below), which doesn't take over the user's screen.
    Mark a new scenario `@smoke` only if it depends on the terminal itself: key encoding,
    wheel, resize, background detection, fonts.
 4. Results: `grep -E "^(PASS|FAIL)" qa/runs/<run>.log`. Each scenario directory holds
@@ -53,7 +53,7 @@ Read first: the docstring of `scripts/qa/drive.py` (every directive and step ver
 - SCROLL moves the pointer to the window centre and back; wheel direction is compensated for
   macOS natural scrolling inside `wheel.swift`.
 - `xterm-dark`/`xterm-light` run headless (real PTY + xterm.js in headless Chromium via
-  Playwright, `scripts/qa/headless.py`) — no macOS, no window, so they run in CI too
+  Playwright, `scripts/qa/headless.py`). They need no macOS and no window, so they run in CI too
   (`make qa-headless`, `.github/workflows/qa-headless.yml`). Use them for the bulk of a QA pass;
   fall back to a real terminal (above) for anything specific to a real key encoder, Terminal.app's
   256-colour rounding, natural-scroll direction, real window chrome, or exact font rendering —
@@ -62,6 +62,6 @@ Read first: the docstring of `scripts/qa/drive.py` (every directive and step ver
 ## Debug terminal input
 
 If kiln seems to mishandle a key or wheel event, find out what the terminal actually sends:
-run a small raw-mode python program in a fresh terminal window that enables the same modes
-(for mouse: `\e[?1003h\e[?1006h`) and logs the bytes it reads, then replay the input. Decide
-between a terminal, driver or kiln problem from those bytes, not from kiln's behaviour.
+run a small raw-mode python program in a fresh terminal window. It must enable the same modes
+(for mouse: `\e[?1003h\e[?1006h`) and log the bytes it reads. Then replay the input. Decide
+whether the fault is in the terminal, the driver or kiln from those bytes, not from kiln's behaviour.

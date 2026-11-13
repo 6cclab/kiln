@@ -1,7 +1,7 @@
 # Efficiency implementation status
 
-This tracks the accepted efficiency plan and prevents partial capabilities from
-being mistaken for the complete roadmap.
+This tracks the accepted efficiency plan so that partial capabilities are not
+mistaken for the complete roadmap.
 
 ## Implemented
 
@@ -48,8 +48,8 @@ being mistaken for the complete roadmap.
   strict usage accounting, setup provenance, mechanical quality, and paired costs.
   `eval plan` fingerprints a selected Claude Code cohort without model calls;
   `eval compare --plan` validates its recorded provenance and check set.
-- Opt-in bounded read formatting reuse with fresh-content checks and a repeated
-  identical-error and multi-call failed-cycle guards, all forwarded to nested workers.
+- Opt-in bounded read formatting reuse with fresh-content checks, plus guards for
+  repeated identical errors and multi-call failed cycles, all forwarded to nested workers.
 - Per-field provenance for the efficiency configuration report, including defaults,
   explicit overrides and evaluated policy sources.
 - Opt-in bounded local run aggregates and dismissible review hypotheses about
@@ -172,5 +172,5 @@ and [worker snapshots and verification dependencies](worker-snapshot-verificatio
 - Broader head-to-head evaluation with complete external usage attribution.
 
 A policy promotion is evidence about the evaluated tasks, not proof that the full
-harness outperforms another product. The implementation keeps incomplete behavior
-explicit in configuration documentation.
+harness outperforms another product. The configuration documentation states
+incomplete behavior explicitly.

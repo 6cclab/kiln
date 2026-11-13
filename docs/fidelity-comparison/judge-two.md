@@ -1,6 +1,6 @@
 # Independent patch review (judge two; final)
 
-Review order: 04, 03, 02, 01. I read only the supplied task, rubric, review instructions, candidate source/patches, and each candidate's grading directory. I did not inspect identity or provenance. All probes used fresh `/tmp` projects and homes.
+Review order: 04, 03, 02, 01. I read only the supplied task, rubric, review instructions, candidate source and patches, and each candidate's grading directory, and did not inspect identity or provenance. All probes used fresh `/tmp` projects and homes.
 
 | Candidate | Correctness | Security | Design | Tests | Scope and usability | Readiness |
 |---|---:|---:|---:|---:|---:|---|
@@ -37,7 +37,7 @@ Cancellation uses `BeginTx(ctx)` and context SQL methods; rollback is deferred (
 
 **Finding 1 — contract violation, reproduced.** `internal/cli/personal_memory.go:217`: `dec.More()` after decoding the top-level array returns false for stray closing delimiters. Trigger: file containing `[]]` or `[]}`. Observed: exit 0 and success JSON with all counts zero. Expected: nonzero, diagnostic, no success JSON because input is malformed/trailing JSON. A second Decode expecting EOF would enforce the contract. The submitted test's `[] []` is rejected, so its coverage gives false confidence for this case.
 
-**Finding 2 — contract violation, reproduced.** `internal/memory/store.go:460-492`: dry-run performs UPDATE/INSERT/search/source SQL and then rolls back. With an abort-on-INSERT trigger and a valid new record, `--dry-run` exits 1; expected success counts and no write attempt. Persistent database rows are rolled back, but the contract requires dry-run to write none.
+**Finding 2 — contract violation, reproduced.** `internal/memory/store.go:460-492`: dry-run performs UPDATE/INSERT/search/source SQL and then rolls back. With an abort-on-INSERT trigger and a valid new record, `--dry-run` exits 1; expected success counts and no write attempt. Persistent database rows are rolled back, but the contract requires a dry run to write none.
 
 **Finding 3 — contract violation, reproduced in supplemental CLI probe.** `internal/memory/sources.go:21-39` opens a destination FIFO before checking its type, through `RebindSources` (`internal/memory/sources.go:93-130`). Valid import JSON binding the FIFO hangs rather than rejecting a nonregular source.
 
@@ -59,6 +59,6 @@ Optional test improvement: `TestImportValidationRejectsAndLeavesDBUnchanged` (`i
 
 ## Comparison and uncertainty
 
-Candidates 01 and 04 are strongest and effectively tied, but both need the shared FIFO rejection fix before readiness. Candidate 04 has broader submitted validation tests, while candidate 01 directly tests stale historical sources; both lack injected rollback/cancellation cases. Candidate 03 additionally needs a true read-only dry-run. Candidate 02 additionally needs strict trailing JSON detection and preservation of `memory --help`. These are explicit contract issues, so their readiness cannot be raised by averaging the other dimensions.
+Candidates 01 and 04 are strongest and effectively tied, but both need the shared FIFO rejection fix before readiness. Candidate 04 has broader submitted validation tests, while candidate 01 directly tests stale historical sources; both lack injected rollback/cancellation cases. Candidate 03 additionally needs a true read-only dry-run. Candidate 02 additionally needs strict trailing JSON detection and preservation of `memory --help`. These are explicit contract issues, so averaging the other dimensions cannot raise their readiness.
 
 All four candidates pass build, gofmt, vet, staticcheck, changed-package race tests, memory e2e, and 29/29 hidden acceptance cases. All four full unit runs fail the same `TestHandleSubmit_LeadingPathIsNotACommand` timeout; the unmodified baseline fails identically under the grader environment, so I do not attribute it to these patches. Supplemental probes independently establish the FIFO, dry-run, help, and malformed-delimiter findings. No candidate source was modified.

@@ -2,7 +2,7 @@
 
 This first offline audit targets defects that can make a model less effective:
 missing instructions, damaged provider state, and blocked memory retrieval.
-It adds no mandatory model review stage, changes no quality/cost policy, and
+It adds no mandatory model review stage, changes no quality or cost policy, and
 uses no paid model runs. The frozen memory-import benchmark artifacts remain
 unchanged.
 

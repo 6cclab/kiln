@@ -1,6 +1,6 @@
 # Independent review: memory import
 
-Review order: 02, 04, 01, 03. Scores are correctness/robustness, security/privacy, design/maintainability, test quality, scope/usability, each 0–4. I reviewed source and submitted tests without changing candidate artifacts. All four pass 29/29 hidden acceptance cases, targeted race and e2e memory tests, build, gofmt, vet, and staticcheck. All four full unit runs fail the same unrelated TUI timeout, also reproduced in the baseline control. I did not treat that as an import defect.
+Review order: 02, 04, 01, 03. Scores are correctness/robustness, security/privacy, design/maintainability, test quality, scope/usability, each 0–4. I reviewed source and submitted tests without changing candidate artifacts. All four pass the 29/29 hidden acceptance cases, targeted race and e2e memory tests, build, gofmt, vet, and staticcheck. All four full unit runs fail the same unrelated TUI timeout, also reproduced in the baseline control. I did not treat that as an import defect.
 
 ## Candidate 02 — 2 / 2 / 2 / 2 / 2; major revisions
 
@@ -10,7 +10,7 @@ Review order: 02, 04, 01, 03. Scores are correctness/robustness, security/privac
 - **Contract violation, reproduced:** `internal/memory/sources.go:101` rebinds through `sourceDigest`, which opens the destination (`sources.go:30`) before checking its file type. A FIFO at the rebound path blocks rather than being rejected as nonregular. Supplemental probe times out after three seconds. This affects source-bearing historical rows too.
 - **Privacy concern, inferred:** `internal/memory/store.go:454` includes the imported key in a conflict diagnostic; a key containing credential material would be echoed to stderr. The contract prohibits echoing credentials. The CLI tests check text secrecy but not sensitive keys.
 
-The selected-key collapse, global rejection of historical invalid rows, scope assignment, and transaction rollback on ordinary errors are sound. Validation happens before `Store.Import`; the transaction handles conflicts and writes. Source rebind checks lexical containment, SHA-256, destination hash, symlink escape, and size through `sourceDigest`, subject to the FIFO flaw. Tests cover round trip, basic flags, malformed input, policies, dry-run final state, and source paths, but omit strict trailing delimiters, dry-run write attempts, and a nonregular source. Documentation describes the command and policies accurately aside from those defects. The broad raw dispatch is unnecessary scope change.
+The selected-key collapse, global rejection of historical invalid rows, scope assignment, and transaction rollback on ordinary errors are sound. Validation happens before `Store.Import`; the transaction handles conflicts and writes. Source rebind checks lexical containment, SHA-256, destination hash, symlink escape, and size through `sourceDigest`, subject to the FIFO flaw. Tests cover round trip, basic flags, malformed input, policies, dry-run final state, and source paths, but omit strict trailing delimiters, dry-run write attempts, and a nonregular source. Documentation describes the command and policies accurately aside from those defects. The broad raw dispatch is an unnecessary scope change.
 
 ## Candidate 04 — 3 / 2 / 4 / 3 / 4; minor revisions
 

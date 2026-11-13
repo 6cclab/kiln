@@ -20,9 +20,8 @@ message. The integration outcome, a branch note, and the operation checkpoint
 then commit together. On restart, a recorded intent is reported as **uncertain**
 and is never applied again automatically: the parent checkout and retained
 manifests need inspection. A recovered batch with no intent is left for explicit
-handling with a durable notice listing its manifests. This conservative rule
-covers a stop before apply, after apply, and before the outcome commit without
-guessing whether an external Git effect happened. An already committed outcome
+handling with a durable notice listing its manifests. The rule is conservative: it covers a stop before apply, after apply, and before
+the outcome commit without guessing whether an external Git effect happened. An already committed outcome
 is replayed as a status event if the process stopped before reporting it.
 
 The branch note is sent to the next model request, rendered in session history
@@ -54,8 +53,8 @@ Text and JSON print results include the notice; stream JSON emits a
   `TestWorkerIntegrationNoticeReplaysAsSystemNote` cover print, live TUI event,
   and TUI session replay surfaces.
 
-Regression reversals were run by temporarily removing each behavior, running
-the named test, and restoring the original file:
+Regression reversals: each behavior was temporarily removed, the named test run,
+and the original file restored:
 
 ```text
 without intent recovery: TestWorkerBatchCompletionRestartWindowsNeverReplayPatch FAIL

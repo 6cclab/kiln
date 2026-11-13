@@ -8,15 +8,15 @@
 
 ## Product activation is refused
 
-`orchestration.isolatedShell` remains explicit and default off, and requires `isolatedWorkers`. Dispatch now refuses it before starting a child on every platform with an error explaining that detached descendants cannot yet be owned safely across process-group changes. The default file-only isolated worker remains functional. A nonempty isolated-worker tool allowlist that names an unsupported tool fails explicitly instead of widening to Bash. Parent MCP and host-executing extension tools remain unavailable.
+`orchestration.isolatedShell` remains explicit and default off, and requires `isolatedWorkers`. Dispatch refuses it on every platform before starting a child, with an error explaining that detached descendants cannot yet be owned safely across process-group changes. The default file-only isolated worker remains functional. A nonempty isolated-worker tool allowlist that names an unsupported tool fails explicitly instead of widening to Bash. Parent MCP and host-executing extension tools remain unavailable.
 
-The old dispatch activation call was removed. Dispatch retains its ordinary
-parent-sandbox conflict check and removes Bash from every isolated-worker
-active tool set as a second boundary behind the explicit refusal.
+The old dispatch activation call was removed. Dispatch keeps its ordinary
+parent-sandbox conflict check and removes Bash from every isolated-worker active
+tool set, a second boundary behind the explicit refusal.
 
-The reason is concrete: a child of Bash can call `setsid()`, detach from the registered process group, and outlive `JobScope.Close()` and worktree cleanup. The read-only review probe `TestReviewConfinedDispatchDetachedDescendant` observed an exact live PID with PPID 1 after actual dispatched-child cleanup; the reviewer killed that PID. `internal/execenv/job_scope.go` currently owns process groups, not descendants that leave them. A best-effort scan of PIDs or a poll after the fact would not establish ownership across rapid detach and reparenting, and risks killing an unrelated reused PID. The macOS SDK's `sys/event.h` states that kqueue `NOTE_TRACK`, `NOTE_TRACKERR` and `NOTE_CHILD` have been unsupported since 10.5; this precludes treating those flags as a descendant tracker. Apple's [kqueue manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kqueue.2.html) documents `NOTE_FORK` as a notification, not automatic descendant ownership.
+The reason is concrete: a child of Bash can call `setsid()`, leave the registered process group, and outlive `JobScope.Close()` and worktree cleanup. The read-only review probe `TestReviewConfinedDispatchDetachedDescendant` observed an exact live PID with PPID 1 after actual dispatched-child cleanup; the reviewer killed that PID. `internal/execenv/job_scope.go` currently owns process groups, not descendants that leave them. A best-effort scan of PIDs or a poll after the fact would not establish ownership across rapid detach and reparenting, and risks killing an unrelated reused PID. The macOS SDK's `sys/event.h` states that kqueue `NOTE_TRACK`, `NOTE_TRACKERR` and `NOTE_CHILD` have been unsupported since 10.5; so those flags cannot serve as a descendant tracker. Apple's [kqueue manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kqueue.2.html) documents `NOTE_FORK` as a notification, not automatic descendant ownership.
 
-The shared parent gate now checks final Bash arguments in a child tool wrapper after all before-tool rewrites, before execution. The wrapper applies to ordinary child Bash, which remains usable. Isolated Bash would use the same wrapper if robust process containment is implemented later; currently it never starts.
+The shared parent gate now checks final Bash arguments in a child tool wrapper, after all before-tool rewrites and before execution. The wrapper applies to ordinary child Bash, which remains usable. Isolated Bash would use the same wrapper if robust process containment is implemented later; today it never starts.
 
 ## Evidence and limits
 

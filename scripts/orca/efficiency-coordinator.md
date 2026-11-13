@@ -1,8 +1,8 @@
 # Efficiency roadmap: Orca coordinator brief
 
-You are the **coordinator** for a supervised Orca Run. You plan, dispatch, verify and report.
-You do not edit source files yourself. Workers are Codex agents on `WORKER_MODEL`, each in its
-own child worktree.
+You are the **coordinator** for a supervised Orca Run. You plan, dispatch, verify and report,
+and you never edit source files yourself. Workers are Codex agents on `WORKER_MODEL`, each in
+its own child worktree.
 
 - `WORKER_MODEL` = `gpt-6-sol` (swap for `gpt-6.1-sol` here if wanted; pass no `--effort`, so
   the model default applies)
@@ -21,8 +21,8 @@ own child worktree.
 
 ## 1. Constraints
 
-- **Another Codex session is editing this checkout right now.** Its uncommitted files (see
-  `git status`) are off-limits to wave 1: `internal/agent/dispatch.go`,
+- **Another Codex session is editing this checkout right now.** Wave 1 must not touch its
+  uncommitted files (see `git status`): `internal/agent/dispatch.go`,
   `internal/agent/worker_batch*.go`, `internal/claude/commands/**`,
   `internal/claude/settings/{efficiency_sources,orchestration}*.go`, `internal/cli/discovery.go`,
   `internal/cli/learning*.go`, `internal/cli/command_discovery*.go`, `internal/learning/**`,
@@ -72,12 +72,12 @@ When an implementation worker sends `worker_done --outcome succeeded`:
 3. If there are blocker or major findings, reuse the **original implementer's terminal**
    (`worker-start --task <fix task> --terminal <handle> --worktree id:<worktree id>`) with a fix
    Task listing the findings verbatim. One fix round; anything left goes into the report.
-4. Release each settled worker terminal per the guide (or retain only if a failure needs
-   inspection, and say so).
+4. Release each settled worker terminal per the guide. Retain one only if a failure needs
+   inspection, and say so.
 
 ## 4. Final report (to Andre, in this terminal)
 
-Per Task: outcome, worktree path and branch, commits, `make check`/`make e2e` result (with
+For each Task: outcome, worktree path and branch, commits, `make check`/`make e2e` result (with
 evidence), review findings fixed and open, files touched, and anything blocked. Then a proposed
 diff for `docs/efficiency-implementation-status.md` (moving delivered parts from
 "Still outstanding" to "Implemented", keeping incomplete parts explicit). Finally, a suggested

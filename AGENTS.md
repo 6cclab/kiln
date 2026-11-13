@@ -21,7 +21,7 @@ self-hosted models. Module `github.com/andrepato/harness`.
 - `make build`: builds `bin/kiln` and installs it to `$GOBIN` or `$GOPATH/bin` (`Makefile:23-31`).
 - Also in the Makefile: `qa`, `qa-lint`, `qa-headless`, `eval`, `eval-live`, `cover`, `covercheck`, `race`.
 - Go cache: if the sandbox blocks the default one, use `GOCACHE=/private/tmp/kiln-gocache` for every run.
-  Never a per-task path: each new one is a 1-3 GB cold rebuild that nothing deletes (Go's cache is safe
+  Never use a per-task path: each new one is a 1-3 GB cold rebuild that nothing deletes (Go's cache is safe
   to share across concurrent builds). Delete other temp dirs you create under `/private/tmp` when done.
 
 ## Working rules

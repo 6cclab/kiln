@@ -1,6 +1,6 @@
 # Readiness candidate: preserved parent snapshot
 
-Captured 2026-11-12 04:58 UTC from the dirty source checkout as a faithful, byte-for-byte baseline. No product source was edited in the child beyond the copied snapshot.
+Captured 2026-11-12 04:58 UTC from the dirty source checkout as a byte-for-byte baseline. The child's product source is the copied snapshot, unedited.
 
 ## Provenance
 
@@ -148,4 +148,4 @@ ok  	github.com/andrepato/harness/test/e2e	231.142s
 
 ## Scope and next steps
 
-The snapshot preserves in-flight work on worker integration, custom command discovery, and learning proposals. `IntegrateWorkerResults` is present as an explicit batch helper, and no call site was added by this snapshot worker. The coordinator can route integration and broader readiness review after this stable baseline. No other branch was cherry-picked, and no push, PR, or merge was made.
+The snapshot preserves in-flight work on worker integration, custom command discovery, and learning proposals. `IntegrateWorkerResults` is present as an explicit batch helper; this snapshot added no call site. The coordinator can route integration and broader readiness review from this stable baseline. No other branch was cherry-picked, and no push, PR, or merge was made.

@@ -1,8 +1,8 @@
 # Benchmarks
 
 Recorded measurements from `go test -bench <name> -benchmem -run '^$' ./<pkg>/`.
-Not asserted — these are plain `testing.B` benchmarks with no thresholds,
-recorded here as a log, one row per measurement run.
+These are plain `testing.B` benchmarks with no thresholds, so nothing is
+asserted. This page is a log with one row per measurement run.
 
 | date | commit | benchmark | ns/op | B/op | allocs/op | machine note |
 | --- | --- | --- | --- | --- | --- | --- |

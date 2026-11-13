@@ -7,7 +7,7 @@ independently approved sets are assembled for the integrated gates.
 
 The preserved snapshot consists of `966fb18` (in-flight implementation),
 `ceab8c0` (provenance report), and `02ffe46` (discovery and learning review
-repairs). Their history remains behind the candidate branch; see
+repairs). Their history stays behind the candidate branch; see
 `readiness-candidate-snapshot.md` and `readiness-snapshot-fixes.md` for exact
 preservation and red/green evidence.
 
@@ -24,7 +24,7 @@ temporary overlay `/private/tmp/kiln_review_overlay.json` and test source
 `/private/tmp/kiln_review_probe_test.go`.
 
 This repair calls `completeToolBatch` after the remaining tool calls have
-truthful skipped results and before either the progress-loop notice or error
+truthful skipped results, before either the progress-loop notice or the error
 exit. If a skipped-result commit or completion callback fails, the operation
 stays pending so recovery can pair the result and resolve any durable intent;
 the patch is never applied twice by this path. The other exits were audited:
@@ -78,9 +78,9 @@ or installed GOBIN replacement was used.
 
 All source worktrees below live under
 `/Users/andrepato/orca/workspaces/harness-kiln/`; each source branch is
-`anpato/<worktree>`. The roadmap table immediately below identifies the main
-files and per-task limits, while the linked reports hold each task's detailed
-red/green tests and review repairs.
+`anpato/<worktree>`. The roadmap table after this one identifies the main files
+and per-task limits; the linked reports hold each task's detailed red/green
+tests and review repairs.
 
 | Task | Source worktree and branch | Source and approved integration commits | Detailed report |
 | --- | --- | --- | --- |
@@ -111,8 +111,8 @@ release CI, installer, doctor and first-run guidance (`.github/workflows`,
 `scripts/install.sh`, `README.md`, `docs/usage.md`, tests). The separate
 snapshot source and reports are retained. Native Windows CI, release publishing,
 the macOS general shell confinement gap, and broader live quality comparisons
-remain open review findings. The completed review repairs and red/green probes
-are documented in the source-area reports linked below.
+remain open review findings. The source-area reports linked below document the
+completed review repairs and red/green probes.
 
 The initial, T6, and T5 sets had no manual source conflicts; Git auto-merged
 `internal/cli/chat.go`, `internal/harness/turn.go`, and settings files. The
@@ -291,9 +291,8 @@ run made seven turns and six tool calls with reported cost USD 0. Kiln's two
 attempted Node Bash checks were correctly blocked in noninteractive
 `acceptEdits` mode; the passing behavioral check was the coordinator's
 independent Node VM verification after the edit. This one bounded coding task
-is not a broad model-quality comparison. It ran
-before this review repair; no model smoke has yet been repeated on the
-repaired binary. This worker does not move focus or run visible drives.
+is not a broad model-quality comparison. It ran before this review repair, and no
+model smoke has yet been repeated on the repaired binary. This worker does not move focus or run visible drives.
 
 ## Proposed status document update
 

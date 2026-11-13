@@ -2,7 +2,7 @@
 
 This roadmap tranche adds opt-in dirty-parent isolation and directory-aware
 verification evidence. It does not establish output-quality or cost parity with
-Claude Code or Codex. Paid comparisons remain deferred.
+Claude Code or Codex; paid comparisons remain deferred.
 
 ## Dirty-parent workers
 
@@ -60,14 +60,15 @@ implementation. They exercise parent index preservation, stale snapshot refusal,
 worker-only patch application, and rerun planning after adding a source file.
 
 Unit regressions cover batch integration, manifest drift, task-result baseline
-propagation, nested worker forwarding, ignored files,
-renames, line-ending normalization, unsafe filesystem inputs, limits,
-permissions, cancellation, legacy proofs and branch restoration. Existing
-file-only evidence and clean-checkout worker behavior remain covered.
+propagation, nested worker forwarding, ignored files, renames, line-ending
+normalization, unsafe filesystem inputs, limits, permissions, cancellation, legacy
+proofs and branch restoration. Existing file-only evidence and clean-checkout
+worker behavior remain covered.
 
 The `/context` fixture's tool count intentionally changes from 3.6k to 3.8k
-because the verification tool schema grew. Only that value changes in its two
-goldens. The agents and permission style fixtures each captured a partial frame in a
-full run; three focused reruns of each passed without changing their expectations.
+because the verification tool schema grew; only that value changes in its two
+goldens. In a full run, the agents and permission style fixtures each captured a
+partial frame; three focused reruns of each passed without changing their
+expectations.
 The final full end-to-end suite passed in 223.676 seconds. The real-terminal
 `commands/context.steps` scenario passed, and its screenshot was inspected.

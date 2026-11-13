@@ -16,20 +16,20 @@ this machine, against a 32,768-token window:
 | Full MCP tool schemas (165 tools, 9 servers) | 31,897 | **97%** |
 | Grafana alone (81 tools) | 19,992 | 61% |
 
-The catalog consumes the window before a system prompt, a file read, or a single
-user turn. That is an architecture problem, not a tuning problem.
+The catalog fills the window before a system prompt, a file read, or a single
+user turn. Tuning cannot fix that; the architecture has to change.
 
-kiln keeps the same interface and slash commands, and spends context
+kiln keeps the same interface and slash commands but spends context
 deliberately: tools are indexed rather than resident, skills load their bodies
 only on invocation, and memory is budgeted against the model's actual window.
 
-Measured result on the same catalog: **1,514 tokens, 5% of the window**, a 26x
-reduction, leaving the window for the conversation.
+Measured on the same catalog: **1,514 tokens, 5% of the window**, a 26x
+reduction that leaves the window for the conversation.
 
 ## What it is built on
 
-A single Go binary. The agent loop, session format, compaction and provider
-catalog are ports of [`@earendil-works/pi`](https://github.com/earendil-works/pi)
+kiln is a single Go binary. The agent loop, session format, compaction and
+provider catalog are ports of [`@earendil-works/pi`](https://github.com/earendil-works/pi)
 (MIT): sessions are pi's JSONL v4 and open in either implementation, and the
 43 providers over 14 API shapes are pi-ai's catalog, vendored under
 `internal/provider/catalog`. The terminal UI is
@@ -40,7 +40,7 @@ The interface follows the kiln "Ruled" design language (`docs/kiln-design.md`):
 a labelled hairline rule above every transcript block, a warm-dark truecolor
 palette, ruled diffs and permission prompts, and a block-letter banner.
 
-Model-agnostic by construction: local Ollama, an API key, or a Claude Pro/Max,
+kiln is model-agnostic: it works with local Ollama, an API key, or a Claude Pro/Max,
 ChatGPT Plus/Pro, GitHub Copilot, Kimi or xAI subscription. No code path branches
 on provider; only the budget tier differs.
 
@@ -52,15 +52,20 @@ curl -fsSL https://raw.githubusercontent.com/6cclab/kiln/main/scripts/install.sh
 
 `scripts/install.sh` installs the latest release's binary for macOS or Linux
 (amd64 or arm64), or Windows (amd64, from Git Bash), to `~/.local/bin`, verifying
-its checksum first. On Windows, run the command above in Git Bash; the installed
+its checksum first. On Windows, run the command in Git Bash; the installed
 file is `kiln.exe`. The installer prints a PATH hint if your shell cannot find it.
-`--ref <vX.Y.Z>` picks a different release; `--ref <branch|commit>` builds that ref
-from source instead, as does `--from-source` or `--source <checkout>` (a local
-checkout, built in place of cloning). `--dir <path>` picks the install directory.
-Go is only needed when building from source (the version go.mod names, or newer);
-git too, unless `--source` is given. Running the script again updates kiln in
-place. On Unix, an already running kiln keeps its old binary until restart;
-on Windows, close kiln before updating so the executable can be replaced.
+
+Options:
+
+- `--ref <vX.Y.Z>` installs a different release.
+- `--ref <branch|commit>`, `--from-source` or `--source <checkout>` builds from
+  source instead. `--source` builds a local checkout in place of cloning.
+- `--dir <path>` sets the install directory.
+
+Building from source needs Go (the version go.mod names, or newer), and git
+unless `--source` is given. Running the script again updates kiln in place. On
+Unix, a running kiln keeps its old binary until restart; on Windows, close kiln
+before updating so the executable can be replaced.
 
 From a checkout:
 
@@ -71,10 +76,10 @@ make build                      # macOS/Linux: bin/kiln, installed to Go's bin d
 
 ## First run
 
-Choose a model before starting a session. A fresh install does not include one;
-the built-in default (`ollama/qwen3.8:latest`) only works on machines that
-already serve that exact model. To use a local Ollama model, install and start
-Ollama, pull a model suited to your machine, then use the exact ID kiln lists:
+Choose a model before starting a session. A fresh install includes none; the
+built-in default (`ollama/qwen3.8:latest`) only works on machines that already
+serve that exact model. To use a local Ollama model, install and start Ollama,
+pull a model suited to your machine, then use the exact ID kiln lists:
 
 ```bash
 model_id=your-chosen-model-id # replace with a model ID suitable for your machine
@@ -83,26 +88,27 @@ kiln models ollama
 kiln --model "ollama/$model_id"
 ```
 
-`kiln models` shows each available model's context and usable budget. If you use
-an API key or subscription instead, check `kiln providers`, run
+`kiln models` shows each available model's context and usable budget. With an
+API key or subscription instead, check `kiln providers`, run
 `kiln login <provider>`, then `kiln models <provider>` and
-`kiln --model <provider>/<model-id-from-list>`. Set `HARNESS_MODEL` to that
-`provider/model` value if you want it to be the default for future sessions.
-`kiln doctor --model <provider/model>` reports an unavailable model under
+`kiln --model <provider>/<model-id-from-list>`. To make that model the default
+for future sessions, set `HARNESS_MODEL` to the same `provider/model` value.
+`kiln doctor --model <provider/model>` lists an unavailable model under
 problems; it is a diagnostic report and still exits with status 0.
 
 ## Update and remove
 
-Run the install command again to update the copy in `~/.local/bin`, or use the
-same `--dir` you chose on installation. To remove that copy, delete
-`~/.local/bin/kiln` (macOS/Linux) or `~/.local/bin/kiln.exe` (Windows Git Bash);
-for a custom `--dir`, delete the file there instead. If you used `make build`,
-remove the binary from Go's bin directory (`go env GOBIN`, or `go env GOPATH` +
-`/bin` when GOBIN is empty). Check `command -v kiln` if multiple copies exist.
+To update, run the install command again, with the same `--dir` if you chose
+one. To remove kiln, delete `~/.local/bin/kiln` (macOS/Linux) or
+`~/.local/bin/kiln.exe` (Windows Git Bash); for a custom `--dir`, delete the file
+there. If you used `make build`, remove the binary from Go's bin directory
+(`go env GOBIN`, or `go env GOPATH` + `/bin` when GOBIN is empty). Run
+`command -v kiln` if multiple copies exist.
+
 Removing the binary leaves sessions and credentials in `~/.harness` and kiln
 settings and memory in `~/.kiln`; delete those separately only if you no longer
-want the data. Claude Code's `.claude` files and `~/.claude.json` are shared and
-should not be removed as part of uninstalling kiln.
+want the data. Claude Code's `.claude` files and `~/.claude.json` are shared, so
+do not remove them when uninstalling kiln.
 
 ## Use
 
@@ -120,22 +126,24 @@ kiln --debug              # debug-level run log, path announced at startup
 kiln --inline             # native scrollback instead of the default full-screen TUI
 ```
 
-MCP servers connect in the background after the prompt appears: the footer shows
+MCP servers connect in the background after the prompt appears. The footer shows
 progress, and a one-line notice counts any servers that failed (`1 MCP server
 unavailable · run /mcp`). `/mcp` names each failed server with a reason you can
 act on; in print mode the same name and reason go to stderr. The model can use a
-server's tools as soon as that connect finishes.
+server's tools as soon as that server connects.
 
-Every run writes a log to `~/.harness/logs` (the last 30 are kept): startup phases
-with elapsed time, each server's connect outcome and duration, and every turn, tool
-call, retry and compaction. `kiln doctor` prints the directory and the latest
-file; attach that file to a bug report.
+Every run writes a log to `~/.harness/logs` (the last 30 are kept). It records
+startup phases with elapsed time, each server's connect outcome and duration, and
+every turn, tool call, retry and compaction. `kiln doctor` prints the directory
+and the latest file; attach that file to a bug report.
 
 Inside a session: `/` for commands, `@` to reference a file, `!` to run a shell
-command directly, `#` to add a memory. `Ctrl+O` toggles the detailed transcript
+command directly. `Ctrl+O` toggles the detailed transcript
 (tool output and reasoning expanded), `Shift+Tab` cycles permission mode, `Esc`
-interrupts, `Ctrl+C` twice exits. `Ctrl+F` toggles full-screen mode
-(`--fullscreen` is accepted for compatibility): the transcript scrolls inside the terminal with `PgUp`/`PgDn`,
+interrupts, `Ctrl+C` twice exits.
+
+`Ctrl+F` toggles full-screen mode (`--fullscreen` is accepted for compatibility).
+In full-screen mode the transcript scrolls inside the terminal with `PgUp`/`PgDn`,
 `Shift+Up`/`Shift+Down` or the mouse wheel, new output follows only while you are
 at the bottom, and history re-wraps on resize. Full-screen is the default;
 `--inline` uses the terminal's native scrollback. Toggling either way redraws the
@@ -147,7 +155,7 @@ uses inline.
 capped at the tier's per-result budget. `@screenshot.png` attaches the image
 instead.
 
-`/doctor` is the first thing to run when something looks wrong: it reports the
+`/doctor` is the first thing to run when something looks wrong. It reports the
 model, tier, tool strategy, MCP status, hooks and agents on one screen, with
 problems last.
 
@@ -159,29 +167,31 @@ credential wins over an environment variable for the same provider.
 
 - **Tiers.** The model's context window is the single place model choice becomes
   behavior. Everything downstream reads a tier and never asks which provider it
-  is on, so the same code relaxes on a 200k model instead of branching.
+  is on, so the same code relaxes on a 200k model without branching.
 - **Tool gating.** MCP tools are registered but inactive. The model sees a
   one-line index and calls `tool_search` to load the schemas it needs.
   Registration is free; activation is what costs tokens.
 - **Postures.** A `coding` posture does not index UniFi or Grafana at all. This
-  does more work than dynamic gating: indexing everything still costs 18% of a
+  saves more than dynamic gating: indexing everything still costs 18% of a
   32k window, while a posture index costs 5%.
 - **Skills.** Only `name` + `description` stay resident, in one place: the
   system prompt's skills index. The `skill` tool itself names no skill, so the
   catalog is never paid for twice. The index is budgeted at 1% of the context
-  window (`internal/budget`'s `SkillsListingTokens`); over budget, descriptions
-  shrink before any skill is dropped from the listing, project/user skills
-  outlast plugin ones, and a skill that still doesn't fit stays invocable by
-  exact name - just unlisted, with a pointer line saying so. Measured against a
-  real config (24 skills, mostly from enabled plugins) with a local capture
-  server standing in for Ollama: a 49,152-token window's first request fell
-  from ~13.3k to ~8.7k tokens (chars/4 estimate of the system prompt + tool
-  schemas), and a 32,768-token window's from ~12.6k to ~7.8k; the `skill`
-  tool's own schema, which used to re-embed every skill's name and
+  window (`internal/budget`'s `SkillsListingTokens`). Over budget, descriptions
+  shrink before any skill is dropped from the listing, and project/user skills
+  outlast plugin ones. A skill that still doesn't fit stays invocable by
+  exact name; it is unlisted, with a pointer line saying so. Bodies load only on
+  invocation.
+
+  Measured against a real config (24 skills, mostly from enabled plugins) with a
+  local capture server standing in for Ollama: a 49,152-token window's first
+  request fell from ~13.3k to ~8.7k tokens (chars/4 estimate of the system
+  prompt + tool schemas), and a 32,768-token window's from ~12.6k to ~7.8k. The
+  `skill` tool's own schema, which used to re-embed every skill's name and
   description, fell from ~1,500 tokens to a fixed ~216 regardless of catalog
-  size. Bodies still load only on invocation.
+  size.
 - **Subagents.** A `task` runs in its own session and window; the parent pays
-  for one paragraph.
+  only for one paragraph.
 - **Roles.** `settings.json`'s `modelRoles` (fast/structured/heavy →
   provider/model) is the one place model names appear; a `task` call picks a
   role instead of naming a provider and model itself. Concurrent `task` calls
@@ -193,13 +203,13 @@ credential wins over an environment variable for the same provider.
 ## `.claude/` compatibility
 
 kiln reads your existing Claude Code configuration exactly as Claude Code
-does. For its own settings it never writes `~/.claude` or `<repo>/.claude` -
-that goes under `.kiln` instead (`~/.kiln` for user-scope state, `<repo>/.kiln`
-for project/local state), joining the Claude Code hierarchy at the same
-scope and winning for a single value (model). MCP is the one deliberate
+does. It never writes its own settings to `~/.claude` or `<repo>/.claude`.
+They go under `.kiln` instead (`~/.kiln` for user-scope state, `<repo>/.kiln`
+for project/local state), which joins the Claude Code hierarchy at the same
+scope and wins for a single value (model). MCP is the one deliberate
 exception: `kiln mcp add`/`add-json`/`remove` write the *same* files
-`claude mcp add` does (`~/.claude.json`, `.mcp.json`) - kiln has no MCP file
-of its own, so a server either tool adds is one set, usable by both.
+`claude mcp add` does (`~/.claude.json`, `.mcp.json`). kiln has no MCP file
+of its own, so a server either tool adds is available to both.
 
 | kiln writes | From | Mirrors |
 |---|---|---|
@@ -207,11 +217,11 @@ of its own, so a server either tool adds is one set, usable by both.
 | `~/.kiln/settings.json` | `/model`'s default | `~/.claude/settings.json` |
 
 A git-tracked or symlinked `<repo>/.kiln/settings.local.json` is held until
-the folder is trusted - only its deny/ask rules apply until then. kiln stores
+the folder is trusted; until then only its deny/ask rules apply. kiln stores
 its own scoped project observations in `~/.kiln/memory.db`; see
 [configuration](docs/configuration.md) for recall, correction, export and deletion.
 An optional run observer can retain reviewable, source-checked records of
-successful local Go test commands; it respects the user's learning and memory
+successful local Go test commands. It respects the user's learning and memory
 opt-outs and does not treat test success as proof of task correctness.
 Claude auto-memory remains read-only; the `/memory` slash command still opens
 Claude Code's `CLAUDE.md` files in your editor.
@@ -232,16 +242,16 @@ Claude Code's `CLAUDE.md` files in your editor.
 |---|---|
 | `~/.claude.json`, `.mcp.json` | MCP servers; `kiln mcp add -s local\|user` writes `~/.claude.json`, `-s project` writes `.mcp.json` |
 
-A `PreToolUse` hook may rewrite a command before it runs. Hooks are applied
-**before** the permission gate, so the gate judges what will actually execute
-rather than what the model proposed. A blocking `Stop` hook keeps the turn going
+A `PreToolUse` hook may rewrite a command before it runs. Hooks run
+**before** the permission gate, so the gate judges what will execute, not what
+the model proposed. A blocking `Stop` hook keeps the turn going
 and sends its reason to the model as a user message.
 
 ## Safety
 
 Tool calls pass through a permission gate before running. Beyond the rules in
 `settings.json`, any path **outside the workspace** requires confirmation even
-when a rule would allow the tool: `allow: [Read]` means "reading is fine here",
+when a rule allows the tool. `allow: [Read]` means "reading is fine here",
 not "read anything on this machine". Widen the workspace with `/add-dir`. In
 print mode there is nobody to ask, so `ask` is a refusal.
 
@@ -258,10 +268,10 @@ print mode there is nobody to ask, so `ask` is a refusal.
 ## Evaluation
 
 `kiln eval` runs the built binary against a directory of scenarios
-(`eval/scenarios/`, one prompt/fixture/check set per subdirectory) and grades
+(`eval/scenarios/`, one prompt/fixture/check set per subdirectory). It grades
 each run mechanically (`checks:` — file contents, tool calls, permission
 blocks, usage, compaction, subagent dispatch, ...) and, where a scenario
-declares a `judge:` rubric, by an LLM judge. Each run is written as one JSON
+declares a `judge:` rubric, with an LLM judge. Each run is written as one JSON
 record to a timestamped file under `eval/results/`.
 
 ```bash
@@ -295,8 +305,8 @@ make eval         # eval/scenarios against faux, reported against eval/results/b
 ```
 
 Every screen assertion runs against an emulated terminal, never against the
-bytes written, because that is where every rendering bug in this project has
-lived. `docs/testing.md` explains the driver, the faux model server and
+bytes written, because every rendering bug in this project has shown up on
+screen, not in the bytes. `docs/testing.md` explains the driver, the faux model server and
 `kiln-drive`, which turns a bug report into a replayable script.
 
 Two upstream libraries are vendored under `third_party/`, each with patches

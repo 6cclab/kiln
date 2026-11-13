@@ -1,7 +1,7 @@
 # kiln documentation
 
-Start with the repository [README](../README.md) for what kiln is, how to
-install it, and the one-screen summary of how it keeps context small.
+Start with the repository [README](../README.md): what kiln is, how to install
+it, and a one-screen summary of how it keeps context small.
 
 ## Using kiln
 
