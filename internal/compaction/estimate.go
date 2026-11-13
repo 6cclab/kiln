@@ -87,7 +87,18 @@ func EstimateTokens(m msg.Message) int {
 // TokensFromUsage is pi's calculateContextTokens(usage)
 // (harness/compaction/compaction.js): totalTokens when reported, else the
 // sum of the four counted fields.
+//
+// A response that ran a server tool (Anthropic web search) is not a
+// measurement: the provider samples the model once per search and reports
+// the input of every pass added together, so it reads as one prompt far
+// larger than the context (a real session: 226,634 input tokens on a
+// request whose very next request, which contained all of it, was
+// 122,184). It returns 0, which every caller treats as "no usage here":
+// they fall back to the request before it and estimate what came after.
 func TokensFromUsage(u msg.Usage) int {
+	if u.ServerToolUse != nil && u.ServerToolUse.WebSearchRequests > 0 {
+		return 0
+	}
 	if u.TotalTokens != 0 {
 		return u.TotalTokens
 	}
