@@ -86,6 +86,7 @@ qa: build
 	python3 scripts/qa/drive.py --terminal $(TERMINAL) --out qa/runs/$(shell date +%Y%m%dT%H%M%S) $(QA_STEPS)
 
 qa-lint:
+	python3 -m unittest discover -s scripts/qa -p '*_test.py'
 	python3 scripts/qa/drive.py --lint $(QA_ALL_STEPS)
 
 # Headless QA: the same qa/scenarios, driven through xterm.js in headless

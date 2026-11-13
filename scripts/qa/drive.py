@@ -176,6 +176,36 @@ def wheel_binary():
     return out
 
 
+# Which way each terminal (by bundle id) reads a posted wheel notch: True when
+# it scrolls the opposite way to what wheel.swift was asked for. Terminals
+# disagree (iTerm2 applies natural scrolling to posted events, Terminal.app
+# does not), so the first SCROLL that visibly moves the screen decides, and
+# the answer holds for the rest of the run.
+WHEEL_INVERTED = {}
+
+
+def scroll_shift(before, after):
+    """How many rows the content moved between two screens: positive when it
+    moved down (the view scrolled up), negative when it moved up, 0 when no
+    shift is clear. Only lines that occur once in `before` count, so blank
+    rows and repeated rules cannot fake a match, and rows that stayed put
+    (footer, prompt) match no shift at all."""
+    b, a = before.split("\n"), after.split("\n")
+    counts = {}
+    for line in b:
+        counts[line] = counts.get(line, 0) + 1
+    unique = {i for i, line in enumerate(b) if line.strip() and counts[line] == 1}
+    best, best_k = 0, 0
+    for k in range(1, len(b)):
+        for sign in (1, -1):
+            n = sum(1 for i in unique if 0 <= i + sign * k < len(a) and a[i + sign * k] == b[i])
+            if n > best:
+                best, best_k = n, sign * k
+            elif n == best:
+                best_k = 0  # a tie between shifts says nothing
+    return best_k if best >= 2 else 0
+
+
 # Named keys -> (orca action, orca key)
 PRESS = {
     "enter": "Return", "return": "Return", "esc": "Escape", "escape": "Escape",
@@ -960,6 +990,43 @@ class Run:
         except OSError as e:
             raise DriveError("RELEASE %s failed: %s" % (name, e))
 
+    def wheel(self, direction, n):
+        """Posts n wheel notches over the window centre, so the view scrolls
+        `direction`. Until this terminal's wheel direction is known, it posts
+        one notch at a time and reads which way the screen moved."""
+        x, y = self.term.centre()
+        other = {"up": "down", "down": "up"}
+
+        def post(word, count):
+            if count <= 0:
+                return
+            p = run([wheel_binary(), str(x), str(y), word, str(count)])
+            if p.returncode != 0:
+                raise DriveError("SCROLL failed: " + (p.stderr or p.stdout).strip())
+
+        bundle = self.term.bundle
+        if bundle in WHEEL_INVERTED:
+            post(other[direction] if WHEEL_INVERTED[bundle] else direction, n)
+            return
+        # One notch each way at most: at the end of the scrollback a notch
+        # the wrong way moves nothing, so try the other word before giving up.
+        net = 0  # notches the view has moved toward `direction`
+        for word in (direction, other[direction]):
+            before = self.screen()
+            post(word, 1)
+            time.sleep(0.4)
+            shift = scroll_shift(before, self.screen())
+            if shift:
+                went = "up" if shift > 0 else "down"
+                WHEEL_INVERTED[bundle] = went != word
+                net += 1 if went == direction else -1
+                self.log("SCROLL %s: this terminal scrolls %s for a posted %s notch" % (
+                    bundle, went, word))
+                post(other[direction] if WHEEL_INVERTED[bundle] else direction, n - net)
+                return
+        self.log("SCROLL %s: the screen did not move, wheel direction still unknown" % bundle)
+        post(direction, n)
+
     def execute(self):
         for lineno, verb, arg in self.steps:
             self.log("%s %s" % (verb, arg))
@@ -980,10 +1047,7 @@ class Run:
                     # (scripts/qa/wheel.swift) over the window's centre.
                     self.term.activate()
                     time.sleep(0.2)
-                    x, y = self.term.centre()
-                    p = run([wheel_binary(), str(x), str(y), direction, n])
-                    if p.returncode != 0:
-                        raise DriveError("SCROLL failed: " + (p.stderr or p.stdout).strip())
+                    self.wheel(direction, int(n))
                     time.sleep(0.3)
             elif verb == "CLICK":
                 x, y = arg.split()[:2]
