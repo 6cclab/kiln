@@ -31,7 +31,7 @@ func TestRenderGolden_PermBashDontAsk5Rules(t *testing.T) {
 }
 
 // TestRenderGolden_PermBashDontAskHidden: not grantable, so the options
-// are Yes / switch to auto mode / No, numbered 1-3.
+// are Yes / use auto mode / No, numbered 1-3.
 func TestRenderGolden_PermBashDontAskHidden(t *testing.T) {
 	withRenderEnv(t, 80)
 	req := BashPermissionRequest{Command: "npm test -- upload"}
@@ -115,7 +115,7 @@ func TestPromptOptions_NoSwitchToTheModeAlreadyOn(t *testing.T) {
 			p := NewPromptState(t.TempDir())
 			reply := p.AskTool(c.req)
 			rendered := stripANSI(strings.Join(p.Render(100), "\n"))
-			hasSwitch := strings.Contains(rendered, "switch to")
+			hasSwitch := strings.Contains(rendered, "switch to") || strings.Contains(rendered, "use auto mode")
 			wantSwitch := len(c.want) == 3
 			if hasSwitch != wantSwitch {
 				t.Errorf("rendered switch option = %v, want %v:\n%s", hasSwitch, wantSwitch, rendered)
@@ -192,7 +192,7 @@ func TestPromptState_AutoModeHasNoSwitchToAuto(t *testing.T) {
 	p := NewPromptState("/tmp")
 	reply := p.AskTool(req)
 	rendered := stripANSI(strings.Join(p.Render(80), "\n"))
-	if strings.Contains(rendered, "switch to auto mode") || !strings.Contains(rendered, "3  No") {
+	if strings.Contains(rendered, "use auto mode") || !strings.Contains(rendered, "3  No") {
 		t.Errorf("rendered:\n%s", rendered)
 	}
 	p.HandleKey(key("3"))

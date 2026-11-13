@@ -498,14 +498,10 @@ func BuiltinCommands(deps BuiltinDeps) Source {
 				}
 				breakdown := buildContextBreakdown(deps, t)
 				for _, entry := range breakdown.Selections {
-					state := "out"
-					if entry.Included {
-						state = "in"
-					}
-					out = append(out, fmt.Sprintf("%s %s %s %s · %s", state, entry.Kind, entry.Material, entry.Name, entry.Reason))
+					out = append(out, entry.Line(entry.Name))
 				}
 				for _, entry := range breakdown.Settings {
-					out = append(out, fmt.Sprintf("%s %s · %s", entry.Name, entry.Value, entry.Source))
+					out = append(out, entry.Line())
 				}
 				return Result{Output: out, Context: breakdown}, nil
 			},

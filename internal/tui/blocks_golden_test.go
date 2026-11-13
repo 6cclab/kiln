@@ -139,9 +139,9 @@ func TestRenderGolden_Context(t *testing.T) {
 			{Kind: "memory", Name: "project:style", Material: "record", Included: true, Reason: "search hit"},
 		},
 		Settings: []commands.ContextSetting{
-			{Name: "model", Value: "kiln-large", Source: "--model"},
-			{Name: "effort", Value: "high", Source: "--effort"},
-			{Name: "permission", Value: "plan", Source: "--permission-mode"},
+			{Name: "model", Value: "kiln-large", Source: "set by --model"},
+			{Name: "effort", Value: "high", Source: "set by --effort"},
+			{Name: "permission", Value: "plan only", Source: "set by --permission-mode"},
 			{Name: "auto-memory dir", Value: "default project directory", Source: "default"},
 		},
 	}

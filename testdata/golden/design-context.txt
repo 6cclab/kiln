@@ -7,14 +7,14 @@
   ■ Free                                                                              123.2k   96%
 
   Selection
-  in agent metadata scout · suggested by metadata match
-  in agent result scout · exact-name invocation
+  scout agent · metadata included · suggested by metadata match
+  scout agent · result included · exact-name invocation
 
   Settings
-  model faux/faux-1 · HARNESS_MODEL
-  effort model default · default
-  permission manual · --permission-mode
-  auto-memory dir default project directory · default
+  model: faux/faux-1 · set by HARNESS_MODEL
+  effort: model default
+  permission: ask before edits · set by --permission-mode
+  auto-memory dir: default project directory
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ›  describe a task · / for commands · @ to add files
   ────────────────────────────────────────────────────────────────────────────────────────────────

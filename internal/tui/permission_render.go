@@ -34,7 +34,7 @@ type PermissionRequest struct {
 	// AutoModeNote is permission.Request's: why auto mode asked instead of
 	// deciding. Committed as a system note just above the prompt.
 	AutoModeNote string
-	// InAutoMode leaves out the bash prompt's "switch to auto mode"
+	// InAutoMode leaves out the bash prompt's "use auto mode"
 	// option: that mode is already on.
 	InAutoMode bool
 	// InAcceptEdits leaves out the edit prompt's "switch to accept edits"
@@ -242,7 +242,7 @@ type BashPermissionRequest struct {
 	// it (or without rules) the option is left out and the rest move up.
 	Grantable    bool
 	DontAskRules []string
-	// InAutoMode leaves out "switch to auto mode" (promptOptionsFor).
+	// InAutoMode leaves out "use auto mode" (promptOptionsFor).
 	InAutoMode bool
 	// Unsandboxed marks a command that runs outside the OS sandbox.
 	Unsandboxed bool
@@ -335,11 +335,19 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 	if req.Grantable && len(req.DontAskRules) > 0 {
 		options = append(options, dontAskLabel(req.DontAskRules, width-4))
 	}
+	autoIdx := -1
 	if !req.InAutoMode {
-		options = append(options, "Yes, and switch to auto mode · auto mode handles these prompts for you")
+		autoIdx = len(options)
+		options = append(options, "Yes, and use auto mode")
 	}
 	options = append(options, "No")
 	for i, opt := range options {
+		if i == autoIdx && i == selected {
+			// What auto mode does shows under the option while it is
+			// selected; unselected, the short label keeps the list to one
+			// row an option at 60 columns.
+			opt += "\n" + autoModeExplanation
+		}
 		lines = append(lines, permissionOptionRows(fmt.Sprintf("%d", i+1), opt, i == selected, width)...)
 	}
 
@@ -347,13 +355,17 @@ func RenderBashPermissionPrompt(req BashPermissionRequest, width, selected int) 
 	// Fit every row to width, same as the generic prompt path
 	// (RenderPermissionPrompt above returns FitLines(...) rather than
 	// lines directly) — this function used to return its lines raw, so a
-	// long option row (e.g. "Yes, and switch to auto mode · ...") ran
+	// long option row (e.g. the old "Yes, and switch to auto mode · ...") ran
 	// past the right edge uncut on a narrow terminal instead of wrapping
 	// (finding bash-prompt-option-overflow-narrow-terminal). "    " lines
 	// up a wrapped continuation under the option label, matching
 	// permissionOptionRow's "key + two spaces" prefix.
 	return FitLines(lines, width, "    ")
 }
+
+// autoModeExplanation is the second row of the bash prompt's "Yes, and use
+// auto mode" option, shown while it is selected.
+const autoModeExplanation = "auto mode handles these prompts for you"
 
 // EditKind distinguishes the Edit vs Write permission prompt's header and
 // question wording. Deliverable 6 states only that "Write prompt mirrors

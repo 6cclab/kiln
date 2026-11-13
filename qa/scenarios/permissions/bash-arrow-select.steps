@@ -1,5 +1,5 @@
 # Bash prompt navigated with arrows instead of a digit key: down, down to
-# reach option 3 ("switch to auto mode"), enter to commit it.
+# reach option 3 ("use auto mode"), enter to commit it.
 @faux testdata/faux/qa/permissions-bash-arrow.yaml
 @smoke
 

@@ -57,7 +57,7 @@ steps:
 		t.Fatal(out)
 	}
 	before := runContextPrint(t, args, "/context")
-	if !strings.Contains(before, "in skill body review · exact-name invocation") {
+	if !strings.Contains(before, "review skill · body included · exact-name invocation") {
 		t.Fatalf("restored context omitted committed skill body:\n%s", before)
 	}
 	beforeRequests := srv.Requests()
@@ -71,7 +71,7 @@ steps:
 		t.Fatal(out)
 	}
 	after := runContextPrint(t, args, "/context")
-	if strings.Contains(after, "in skill body review") {
+	if strings.Contains(after, "review skill · body included") {
 		t.Fatalf("compacted body reported as current:\n%s", after)
 	}
 	reqs := srv.Requests()
@@ -125,7 +125,7 @@ steps:
 	}
 	args.ContinueLatest = true
 	report := runContextPrint(t, args, "/context")
-	for _, want := range []string{"in skill metadata review · catalog listing", "Claude instructions", "Claude auto memory"} {
+	for _, want := range []string{"review skill · metadata included · catalog listing", "Claude instructions", "Claude auto memory"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("context omitted %q:\n%s", want, report)
 		}
@@ -154,7 +154,7 @@ steps:
 	args.Model = ""
 	args.ContinueLatest = true
 	contextOut := runContextPrint(t, args, "/context")
-	if !strings.Contains(contextOut, "model faux/faux-2 · resumed session") {
+	if !strings.Contains(contextOut, "model: faux/faux-2 · from the resumed session") {
 		t.Fatal(contextOut)
 	}
 	var configOut, stderr bytes.Buffer

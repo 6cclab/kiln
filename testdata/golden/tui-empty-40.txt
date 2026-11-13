@@ -5,4 +5,4 @@
   ────────────────────────────────────
   ›  describe a task · / for commands
   ────────────────────────────────────
-  ● ask before edits  ⇧⇥
+  ● ask before edits  faux-1   ctx 0%

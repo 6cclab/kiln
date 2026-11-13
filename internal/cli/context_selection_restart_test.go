@@ -76,7 +76,7 @@ steps:
 func TestContextSelectionLiveRestartKeepsRequestDecisions(t *testing.T) {
 	args := seedDecisionRequest(t)
 	report := runContextPrint(t, args, "/context")
-	for _, want := range []string{"in skill metadata pinned-helper · pinned", ":dbnote · search hit", "out skill metadata dbtwo · budget-dropped"} {
+	for _, want := range []string{"pinned-helper skill · metadata included · pinned", ":dbnote memory · record included · search hit", "dbtwo skill · metadata left out · budget-dropped"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("restarted /context omitted %q:\n%s", want, report)
 		}
@@ -132,7 +132,7 @@ func TestContextSelectionLiveOldSessionWithoutRecord(t *testing.T) {
 			t.Errorf("old session reported %q:\n%s", gone, report)
 		}
 	}
-	if !strings.Contains(report, "in skill metadata dbone · search hit") {
+	if !strings.Contains(report, "dbone skill · metadata included · search hit") {
 		t.Errorf("committed search hits must still be restored:\n%s", report)
 	}
 }

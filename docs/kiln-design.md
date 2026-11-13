@@ -152,7 +152,7 @@ A `─` rule in `rule-strong` (`#3a3228`) above and below the input
   - a permission or plan prompt is open, not currently capturing feedback
     text: `press N, N or N` for the prompt's actual option count — `press
     1, 2 or 3` for a generic/edit/write/plan prompt (3 options), `press 1,
-    2, 3 or 4` for the Bash prompt's extra "switch to auto mode" option
+    2, 3 or 4` for the Bash prompt's extra "use auto mode" option
     (4 options) — built by `placeholderForOptionCount`, so any future
     option-count change is covered without a hardcoded per-tool check.
   - a prompt is open and capturing free-text feedback (option 3, "tell
@@ -314,13 +314,15 @@ approval needed ─────────────────────�
 ──────────────────────────────────────────────────────────
  1  Yes
  2  Yes, and don't ask again for: npm test *
- 3  Yes, and switch to auto mode · auto mode handles these prompts for you
+ 3  Yes, and use auto mode
  4  No
 
  ↑↓ select · enter confirm · esc decline · tab to amend
 ```
 
-Selected row: raised background (`#241f18`) + amber key. Option 2's gate
+Selected row: raised background (`#241f18`) + amber key. While option 3 is
+selected, a second row under it explains it: "auto mode handles these
+prompts for you". Option 2's gate
 expression is the command's first two words plus ` *` (`bashDontAskRule`
 — e.g. `openssl rand -hex 4` → `openssl rand *`).
 

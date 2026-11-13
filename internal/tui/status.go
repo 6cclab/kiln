@@ -158,7 +158,7 @@ func Elapsed(d time.Duration) string {
 // only auto-allows edit/write and read-only calls, asking for everything
 // else, while auto is a blanket allow for every call not already denied —
 // the same "auto mode" the Bash/plan permission prompts already offer to
-// switch into (internal/tui/permission_render.go's "switch to auto mode").
+// switch into (internal/tui/permission_render.go's "use auto mode").
 // So they get distinct labels: "auto-edit" for acceptEdits, "auto mode"
 // for auto, reusing that established name rather than inventing a new one.
 func modeLabel(mode string) (label string, colour func(string) string) {
@@ -178,6 +178,13 @@ func modeLabel(mode string) (label string, colour func(string) string) {
 	default: // "manual", "", any unrecognised mode
 		return "ask before edits", Muted
 	}
+}
+
+// PermissionLabel is the footer's name for a permission mode ("manual" is
+// "ask before edits"), so /context names the mode the way the footer does.
+func PermissionLabel(mode string) string {
+	label, _ := modeLabel(mode)
+	return label
 }
 
 // contextPressure colours the context meter's filled cells: amber below
@@ -259,11 +266,11 @@ func AbbrevHome(path, home string) string {
 // RenderStatusLine renders the one-row status line: mode segment, location
 // segment, model, a flexible spacer, then the context meter and cost —
 // fitted so the right side ends at width-1. When the row does not fit, the
-// cwd shortens first, then segments drop in a fixed, monotonic order: cost,
-// then the model, then the location itself; past that the row is truncated
-// outright with FitStatus. Monotonic means never recombining — a row that
-// has already dropped cost never brings it back by dropping the model
-// instead, so two widths one column apart show a consistent, predictable
+// cwd shortens first, then segments drop in a fixed, monotonic order (the
+// list at the end of this function): cost, the ⇧⇥ hint, the folder, the
+// branch, then the narrow forms of the model and context meter; past that
+// the row is truncated outright with FitStatus. Monotonic means never
+// recombining: two widths one column apart show a consistent, predictable
 // set of segments.
 // design-studio: kiln / Terminal {"scene":"shells","layout":"ruled"}
 // design-studio: kiln / Terminal {"scene":"routed","layout":"ruled"}
@@ -305,6 +312,12 @@ func RenderStatusLine(s StatusState, width int) string {
 		cwd := s.Cwd
 		if VisibleWidth(cwd) > cwdWidth {
 			cwd = ShortenPathLeft(cwd, cwdWidth)
+			// A cut inside the folder's own name ("…ay-api", "…01") names
+			// nothing: drop the folder for the next step instead.
+			base := s.Cwd[strings.LastIndex(s.Cwd, "/")+1:]
+			if !strings.HasPrefix(cwd, "…/") && cwd != "…"+base {
+				return ""
+			}
 		}
 		if cwd == "" {
 			return ""
@@ -394,79 +407,123 @@ func RenderStatusLine(s StatusState, width int) string {
 		shellsSeg = KilnAmber(G().Shells + " " + plural.Count(s.Shells, "shell"))
 	}
 
-	// needLoc: refuse a row that would only fit by dropping the location
-	// entirely, so a tight row gives up cost, then the model, before the
-	// cwd · branch (defect: a long cwd blanked the branch too).
-	build := func(includeCost, includeShells, includeModel, needLoc bool, modelVariant string) string {
-		r := ctxSeg
-		if includeCost {
+	// The narrow forms: the mode without its shortcut hint (the shortcuts
+	// panel still lists it), the context as "ctx N%" without its bar, and
+	// the model without its provider prefix.
+	modeSegBare := colour(dot) + " " + colour(label)
+	ctxSegCompact := "ctx " + Muted(fmt.Sprintf("%d%%", percent))
+	shortModel := func(m string) string {
+		if i := strings.LastIndex(m, "/"); i >= 0 && i < len(m)-1 {
+			return m[i+1:]
+		}
+		return m
+	}
+	modelShort := ""
+	if name := s.RoutedModel; name != "" || s.ModelLabel != "" {
+		if name == "" {
+			name = s.ModelLabel
+		}
+		modelShort = shortModel(name)
+	}
+
+	type footer struct {
+		cost, shells, hint, folder, branch, meter bool
+		model                                     string // plain label; "" drops it
+		styled                                    string // the model segment as drawn, when set
+	}
+	build := func(f footer) string {
+		r := ctxSegCompact
+		if f.meter {
+			r = ctxSeg
+		}
+		if f.cost {
 			r += "  " + costSeg
 		}
 		rw := VisibleWidth(r)
 		model := ""
-		if includeModel && modelVariant != "" {
-			model = "  " + modelVariant
+		if f.styled != "" {
+			model = "  " + f.styled
+		} else if f.model != "" {
+			model = "  " + Ink(f.model)
 		}
 		shells := ""
-		if includeShells && shellsSeg != "" {
+		if f.shells && shellsSeg != "" {
 			shells = "  " + shellsSeg
 		}
-		lwMode := VisibleWidth(modeSeg) + VisibleWidth(model) + VisibleWidth(shells)
+		mode := modeSegBare
+		if f.hint {
+			mode = modeSeg
+		}
+		lwMode := VisibleWidth(mode) + VisibleWidth(model) + VisibleWidth(shells)
 
 		tryLoc := func(cwdWidth int) string {
-			left := modeSeg
-			if loc := locSegAt(cwdWidth); loc != "" {
+			left := mode
+			switch {
+			case f.folder && s.Cwd != "":
+				loc := locSegAt(cwdWidth)
+				if loc == "" {
+					return ""
+				}
 				left += "  " + loc
-			} else if needLoc && s.Cwd != "" {
-				return ""
+			case f.branch && s.Git != nil:
+				left += "  " + Muted(strings.TrimPrefix(branchSuffix, " · "))
 			}
-			left += model
-			left += shells
-			lw := VisibleWidth(left)
-			spacer := width - 1 - lw - rw
+			left += model + shells
+			spacer := width - 1 - VisibleWidth(left) - rw
 			if spacer < 1 {
 				return ""
 			}
 			return left + strings.Repeat(" ", spacer) + r
 		}
 
+		if !f.folder || s.Cwd == "" {
+			return tryLoc(0)
+		}
 		if out := tryLoc(VisibleWidth(s.Cwd)); out != "" {
 			return out
 		}
 		available := width - 1 - lwMode - 2 - VisibleWidth(branchSuffix) - rw - 1
 		if available >= 1 {
-			if out := tryLoc(available); out != "" {
-				return out
-			}
+			return tryLoc(available)
 		}
-		return tryLoc(0)
+		return ""
 	}
 
 	// Drop order as the row narrows, fixed and monotonic: shorten the cwd
 	// (inside build) first, then drop cost, then the shells indicator, then
-	// collapse the model ("auto → model" to just the routed model), then drop
-	// the model, and only then the location itself. Each step is strictly
-	// narrower than the last — nothing comes back once dropped — so two
-	// terminal widths one column apart never show a different combination of
-	// segments (defect: trying {cost, no model} before giving up on cost let
-	// a wider row drop cost while a narrower one kept it by keeping the model
-	// instead, qa/findings/20261004T204953Z-narrow-footer-and-panel-clipping.json).
-	// When no shell is running shellsSeg is "", so the shells flag has no
-	// effect and the sequence collapses to the original cost→model→loc order.
-	for _, try := range []struct {
-		cost, shells, model, needLoc bool
-		variant                      string
-	}{
-		{true, true, true, true, modelSeg},
-		{false, true, true, true, modelSeg},
-		{false, false, true, true, modelSeg},
-		{false, false, true, true, modelSegCollapsed},
-		{false, false, false, true, ""},
-		{false, false, false, false, ""},
+	// the ⇧⇥ hint, then the folder (the branch stays), then the branch,
+	// then collapse "auto → model" to the routed model, then the context
+	// bar (the percentage stays), then the provider prefix of the model,
+	// and last cut the model itself. Mode, model and context percentage
+	// are what a narrow window keeps: which model answers and how full the
+	// context is matter more than where the session runs. Each step is
+	// strictly narrower than the last, so two widths one column apart
+	// never show a different combination of segments (qa/findings/
+	// 20261004T204953Z-narrow-footer-and-panel-clipping.json). When no
+	// shell runs, shellsSeg is "" and its step changes nothing.
+	for _, f := range []footer{
+		{cost: true, shells: true, hint: true, folder: true, branch: true, meter: true, styled: modelSeg},
+		{shells: true, hint: true, folder: true, branch: true, meter: true, styled: modelSeg},
+		{hint: true, folder: true, branch: true, meter: true, styled: modelSeg},
+		{folder: true, branch: true, meter: true, styled: modelSeg},
+		{branch: true, meter: true, styled: modelSeg},
+		{meter: true, styled: modelSeg},
+		{meter: true, styled: modelSegCollapsed},
+		{styled: modelSegCollapsed},
+		{model: modelShort},
 	} {
-		if out := build(try.cost, try.shells, try.model, try.needLoc, try.variant); out != "" {
+		if out := build(f); out != "" {
 			return out
 		}
 	}
-	return FitStatus(modeSeg, width)
+	// The model, cut to whatever room the mode and "ctx N%" leave.
+	if room := width - 1 - VisibleWidth(modeSegBare) - 2 - 2 - VisibleWidth(ctxSegCompact); modelShort != "" && room >= 4 {
+		if out := build(footer{model: FitStatus(modelShort, room)}); out != "" {
+			return out
+		}
+	}
+	if out := build(footer{}); out != "" {
+		return out
+	}
+	return FitStatus(modeSegBare, width)
 }

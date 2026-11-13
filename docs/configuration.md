@@ -378,7 +378,7 @@ Reading and writing it never prompts, in every mode (plan mode included), as Cla
 - **Failures.** An error, a timeout, an unreadable answer, an answer that did not finish (cut off at the token limit, even when what arrived parses) or no classifier at all asks the user; in print mode, which has nobody to ask, the call is refused. Never allowed. Failures do not count as blocks. A permission check that errors or panics (a cancelled prompt or classifier call) blocks the call (`harness` before_tool).
 - **Settings.** `autoMode.environment`, `allow`, `soft_deny` and `hard_deny` are prose lists added to the classifier's instructions. A list containing `"$defaults"` keeps kiln's built-in entries at that position; a list without it replaces them. Read from user settings and `--settings` only: a repository cannot tell the classifier what to allow.
 - **Run log.** Each call logs `auto mode classifier` with `tool`, `decision` (`allow`/`block`/`error`), `model`, `ms`, `input_tokens`, `output_tokens`, `cache_read`, `cache_write`, and the reason or error.
-- **Prompts in auto mode** (a failed check, a run of blocks, an ask rule, a path outside the workspace) leave out the bash prompt's "switch to auto mode" option.
+- **Prompts in auto mode** (a failed check, a run of blocks, an ask rule, a path outside the workspace) leave out the bash prompt's "use auto mode" option.
 
 Not implemented from Claude Code's auto mode: `autoMode.classifyAllShell`, the two-minute countdown on a critical-path removal's prompt, reviewing a subagent's report before the parent reads it, and the `claude auto-mode` subcommands.
 

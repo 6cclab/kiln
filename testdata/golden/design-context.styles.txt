@@ -7,14 +7,14 @@
   [fg=#3f372c]■[/] [fg=#ece4d4]Free[/]                                                                              [fg=#a39781]123.2k[/] [fg=#a39781]  96%[/]  
                                                                                                     
   [fg=#a39781]Selection[/]                                                                                         
-  in agent metadata scout · suggested by metadata match                                             
-  in agent result scout · exact-name invocation                                                     
+  scout agent · metadata included · suggested by metadata match                                     
+  scout agent · result included · exact-name invocation                                             
                                                                                                     
   [fg=#a39781]Settings[/]                                                                                          
-  model faux/faux-1 · HARNESS_MODEL                                                                 
-  effort model default · default                                                                    
-  permission manual · --permission-mode                                                             
-  auto-memory dir default project directory · default                                               
+  model: faux/faux-1 · set by HARNESS_MODEL                                                         
+  effort: model default                                                                             
+  permission: ask before edits · set by --permission-mode                                           
+  auto-memory dir: default project directory                                                        
   [fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────[/]  
   [fg=#e9a64b]›[/]  [fg=#7d7262]describe a task · / for commands · @ to add files[/]                                              
   [fg=#3a3228]────────────────────────────────────────────────────────────────────────────────────────────────[/]  

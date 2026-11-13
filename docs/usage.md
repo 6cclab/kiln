@@ -276,7 +276,7 @@ given mode with `--permission-mode`. Source: `internal/claude/settings/settings.
   No, and tell kiln what to do instead** (opens a feedback line) — `Esc`
   declines outright.
 - A shell command: **1 Yes** · **2 Yes, and don't ask again for: `<rules>`**
-  · **3 Yes, and switch to auto mode** · **4 No** (`↑`/`↓` to move, `Tab` to
+  · **3 Yes, and use auto mode** · **4 No** (`↑`/`↓` to move, `Tab` to
   amend).
 - An edit or write: **1 Yes** · **2 Yes, and switch to accept edits for this
   session** · **3 No**.
