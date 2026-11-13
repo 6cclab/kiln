@@ -271,7 +271,20 @@ kiln reads Claude Code's `.claude` files exactly as Claude Code does and never w
 | `autoMemoryDirectory` | `string` | last non-empty wins; absolute or `~/`-prefixed (§7's "Auto memory") |
 | `autoMode.environment`, `autoMode.allow`, `autoMode.soft_deny`, `autoMode.hard_deny` | `AutoModeConfig` (`settings/automode.go`, `LoadAutoMode`) | read **only** from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`, concatenated in that order; ignored in project and local settings, with a startup warning (see "Auto mode classifier") |
 | `modelRouter` | `ModelRouterConfig` (`settings/modelrouter.go`, `LoadModelRouter`) | read **only** from `~/.claude/settings.json`, `~/.kiln/settings.json` and `--settings`, a later file's value replacing an earlier one's; ignored in project and local settings, with a startup warning. Its role names resolve against `modelRoles` from those same files only (§6a) |
+| `webSearch.searxngUrl` | `WebSearch.SearxngURL` | read **only** from user settings (`~/.claude/settings.json`, `~/.kiln/settings.json`) and `--settings`, last non-empty wins; ignored in project and local settings, since it receives every search query (see "Web search" below) |
 | `sandbox` | `Sandbox` (`sandbox.go`) | Claude Code's rules: booleans last-set wins, arrays combined; some keys only from user settings or `--settings` (see "Sandbox" below) |
+
+### Web search
+
+`web_search` on an Anthropic model is Anthropic's server tool: Anthropic runs the search, and kiln shows the query and results. Other providers can't run it, so by default their models are not offered `web_search` (`web_fetch` works with every provider).
+
+To search from any model, point kiln at a [SearXNG](https://docs.searxng.org/) instance with its JSON API enabled (`json` listed under `search.formats` in the instance's `settings.yml`):
+
+```json
+{ "webSearch": { "searxngUrl": "http://searx.local:8080" } }
+```
+
+Put it in `~/.claude/settings.json`, `~/.kiln/settings.json` or a `--settings` file. Non-Anthropic models then get `web_search` as an ordinary tool: kiln calls `<url>/search?q=…&format=json` and returns up to 10 results with title, URL and snippet. The model can pass `allowed_domains` or `blocked_domains` (not both); a domain also matches its subdomains. Anthropic models keep the server tool. A `WebSearch` deny rule removes the tool for every model. Otherwise a search asks for permission in manual and plan mode, like `web_fetch` (`internal/tools/websearch.go`, `internal/harness/turn.go` `buildStreamOptions`).
 
 ### Permission rule syntax (`MatchesRule`, `settings.go`)
 

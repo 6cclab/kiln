@@ -1,7 +1,7 @@
 # A research request answered from a live page: kiln fetches the release
 # notes with web_fetch (shown as "web fetch") and answers with the link.
-# (web_search is Anthropic's server tool, so it exists only on Anthropic
-# models; web_fetch works with any provider.)
+# (web_search is Anthropic's server tool; other models get it only when
+# webSearch.searxngUrl is set. web_fetch works with any provider.)
 @real
 @size 140x45
 WAITFOR /describe a task/ 30

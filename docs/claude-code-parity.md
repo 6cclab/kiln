@@ -356,7 +356,7 @@ call, but API keys are.
 
 ## Deliberate divergences
 
-Seven; the first six are additive:
+Eight; all but the seventh are additive:
 
 1. **Budget footer** (§7): required by the 32k local case.
 2. **Model picker spans providers**: `/model` must offer local Ollama models
@@ -396,6 +396,14 @@ Seven; the first six are additive:
    memory-note input mode and `~/.kiln/CLAUDE.md` file (see §2) rather than
    invent a CLAUDE.md of its own. Open item: a kiln-native, writable memory
    store (auto or otherwise) does not exist yet.
+8. **`web_search` on any provider** — Claude Code's WebSearch runs on
+   Anthropic's backend only, and "the search backend is not configurable"
+   (tools reference, "WebSearch tool behavior"). kiln sends the same server
+   tool to Anthropic models. When `webSearch.searxngUrl` is set in user
+   settings, every other model gets `web_search` as an ordinary tool that
+   queries that SearXNG instance (`docs/configuration.md`, "Web search").
+   It takes `allowed_domains` or `blocked_domains`, as Claude Code's does,
+   and asks for permission like `web_fetch`.
 
 ## Explicit non-goals
 

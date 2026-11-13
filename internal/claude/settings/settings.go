@@ -82,9 +82,13 @@ type Settings struct {
 	Orchestration          Orchestration
 	PersonalMemoryEnabled  *bool
 	SkillDiscovery         SkillDiscovery
-	Permissions            Permissions
-	Model                  string
-	EffortLevel            string
+	// WebSearch configures kiln's own web_search backend for models not
+	// served over the Anthropic Messages API (a kiln key; Claude Code
+	// ignores it). Read from user settings and --settings only.
+	WebSearch   WebSearch
+	Permissions Permissions
+	Model       string
+	EffortLevel string
 	// ModelRoles maps a role name (e.g. "fast", "structured", "heavy") to
 	// a "provider/model" string. Roles let a subagent or alias request a
 	// class of model ("give me something fast") without naming a literal
@@ -171,6 +175,14 @@ func (f LoadedSettingsFile) Label() string {
 	return dir
 }
 
+// WebSearch is the "webSearch" settings object.
+type WebSearch struct {
+	// SearxngURL is the base URL of a SearXNG instance with its JSON API
+	// enabled. When set, web_search works on every provider, not only
+	// Anthropic's.
+	SearxngURL string `json:"searxngUrl"`
+}
+
 // StatusLineConfig is Claude Code's settings.json "statusLine" object: a
 // command whose stdout is rendered below the input box. Type is "command".
 type StatusLineConfig struct {
@@ -199,6 +211,7 @@ type rawSettings struct {
 	Orchestration           Orchestration      `json:"orchestration"`
 	PersonalMemoryEnabled   *bool              `json:"personalMemoryEnabled"`
 	SkillDiscovery          SkillDiscovery     `json:"skillDiscovery"`
+	WebSearch               WebSearch          `json:"webSearch"`
 	Permissions             *rawPermissions    `json:"permissions"`
 	Model                   string             `json:"model"`
 	EffortLevel             string             `json:"effortLevel"`
@@ -522,6 +535,12 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 			if raw.MemoryRetrievalTokens != nil && *raw.MemoryRetrievalTokens > PositiveOr(merged.MemoryRetrievalTokens, 512) {
 				raw.MemoryRetrievalTokens = nil
 			}
+		}
+		// The SearXNG URL receives every query the model searches for, so a
+		// repository's settings can't point it at a server of their choosing.
+		if trustedEfficiencySource && strings.TrimSpace(raw.WebSearch.SearxngURL) != "" {
+			merged.WebSearch.SearxngURL = strings.TrimSpace(raw.WebSearch.SearxngURL)
+			merged.recordSource("webSearch.searxngUrl", f.Path)
 		}
 		merged.LearningAutomation.merge(raw.LearningAutomation)
 		merged.RuntimeEfficiency.merge(raw.RuntimeEfficiency)
@@ -979,10 +998,10 @@ func decideRules(h Hits, toolName, primaryArg string, mode PermissionMode) Decis
 			}
 			return Ask
 		}
-		// Fetching a page changes nothing locally and is how a plan gets
-		// researched, but the URL can carry data out, so it asks rather
-		// than being refused or allowed.
-		if toolName == "web_fetch" {
+		// Fetching a page or searching changes nothing locally and is how a
+		// plan gets researched, but the URL or query can carry data out, so
+		// it asks rather than being refused or allowed.
+		if toolName == "web_fetch" || toolName == "web_search" {
 			return Ask
 		}
 		return Deny
