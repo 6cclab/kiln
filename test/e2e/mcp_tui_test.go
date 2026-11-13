@@ -84,13 +84,10 @@ func TestTUI_MCP_BackgroundConnect(t *testing.T) {
 	// tool_search is a read-only tool: it groups as "Reading…" only while
 	// live, and commits as its own kiln "tool" block (a "tool search" label
 	// rule, then its argument) once done, like every other call. The MCP
-	// tool's own call renders the same way under a "mcp fixture echo"
-	// label rule; the row below it no longer repeats the name. MapToolName's titleCase now splits a snake_case
-	// name on "_" and joins with a single space instead of leaving the
-	// underscore in place (qa/findings/20260927T000543Z-snake-case-tool-
-	// names-not-title-cased.json), which also collapses an MCP tool's
-	// double-underscore-separated segments into single spaces.
-	for _, want := range []string{"tool search ─", "mcp fixture echo ─", "round trip", "Echoed."} {
+	// tool's own call renders the same way under a "fixture · echo" label
+	// rule (server, then tool; MapToolName); the row below it no longer
+	// repeats the name.
+	for _, want := range []string{"tool search ─", "fixture · echo ─", "round trip", "Echoed."} {
 		if !regexp.MustCompile(regexp.QuoteMeta(want)).MatchString(joined) {
 			t.Errorf("screen missing %q:\n%s", want, joined)
 		}

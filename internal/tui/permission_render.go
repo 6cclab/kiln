@@ -923,12 +923,11 @@ func raisedCommand(cmd string, width int) string {
 // qualified id ("mcp__incidents__list_incidents") reads as the tool and
 // the server it belongs to.
 func promptToolName(name string) string {
-	rest, ok := strings.CutPrefix(name, "mcp__")
-	if !ok {
+	if !strings.HasPrefix(name, "mcp__") {
 		return strings.ReplaceAll(name, "_", " ")
 	}
-	server, tool, ok := strings.Cut(rest, "__")
-	if !ok || server == "" || tool == "" {
+	server, tool, ok := splitMCPToolName(name)
+	if !ok {
 		return name
 	}
 	return fmt.Sprintf("%s from the %s MCP server", tool, server)
