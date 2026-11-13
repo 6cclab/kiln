@@ -127,7 +127,7 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `ui.focus` | `(args) => Promise<{ deny? }>` | ⚠️ lands the focus ring of a pane that holds the keys on a keyed Button; any other element is `{ deny }` (kiln's ring walks Buttons) |
 | `ui.copy` | `(args) => Promise<UiCopyResult>` | ✅ written as the mouse selection is (OSC 52 plus the local clipboard tool); `no-clipboard` when that tool fails |
 | `ui.selection` | `() => Promise<UiSelection \| undefined>` | ⚠️ the text of the last mouse selection (fullscreen only); no `requestId`, since kiln keeps no row identity for it. Cleared by the next click |
-| `ui.notify` | `(text, options?) => Promise<UiNotifyResult>` | ⚠️ writes the escape sequence of `preferredNotifChannel` (`auto` picks iTerm2, Kitty, Ghostty, else the bell). kiln does not run the person's `Notification` hooks for it first |
+| `ui.notify` | `(text, options?) => Promise<UiNotifyResult>` | ⚠️ writes the escape sequence of `preferredNotifChannel` (`auto` picks iTerm2, Kitty, Ghostty, else the bell), once the person's `Notification` hooks have run (`notification_type` `plugin_notification`, `message` the text, `title` the heading; a matcher is tested against the type, so a `permission_prompt` hook does not run). They run only under the TUI (a `-p` run has no notification wiring) |
 | `ui.view` | (kiln-only name) | ✅ always refuses — kiln has no per-agent transcript view |
 
 ### clock

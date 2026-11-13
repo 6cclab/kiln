@@ -326,3 +326,20 @@ func TestUIPressHookCanTakeThePress(t *testing.T) {
 		t.Errorf("a hook took the press, yet onPress ran: presses = %v", got)
 	}
 }
+
+// ui.input, ui.select, ui.message and ui.fault are about elements kiln does
+// not draw (Input, Select, Client): a hook on them registers and kiln says it
+// never raises them.
+func TestUIEventsOfElementsKilnDoesNotDrawAreNeverRaised(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.load(t, "clientless")
+	logs := h.logs.String()
+	for _, ev := range []string{"ui.input", "ui.select", "ui.message", "ui.fault"} {
+		if supportedEvents[ev] {
+			t.Errorf("%s is listed as raised, yet kiln draws no element that could raise it", ev)
+		}
+		if !strings.Contains(logs, "kiln does not raise "+ev) {
+			t.Errorf("a %s hook was not reported as never raised:\n%s", ev, logs)
+		}
+	}
+}

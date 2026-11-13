@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 
+	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/mods"
 )
 
@@ -56,6 +57,41 @@ func (r *modsRuntime) dialogOpen(id string, open bool) {
 		if d := r.driver.Load(); d != nil {
 			d.SetNotice(id, "")
 		}
+	}
+}
+
+// setNotifyHooks wires the runner of the person's Notification hooks, which
+// $.ui.notify runs before its channel writes.
+func (r *modsRuntime) setNotifyHooks(fn func(ctx context.Context, title, text string)) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.notifyHooks = fn
+	r.mu.Unlock()
+}
+
+// notificationHooks returns the runner of the Notification hooks for a
+// plugin's notification: notification_type "plugin_notification", message the
+// text and title the heading, matched by notification_type as Claude Code does.
+func notificationHooks(cfg func() claudehooks.Config, sessionID, transcript, cwd string, onNotice func(string)) func(context.Context, string, string) {
+	return func(ctx context.Context, title, text string) {
+		claudehooks.RunHooks(claudehooks.RunOptions{
+			Config:      cfg(),
+			Event:       claudehooks.Notification,
+			ToolName:    "plugin_notification",
+			HasToolName: true,
+			Payload: claudehooks.Payload{
+				SessionID:        sessionID,
+				TranscriptPath:   transcript,
+				Cwd:              cwd,
+				Message:          text,
+				Title:            title,
+				NotificationType: "plugin_notification",
+			},
+			OnNotice: onNotice,
+			Ctx:      ctx,
+		})
 	}
 }
 
@@ -121,7 +157,13 @@ func (r *modsRuntime) uiServices(svc *mods.Services) {
 		d.SetNotice(id, text)
 		return ""
 	}
-	ui.Notify = func(_ context.Context, title, text string) mods.NotifyResult {
+	ui.Notify = func(ctx context.Context, title, text string) mods.NotifyResult {
+		r.mu.Lock()
+		hooks := r.notifyHooks
+		r.mu.Unlock()
+		if hooks != nil {
+			hooks(ctx, title, text) // the person's Notification hooks run first
+		}
 		d := drv()
 		if d == nil {
 			return mods.NotifyResult{Reason: "no-surface"}

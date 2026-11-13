@@ -36,6 +36,7 @@ type Payload struct {
 	// Notification: the text shown to the user and its kind
 	// ("permission_prompt").
 	Message          string `json:"message,omitempty"`
+	Title            string `json:"title,omitempty"`
 	NotificationType string `json:"notification_type,omitempty"`
 	// PreCompact: "auto" or "manual", and the user's /compact instructions.
 	Trigger            string `json:"trigger,omitempty"`

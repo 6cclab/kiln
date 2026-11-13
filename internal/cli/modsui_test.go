@@ -2,9 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
 	"github.com/andrepato/harness/internal/mods"
 )
 
@@ -92,5 +96,40 @@ func TestPersonMovesWithoutEngineStand(t *testing.T) {
 	}
 	if r.Has("ui.scroll") {
 		t.Error("Has with no engine")
+	}
+}
+
+// $.ui.notify runs the person's Notification hooks first, with
+// notification_type plugin_notification, the text as message and the title;
+// a matcher on another type does not run.
+func TestNotifyRunsNotificationHooksBeforeTheChannel(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "payload.json")
+	other := filepath.Join(t.TempDir(), "other.json")
+	cfg := claudehooks.Config{claudehooks.Notification: {
+		{MatcherPattern: "plugin_notification", Hooks: []claudehooks.Command{{Type: "command", Command: "cat > " + out}}},
+		{MatcherPattern: "permission_prompt", Hooks: []claudehooks.Command{{Type: "command", Command: "cat > " + other}}},
+	}}
+	r := &modsRuntime{}
+	r.setNotifyHooks(notificationHooks(func() claudehooks.Config { return cfg }, "sid", "/t.jsonl", t.TempDir(), nil))
+	var s mods.Services
+	r.uiServices(&s)
+	got := s.UI.Notify(context.Background(), "CI", "tests passed")
+	if got.Reason != "no-surface" {
+		t.Errorf("notify = %+v, want no-surface (no interface), the hooks having run all the same", got)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("the Notification hook did not run: %v", err)
+	}
+	var p map[string]any
+	if err := json.Unmarshal(data, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p["notification_type"] != "plugin_notification" || p["message"] != "tests passed" || p["title"] != "CI" ||
+		p["hook_event_name"] != "Notification" || p["session_id"] != "sid" {
+		t.Errorf("hook payload = %v", p)
+	}
+	if _, err := os.Stat(other); err == nil {
+		t.Error("a hook matching permission_prompt ran for a plugin notification")
 	}
 }

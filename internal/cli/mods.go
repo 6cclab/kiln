@@ -99,9 +99,11 @@ type modsRuntime struct {
 	pending map[string]mods.ToolHandle // agentID + "\x00" + tool call id
 	// dialogs are the tool calls whose permission dialog is up.
 	dialogs map[string]bool
-	agents  map[string]*mods.AgentInfo
-	order   []string
-	turnSeq atomic.Int64
+	// notifyHooks runs the person's Notification hooks for $.ui.notify (the TUI wires it).
+	notifyHooks func(ctx context.Context, title, text string)
+	agents      map[string]*mods.AgentInfo
+	order       []string
+	turnSeq     atomic.Int64
 
 	// mainTurn is the id of the main loop's running turn ("" between turns);
 	// $.turn.abort checks it. lane aborts it. stops end the per-conversation
