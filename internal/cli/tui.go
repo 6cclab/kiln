@@ -255,7 +255,8 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		fmt.Fprintf(stderr, "keybindings: %s\n", c)
 	}
 
-	banner := newBanner(deps, bannerContentWidth(stdout))
+	banner := newBanner(deps)
+	launchWidth := bannerContentWidth(stdout)
 	// A resumed session's footer starts from its own figures.
 	var initialUsed *int
 	var initialCost *float64
@@ -330,7 +331,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		SessionName:    "kiln", // the terminal title, as Claude Code sets "Claude Code"
 		Effort:         deps.Effort,
 		ModelID:        deps.Resolved.Model.ID,
-		Banner:         banner(),
+		Banner:         banner(launchWidth),
 		BannerFunc:     banner,
 		StartupNotes:   deps.StartupNotes,
 		SessionID:      deps.Started.SessionID,
@@ -737,30 +738,21 @@ func bannerContentWidth(stdout io.Writer) int {
 // always survives; only if that suffix alone does not fit does the row
 // fall through to app.go's tail-truncation.
 func bannerRows(deps InteractiveDeps, width int) []string {
-	return newBanner(deps, width)()
+	return newBanner(deps)(width)
 }
 
 // newBanner reads everything the banner shows (git branch, recent
-// sessions) once, and returns a function that styles those rows on each
-// call. app.go calls it when it commits the banner, after the terminal has
+// sessions) once, and returns a function that lays out and styles those
+// rows for a width on each call. Laying out per call is what lets a resize
+// pick the right variant: the layout used to be fixed at the launch width,
+// so shrinking a 120-column window to 40 kept the art and cut the repo
+// line beside it (finding 20261112T220956Z-resized-banner-keeps-launch-width).
+// app.go calls it when it commits the banner, after the terminal has
 // reported its background, so the rows pick up the background-aware text
 // tokens. Rows styled before that reply keep the dark design defaults,
 // and ink-coloured text on a light background is near-invisible.
-func newBanner(deps InteractiveDeps, width int) func() []string {
+func newBanner(deps InteractiveDeps) func(width int) []string {
 	verLabel := versionLabel(Version)
-
-	// The kiln art sits left of the text when there is room for it and
-	// a usable repo line beside it; a narrow terminal (or screen-reader
-	// mode, where block art is noise read aloud) gets the text alone.
-	art := !tui.IsPlain() && width-kilnArtWidth-kilnArtGap >= kilnArtMinText
-	textWidth := width
-	if art {
-		textWidth = width - kilnArtWidth - kilnArtGap
-	}
-
-	// The repo line per the design: "<cwd> · branch <b> · model <m>", cwd
-	// with the home dir abbreviated to ~ and, when the row is tight,
-	// left-truncated so the branch/model suffix survives intact.
 	cwd := abbrevHome(deps.Cwd)
 	suffix := ""
 	if wd, err := os.Getwd(); err == nil {
@@ -769,15 +761,6 @@ func newBanner(deps InteractiveDeps, width int) func() []string {
 		}
 	}
 	suffix += " · model " + deps.ModelLabel
-
-	maxCwd := textWidth - tui.VisibleWidth(suffix)
-	if maxCwd < 1 {
-		maxCwd = 1
-	}
-	if tui.VisibleWidth(cwd) > maxCwd {
-		cwd = tui.ShortenPathLeft(cwd, maxCwd)
-	}
-	loc := cwd + suffix
 
 	var recent []recentSession
 	var currentSessionID string
@@ -788,7 +771,35 @@ func newBanner(deps InteractiveDeps, width int) func() []string {
 		recent = recentSessionRows(deps.Cwd, currentSessionID)
 	}
 
-	return func() []string { return styleBanner(verLabel, loc, recent, art) }
+	return func(width int) []string {
+		art, loc := bannerLayout(cwd, suffix, width)
+		return styleBanner(verLabel, loc, recent, art)
+	}
+}
+
+// bannerLayout decides, for a width, whether the art fits and what the
+// repo line reads.
+func bannerLayout(cwd, suffix string, width int) (art bool, loc string) {
+	// The kiln art sits left of the text when there is room for it and
+	// a usable repo line beside it; a narrow terminal (or screen-reader
+	// mode, where block art is noise read aloud) gets the text alone.
+	art = !tui.IsPlain() && width-kilnArtWidth-kilnArtGap >= kilnArtMinText
+	textWidth := width
+	if art {
+		textWidth = width - kilnArtWidth - kilnArtGap
+	}
+
+	// The repo line per the design: "<cwd> · branch <b> · model <m>", cwd
+	// with the home dir abbreviated to ~ and, when the row is tight,
+	// left-truncated so the branch/model suffix survives intact.
+	maxCwd := textWidth - tui.VisibleWidth(suffix)
+	if maxCwd < 1 {
+		maxCwd = 1
+	}
+	if tui.VisibleWidth(cwd) > maxCwd {
+		cwd = tui.ShortenPathLeft(cwd, maxCwd)
+	}
+	return art, cwd + suffix
 }
 
 // The banner's kiln, copied from the design (docs/kiln-design-handoff/

@@ -115,10 +115,12 @@ type Config struct {
 	// Banner is the startup banner, committed (fitted to the terminal
 	// width) on the first WindowSizeMsg so a long cwd row never wraps.
 	Banner []string
-	// BannerFunc, when set, re-renders Banner at commit time, so the rows
-	// use the text tokens fitted to the terminal's reported background
-	// rather than the design defaults Banner was styled with at startup.
-	BannerFunc func() []string
+	// BannerFunc, when set, re-renders Banner at commit time for the
+	// current content width, so the rows use the text tokens fitted to the
+	// terminal's reported background rather than the design defaults
+	// Banner was styled with at startup, and a resize picks the layout
+	// that fits (the art drops out on a narrow window).
+	BannerFunc func(width int) []string
 	// StartupNotes are committed as system notes right after the banner,
 	// once the terminal's width is known (committed any earlier, a note
 	// wrapped at the fallback width).
@@ -828,8 +830,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamWrap.release()
 		if m.cfg.Bridge != nil {
 			m = m.commitReconnectNote()
-			renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
-			lines := append([]string{""}, RenderAssistantText(renderer.Render(msg.Text))...)
+			lines := append([]string{""}, RenderAssistantText(transcriptRenderer(m.contentWidth()).Render(msg.Text))...)
 			m.commit(lines)
 		}
 		return m, nil
@@ -2785,7 +2786,7 @@ func (m Model) frameHeight() int {
 func (m Model) bannerRows() []string {
 	src := m.cfg.Banner
 	if m.cfg.BannerFunc != nil {
-		src = m.cfg.BannerFunc()
+		src = m.cfg.BannerFunc(m.contentWidth())
 	}
 	rows := make([]string, len(src))
 	for i, r := range src {

@@ -55,10 +55,10 @@ func clipPreview(lines []string) []string {
 func renderReplacement(op EditOp) []string {
 	var lines []string
 	for _, line := range firstN(strings.Split(op.OldText, "\n"), maxPreviewLines) {
-		lines = append(lines, OnDiffDel(padToWidth(KilnRed("  − "+line), ruleWidth())))
+		lines = append(lines, onRow(OnDiffDel, padToWidth(KilnRed("  − "+line), ruleWidth())))
 	}
 	for _, line := range firstN(strings.Split(op.NewText, "\n"), maxPreviewLines) {
-		lines = append(lines, OnDiffAdd(padToWidth(KilnGreen("  + "+line), ruleWidth())))
+		lines = append(lines, onRow(OnDiffAdd, padToWidth(KilnGreen("  + "+line), ruleWidth())))
 	}
 	return lines
 }
@@ -180,7 +180,7 @@ func RenderChangePreview(toolName string, args map[string]any) []string {
 		if !exists {
 			out := []string{Muted(fmt.Sprintf("  new file, %s", plural.Count(len(contentLines), "line")))}
 			for _, l := range contentLines {
-				out = append(out, OnDiffAdd(padToWidth(KilnGreen("  + "+l), ruleWidth())))
+				out = append(out, onRow(OnDiffAdd, padToWidth(KilnGreen("  + "+l), ruleWidth())))
 			}
 			return append(header, clipPreview(out)...)
 		}
@@ -191,10 +191,10 @@ func RenderChangePreview(toolName string, args map[string]any) []string {
 		existingLines := strings.Split(existing, "\n")
 		out := []string{Muted(fmt.Sprintf("  overwrites %s", plural.Count(len(existingLines), "existing line")))}
 		for _, l := range firstN(existingLines, 6) {
-			out = append(out, OnDiffDel(padToWidth(KilnRed("  − "+l), ruleWidth())))
+			out = append(out, onRow(OnDiffDel, padToWidth(KilnRed("  − "+l), ruleWidth())))
 		}
 		for _, l := range firstN(contentLines, 6) {
-			out = append(out, OnDiffAdd(padToWidth(KilnGreen("  + "+l), ruleWidth())))
+			out = append(out, onRow(OnDiffAdd, padToWidth(KilnGreen("  + "+l), ruleWidth())))
 		}
 		return append(header, clipPreview(out)...)
 	}

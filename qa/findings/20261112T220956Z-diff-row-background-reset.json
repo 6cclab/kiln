@@ -1,0 +1,35 @@
+{
+ "id": "20261112T220956Z-diff-row-background-reset",
+ "found_at": "2026-11-12T22:09:56Z",
+ "scenario": "tools/edit-existing",
+ "step": "edit-diff",
+ "terminals": [
+  "iterm-dark",
+  "terminal"
+ ],
+ "category": "design-drift",
+ "severity": "medium",
+ "title": "Diff row and header backgrounds stop at nested ANSI resets",
+ "observed": "In the fresh 120x40 iTerm2 capture, added and removed diff row tints cover the line-number gutter but disappear before the sign, code, and trailing padding. The header panel tint similarly stops after its styled path. RenderDiffLines and diffHeaderRow wrap a background around independently styled spans containing full SGR resets; the committed diff-modified.styles.txt also records this sequence. Cross-checked in Terminal.app: the same visual defect is present.",
+ "expected": "Added and removed row backgrounds and the diff header panel span the full content width. Compose foreground and background together per span, or otherwise preserve the background across inner resets; verify actual styled cells across the row.",
+ "design_ref": "docs/kiln-design-handoff/Terminal.dc.html:diff block; internal/tui/transcript.go:215; internal/tui/transcript.go:248",
+ "evidence": [
+  "qa/runs/ui-polish-review-20261112/color/iterm-dark/tools-edit-existing-120x40/01-edit-diff.png",
+  "internal/tui/testdata/render/diff-modified.styles.txt",
+  "qa/runs/ui-polish-review-20261112/crosscheck/terminal/tools-edit-existing-120x40/01-edit-diff.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/theme.go",
+   "internal/tui/transcript.go",
+   "internal/tui/changepreview.go"
+  ],
+  "regression_test": "TestDiffRows_BackgroundSpansTheRow",
+  "after_evidence": [
+   "qa/runs/fixbg/terminal/tools-edit-existing-120x40/01-edit-diff.png"
+  ],
+  "note": "onRow re-applies the surface after every inner reset (RaiseRow's mechanism, generalised); verified in Terminal.app on the Mac mini",
+  "updated_at": "2026-11-12T23:34:47Z"
+ }
+}

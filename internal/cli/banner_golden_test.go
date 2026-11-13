@@ -279,3 +279,32 @@ func TestBannerRow1_LongCwdKeepsBranchAndModelAt120And80(t *testing.T) {
 		}
 	}
 }
+
+// TestBanner_LaysOutForTheWidthItIsDrawnAt: one banner, drawn at the width
+// of each commit. Its layout used to be fixed at launch, so a window shrunk
+// from 120 to 40 columns kept the art and cut the repo line beside it
+// (finding 20261112T220956Z-resized-banner-keeps-launch-width).
+func TestBanner_LaysOutForTheWidthItIsDrawnAt(t *testing.T) {
+	tui.SetColorEnabled(true)
+	tui.SetPlainMode(false)
+	chdirNoGit(t)
+	t.Setenv("HOME", t.TempDir())
+	banner := newBanner(InteractiveDeps{Cwd: "/home/dev/relay-api", ModelLabel: "kiln-large"})
+
+	if wide := strings.Join(banner(120), "\n"); !strings.ContainsAny(wide, "█▀▄") {
+		t.Fatalf("120 columns: want the kiln art beside the text\n%s", wide)
+	}
+	narrow := banner(40)
+	if joined := strings.Join(narrow, "\n"); strings.ContainsAny(joined, "█▀▄") {
+		t.Errorf("40 columns: the art should drop out\n%s", joined)
+	}
+	var loc string
+	for _, r := range narrow {
+		if strings.Contains(ansi.Strip(r), "model kiln-large") {
+			loc = ansi.Strip(r)
+		}
+	}
+	if loc == "" || tui.VisibleWidth(loc) > 40 {
+		t.Errorf("40 columns: want the repo line whole within 40 columns, got %q", loc)
+	}
+}
