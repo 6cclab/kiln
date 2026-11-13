@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -166,9 +165,6 @@ func TestProcessSpawnCannotStartRejectsFirstPull(t *testing.T) {
 		t.Errorf("empty argv: err = %q, want one naming argv", out.Err)
 	}
 }
-
-// pidAlive reports whether pid is still a running process.
-func pidAlive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
 func pidFrom(t *testing.T, file string) int {
 	t.Helper()
