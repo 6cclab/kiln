@@ -1019,6 +1019,23 @@ func (e *Engine) matchValue(want, got goja.Value) bool {
 			}
 			r, err := test(wo, got)
 			return err == nil && r.ToBoolean()
+		case "Object":
+			// { props: { kind: "x" } } matches on the nested field, as the
+			// d.ts's ToolProgress example does.
+			gotObj, ok := got.(*goja.Object)
+			if !ok {
+				return false
+			}
+			for _, k := range wo.Keys() {
+				g := gotObj.Get(k)
+				if g == nil {
+					g = goja.Undefined()
+				}
+				if !e.matchValue(wo.Get(k), g) {
+					return false
+				}
+			}
+			return true
 		}
 	}
 	return want.StrictEquals(got)

@@ -57,6 +57,10 @@ type Site struct {
 	Title     string
 	IsFocused bool
 	IsWorking bool
+	// Props are the plain-data props of any other component (CommandOutput,
+	// ...), as RenderPropsOf declares them; a Pane's and AbovePrompt's are
+	// built from the fields above.
+	Props map[string]any
 }
 
 // Drawing is what one mod drew for one site: nil Tree means the mod did not

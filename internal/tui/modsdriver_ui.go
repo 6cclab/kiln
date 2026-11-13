@@ -224,3 +224,27 @@ func (d *ModsDriver) handlePersonMove(key string) bool {
 	}
 	return false
 }
+
+// rowBudget bounds how long a transcript row waits for a mod to draw it: the
+// row is committed from the Bubble Tea goroutine.
+const rowBudget = 300 * time.Millisecond
+
+// DrawRow lets a mod's ui.render hook draw a transcript row (CommandOutput):
+// the rows of the first tree drawn for it, nil when no mod drew one. Only a
+// tree replaces the row; a hook that rewrites `props` and calls next draws the
+// engine's own row.
+func (d *ModsDriver) DrawRow(component, requestID string, props map[string]any, width int) []string {
+	if d == nil || !d.engine.Has("ui.render") {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), rowBudget)
+	defer cancel()
+	site := mods.Site{Component: component, RequestID: requestID, Surface: "terminal",
+		BodyColumns: max(0, width), Props: props}
+	for _, dr := range d.engine.Render(ctx, site) {
+		if dr.Tree != nil {
+			return RenderModTree(*dr.Tree, width).Lines
+		}
+	}
+	return nil
+}

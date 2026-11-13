@@ -297,6 +297,7 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		}
 	}
 	if modsDriver != nil {
+		bridge.SetRowDrawer(modsDriver.DrawRow)
 		modsDriver.SetSend(bridge.SendAsync, func(_, text string) {
 			bridge.SendAsync(tui.MsgFooterNote{Text: text})
 		})

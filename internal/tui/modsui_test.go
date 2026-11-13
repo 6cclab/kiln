@@ -194,6 +194,54 @@ func TestUnhookedKeysMoveThePaneAtOnce(t *testing.T) {
 	}
 }
 
+// rowEngine draws every site as one Text, and hooks ui.render.
+type rowEngine struct {
+	fakePromptEngine
+	site mods.Site
+	none bool
+}
+
+func (r *rowEngine) Has(ev string) bool { return ev == "ui.render" }
+func (r *rowEngine) Render(_ context.Context, s mods.Site) []mods.Drawing {
+	r.site = s
+	if r.none {
+		return []mods.Drawing{{Plugin: "p"}}
+	}
+	return []mods.Drawing{{Plugin: "p", Tree: &mods.Element{Type: "Text", Text: "row for " + s.RequestID}}}
+}
+
+func TestDrawRowRendersTheFirstTreeAtWidth(t *testing.T) {
+	eng := &rowEngine{}
+	d := NewModsDriver(eng)
+	t.Cleanup(d.Close)
+	rows := d.DrawRow("CommandOutput", "status", map[string]any{"text": "x"}, 40)
+	if len(rows) != 1 || !strings.Contains(rows[0], "row for status") {
+		t.Errorf("rows = %q", rows)
+	}
+	if eng.site.Component != "CommandOutput" || eng.site.Props["text"] != "x" || eng.site.BodyColumns != 40 {
+		t.Errorf("site = %+v", eng.site)
+	}
+	eng.none = true
+	if rows := d.DrawRow("CommandOutput", "status", nil, 40); rows != nil {
+		t.Errorf("a hook that drew nothing gave rows %q", rows)
+	}
+	var nilDriver *ModsDriver
+	if nilDriver.DrawRow("CommandOutput", "s", nil, 40) != nil {
+		t.Error("a nil driver drew")
+	}
+	if NewModsDriverForTest(t).DrawRow("CommandOutput", "s", nil, 40) != nil {
+		t.Error("a driver with no ui.render hook drew")
+	}
+}
+
+// NewModsDriverForTest is a driver over an engine with no hooks.
+func NewModsDriverForTest(t *testing.T) *ModsDriver {
+	t.Helper()
+	d := NewModsDriver(newFakePromptEngine())
+	t.Cleanup(d.Close)
+	return d
+}
+
 func TestStatusAndNoticeLines(t *testing.T) {
 	d := NewModsDriver(newFakePromptEngine())
 	t.Cleanup(d.Close)

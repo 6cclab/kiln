@@ -294,6 +294,26 @@ func TestUIPressRunsThroughHooks(t *testing.T) {
 	}
 }
 
+func TestRenderOtherComponentsCarryTheirProps(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.load(t, "rowdrawer")
+	ctx := ctxT(t)
+	h.e.SessionStart(ctx)
+	site := Site{Component: "CommandOutput", RequestID: "status", BodyColumns: 60,
+		Props: map[string]any{"command": "status", "args": "", "text": "all good", "isErrored": false}}
+	ds := h.e.Render(ctx, site)
+	if len(ds) != 1 || ds[0].Tree == nil {
+		t.Fatalf("Render = %+v\n%s", ds, h.logs)
+	}
+	if got := joined(ds[0].Tree); got != "mod row for status: all good (status)" {
+		t.Errorf("row = %q", got)
+	}
+	site.Props = map[string]any{"command": "cost", "args": "", "text": "x", "isErrored": false}
+	if ds := h.e.Render(ctx, site); len(ds) != 0 {
+		t.Errorf("a hook matched on command status drew for cost: %+v", ds)
+	}
+}
+
 func TestUIPressHookCanTakeThePress(t *testing.T) {
 	h := newHarness(t, Options{})
 	h.load(t, "drawer", "presstaker")

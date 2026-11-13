@@ -783,15 +783,20 @@ func renderEvent(site Site) map[string]any {
 	scroll := map[string]any{"offset": 0, "bodyRows": site.BodyRows}
 	var props map[string]any
 	switch site.Component {
+	case "Pane":
+		props = map[string]any{
+			"title": site.Title, "isFocused": site.IsFocused, "bodyColumns": site.BodyColumns,
+			"placement": "dock", "scroll": scroll, "view": view,
+		}
 	case "AbovePrompt":
 		props = map[string]any{
 			"hasSurvey": false, "isWorking": site.IsWorking, "maxRows": site.BodyRows,
 			"bodyColumns": site.BodyColumns, "scroll": scroll, "view": view,
 		}
 	default:
-		props = map[string]any{
-			"title": site.Title, "isFocused": site.IsFocused, "bodyColumns": site.BodyColumns,
-			"placement": "dock", "scroll": scroll, "view": view,
+		props = site.Props
+		if props == nil {
+			props = map[string]any{}
 		}
 	}
 	surface := surfaceOf(site)
