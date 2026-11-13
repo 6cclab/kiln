@@ -76,6 +76,15 @@ type Services struct {
 	// rows are the engine's. nil lists none.
 	Config func() []ConfigRow
 
+	// GateProcess asks kiln's permission gate (the one the Bash tool goes
+	// through) whether plugin's $.process.spawn may start argv in cwd with env
+	// over the host's; deny is the refusal's reason, "" when it may run. nil
+	// means no gate: spawn refuses, since a mod's process never runs ungated.
+	GateProcess func(ctx context.Context, plugin string, argv []string, cwd string, env map[string]string) (deny string, err error)
+	// McpConnect reports whether the MCP server key of plugin's own manifest is
+	// connected (kiln connects them at session start and starts none later).
+	McpConnect func(ctx context.Context, plugin, server string) McpConnectAnswer
+
 	// UI is what the screen lends the ui.* methods.
 	UI UIServices
 }

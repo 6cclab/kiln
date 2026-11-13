@@ -1590,7 +1590,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				return "", nil
 			},
 		}
-		modsToolDeps{rt: modsRT, harness: started.Harness, lane: started.Lane, gate: gate, dispatcher: dispatcher, cwd: cwd}.fill(&dep.services)
+		modsToolDeps{rt: modsRT, harness: started.Harness, lane: started.Lane, gate: gate, dispatcher: dispatcher, cwd: cwd,
+			hub: hub, sandboxed: sandboxMgr != nil}.fill(&dep.services)
 		modsRT.agentDefs = dispatcher.AgentList
 		for _, err := range modsRT.start(ctx, cwd, started.SessionID, dep) {
 			startupWarn(fmt.Sprintf("mod not loaded: %v", err))

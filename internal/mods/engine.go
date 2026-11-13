@@ -78,6 +78,8 @@ var supportedEvents = map[string]bool{
 	"ui.copy":             true,
 	"ui.selection":        true,
 	"ui.blit":             true,
+	"plugin.register":     true,
+	"engine.create":       true,
 	// session.attach and session.detach are left out on purpose: kiln has
 	// one local terminal and no remote client to attach, so a hook on them
 	// logs "kiln does not raise" and never runs.
@@ -131,6 +133,7 @@ var gatingEvents = map[string]bool{
 	"prompt.compose": true, "prompt.attachment": true, "prompt.mention": true,
 	"session.send": true, "session.receive": true,
 	"config.set": true, "config.describe": true, "skill.prompt": true,
+	"plugin.register": true, "engine.create": true,
 }
 
 var nameRule = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -222,6 +225,11 @@ type Module struct {
 	Root    string
 	Path    string
 	Options map[string]any
+	// Version is the manifest's version and Provenance the loader's key
+	// ("<name>@<marketplace>"); plugin.register carries both. Empty: the
+	// version is left out and the provenance reads "<name>@inline".
+	Version    string
+	Provenance string
 }
 
 // ModelTextBlock is one block of a model.complete prompt or system prompt. Cache
@@ -298,6 +306,16 @@ type Engine struct {
 	nextCallback int
 	paneOwner    map[string]string
 	paneTitle    map[string]string
+	// nouns are what engine.create steps added to $, by name; every hook's $
+	// carries them. core is the table the fold's steps see as built so far.
+	nouns map[string]goja.Value
+	core  *goja.Object
+	// createFailed are the plugins whose engine.create step broke the fold's
+	// rules (replaced or withheld a noun), with why; they unload.
+	createFailed map[string]string
+	// procs are the children $.process.spawn started and not yet reaped; Close
+	// kills them (the module unloading ends the child).
+	procs procSet
 	// warnedUnimpl remembers the plugin+call pairs an unimplemented $ call
 	// already logged, so a mod that polls one (squad calls $.session.id and
 	// $.fs.* every few seconds) warns once, not on every tick.
@@ -319,6 +337,8 @@ type plugin struct {
 	options goja.Value
 	timers  map[*timer]bool
 	loaded  bool
+	// patterns are the event patterns its on() calls named, as written.
+	patterns []string
 	// rows are the /config rows of the plugin's userConfig fields.
 	rows []configRow
 }
@@ -348,6 +368,8 @@ func New(host Host, opts Options) *Engine {
 		clock:         opts.Clock,
 		state:         newStateStore(),
 		byName:        map[string]*plugin{},
+		nouns:         map[string]goja.Value{},
+		createFailed:  map[string]string{},
 		hooks:         map[string][]*hook{},
 		callbacks:     map[int]callbackEntry{},
 		siteCallbacks: map[string][]int{},
@@ -456,6 +478,7 @@ func (e *Engine) Close() {
 	if e.closed.Swap(true) {
 		return
 	}
+	e.procs.killAll()
 	e.w.do(func() {
 		for _, p := range e.plugins {
 			for t := range p.timers {
@@ -478,6 +501,9 @@ func (e *Engine) Load(mods []Module) []error {
 			e.log.Warn("mods: load failed", "plugin", m.Plugin, "module", m.Path, "err", err)
 		}
 	}
+	for name, why := range e.fold() {
+		errs = append(errs, fmt.Errorf("mod %s: %s", name, why))
+	}
 	return errs
 }
 
@@ -499,8 +525,22 @@ func (e *Engine) loadOne(m Module) error {
 	if err != nil {
 		return fmt.Errorf("bundle: %w", err)
 	}
-	var loadErr error
-	if !e.w.do(func() { loadErr = e.evaluate(m, code, opts) }) {
+	var (
+		p       *plugin
+		pending []*hook
+		loadErr error
+	)
+	if !e.w.do(func() { p, pending, loadErr = e.evaluate(m, code, opts) }) {
+		return ErrClosed
+	}
+	if loadErr != nil {
+		return loadErr
+	}
+	if reason := e.judge(m, p, code); reason != "" {
+		e.log.Warn("mods: plugin.register refused a module", "plugin", m.Plugin, "reason", reason)
+		return fmt.Errorf("refused by plugin.register: %s", reason)
+	}
+	if !e.w.do(func() { loadErr = e.admit(p, pending) }) {
 		return ErrClosed
 	}
 	return loadErr
@@ -509,19 +549,19 @@ func (e *Engine) loadOne(m Module) error {
 var pluginNameRule = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
 // evaluate runs a bundled module and its register(on, options); worker-only.
-func (e *Engine) evaluate(m Module, code string, opts map[string]any) error {
+func (e *Engine) evaluate(m Module, code string, opts map[string]any) (*plugin, []*hook, error) {
 	vm := e.w.vm
 	if _, dup := e.byName[m.Plugin]; dup {
-		return fmt.Errorf("a mod named %s is already loaded", m.Plugin)
+		return nil, nil, fmt.Errorf("a mod named %s is already loaded", m.Plugin)
 	}
 	p := &plugin{name: m.Plugin, root: m.Root, timers: map[*timer]bool{}, rows: pluginConfigRows(m.Plugin, m.Root, opts)}
 	prog, err := goja.Compile(m.Path, "(function (module, exports, require) {"+code+"\n})", true)
 	if err != nil {
-		return fmt.Errorf("compile: %w", err)
+		return nil, nil, fmt.Errorf("compile: %w", err)
 	}
 	wrapper, err := vm.RunProgram(prog)
 	if err != nil {
-		return fmt.Errorf("evaluate: %w", jsErr(err))
+		return nil, nil, fmt.Errorf("evaluate: %w", jsErr(err))
 	}
 	wrap, _ := goja.AssertFunction(wrapper)
 	module := vm.NewObject()
@@ -534,15 +574,15 @@ func (e *Engine) evaluate(m Module, code string, opts map[string]any) error {
 		panic(vm.NewTypeError("a hooks module may import only its plugin's files and \"claude-code\", not %q", name))
 	})
 	if _, err := wrap(goja.Undefined(), module, exports, require); err != nil {
-		return fmt.Errorf("evaluate: %w", jsErr(err))
+		return nil, nil, fmt.Errorf("evaluate: %w", jsErr(err))
 	}
 	reg, ok := goja.AssertFunction(module.Get("exports").ToObject(vm).Get("register"))
 	if !ok {
-		return errors.New("the module exports no register function")
+		return nil, nil, errors.New("the module exports no register function")
 	}
 	optVal, err := e.toJS(opts)
 	if err != nil {
-		return fmt.Errorf("options: %w", err)
+		return nil, nil, fmt.Errorf("options: %w", err)
 	}
 	p.options = optVal
 	var pending []*hook
@@ -550,9 +590,17 @@ func (e *Engine) evaluate(m Module, code string, opts map[string]any) error {
 		return e.on(p, &pending, call)
 	})
 	if _, err := reg(goja.Undefined(), on, optVal); err != nil {
-		return fmt.Errorf("register: %w", jsErr(err))
+		return nil, nil, fmt.Errorf("register: %w", jsErr(err))
 	}
 	p.loaded = true
+	return p, pending, nil
+}
+
+// admit puts an evaluated module's hooks in the table; worker-only.
+func (e *Engine) admit(p *plugin, pending []*hook) error {
+	if _, dup := e.byName[p.name]; dup {
+		return fmt.Errorf("a mod named %s is already loaded", p.name)
+	}
 	e.plugins = append(e.plugins, p)
 	e.byName[p.name] = p
 	for _, h := range pending {
@@ -560,6 +608,34 @@ func (e *Engine) evaluate(m Module, code string, opts map[string]any) error {
 	}
 	e.hooked.Store(indexHooks(e.hooks))
 	return nil
+}
+
+// unload takes a plugin out of the chain (its hooks, its timers); worker-only.
+func (e *Engine) unload(name string) {
+	p := e.byName[name]
+	if p == nil {
+		return
+	}
+	for t := range p.timers {
+		t.cancel()
+	}
+	for ev, hs := range e.hooks {
+		kept := hs[:0:0]
+		for _, h := range hs {
+			if h.plugin != p {
+				kept = append(kept, h)
+			}
+		}
+		e.hooks[ev] = kept
+	}
+	delete(e.byName, name)
+	for i, q := range e.plugins {
+		if q == p {
+			e.plugins = append(e.plugins[:i:i], e.plugins[i+1:]...)
+			break
+		}
+	}
+	e.hooked.Store(indexHooks(e.hooks))
 }
 
 // hookIndex is a snapshot of the hook table: the events with a hook, and the
@@ -642,9 +718,18 @@ func (e *Engine) on(p *plugin, pending *[]*hook, call goja.FunctionCall) goja.Va
 		return e.registration(nil)
 	}
 	var events []string
+	note := func(pat string) {
+		for _, q := range p.patterns {
+			if q == pat {
+				return
+			}
+		}
+		p.patterns = append(p.patterns, pat)
+	}
 	switch pat := call.Argument(0).Export().(type) {
 	case string:
 		events = expandPattern(pat)
+		note(pat)
 	case []any:
 		for _, x := range pat {
 			s, ok := x.(string)
@@ -652,6 +737,7 @@ func (e *Engine) on(p *plugin, pending *[]*hook, call goja.FunctionCall) goja.Va
 				panic(vm.NewTypeError("on: an event pattern lists event names"))
 			}
 			events = append(events, s)
+			note(s)
 		}
 	default:
 		panic(vm.NewTypeError("on: the first argument names an event"))
@@ -811,7 +897,7 @@ func (f *frame) start(fn goja.Callable) {
 		f.fail("throw", jsErr(err).Error())
 		return
 	}
-	args = append(args, dollar, f.input, f.makeNext())
+	args = append(args, e.dollarFor(f, dollar), f.input, f.makeNext())
 	ret, err := fn(goja.Undefined(), args...)
 	if err != nil {
 		if failKind(err) == "timeout" {
@@ -844,6 +930,13 @@ func (f *frame) succeed(v goja.Value) {
 	if gatingEvents[f.c.event] {
 		if _, ok := v.(*goja.Object); !ok {
 			f.fail("throw", fmt.Sprintf("returned %s where %s takes an object", typeName(v), f.c.event))
+			return
+		}
+	}
+	if f.c.event == "engine.create" && !f.isCatch {
+		if why := f.c.e.createViolation(v); why != "" {
+			f.c.e.createFailed[f.plugin.name] = why
+			f.fail("throw", why)
 			return
 		}
 	}

@@ -139,7 +139,7 @@ func newModsRuntime(plugins []claudeplugins.Plugin, model string, window int) *m
 				diag.L().Warn("mods: plugin options unreadable", "plugin", p.Key, "error", err)
 				continue
 			}
-			modules = append(modules, mods.Module{Plugin: p.Name, Root: p.Root, Path: path, Options: opts})
+			modules = append(modules, mods.Module{Plugin: p.Name, Root: p.Root, Path: path, Options: opts, Version: p.Version, Provenance: p.Key})
 		}
 	}
 	if len(modules) == 0 {

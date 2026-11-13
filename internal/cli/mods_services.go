@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/harness"
+	"github.com/andrepato/harness/internal/mcp"
 	"github.com/andrepato/harness/internal/mods"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/tool"
@@ -33,6 +35,94 @@ type modsToolDeps struct {
 	gate       *permission.Gate
 	dispatcher *agent.Dispatcher
 	cwd        string
+	// hub is the session's MCP hub ($.mcp.connect reads what it connected).
+	hub *mcp.Hub
+	// sandboxed is set when the OS sandbox wraps the bash tool; a mod's
+	// process is not wrapped by it, so $.process.spawn refuses.
+	sandboxed bool
+}
+
+// quoteArg is arg as one shell word, left bare when it has nothing to quote.
+func quoteArg(arg string) string {
+	if arg != "" && strings.Trim(arg, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-") == "" {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+// modsProcessCommand is the shell command line $.process.spawn's argument
+// vector stands for, as the permission gate reads it: a directory other than
+// the session's is a leading cd, env a leading assignment each.
+func modsProcessCommand(argv []string, cwd, sessionCwd string, env map[string]string) string {
+	var parts []string
+	if cwd != "" && cwd != sessionCwd {
+		parts = append(parts, "cd "+quoteArg(cwd)+" &&")
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts = append(parts, k+"="+quoteArg(env[k]))
+	}
+	for _, a := range argv {
+		parts = append(parts, quoteArg(a))
+	}
+	return strings.Join(parts, " ")
+}
+
+// gateModProcess decides whether a mod's process may run: the permission gate
+// judges it as the Bash call it amounts to (rules, modes, prompts, protected
+// paths and auto mode all apply), and nothing runs when the gate cannot be
+// asked. deny is the reason it may not.
+func gateModProcess(ctx context.Context, set *tool.Set, gate *permission.Gate, lane automode.EntryLister, sandboxed bool,
+	plugin string, argv []string, cwd, sessionCwd string, env map[string]string) (string, error) {
+	if sandboxed {
+		return "kiln's OS sandbox is on and does not wrap a mod's process, so " + plugin + " may not start one", nil
+	}
+	if gate == nil || set == nil {
+		return "kiln has no permission gate to judge it by", nil
+	}
+	bash, _, ok := kilnToolName(set, "Bash")
+	if !ok {
+		return "kiln has no Bash tool to judge it as", nil
+	}
+	cmd := modsProcessCommand(argv, cwd, sessionCwd, env)
+	req := permission.Request{ToolName: bash, PrimaryArg: cmd, Args: map[string]any{"command": cmd},
+		History: autoModeHistory(ctx, lane)}
+	blocked, _, err := gate.CheckWithOutcome(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if blocked != nil {
+		return blocked.Reason, nil
+	}
+	return "", nil
+}
+
+// modsMcpConnect is what $.mcp.connect answers for plugin's server key. kiln
+// connects every enabled plugin's MCP servers (hub name plugin_<plugin>_<key>)
+// at session start and starts none later, so this reads what that came to.
+func modsMcpConnect(statuses, pending []mcp.ServerStatus, plugin, server string) mods.McpConnectAnswer {
+	name := fmt.Sprintf("plugin_%s_%s", plugin, server)
+	for _, st := range statuses {
+		if st.Name != name {
+			continue
+		}
+		if st.OK {
+			return mods.McpConnectAnswer{Connected: true, Server: name}
+		}
+		return mods.McpConnectAnswer{Reason: "failed", Message: fmt.Sprintf("%s did not connect: %s", server, st.Error)}
+	}
+	for _, st := range pending {
+		if st.Name == name {
+			return mods.McpConnectAnswer{Reason: "failed",
+				Message: server + " is still connecting; kiln connects a plugin's servers at session start and starts none on demand"}
+		}
+	}
+	return mods.McpConnectAnswer{Reason: "unlisted",
+		Message: fmt.Sprintf("%s lists no MCP server %q that kiln connected; kiln starts none on demand", plugin, server)}
 }
 
 var modAgentSeq atomic.Int64
@@ -72,6 +162,20 @@ func commandSource(o slashcommands.Origin) string {
 
 // fill sets the tool, command and agent services on s.
 func (d modsToolDeps) fill(s *mods.Services) {
+	s.GateProcess = func(ctx context.Context, plugin string, argv []string, cwd string, env map[string]string) (string, error) {
+		var set *tool.Set
+		if d.harness != nil {
+			set = d.harness.Tools()
+		}
+		return gateModProcess(ctx, set, d.gate, d.lane, d.sandboxed, plugin, argv, cwd, d.cwd, env)
+	}
+	s.McpConnect = func(_ context.Context, plugin, server string) mods.McpConnectAnswer {
+		if d.hub == nil {
+			return mods.McpConnectAnswer{Reason: "failed", Message: "kiln has no MCP hub in this run"}
+		}
+		return modsMcpConnect(d.hub.Statuses(), d.hub.Pending(), plugin, server)
+	}
+
 	s.Config = func() []mods.ConfigRow {
 		var model func() string
 		if d.rt != nil {

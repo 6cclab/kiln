@@ -61,14 +61,16 @@ var implemented = map[string]bool{
 	"session.messages": true, "session.identity": true, "session.authorize": true,
 	"session.surfaces": true, "session.surface": true, "session.send": true,
 	"config.list": true, "config.set": true, "telemetry.log": true, "telemetry.mark": true,
+	"mcp.connect": true, "process.spawn": true,
 }
 
-// documented lists the rest of the mod API as Claude Code declares it, plus
-// methods its docs name (session.compact/append, prompt.submit, tool.call,
-// agent.spawn).
+// documented lists the rest of the mod API as Claude Code declares it:
+// audio, which kiln does not do by decision (2026-11-09).
+//
+// $.plugin.name and $.plugin.root are properties, not calls: dollarFor sets
+// them on every hook's $.
 var documented = []string{
 	"audio.play", "audio.speak",
-	"mcp.connect", "process.spawn",
 }
 
 func apiNames() []string {
@@ -121,6 +123,8 @@ func (e *Engine) apiCall(call goja.FunctionCall) goja.Value {
 		return e.js.table
 	case "clock.every", "clock.after":
 		return e.startTimer(f, name == "clock.every", arg(0), arg(1))
+	case "process.spawn":
+		return e.spawnProcess(f, arg(0))
 	}
 	v, err := e.answer(f, name, arg)
 	if err != nil {
@@ -467,6 +471,9 @@ func (e *Engine) answer(f *frame, name string, arg func(int) goja.Value) (any, e
 
 	case "mcp.call":
 		return e.mcpCall(arg)
+
+	case "mcp.connect":
+		return e.mcpConnect(f, arg)
 
 	case "model.classify":
 		return e.modelClassify(arg)
