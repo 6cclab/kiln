@@ -60,11 +60,54 @@ func SearchSkills(records []SkillRecord, query string, limit int) []SkillRecord 
 
 // SkillSearchText bounds results independently of catalog size, including names.
 func SkillSearchText(records []SkillRecord, query string, tokens int) string {
+	return skillLines(SearchSkills(records, query, 20), tokens)
+}
+
+// SuggestSkills is SearchSkills for the suggestions kiln adds on its own
+// to a typed request, with SuggestCapabilities' stricter matching.
+func SuggestSkills(records []SkillRecord, query string, limit int) []SkillRecord {
+	terms := suggestionTerms(query)
+	if len(terms) == 0 {
+		return nil
+	}
+	type hit struct {
+		record SkillRecord
+		score  int
+	}
+	var hits []hit
+	for _, r := range records {
+		if score, _ := suggestionScore(r.Name, r.Description, terms); score > 0 {
+			hits = append(hits, hit{r, score})
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].score != hits[j].score {
+			return hits[i].score > hits[j].score
+		}
+		return hits[i].record.Name < hits[j].record.Name
+	})
+	var out []SkillRecord
+	for _, h := range hits {
+		if len(out) == limit {
+			break
+		}
+		out = append(out, h.record)
+	}
+	return out
+}
+
+// SkillSuggestionText is SkillSearchText over SuggestSkills.
+func SkillSuggestionText(records []SkillRecord, query string, tokens int) string {
+	return skillLines(SuggestSkills(records, query, 20), tokens)
+}
+
+// skillLines renders records as "name: description" lines within tokens.
+func skillLines(records []SkillRecord, tokens int) string {
 	if tokens <= 0 {
 		return ""
 	}
 	var b strings.Builder
-	for _, r := range SearchSkills(records, query, 20) {
+	for _, r := range records {
 		description := []rune(strings.Join(strings.Fields(r.Description), " "))
 		if len(description) > 240 {
 			description = append(description[:237], '.', '.', '.')

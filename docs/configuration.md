@@ -787,8 +787,13 @@ points to `capability_search` instead of listing every installed skill and
 MCP tool. The search ranks eligible skills and posture-scoped MCP tools together by
 name and description, with a bounded result count and response size. Results
 give the matched query terms and the exact action to take. Metadata
-suggestions for the latest user request are appended at the end of each model
-request, so earlier conversation text is unchanged. Search and suggestions do
+suggestions for the latest typed request are appended to the first model
+request answering it (not to the tool-loop steps after it), so earlier
+conversation text is unchanged. Suggestions match more strictly than the
+search (`internal/tools/suggest_match.go`): only content words of three or
+more letters count (acknowledgements like "ok go ahead" have none and get no
+suggestions), they match whole words or word prefixes, and an entry needs one
+of a one- or two-word request's terms, else half of them up to three. Search and suggestions do
 not read skill bodies or call a model; `skill` loads full instructions only
 when invoked. An explicit `capability_search` admits the returned MCP matches into
 the active tool set, so they are callable on the next step. Suggestions do not

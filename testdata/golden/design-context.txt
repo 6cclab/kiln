@@ -7,7 +7,6 @@
   ■ Free                                                                              123.2k   96%
 
   Selection
-  scout agent · metadata included · suggested by metadata match
   scout agent · result included · exact-name invocation
 
   Settings
