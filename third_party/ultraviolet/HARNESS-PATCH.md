@@ -38,4 +38,4 @@ on every row from the old height down, which a blank model would not emit.
 
 The patch resizes first unless the frame is a shorter inline one (the only case the previous
 patch needed the old height for). Test: `TestRendererFullscreenGrowTracksEveryRow`.
-HARNESS-PATCH.diff was not regenerated.
+HARNESS-PATCH.diff covers both patches.
