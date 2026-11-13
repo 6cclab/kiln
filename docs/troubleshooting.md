@@ -12,26 +12,25 @@ kiln --debug     # debug-level log; path is announced at startup / on stderr
 
 `/doctor` does the same inside a session. Logs go to `~/.harness/logs`
 (`HARNESS_LOG_DIR` overrides), one file per run, last 30 kept
-(`internal/diag/diag.go`). `--debug`/`HARNESS_DEBUG=1` adds every
-turn, tool call, retry and compaction pass, not just phase timings
-(`internal/diag/diag.go`). `kiln doctor`'s `logs` line names the latest file —
-attach that to a bug report, plus a `kiln-drive --record` capture for anything
+(`internal/diag/diag.go`). `--debug`/`HARNESS_DEBUG=1` adds every turn, tool
+call, retry and compaction pass, not just phase timings
+(`internal/diag/diag.go`). `kiln doctor`'s `logs` line names the latest file;
+attach it to a bug report, plus a `kiln-drive --record` capture for anything
 visual (see "Reporting a bug").
 
 ## Startup and models
 
 - **`kiln doctor` lists `model ... is unavailable` or `model ... is invalid` under
-  problems.** Doctor now includes a model it cannot resolve in its problem
-  list, even though it keeps its report-only exit status of 0. A new install
-  does not provide the built-in default `ollama/qwen3.8:latest`. Run
-  `kiln models` to see available choices, install or log in to a provider if
-  the list is empty, and start with `kiln --model provider/model` using an
-  exact listed ID. See the README's [First run](../README.md#first-run).
+  problems.** Doctor lists a model it cannot resolve under problems, but its
+  exit status stays 0 because it is report-only. A new install does not provide
+  the built-in default `ollama/qwen3.8:latest`. Run `kiln models` to see
+  available choices, install or log in to a provider if the list is empty, and
+  start with `kiln --model provider/model` using an exact listed ID. See the README's [First run](../README.md#first-run).
 
 - **`kiln: invalid model %q: expected provider/model`** (`internal/cli/chat.go`).
   `--model`, settings.json's `model` (only honored with a `/` in it),
-  `HARNESS_MODEL`, or the default resolved to something not `provider/model`
-  shaped. Fix: `kiln --model anthropic/claude-opus-4-6`; `kiln models` lists pairs.
+  `HARNESS_MODEL`, or the default resolved to something that is not
+  `provider/model`. Fix: `kiln --model anthropic/claude-opus-4-6`; `kiln models` lists pairs.
 
 - **`unknown model "%s" on provider "%s": run a refresh first if the provider is
   dynamic`** (`internal/provider/registry.go`). Typo, or (Ollama) the model
@@ -42,15 +41,15 @@ visual (see "Reporting a bug").
   %d + tools %d + reserve %d) exceeds it by %d tokens. Raise num_ctx, or pick a
   model with a larger window.`** (`internal/budget/tier.go`,
   `ContextTooSmallError`). Usable budget fell below the 4,096-token floor
-  (`MinUsableTokens`, `internal/budget/tier.go`) — checked at startup so
-  it doesn't surface as a silently truncated first turn. Fix: raise `num_ctx` /
+  (`MinUsableTokens`, `internal/budget/tier.go`). The check runs at startup so
+  the problem doesn't surface as a silently truncated first turn. Fix: raise `num_ctx` /
   `OLLAMA_CONTEXT_LENGTH`, or pick a bigger model (`kiln models` shows budgets).
 
 - **`kiln: role %s`** warnings, e.g. `heavy: "opus" is not provider/model` or
   `heavy: anthropic/claude-opus-4-6 is not among the available models`
   (`internal/claude/agents/agents.go`, printed at `internal/cli/chat.go`).
-  A `modelRoles` entry is malformed or names an unavailable model. Not fatal — a
-  bad role falls back to the parent model at dispatch. Fix: correct
+  A `modelRoles` entry is malformed or names an unavailable model. This is not
+  fatal: a bad role falls back to the parent model at dispatch. Fix: correct
   `.claude/settings.json`'s `modelRoles`; check with `kiln models`.
 
 - **`roles %s and %s both use ollama with different models; loading a second
@@ -60,8 +59,8 @@ visual (see "Reporting a bug").
 
 - **`CLAUDE.md files use ~Nk tokens, over this model's Mk memory budget;
   loaded anyway`** (`internal/cli/chat.go`). The CLAUDE.md files alone
-  exceed the tier's memory budget (10% of the window). They still load;
-  every rule is then listed by description rather than loaded
+  exceed the tier's memory budget (10% of the window). They still load, but
+  every rule is then listed by description instead of loaded
   (`internal/claude/memory/memory.go`). Fix: trim CLAUDE.md, move detail
   into `.claude/rules/*.md` with a `description`, or use a bigger-window
   model.
@@ -72,12 +71,12 @@ visual (see "Reporting a bug").
 
 - **No "no provider configured" message at startup.** `resolveAuth` treats
   "nothing stored, nothing in env" as an empty key, not an error
-  (`internal/provider/builtin/builtin.go`); auth is only checked when a
-  request actually goes out, so a misconfigured provider fails at first turn
-  (a 401/HTTP error), not at launch. Fix: check first with `kiln providers` /
+  (`internal/provider/builtin/builtin.go`). Auth is only checked when a
+  request goes out, so a misconfigured provider fails at the first turn (a
+  401/HTTP error), not at launch. Fix: check first with `kiln providers` /
   `kiln doctor`, and `kiln login <provider>`.
 
-- **`keybindings: %s`** at startup — a parse error (`could not parse <path>:
+- **`keybindings: %s`** at startup: a parse error (`could not parse <path>:
   <err>`, `<path> must contain a JSON object mapping actions to keys`,
   `internal/claude/keybindings/keybindings.go`) or a conflict (`<key> is
   bound to <actions>`, `internal/claude/keybindings/keybindings.go`), printed
@@ -100,8 +99,8 @@ kiln providers            # kind + configured/- per provider
 ```
 
 - **`Logging in to %s...`** then **`Logged in to %s.`** or **`Login failed: %s`**
-  (`internal/auth/login/login.go`) — normal login output; the failure
-  wraps whatever the OAuth exchange or key prompt returned.
+  (`internal/auth/login/login.go`): normal login output. The failure wraps
+  whatever the OAuth exchange or key prompt returned.
 
 - **`no OAuth login flow implemented for provider "%s"`**
   (`internal/auth/login/login.go`). That provider has no OAuth flow
@@ -111,27 +110,27 @@ kiln providers            # kind + configured/- per provider
   or **`%s OAuth credential was removed during refresh`** (same file:280). The
   stored token's `Expires` (already reduced by a 5-minute margin at store time,
   `internal/auth/oauth/anthropic.go`) passed and the refresh call itself
-  failed (network error or revoked token); the second means a concurrent logout
-  raced the refresh. Fix: `kiln login <provider>` again.
+  failed (network error or revoked token). The second message means a
+  concurrent logout raced the refresh. Fix: `kiln login <provider>` again.
 
 - **`HTTP request failed. status=%d; url=%s; body=%s`** / **`token response
   returned invalid JSON. url=%s; body=%s; err=%w`**
-  (`internal/auth/oauth/anthropic.go`) — the token endpoint rejected the
+  (`internal/auth/oauth/anthropic.go`): the token endpoint rejected the
   exchange/refresh, or returned an unexpected body. Fix: `kiln login <provider>`
   again; a persistent failure means the OAuth grant was revoked.
 
-- Ollama auths via the `OLLAMA_HOST` env var, not a stored credential — there is
-  no `kiln login ollama` flow (`internal/provider/ollama/ollama.go`). A
+- Ollama auths via the `OLLAMA_HOST` env var, not a stored credential, so there
+  is no `kiln login ollama` flow (`internal/provider/ollama/ollama.go`). A
   gateway in front of Ollama takes its bearer token from `Options.APIKey`, not
-  the credential store; `client.go`'s native `/api/chat` client sends it the
-  same way the discovery calls already do (`Authorization: Bearer`).
+  the credential store. `client.go`'s native `/api/chat` client sends it the
+  same way the discovery calls do (`Authorization: Bearer`).
 
 ## Ollama
 
 No login needed for a bare local install (`internal/provider/ollama/ollama.go:
 271-273`). kiln streams Ollama completions through its native `/api/chat`
 protocol (`internal/provider/ollama/client.go`), not the OpenAI-compatible
-`/v1` endpoint — `/v1` cannot carry `num_ctx`, so a model's actually served
+`/v1` endpoint. `/v1` cannot carry `num_ctx`, so a model's actually served
 window used to depend on whichever caller last loaded it, independent of
 what kiln asked for (this was a real bug: see
 `qa/findings/20261006T141123Z-ollama-context-window-mismatch.json`).
@@ -139,42 +138,43 @@ what kiln asked for (this was a real bug: see
 **Context window resolution**, most authoritative first
 (`internal/provider/ollama/ollama.go`, `ResolveContextWindow`): `num_ctx`
 pinned in the Modelfile, from `/api/show`'s `parameters` → the server-wide
-`OLLAMA_CONTEXT_LENGTH` (now also read as kiln's own ask, not just a guess
-at the server's default) → the model's *training* context
+`OLLAMA_CONTEXT_LENGTH` (also read as kiln's own ask, not just a guess at
+the server's default) → the model's *training* context
 (`model_info.*.context_length` from `/api/show`), capped at 32,768 so an
 unconfigured large-context model doesn't get asked to serve a window no
 consumer box can hold → a conservative 8,192-token fallback if nothing is
 known at all. A Modelfile pin or `OLLAMA_CONTEXT_LENGTH` above the model's
 training context is capped at it, since Ollama silently serves no more than
-that. `/api/ps`'s `context_length` (a resident model's *current*
-serving window) is no longer consulted: every `/api/chat` request now
-carries its own `options.num_ctx` equal to the resolved window, so the next
-request is what sets the served window, not whatever an earlier caller
-loaded it with. Consequence: **the served window is always what `kiln
-models` reports**, not a function of load order.
+that. `/api/ps`'s `context_length` (a resident model's *current* serving
+window) is no longer consulted. Every `/api/chat` request carries its own
+`options.num_ctx` equal to the resolved window, so the next request sets the
+served window, not whatever an earlier caller loaded it with. As a result,
+**the served window is always what `kiln models` reports**, not a function of
+load order.
 
 - Ollama unreachable: `DiscoverModels` calls `/api/tags` first and fails whole
-  on error (`internal/provider/ollama/ollama.go`) — surfaces as
+  on error (`internal/provider/ollama/ollama.go`). It surfaces as
   `kiln: refreshing ollama: %v` wrapping Go's raw dial error (e.g. `connection
   refused`). Fix: `ollama serve`; check `OLLAMA_HOST`.
 
 - A model in `ollama list` missing from `kiln models ollama`: models without
   the `"completion"` capability are skipped outright, and without `"tools"`
   when `RequireTools` is true (the default) — the agent loop needs tool calls
-  (`internal/provider/ollama/ollama.go`). Intentional filtering, not a
+  (`internal/provider/ollama/ollama.go`). This filtering is intentional, not a
   bug.
 
 - Window smaller than expected / early compaction: pin `num_ctx` in the
-  Modelfile, or set `OLLAMA_CONTEXT_LENGTH` and restart kiln — no reload or
-  `/api/ps` check needed; the next request kiln sends carries the new window
-  itself.
+  Modelfile, or set `OLLAMA_CONTEXT_LENGTH` and restart kiln. No reload or
+  `/api/ps` check is needed; the next request kiln sends carries the new
+  window itself.
 
 ## MCP servers
 
 Read from `~/.claude.json` and `.mcp.json` - the same files `claude mcp add`
 writes, and `kiln mcp add` writes them too (`internal/mcp/config.go`; scopes
 and precedence in `docs/configuration.md`).
-Servers connect sequentially, name-sorted; one failing doesn't block the rest
+Servers connect concurrently (at most 3 stdio servers and 20 network servers
+at a time, in name order), and one failing doesn't block the rest
 (`internal/mcp/hub.go`).
 
 ```bash
@@ -203,10 +203,10 @@ kiln --strict-mcp-config --mcp-config ./project-mcp.json
   `unauthorized (check its token) at <url>` (401) · `forbidden at <url>` (403) ·
   `the server exited before it answered` (stdio process died mid-handshake) ·
   `connected, but listing its tools failed: <reason>` (handshake OK,
-  `tools/list` itself errored, `internal/mcp/hub.go` — a server-side
-  bug, not a connectivity issue).
+  `tools/list` itself errored, `internal/mcp/hub.go`; a server-side bug, not a
+  connectivity issue).
 
-- **`--strict-mcp-config`** with no `--mcp-config` connects to **nothing** — it
+- **`--strict-mcp-config`** with no `--mcp-config` connects to **nothing**; it
   does not fall back to `~/.claude.json` (`internal/mcp/config.go`).
 
 - A connected server's tools are invisible to the model, not even offered by
@@ -214,7 +214,7 @@ kiln --strict-mcp-config --mcp-config ./project-mcp.json
   restricts which *servers* are indexed. A server named by some built-in
   posture but not the active one is never indexed, `tool_search` or not
   (`InPosture`, `internal/mcp/gating.go`). A server no posture names at all
-  is in scope for every posture, so this only affects the servers on the
+  is in scope for every posture, so gating only affects the servers on the
   built-in lists. Fix: `/posture all` (every server; expensive),
   `/posture ops`, or add the server to a posture's list.
 
@@ -230,9 +230,9 @@ kiln --strict-mcp-config --mcp-config ./project-mcp.json
 - An in-posture tool still isn't directly callable (only `tool_search`,
   `bash`, `read`, `edit`, `write`, `todo_write`, etc. are resident): on the
   `posture-index`/`full-index` tool strategies (small/medium tiers) MCP tools
-  are indexed but not *active* — only `tool_search`'s admissions run
-  (`internal/mcp/gating.go`). This is expected; the model calls
-  `tool_search` itself. Check the strategy via `kiln doctor`'s `tools` line.
+  are indexed but not *active*; only `tool_search`'s admissions run
+  (`internal/mcp/gating.go`). This is expected; the model calls `tool_search`
+  itself. Check the strategy via `kiln doctor`'s `tools` line.
 
 ## Permissions
 
@@ -286,13 +286,13 @@ match wins, checked first → `bypassPermissions` allows the rest → `allow` ma
 ## Hooks
 
 Read from `.claude/settings.json`'s `hooks`. `PreToolUse` runs **before** the
-permission gate, and a rewrite it makes is what the gate judges — not the
-model's original call (`internal/claude/hooks/runner.go`). Default
+permission gate, and the gate judges a rewrite it makes, not the model's
+original call (`internal/claude/hooks/runner.go`). Default
 timeout: **60s** (`DefaultTimeoutSeconds`, `internal/claude/hooks/hooks.go`),
 overridable per-hook via `timeout` in settings.json.
 
-- **`hook timed out: <label>`** (`internal/claude/hooks/runner.go`) —
-  didn't exit in time; its process group is SIGKILLed. Fix: raise `timeout`.
+- **`hook timed out: <label>`** (`internal/claude/hooks/runner.go`): the hook
+  didn't exit in time, and its process group is SIGKILLed. Fix: raise `timeout`.
 
 - **`blocked by hook: <label>`** (default reason) or the hook's stderr as the
   reason (same file:150-157) — exit code 2, Claude Code's "block this call"
@@ -308,8 +308,8 @@ overridable per-hook via `timeout` in settings.json.
   `hookSpecificOutput.permissionDecision: "deny"` with no reason.
 
 - Non-JSON stdout (or JSON that isn't an object) becomes context appended for
-  the model, not a user notice — no hard error for malformed JSON, it just
-  falls through to this path (file:167-183).
+  the model, not a user notice. Malformed JSON is not a hard error; it falls
+  through to this path (file:167-183).
 
 - **`rewrote <tool>: <primary arg>`** notice (file:325-331) — a `PreToolUse`
   hook returned `updatedInput`; the gate then checks the merged args.
@@ -322,12 +322,12 @@ overridable per-hook via `timeout` in settings.json.
   `"stop_hook_active": true`; a hook that blocks whatever that says keeps
   the turn going until you press Esc (or, in `-p`, until `--max-turns`).
 
-- **`Stop hook stopped the turn: <stopReason>`** — a `Stop` hook answered
+- **`Stop hook stopped the turn: <stopReason>`**: a `Stop` hook answered
   `{"continue": false}`: the turn ends there.
 
 ## Context and compaction
 
-- `CLAUDE.md files use ~Nk tokens, over this model's … memory budget` — see
+- `CLAUDE.md files use ~Nk tokens, over this model's … memory budget`: see
   "Startup and models" (`internal/claude/memory/memory.go`).
 
 - **Compaction trigger**: fires when estimated context tokens exceed
@@ -422,8 +422,8 @@ overridable per-hook via `timeout` in settings.json.
   (`internal/tui/keys.go`); second press within that window exits.
 
 - **Truecolor**: the palette is 24-bit throughout with no fallback for a
-  non-truecolor terminal (`internal/tui/theme.go`) — colors are
-  approximated by the terminal, not by kiln.
+  non-truecolor terminal (`internal/tui/theme.go`); the terminal approximates
+  the colors, not kiln.
 
 - **`--ax-screen-reader`**: forces plain, linear, always-inline output —
   full-screen is unavailable and `Ctrl+F` is a no-op (`internal/cli/tui.go`).
@@ -432,8 +432,8 @@ overridable per-hook via `timeout` in settings.json.
   `PgUp`/`PgDn`, `Shift+Up/Down`, or the mouse wheel. Toggling either way
   redraws the transcript from the session log, so shell (`!`) output and
   hook notices not in that log don't survive the switch. Mouse text
-  selection needs the terminal's own passthrough modifier (Shift or Option)
-  since the app owns mouse events otherwise.
+  selection needs the terminal's own passthrough modifier (Shift or Option),
+  because the app otherwise owns mouse events.
 
 - **`/bashes`** lists background shells; reports `no background shells` if none
   are running or none are wired in (`internal/commands/inline.go`).
@@ -492,11 +492,11 @@ overridable per-hook via `timeout` in settings.json.
    go run ./cmd/kiln-drive --bin bin/kiln --record repro.rec ...
    ```
 
-   This captures the exact PTY byte stream plus input markers, replayable
-   later (including at a different terminal size) without the original model
-   conversation.
-3. If a scripted model conversation is needed to reproduce it, write a faux
-   script and drive `kiln-drive` against it — see `docs/testing.md` for the
-   script format and worked invocations; that document owns this, not this one.
+   This captures the exact PTY byte stream plus input markers. You can replay
+   it later, including at a different terminal size, without the original
+   model conversation.
+3. If reproducing the bug needs a scripted model conversation, write a faux
+   script and drive `kiln-drive` against it. `docs/testing.md` owns the script
+   format and worked invocations.
 4. Include: the debug log, the recording (if any), the exact command line, and
    `kiln doctor`'s output.

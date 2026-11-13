@@ -1,27 +1,26 @@
 # kiln rendering contract
 
-This is kiln's own rendering contract — the "Ruled" layout (Layout 1b) from
-the design handoff (`docs/kiln-design-handoff/README.md`, copied into this
-repo for reference; the original bundle also has an interactive HTML
-prototype and screenshots that aren't reproduced here). Kiln has its own
-palette, glyphs and block layout, applied on top of a renderer whose
-default mode is full-screen (alt-screen): blocks commit into a scrolling
-`viewport` transcript, banner at the top, growing down until it fills the
-screen and then scrolling, with a small live region — spinner, prompts,
-input box, status line — pinned to the bottom every frame. `--inline` opts
-out, committing the same blocks straight into native terminal scrollback
-instead (`Bridge.Commit` → `Program.Println`), with the same live region
-redrawing below it.
+This is kiln's rendering contract: the "Ruled" layout (Layout 1b) from the
+design handoff (`docs/kiln-design-handoff/README.md`, copied into this repo for
+reference; the original bundle also has an interactive HTML prototype and
+screenshots that aren't reproduced here). kiln has its own palette, glyphs and
+block layout, applied on top of a renderer whose default mode is full-screen
+(alt-screen). Blocks commit into a scrolling `viewport` transcript, banner at
+the top, growing down until it fills the screen and then scrolling. A small
+live region (spinner, prompts, input box, status line) is pinned to the bottom
+and redrawn every frame. `--inline` opts out and commits the same blocks
+straight into native terminal scrollback (`Bridge.Commit` → `Program.Println`),
+with the same live region redrawing below them.
 
 Where this doc and the code (`internal/tui/theme.go`, `internal/tui/status.go`,
 `internal/tui/spinner.go`, `internal/tui/transcript.go`, `internal/tui/note.go`,
 `internal/tui/context.go`, `internal/tui/plan.go`, `internal/tui/subagents.go`,
 `internal/tui/retry.go`, `internal/tui/permission_render.go`,
 `internal/tui/autocomplete.go`, `internal/tui/replay.go`, `internal/cli/tui.go`)
-disagree, the code wins — this is a snapshot, not the source of truth.
+disagree, the code wins: this doc is a snapshot, not the source of truth.
 `docs/claude-code-parity.md` keeps the *behavioral*/feature checklist
-(keybindings, CLI flags, permission-mode semantics, hooks, MCP) that is
-unaffected by this visual change. This doc describes only what
+(keybindings, CLI flags, permission-mode semantics, hooks, MCP), which this
+visual change does not affect. This doc describes only what
 `internal/tui`/`internal/cli` render today; the design handoff
 (`docs/kiln-design-handoff/README.md`) is a wishlist and is not touched by
 this doc or by this pass.
@@ -49,10 +48,10 @@ Every hex value below is read directly from `internal/tui/theme.go`'s
 | diff del bg | `#2f1c15` | diff `−` line background |
 | bar-empty | `#3f372c` | subagents panel: progress-bar empty cell |
 
-kiln does **not** set a global terminal background: even in full-screen
-(alt-screen) mode it never paints the whole frame one flat background —
-only the `raise`/`panel`/diff-line/bar-empty background tints apply, as
-per-span SGR, where the design uses them.
+kiln does **not** set a global terminal background. Even in full-screen
+(alt-screen) mode it never paints the whole frame one flat background; only
+the `raise`/`panel`/diff-line/bar-empty background tints apply, as per-span
+SGR, where the design uses them.
 
 ## Glyphs
 
@@ -80,10 +79,10 @@ From `internal/tui/theme.go`'s `UnicodeGlyphs` table:
 | `◐ ◓ ◑ ◒` | spinner frames, 140ms per frame (`Spinner`) |
 | `↺` | reconnect (`Reconnect`) |
 | `→` | tool output / subagent action (`Action`) |
-| `⏺` | `Call` — the marker on a collapsed running-Bash-group row, and on the model-switch / subagent-dispatch notes `bridge.go` commits |
-| `⎿` | `Result` — the continuation glyph under a multi-line slash-command result (`CommitCommandResult`) |
-| `∴` | `Thinking` — verbose mode's `∴ Thinking`/`∴ Thinking…` row (collapsed mode shows nothing; the spinner's own "thinking with effort" suffix carries that state instead) |
-| `✻` | `Summary` — carried over from the pre-kiln glyph set; not referenced by any renderer today |
+| `⏺` | `Call`: the marker on a collapsed running-Bash-group row, and on the model-switch / subagent-dispatch notes `bridge.go` commits |
+| `⎿` | `Result`: the continuation glyph under a multi-line slash-command result (`CommitCommandResult`) |
+| `∴` | `Thinking`: verbose mode's `∴ Thinking`/`∴ Thinking…` row (collapsed mode shows nothing; the spinner's own "thinking with effort" suffix carries that state instead) |
+| `✻` | `Summary`: carried over from the pre-kiln glyph set; not referenced by any renderer today |
 | `⇧⇥` | cycle-mode hint (status.go literal, not a `Glyphs` field) |
 
 `ASCIIGlyphs` (`internal/tui/theme.go`) is the plain-mode/screen-reader
@@ -93,9 +92,9 @@ spinner → `-\|/`, `✓`/`✕` → `+`/`x`), used under `--ax-screen-reader` an
 
 ## Banner
 
-No label rule (it's not a transcript block, `internal/cli/tui.go`'s
-`bannerRows`); sits above a `─` rule, pinned near the bottom of the screen
-on startup with blank filler above it:
+The banner has no label rule because it is not a transcript block
+(`internal/cli/tui.go`'s `bannerRows`). It sits above a `─` rule, pinned near
+the bottom of the screen on startup with blank filler above it:
 
 ```
 K I L N  v0.9.2 · coding agent
@@ -111,9 +110,9 @@ Recent sessions
 - Row 0: `K I L N` (spaced letters) in amber bold, then dim
   `v<version> · coding agent` (`v` prefix only when the version string
   starts with a digit; a non-numeric build string like `dev` renders bare).
-- A blank row, then row 2: dim — `<cwd, ~-abbreviated>`, ` · branch `,
+- A blank row, then row 2, all dim: `<cwd, ~-abbreviated>`, ` · branch `,
   the branch name (only when git status was read successfully), ` · model
-  `, the model label. There is no separate "effort" segment on this row —
+  `, the model label. There is no separate "effort" segment on this row;
   `bannerRows` builds exactly `loc + " · model " + modelLabel`.
 - A blank row, then the shortcut-tips row: keys in amber, descriptions
   dim (`/ commands`, `@ add files`, `⇧⇥ cycle mode`, `esc stop`).
@@ -122,11 +121,11 @@ Recent sessions
   10-column padded) + the session's first user message, single line,
   truncated to 60 columns (`firstUserMessageTitle`). Rows are read from
   `internal/session/jsonl`'s repo for this cwd, newest-modified first, with
-  a 300ms timeout — on timeout, on any read error, or when there are no
+  a 300ms timeout. On timeout, on any read error, or when there are no
   sessions in this folder, the whole "Recent sessions" block is omitted
   silently (`recentSessionRows`/`buildRecentSessionRows`).
-- A closing blank row; the caller pins a full-width `─` divider and the
-  input box below that.
+- A closing blank row. The caller pins a full-width `─` divider and the input
+  box below it.
 
 ## Input box
 
@@ -164,9 +163,9 @@ A `─` rule in `rule-strong` (`#3a3228`) above and below the input
 
 ## Status line
 
-Below the input box, one row, always rendered (`internal/tui/status.go`'s
-`RenderStatusLine`), unless the shortcuts panel, a dialog, a prompt, or the
-verbose-transcript notice is occupying that slot instead (`app.go`'s
+The status line is one row below the input box. It is always rendered
+(`internal/tui/status.go`'s `RenderStatusLine`) unless the shortcuts panel, a
+dialog, a prompt, or the verbose-transcript notice occupies that slot instead (`app.go`'s
 `liveLines`/`renderStatusRow`):
 
 ```
@@ -198,13 +197,13 @@ Segments, left to right:
 - **Cost**: two spaces then `$N.NN` (dim), included only when cumulative
   cost is greater than zero.
 
-When the row does not fit at the terminal's width, segments drop in this
-order: location first, then cost, then (if still too wide) the whole row
-is truncated with `FitStatus`.
+When the row does not fit the terminal's width, segments drop in this order:
+location first, then cost, then (if still too wide) the whole row is
+truncated with `FitStatus`.
 
 A configured `statusLine` command's output renders as extra dim rows
 *after* this one (its own colours stripped and re-tinted dim), refreshed
-on its own schedule — it does not replace the status line above.
+on its own schedule. It does not replace the status line above.
 
 ## Busy line (spinner)
 
@@ -233,21 +232,20 @@ Only while a turn is running, one row, above the input box
   If a follow-up is queued via `Lane.Steer` while this turn runs, `
   N queued` is appended to whatever suffix is showing (or becomes the
   whole suffix if there was none).
-- `esc to stop` (dim) is right-aligned to the row's own width (not
-  Claude Code's "esc to interrupt").
+- `esc to stop` (dim) is right-aligned to the row's own width (Claude Code
+  says "esc to interrupt" instead).
 
-There is no separate "effort hint" row and no post-turn "turn summary"
-row: the busy line simply disappears when the turn ends
-(`app.go`'s `finishTurn`); `RenderTranscriptEntries`'s replay does not
-re-append one either (see "Replay" below).
+There is no separate "effort hint" row and no post-turn "turn summary" row.
+The busy line simply disappears when the turn ends (`app.go`'s `finishTurn`),
+and `RenderTranscriptEntries`'s replay does not re-append one either (see
+"Replay" below).
 
 ## Block anatomy — the label rule
 
-The core pattern: every transcript block (except the banner) has a label
-on a hairline rule above it, with right-aligned metadata, and one blank
-row between blocks — `internal/tui/theme.go`'s `labelRule(label,
-labelColor, meta, width)`, the shared helper every block-rendering
-function calls:
+Every transcript block (except the banner) has a label on a hairline rule
+above it, with right-aligned metadata, and one blank row between blocks.
+`internal/tui/theme.go`'s `labelRule(label, labelColor, meta, width)` is the
+shared helper every block-rendering function calls:
 
 ```
 {label}────────────────────────────────────  {meta}
@@ -298,8 +296,8 @@ approval needed ─────────────────────�
 ```
 
 Selected row: raised background (`#241f18`) + amber key + ink label; the
-other rows show a faint key and a dim label. ↑/↓ move the selection, the
-same convention as the Bash and Edit/Write prompts below.
+other rows show a faint key and a dim label. ↑/↓ move the selection, as in
+the Bash and Edit/Write prompts below.
 
 **Bash prompt** (`RenderBashPermissionPrompt`, 4 options):
 
@@ -322,9 +320,8 @@ approval needed ─────────────────────�
 
 Selected row: raised background (`#241f18`) + amber key. While option 3 is
 selected, a second row under it explains it: "auto mode handles these
-prompts for you". Option 2's gate
-expression is the command's first two words plus ` *` (`bashDontAskRule`
-— e.g. `openssl rand -hex 4` → `openssl rand *`).
+prompts for you". Option 2's gate expression is the command's first two words
+plus ` *` (`bashDontAskRule`, e.g. `openssl rand -hex 4` → `openssl rand *`).
 
 **Edit/Write prompt** (`RenderEditPermissionPrompt`, 3 options): amber
 rule frame, `Allow kiln to edit <path>?` / `Allow kiln to write to
@@ -362,10 +359,10 @@ plan ─────────────────────────
 
 A body taller than the available frame height clips, with a trailing `↓`
 one column short of the right edge on the last visible row
-(`RenderPlanApproval`'s `height`/scroll handling). `selected` always
-arrives as 0 from the live key path today — 1/2/3 commit immediately
-rather than arrow-navigating first — so a non-zero selected state is only
-exercised by unit tests, not by any interactive key sequence.
+(`RenderPlanApproval`'s `height`/scroll handling). `selected` always arrives
+as 0 from the live key path today, because 1/2/3 commit immediately instead
+of arrow-navigating first. A non-zero selected state is exercised only by
+unit tests, not by any interactive key sequence.
 
 ## Dialogs (`/model`, `/mcp`, rewind, trust, command palette)
 
@@ -380,7 +377,7 @@ able to read, edit, and execute files here.` (`internal/tui/dialog_trust.go`).
 
 - Selected row: raised background spanning the full row width, command/
   value in amber. Unselected rows: command/value in ink, description dim
-  (both rows carry colour — only the background tint differs).
+  (both rows carry colour; only the background tint differs).
 - Slash-command rows: two-space indent, the command padded to a
   10-column column (`slashCommandColumn`), then the description,
   truncated (not wrapped) to the remaining width.
@@ -400,24 +397,23 @@ While the assistant's text is still arriving, the live region (above the
 input box, below any retry/plan/subagents rows) shows a `kiln ───` label
 rule (dim) and the last 8 wrapped rows of the in-flight text
 (`maxStreamRows`, `internal/tui/stream.go`'s `RenderStreamLive`), plain-
-wrapped (no markdown rendering — that only happens once, on commit), with
-a trailing amber `▍` caret appended to the last visible row. This live
-block is dropped, not committed, once the message finishes — the
-committed `kiln` text block (this doc's block-anatomy table) replaces it
-with the fully markdown-rendered text.
+wrapped (markdown renders only once, on commit), with a trailing amber `▍`
+caret appended to the last visible row. This live block is dropped, not
+committed, once the message finishes; the committed `kiln` text block (this
+doc's block-anatomy table) replaces it with the fully markdown-rendered text.
 
 ## Replay (Ctrl+O / Ctrl+F / Rewind)
 
 `internal/tui/replay.go`'s `RenderTranscriptEntries` redraws a session
 branch from its logged entries plus any synthetic blocks recorded via
 `Bridge.CommitSynthetic` (the committed plan checklist, subagent dispatch
-lines, system notes, the `/context` block — none of which are session log
-entries, so a replay built purely from the log would silently drop them).
+lines, system notes, the `/context` block). None of these are session log
+entries, so a replay built purely from the log would silently drop them.
 Read-only tool calls (Read/Glob/Grep/Bash-without-shown-output/web
 fetch/search) group into a collapsed `Read N files`/`Ran N shell
 commands` row in non-verbose mode; Edit and Write never group. There is
-no turn-summary row appended at the end of a replay — the busy line's
-disappearance at turn end is the whole story (see "Busy line" above).
+no turn-summary row appended at the end of a replay; the busy line's
+disappearance at turn end is all there is (see "Busy line" above).
 
 ## Esc semantics (abort order)
 
@@ -425,8 +421,8 @@ disappearance at turn end is the whole story (see "Busy line" above).
 started but never reached its own end event commits first, as a red
 tool-call error block (from `Bridge.InFlightTools`); then the live
 `plan`/`subagents` panels commit their final state as ordinary blocks (the
-same commit every normal turn end makes); then, last, a `system` note —
-`■ Interrupted. Tell kiln what to do instead.` — so the note reads as the
+same commit every normal turn end makes); then, last, a `system` note,
+`■ Interrupted. Tell kiln what to do instead.`, so the note reads as the
 final word on what happened.
 
 ## Queued follow-up
@@ -442,8 +438,8 @@ queue length — which the busy line's ` · N queued` suffix reads (see
 
 ## Rename note
 
-The product is "kiln"; the on-disk data directory stays `~/.harness`
-(credentials, sessions, history, trust, search db — renamed silently would
+The product is "kiln", but the on-disk data directory stays `~/.harness`
+(credentials, sessions, history, trust, search db; renaming it silently would
 orphan existing users' data), the Go module path stays
 `github.com/andrepato/harness`, and `HARNESS_*` env vars are unchanged. Only
 the user-facing surface (banner, `--version`/`--help`, usage strings, the

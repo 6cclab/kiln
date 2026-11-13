@@ -1,23 +1,28 @@
 # kiln: optional full-screen (alt-screen) TUI mode — plan
 
-> Status: built (2026-09-25). `--fullscreen` / `Ctrl+F`; inline stays the default.
-> Built as designed below with two settled decisions: scroll keys are `PgUp`/`PgDn`,
-> `Shift+Up`/`Shift+Down` and the mouse wheel only (plain arrows stay the editor's
-> history recall, `j`/`k` must still type), and the toggle uses the same clear+replay
-> path as `Ctrl+O`, so non-session lines (`!` output, hook notices) are lost on toggle.
-> Fullscreen turns mouse reporting on, so terminal text selection needs the terminal's
-> modifier (usually Shift or Option) while it is active.
+> Status: built (2026-09-25) as `--fullscreen` / `Ctrl+F`, with inline as the default.
+> Full-screen has since become the default and `--inline` opts out
+> (`internal/cli/args.go:330-331`); the text below is the original plan.
+> The build followed the design below, with two settled decisions:
+>
+> - Scroll keys are `PgUp`/`PgDn`, `Shift+Up`/`Shift+Down` and the mouse wheel
+>   only. Plain arrows stay the editor's history recall, and `j`/`k` must still type.
+> - The toggle uses the same clear+replay path as `Ctrl+O`, so non-session lines
+>   (`!` output, hook notices) are lost on toggle.
+>
+> Fullscreen turns mouse reporting on, so terminal text selection needs the
+> terminal's modifier (usually Shift or Option) while it is active.
 
 ## Context
 Full-screen mode is an alt-screen TUI with an internal scrolling transcript viewport and a fixed
-input + status bar at the bottom — the layout the kiln design mockup shows, and how Claude Code
-behaves. It also resolves the inline model's "dynamic gap / bottom-pin" limitation. It is
+input + status bar at the bottom. This is the layout the kiln design mockup shows and how Claude
+Code behaves. It also resolves the inline model's "dynamic gap / bottom-pin" limitation. It is
 **opt-in** (a `--fullscreen` flag plus a runtime toggle keybind); inline stays the default so
 nothing regresses and the existing inline cursor/autowrap fixes still apply to the default path.
 
 ## Approach
 Add a full-screen render path alongside the inline one, selected by a `fullscreen bool` on the
-model. Reuse the existing renderers — only the *composition* and the *commit target* change.
+model. Reuse the existing renderers; only the *composition* and the *commit target* change.
 
 1. **Frame = alt-screen.** Bubbletea already supports a per-frame `View.AltScreen` field
    (`third_party/bubbletea/cursed_renderer.go` handles enter/exit). In fullscreen, `View()`
@@ -55,17 +60,17 @@ model. Reuse the existing renderers — only the *composition* and the *commit t
    flips `m.fullscreen`, enters/exits alt-screen on the next frame, and re-renders.
 
 ## Key files
-- `internal/tui/app.go` — `fullscreen bool` + `viewport` on `Model`; `View()` branches to a
+- `internal/tui/app.go`: `fullscreen bool` + `viewport` on `Model`; `View()` branches to a
   `fullScreenView()` composer; `Update` handles toggle, scroll keys, fullscreen resize; gate the
   inline-only `committedRows`/filler code on `!m.fullscreen`.
-- `internal/tui/bridge.go` — commit-sink mode (append-to-buffer vs `tea.Println`).
-- `internal/tui/replay.go` — reuse `RenderTranscriptEntries` (verify it covers every block type
+- `internal/tui/bridge.go`: commit-sink mode (append-to-buffer vs `tea.Println`).
+- `internal/tui/replay.go`: reuse `RenderTranscriptEntries` (verify it covers every block type
   shown live).
-- `internal/tui/keys.go` — toggle action + viewport scroll routing.
-- `internal/cli/args.go`, `internal/cli/tui.go` — `--fullscreen` flag → `Config.Fullscreen`.
-- `third_party/bubbletea/*` — no change expected (AltScreen already supported); confirm
+- `internal/tui/keys.go`: toggle action + viewport scroll routing.
+- `internal/cli/args.go`, `internal/cli/tui.go`: `--fullscreen` flag → `Config.Fullscreen`.
+- `third_party/bubbletea/*`: no change expected (AltScreen already supported); confirm
   enter/exit through the driver.
-- Dep: `charm.land/bubbles/v2/viewport` (already in the module graph via bubbles v2.2.1).
+- Dependency: `charm.land/bubbles/v2/viewport` (already in the module graph via bubbles v2.2.1).
 
 ## Risks / decisions to settle during build
 - **Streaming vs viewport**: render the in-progress turn as the content tail and `GotoBottom`
