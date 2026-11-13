@@ -418,6 +418,9 @@ func (h *Harness) requestOptions() Options {
 	return h.opts
 }
 
+// Tools is the tool set the next request resolves active tool names against.
+func (h *Harness) Tools() *tool.Set { return h.toolSet() }
+
 // toolSet returns the tool set the next request will resolve active tool
 // names against, read under the same lock SetTools/AddTools write it with.
 func (h *Harness) toolSet() *tool.Set {

@@ -2,6 +2,7 @@ package mods
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/dop251/goja"
@@ -28,6 +29,25 @@ type Services struct {
 	// AbortTurn cancels the main loop's running turn turnID; it errors, naming
 	// both ids, when turnID is not the running turn's.
 	AbortTurn func(ctx context.Context, turnID string) error
+
+	// Tools lists the tools the model has, as the model names them.
+	Tools func() []ToolInfo
+	// CallTool runs a tool through kiln's permission gate (which may prompt
+	// the person) and returns its output; a refusal is ToolOutput.Deny.
+	CallTool func(ctx context.Context, tool string, args json.RawMessage, toolUseID string) (ToolOutput, error)
+	// CheckTool is what the permission gate would decide for a call, asking
+	// nobody.
+	CheckTool func(ctx context.Context, tool string, input json.RawMessage) (ToolVerdict, error)
+	// Commands lists the slash commands; RunCommand runs one (the text it
+	// printed) without raising command.run again for a mod's own command.
+	Commands   func() []CommandInfo
+	RunCommand func(ctx context.Context, command, args string) (CommandOutput, error)
+	// RegisterAgent makes an agent type (AgentSpec's keys) dispatchable.
+	RegisterAgent func(ctx context.Context, spec map[string]any) error
+	// SpawnAgent starts a subagent in the background (AgentSpawnInput's keys,
+	// as the hooks left them) and returns once it started. The context is
+	// marked as having raised agent.spawn.
+	SpawnAgent func(ctx context.Context, in map[string]any) (AgentStarted, error)
 }
 
 // CompactResult is what a compaction left: the conversation after it and the
@@ -216,5 +236,5 @@ func (e *Engine) answerOps(f *frame, name string, arg func(int) goja.Value) (out
 				}
 			}, func(map[string]any) (any, error) { return nil, nil }), true, nil
 	}
-	return nil, false, nil
+	return e.answerTools(f, name, arg)
 }

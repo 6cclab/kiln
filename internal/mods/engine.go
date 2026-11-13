@@ -31,31 +31,39 @@ var ErrClosed = errors.New("mods: engine closed")
 // supportedEvents are the events kiln raises in v1. A hook on any other
 // event registers (so the module loads) but never runs; Load logs it.
 var supportedEvents = map[string]bool{
-	"session.start":   true,
-	"command.run":     true,
-	"tool.call":       true,
-	"agent.spawn":     true,
-	"turn.start":      true,
-	"turn.step":       true,
-	"turn.complete":   true,
-	"ui.render":       true,
-	"session.end":     true,
-	"session.compact": true,
-	"session.append":  true,
-	"turn.abort":      true,
+	"session.start":    true,
+	"command.run":      true,
+	"tool.call":        true,
+	"agent.spawn":      true,
+	"turn.start":       true,
+	"turn.step":        true,
+	"turn.complete":    true,
+	"ui.render":        true,
+	"session.end":      true,
+	"session.compact":  true,
+	"session.append":   true,
+	"turn.abort":       true,
+	"tool.check":       true,
+	"tool.describe":    true,
+	"command.describe": true,
+	"agent.offer":      true,
 }
 
 // pinnedFields are the fields of each event a hook may not change on the
 // way down: one left out of next's argument is kept, a different value
 // rejects the next call (claude-code.d.ts: "Pinned").
 var pinnedFields = map[string][]string{
-	"tool.call":     {"tool", "tool_use_id", "agentId"},
-	"agent.spawn":   {"tool_use_id", "fork", "parentModel", "parentAgentId", "permissionMode", "name"},
-	"turn.start":    {"turnId"},
-	"turn.step":     {"turnId", "index", "messageCount", "agentId"},
-	"turn.complete": {"turnId", "agentId"},
-	"command.run":   {"command"},
-	"ui.render":     {"surface", "component", "requestId"},
+	"tool.call":        {"tool", "tool_use_id", "agentId"},
+	"agent.spawn":      {"tool_use_id", "fork", "parentModel", "parentAgentId", "permissionMode", "name"},
+	"turn.start":       {"turnId"},
+	"turn.step":        {"turnId", "index", "messageCount", "agentId"},
+	"turn.complete":    {"turnId", "agentId"},
+	"command.run":      {"command"},
+	"tool.check":       {"tool", "input", "tool_use_id", "agentId", "ceiling"},
+	"tool.describe":    {"tool", "provider"},
+	"command.describe": {"command", "immediate", "provider"},
+	"agent.offer":      {"agent", "description", "source", "provider"},
+	"ui.render":        {"surface", "component", "requestId"},
 }
 
 // gatingEvents must resolve to an object; anything else is a hook that
@@ -63,6 +71,7 @@ var pinnedFields = map[string][]string{
 var gatingEvents = map[string]bool{
 	"session.start": true, "command.run": true, "tool.call": true, "agent.spawn": true,
 	"turn.start": true, "turn.step": true, "turn.complete": true,
+	"tool.check": true, "tool.describe": true, "command.describe": true, "agent.offer": true,
 }
 
 var nameRule = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)

@@ -39,6 +39,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andrepato/harness/internal/automode"
@@ -107,6 +108,9 @@ type Dispatcher struct {
 	Gate *permission.Gate
 	// Agents is the catalog Dispatch resolves subagent_type against.
 	Agents []agents.Definition
+	// extraAgents are the definitions AddAgent made (registered.go).
+	agentsMu    sync.RWMutex
+	extraAgents []agents.Definition
 	// Roles is settings.json's modelRoles map (role name ->
 	// "provider/model"), threaded into agents.ResolveModel so a task's
 	// `model` argument (or an agent definition's `model:` alias) can name
@@ -235,7 +239,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (_ Dispa
 		defer cancel()
 	}
 
-	def, ok := findAgentDefinition(d.Agents, req.Agent)
+	def, ok := findAgentDefinition(d.AgentList(), req.Agent)
 	if !ok {
 		return DispatchResult{}, fmt.Errorf("agent: no agent named %q", req.Agent)
 	}
@@ -458,7 +462,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (_ Dispa
 			AutoIntegrate:         d.AutoIntegrate,
 			Registry:              d.Registry,
 			Gate:                  d.Gate,
-			Agents:                d.Agents,
+			Agents:                d.AgentList(),
 			Roles:                 d.Roles,
 			SessionsRoot:          d.SessionsRoot,
 			Env:                   workerEnv,
@@ -472,7 +476,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (_ Dispa
 			Approved:              d.Approved,
 			ProgressLoopFileBytes: d.ProgressLoopFileBytes,
 		}
-		extraTools = append(extraTools, tools.TaskTool(adaptDispatch(child.Dispatch), d.Agents, d.Roles, resolved.Tier))
+		extraTools = append(extraTools, tools.TaskTool(adaptDispatch(child.Dispatch), d.AgentList(), d.Roles, resolved.Tier))
 	}
 
 	extraTools = append(extraTools, hookTools...)
@@ -521,7 +525,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (_ Dispa
 		// which nothing sizes, so it stays as it is.
 		dispatch := adaptDispatch(child.Dispatch)
 		started.OnTierChanged = func(_ context.Context, tier budget.Tier) {
-			started.Harness.AddTools(tools.TaskTool(dispatch, d.Agents, d.Roles, tier))
+			started.Harness.AddTools(tools.TaskTool(dispatch, d.AgentList(), d.Roles, tier))
 		}
 	}
 

@@ -42,14 +42,14 @@ are out of scope here.)
 | `turn.step` | a model request is about to be sent (streams) | ✅ chunks (text, thinking, tool, input, stop) stream through the hook chain in order, then the result |
 | `turn.complete` | a model turn ended | ✅ |
 | `tool.call` | before the engine runs a tool | ✅ |
-| `tool.check` | before a tool's permission verdict settles | ➖ |
-| `tool.describe` | a tool's schema first rendered in a session | ➖ |
+| `tool.check` | before a tool's permission verdict settles | ⚠️ raised before the permission gate on every real call (core's answer is the gate's query: allow, ask or deny); only a hook's `deny` is applied, an `allow`/`ask` does not override the gate |
+| `tool.describe` | a tool's schema first rendered in a session | ⚠️ raised once per tool of the main conversation when mods start; a rewritten `description` replaces the tool's; `isDeferred` is not applied (no ToolSearch placement); subagents' tools are not described |
 | `command.run` | a slash command is about to run | ✅ |
-| `command.describe` | a command listed for typeahead / help | ➖ |
+| `command.describe` | a command listed for typeahead / help | ⚠️ raised for every command each time the registry list is rebuilt (500 ms bound); `description` and `argumentHint` apply; `isHidden` does not (kiln's typeahead has no hidden commands); `immediate` is always false |
 | `config.set` | a /config row is about to change | ➖ |
 | `config.describe` | a /config row is listed | ➖ |
 | `agent.spawn` | before the Agent tool starts a subagent | ✅ |
-| `agent.offer` | an agent type is offered to the model | ➖ |
+| `agent.offer` | an agent type is offered to the model | ⚠️ raised at dispatch (the model naming a `subagent_type`); `isOffered: false` refuses the dispatch with a reason; the task tool's static listing of agent types is built before mods start and is not filtered; a plugin's own `$.agent.spawn` is no offer |
 | `prompt.submit` | a prompt is submitted, before the turn | ➖ (registers, never runs) |
 | `prompt.fill` | text is about to enter the prompt box | ➖ |
 | `prompt.suggest` | text proposed as a prompt suggestion | ➖ |
@@ -131,15 +131,15 @@ Grouped by namespace. "Signature" is Claude Code's.
 | `agent.list` | `() => Promise<AgentInfo[]>` | ✅ |
 | `command.register` | `(command) => Promise<…>` | ✅ |
 | `tool.register` | `(tool) => Promise<…>` | ✅ |
-| `agent.spawn` | `(input) => Promise<AgentSpawnResult>` | 🚫 |
-| `agent.register` | `(spec) => Promise<…>` | 🚫 |
-| `agent.offer` | `(input) => Promise<…>` | ❌ |
-| `command.list` | `() => Promise<CommandInfo[]>` | 🚫 |
-| `command.run` | `(input) => Promise<CommandRunResult>` | ❌ (event raised; not a `$` call) |
-| `command.describe` | `(input) => Promise<…>` | ❌ |
-| `tool.list` | `() => Promise<ToolInfo[]>` | 🚫 |
-| `tool.call` | `(input) => Promise<ToolCallResult>` | 🚫 |
-| `tool.check` | `(input) => Promise<ToolCheckResult>` | ❌ |
+| `agent.spawn` | `(input) => Promise<AgentSpawnResult>` | ⚠️ raises `agent.spawn` (every hook but the caller's), then starts the subagent in the background and resolves `{model, agentId}`; `name`, `cwd` and `background` are not applied (kiln has no teammates, and a subagent runs in the session's directory); the model is the one asked or the session's, not yet resolved |
+| `agent.register` | `(spec) => Promise<…>` | ⚠️ raises `agent.register`, then makes the type dispatchable by name (`$.agent.spawn`, or the model naming it); refuses a name that exists; `disallowedTools`, `effort` and `permissionMode` are not applied; the task tool's listing does not include it (the model is not told of it) |
+| `agent.offer` | `(input) => Promise<…>` | ➖ an event only: Claude Code has no `$` call of that name |
+| `command.list` | `() => Promise<CommandInfo[]>` | ✅ `source` is builtin, user (project and personal files) or plugin (plugins and skills); `plugin` is the command's namespace; no `mcp` source |
+| `command.run` | `(input) => Promise<CommandRunResult>` | ⚠️ raises `command.run` (every hook but the caller's), then runs the slash command and resolves `{text}`; a panel, an editor hand-over, a quit or a prompt expansion does only its printed part; a mod's own command is answered by its hook, so core runs nothing for it; no `exitCode` |
+| `command.describe` | `(input) => Promise<…>` | ➖ an event only: Claude Code has no `$` call of that name |
+| `tool.list` | `() => Promise<ToolInfo[]>` | ✅ the main conversation's tools by Claude Code's names (`bash` is `Bash`); `mcp` is true for `mcp__` tools |
+| `tool.call` | `(input) => Promise<ToolCallResult>` | ⚠️ raises `tool.call` (every hook but the caller's), then runs the tool through the permission gate (which may prompt the person) and resolves `{result, text, isError?}` (`result` is the text: kiln has no structured per-tool results) or `{deny}`; the settings PreToolUse hooks do not run for it; `consent` and `requestMeta` are not applied; a mod's own tool is answered by its hook alone |
+| `tool.check` | `(input) => Promise<ToolCheckResult>` | ✅ raises `tool.check` (every hook but the caller's); core is the permission gate asked without prompting or calling the auto-mode classifier (where the gate would ask, the answer is `ask`); a deny is recorded in the gate's blocked list like any refusal; no `rule`, `hook`, `setting` or `ceiling` |
 
 ### model / audio / mcp / http / process
 | call | signature | kiln |
@@ -197,7 +197,7 @@ classify-only call). The deliberate stops left:
    `session.version` returns `{version}` only (no `base`/`builtAt` — kiln's version
    is a git sha); `session.repo` reports `internal:false`, `name:null` (kiln has no
    own-org notion).
-5. Everything under `prompt.*`, `config.*`, `agent.offer`, `tool.check`,
+5. Everything under `prompt.*`, `config.*`,
    `skill.prompt`, `attribution.text` — deep integration points; no consumer, low
    priority.
 

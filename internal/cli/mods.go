@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/claude/agents"
 	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	slashcommands "github.com/andrepato/harness/internal/commands"
 	"github.com/andrepato/harness/internal/crash"
@@ -88,6 +89,11 @@ type modsRuntime struct {
 	host    *modsHost
 	driver  atomic.Pointer[tui.ModsDriver]
 	toolSet atomic.Pointer[[]mods.ToolSpec]
+	// registry is the slash-command registry, set once it is built.
+	registry atomic.Pointer[slashcommands.Registry]
+	// agentDefs lists the subagent types the dispatcher knows (agent.offer
+	// states each one's description and source).
+	agentDefs func() []agents.Definition
 
 	mu      sync.Mutex
 	pending map[string]mods.ToolHandle // agentID + "\x00" + tool call id
@@ -493,6 +499,20 @@ func (r *modsRuntime) attach(agentID, model string, h *harness.Harness) {
 			// tool runs as usual.
 			diag.L().Info("mods: a tool.call answer for a built-in tool is not supported; the tool runs", "tool", call.Name)
 		}
+		// tool.check: the hooks' verdict on the call as it will run. Only a
+		// deny is applied; the permission gate, which runs next, decides
+		// the rest.
+		checked := args
+		if outcome.Args != nil {
+			checked = outcome.Args
+		}
+		if dec, why, ok := e.ToolCheck(ctx, claudeToolName(call.Name), checked, call.ID, agentID); ok && dec == "deny" {
+			if why == "" {
+				why = "a tool.check hook denied this call"
+			}
+			handle.Finish(nil, true)
+			return harness.BeforeToolResult{Block: &harness.ToolBlock{Reason: why}}, nil
+		}
 		r.mu.Lock()
 		r.pending[agentID+"\x00"+call.ID] = handle
 		r.mu.Unlock()
@@ -544,14 +564,31 @@ func (r *modsRuntime) BeforeSpawn(ctx context.Context, agentID, agentType string
 	if e == nil {
 		return ""
 	}
-	out := e.Spawn(ctx, mods.Spawn{AgentID: agentID, ToolUseID: agentID, Type: agentType,
-		Description: req.Description, Prompt: req.Prompt, Model: req.Model, ParentModel: r.model})
-	if out.Deny != "" {
-		return out.Deny
-	}
-	req.Prompt = out.Spawn.Prompt
-	if out.Spawn.Model != "" {
-		req.Model = out.Spawn.Model
+	// A $.agent.spawn call raised agent.spawn itself (the hooks' rewrites are
+	// in req already) and is no offer to the model (agent.offer governs only
+	// the model's own dispatch).
+	if !mods.IsRaised(ctx, "agent.spawn") {
+		desc, source := "", "built-in"
+		if r.agentDefs != nil {
+			for _, def := range r.agentDefs() {
+				if def.Name == agentType {
+					desc, source = def.Description, string(def.Source)
+					break
+				}
+			}
+		}
+		if !e.AgentOffer(ctx, agentType, desc, source) {
+			return "agent " + agentType + " is not offered: a plugin's agent.offer hook withdrew it"
+		}
+		out := e.Spawn(ctx, mods.Spawn{AgentID: agentID, ToolUseID: agentID, Type: agentType,
+			Description: req.Description, Prompt: req.Prompt, Model: req.Model, ParentModel: r.model})
+		if out.Deny != "" {
+			return out.Deny
+		}
+		req.Prompt = out.Spawn.Prompt
+		if out.Spawn.Model != "" {
+			req.Model = out.Spawn.Model
+		}
 	}
 	r.mu.Lock()
 	if _, ok := r.agents[agentID]; !ok {

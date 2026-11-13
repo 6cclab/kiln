@@ -1033,6 +1033,9 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 			r := g.record(req, fmt.Sprintf("%s is outside the workspace, and don't-ask mode refuses anything that would need approval.", path))
 			return &r, OutcomeNone, nil
 		}
+		if isQuery(ctx) && g.prompter != nil {
+			return nil, OutcomeNone, ErrWouldAsk
+		}
 		if g.prompter == nil {
 			reason := fmt.Sprintf("%s is outside the workspace and cannot be confirmed.", path)
 			if outsideNote != "" {
@@ -1083,6 +1086,9 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		note = fmt.Sprintf("Auto mode asks before writing %s: it resolves to a protected path.", protPath)
 	}
 	if verdict == settings.Allow && mode == settings.ModeAuto && !g.autoSkipsClassifier(req, hits) {
+		if isQuery(ctx) {
+			return nil, OutcomeNone, ErrWouldAsk // a query calls no classifier model
+		}
 		r, out, why, err := g.classifyAuto(ctx, req)
 		if err != nil {
 			return nil, OutcomeNone, err
@@ -1120,6 +1126,9 @@ func (g *Gate) checkWithOutcome(ctx context.Context, req Request) (*BlockResult,
 		}
 		r := g.record(req, reason)
 		return &r, OutcomeNone, nil
+	}
+	if isQuery(ctx) && g.prompter != nil {
+		return nil, OutcomeNone, ErrWouldAsk
 	}
 	if g.prompter == nil {
 		// Headless with no way to ask. Refusing beats proceeding: an
