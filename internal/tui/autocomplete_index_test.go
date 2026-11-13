@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,5 +181,91 @@ func BenchmarkAtKeystroke(b *testing.B) {
 		m2 := next.(Model)
 		next, _ = m2.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 		m = next.(Model)
+	}
+}
+
+// TestFileSuggestions_TopMatchesFullSort: keeping only the best
+// fileResultsLimit matches by insertion gives exactly the first
+// fileResultsLimit of a full sort by the same order (score, depth, length,
+// path), for queries that tie heavily and for the bare "@" where all match.
+func TestFileSuggestions_TopMatchesFullSort(t *testing.T) {
+	var cands []fileCandidate
+	for i := 0; i < 300; i++ {
+		dir := fmt.Sprintf("d%d", i%7)
+		if i%3 == 0 {
+			dir += fmt.Sprintf("/sub%d", i%5)
+		}
+		cands = append(cands, fileCandidate{relPath: fmt.Sprintf("%s/file%03d.go", dir, (i*37)%300)})
+		if i%11 == 0 {
+			cands = append(cands, fileCandidate{relPath: dir, isDir: true})
+		}
+	}
+	x := newFileIndex()
+	x.walk = func(string) []fileCandidate { return cands }
+	_, cmd := x.lookup("/base")
+	x.apply(cmd().(msgFileIndexReady))
+
+	for _, q := range []string{"", "file", "file1", "d3", "sub", "go"} {
+		got, _ := fileSuggestions(x, "/base", q)
+
+		type scored struct {
+			fileCandidate
+			score float64
+		}
+		var all []scored
+		for _, c := range cands {
+			if s := scoreLowered(strings.ToLower(filepath.Base(c.relPath)), strings.ToLower(c.relPath), strings.ToLower(q), c.isDir); s > 0 {
+				all = append(all, scored{c, s})
+			}
+		}
+		sort.SliceStable(all, func(i, j int) bool {
+			a, b := all[i], all[j]
+			if a.score != b.score {
+				return a.score > b.score
+			}
+			if depthOf(a.relPath) != depthOf(b.relPath) {
+				return depthOf(a.relPath) < depthOf(b.relPath)
+			}
+			if len(a.relPath) != len(b.relPath) {
+				return len(a.relPath) < len(b.relPath)
+			}
+			return a.relPath < b.relPath
+		})
+		want := all[:min(len(all), fileResultsLimit)]
+		if len(got) != len(want) {
+			t.Fatalf("query %q: %d items, want %d", q, len(got), len(want))
+		}
+		for i := range want {
+			if !strings.HasPrefix(got[i].Description, want[i].relPath) {
+				t.Errorf("query %q item %d = %q, want %q", q, i, got[i].Description, want[i].relPath)
+			}
+		}
+	}
+}
+
+// TestFileIndex_EvictsLeastRecentlyUsed: at most fileIndexDirs directories
+// are cached; a new one evicts the one used longest ago, and a walk that
+// lands for an evicted directory is dropped.
+func TestFileIndex_EvictsLeastRecentlyUsed(t *testing.T) {
+	x := newFileIndex()
+	x.walk = func(string) []fileCandidate { return []fileCandidate{{relPath: "a"}} }
+	cmds := map[string]tea.Cmd{}
+	for i := 0; i < fileIndexDirs; i++ {
+		base := fmt.Sprintf("/d%d", i)
+		_, cmds[base] = x.lookup(base)
+	}
+	x.lookup("/d0") // most recent now; /d1 is the oldest
+	x.lookup("/new")
+	if len(x.dirs) != fileIndexDirs {
+		t.Fatalf("%d directories cached, want %d", len(x.dirs), fileIndexDirs)
+	}
+	if _, ok := x.dirs["/d1"]; ok {
+		t.Fatal("/d1 (least recently used) was kept")
+	}
+	if _, ok := x.dirs["/d0"]; !ok {
+		t.Fatal("/d0 (just used) was evicted")
+	}
+	if x.apply(cmds["/d1"]().(msgFileIndexReady)) {
+		t.Fatal("a walk for an evicted directory was applied")
 	}
 }
