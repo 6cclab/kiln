@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/agent"
+	"github.com/andrepato/harness/internal/auth"
+	authlogin "github.com/andrepato/harness/internal/auth/login"
 	"github.com/andrepato/harness/internal/budget"
 	"github.com/andrepato/harness/internal/provider"
 )
@@ -18,17 +20,120 @@ import (
 // nothing to meter. What actually constrains a session here is the
 // context budget, so that is what it reports.
 //
-// /login and /logout already exist as CLI subcommands. As slash commands
-// they report status and point at the subcommand rather than running an
-// OAuth flow inline — that flow opens a browser and binds a local port,
-// which must not start mid-turn.
+// /login and /logout run the same flow as the `kiln login` / `kiln logout`
+// subcommands, inside the session, as Claude Code's own /login does: the
+// flow's prompts and notices go through Interaction (the TUI draws them
+// above the editor), and /login runs as a background command so Esc
+// cancels it and a browser OAuth callback never blocks the event loop.
+// Without an Interaction (print mode, which has nobody to prompt) they
+// keep the old behaviour: report status and name the subcommand.
 type AccountDeps struct {
-	Registry   *provider.Registry
-	Todos      *agent.TodoStore
-	Tier       budget.Tier
-	ModelLabel string
+	// Interaction supplies the in-session login prompts. nil, or a func
+	// returning nil, means no interactive session.
+	Interaction func() auth.Interaction
+	Registry    *provider.Registry
+	Todos       *agent.TodoStore
+	Tier        budget.Tier
+	ModelLabel  string
 	// ContextUsed, if set, reports tokens currently resident.
 	ContextUsed func() (int, bool)
+}
+
+func (d AccountDeps) interaction() auth.Interaction {
+	if d.Interaction == nil || d.Registry == nil {
+		return nil
+	}
+	return d.Interaction()
+}
+
+// runLogin is /login in an interactive session. With a provider it logs in
+// to it; without, it asks which one first (the picker marks the ones that
+// are already configured). The whole flow runs in Background: the picker,
+// the browser wait and the key prompt all block on the user.
+func (d AccountDeps) runLogin(wanted string, ia auth.Interaction) Result {
+	if wanted != "" {
+		p, ok := d.Registry.Provider(wanted)
+		if !ok {
+			return Result{Output: []string{fmt.Sprintf("Unknown provider %q. Providers you can log in to: %s.", wanted, strings.Join(d.loginProviderIDs(), ", "))}, Mistake: true}
+		}
+		if p.Auth().Kind == provider.AuthKindNone {
+			return Result{Output: []string{fmt.Sprintf("%s needs no login.", wanted)}, Mistake: true}
+		}
+	}
+	return Result{
+		Background: func(ctx context.Context) (Result, error) {
+			id := wanted
+			if id == "" {
+				choice, err := d.pickProvider(ctx, ia)
+				if err != nil {
+					return Result{Output: []string{"Login cancelled."}}, nil
+				}
+				id = choice
+			}
+			if err := authlogin.Login(ctx, d.Registry, d.Registry.Credentials(), id, ia); err != nil && ctx.Err() != nil {
+				return Result{}, ctx.Err()
+			}
+			// Login reported its own outcome ("Logged in to ..." or
+			// "Login failed: ...") through ia.
+			return Result{}, nil
+		},
+		BusyLabel:  "Logging in" + d.labelSuffix(wanted),
+		CancelNote: "Login cancelled.",
+	}
+}
+
+func (d AccountDeps) labelSuffix(id string) string {
+	if p, ok := d.Registry.Provider(id); ok {
+		return " to " + p.Name()
+	}
+	return ""
+}
+
+// loginProviderIDs is every provider that has something to log in to.
+func (d AccountDeps) loginProviderIDs() []string {
+	var out []string
+	for _, p := range d.Registry.Providers() {
+		if p.Auth().Kind != provider.AuthKindNone {
+			out = append(out, p.ID())
+		}
+	}
+	return out
+}
+
+func (d AccountDeps) pickProvider(ctx context.Context, ia auth.Interaction) (string, error) {
+	var opts []auth.SelectOption
+	for _, p := range d.Registry.Providers() {
+		spec := p.Auth()
+		if spec.Kind == provider.AuthKindNone {
+			continue
+		}
+		desc := "api key"
+		if spec.Kind == provider.AuthKindOAuth {
+			desc = "oauth"
+			if spec.IsSubscription {
+				desc = "subscription"
+			}
+		}
+		if ok, err := d.Registry.CheckAuth(ctx, p.ID()); err == nil && ok {
+			desc += ", configured"
+		}
+		opts = append(opts, auth.SelectOption{ID: p.ID(), Label: p.ID(), Description: desc})
+	}
+	return ia.Prompt(ctx, auth.Prompt{Type: auth.PromptSelect, Message: "Which provider do you want to log in to?", Options: opts})
+}
+
+// runLogout is /logout in an interactive session: it removes the stored
+// credential straight away. A key still set in the environment keeps the
+// provider usable, so say so rather than let "Logged out" mislead.
+func (d AccountDeps) runLogout(ctx context.Context, id string) Result {
+	if err := authlogin.Logout(ctx, d.Registry, d.Registry.Credentials(), id); err != nil {
+		return Result{Output: []string{err.Error()}, Mistake: true}
+	}
+	lines := []string{fmt.Sprintf("Logged out of %s.", id)}
+	if ok, err := d.Registry.CheckAuth(ctx, id); err == nil && ok {
+		lines = append(lines, fmt.Sprintf("%s is still configured through its environment variable.", id))
+	}
+	return Result{Output: lines}
 }
 
 // AccountCommands returns the source for /login, /logout, /usage, /todos
@@ -44,7 +149,7 @@ func AccountCommands(deps AccountDeps) Source {
 	cmds := []Command{
 		{
 			Name:         "login",
-			Description:  "Show auth status, or how to log in to a provider",
+			Description:  "Log in to a provider (or show auth status)",
 			ArgumentHint: "[provider]",
 			ArgumentCompletions: func(prefix string) []Completion {
 				if deps.Registry == nil {
@@ -67,6 +172,9 @@ func AccountCommands(deps AccountDeps) Source {
 			},
 			Run: func(ctx context.Context, args string) (Result, error) {
 				wanted := strings.TrimSpace(args)
+				if ia := deps.interaction(); ia != nil {
+					return deps.runLogin(wanted, ia), nil
+				}
 				if wanted != "" {
 					return Result{Output: []string{
 						"Run this outside the session:",
@@ -100,7 +208,7 @@ func AccountCommands(deps AccountDeps) Source {
 		},
 		{
 			Name:         "logout",
-			Description:  "How to log out of a provider",
+			Description:  "Log out of a provider",
 			ArgumentHint: "<provider>",
 			ArgumentCompletions: func(prefix string) []Completion {
 				if deps.Registry == nil {
@@ -124,6 +232,9 @@ func AccountCommands(deps AccountDeps) Source {
 				wanted := strings.TrimSpace(args)
 				if wanted == "" {
 					return Result{Output: []string{"Name the provider to log out of: /logout <provider>."}, Mistake: true}, nil
+				}
+				if deps.interaction() != nil {
+					return deps.runLogout(ctx, wanted), nil
 				}
 				return Result{Output: []string{
 					"Run this outside the session:",

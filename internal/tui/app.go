@@ -115,10 +115,12 @@ type Config struct {
 	// Banner is the startup banner, committed (fitted to the terminal
 	// width) on the first WindowSizeMsg so a long cwd row never wraps.
 	Banner []string
-	// BannerFunc, when set, re-renders Banner at commit time, so the rows
-	// use the text tokens fitted to the terminal's reported background
-	// rather than the design defaults Banner was styled with at startup.
-	BannerFunc func() []string
+	// BannerFunc, when set, re-renders Banner at commit time for the
+	// current content width, so the rows use the text tokens fitted to the
+	// terminal's reported background rather than the design defaults
+	// Banner was styled with at startup, and a resize picks the layout
+	// that fits (the art drops out on a narrow window).
+	BannerFunc func(width int) []string
 	// StartupNotes are committed as system notes right after the banner,
 	// once the terminal's width is known (committed any earlier, a note
 	// wrapped at the fallback width).
@@ -839,8 +841,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamWrap.release()
 		if m.cfg.Bridge != nil {
 			m = m.commitReconnectNote()
-			renderer := NewMarkdownRenderer(m.contentWidth(), IsPlain())
-			lines := append([]string{""}, RenderAssistantText(renderer.Render(msg.Text))...)
+			lines := append([]string{""}, RenderAssistantText(transcriptRenderer(m.contentWidth()).Render(msg.Text))...)
 			m.commit(lines)
 		}
 		return m, nil
@@ -1134,7 +1135,7 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 		return m.openPrompt(queuedPrompt{plan: &pendingPlan{plan: msg.Plan, reply: msg.Reply}}), nil
 
 	case MsgAskUserPrompt:
-		return m.openPrompt(queuedPrompt{question: &pendingQuestion{questions: msg.Questions, checked: map[int]bool{}, reply: msg.Reply}}), nil
+		return m.openPrompt(queuedPrompt{question: newPendingQuestion(msg.Questions, msg.Entry, msg.NoOther, msg.Reply)}), nil
 
 	case MsgPromptWithdrawn:
 		wasActive := m.prompt.Active()
@@ -2253,7 +2254,7 @@ func (m Model) syncPromptPlaceholder() Model {
 	case m.prompt.question != nil && m.prompt.question.reviewing:
 		m.editor.SetPlaceholder("press 1 or 2")
 	case m.prompt.question != nil:
-		total := len(m.prompt.question.questions[m.prompt.question.index].Options) + 1
+		total := m.prompt.question.rows()
 		m.editor.SetPlaceholder(placeholderForOptionCount(total))
 	case m.prompt.pending != nil:
 		m.editor.SetPlaceholder(placeholderForOptionCount(len(promptOptionsFor(m.prompt.pending.request))))
@@ -2310,6 +2311,11 @@ func (m Model) restoreLabelAfterPrompt(declined bool) Model {
 func placeholderForOptionCount(n int) string {
 	if n <= 1 {
 		return "press 1"
+	}
+	if n > 9 {
+		// A long list is picked with the arrows; a two-digit row has no
+		// single key.
+		return "↑↓ to select · enter to confirm"
 	}
 	digits := make([]string, n)
 	for i := range digits {
@@ -2800,7 +2806,7 @@ func (m Model) frameHeight() int {
 func (m Model) bannerRows() []string {
 	src := m.cfg.Banner
 	if m.cfg.BannerFunc != nil {
-		src = m.cfg.BannerFunc()
+		src = m.cfg.BannerFunc(m.contentWidth())
 	}
 	rows := make([]string, len(src))
 	for i, r := range src {

@@ -32,7 +32,9 @@ build:
 
 check:
 	@echo "==> gofmt"
-	@fmtout="$$(gofmt -l .)"; \
+	@# Only files git tracks or would track: an agent's worktree under the
+	@# ignored .claude/worktrees is another checkout, not this one.
+	@fmtout="$$(git ls-files --cached --others --exclude-standard -- '*.go' | xargs gofmt -l)"; \
 	if [ -n "$$fmtout" ]; then \
 		echo "gofmt found unformatted files:"; \
 		echo "$$fmtout"; \

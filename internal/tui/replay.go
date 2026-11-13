@@ -44,7 +44,7 @@ func RenderTranscriptEntries(entries []session.Entry, width int, verbose bool, c
 	// ctrl+o view.
 	var out []string
 	calls := map[string]msg.ToolCall{}
-	renderer := NewMarkdownRenderer(width, IsPlain())
+	renderer := transcriptRenderer(width)
 
 	bySynthetic := map[string][]SyntheticCommit{}
 	for _, sc := range synthetics {

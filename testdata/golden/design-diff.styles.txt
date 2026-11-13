@@ -1,4 +1,4 @@
-  [fg=#7d7262 bg=#232619]  23[/] [fg=#9bc46e]+ [/][fg=#ece4d4]router.post('/upload', requireAuth, rateLimit, upload.single('file'), handleUpload);[/]       
+  [fg=#7d7262 bg=#232619]  23[/][bg=#232619] [/][fg=#9bc46e bg=#232619]+ [/][fg=#ece4d4 bg=#232619]router.post('/upload', requireAuth, rateLimit, upload.single('file'), handleUpload);[/][bg=#232619]     [/]  
   [fg=#7d7262]  24[/]                                                                                              
   [fg=#7d7262]  25[/]   [fg=#a39781]export default router;[/]                                                                     
                                                                                                     
