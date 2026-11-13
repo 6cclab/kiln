@@ -7,8 +7,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrepato/harness/internal/commands"
@@ -435,7 +437,7 @@ func extractAtPrefix(text []rune) (prefix string, tokenStart int, ok bool) {
 // analogue of CombinedAutocompleteProvider.getSuggestions
 // (autocomplete.js), called on every keystroke the way editor.js's
 // updateAutocomplete is.
-func BuildPopup(reg *commands.Registry, cwd string, line string, col int) *Popup {
+func BuildPopup(reg *commands.Registry, cwd string, line string, col int, files *fileIndex) (*Popup, tea.Cmd) {
 	runes := []rune(line)
 	if col > len(runes) {
 		col = len(runes)
@@ -448,11 +450,11 @@ func BuildPopup(reg *commands.Registry, cwd string, line string, col int) *Popup
 
 	// `@` file mention: checked first, exactly like getSuggestions does.
 	if atPrefix, start, ok := extractAtPrefix(before); ok {
-		items := fileSuggestions(cwd, strings.TrimPrefix(atPrefix, "@"))
+		items, cmd := fileSuggestions(files, cwd, strings.TrimPrefix(atPrefix, "@"))
 		if len(items) == 0 {
-			return nil
+			return nil, cmd
 		}
-		return &Popup{Kind: KindFile, Items: items, Start: start, End: col}
+		return &Popup{Kind: KindFile, Items: items, Start: start, End: col}, cmd
 	}
 
 	// `/` slash command / argument completion: only when the line (from
@@ -465,7 +467,7 @@ func BuildPopup(reg *commands.Registry, cwd string, line string, col int) *Popup
 			prefix := textBefore[1:]
 			items := slashCommandSuggestions(reg, prefix)
 			if len(items) == 0 {
-				return nil
+				return nil, nil
 			}
 			// Start is 0, not 1: the replacement Accept builds already
 			// includes the leading "/" (applyCompletion's own beforePrefix
@@ -475,27 +477,27 @@ func BuildPopup(reg *commands.Registry, cwd string, line string, col int) *Popup
 			// too, or accepting doubles it into "//name " the way
 			// registry.go's Execute doc comment describes as a real bug
 			// this port hit once already.
-			return &Popup{Kind: KindSlashCommand, Items: items, Start: 0, End: col}
+			return &Popup{Kind: KindSlashCommand, Items: items, Start: 0, End: col}, nil
 		}
 		name := textBefore[1:spaceIdx]
 		cmd, ok := reg.Get(name)
 		if !ok || cmd.ArgumentCompletions == nil {
-			return nil
+			return nil, nil
 		}
 		argStart := spaceIdx + 1
 		argText := textBefore[argStart:]
 		completions := cmd.ArgumentCompletions(argText)
 		if len(completions) == 0 {
-			return nil
+			return nil, nil
 		}
 		items := make([]AutocompleteItem, len(completions))
 		for i, c := range completions {
 			items[i] = AutocompleteItem{Value: c.Value, Label: c.Label, Description: c.Description}
 		}
-		return &Popup{Kind: KindArgument, Items: items, Start: len([]rune(textBefore[:argStart])), End: col}
+		return &Popup{Kind: KindArgument, Items: items, Start: len([]rune(textBefore[:argStart])), End: col}, nil
 	}
 
-	return nil
+	return nil, nil
 }
 
 // slashCommandRe matches the "skill:" namespace pi-tui strips from the
@@ -644,8 +646,17 @@ func indexOfRune(rs []rune, target rune, from int) int {
 // --- `@` file completion -----------------------------------------------------
 
 const (
-	fileWalkLimit    = 4000 // cap on entries visited, a stand-in for fd's own speed
-	fileResultsLimit = 20   // topEntries.slice(0, 20) in getFuzzyFileSuggestions
+	// fileIndexLimit caps the entries one directory's index keeps, so a walk
+	// of a huge tree (or of "/" via "@/") stays bounded: about 200 bytes per
+	// entry with the lowercase copies, so roughly 40 MB per directory at the
+	// cap, and at most fileIndexDirs directories are cached. It replaces the
+	// old 4,000-entry cutoff that made files deep in a big tree unfindable.
+	fileIndexLimit = 200_000
+	fileIndexDirs  = 4
+	// fileIndexTTL is how long an index is served before a background
+	// rebuild is started (the stale index keeps serving until it lands).
+	fileIndexTTL     = 30 * time.Second
+	fileResultsLimit = 20 // topEntries.slice(0, 20) in getFuzzyFileSuggestions
 )
 
 type fileCandidate struct {
@@ -660,7 +671,7 @@ type fileCandidate struct {
 // AutocompleteItems whose Value already carries pi-tui's buildCompletionValue
 // shape (trailing "/" for directories, "@"-free — BuildPopup/Accept add
 // the "@").
-func fileSuggestions(cwd, query string) []AutocompleteItem {
+func fileSuggestions(files *fileIndex, cwd, query string) ([]AutocompleteItem, tea.Cmd) {
 	baseDir := cwd
 	displayBase := ""
 	scanQuery := query
@@ -676,39 +687,55 @@ func fileSuggestions(cwd, query string) []AutocompleteItem {
 		}
 		info, err := os.Stat(candidate)
 		if err != nil || !info.IsDir() {
-			return nil
+			return nil, nil
 		}
 		baseDir = candidate
 	}
 
-	entries := walkForCandidates(baseDir, fileWalkLimit)
+	entries, cmd := files.lookup(baseDir)
 	type scoredEntry struct {
 		fileCandidate
 		score float64
 	}
-	scored := make([]scoredEntry, 0, len(entries))
-	for _, e := range entries {
-		s := scoreEntry(e.relPath, scanQuery, e.isDir)
+	lowerQuery := strings.ToLower(scanQuery)
+	// Keep only the best fileResultsLimit entries (insertion into a short
+	// sorted slice) rather than sorting every match: with a bare "@" all
+	// 200k indexed entries match, and a full sort ran on every keystroke.
+	// relPath is unique, so the order is total and equals a full sort's.
+	better := func(x, y scoredEntry) bool {
+		if x.score != y.score {
+			return x.score > y.score
+		}
+		dx, dy := depthOf(x.relPath), depthOf(y.relPath)
+		if dx != dy {
+			return dx < dy
+		}
+		if len(x.relPath) != len(y.relPath) {
+			return len(x.relPath) < len(y.relPath)
+		}
+		return x.relPath < y.relPath
+	}
+	scored := make([]scoredEntry, 0, fileResultsLimit+1)
+	for i := range entries {
+		e := &entries[i]
+		s := scoreLowered(e.lowerName, e.lowerPath, lowerQuery, e.isDir)
 		if s <= 0 {
 			continue
 		}
-		scored = append(scored, scoredEntry{e, s})
-	}
-	sort.SliceStable(scored, func(i, j int) bool {
-		if scored[i].score != scored[j].score {
-			return scored[i].score > scored[j].score
+		if len(scored) == fileResultsLimit && s < scored[len(scored)-1].score {
+			continue
 		}
-		di, dj := depthOf(scored[i].relPath), depthOf(scored[j].relPath)
-		if di != dj {
-			return di < dj
+		c := scoredEntry{e.fileCandidate, s}
+		pos := sort.Search(len(scored), func(k int) bool { return better(c, scored[k]) })
+		if pos >= fileResultsLimit {
+			continue
 		}
-		if len(scored[i].relPath) != len(scored[j].relPath) {
-			return len(scored[i].relPath) < len(scored[j].relPath)
+		scored = append(scored, scoredEntry{})
+		copy(scored[pos+1:], scored[pos:])
+		scored[pos] = c
+		if len(scored) > fileResultsLimit {
+			scored = scored[:fileResultsLimit]
 		}
-		return scored[i].relPath < scored[j].relPath
-	})
-	if len(scored) > fileResultsLimit {
-		scored = scored[:fileResultsLimit]
 	}
 
 	out := make([]AutocompleteItem, 0, len(scored))
@@ -722,7 +749,7 @@ func fileSuggestions(cwd, query string) []AutocompleteItem {
 		}
 		out = append(out, AutocompleteItem{Value: value, Label: label, Description: display})
 	}
-	return out
+	return out, cmd
 }
 
 func depthOf(relPath string) int {
@@ -732,19 +759,17 @@ func depthOf(relPath string) int {
 	return strings.Count(relPath, "/")
 }
 
-// scoreEntry is scoreEntry (autocomplete.js): higher is better here (this
+// scoreLowered is scoreEntry (autocomplete.js), over pre-lowercased inputs
+// (the index stores them, so a keystroke allocates nothing per entry): higher is better here (this
 // port keeps the oracle's sign so "score > 0 keeps it" reads the same),
 // sorted descending by fileSuggestions above (the oracle sorts its own
 // higher-is-better score descending too, despite fuzzyMatch's unrelated
 // lower-is-better convention — two different scoring functions in the same
 // file).
-func scoreEntry(relPath, query string, isDir bool) float64 {
-	name := filepath.Base(relPath)
-	lowerName := strings.ToLower(name)
-	lowerQuery := strings.ToLower(query)
+func scoreLowered(lowerName, lowerPath, lowerQuery string, isDir bool) float64 {
 	var score float64
 	switch {
-	case query == "":
+	case lowerQuery == "":
 		score = 1
 	case lowerName == lowerQuery:
 		score = 100
@@ -752,7 +777,7 @@ func scoreEntry(relPath, query string, isDir bool) float64 {
 		score = 80
 	case strings.Contains(lowerName, lowerQuery):
 		score = 50
-	case strings.Contains(strings.ToLower(relPath), lowerQuery):
+	case strings.Contains(lowerPath, lowerQuery):
 		score = 30
 	default:
 		return 0
@@ -801,4 +826,125 @@ func walkForCandidates(baseDir string, limit int) []fileCandidate {
 	}
 	walk(baseDir, "")
 	return out
+}
+
+// --- per-directory file index -------------------------------------------------
+
+type indexedCandidate struct {
+	fileCandidate
+	lowerName, lowerPath string
+}
+
+// msgFileIndexReady carries a finished walk back to Update.
+type msgFileIndexReady struct {
+	base    string
+	gen     uint64
+	entries []indexedCandidate
+}
+
+type fileIndexEntry struct {
+	entries  []indexedCandidate
+	built    time.Time
+	building bool
+	gen      uint64 // generation of the walk in flight (or last started)
+	used     uint64 // LRU tick
+}
+
+// fileIndex caches walked file lists per base directory. It is touched only
+// from the Update goroutine; the walk itself runs in a tea.Cmd and its result
+// returns by message, so typing never waits on the filesystem. Results are
+// tagged with a generation, and a result older than the walk currently
+// wanted is dropped.
+type fileIndex struct {
+	dirs map[string]*fileIndexEntry
+	tick uint64
+	gen  uint64
+	now  func() time.Time
+	walk func(base string) []fileCandidate
+}
+
+func newFileIndex() *fileIndex {
+	return &fileIndex{
+		dirs: map[string]*fileIndexEntry{},
+		now:  time.Now,
+		walk: func(base string) []fileCandidate { return walkForCandidates(base, fileIndexLimit) },
+	}
+}
+
+// lookup returns whatever index base has so far (nil before the first walk
+// lands) and, when none is fresh, a Cmd that builds one. It never walks.
+func (x *fileIndex) lookup(base string) ([]indexedCandidate, tea.Cmd) {
+	if x == nil {
+		return nil, nil
+	}
+	x.tick++
+	e := x.dirs[base]
+	if e == nil {
+		if len(x.dirs) >= fileIndexDirs {
+			x.evict()
+		}
+		e = &fileIndexEntry{}
+		x.dirs[base] = e
+	}
+	e.used = x.tick
+	if e.building || (!e.built.IsZero() && x.now().Sub(e.built) < fileIndexTTL) {
+		return e.entries, nil
+	}
+	e.building = true
+	x.gen++
+	e.gen = x.gen
+	return e.entries, x.build(base, e.gen)
+}
+
+func (x *fileIndex) build(base string, gen uint64) tea.Cmd {
+	walk := x.walk
+	return func() tea.Msg {
+		cands := walk(base)
+		out := make([]indexedCandidate, len(cands))
+		for i, c := range cands {
+			out[i] = indexedCandidate{c, strings.ToLower(filepath.Base(c.relPath)), strings.ToLower(c.relPath)}
+		}
+		return msgFileIndexReady{base: base, gen: gen, entries: out}
+	}
+}
+
+// apply installs a finished walk; it reports false when the result was
+// superseded (evicted directory or a newer generation) and was dropped.
+func (x *fileIndex) apply(msg msgFileIndexReady) bool {
+	e := x.dirs[msg.base]
+	if e == nil || msg.gen != e.gen {
+		return false
+	}
+	e.entries = msg.entries
+	e.built = x.now()
+	e.building = false
+	return true
+}
+
+// invalidate marks every cached directory stale (a tool may have edited
+// files); the next lookup rebuilds in the background and serves the old
+// list meanwhile.
+func (x *fileIndex) invalidate() {
+	if x == nil {
+		return
+	}
+	for _, e := range x.dirs {
+		e.built = time.Time{}
+		if e.building { // drop the walk in flight: it began before the edit
+			e.building = false
+			x.gen++
+			e.gen = x.gen
+		}
+	}
+}
+
+func (x *fileIndex) evict() {
+	var oldest string
+	var min uint64 = ^uint64(0)
+	for k, e := range x.dirs {
+		if e.used < min {
+			oldest, min = k, e.used
+		}
+	}
+	delete(x.dirs, oldest)
 }

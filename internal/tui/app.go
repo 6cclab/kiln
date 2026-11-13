@@ -247,6 +247,9 @@ type Model struct {
 	// two triggers matches the editor's current line/cursor. Rebuilt from
 	// scratch on every keystroke by refreshPopup — see autocomplete.go.
 	popup *Popup
+	// files caches `@` completion candidates per directory, built off the
+	// Update goroutine (see fileIndex). Created lazily by refreshPopup.
+	files *fileIndex
 	// shortcuts is set while the `?` shortcuts panel is shown under the
 	// input box (docs/claude-code-reference.md §6); any key closes it.
 	shortcuts bool
@@ -800,17 +803,25 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingImages = append(m.pendingImages, img)
 			ed, cmd, _ := m.editor.Update(tea.PasteMsg{Content: placeholder})
 			m.editor = ed
-			m = m.refreshPopup()
+			var pc tea.Cmd
+			m, pc = m.refreshPopup()
 			m = m.refreshEditorStyles()
-			return m, cmd
+			return m, tea.Batch(cmd, pc)
 		} else if refused != "" {
 			m.commitNote(imageRefusalNoteText(refused))
 		}
 		ed, cmd, _ := m.editor.Update(msg)
 		m.editor = ed
-		m = m.refreshPopup()
+		m, pc := m.refreshPopup()
 		m = m.refreshEditorStyles()
-		return m, cmd
+		return m, tea.Batch(cmd, pc)
+
+	case msgFileIndexReady:
+		if m.files == nil || !m.files.apply(msg) {
+			return m, nil
+		}
+		m, _ = m.refreshPopup()
+		return m, nil
 
 	case msgSpinnerTick:
 		if !m.busy && m.background == nil {
@@ -1318,6 +1329,7 @@ func (m Model) handleThinking(msg MsgThinking) Model {
 
 func (m Model) finishTurn(msg msgTurnResult) (Model, tea.Cmd) {
 	m = m.flushGroup()
+	m.files.invalidate() // the turn's tools may have created or removed files
 	m.busy = false
 	m.spinner.Stop()
 	m.footer.SetBusy(false)
@@ -2233,14 +2245,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if didClearScr {
 			return m, tea.ClearScreen
 		}
-		m = m.refreshPopup()
+		m, pc := m.refreshPopup()
 		m = m.refreshEditorStyles()
-		return m, hintCmd
+		return m, tea.Batch(hintCmd, pc)
 	}
 
 	ed, cmd, ev := m.editor.Update(msg)
 	m.editor = ed
-	m = m.refreshPopup()
+	m, pc := m.refreshPopup()
+	cmd = tea.Batch(cmd, pc)
 	m = m.refreshEditorStyles()
 	switch ev.Kind {
 	case editor.EventSubmit:
@@ -2354,11 +2367,18 @@ func placeholderForOptionCount(n int) string {
 // line and cursor column, called after every keystroke that could have
 // changed either — editor.js's own updateAutocomplete/tryTriggerAutocomplete
 // run on the same "after every edit" cadence (editor.js:1016-1045).
-func (m Model) refreshPopup() Model {
+//
+// It never walks the filesystem: `@` candidates come from m.files, and the
+// returned Cmd (when non-nil) refreshes that index in the background.
+func (m Model) refreshPopup() (Model, tea.Cmd) {
+	if m.files == nil {
+		m.files = newFileIndex()
+	}
 	line, col := m.editor.CursorLine()
-	m.popup = BuildPopup(m.cfg.Registry, m.cfg.Cwd, line, col)
+	var cmd tea.Cmd
+	m.popup, cmd = BuildPopup(m.cfg.Registry, m.cfg.Cwd, line, col, m.files)
 	m.editor.PopupActive = m.popup != nil
-	return m
+	return m, cmd
 }
 
 // cycleMode advances the permission mode one step around Claude Code's

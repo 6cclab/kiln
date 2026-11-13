@@ -39,7 +39,7 @@ func testRegistry() *commands.Registry {
 
 func TestBuildPopup_SlashCommandMatching(t *testing.T) {
 	reg := testRegistry()
-	p := BuildPopup(reg, "/tmp", "/mod", 4)
+	p := buildPopupSync(reg, "/tmp", "/mod", 4)
 	if p == nil {
 		t.Fatal("expected a popup for /mod")
 	}
@@ -78,7 +78,7 @@ func TestBuildPopup_SlashCommandIsPrefixNotFuzzy(t *testing.T) {
 			Run: func(ctx context.Context, args string) (commands.Result, error) { return commands.Result{}, nil }},
 	}))
 
-	p := BuildPopup(reg, "/tmp", "/co", 3)
+	p := buildPopupSync(reg, "/tmp", "/co", 3)
 	if p == nil {
 		t.Fatal("expected a popup for /co")
 	}
@@ -104,7 +104,7 @@ func TestBuildPopup_SlashCommandPrefixIsCaseInsensitive(t *testing.T) {
 		{Name: "context", Description: "show context usage",
 			Run: func(ctx context.Context, args string) (commands.Result, error) { return commands.Result{}, nil }},
 	}))
-	p := BuildPopup(reg, "/tmp", "/CO", 3)
+	p := buildPopupSync(reg, "/tmp", "/CO", 3)
 	if p == nil || len(p.Items) != 1 || p.Items[0].Value != "context" {
 		t.Fatalf("expected /CO to match \"context\" case-insensitively, got %+v", p)
 	}
@@ -112,7 +112,7 @@ func TestBuildPopup_SlashCommandPrefixIsCaseInsensitive(t *testing.T) {
 
 func TestBuildPopup_SlashCommandEmptyPrefixListsAll(t *testing.T) {
 	reg := testRegistry()
-	p := BuildPopup(reg, "/tmp", "/", 1)
+	p := buildPopupSync(reg, "/tmp", "/", 1)
 	if p == nil {
 		t.Fatal("expected a popup for bare /")
 	}
@@ -123,7 +123,7 @@ func TestBuildPopup_SlashCommandEmptyPrefixListsAll(t *testing.T) {
 
 func TestBuildPopup_NoSlashNoPopup(t *testing.T) {
 	reg := testRegistry()
-	if p := BuildPopup(reg, "/tmp", "hello /mod", 10); p != nil {
+	if p := buildPopupSync(reg, "/tmp", "hello /mod", 10); p != nil {
 		t.Fatalf("expected nil popup for a line not starting with /, got %+v", p)
 	}
 }
@@ -131,7 +131,7 @@ func TestBuildPopup_NoSlashNoPopup(t *testing.T) {
 func TestBuildPopup_ArgumentCompletion(t *testing.T) {
 	reg := testRegistry()
 	line := "/model anth"
-	p := BuildPopup(reg, "/tmp", line, len(line))
+	p := buildPopupSync(reg, "/tmp", line, len(line))
 	if p == nil {
 		t.Fatal("expected a popup for /model anth")
 	}
@@ -149,14 +149,14 @@ func TestBuildPopup_ArgumentCompletion(t *testing.T) {
 
 func TestBuildPopup_UnknownCommandArgsNoPopup(t *testing.T) {
 	reg := testRegistry()
-	if p := BuildPopup(reg, "/tmp", "/nope some args", 15); p != nil {
+	if p := buildPopupSync(reg, "/tmp", "/nope some args", 15); p != nil {
 		t.Fatalf("expected nil popup for an unknown command's arguments, got %+v", p)
 	}
 }
 
 func TestBuildPopup_CommandWithoutArgumentCompletionsNoPopup(t *testing.T) {
 	reg := testRegistry()
-	if p := BuildPopup(reg, "/tmp", "/memory some text", 18); p != nil {
+	if p := buildPopupSync(reg, "/tmp", "/memory some text", 18); p != nil {
 		t.Fatalf("expected nil popup for a command with no ArgumentCompletions, got %+v", p)
 	}
 }
@@ -171,7 +171,7 @@ func TestBuildPopup_AtFileCompletion(t *testing.T) {
 	}
 
 	line := "look at @src/ma"
-	p := BuildPopup(nil, dir, line, len([]rune(line)))
+	p := buildPopupSync(nil, dir, line, len([]rune(line)))
 	if p == nil {
 		t.Fatal("expected a popup for @src/ma")
 	}
@@ -206,7 +206,7 @@ func TestBuildPopup_AtFileCompletionTieBreak(t *testing.T) {
 		}
 	}
 	line := "@src/ma"
-	p := BuildPopup(nil, dir, line, len([]rune(line)))
+	p := buildPopupSync(nil, dir, line, len([]rune(line)))
 	if p == nil || len(p.Items) < 2 {
 		t.Fatalf("expected two tied matches, got %+v", p)
 	}
@@ -221,7 +221,7 @@ func TestBuildPopup_AtEmptyPrefixListsCwd(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := "@"
-	p := BuildPopup(nil, dir, line, 1)
+	p := buildPopupSync(nil, dir, line, 1)
 	if p == nil {
 		t.Fatal("expected a popup for bare @")
 	}
