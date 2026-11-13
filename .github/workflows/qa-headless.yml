@@ -46,6 +46,9 @@ jobs:
           pip install -r scripts/qa/requirements.txt
           python -m playwright install --with-deps chromium
 
+      - name: driver unit tests
+        run: python3 -m unittest discover -s scripts/qa -p '*_test.py'
+
       - name: run headless QA (excludes qa/scenarios/real, which drives a real model)
         run: |
           STEPS=$(find qa/scenarios -mindepth 2 -maxdepth 2 -name '*.steps' -not -path 'qa/scenarios/real/*' | sort)

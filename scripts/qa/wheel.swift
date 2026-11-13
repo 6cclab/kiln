@@ -27,6 +27,8 @@ usleep(50_000)
 // With natural scrolling on (the macOS default, and the setting when the
 // key is unset) the terminal reads a posted positive delta as wheel-down:
 // probed in iTerm2 with SGR mouse reporting, +1 arrived as button 65.
+// Terminal.app does not invert posted events, so drive.py checks which way
+// the screen moves on a terminal's first SCROLL and swaps the word it passes.
 let natural = UserDefaults.standard.object(forKey: "com.apple.swipescrolldirection") as? Bool ?? true
 var delta: Int32 = args[3] == "up" ? 1 : -1
 if natural {
