@@ -756,6 +756,10 @@ Server entry (one struct covers both transports):
 
 `HARNESS_MCP_CONNECT_TIMEOUT` (`internal/mcp/hub.go`), default 30s, bounds each server's connect + list-tools call; an invalid or non-positive value also falls back to 30s.
 
+### Output limits
+
+`internal/mcp/result_cap.go`, as Claude Code documents them (code.claude.com/docs/en/mcp, "MCP output limits"). A successful result with no image over `MAX_MCP_OUTPUT_TOKENS` tokens (default 25,000; kiln's chars/4 estimate), or over 50,000 characters whatever its token count, is saved to a file in the session scratchpad (the system temp directory when there is none) and replaced in the conversation by Claude Code's message: `<persisted-output>`, `Output too large (<size>). Full output saved to: <path>`, and the first 2KB as a preview. The model reads the file in parts; the scratchpad needs no permission prompt. An error result over 11,000 characters keeps its first and last 5,000. A result over 10,000 tokens logs `mcp large output` (Claude Code shows a warning). Not supported: a tool's `anthropic/maxResultSizeChars`. `MAX_MCP_OUTPUT_TOKENS` is read from kiln's own environment, not a settings file's `env`.
+
 ### Postures
 
 `internal/mcp/gating.go`. A posture restricts which servers' tools are indexed/searchable at all. A server that no built-in posture names is in scope for every posture (`InPosture`). The lists keep the known noisy servers out of a coding session; they do not hide a newly configured server until you discover `/posture`.

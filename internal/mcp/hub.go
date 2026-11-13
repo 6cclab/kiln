@@ -168,6 +168,8 @@ type Hub struct {
 	scopes   map[string]string // server name -> ServerConfig.Scope
 	pending  map[string]bool   // servers ConnectAll is still connecting
 
+	resultDir string // where oversized results are saved (SetResultDir)
+
 	// OnServer, if set before ConnectAll, is called after each server's
 	// connect attempt finishes, so a UI can show progress while the
 	// remaining servers connect. Called from ConnectAll's goroutine.
@@ -614,6 +616,7 @@ func ToHarnessTool(hub *Hub, t McpTool) *tool.Tool {
 					blocks = append(blocks, msg.Image(v.MIMEType, base64.StdEncoding.EncodeToString(v.Data)))
 				}
 			}
+			blocks = capResult(blocks, res.IsError, hub.getResultDir(), t.QualifiedName, inv.ToolCallID)
 			return tool.Result{Content: blocks, IsError: res.IsError}, nil
 		},
 	}
