@@ -2,6 +2,7 @@
 const seen: any[] = []
 const EVENTS = [
   'session.end', 'session.compact', 'session.append', 'turn.abort',
+  'tool.call', 'tool.check', 'agent.spawn', 'agent.register', 'agent.offer',
 ]
 
 export const register = (on: any) => {

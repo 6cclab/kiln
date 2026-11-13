@@ -51,20 +51,22 @@ var implemented = map[string]bool{
 	"agent.list":       true,
 	"command.register": true, "tool.register": true,
 	"session.compact": true, "session.append": true, "turn.abort": true,
+	"tool.list": true, "tool.call": true, "tool.check": true,
+	"command.list": true, "command.run": true,
+	"agent.register": true, "agent.spawn": true,
 }
 
 // documented lists the rest of the mod API as Claude Code declares it, plus
 // methods its docs name (session.compact/append, prompt.submit, tool.call,
 // agent.spawn).
 var documented = []string{
-	"agent.register", "agent.spawn", "audio.play", "audio.speak",
-	"command.list", "command.run", "config.list", "config.set",
+	"audio.play", "audio.speak",
+	"config.list", "config.set",
 	"mcp.connect", "process.spawn",
 	"prompt.compose", "prompt.fill", "prompt.media", "prompt.read", "prompt.submit", "prompt.suggest",
 	"session.authorize", "session.identity", "session.messages", "session.send",
 	"session.surface", "session.surfaces",
 	"telemetry.log", "telemetry.mark",
-	"tool.call", "tool.check", "tool.list",
 	"ui.ask", "ui.blit", "ui.copy", "ui.focus", "ui.log", "ui.notice", "ui.notify",
 	"ui.scroll", "ui.selection", "ui.status",
 }

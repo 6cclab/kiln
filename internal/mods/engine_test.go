@@ -511,12 +511,12 @@ func TestUnknownApiCallRejectsNotCrash(t *testing.T) {
 	h.load(t, "unknown")
 	h.e.SessionStart(ctxT(t))
 
-	if got := runCommand(t, h, "gen", ""); got != "$.agent.spawn is not available in kiln (mods v1)" {
-		t.Errorf("$.agent.spawn = %q", got)
+	if got := runCommand(t, h, "gen", ""); got != "$.audio.play is not available in kiln (mods v1)" {
+		t.Errorf("$.audio.play = %q", got)
 	}
 	logs := h.logs.String()
 	for _, want := range []string{
-		"unknown: $.agent.spawn is not available in kiln (mods v1)",
+		"unknown: $.audio.play is not available in kiln (mods v1)",
 		"unknown: kiln does not raise prompt.submit (mods v1); this hook never runs",
 	} {
 		if !strings.Contains(logs, want) {
@@ -530,10 +530,10 @@ func TestUnknownApiCallRejectsNotCrash(t *testing.T) {
 	if got := runCommand(t, h, "gen", ""); got == "" {
 		t.Error("engine stopped answering")
 	}
-	// The warning is throttled: $.agent.spawn is called at session.start and
+	// The warning is throttled: $.audio.play is called at session.start and
 	// again on each command.run, but logs once per plugin+call, not per call.
-	if n := strings.Count(logs, "$.agent.spawn is not available"); n != 1 {
-		t.Errorf("$.agent.spawn warned %d times, want 1 (throttled)", n)
+	if n := strings.Count(logs, "$.audio.play is not available"); n != 1 {
+		t.Errorf("$.audio.play warned %d times, want 1 (throttled)", n)
 	}
 }
 

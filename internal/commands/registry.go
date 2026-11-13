@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // Origin records where a command came from. Shown in the palette so origin
@@ -296,9 +297,30 @@ func StaticSource(origin Origin, cmds []Command) Source {
 // Registry is the slash-command registry: one flat namespace, pluggable
 // sources, later sources winning on a name collision.
 type Registry struct {
+	// mu guards everything below: a mod's $.command.list reads the registry
+	// from its own goroutine while the TUI refreshes it.
+	mu      sync.Mutex
 	sources []Source
 	cache   []Command
 	cached  bool
+	// describe, when set, lets a caller (the mods' command.describe hook)
+	// rewrite how each command presents; described caches its answer until
+	// the next Invalidate.
+	describe  func(Command) Command
+	described []Command
+	// gen counts invalidations, so a describe pass that raced one is dropped.
+	gen int
+}
+
+// SetDescribe installs fn, called once per command each time the list is
+// rebuilt; it may rewrite Description and ArgumentHint. It runs outside the
+// registry's lock, so it may call Raw.
+func (r *Registry) SetDescribe(fn func(Command) Command) {
+	r.mu.Lock()
+	r.describe = fn
+	r.described = nil
+	r.gen++
+	r.mu.Unlock()
 }
 
 // NewRegistry returns an empty registry.
@@ -310,15 +332,23 @@ func NewRegistry() *Registry {
 // command deliberately shadows a built-in of the same name, matching how
 // the settings hierarchy resolves.
 func (r *Registry) Add(source Source) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.sources = append(r.sources, source)
 	r.cache = nil
 	r.cached = false
+	r.described = nil
+	r.gen++
 }
 
 // Invalidate drops the cache so the next List re-reads every source.
 func (r *Registry) Invalidate() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.cache = nil
 	r.cached = false
+	r.described = nil
+	r.gen++
 }
 
 // List returns every command, deduped by qualified name (later source
@@ -326,6 +356,35 @@ func (r *Registry) Invalidate() {
 // Load fails contributes no commands rather than failing the whole list —
 // a malformed file in .claude/commands must not take down the palette.
 func (r *Registry) List() []Command {
+	raw := r.Raw()
+	r.mu.Lock()
+	fn, gen := r.describe, r.gen
+	if fn == nil {
+		r.mu.Unlock()
+		return raw
+	}
+	if r.described != nil {
+		out := r.described
+		r.mu.Unlock()
+		return out
+	}
+	r.mu.Unlock()
+	out := make([]Command, len(raw))
+	for i, c := range raw {
+		out[i] = fn(c)
+	}
+	r.mu.Lock()
+	if r.gen == gen {
+		r.described = out
+	}
+	r.mu.Unlock()
+	return out
+}
+
+// Raw is List as the sources gave it, before any SetDescribe rewrite.
+func (r *Registry) Raw() []Command {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.cached {
 		return r.cache
 	}

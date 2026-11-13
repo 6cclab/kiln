@@ -1565,6 +1565,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				return "", nil
 			},
 		}
+		modsToolDeps{rt: modsRT, harness: started.Harness, lane: started.Lane, gate: gate, dispatcher: dispatcher, cwd: cwd}.fill(&dep.services)
+		modsRT.agentDefs = dispatcher.AgentList
 		for _, err := range modsRT.start(ctx, cwd, started.SessionID, dep) {
 			startupWarn(fmt.Sprintf("mod not loaded: %v", err))
 		}
@@ -1578,6 +1580,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		names := modsRT.toolNames()
 		gate.SetModTools(names)
 		started.Harness.AddTools(modsRT.tools("")...)
+		modsRT.describeTools(ctx, started.Harness)
 		mcpSess.addResident(names...)
 		if err := mcpSess.regate(); err != nil {
 			diag.L().Warn("mods: regate failed", "err", err)
@@ -2046,6 +2049,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			return modsRT.commands(), nil
 		}})
 		registryRef = registry
+		modsRT.registry.Store(registry)
+		registry.SetDescribe(modsRT.describeCommand)
 	}
 
 	// postToolCtxQueue carries PostToolUse additionalContext into the
