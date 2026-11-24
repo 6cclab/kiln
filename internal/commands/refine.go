@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/andrepato/harness/internal/claude/paths"
+	"github.com/andrepato/harness/internal/review"
 )
 
 // refinePrompt is the prompt /refine sends: review this conversation and
@@ -50,9 +51,9 @@ func refinePrompt(focus, skillsDir string) string {
 		"Read a SKILL.md in full right before editing it, and fix a wrong sentence in place instead of adding a",
 		"correction below it.",
 		"",
-		skillFormatRules,
+		review.SkillFormatRules,
 		"",
-		skillWritingRules,
+		review.SkillWritingRules,
 		"",
 		"Saying nothing needs saving is a fine outcome when the conversation taught nothing durable. Do not invent",
 		"a lesson to have something to save.",

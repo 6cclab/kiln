@@ -61,6 +61,7 @@ import (
 	"github.com/andrepato/harness/internal/provider/builtin"
 	fauxprovider "github.com/andrepato/harness/internal/provider/faux"
 	"github.com/andrepato/harness/internal/provider/ollama"
+	"github.com/andrepato/harness/internal/review"
 	"github.com/andrepato/harness/internal/router"
 	"github.com/andrepato/harness/internal/search"
 	"github.com/andrepato/harness/internal/session/jsonl"
@@ -1639,6 +1640,13 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		}
 	}
 	wireAutoMode(gate, reg, started, memory.Text, autoModeConfig, modelRouter.direct)
+	// The automatic learning review (learning_review.go): interactive
+	// sessions only, and only when the user's settings enable it. It
+	// proposes; /pending applies.
+	reviewNotice := &rebindable[func(string)]{}
+	if !args.Print {
+		defer attachLearningReview(started, reg, settings, projectMemory, memoryScope(cwd), modelRouter.direct, reviewNotice.get)()
+	}
 	// The model router's own classifier (kiln/auto's first-request call on
 	// modelRoles.fast) is built in setupModelRouter, before the harness
 	// exists; its usage is wired in now, as auto mode's classifier's is
@@ -1954,6 +1962,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Hooks:              hookConfig,
 		Agents:             agentsList,
 		Skills:             allSkills,
+		Memory:             projectMemory,
 		SkillPrompt:        skillSlashRewriter(skillModsFn),
 		Plugins:            activePlugins,
 		PluginCommands:     pluginCommands,
@@ -2357,11 +2366,17 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 				applyMCP()
 				return hub.Statuses()[before:]
 			},
-			LogPath:          logPath,
-			Debug:            args.Debug,
-			StatusLine:       settings.StatusLine,
-			SetPlanApprover:  func(fn tools.PlanApprover) { planApprover.set(fn) },
-			SetHookNotice:    func(fn func(string)) { hookNotice.set(fn) },
+			LogPath:         logPath,
+			Debug:           args.Debug,
+			StatusLine:      settings.StatusLine,
+			SetPlanApprover: func(fn tools.PlanApprover) { planApprover.set(fn) },
+			SetHookNotice:   func(fn func(string)) { hookNotice.set(fn) },
+			SetReviewNotice: func(fn func(string)) {
+				reviewNotice.set(fn)
+				if n := pendingNotice(review.DefaultQueue()); n != "" {
+					crash.Go(func() { fn(n) })
+				}
+			},
 			SetHookActivity:  func(fn func(string)) { hookActivity.set(fn) },
 			SetLoginUI:       loginUI.set,
 			ModelLabel:       providerID + "/" + modelID,

@@ -67,6 +67,7 @@ type RuleSource struct {
 // Settings is the merged result of loading settings.json across scopes.
 type Settings struct {
 	LearningAutomation LearningAutomation
+	LearningReview     LearningReview
 	RuntimeEfficiency  RuntimeEfficiency
 	// EfficiencySources records the last accepted explicit source per efficiency field.
 	EfficiencySources map[string]string
@@ -200,6 +201,7 @@ type rawPermissions struct {
 
 type rawSettings struct {
 	LearningAutomation      LearningAutomation `json:"learningAutomation"`
+	LearningReview          LearningReview     `json:"learningReview"`
 	RuntimeEfficiency       RuntimeEfficiency  `json:"runtimeEfficiency"`
 	TaskVerificationStatus  *bool              `json:"taskVerificationStatus"`
 	TaskStateEnabled        *bool              `json:"taskStateEnabled"`
@@ -523,6 +525,17 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 			if raw.LearningEnabled != nil && *raw.LearningEnabled {
 				raw.LearningEnabled = nil
 			}
+			// Nor turn on the automatic review, or make it run more often
+			// than the user's own settings (each review is a model call).
+			if raw.LearningReview.Enabled != nil && *raw.LearningReview.Enabled {
+				raw.LearningReview.Enabled = nil
+			}
+			if n := raw.LearningReview.EveryPrompts; n != nil && *n < PositiveOr(merged.LearningReview.EveryPrompts, DefaultReviewEveryPrompts) {
+				raw.LearningReview.EveryPrompts = nil
+			}
+			if n := raw.LearningReview.EveryToolCalls; n != nil && *n < PositiveOr(merged.LearningReview.EveryToolCalls, DefaultReviewEveryToolCalls) {
+				raw.LearningReview.EveryToolCalls = nil
+			}
 			if raw.MemoryAutoRetrieve != nil && *raw.MemoryAutoRetrieve {
 				raw.MemoryAutoRetrieve = nil
 			}
@@ -543,6 +556,7 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 			merged.recordSource("webSearch.searxngUrl", f.Path)
 		}
 		merged.LearningAutomation.merge(raw.LearningAutomation)
+		merged.LearningReview.merge(raw.LearningReview)
 		merged.RuntimeEfficiency.merge(raw.RuntimeEfficiency)
 		merged.SkillDiscovery.merge(raw.SkillDiscovery, f.Path)
 		merged.Orchestration.merge(raw.Orchestration)

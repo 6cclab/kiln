@@ -192,6 +192,7 @@ below).
 | `/init` | — | ask the model to write/refresh this project's `CLAUDE.md` |
 | `/learn` | `[sources and focus]` | ask the model to save a reusable skill under `~/.kiln/skills` from files, a URL, pasted notes, or (with no argument) what this conversation just did; every write asks for permission, since `~/.kiln` is a protected path |
 | `/refine` | `[focus]` | ask the model to review this conversation and save what it taught: skill updates under `~/.kiln/skills` and memory notes through `memory_write`, only what the conversation supports. Skill writes ask in every mode but `bypassPermissions`; memory writes ask in manual and accept-edits modes |
+| `/pending` | `[approve\|reject <id…\|all>]` | list the automatic learning review's proposed skill and memory changes with a preview, or approve (write) or reject them; see `learningReview` in configuration.md |
 | `/config` | — | list the settings files in effect and their scope |
 
 **Model & context**

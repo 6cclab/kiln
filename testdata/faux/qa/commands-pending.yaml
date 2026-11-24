@@ -1,0 +1,10 @@
+model: faux-1
+steps:
+  # The person's turn.
+  - text: "Done: tagged v1.2.0 with git tag and pushed it."
+    usage: {input: 300, output: 20}
+    end_turn: true
+  # The learning review's request (internal/review): one JSON object.
+  - text: '{"proposals": [{"kind": "skill", "skill": "release-flow", "file": "SKILL.md", "content": "---\nname: release-flow\ndescription: Tag and publish a kiln release.\n---\n# Release flow\n\n## Procedure\n1. Run `make check`.\n2. Tag with `git tag vX.Y.Z` and push the tag.\n", "why": "the person walked through a release"}]}'
+    usage: {input: 900, output: 80}
+    end_turn: true
