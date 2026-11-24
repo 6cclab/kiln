@@ -34,3 +34,16 @@ func TestAllSettingsFiles(t *testing.T) {
 		t.Errorf("KilnLocalSettingsPath = %q", got)
 	}
 }
+
+// TestKilnSkillsDir: kiln's own skills live under ~/.kiln/skills, never
+// under ~/.claude.
+func TestKilnSkillsDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if got := KilnUserDir(); got != filepath.Join(home, ".kiln") {
+		t.Errorf("KilnUserDir() = %q", got)
+	}
+	if got := KilnSkillsDir(); got != filepath.Join(home, ".kiln", "skills") {
+		t.Errorf("KilnSkillsDir() = %q", got)
+	}
+}
