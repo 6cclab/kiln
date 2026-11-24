@@ -632,7 +632,7 @@ func (c *OpenAICodexResponsesClient) run(ctx context.Context, model provider.Mod
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		buf, _ := io.ReadAll(resp.Body)
-		return errorOut(partial, events, isRetriableStatus(resp.StatusCode), &StatusError{Status: resp.StatusCode, Body: string(buf), Retriable: isRetriableStatus(resp.StatusCode)})
+		return errorOut(partial, events, isRetriableStatus(resp.StatusCode), NewStatusError(resp, buf))
 	}
 
 	events <- msg.StreamEvent{Type: msg.EventStart, Partial: partial}

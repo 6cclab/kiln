@@ -1,0 +1,23 @@
+model: faux-1
+steps:
+  # First prompt: cut at the output limit, then finished by the
+  # continuation kiln sends (internal/harness/output_limit.go).
+  - text: "Part one of the answer."
+    stop_reason: max_tokens
+    end_turn: true
+  - text: "Part two, finished."
+    end_turn: true
+  # Second prompt: every reply is cut, so kiln gives up after three
+  # continuations and says why.
+  - text: "Chunk A."
+    stop_reason: max_tokens
+    end_turn: true
+  - text: "Chunk B."
+    stop_reason: max_tokens
+    end_turn: true
+  - text: "Chunk C."
+    stop_reason: max_tokens
+    end_turn: true
+  - text: "Chunk D."
+    stop_reason: max_tokens
+    end_turn: true

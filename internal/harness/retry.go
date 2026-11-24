@@ -70,6 +70,34 @@ func (p RetryPolicy) delay(attempt int) time.Duration {
 	return time.Duration(jittered) * time.Millisecond
 }
 
+// retryAfter is implemented by provider errors that carry the server's
+// requested wait (api.StatusError, from a Retry-After header).
+type retryAfter interface {
+	RetryAfterDelay() time.Duration
+}
+
+// delayFor is the wait before retrying after err: the backoff for attempt,
+// raised to the server's Retry-After when it asked for longer, still capped
+// at MaxAgentDelayMs. Without this a 429 that says "wait 30s" is retried
+// within a few seconds, every attempt fails and the turn ends.
+// HARNESS_RETRY_DELAY_MS still overrides everything (QA countdowns).
+func (p RetryPolicy) delayFor(attempt int, err error) time.Duration {
+	d := p.delay(attempt)
+	if os.Getenv("HARNESS_RETRY_DELAY_MS") != "" {
+		return d
+	}
+	var ra retryAfter
+	if errors.As(err, &ra) {
+		if want := ra.RetryAfterDelay(); want > d {
+			d = want
+		}
+	}
+	if max := time.Duration(p.normalized().MaxAgentDelayMs) * time.Millisecond; d > max {
+		d = max
+	}
+	return d
+}
+
 // RetriableError is implemented by provider errors that carry an HTTP
 // status, so isRetriable can recognize 429/5xx without string sniffing.
 type RetriableError interface {

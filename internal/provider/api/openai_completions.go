@@ -583,13 +583,44 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		buf, _ := io.ReadAll(resp.Body)
-		return errorOut(partial, events, isRetriableStatus(resp.StatusCode), &StatusError{Status: resp.StatusCode, Body: string(buf), Retriable: isRetriableStatus(resp.StatusCode)})
+		return errorOut(partial, events, isRetriableStatus(resp.StatusCode), NewStatusError(resp, buf))
 	}
 
 	events <- msg.StreamEvent{Type: msg.EventStart, Partial: partial}
 
 	var textIndex = -1
 	var thinkingIndex = -1
+	// inline splits a leading <think>…</think> block out of the content
+	// field (think_tags.go) for servers that leave it there.
+	var inline thinkSplitter
+	appendText := func(delta string) {
+		if delta == "" {
+			return
+		}
+		if textIndex == -1 {
+			partial.Content = append(partial.Content, msg.Text(""))
+			textIndex = len(partial.Content) - 1
+			events <- msg.StreamEvent{Type: msg.EventTextStart, ContentIndex: textIndex, Partial: partial}
+		}
+		tc := partial.Content[textIndex].(msg.TextContent)
+		tc.Text += delta
+		partial.Content[textIndex] = tc
+		events <- msg.StreamEvent{Type: msg.EventTextDelta, ContentIndex: textIndex, Delta: delta, Partial: partial}
+	}
+	appendThinking := func(delta string) {
+		if delta == "" {
+			return
+		}
+		if thinkingIndex == -1 {
+			partial.Content = append(partial.Content, msg.Thinking(""))
+			thinkingIndex = len(partial.Content) - 1
+			events <- msg.StreamEvent{Type: msg.EventThinkingStart, ContentIndex: thinkingIndex, Partial: partial}
+		}
+		tc := partial.Content[thinkingIndex].(msg.ThinkingContent)
+		tc.Thinking += delta
+		partial.Content[thinkingIndex] = tc
+		events <- msg.StreamEvent{Type: msg.EventThinkingDelta, ContentIndex: thinkingIndex, Delta: delta, Partial: partial}
+	}
 	toolIndexOf := map[int]int{}    // openai tool-call index -> partial.Content position
 	toolArgsBuf := map[int]string{} // openai tool-call index -> accumulated raw JSON
 	sawFinish := false
@@ -620,15 +651,9 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 		delta := choice.Delta
 
 		if delta.Content != "" {
-			if textIndex == -1 {
-				partial.Content = append(partial.Content, msg.Text(""))
-				textIndex = len(partial.Content) - 1
-				events <- msg.StreamEvent{Type: msg.EventTextStart, ContentIndex: textIndex, Partial: partial}
-			}
-			tc := partial.Content[textIndex].(msg.TextContent)
-			tc.Text += delta.Content
-			partial.Content[textIndex] = tc
-			events <- msg.StreamEvent{Type: msg.EventTextDelta, ContentIndex: textIndex, Delta: delta.Content, Partial: partial}
+			thinking, text := inline.feed(delta.Content)
+			appendThinking(thinking)
+			appendText(text)
 		}
 
 		// Some endpoints return reasoning in reasoning_content (llama.cpp), or
@@ -643,17 +668,7 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 		if reasoning == "" {
 			reasoning = delta.ReasoningText
 		}
-		if reasoning != "" {
-			if thinkingIndex == -1 {
-				partial.Content = append(partial.Content, msg.Thinking(""))
-				thinkingIndex = len(partial.Content) - 1
-				events <- msg.StreamEvent{Type: msg.EventThinkingStart, ContentIndex: thinkingIndex, Partial: partial}
-			}
-			tc := partial.Content[thinkingIndex].(msg.ThinkingContent)
-			tc.Thinking += reasoning
-			partial.Content[thinkingIndex] = tc
-			events <- msg.StreamEvent{Type: msg.EventThinkingDelta, ContentIndex: thinkingIndex, Delta: reasoning, Partial: partial}
-		}
+		appendThinking(reasoning)
 
 		for _, tc := range delta.ToolCalls {
 			pos, ok := toolIndexOf[tc.Index]
@@ -701,8 +716,27 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 		return errorOut(partial, events, false, provider.StreamInterrupted{Cause: streamErr})
 	}
 
-	for _, pos := range toolIndexOf {
+	thinking, text := inline.flush()
+	appendThinking(thinking)
+	appendText(text)
+
+	for index, pos := range toolIndexOf {
 		call := partial.Content[pos].(msg.ToolCall)
+		// Each delta above only updates Arguments when the text so far
+		// parses, so a stream cut mid-object (a small max_tokens, a local
+		// server's num_predict) would otherwise leave Arguments nil and run
+		// the tool with no input. Flag it the way the Anthropic stream does
+		// (anthropic_messages.go), and the harness refuses the call.
+		call.Arguments, call.InvalidArgs = map[string]any{}, ""
+		if raw := toolArgsBuf[index]; raw != "" {
+			var args map[string]any
+			if err := json.Unmarshal([]byte(raw), &args); err != nil || args == nil {
+				call.InvalidArgs = raw
+			} else {
+				call.Arguments = args
+			}
+		}
+		partial.Content[pos] = call
 		events <- msg.StreamEvent{Type: msg.EventToolCallEnd, ContentIndex: pos, ToolCall: &call, Partial: partial}
 	}
 	if textIndex != -1 {
