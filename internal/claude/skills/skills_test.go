@@ -83,6 +83,45 @@ func TestLoadSkillsProjectShadowsPersonal(t *testing.T) {
 	}
 }
 
+// TestLoadSkillsReadsKilnSkillsBelowClaude: skills /learn saved under
+// ~/.kiln/skills load as user scope, and a ~/.claude or project skill of the
+// same name shadows the learned one, so a hand-written skill always wins.
+func TestLoadSkillsReadsKilnSkillsBelowClaude(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	write := func(dir, name, desc string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: " + desc + "\n---\nBody."
+		if err := os.WriteFile(filepath.Join(dir, name, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kiln := filepath.Join(home, ".kiln", "skills")
+	write(kiln, "learned", "from kiln")
+	write(kiln, "both-user", "from kiln")
+	write(kiln, "both-project", "from kiln")
+	write(filepath.Join(home, ".claude", "skills"), "both-user", "from claude user")
+	write(filepath.Join(cwd, ".claude", "skills"), "both-project", "from claude project")
+
+	byName := map[string]Skill{}
+	for _, s := range LoadSkills(cwd) {
+		byName[s.Name] = s
+	}
+	if s := byName["learned"]; s.Description != "from kiln" || s.Scope != paths.ScopeUser || s.FilePath != filepath.Join(kiln, "learned", "SKILL.md") {
+		t.Errorf("learned = %+v, want the ~/.kiln/skills skill at user scope", s)
+	}
+	if got := byName["both-user"].Description; got != "from claude user" {
+		t.Errorf("both-user description = %q, want ~/.claude/skills to shadow ~/.kiln/skills", got)
+	}
+	if got := byName["both-project"].Description; got != "from claude project" {
+		t.Errorf("both-project description = %q, want .claude/skills to shadow ~/.kiln/skills", got)
+	}
+}
+
 // TestLoadFromSkipsNonSkillEntries: a stray file in skills/ and a skill
 // directory without a SKILL.md are skipped, not loaded or fatal. Hermetic
 // (a temp dir, not ~/.claude), so coverage no longer depends on what the

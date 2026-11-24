@@ -1,0 +1,21 @@
+model: faux-1
+steps:
+  # /learn's reply: write the skill under ~/.kiln/skills (a protected
+  # path, so the write asks), then report it.
+  - tool_call:
+      name: write
+      args:
+        path: ~/.kiln/skills/release-flow/SKILL.md
+        content: |
+          ---
+          name: release-flow
+          description: Tag and publish a kiln release.
+          ---
+          # Release flow
+
+          ## Procedure
+          1. Run `make check`.
+          2. Tag the release with `git tag vX.Y.Z` and push the tag.
+  - text: "Saved the release-flow skill."
+    usage: {input: 400, output: 30}
+    end_turn: true

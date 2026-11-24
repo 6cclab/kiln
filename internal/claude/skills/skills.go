@@ -127,10 +127,13 @@ func loadFrom(dir string, scope paths.Scope) []Skill {
 
 // LoadSkills loads every skill definition across scopes. A later scope
 // wins by name: a project skill shadows a personal one of the same name.
+// Skills /learn saved under ~/.kiln/skills load first, as user scope, so
+// any .claude skill of the same name shadows a learned one.
 func LoadSkills(cwd string) []Skill {
 	byName := map[string]Skill{}
 	var order []string
-	for _, root := range paths.ClaudeRoots(cwd) {
+	roots := append([]paths.ClaudeRoot{{Scope: paths.ScopeUser, Dir: paths.KilnUserDir()}}, paths.ClaudeRoots(cwd)...)
+	for _, root := range roots {
 		for _, skill := range loadFrom(filepath.Join(root.Dir, "skills"), root.Scope) {
 			if _, exists := byName[skill.Name]; !exists {
 				order = append(order, skill.Name)

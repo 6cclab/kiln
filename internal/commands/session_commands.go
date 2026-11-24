@@ -491,6 +491,7 @@ func SessionCommands(deps SessionCommandDeps) Source {
 				}, "\n")}, nil
 			},
 		},
+		learnCommand(),
 		{
 			Name:        "config",
 			Description: "Show settings and where they came from",

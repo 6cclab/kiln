@@ -236,10 +236,11 @@ steps:
 	}
 }
 
-// TestRun_PrintHelp_31Builtins checks /help lists all 31 built-in slash
-// commands the registry wiring in commands.go registers — 29, /plugin
-// (internal/commands/plugin_commands.go) and /plan (manage_commands.go).
-func TestRun_PrintHelp_31Builtins(t *testing.T) {
+// TestRun_PrintHelp_32Builtins checks /help lists all 32 built-in slash
+// commands the registry wiring in commands.go registers — 30 (including
+// /learn), /plugin (internal/commands/plugin_commands.go) and /plan
+// (manage_commands.go).
+func TestRun_PrintHelp_32Builtins(t *testing.T) {
 	startFaux(t, unreadScript)
 	scratchProject(t)
 
@@ -258,8 +259,8 @@ func TestRun_PrintHelp_31Builtins(t *testing.T) {
 			count++
 		}
 	}
-	if count != 31 {
-		t.Errorf("/help listed %d commands, want 31:\n%s", count, stdout.String())
+	if count != 32 {
+		t.Errorf("/help listed %d commands, want 32:\n%s", count, stdout.String())
 	}
 }
 

@@ -604,7 +604,7 @@ Skills, commands, agents and memory all read the same two roots, lowest preceden
 
 ### Skills
 
-`~/.claude/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`. Frontmatter: `name` and `description` (both required, or the skill is dropped), `user-invocable` (bool, **defaults to `true`** if absent; this is what makes a skill a slash command). Only `name`/`description`/`location` stay resident in the system prompt; the body loads on invocation.
+`~/.claude/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`, plus kiln's own `~/.kiln/skills/*/SKILL.md`, where `/learn` saves the skills it writes. kiln's folder loads first, as user scope, so a `~/.claude` or project skill of the same name shadows a learned one; kiln never writes a `.claude` skill. Frontmatter: `name` and `description` (both required, or the skill is dropped), `user-invocable` (bool, **defaults to `true`** if absent; this is what makes a skill a slash command). Only `name`/`description`/`location` stay resident in the system prompt; the body loads on invocation.
 
 ### Commands
 
