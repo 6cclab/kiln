@@ -202,6 +202,9 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	// stopHookActive: an OnBeforeStop handler has already continued this
 	// operation (StopInfo.StopHookActive).
 	stopHookActive := false
+	// outputLimitRecoveries counts replies continued after stopping at
+	// the output token limit (output_limit.go).
+	outputLimitRecoveries := 0
 driveLoop:
 	for {
 		if err := ctx.Err(); err != nil {
@@ -406,6 +409,20 @@ driveLoop:
 				// looping back re-requests exactly as Anthropic's docs
 				// prescribe, without treating this as the end of the turn.
 				continue
+			}
+			if final.StopReason == msg.StopLength {
+				// Cut off at the output token limit with no tool call: ask
+				// the model to go on, as Claude Code does, a bounded
+				// number of times; then say why the reply stopped.
+				if outputLimitRecoveries < maxOutputLimitRecoveries {
+					outputLimitRecoveries++
+					var contErr error
+					if tip, contErr = l.commitStopContinuation(tip, StopVerdict{Message: outputLimitContinuation(final), Source: outputLimitSource}); contErr != nil {
+						return l.finishFailed(operationID, tip, contErr)
+					}
+					continue
+				}
+				l.h.events.Emit(Event{Type: EventFault, Lane: l.name, OperationID: operationID, Err: outputLimitExhausted(final)})
 			}
 			l.h.events.Emit(Event{Type: EventTurnEnd, Lane: l.name, OperationID: operationID})
 			// The model finished before the next loop iteration's own

@@ -1,0 +1,18 @@
+# A reply cut at the output token limit is continued without showing the
+# continuation message (internal/harness/output_limit.go, as Claude Code
+# does); a reply that keeps getting cut ends with an error saying why.
+@faux testdata/faux/qa/errors-output-limit.yaml
+
+WAITFOR /describe a task/ 20
+SEND write the long answer
+WAITFOR /Part two, finished\./ 20
+SHOT continued
+EXPECT /Part one of the answer\./
+EXPECT_NOT /Output token limit hit/
+SEND keep going
+WAITFOR /stopped at the output token limit/ 30
+SHOT gave-up
+EXPECT /Chunk D\./
+EXPECT /4 times in a row/
+EXPECT_NOT /Output token limit hit/
+EXPECT_NOT /panic|goroutine/

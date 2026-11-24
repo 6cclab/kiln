@@ -86,7 +86,12 @@ Starting from a user prompt in the TUI or `-p` mode:
    (`finishCompleted`), unless something is queued (`drainInbox`) or a
    `Hooks.OnBeforeStop` handler (the Stop hook) answers Continue: its
    message is committed as a user entry (`msg.UserMessage.KilnHook` names
-   the hook) and the loop asks the model again, in the same operation.
+   the hook) and the loop asks the model again, in the same operation. A reply
+   that stopped at the output token limit (`msg.StopLength`) with no tool
+   call is continued the same way, as Claude Code does: its resume message
+   is committed with `KilnHook: "OutputLimit"`, up to three times per
+   operation, after which an `EventFault` says why the reply stopped
+   (`internal/harness/output_limit.go`).
 8. **Tool call → `before_tool` hook → permission gate → execution → `after_tool`.**
    `Lane.beginTool` first runs `Hooks.OnBeforeTool` (the CLI wires this to
    `hooks.GuardToolCall`, running `.claude/settings.json` `PreToolUse` hooks
