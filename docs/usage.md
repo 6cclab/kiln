@@ -190,6 +190,7 @@ below).
 | `/memory` | `[user\|project\|auto]` | no args: list the available CLAUDE.md files and the auto-memory folder; a name: open that CLAUDE.md in `$EDITOR`/`$VISUAL` (or print its path with none set), or name the auto-memory folder |
 | `/add-dir` | `<path>` | let tools touch another directory without prompting; no args lists current roots |
 | `/init` | — | ask the model to write/refresh this project's `CLAUDE.md` |
+| `/learn` | `[sources and focus]` | ask the model to save a reusable skill under `~/.kiln/skills` from files, a URL, pasted notes, or (with no argument) what this conversation just did; every write asks for permission, since `~/.kiln` is a protected path |
 | `/config` | — | list the settings files in effect and their scope |
 
 **Model & context**
@@ -254,7 +255,7 @@ the palette entry; `$ARGUMENTS`/`$1`/`$2`... in the body are substituted from
 what you typed, and running the command sends the rendered body to the model
 as a prompt. Source: `internal/claude/commands`.
 
-**Skills.** A skill under `.claude/skills` or `~/.claude/skills` appears as a
+**Skills.** A skill under `.claude/skills`, `~/.claude/skills` or `~/.kiln/skills` (where `/learn` saves) appears as a
 slash command named after it as long as its frontmatter doesn't set
 `user-invocable: false` (the default is invocable). It carries no namespace.
 Running it sends the skill's body, plus anything you typed after it, to the

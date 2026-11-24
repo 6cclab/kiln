@@ -100,6 +100,18 @@ func KilnLocalSettingsPath(cwd string) string {
 	return filepath.Join(cwd, KilnDir, "settings.local.json")
 }
 
+// KilnUserDir is ~/.kiln.
+func KilnUserDir() string {
+	return filepath.Join(homeDir(), KilnDir)
+}
+
+// KilnSkillsDir is ~/.kiln/skills, where /learn saves the skills it writes.
+// kiln loads it as user-scope skills, below ~/.claude/skills, so a skill
+// the person wrote by hand wins over a learned one of the same name.
+func KilnSkillsDir() string {
+	return filepath.Join(KilnUserDir(), "skills")
+}
+
 // SettingsSource is one settings file kiln reads; Kiln marks kiln's own.
 type SettingsSource struct {
 	SettingsFile

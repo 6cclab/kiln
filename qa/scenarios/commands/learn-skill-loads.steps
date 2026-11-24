@@ -1,0 +1,12 @@
+# A skill /learn saved under ~/.kiln/skills loads at startup as a user
+# skill (internal/claude/skills LoadSkills) and appears in the slash
+# palette with its description.
+@faux testdata/faux/qa/commands-baseline.yaml
+@setup mkdir -p {HOME}/.kiln/skills/release-flow && printf -- '---\nname: release-flow\ndescription: Tag and publish a kiln release.\n---\n# Release flow\n' > {HOME}/.kiln/skills/release-flow/SKILL.md
+
+WAITFOR /describe a task/ 20
+TYPE /release
+WAITFOR /release-flow/ 10
+SHOT palette
+EXPECT /\/release-flow.*Tag and publish a kiln release/
+EXPECT_NOT /panic|goroutine/
