@@ -701,8 +701,23 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 		return errorOut(partial, events, false, provider.StreamInterrupted{Cause: streamErr})
 	}
 
-	for _, pos := range toolIndexOf {
+	for index, pos := range toolIndexOf {
 		call := partial.Content[pos].(msg.ToolCall)
+		// Each delta above only updates Arguments when the text so far
+		// parses, so a stream cut mid-object (a small max_tokens, a local
+		// server's num_predict) would otherwise leave Arguments nil and run
+		// the tool with no input. Flag it the way the Anthropic stream does
+		// (anthropic_messages.go), and the harness refuses the call.
+		call.Arguments, call.InvalidArgs = map[string]any{}, ""
+		if raw := toolArgsBuf[index]; raw != "" {
+			var args map[string]any
+			if err := json.Unmarshal([]byte(raw), &args); err != nil || args == nil {
+				call.InvalidArgs = raw
+			} else {
+				call.Arguments = args
+			}
+		}
+		partial.Content[pos] = call
 		events <- msg.StreamEvent{Type: msg.EventToolCallEnd, ContentIndex: pos, ToolCall: &call, Partial: partial}
 	}
 	if textIndex != -1 {
