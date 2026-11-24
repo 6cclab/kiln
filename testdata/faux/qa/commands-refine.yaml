@@ -1,0 +1,15 @@
+model: faux-1
+steps:
+  # /refine's reply: one memory note, through memory_write (which asks in
+  # manual mode), then the summary.
+  - tool_call:
+      name: memory_write
+      args:
+        action: remember
+        key: test-command
+        kind: procedure
+        text: Run make check before every commit.
+        evidence: The person said to run make check before committing.
+  - text: "Saved memory test-command: Run make check before every commit."
+    usage: {input: 400, output: 30}
+    end_turn: true

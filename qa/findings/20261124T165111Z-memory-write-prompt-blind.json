@@ -1,0 +1,29 @@
+{
+ "id": "20261124T165111Z-memory-write-prompt-blind",
+ "found_at": "2026-11-24T16:51:11Z",
+ "scenario": "commands/refine",
+ "step": "16",
+ "terminals": [
+  "xterm-dark"
+ ],
+ "category": "usability",
+ "severity": "medium",
+ "title": "memory_write approval prompt does not show what will be saved",
+ "observed": "The prompt reads only 'Allow kiln to use memory write?' with Yes/No options; the key, text and evidence of the note are not shown.",
+ "expected": "The prompt shows the note being saved (key, kind, text, evidence) or forgotten, as edit and write prompts show their diff.",
+ "design_ref": "Terminal.dc.html permission block (cmd + why)",
+ "evidence": [
+  "qa/runs/refine-20261124T164944Z/xterm-dark/commands-refine-120x40/02-memory-prompt.png"
+ ],
+ "status": "fixed",
+ "fix": {
+  "files": [
+   "internal/tui/changepreview.go"
+  ],
+  "regression_test": "TestRenderChangePreviewMemoryWrite",
+  "after_evidence": [
+   "qa/runs/refine-20261124T165116Z/xterm-dark/commands-refine-120x40/02-memory-prompt.png"
+  ],
+  "updated_at": "2026-11-24T16:51:32Z"
+ }
+}

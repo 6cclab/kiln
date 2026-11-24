@@ -1,0 +1,20 @@
+# /refine (internal/commands/refine.go) sends a review prompt; what the
+# model proposes to save goes through the permission gate, so a memory note
+# waits for approval in manual mode before it is stored.
+@faux testdata/faux/qa/commands-refine.yaml
+
+WAITFOR /describe a task/ 20
+TYPE /refi
+WAITFOR /\/refine/ 10
+SHOT palette
+EXPECT /Save what this conversation taught as skill updates and memory notes/
+TYPE ne
+KEY enter
+WAITFOR /approval needed/ 20
+SHOT memory-prompt
+EXPECT /[Mm]emory/
+EXPECT /Run make check before every commit/
+KEY 1
+WAITFOR /Saved memory test-command/ 20
+SHOT saved
+EXPECT_NOT /panic|goroutine/

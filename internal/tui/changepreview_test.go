@@ -88,3 +88,28 @@ func TestRenderChangePreviewOtherToolsHaveNoPreview(t *testing.T) {
 		t.Errorf("bash should have no preview, got %v", out)
 	}
 }
+
+// TestRenderChangePreviewMemoryWrite: a memory_write approval shows what
+// will be stored (key, kind, text, evidence) or forgotten, not just the
+// tool's name, so approving a memory note is never blind.
+func TestRenderChangePreviewMemoryWrite(t *testing.T) {
+	out := RenderChangePreview("memory_write", map[string]any{
+		"action": "remember", "key": "test-command", "kind": "procedure",
+		"text": "Run make check before every commit.", "evidence": "The person said so.",
+	})
+	// Wrapping follows the terminal width another test may have set, so
+	// match on the words, not the line breaks.
+	joined := strings.Join(strings.Fields(stripANSI(strings.Join(out, "\n"))), " ")
+	for _, want := range []string{"remember test-command", "procedure", "Run make check before every commit.", "evidence: The person said so."} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("preview lacks %q:\n%s", want, joined)
+		}
+	}
+	forget := stripANSI(strings.Join(RenderChangePreview("memory_write", map[string]any{"action": "forget", "key": "old-note"}), "\n"))
+	if !strings.Contains(forget, "forget old-note") || !strings.Contains(forget, "every version") {
+		t.Errorf("forget preview = %q, want the key and that every version goes", forget)
+	}
+	if got := RenderChangePreview("memory_write", map[string]any{"action": "remember"}); got != nil {
+		t.Errorf("preview with no key = %q, want nil", got)
+	}
+}

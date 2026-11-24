@@ -295,6 +295,49 @@ func TestLearnPromptsForAKilnSkill(t *testing.T) {
 	}
 }
 
+// TestRefinePromptsForAReview: /refine hands the model a prompt (no output
+// of its own) to review the conversation into kiln skills and memory
+// notes, grounded in what was said, never editing a .claude skill; a focus
+// typed after it is carried verbatim and put first.
+func TestRefinePromptsForAReview(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	source := SessionCommands(SessionCommandDeps{Cwd: t.TempDir()})
+	refine := findCmd(t, source, "refine")
+	skillsDir := filepath.Join(home, ".kiln", "skills")
+
+	res, err := refine.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Prompt == "" || len(res.Output) != 0 {
+		t.Fatalf("got %+v, want a Prompt and no Output", res)
+	}
+	for _, want := range []string{
+		"Review the conversation above",
+		"Skills, under " + skillsDir,
+		"`memory_write`",
+		"Save only what you can point to in this conversation",
+		"Change skills only under " + skillsDir,
+		"Do not capture:",
+	} {
+		if !strings.Contains(res.Prompt, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, res.Prompt)
+		}
+	}
+	if strings.Contains(res.Prompt, "focus on this") {
+		t.Errorf("a /refine with no argument has a focus section:\n%s", res.Prompt)
+	}
+
+	res, err = refine.Run(context.Background(), "  the release steps  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(res.Prompt, "The person asked you to focus on this; it comes first:\nthe release steps") {
+		t.Errorf("focus not appended verbatim:\n%s", res.Prompt)
+	}
+}
+
 func TestConfigListsSettingsFilesInOrder(t *testing.T) {
 	cwd := t.TempDir()
 	source := SessionCommands(SessionCommandDeps{Cwd: cwd})
