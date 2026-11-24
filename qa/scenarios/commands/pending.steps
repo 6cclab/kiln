@@ -1,0 +1,24 @@
+# The automatic learning review (internal/cli/learning_review.go), enabled
+# in the user's ~/.kiln/settings.json: after a due run and the idle delay
+# it proposes a skill, a note says so, /pending previews it, and only
+# /pending approve writes it under ~/.kiln/skills.
+@faux testdata/faux/qa/commands-pending.yaml
+@env HARNESS_REVIEW_IDLE_MS=200
+@setup mkdir -p {HOME}/.kiln && printf '{"learningReview":{"enabled":true,"everyPrompts":1}}' > {HOME}/.kiln/settings.json
+
+WAITFOR /describe a task/ 20
+SEND tag and push the release
+WAITFOR /tagged v1\.2\.0/ 20
+WAITFOR /Learning review proposed 1 change · \/pending to review/ 20
+SHOT proposed
+RUN test ! -e {HOME}/.kiln/skills/release-flow/SKILL.md
+SEND /pending
+WAITFOR /#1 new skill release-flow\/SKILL\.md/ 10
+SHOT pending-list
+EXPECT /the person walked through a release/
+EXPECT /\+ description: Tag and publish a kiln release\./
+SEND /pending approve 1
+WAITFOR /Approved #1: wrote ~\/\.kiln\/skills\/release-flow\/SKILL\.md/ 10
+SHOT approved
+RUN grep -q "name: release-flow" {HOME}/.kiln/skills/release-flow/SKILL.md
+EXPECT_NOT /panic|goroutine/

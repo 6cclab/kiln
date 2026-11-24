@@ -27,14 +27,17 @@ import (
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudecommands "github.com/andrepato/harness/internal/claude/commands"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
+	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	claudeskills "github.com/andrepato/harness/internal/claude/skills"
 	"github.com/andrepato/harness/internal/claude/writesettings"
 	slashcommands "github.com/andrepato/harness/internal/commands"
 	mcpgate "github.com/andrepato/harness/internal/mcp"
+	"github.com/andrepato/harness/internal/memory"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
+	"github.com/andrepato/harness/internal/review"
 	"github.com/andrepato/harness/internal/session/jsonl"
 )
 
@@ -56,6 +59,9 @@ type registryDeps struct {
 	Hooks    claudehooks.Config
 	Agents   []claudeagents.Definition
 	Skills   []claudeskills.Skill
+	// Memory is the project memory store (nil when personal memory is
+	// off), where /pending saves an approved memory note.
+	Memory *memory.Store
 	// SkillPrompt, when set, sees the prompt a /skill command is about to
 	// send and returns the text to send (mods' skill.prompt).
 	SkillPrompt func(ctx context.Context, s claudeskills.Skill, prompt string) string
@@ -336,6 +342,8 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		},
 		Todos: deps.Todos,
 	}))
+
+	registry.Add(pendingSource(review.DefaultQueue(), paths.KilnSkillsDir(), deps.Memory))
 
 	for _, s := range slashcommands.ClaudeCommandSources(deps.Cwd) {
 		registry.Add(s)

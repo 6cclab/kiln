@@ -124,6 +124,9 @@ type InteractiveDeps struct {
 	// onPlanApprover/onHookNotices callbacks do. Either may be nil.
 	SetPlanApprover func(tools.PlanApprover)
 	SetHookNotice   func(func(string))
+	// SetReviewNotice binds where the learning review reports what it
+	// proposed (a transcript note).
+	SetReviewNotice func(func(string))
 	// SetHookActivity rebinds what a running Stop hook chain reports for
 	// the busy row (Bridge.HookActivity).
 	SetHookActivity func(func(string))
@@ -216,6 +219,9 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 	}
 	if deps.SetHookNotice != nil {
 		deps.SetHookNotice(bridge.HookNotice)
+	}
+	if deps.SetReviewNotice != nil {
+		deps.SetReviewNotice(bridge.CommitNote)
 	}
 	if deps.SetLoginUI != nil {
 		deps.SetLoginUI(tui.NewAuthInteraction(bridge))

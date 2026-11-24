@@ -1131,6 +1131,46 @@ both aggregate records and dismissals for this project. Disabling capture leaves
 existing records available for inspection and deletion. Records and suggestions
 are separate from conversational memory and evaluated policy candidates.
 
+### Automatic learning review
+
+```json
+{
+  "learningReview": {
+    "enabled": false,
+    "everyPrompts": 10,
+    "everyToolCalls": 15
+  }
+}
+```
+
+With `enabled` in user settings (`~/.claude/settings.json`, `~/.kiln/settings.json` or
+`--settings`), an interactive session reviews itself in the background: once a run ends
+with `everyPrompts` prompts or `everyToolCalls` tool calls since the last review, and the
+session has then sat idle for 20 seconds, kiln sends the session's model one request with
+no tools. It reads a digest of the conversation (what you typed, the agent's replies, tool
+calls by name, failed tool results), kiln's own skills under `~/.kiln/skills` and the
+project's recent memory notes, and answers with proposals: whole skill files under
+`~/.kiln/skills/<name>/` (`SKILL.md` or `references/`, `templates/`, `scripts/` files) and
+memory notes with evidence. Typing a new prompt cancels a review that is waiting or running;
+it is tried again after a later run. Its usage counts toward the session's cost.
+
+Nothing is written until you approve it. Proposals wait in `~/.kiln/proposals/`, a note
+says when a review added some, and startup says when some are waiting:
+
+```text
+/pending                     list proposals, with the lines each would change
+/pending approve <id…|all>   write them
+/pending reject <id…|all>    drop them
+```
+
+Approval refuses a skill file that changed after it was proposed. A proposal that would
+write outside its skill's directory, a `SKILL.md` that would not load under its
+directory's name, or a memory note without evidence is dropped when the review answers.
+Project and local settings can turn the review off or make it less frequent, never turn
+it on or make it more frequent; `learningEnabled: false` turns it off, and
+`personalMemoryEnabled: false` stops memory proposals. The review's rules are adapted
+from hermes-agent's background review (`internal/review/prompt.go`).
+
 ### Evaluated personal policies
 
 `kiln learning` manages a narrow policy containing `skillBudgetTokens` and
