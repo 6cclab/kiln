@@ -37,6 +37,8 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     @untrusted                   do not pre-trust the project
     @smoke                       part of the real-terminal smoke set (`make qa`
                                  runs only these by default)
+    @requires cell-click         uses CLICKCELL, which only the headless
+                                 terminals support
     @requires kitty-keyboard     needs the kitty keyboard protocol (shift+enter
                                  as its own key); headless terminals, whose
                                  xterm.js lacks it, report SKIP instead
@@ -63,6 +65,8 @@ Scenario file (.steps): directives, then steps, one per line; `#` comments.
     SCROLL <up|down> <n>         mouse wheel over the window centre (moves
                                  the pointer there and back)
     CLICK <x> <y>                click at window-local points
+    CLICKCELL <col> <row>        click the centre of a screen cell (0-indexed),
+                                 headless terminals only (@requires cell-click)
     RESIZE <cols> <rows>         resize the window
     WAIT <seconds>               sleep
     WAITFOR /regex/ [seconds]    poll the screen text until it matches
@@ -1049,6 +1053,11 @@ class Run:
                     time.sleep(0.2)
                     self.wheel(direction, int(n))
                     time.sleep(0.3)
+            elif verb == "CLICKCELL":
+                col, row = arg.split()[:2]
+                if not hasattr(self.term, "click_cell"):
+                    raise DriveError("CLICKCELL needs a headless terminal (xterm-dark, xterm-light)")
+                self.term.click_cell(int(col), int(row))
             elif verb == "CLICK":
                 x, y = arg.split()[:2]
                 if hasattr(self.term, "click"):
@@ -1178,7 +1187,7 @@ class Run:
         return result
 
 
-VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "RESIZE", "WAIT", "WAITFOR", "WAITGONE", "SUBMIT_UNTIL", "RELEASE", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE",
+VERBS = {"TYPE", "KEY", "SCROLL", "CLICK", "CLICKCELL", "RESIZE", "WAIT", "WAITFOR", "WAITGONE", "SUBMIT_UNTIL", "RELEASE", "SHOT", "EXPECT", "EXPECT_NOT", "NOTE",
          "SEND", "IDLE", "TURN", "RUN", "RELAUNCH", "EXPECT_PROMPTS"}
 FAUX_TOP = {"model", "steps", "models"}
 FAUX_STEP = {"text", "thinking", "tool_call", "tool_calls", "on_tool_result", "on_tool_results",
@@ -1233,7 +1242,8 @@ def lint_faux(path):
 
 
 # @requires values, and the terminals that cannot meet each.
-REQUIREMENTS = {"kitty-keyboard": ("xterm-dark", "xterm-light")}
+REQUIREMENTS = {"kitty-keyboard": ("xterm-dark", "xterm-light"),
+                "cell-click": ("iterm-dark", "iterm-light", "terminal", "warp")}
 
 
 def unmet_requirement(scenario, terminal):
