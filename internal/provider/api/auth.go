@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Auth is the resolved credential used for one request. Exactly one of
@@ -29,6 +30,45 @@ type StatusError struct {
 	Status    int
 	Body      string
 	Retriable bool
+	// RetryAfter is how long the response's Retry-After header asked the
+	// client to wait (delay-seconds or an HTTP date); zero when absent,
+	// unparseable or already past.
+	RetryAfter time.Duration
+}
+
+// NewStatusError is the error for a non-2xx response whose body has been
+// read.
+func NewStatusError(resp *http.Response, body []byte) *StatusError {
+	return &StatusError{
+		Status:     resp.StatusCode,
+		Body:       string(body),
+		Retriable:  isRetriableStatus(resp.StatusCode),
+		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+	}
+}
+
+// RetryAfterDelay is the server's requested wait, for the harness's retry
+// backoff (internal/harness/retry.go).
+func (e *StatusError) RetryAfterDelay() time.Duration { return e.RetryAfter }
+
+// parseRetryAfter reads a Retry-After value (RFC 9110 §10.2.3): a number of
+// seconds or an HTTP date. A missing, negative, unparseable or past value is
+// zero.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.ParseFloat(v, 64); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs * float64(time.Second))
+	}
+	if at, err := http.ParseTime(v); err == nil && at.After(now) {
+		return at.Sub(now)
+	}
+	return 0
 }
 
 // Error reads as a sentence a person can act on: the status in words and

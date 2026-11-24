@@ -830,7 +830,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		if !isRetriable(err) || attempt == retry.MaxAttempts {
 			return nil, target, tip, err
 		}
-		delay := retry.delay(attempt)
+		delay := retry.delayFor(attempt, err)
 		l.h.events.Emit(Event{Type: EventRetryScheduled, Lane: l.name, OperationID: operationID, Attempt: attempt, MaxAttempts: retry.MaxAttempts, DelayMs: delay.Milliseconds(), RetryError: err.Error()})
 		if sleepErr := sleepCtx(ctx, delay, l.retryNow); sleepErr != nil {
 			return nil, target, tip, sleepErr

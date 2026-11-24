@@ -134,7 +134,9 @@ Retries (`internal/harness/retry.go`) use `RetryPolicy` (default: 1s base
 delay, capped at 60s, 4 attempts) with full jitter exponential backoff,
 triggered by `isRetriable`: HTTP 429/529/5xx (via a `RetriableError`
 carrying a status code), a `net.Error`, `context.DeadlineExceeded`, or a
-string match on common transient-failure text.
+string match on common transient-failure text. When the provider's response had a
+`Retry-After` header (`api.StatusError.RetryAfter`), the wait is raised to
+it, still capped at the policy's 60s (`RetryPolicy.delayFor`).
 
 A model request has no total deadline: provider HTTP clients bound only
 connecting (`api.NewStreamingClient`). `requestWithRetry` instead ends a
