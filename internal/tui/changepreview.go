@@ -142,6 +142,10 @@ func changePreviewHeader(path string) []string {
 func RenderChangePreview(toolName string, args map[string]any) []string {
 	tool := strings.ToLower(toolName)
 
+	if tool == "memory_write" {
+		return memoryWritePreview(args)
+	}
+
 	if tool == "edit" {
 		edits := parseEdits(args["edits"])
 		if len(edits) == 0 {
@@ -200,4 +204,35 @@ func RenderChangePreview(toolName string, args map[string]any) []string {
 	}
 
 	return nil
+}
+
+// memoryWritePreview shows what a memory_write call will store or forget,
+// so its approval prompt says more than the tool's name: the key and kind,
+// the note's text, and the evidence the model gave for it.
+func memoryWritePreview(args map[string]any) []string {
+	str := func(k string) string { s, _ := args[k].(string); return strings.TrimSpace(s) }
+	key := str("key")
+	if key == "" {
+		return nil
+	}
+	if strings.EqualFold(str("action"), "forget") {
+		return []string{"  " + Ink("forget "+key) + Muted(" · every version")}
+	}
+	head := "  " + Ink(Bold("remember "+key))
+	if kind := str("kind"); kind != "" {
+		head += Muted(" · " + kind)
+	}
+	width := maxInt(ruleWidth()-4, 20)
+	var body []string
+	for _, line := range strings.Split(str("text"), "\n") {
+		for _, part := range wrapHard(line, width) {
+			body = append(body, "  "+Ink(part))
+		}
+	}
+	if evidence := str("evidence"); evidence != "" {
+		for _, part := range wrapHard("evidence: "+evidence, width) {
+			body = append(body, "  "+Muted(part))
+		}
+	}
+	return append([]string{head}, clipPreview(body)...)
 }
