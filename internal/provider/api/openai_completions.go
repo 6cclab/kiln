@@ -590,6 +590,37 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 
 	var textIndex = -1
 	var thinkingIndex = -1
+	// inline splits a leading <think>…</think> block out of the content
+	// field (think_tags.go) for servers that leave it there.
+	var inline thinkSplitter
+	appendText := func(delta string) {
+		if delta == "" {
+			return
+		}
+		if textIndex == -1 {
+			partial.Content = append(partial.Content, msg.Text(""))
+			textIndex = len(partial.Content) - 1
+			events <- msg.StreamEvent{Type: msg.EventTextStart, ContentIndex: textIndex, Partial: partial}
+		}
+		tc := partial.Content[textIndex].(msg.TextContent)
+		tc.Text += delta
+		partial.Content[textIndex] = tc
+		events <- msg.StreamEvent{Type: msg.EventTextDelta, ContentIndex: textIndex, Delta: delta, Partial: partial}
+	}
+	appendThinking := func(delta string) {
+		if delta == "" {
+			return
+		}
+		if thinkingIndex == -1 {
+			partial.Content = append(partial.Content, msg.Thinking(""))
+			thinkingIndex = len(partial.Content) - 1
+			events <- msg.StreamEvent{Type: msg.EventThinkingStart, ContentIndex: thinkingIndex, Partial: partial}
+		}
+		tc := partial.Content[thinkingIndex].(msg.ThinkingContent)
+		tc.Thinking += delta
+		partial.Content[thinkingIndex] = tc
+		events <- msg.StreamEvent{Type: msg.EventThinkingDelta, ContentIndex: thinkingIndex, Delta: delta, Partial: partial}
+	}
 	toolIndexOf := map[int]int{}    // openai tool-call index -> partial.Content position
 	toolArgsBuf := map[int]string{} // openai tool-call index -> accumulated raw JSON
 	sawFinish := false
@@ -620,15 +651,9 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 		delta := choice.Delta
 
 		if delta.Content != "" {
-			if textIndex == -1 {
-				partial.Content = append(partial.Content, msg.Text(""))
-				textIndex = len(partial.Content) - 1
-				events <- msg.StreamEvent{Type: msg.EventTextStart, ContentIndex: textIndex, Partial: partial}
-			}
-			tc := partial.Content[textIndex].(msg.TextContent)
-			tc.Text += delta.Content
-			partial.Content[textIndex] = tc
-			events <- msg.StreamEvent{Type: msg.EventTextDelta, ContentIndex: textIndex, Delta: delta.Content, Partial: partial}
+			thinking, text := inline.feed(delta.Content)
+			appendThinking(thinking)
+			appendText(text)
 		}
 
 		// Some endpoints return reasoning in reasoning_content (llama.cpp), or
@@ -643,17 +668,7 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 		if reasoning == "" {
 			reasoning = delta.ReasoningText
 		}
-		if reasoning != "" {
-			if thinkingIndex == -1 {
-				partial.Content = append(partial.Content, msg.Thinking(""))
-				thinkingIndex = len(partial.Content) - 1
-				events <- msg.StreamEvent{Type: msg.EventThinkingStart, ContentIndex: thinkingIndex, Partial: partial}
-			}
-			tc := partial.Content[thinkingIndex].(msg.ThinkingContent)
-			tc.Thinking += reasoning
-			partial.Content[thinkingIndex] = tc
-			events <- msg.StreamEvent{Type: msg.EventThinkingDelta, ContentIndex: thinkingIndex, Delta: reasoning, Partial: partial}
-		}
+		appendThinking(reasoning)
 
 		for _, tc := range delta.ToolCalls {
 			pos, ok := toolIndexOf[tc.Index]
@@ -700,6 +715,10 @@ func (c *OpenAICompletionsClient) run(ctx context.Context, model provider.Model,
 		}
 		return errorOut(partial, events, false, provider.StreamInterrupted{Cause: streamErr})
 	}
+
+	thinking, text := inline.flush()
+	appendThinking(thinking)
+	appendText(text)
 
 	for index, pos := range toolIndexOf {
 		call := partial.Content[pos].(msg.ToolCall)
