@@ -46,3 +46,21 @@ class ScrollShiftTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CellClickTest(unittest.TestCase):
+    """link-click clicks by cell: pixel points depend on the font's cell
+    size, which differs on the Linux CI runner, so the click missed the
+    link there. Real terminals cannot click by cell and skip it."""
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "qa", "scenarios", "mouse", "link-click.steps")
+
+    def test_link_click_uses_cells(self):
+        self.assertEqual(drive.lint_scenario(self.path), [])
+        verbs = [line.split()[0] for line in open(self.path) if line.strip() and not line.startswith(("#", "@"))]
+        self.assertIn("CLICKCELL", verbs)
+        self.assertNotIn("CLICK", verbs)
+
+    def test_real_terminals_skip_cell_clicks(self):
+        self.assertIsNone(drive.unmet_requirement(self.path, "xterm-dark"))
+        self.assertIsNotNone(drive.unmet_requirement(self.path, "iterm-dark"))

@@ -397,6 +397,18 @@ class Headless:
         self._page.mouse.click(box["x"] + int(x), box["y"] + int(y))
         self.settle()
 
+    def click_cell(self, col, row):
+        """Click the centre of screen cell (col, row), both 0-indexed, using
+        the cell size xterm.js actually rendered: point coordinates depend
+        on font metrics, which differ between macOS and the Linux CI
+        runner."""
+        self._focus()
+        r = self._page.evaluate(
+            "() => { const b = document.querySelector('.xterm-screen').getBoundingClientRect();"
+            " return {x: b.x, y: b.y, w: b.width / window.__term.cols, h: b.height / window.__term.rows}; }")
+        self._page.mouse.click(r["x"] + (int(col) + 0.5) * r["w"], r["y"] + (int(row) + 0.5) * r["h"])
+        self.settle()
+
     def screenshot(self, path):
         self._page.locator("#terminal").screenshot(path=path)
 
