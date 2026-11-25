@@ -68,9 +68,12 @@ type Input struct {
 
 // Stats is what a review cost and did, for the run log.
 type Stats struct {
-	Requests   int
-	ToolCalls  int
-	Refused    int
+	Requests  int
+	ToolCalls int
+	// Captured counts write, edit and memory_write calls recorded as
+	// proposals; Refused names the other non-read calls refused.
+	Captured   int
+	Refused    []string
 	Repaired   bool
 	CacheRead  int // prompt tokens the provider served from its cache
 	InputTotal int // all prompt tokens, cached or not
@@ -98,10 +101,14 @@ func Instruction(in Input) (text string, shown map[string]bool) {
 }
 
 // Run continues conv with the review's instruction and returns its
-// proposals, validated and ready to queue. The review may call
-// ReadOnlyTools through tools (nil refuses every call) for up to
-// maxToolRounds rounds; an answer that is not the expected JSON gets one
-// request to fix it. usage, when set, receives every request's usage
+// proposals, validated and ready to queue. The review proposes by calling
+// write or edit on a file under the skills directory, or memory_write
+// (captureCall records each as a proposal instead of running it), or in
+// a JSON answer. It may call ReadOnlyTools through tools (nil refuses
+// every call); other calls are refused. After maxToolRounds rounds of
+// calls it stops with what it has. A final reply that proposes nothing
+// and neither is JSON nor says there is nothing gets one request to fix
+// it. usage, when set, receives every request's usage
 // whether or not the answer parses: the tokens are spent either way.
 func Run(ctx context.Context, conv Conversation, in Input, tools ToolRunner, usage func(msg.Usage)) ([]Proposal, Stats, error) {
 	instruction, seen := Instruction(in)
@@ -118,6 +125,7 @@ func Run(ctx context.Context, conv Conversation, in Input, tools ToolRunner, usa
 		}
 	}
 	var st Stats
+	var got proposals
 	for round := 0; ; round++ {
 		ch, wait := provider.Stream(ctx, conv.Streamer, conv.Model, messages, opts)
 		for range ch {
@@ -140,14 +148,25 @@ func Run(ctx context.Context, conv Conversation, in Input, tools ToolRunner, usa
 		calls := toolCalls(am)
 		if len(calls) > 0 {
 			if round >= maxToolRounds {
-				return nil, st, fmt.Errorf("still calling tools after %d rounds", maxToolRounds)
+				if len(got) == 0 {
+					return nil, st, fmt.Errorf("still calling tools after %d rounds", maxToolRounds)
+				}
+				return got.capped(&st)
 			}
 			messages = append(messages, *am)
+			why := whyOf(am)
 			for _, call := range calls {
 				st.ToolCalls++
-				text, isErr := runReviewTool(ctx, tools, call, in.SkillsDir, seen)
-				if isErr {
-					st.Refused++
+				text, isErr, captured := captureCall(call, in, seen, &got, why)
+				if captured {
+					if !isErr {
+						st.Captured++
+					}
+				} else {
+					text, isErr = runReviewTool(ctx, tools, call, in.SkillsDir, seen)
+					if isErr && !ReadOnlyTools[call.Name] {
+						st.Refused = append(st.Refused, call.Name)
+					}
 				}
 				messages = append(messages, msg.ToolResultMessage{Role: msg.RoleToolResult, ToolCallID: call.ID, ToolName: call.Name,
 					Content: msg.Blocks{msg.Text(text)}, IsError: isErr, Timestamp: time.Now().UnixMilli()})
@@ -155,21 +174,48 @@ func Run(ctx context.Context, conv Conversation, in Input, tools ToolRunner, usa
 			continue
 		}
 		if am.StopReason != msg.StopStop {
+			if len(got) > 0 {
+				return got.capped(&st)
+			}
 			return nil, st, fmt.Errorf("answer did not finish (stop reason %q)", am.StopReason)
 		}
-		proposals, err := Parse(msg.TextOf(am.Content), in, seen)
+		text := msg.TextOf(am.Content)
+		parsed, err := Parse(text, in, seen)
 		var notJSON *notJSONError
-		if errors.As(err, &notJSON) && !st.Repaired {
-			// Small models wrap the object in prose or break it; one
-			// precise request fixes most of these.
-			st.Repaired = true
-			messages = append(messages, *am, msg.UserMessage{Role: msg.RoleUser, Timestamp: time.Now().UnixMilli(), Content: msg.Blocks{msg.Text(
-				"That reply was not the JSON object asked for (" + notJSON.err.Error() + "). Reply again with only the JSON object, " +
-					`starting with {"proposals": and nothing before or after it.`)}})
-			continue
+		if errors.As(err, &notJSON) {
+			if len(got) > 0 || saysNothing(text) {
+				got.explain(text)
+				return got.capped(&st)
+			}
+			if !st.Repaired {
+				// Small models claim they saved something without a
+				// call, or break the JSON; one precise request fixes
+				// most of these.
+				st.Repaired = true
+				messages = append(messages, *am, msg.UserMessage{Role: msg.RoleUser, Timestamp: time.Now().UnixMilli(), Content: msg.Blocks{msg.Text(
+					"No proposal was recorded: that reply made no write, edit or memory_write call and is not the JSON object (" +
+						notJSON.err.Error() + "). If there is something to keep, make those calls now. If not, reply NOTHING.")}})
+				continue
+			}
+			return nil, st, err
 		}
-		return proposals, st, err
+		for _, p := range parsed {
+			got.add(p)
+		}
+		out, st, capErr := got.capped(&st)
+		if err == nil {
+			err = capErr
+		}
+		return out, st, err
 	}
+}
+
+// capped is the proposals, at most maxProposals of them.
+func (ps proposals) capped(st *Stats) ([]Proposal, Stats, error) {
+	if len(ps) > maxProposals {
+		return ps[:maxProposals], *st, fmt.Errorf("dropped %d proposal(s) over the limit of %d", len(ps)-maxProposals, maxProposals)
+	}
+	return ps, *st, nil
 }
 
 func toolCalls(am *msg.AssistantMessage) []msg.ToolCall {
@@ -187,8 +233,8 @@ func toolCalls(am *msg.AssistantMessage) []msg.ToolCall {
 // file marks it seen, so the review may replace it.
 func runReviewTool(ctx context.Context, tools ToolRunner, call msg.ToolCall, skillsDir string, seen map[string]bool) (string, bool) {
 	if !ReadOnlyTools[call.Name] || tools == nil {
-		return "The learning review only reads (read, skill) and proposes; it cannot run " + call.Name +
-			". Do not continue the task. Put each change you want in your JSON answer instead.", true
+		return "The learning review cannot run " + call.Name + ". It may read (read, skill) and propose (write or edit a file under " +
+			skillsDir + ", memory_write); nothing else. Do not continue the task.", true
 	}
 	text, isErr := tools(ctx, call)
 	if call.Name == "read" && !isErr {
@@ -228,28 +274,30 @@ type notJSONError struct{ err error }
 
 func (e *notJSONError) Error() string { return "answer is not the expected JSON: " + e.err.Error() }
 
-// answer is the JSON the review replies with.
-type answer struct {
-	Proposals []struct {
-		Kind     string `json:"kind"`
-		Why      string `json:"why"`
-		Skill    string `json:"skill"`
-		File     string `json:"file"`
-		Content  string `json:"content"`
-		Key      string `json:"key"`
-		Type     string `json:"type"`
-		Text     string `json:"text"`
-		Evidence string `json:"evidence"`
-	} `json:"proposals"`
+// rawProposal is one proposal as the review states it, in its JSON answer
+// or through a write, edit or memory_write call.
+type rawProposal struct {
+	Kind     string `json:"kind"`
+	Why      string `json:"why"`
+	Skill    string `json:"skill"`
+	File     string `json:"file"`
+	Content  string `json:"content"`
+	Key      string `json:"key"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Evidence string `json:"evidence"`
 }
 
-// Parse reads the review's answer: one JSON object, optionally in a code
+// answer is the JSON the review may reply with.
+type answer struct {
+	Proposals []rawProposal `json:"proposals"`
+}
+
+// Parse reads the review's JSON answer: one object, optionally in a code
 // fence or after a thinking block. A reply that is not that object is a
-// *notJSONError; a proposal that breaks a rule (a path outside its skill,
-// a SKILL.md that would not load, a memory note with no evidence, a
-// replacement for an existing file the review never saw whole) is dropped
-// and named in the error, the valid ones still returned. seen holds the
-// skill files (relative to in.SkillsDir) the review saw whole.
+// *notJSONError; a proposal that breaks a rule (validate) is dropped and
+// named in the error, the valid ones still returned. seen holds the skill
+// files (relative to in.SkillsDir) the review saw whole.
 func Parse(text string, in Input, seen map[string]bool) ([]Proposal, error) {
 	a, err := decodeAnswer(text)
 	if err != nil {
@@ -258,47 +306,9 @@ func Parse(text string, in Input, seen map[string]bool) ([]Proposal, error) {
 	var out []Proposal
 	var dropped []string
 	for _, r := range a.Proposals {
-		p := Proposal{Kind: r.Kind, Why: strings.TrimSpace(r.Why), Session: in.Session}
-		var bad error
-		switch r.Kind {
-		case KindSkill:
-			p.Skill, p.File, p.Content = strings.TrimSpace(r.Skill), strings.TrimSpace(r.File), r.Content
-			if bad = validSkillTarget(p.Skill, p.File); bad == nil && p.File == "SKILL.md" {
-				bad = validSkillFile(p.Skill, p.Content)
-			}
-			if bad == nil && strings.TrimSpace(p.Content) == "" {
-				bad = errors.New("empty content")
-			}
-			if bad == nil {
-				p.Base = Hash(p.SkillPath(in.SkillsDir))
-				if current, err := os.ReadFile(p.SkillPath(in.SkillsDir)); err == nil && string(current) == p.Content {
-					bad = errors.New("no change")
-				} else if p.Base != "" && !seen[p.Skill+"/"+p.File] {
-					// A whole-file replacement written blind drops what
-					// the review never saw.
-					bad = errors.New("replaces a file the review did not read in full")
-				}
-			}
-		case KindMemory:
-			p.Scope, p.Key, p.Type = in.MemoryScope, strings.TrimSpace(r.Key), r.Type
-			p.Text, p.Evidence = strings.TrimSpace(r.Text), strings.TrimSpace(r.Evidence)
-			switch {
-			case in.Memory == nil:
-				bad = errors.New("memory is off")
-			case p.Key == "" || p.Text == "" || p.Evidence == "":
-				bad = errors.New("memory note needs a key, text and evidence")
-			case p.Type != "preference" && p.Type != "fact" && p.Type != "procedure" && p.Type != "observation":
-				bad = fmt.Errorf("invalid memory type %q", p.Type)
-			}
-		default:
-			bad = fmt.Errorf("unknown kind %q", r.Kind)
-		}
+		p, bad := validate(r, in, seen)
 		if bad != nil {
 			dropped = append(dropped, p.Target()+": "+bad.Error())
-			continue
-		}
-		if len(out) == maxProposals {
-			dropped = append(dropped, p.Target()+": over the limit of "+fmt.Sprint(maxProposals))
 			continue
 		}
 		out = append(out, p)
@@ -307,6 +317,205 @@ func Parse(text string, in Input, seen map[string]bool) ([]Proposal, error) {
 		return out, fmt.Errorf("dropped %d proposal(s): %s", len(dropped), strings.Join(dropped, "; "))
 	}
 	return out, nil
+}
+
+// validate turns r into a Proposal, or says why it cannot be one: a path
+// outside its skill, a SKILL.md that would not load, empty or unchanged
+// content, a replacement for an existing file the review never saw whole,
+// or a memory note without a key, text, evidence or known type.
+func validate(r rawProposal, in Input, seen map[string]bool) (Proposal, error) {
+	p := Proposal{Kind: r.Kind, Why: strings.TrimSpace(r.Why), Session: in.Session}
+	switch r.Kind {
+	case KindSkill:
+		p.Skill, p.File, p.Content = strings.TrimSpace(r.Skill), strings.TrimSpace(r.File), r.Content
+		if err := validSkillTarget(p.Skill, p.File); err != nil {
+			return p, err
+		}
+		if p.File == "SKILL.md" {
+			if err := validSkillFile(p.Skill, p.Content); err != nil {
+				return p, err
+			}
+		}
+		if strings.TrimSpace(p.Content) == "" {
+			return p, errors.New("empty content")
+		}
+		p.Base = Hash(p.SkillPath(in.SkillsDir))
+		if current, err := os.ReadFile(p.SkillPath(in.SkillsDir)); err == nil && string(current) == p.Content {
+			return p, errors.New("no change")
+		}
+		if p.Base != "" && !seen[p.Skill+"/"+p.File] {
+			// A whole-file replacement written blind drops what the
+			// review never saw.
+			return p, errors.New("replaces a file the review did not read in full; read it whole first")
+		}
+	case KindMemory:
+		p.Scope, p.Key, p.Type = in.MemoryScope, strings.TrimSpace(r.Key), r.Type
+		p.Text, p.Evidence = strings.TrimSpace(r.Text), strings.TrimSpace(r.Evidence)
+		switch {
+		case in.Memory == nil:
+			return p, errors.New("memory is off")
+		case p.Key == "" || p.Text == "" || p.Evidence == "":
+			return p, errors.New("a memory note needs a key, text and evidence")
+		case p.Type != "preference" && p.Type != "fact" && p.Type != "procedure" && p.Type != "observation":
+			return p, fmt.Errorf("invalid memory kind %q", p.Type)
+		}
+	default:
+		return p, fmt.Errorf("unknown kind %q", r.Kind)
+	}
+	return p, nil
+}
+
+// proposals collects a review's proposals in order; a later one for the
+// same target replaces the earlier.
+type proposals []Proposal
+
+func (ps *proposals) add(p Proposal) {
+	for i := range *ps {
+		if (*ps)[i].Kind == p.Kind && (*ps)[i].Target() == p.Target() {
+			(*ps)[i] = p
+			return
+		}
+	}
+	*ps = append(*ps, p)
+}
+
+// explain gives proposals made without a stated reason the review's
+// closing summary as their reason.
+func (ps proposals) explain(summary string) {
+	line := strings.TrimSpace(whyOf(&msg.AssistantMessage{Content: msg.Blocks{msg.Text(summary)}}))
+	if line == defaultWhy {
+		return
+	}
+	for i := range ps {
+		if ps[i].Why == defaultWhy {
+			ps[i].Why = line
+		}
+	}
+}
+
+func (ps proposals) content(skill, file string) (string, bool) {
+	for _, p := range ps {
+		if p.Kind == KindSkill && p.Skill == skill && p.File == file {
+			return p.Content, true
+		}
+	}
+	return "", false
+}
+
+// captureCall turns a write, edit or memory_write call into a proposal
+// instead of running it: agents reach for these tools to save what they
+// learned, and refusing them is how hermes-agent's reviewer ended up in
+// denial loops on weak models. Nothing is written; the result tells the
+// model whether its proposal was recorded, or why not so it can fix it.
+// ok is false for any other tool.
+func captureCall(call msg.ToolCall, in Input, seen map[string]bool, got *proposals, why string) (text string, isErr, ok bool) {
+	reject := func(err error) (string, bool, bool) {
+		return "Not recorded: " + err.Error() + ".", true, true
+	}
+	var raw rawProposal
+	switch call.Name {
+	case "write", "edit":
+		path, _ := call.Arguments["path"].(string)
+		rel, inside := underDir(in.SkillsDir, path)
+		skill, file, _ := strings.Cut(rel, "/")
+		if !inside || file == "" {
+			return reject(fmt.Errorf("the review only proposes files under %s/<skill>/; it does not change the project", in.SkillsDir))
+		}
+		content, _ := call.Arguments["content"].(string)
+		if call.Name == "edit" {
+			current, pending := got.content(skill, file)
+			if !pending {
+				data, err := os.ReadFile(filepath.Join(in.SkillsDir, skill, filepath.FromSlash(file)))
+				if err != nil {
+					return reject(errors.New("no such file; use write with the whole file"))
+				}
+				if !seen[skill+"/"+file] {
+					return reject(errors.New("read the file whole before editing it"))
+				}
+				current = string(data)
+			}
+			var err error
+			if content, err = applyEdits(current, call.Arguments["edits"]); err != nil {
+				return reject(err)
+			}
+			seen[skill+"/"+file] = true
+		}
+		raw = rawProposal{Kind: KindSkill, Skill: skill, File: file, Content: content, Why: why}
+	case "memory_write":
+		if action, _ := call.Arguments["action"].(string); action != "remember" {
+			return reject(errors.New("the review only proposes new notes (action remember)"))
+		}
+		str := func(k string) string { v, _ := call.Arguments[k].(string); return v }
+		raw = rawProposal{Kind: KindMemory, Key: str("key"), Type: str("kind"), Text: str("text"), Evidence: str("evidence"), Why: why}
+	default:
+		return "", false, false
+	}
+	p, err := validate(raw, in, seen)
+	if err != nil {
+		return reject(err)
+	}
+	got.add(p)
+	return "Recorded as a proposal for the person to approve; nothing was written. Do not repeat it in your reply.", false, true
+}
+
+// applyEdits applies edit-tool edits ({oldText, newText}, each oldText
+// found exactly once) to content.
+func applyEdits(content string, edits any) (string, error) {
+	list, _ := edits.([]any)
+	if len(list) == 0 {
+		return "", errors.New("edits must list at least one {oldText, newText}")
+	}
+	for _, e := range list {
+		m, _ := e.(map[string]any)
+		oldText, _ := m["oldText"].(string)
+		newText, _ := m["newText"].(string)
+		switch n := strings.Count(content, oldText); {
+		case oldText == "":
+			return "", errors.New("an edit has an empty oldText")
+		case n == 0:
+			return "", fmt.Errorf("oldText %q is not in the file", clip(oldText, 80))
+		case n > 1:
+			return "", fmt.Errorf("oldText %q is in the file %d times; include more context", clip(oldText, 80), n)
+		}
+		content = strings.Replace(content, oldText, newText, 1)
+	}
+	return content, nil
+}
+
+// whyOf is the reason the model gave alongside its calls: the first line
+// of the message's text.
+func whyOf(am *msg.AssistantMessage) string {
+	for _, line := range strings.Split(msg.TextOf(am.Content), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return clip(line, 200)
+		}
+	}
+	return defaultWhy
+}
+
+// defaultWhy is a proposal's reason when the review stated none.
+const defaultWhy = "proposed during the learning review"
+
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
+// saysNothing reports whether a reply means there is nothing to keep, as
+// opposed to claiming it saved something it never proposed.
+func saysNothing(text string) bool {
+	t := strings.ToLower(text)
+	if !strings.Contains(t, "nothing") && !strings.Contains(t, "no proposal") {
+		return false
+	}
+	for _, claim := range []string{"saved", "updated", "wrote", "written", "created", "added", "recorded"} {
+		if strings.Contains(t, claim) {
+			return false
+		}
+	}
+	return true
 }
 
 // skillsContext shows the review kiln's own skills: whole files within

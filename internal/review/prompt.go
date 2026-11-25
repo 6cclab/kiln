@@ -44,8 +44,8 @@ func reviewRules(memoryOn bool) string {
 		"This message is from kiln, not the person: the task is paused for kiln's learning review. Do not continue",
 		"the task or answer the person. Look back over this conversation and propose what kiln should keep so the",
 		"next session starts knowing it. You only propose: the person approves or rejects each change, so propose",
-		"only what you would defend. You may call read (files) and skill (load a skill) to check what you propose;",
-		"every other tool is refused.",
+		"only what you would defend. You may call read (files) and skill (load a skill) to check what you propose,",
+		"and write, edit and memory_write to propose (below); every other tool is refused.",
 		"",
 		"Two places can hold a lesson:",
 		"- A skill under the kiln_skills directory: how to do a class of task for this person (steps, commands,",
@@ -70,7 +70,7 @@ func reviewRules(memoryOn bool) string {
 		"leave it out: a wrong note misleads every later session.",
 		"",
 		"Where a skill lesson goes, the first that fits: an existing kiln skill that covers the class of task",
-		"(propose its whole SKILL.md with the change made in place); a `references/<topic>.md` file under one, with",
+		"(edit its SKILL.md in place); a `references/<topic>.md` file under one, with",
 		"a pointer added to its SKILL.md; a new skill named for the class of task, never for a PR, an error message",
 		"or today's task. A skill or file not shown in full below (marked truncated, or a references/ file) must be",
 		"read whole with the read tool before you propose replacing it; a replacement for a file you have not read",
@@ -83,15 +83,24 @@ func reviewRules(memoryOn bool) string {
 		"",
 		"Most conversations teach nothing durable; then propose nothing. Never invent a lesson to have one.",
 		"",
-		"Reply with one JSON object and nothing else:",
-		`{"proposals": [`,
-		`  {"kind": "skill", "skill": "<name>", "file": "SKILL.md or references/<topic>.md", "content": "<the whole file>", "why": "<one line: the lesson and what in the conversation shows it>"},`,
+		"How to propose: nothing you do here is written; each proposal waits for the person's approval.",
+		"- A skill file: call write with its path under the kiln_skills directory and the whole file, or edit to change",
+		"  part of a file you have read. Before the calls, say in one line what the lesson is and what shows it.",
 	)
 	if memoryOn {
-		lines = append(lines,
-			`  {"kind": "memory", "key": "<short-key>", "type": "preference|fact|procedure|observation", "text": "<the note>", "evidence": "<what the person said or a tool showed>", "why": "<one line>"}`)
+		lines = append(lines, "- A memory note: call memory_write with action remember, a short key, kind, text and evidence.")
 	}
-	lines = append(lines, `]}`, `With nothing to propose, reply {"proposals": []}.`, "</kiln_learning_review>")
+	lines = append(lines,
+		"Each call's result says whether the proposal was recorded or why not; fix it and call again if needed.",
+		"When you are done, reply with one line saying what you proposed, or NOTHING if there is nothing to keep.",
+		"",
+		"If you cannot call tools, reply instead with one JSON object and nothing else:",
+		`{"proposals": [{"kind": "skill", "skill": "<name>", "file": "SKILL.md or references/<topic>.md", "content": "<the whole file>", "why": "<one line>"}`,
+	)
+	if memoryOn {
+		lines = append(lines, `  , {"kind": "memory", "key": "<short-key>", "type": "preference|fact|procedure|observation", "text": "<the note>", "evidence": "<what the person said or a tool showed>", "why": "<one line>"}`)
+	}
+	lines = append(lines, `]}`, "</kiln_learning_review>")
 	return strings.Join(lines, "\n")
 }
 

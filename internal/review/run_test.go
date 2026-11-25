@@ -102,9 +102,9 @@ func TestRunContinuesTheConversation(t *testing.T) {
 }
 
 // TestRunReadsAndRefusesWrites: a read runs and its result goes back to
-// the model; a write is refused without running; a whole read of a
-// skill file lets the review replace it, while a replacement for a file
-// it never read is dropped.
+// the model; a write outside the skills directory and a bash call are
+// refused without running; a JSON replacement for a file it read whole is
+// kept, one for a file it never read is dropped.
 func TestRunReadsAndRefusesWrites(t *testing.T) {
 	in := input(t, false)
 	ref := filepath.Join(in.SkillsDir, "release-flow", "references", "tags.md")
@@ -117,11 +117,14 @@ func TestRunReadsAndRefusesWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	project := filepath.Join(t.TempDir(), "main.go")
 	answer := `{"proposals":[` +
 		`{"kind":"skill","skill":"release-flow","file":"references/tags.md","content":"new\n","why":"read first"},` +
 		`{"kind":"skill","skill":"release-flow","file":"references/unread.md","content":"new\n","why":"blind"}]}`
 	s := &scripted{replies: []*msg.AssistantMessage{
-		calls(msg.NewToolCall("c1", "read", map[string]any{"path": ref}), msg.NewToolCall("c2", "write", map[string]any{"path": ref, "content": "x"})),
+		calls(msg.NewToolCall("c1", "read", map[string]any{"path": ref}),
+			msg.NewToolCall("c2", "write", map[string]any{"path": project, "content": "x"}),
+			msg.NewToolCall("c3", "bash", map[string]any{"command": "rm -rf /"})),
 		text(answer),
 	}}
 	var ran []string
@@ -136,18 +139,104 @@ func TestRunReadsAndRefusesWrites(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "did not read in full") {
 		t.Errorf("err = %v, want the blind replacement named", err)
 	}
-	if strings.Join(ran, ",") != "read" || st.ToolCalls != 2 || st.Refused != 1 {
-		t.Errorf("ran %v, stats %+v; want only the read run", ran, st)
+	if strings.Join(ran, ",") != "read" || st.ToolCalls != 3 || strings.Join(st.Refused, ",") != "bash" {
+		t.Errorf("ran %v, stats %+v; want only the read run, bash refused", ran, st)
 	}
-	results := s.sent[1][len(s.sent[1])-2:]
-	if r := results[1].(msg.ToolResultMessage); !r.IsError || !strings.Contains(msg.TextOf(r.Content), "only reads") {
-		t.Errorf("write result = %+v, want a refusal", r)
+	results := s.sent[1][len(s.sent[1])-3:]
+	if r := results[1].(msg.ToolResultMessage); !r.IsError || !strings.Contains(msg.TextOf(r.Content), "does not change the project") {
+		t.Errorf("project write result = %+v, want a refusal", r)
 	}
-	if _, err := os.Stat(ref); err != nil {
-		t.Fatal(err)
-	}
-	if data, _ := os.ReadFile(ref); string(data) != "old\n" {
+	if _, err := os.Stat(project); !os.IsNotExist(err) {
 		t.Error("the refused write ran")
+	}
+}
+
+// TestRunCapturesWritesAsProposals: write, edit and memory_write calls
+// become proposals instead of running, each answered with whether it was
+// recorded; a blind replacement is refused with the reason so the model
+// can read and retry, and a summary reply needs no JSON.
+func TestRunCapturesWritesAsProposals(t *testing.T) {
+	in := input(t, true)
+	writeSkill(t, in.SkillsDir, "release-flow", goodSkill)
+	skillFile := filepath.Join(in.SkillsDir, "release-flow", "SKILL.md")
+	newSkill := "---\nname: flaky-tests\ndescription: Chase flaky Go tests with -count and -race.\n---\n# Flaky tests\n"
+	s := &scripted{replies: []*msg.AssistantMessage{
+		calls(
+			msg.NewToolCall("c1", "write", map[string]any{"path": filepath.Join(in.SkillsDir, "flaky-tests", "SKILL.md"), "content": newSkill}),
+			msg.NewToolCall("c2", "edit", map[string]any{"path": skillFile, "edits": []any{map[string]any{"oldText": "# Release flow", "newText": "# Release flow\n\nPush only the new tag."}}}),
+			msg.NewToolCall("c3", "memory_write", map[string]any{"action": "remember", "key": "pnpm", "kind": "preference", "text": "Use pnpm.", "evidence": "The person said always."}),
+			msg.NewToolCall("c4", "memory_write", map[string]any{"action": "forget", "key": "old"}),
+		),
+		text("Proposed a new skill, a skill fix and a memory note."),
+	}}
+	tools := func(context.Context, msg.ToolCall) (string, bool) { return "", false }
+	got, st, err := Run(context.Background(), conversation(s), in, tools, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var targets []string
+	for _, p := range got {
+		targets = append(targets, p.Kind+":"+p.Target())
+	}
+	// The edit applies: the instruction showed release-flow/SKILL.md whole.
+	if st.Captured != len(got) || st.Requests != 2 {
+		t.Errorf("stats %+v for %v", st, targets)
+	}
+	results := s.sent[1][len(s.sent[1])-4:]
+	texts := []string{}
+	for _, r := range results {
+		texts = append(texts, msg.TextOf(r.(msg.ToolResultMessage).Content))
+	}
+	if !strings.HasPrefix(texts[0], "Recorded") || !strings.HasPrefix(texts[1], "Recorded") || !strings.HasPrefix(texts[2], "Recorded") || !strings.HasPrefix(texts[3], "Not recorded") {
+		t.Errorf("results = %q", texts)
+	}
+	want := "skill:flaky-tests/SKILL.md skill:release-flow/SKILL.md memory:pnpm"
+	if strings.Join(targets, " ") != want {
+		t.Fatalf("proposals %v, want %s", targets, want)
+	}
+	if !strings.Contains(got[1].Content, "Push only the new tag.") || got[1].Why != "Proposed a new skill, a skill fix and a memory note." {
+		t.Errorf("edit proposal = %+v", got[1])
+	}
+	if _, err := os.Stat(filepath.Join(in.SkillsDir, "flaky-tests")); !os.IsNotExist(err) {
+		t.Error("a captured write ran")
+	}
+	if data, _ := os.ReadFile(skillFile); string(data) != goodSkill {
+		t.Error("a captured edit ran")
+	}
+
+	// An unread reference is refused with the reason; after a read, the
+	// same write is recorded.
+	ref := filepath.Join(in.SkillsDir, "release-flow", "references", "tags.md")
+	_ = os.MkdirAll(filepath.Dir(ref), 0o755)
+	_ = os.WriteFile(ref, []byte("old\n"), 0o644)
+	write := msg.NewToolCall("w", "write", map[string]any{"path": ref, "content": "new\n"})
+	s = &scripted{replies: []*msg.AssistantMessage{
+		calls(write),
+		calls(msg.NewToolCall("r", "read", map[string]any{"path": ref})),
+		calls(write),
+		text("NOTHING else."),
+	}}
+	got, _, err = Run(context.Background(), conversation(s), in, tools, nil)
+	if err != nil || len(got) != 1 || got[0].File != "references/tags.md" {
+		t.Fatalf("after reading: %+v, %v", got, err)
+	}
+	if first := msg.TextOf(s.sent[1][len(s.sent[1])-1].(msg.ToolResultMessage).Content); !strings.Contains(first, "read it whole first") {
+		t.Errorf("blind write result = %q", first)
+	}
+}
+
+// TestRunTakesNothingAtItsWord: "NOTHING" ends the review with no
+// proposals and no repair; a claim to have saved something with no call
+// behind it gets one request to make the calls.
+func TestRunTakesNothingAtItsWord(t *testing.T) {
+	in := input(t, true)
+	s := &scripted{replies: []*msg.AssistantMessage{text("NOTHING")}}
+	if got, st, err := Run(context.Background(), conversation(s), in, nil, nil); err != nil || len(got) != 0 || st.Repaired {
+		t.Fatalf("NOTHING: %+v, %+v, %v", got, st, err)
+	}
+	s = &scripted{replies: []*msg.AssistantMessage{text("Saved the pnpm preference; nothing else."), text(memoryAnswer)}}
+	if got, st, err := Run(context.Background(), conversation(s), in, nil, nil); err != nil || len(got) != 1 || !st.Repaired {
+		t.Fatalf("false claim: %+v, %+v, %v", got, st, err)
 	}
 }
 
@@ -161,7 +250,7 @@ func TestRunRepairsAnAnswerThatIsNotJSON(t *testing.T) {
 		t.Fatalf("Run = %+v, %+v, %v", got, st, err)
 	}
 	last := s.sent[1][len(s.sent[1])-1].(msg.UserMessage)
-	if !strings.Contains(msg.TextOf(last.Content), "not the JSON object") {
+	if !strings.Contains(msg.TextOf(last.Content), "No proposal was recorded") {
 		t.Errorf("repair request = %q", msg.TextOf(last.Content))
 	}
 	s = &scripted{replies: []*msg.AssistantMessage{text("no"), text("still no")}}

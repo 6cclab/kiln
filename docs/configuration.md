@@ -1168,11 +1168,15 @@ cache serves it: on Anthropic the conversation is read from cache, and on Ollama
 llama.cpp the KV cache already holds it, so only the instruction is new. The review sees
 the whole conversation, kiln's own skills under `~/.kiln/skills` (with how often each was
 used and whether it has gone stale) and the project's recent memory notes. It may call
-`read` (kiln's skills, and files the session may read without asking) and `skill`; any
-other tool call is refused without running. It answers with proposals: whole skill files
-under `~/.kiln/skills/<name>/` (`SKILL.md` or `references/`, `templates/`, `scripts/`
-files) and memory notes with evidence. An answer that is not the expected JSON gets one
-request to fix it. Typing a new prompt cancels a review that is waiting or running; it is
+`read` (kiln's skills, and files the session may read without asking) and `skill`. It
+proposes the way an agent saves anything: `write` or `edit` on a file under
+`~/.kiln/skills/<name>/` (`SKILL.md` or `references/`, `templates/`, `scripts/` files),
+and `memory_write` for a note with evidence. Those calls never run; each becomes a
+proposal, and its result tells the model whether it was recorded or why not (a file it has
+not read whole, a `SKILL.md` that would not load), so it can fix it. Any other tool call
+is refused without running. A model that cannot call tools may answer with a JSON list of
+proposals instead. A reply that claims to have saved something with no call behind it gets
+one request to make the calls. Typing a new prompt cancels a review that is waiting or running; it is
 tried again after a later run. Its usage counts toward the session's cost, and the run log
 records its requests, tool calls and cached prompt tokens.
 

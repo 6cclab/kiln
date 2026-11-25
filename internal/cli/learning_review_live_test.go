@@ -58,6 +58,15 @@ func TestLiveLearningReview(t *testing.T) {
 		tl, _ := set.Get(name)
 		toolDefs = append(toolDefs, provider.ToolDef{Name: tl.Name, Description: tl.Description, Parameters: tl.Parameters})
 	}
+	// A session with personal memory on also declares the memory tools.
+	store, err := memory.Open(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, tl := range tools.MemoryTools(store, "/proj") {
+		toolDefs = append(toolDefs, provider.ToolDef{Name: tl.Name, Description: tl.Description, Parameters: tl.Parameters})
+	}
 	// The session's own requests set no max_tokens (the model's default),
 	// as kiln's lane does; KILN_REVIEW_THINKING sets a thinking level.
 	opts := provider.StreamOptions{SystemPrompt: liveSystemPrompt, Tools: toolDefs,
@@ -104,15 +113,30 @@ func TestLiveLearningReview(t *testing.T) {
 			in := review.Input{SkillsDir: skillsDir, MemoryScope: "/proj", Session: "live", Memory: []memory.Record{}}
 			runner := reviewToolRunner(tools.Builtins(execenv.New(dir)), dir, skillsDir, func(string) bool { return false })
 			reviewStart := time.Now()
+			timed := &firstToken{Streamer: p}
+			conv.Streamer = timed
 			proposals, st, err := review.Run(ctx, conv, in, runner, nil)
+			// Control: the review's first request with the system prompt
+			// changed, so no cache can serve it; its time to first token
+			// is what reading the whole prompt costs.
+			instruction, _ := review.Instruction(in)
+			cold := opts
+			cold.SystemPrompt = fmt.Sprintf("[%d] ", time.Now().UnixNano()) + opts.SystemPrompt
+			cold.MaxTokens = 16
+			coldTimer := &firstToken{Streamer: p}
+			ch, wait := provider.Stream(ctx, coldTimer, model, append(append([]msg.Message(nil), messages...),
+				msg.UserMessage{Role: msg.RoleUser, Content: msg.Blocks{msg.Text(instruction)}}), cold)
+			for range ch {
+			}
+			_, _ = wait()
 			got := []string{}
 			for _, pr := range proposals {
 				got = append(got, pr.Kind+":"+pr.Target())
 			}
 			verdict := c.check(proposals)
-			rows = append(rows, fmt.Sprintf("%-22s run %d | %-4s | proposals %v | err %v | req %d tools %d refused %d repaired %v | last-request prompt %d tok | review prompt: %d evaluated, %d cache-read | %.1fs + %.1fs",
-				c.name, i+1, verdict, got, err, st.Requests, st.ToolCalls, st.Refused, st.Repaired, lastInput,
-				st.InputTotal-st.CacheRead, st.CacheRead, reviewStart.Sub(start).Seconds(), time.Since(reviewStart).Seconds()))
+			rows = append(rows, fmt.Sprintf("%-22s run %d | %-4s | proposals %v | err %v | req %d tools %d captured %d refused %v repaired %v | prompt %d tok, %d cache-read | first token %.2fs (cold %.2fs) | %.1fs + %.1fs",
+				c.name, i+1, verdict, got, err, st.Requests, st.ToolCalls, st.Captured, st.Refused, st.Repaired, lastInput,
+				st.CacheRead, timed.first.Seconds(), coldTimer.first.Seconds(), reviewStart.Sub(start).Seconds(), time.Since(reviewStart).Seconds()))
 			for _, pr := range proposals {
 				body := pr.Content + pr.Text
 				t.Logf("%s run %d proposal %s why=%q\n%s", c.name, i+1, pr.Target(), pr.Why, clipLive(body, 900))
@@ -120,6 +144,30 @@ func TestLiveLearningReview(t *testing.T) {
 		}
 	}
 	t.Log("\n" + strings.Join(rows, "\n"))
+}
+
+// firstToken times the first request's first stream event.
+type firstToken struct {
+	review.Streamer
+	first time.Duration
+	n     int
+}
+
+func (f *firstToken) Stream(ctx context.Context, m provider.Model, transcript []msg.Message, opts provider.StreamOptions) (<-chan msg.StreamEvent, func() (*msg.AssistantMessage, error)) {
+	f.n++
+	start, measure := time.Now(), f.n == 1
+	in, wait := f.Streamer.Stream(ctx, m, transcript, opts)
+	out := make(chan msg.StreamEvent)
+	go func() {
+		defer close(out)
+		for ev := range in {
+			if measure && f.first == 0 && ev.Type != msg.EventStart {
+				f.first = time.Since(start)
+			}
+			out <- ev
+		}
+	}()
+	return out, wait
 }
 
 func clipLive(s string, n int) string {

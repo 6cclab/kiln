@@ -162,7 +162,7 @@ func attachLearningReview(started *agent.Started, cwd string, settings claudeset
 			}
 		})
 		diag.L().Info("learning review", "model", model.Provider+"/"+model.ID, "requests", st.Requests,
-			"tool_calls", st.ToolCalls, "refused", st.Refused, "repaired", st.Repaired,
+			"tool_calls", st.ToolCalls, "captured", st.Captured, "refused", strings.Join(st.Refused, ","), "repaired", st.Repaired,
 			"cache_read", st.CacheRead, "input_total", st.InputTotal, "kept", len(proposals), "err", fmt.Sprint(err))
 		added, err := queue.Add(proposals)
 		if err != nil {
