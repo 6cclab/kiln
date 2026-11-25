@@ -27,7 +27,6 @@ import (
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudecommands "github.com/andrepato/harness/internal/claude/commands"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
-	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	claudeskills "github.com/andrepato/harness/internal/claude/skills"
@@ -37,7 +36,6 @@ import (
 	"github.com/andrepato/harness/internal/memory"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
-	"github.com/andrepato/harness/internal/review"
 	"github.com/andrepato/harness/internal/session/jsonl"
 )
 
@@ -360,7 +358,9 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		Todos: deps.Todos,
 	}))
 
-	registry.Add(pendingSource(review.DefaultQueue(), paths.KilnSkillsDir(), deps.Memory))
+	stores := defaultLearningStores(deps.Memory, started.SessionID)
+	registry.Add(pendingSource(stores))
+	registry.Add(learnedSource(stores))
 
 	for _, s := range slashcommands.ClaudeCommandSources(deps.Cwd) {
 		registry.Add(s)

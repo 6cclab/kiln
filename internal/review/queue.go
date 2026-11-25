@@ -32,6 +32,9 @@ import (
 const (
 	KindSkill  = "skill"
 	KindMemory = "memory"
+	// KindArchive moves a kiln-made skill that went unused out of the
+	// skills directory (curator.go); /learned revert brings it back.
+	KindArchive = "archive"
 )
 
 // Proposal is one change the review suggests.
@@ -63,8 +66,11 @@ type Proposal struct {
 
 // Target names what a proposal changes, for listings.
 func (p Proposal) Target() string {
-	if p.Kind == KindSkill {
+	switch p.Kind {
+	case KindSkill:
 		return p.Skill + "/" + p.File
+	case KindArchive:
+		return p.Skill
 	}
 	return p.Key
 }
@@ -161,15 +167,21 @@ func Hash(path string) string {
 	if err != nil {
 		return ""
 	}
+	return hashBytes(data)
+}
+
+func hashBytes(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
 
 // Apply makes an approved proposal's change: a skill file written under
-// skillsDir, or a memory note put in store. A skill file that changed
-// since the proposal was made is refused, so approval never overwrites an
-// edit the person (or another approval) made in between.
-func Apply(ctx context.Context, p Proposal, skillsDir string, store *memory.Store) error {
+// skillsDir, a memory note put in store, or an unused skill archived.
+// Skill changes are logged in h, so /learned revert can undo them. A
+// skill file that changed since the proposal was made is refused, so
+// approval never overwrites an edit the person (or another approval) made
+// in between.
+func Apply(ctx context.Context, p Proposal, skillsDir string, store *memory.Store, h History, session string) error {
 	switch p.Kind {
 	case KindSkill:
 		if err := validSkillTarget(p.Skill, p.File); err != nil {
@@ -179,15 +191,22 @@ func Apply(ctx context.Context, p Proposal, skillsDir string, store *memory.Stor
 		if Hash(path) != p.Base {
 			return fmt.Errorf("%s changed since this was proposed; reject it and run /refine for a fresh one", p.Target())
 		}
+		before, readErr := os.ReadFile(path)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		return writeAtomic(path, []byte(p.Content), 0o644)
+		if err := writeAtomic(path, []byte(p.Content), 0o644); err != nil {
+			return err
+		}
+		return h.RecordWrite(skillsDir, path, before, readErr == nil, []byte(p.Content), SourceReview, session, p.ID)
 	case KindMemory:
 		if store == nil {
 			return errors.New("personal memory is off in this session")
 		}
 		_, err := store.Put(ctx, memory.Record{Scope: p.Scope, Key: p.Key, Kind: p.Type, Text: p.Text, Evidence: "kiln review: " + p.Evidence})
+		return err
+	case KindArchive:
+		_, err := Archive(h, skillsDir, p.Skill, SourceCurator, session, p.ID)
 		return err
 	}
 	return fmt.Errorf("unknown proposal kind %q", p.Kind)

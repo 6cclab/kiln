@@ -39,6 +39,10 @@ type Env struct {
 	fileStamps *fileStamps
 	// Cwd is the working directory relative paths resolve against.
 	Cwd string
+	// OnWrite, when set, sees every file the edit and write tools change:
+	// what it held before (existed false for a new file) and after. The
+	// skill history uses it (internal/review).
+	OnWrite func(path string, before []byte, existed bool, after []byte)
 	// ShellPath overrides the shell used by Exec. Empty selects pi's
 	// default: /bin/bash if present, else the first "bash" on PATH, else
 	// "sh".

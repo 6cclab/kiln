@@ -1161,13 +1161,20 @@ are separate from conversational memory and evaluated policy candidates.
 With `enabled` in user settings (`~/.claude/settings.json`, `~/.kiln/settings.json` or
 `--settings`), an interactive session reviews itself in the background: once a run ends
 with `everyPrompts` prompts or `everyToolCalls` tool calls since the last review, and the
-session has then sat idle for 20 seconds, kiln sends the session's model one request with
-no tools. It reads a digest of the conversation (what you typed, the agent's replies, tool
-calls by name, failed tool results), kiln's own skills under `~/.kiln/skills` and the
-project's recent memory notes, and answers with proposals: whole skill files under
-`~/.kiln/skills/<name>/` (`SKILL.md` or `references/`, `templates/`, `scripts/` files) and
-memory notes with evidence. Typing a new prompt cancels a review that is waiting or running;
-it is tried again after a later run. Its usage counts toward the session's cost.
+session has then sat idle for 20 seconds, kiln continues the session's last request with
+the review's instruction added at the end. Everything before it (model, system prompt,
+tools, every message) is byte-for-byte what the session just sent, so the provider's prompt
+cache serves it: on Anthropic the conversation is read from cache, and on Ollama or
+llama.cpp the KV cache already holds it, so only the instruction is new. The review sees
+the whole conversation, kiln's own skills under `~/.kiln/skills` (with how often each was
+used and whether it has gone stale) and the project's recent memory notes. It may call
+`read` (kiln's skills, and files the session may read without asking) and `skill`; any
+other tool call is refused without running. It answers with proposals: whole skill files
+under `~/.kiln/skills/<name>/` (`SKILL.md` or `references/`, `templates/`, `scripts/`
+files) and memory notes with evidence. An answer that is not the expected JSON gets one
+request to fix it. Typing a new prompt cancels a review that is waiting or running; it is
+tried again after a later run. Its usage counts toward the session's cost, and the run log
+records its requests, tool calls and cached prompt tokens.
 
 Nothing is written until you approve it. Proposals wait in `~/.kiln/proposals/`, a note
 says when a review added some, and startup says when some are waiting:
@@ -1180,11 +1187,28 @@ says when a review added some, and startup says when some are waiting:
 
 Approval refuses a skill file that changed after it was proposed. A proposal that would
 write outside its skill's directory, a `SKILL.md` that would not load under its
-directory's name, or a memory note without evidence is dropped when the review answers.
+directory's name, a replacement for an existing file the review neither was shown in full
+nor read whole, or a memory note without evidence is dropped when the review answers.
 Project and local settings can turn the review off or make it less frequent, never turn
 it on or make it more frequent; `learningEnabled: false` turns it off, and
 `personalMemoryEnabled: false` stops memory proposals. The review's rules are adapted
 from hermes-agent's background review (`internal/review/prompt.go`).
+
+**Skill history and use.** Every change kiln makes under `~/.kiln/skills` (an approved
+proposal, or the agent's `write` or `edit` tool, as with `/learn` and `/refine`) is logged
+in `~/.kiln/skill-history.jsonl` with the file's previous content. Each use of a kiln skill
+(the `skill` tool or its slash command) is counted in `~/.kiln/skill-usage.json`.
+
+```text
+/learned                 kiln's skills: who made each, how often it was used, stale ones
+/learned history [skill] the changes, newest first
+/learned revert <n>      undo change n (refused if the file changed since); undoable too
+```
+
+A skill with no history was made by hand. With the review on, startup also proposes
+archiving each kiln-made skill unused and unchanged for 30 days (stale after 14); approving
+moves it to `~/.kiln/skills-archive/` and `/learned revert` brings it back, while rejecting
+keeps it and is remembered for 30 days. Skills made by hand are never proposed.
 
 ### Evaluated personal policies
 

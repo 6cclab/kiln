@@ -84,6 +84,7 @@ func WriteTool(env *execenv.Env) *tool.Tool {
 					return tool.Errorf("%s", errText), nil
 				}
 				env.NoteFileContent(absolutePath, []byte(in.Content))
+				env.NoteWrite(absolutePath, existing, !newFile, []byte(in.Content))
 				if ctx.Err() != nil {
 					return tool.Errorf("Operation aborted"), nil
 				}

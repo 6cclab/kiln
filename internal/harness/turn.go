@@ -867,6 +867,7 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		}
 		cancelReq(nil)
 		if err == nil {
+			l.noteRequest(m, transcript, opts, responseEntryID)
 			return final, target, tip, nil
 		}
 		lastErr = err

@@ -738,6 +738,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	addDirs := args.AddDir
 
 	env := execenv.New(cwd)
+	skillUsage, skillHistory := review.DefaultUsage(), review.DefaultHistory()
 
 	skillList := skills.LoadSkills(cwd)
 
@@ -848,7 +849,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	selections := newContextSelectionLedger()
 	selections.ExcludeConfiguredSkills(skillRecords, settings.SkillDiscovery.Excluded)
 	skillRecords = discoveryRecords(skillRecords, settings.SkillDiscovery)
-	skillTool := tools.SkillToolWith(skillRecords, nil, skillRewriter(skillModsFn))
+	skillTool := tools.SkillToolWith(skillRecords, nil, countToolSkillUse(skillUsage, paths.KilnSkillsDir(), skillRewriter(skillModsFn)))
 
 	permissionMode := resolvePermissionMode(args, settings)
 	perms := settings.Permissions
@@ -1328,6 +1329,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	sizing.started = started
 	started.OnTierChanged = sizing.onTierChanged
 	phase("session started", "session", started.SessionID, "transcript", started.TranscriptPath)
+	env.OnWrite = recordSkillWrite(skillHistory, paths.KilnSkillsDir(), started.SessionID)
 	diag.L().Info("run log", "session", started.SessionID, "path", logPath)
 	logHarnessEvents(started.Harness)
 
@@ -1648,7 +1650,10 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// nothing.
 	transcriptNote := &rebindable[func(string)]{}
 	if !args.Print {
-		defer attachLearningReview(started, reg, settings, projectMemory, memoryScope(cwd), modelRouter.direct, transcriptNote.get)()
+		if reviewOn(settings) {
+			curateSkills(review.DefaultQueue(), skillHistory, skillUsage, paths.KilnSkillsDir(), time.Now())
+		}
+		defer attachLearningReview(started, cwd, settings, projectMemory, memoryScope(cwd), taskReadAllowed, transcriptNote.get)()
 	}
 	// The model router's own classifier (kiln/auto's first-request call on
 	// modelRoles.fast) is built in setupModelRouter, before the harness
@@ -1996,7 +2001,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		Agents:             agentsList,
 		Skills:             allSkills,
 		Memory:             projectMemory,
-		SkillPrompt:        skillSlashRewriter(skillModsFn),
+		SkillPrompt:        countSlashSkillUse(skillUsage, paths.KilnSkillsDir(), skillSlashRewriter(skillModsFn)),
 		Plugins:            activePlugins,
 		PluginCommands:     pluginCommands,
 		MCP:                mcpSess,

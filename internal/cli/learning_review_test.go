@@ -20,7 +20,7 @@ func ev(t harness.EventType) harness.Event { return harness.Event{Type: t} }
 // successful review resets the count.
 func TestReviewSchedulerRunsWhenDueAndIdle(t *testing.T) {
 	ran := make(chan struct{}, 4)
-	s := &reviewScheduler{everyPrompts: 2, everyToolCalls: 100, idle: 10 * time.Millisecond, run: func(context.Context) { ran <- struct{}{} }}
+	s := &reviewScheduler{everyPrompts: 2, everyToolCalls: 100, idle: 10 * time.Millisecond, run: func(context.Context) bool { ran <- struct{}{}; return true }}
 	defer s.close()
 
 	s.observe(ev(harness.EventRunStart))
@@ -57,10 +57,11 @@ func TestReviewSchedulerRunsWhenDueAndIdle(t *testing.T) {
 func TestReviewSchedulerYieldsToThePerson(t *testing.T) {
 	started := make(chan struct{}, 2)
 	cancelled := make(chan struct{}, 2)
-	s := &reviewScheduler{everyPrompts: 1, everyToolCalls: 100, idle: 30 * time.Millisecond, run: func(ctx context.Context) {
+	s := &reviewScheduler{everyPrompts: 1, everyToolCalls: 100, idle: 30 * time.Millisecond, run: func(ctx context.Context) bool {
 		started <- struct{}{}
 		<-ctx.Done()
 		cancelled <- struct{}{}
+		return true
 	}}
 	defer s.close()
 
@@ -90,6 +91,42 @@ func TestReviewSchedulerYieldsToThePerson(t *testing.T) {
 	}
 }
 
+// TestReviewSchedulerKeepsCountsWhenItCannotRun: a review with nothing to
+// continue (the run ended mid tool step, say) keeps the counts, so the
+// next run that ends tries again.
+func TestReviewSchedulerKeepsCountsWhenItCannotRun(t *testing.T) {
+	ran := make(chan struct{}, 4)
+	s := &reviewScheduler{everyPrompts: 1, everyToolCalls: 100, idle: time.Millisecond, run: func(context.Context) bool { ran <- struct{}{}; return false }}
+	defer s.close()
+	s.observe(ev(harness.EventRunStart))
+	s.observe(ev(harness.EventRunEnd))
+	<-ran
+	waitFor(t, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.cancel == nil })
+	s.mu.Lock()
+	prompts := s.prompts
+	s.mu.Unlock()
+	if prompts != 1 {
+		t.Fatalf("prompts = %d after a review that could not run, want 1 kept", prompts)
+	}
+	s.observe(ev(harness.EventRunEnd))
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("not tried again after the next run")
+	}
+}
+
+func testStores(dir string, store *memory.Store) learningStores {
+	return learningStores{
+		queue:     review.Queue{Dir: filepath.Join(dir, "proposals")},
+		history:   review.History{Path: filepath.Join(dir, "skill-history.jsonl")},
+		usage:     review.Usage{Path: filepath.Join(dir, "skill-usage.json")},
+		skillsDir: filepath.Join(dir, "skills"),
+		memory:    store,
+		session:   "s1",
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -115,6 +152,7 @@ func TestPendingListsApprovesAndRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	ls := testStores(dir, store)
 	skill := "---\nname: release-flow\ndescription: Tag and publish a kiln release.\n---\n# Release flow\n"
 	if _, err := queue.Add([]review.Proposal{
 		{Kind: review.KindSkill, Skill: "release-flow", File: "SKILL.md", Content: skill, Why: "walked through it"},
@@ -124,14 +162,14 @@ func TestPendingListsApprovesAndRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list := strings.Join(pendingRun(ctx, queue, skillsDir, store, ""), "\n")
+	list := strings.Join(pendingRun(ctx, ls, ""), "\n")
 	for _, want := range []string{"#1 new skill release-flow/SKILL.md — walked through it", "    + description: Tag and publish a kiln release.", "#2 memory check-first (preference) — stated", "    evidence: The person said always.", "/pending approve <id…|all>"} {
 		if !strings.Contains(list, want) {
 			t.Errorf("list lacks %q:\n%s", want, list)
 		}
 	}
 
-	out := strings.Join(pendingRun(ctx, queue, skillsDir, store, "approve 1 #2 9"), "\n")
+	out := strings.Join(pendingRun(ctx, ls, "approve 1 #2 9"), "\n")
 	for _, want := range []string{"Approved #1: wrote", "Approved #2: saved memory check-first.", "No pending proposal 9."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("approve output lacks %q:\n%s", want, out)
@@ -144,7 +182,7 @@ func TestPendingListsApprovesAndRejects(t *testing.T) {
 		t.Errorf("memory not saved: %+v", rec)
 	}
 
-	out = strings.Join(pendingRun(ctx, queue, skillsDir, store, "reject all"), "\n")
+	out = strings.Join(pendingRun(ctx, ls, "reject all"), "\n")
 	if !strings.Contains(out, "Rejected #3 guess.") {
 		t.Errorf("reject output = %q", out)
 	}
@@ -154,7 +192,7 @@ func TestPendingListsApprovesAndRejects(t *testing.T) {
 	if left, _ := queue.List(); len(left) != 0 {
 		t.Errorf("%d proposals left, want none", len(left))
 	}
-	if got := pendingRun(ctx, queue, skillsDir, store, "delete 1"); !strings.HasPrefix(got[0], "Usage:") {
+	if got := pendingRun(ctx, ls, "delete 1"); !strings.HasPrefix(got[0], "Usage:") {
 		t.Errorf("bad verb = %q, want usage", got)
 	}
 }

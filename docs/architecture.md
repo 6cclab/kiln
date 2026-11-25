@@ -96,7 +96,12 @@ Starting from a user prompt in the TUI or `-p` mode:
    the request once a block's last 1,500+ bytes repeat one varied chunk at
    least four times), kept up to the chunk's first copy, and continued with
    a note marked `KilnHook: "Repetition"`, up to twice per operation
-   (`internal/harness/repetition.go`).
+   (`internal/harness/repetition.go`). Each answered request is remembered
+   with its model, options and transcript; while its answer is still the
+   tip (and called no tools), `Lane.ForkLastRequest` hands a side request
+   that continues it byte for byte, so a prompt cache serves the prefix.
+   The learning review is built on it (`internal/harness/fork.go`,
+   `internal/review`).
 8. **Tool call → `before_tool` hook → permission gate → execution → `after_tool`.**
    `Lane.beginTool` first runs `Hooks.OnBeforeTool` (the CLI wires this to
    `hooks.GuardToolCall`, running `.claude/settings.json` `PreToolUse` hooks
