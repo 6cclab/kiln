@@ -738,6 +738,21 @@ Precedence on a name clash: `--mcp-config`, then local, then project, then
 user. A read/parse failure or missing file returns an empty server map
 instead of an error, so a broken config never blocks startup.
 
+### After connecting
+
+`internal/mcp/lifecycle.go`, matching Claude Code:
+
+- A server that sends `notifications/tools/list_changed` has its tools
+  fetched again and re-registered for the session; if that fetch fails, the
+  previous tools stay.
+- A stdio server whose process exits is marked disconnected with a note
+  (`MCP server "name" disconnected · /mcp reconnect name to restart it`) and
+  is not restarted on its own. Calls to its tools say it is disconnected.
+- A remote (HTTP/SSE) server is pinged every 30 seconds; after two failed
+  pings in a row (the server restarted or went away) kiln reconnects it,
+  waiting 1, 2, 4, 8 and 16 seconds between attempts, and notes the outcome.
+- `/mcp reconnect <server|all>` connects a server again at any time.
+
 Server entry (one struct covers both transports):
 
 ```json

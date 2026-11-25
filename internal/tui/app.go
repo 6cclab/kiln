@@ -908,6 +908,9 @@ func (m Model) update(tm tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgChannelEvent:
 		return m.injectChannelEvent(msg)
 
+	case MsgShellExited:
+		return m.injectShellExit(msg)
+
 	case MsgQueue:
 		m.spinner.SetQueueLen(msg.Len)
 		// Len 0 is only ever sent by the lane's own drain (drainInbox's

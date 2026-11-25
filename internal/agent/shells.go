@@ -104,6 +104,11 @@ type BackgroundShells struct {
 	// registry synchronously in a way that blocks. nil (print mode, tests)
 	// means no notification.
 	onChange func()
+	// onExit, if set, is called once when a shell ends on its own (it
+	// exited or failed to run; not when it was killed), with its final
+	// snapshot, so the session can tell the model (Claude Code's
+	// task-notification). Same calling rules as onChange.
+	onExit func(Shell)
 }
 
 // NewBackgroundShells returns an empty registry.
@@ -116,6 +121,14 @@ func NewBackgroundShells() *BackgroundShells {
 func (b *BackgroundShells) SetOnChange(fn func()) {
 	b.mu.Lock()
 	b.onChange = fn
+	b.mu.Unlock()
+}
+
+// SetOnExit registers a callback fired when a shell ends on its own. Set
+// once at wiring time, before any shell starts.
+func (b *BackgroundShells) SetOnExit(fn func(Shell)) {
+	b.mu.Lock()
+	b.onExit = fn
 	b.mu.Unlock()
 }
 
@@ -233,6 +246,12 @@ func (b *BackgroundShells) Start(ctx context.Context, command string, env *exece
 		}
 		entry.mu.Unlock()
 		b.notify()
+		b.mu.Lock()
+		onExit := b.onExit
+		b.mu.Unlock()
+		if onExit != nil {
+			onExit(entry.snapshot())
+		}
 	})
 
 	snap := entry.snapshot()

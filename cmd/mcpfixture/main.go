@@ -27,6 +27,11 @@
 //	                 of a clock: the test creates the file when it has seen
 //	                 what it needs, so a slow machine cannot end the wait
 //	                 early or late. Used by TestMCP_FirstTurnDoesNotWaitForConnect.
+//	--exit-gate      exit (status 3) once the given file exists, mid-session:
+//	                 a server that crashes, for the hub's disconnect tests.
+//	--add-tool-gate  once the given file exists, add a tool named "late",
+//	                 which makes the server send notifications/tools/
+//	                 list_changed, for the hub's tool-refresh tests.
 package main
 
 import (
@@ -60,6 +65,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	hang := fs.Bool("hang", false, "start but never complete MCP initialize")
 	connectDelay := fs.Duration("connect-delay", 0, "sleep this long before completing MCP initialize (test only)")
 	connectGate := fs.String("connect-gate", "", "wait until this file exists before completing MCP initialize (test only)")
+	exitGate := fs.String("exit-gate", "", "exit once this file exists (test only)")
+	addToolGate := fs.String("add-tool-gate", "", "add a tool named late once this file exists (test only)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -96,9 +103,34 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	}
 
 	server := mcpfixture.NewServer()
+	if *exitGate != "" {
+		go func() {
+			waitForFile(*exitGate)
+			os.Exit(3)
+		}()
+	}
+	if *addToolGate != "" {
+		go func() {
+			waitForFile(*addToolGate)
+			mcp.AddTool(server.Server, &mcp.Tool{Name: "late", Description: "a tool added after connect"},
+				func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+					return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "late"}}}, nil, nil
+				})
+		}()
+	}
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintf(stderr, "mcpfixture: server failed: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// waitForFile returns once path exists.
+func waitForFile(path string) {
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

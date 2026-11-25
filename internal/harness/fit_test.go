@@ -29,9 +29,15 @@ func requestsFor(srv *tkfaux.Server, model string) []tkfaux.Request {
 	return out
 }
 
-// longText is about n tokens of plain prose.
+// longText is about n tokens of plain prose. Each sentence is numbered:
+// the same sentence repeated is a degenerate reply, which the repetition
+// guard (repetition.go) cuts.
 func longText(n int) string {
-	return strings.Repeat("The quick brown fox jumps over the lazy dog. ", n*4/45)
+	var b strings.Builder
+	for i := 0; b.Len() < n*4; i++ {
+		fmt.Fprintf(&b, "The quick brown fox %d jumps over the lazy dog. ", i)
+	}
+	return b.String()
 }
 
 const smallWindow = 32768 // faux-2's context window

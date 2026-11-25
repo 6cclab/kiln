@@ -91,7 +91,12 @@ Starting from a user prompt in the TUI or `-p` mode:
    call is continued the same way, as Claude Code does: its resume message
    is committed with `KilnHook: "OutputLimit"`, up to three times per
    operation, after which an `EventFault` says why the reply stopped
-   (`internal/harness/output_limit.go`).
+   (`internal/harness/output_limit.go`). A reply that degenerates into the
+   same text over and over is cut while it streams (`repeatWatch` cancels
+   the request once a block's last 1,500+ bytes repeat one varied chunk at
+   least four times), kept up to the chunk's first copy, and continued with
+   a note marked `KilnHook: "Repetition"`, up to twice per operation
+   (`internal/harness/repetition.go`).
 8. **Tool call → `before_tool` hook → permission gate → execution → `after_tool`.**
    `Lane.beginTool` first runs `Hooks.OnBeforeTool` (the CLI wires this to
    `hooks.GuardToolCall`, running `.claude/settings.json` `PreToolUse` hooks

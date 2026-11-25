@@ -33,6 +33,10 @@ type FileInfo struct {
 // failures come back as an error.
 type Env struct {
 	confined *confinedFiles
+	// fileStamps is what the session last saw of each file it read or
+	// wrote (filestamps.go), so an edit refuses a file changed since.
+	// Created on first use; a copied Env shares it once it exists.
+	fileStamps *fileStamps
 	// Cwd is the working directory relative paths resolve against.
 	Cwd string
 	// ShellPath overrides the shell used by Exec. Empty selects pi's

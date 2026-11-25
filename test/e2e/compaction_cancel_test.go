@@ -10,6 +10,7 @@ package e2e
 // model whose compaction step never answers.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,7 +24,18 @@ import (
 
 // longReply is ~12k tokens by kiln's chars/4 estimate: four of them
 // outgrow faux-1's 32k retained tail, so /compact has history to summarise.
-var longReply = strings.Repeat("The quick brown fox jumps over the lazy dog. ", 1100)
+var longReply = prose(1100)
+
+// prose is n numbered sentences of filler. One sentence repeated would be
+// a degenerate reply, which kiln cuts as it streams
+// (internal/harness/repetition.go).
+func prose(n int) string {
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "The quick brown fox %d jumps over the lazy dog. ", i)
+	}
+	return b.String()
+}
 
 // hangingCompactionScript scripts seedTurns long replies, then a
 // compaction answer that never arrives, then after (one reply each).

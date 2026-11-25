@@ -31,9 +31,14 @@ type MCPTool struct {
 
 // ManageDeps is everything manageCommands binds against.
 type ManageDeps struct {
-	Gate               ManageGate
-	MCPStatuses        func() []ServerStatus
-	MCPTools           func() []MCPTool
+	Gate        ManageGate
+	MCPStatuses func() []ServerStatus
+	MCPTools    func() []MCPTool
+	// MCPReconnect connects a configured MCP server again (/mcp reconnect),
+	// returning its new status; MCPServerNames lists the configured servers
+	// for /mcp reconnect all. Nil when there is no MCP hub.
+	MCPReconnect       func(ctx context.Context, server string) (ServerStatus, error)
+	MCPServerNames     func() []string
 	Hooks              hooks.Config
 	Agents             []agents.Definition
 	Cwd                string
@@ -188,6 +193,56 @@ func mcpStatusesText(statuses []ServerStatus) []string {
 		}
 	}
 	return lines
+}
+
+// mcpAction is /mcp with arguments: "reconnect <server|all>", Claude
+// Code's inline action (its wording too). Connecting can take the connect
+// timeout, so it runs in the background with a busy line.
+func mcpAction(deps ManageDeps, args string) Result {
+	fields := strings.Fields(args)
+	if fields[0] != "reconnect" {
+		return Result{Output: []string{fmt.Sprintf("%q isn't a recognized /mcp action. Try reconnect.", fields[0])}}
+	}
+	if len(fields) != 2 {
+		return Result{Output: []string{"Usage: /mcp reconnect <server|all>"}}
+	}
+	if deps.MCPReconnect == nil {
+		return Result{Output: []string{"No MCP servers are configured."}}
+	}
+	target := fields[1]
+	return Result{
+		BusyLabel: "Reconnecting " + target,
+		Background: func(ctx context.Context) (Result, error) {
+			names := []string{target}
+			if target == "all" && deps.MCPServerNames != nil {
+				names = deps.MCPServerNames()
+				sort.Strings(names)
+			}
+			var out []string
+			for _, name := range names {
+				st, err := deps.MCPReconnect(ctx, name)
+				switch {
+				case err != nil:
+					out = append(out, err.Error()+". Run /mcp to see the configured servers.")
+				case st.OK:
+					out = append(out, fmt.Sprintf("Reconnected %q (%s).", name, pluralTools(st.ToolCount)))
+				default:
+					out = append(out, fmt.Sprintf("Couldn't reconnect %q: %s", name, st.Error))
+				}
+			}
+			if len(out) == 0 {
+				out = []string{"No MCP servers are configured."}
+			}
+			return Result{Output: out}, nil
+		},
+	}
+}
+
+func pluralTools(n int) string {
+	if n == 1 {
+		return "1 tool"
+	}
+	return fmt.Sprintf("%d tools", n)
 }
 
 // mcpModal builds /mcp's dialog spec (commands.ModalSpec.Kind == "mcp",
@@ -444,13 +499,23 @@ func ManageCommands(deps ManageDeps) Source {
 	cmds := make([]Command, 0, len(screens))
 	for _, s := range screens {
 		s := s
-		cmds = append(cmds, Command{
+		cmd := Command{
 			Name:        s.name,
 			Description: s.desc,
 			Run: func(ctx context.Context, args string) (Result, error) {
 				return Result{Modal: s.spec(), Output: s.text()}, nil
 			},
-		})
+		}
+		if s.name == "mcp" {
+			cmd.ArgumentHint = "[reconnect <server|all>]"
+			cmd.Run = func(ctx context.Context, args string) (Result, error) {
+				if strings.TrimSpace(args) == "" {
+					return Result{Modal: s.spec(), Output: s.text()}, nil
+				}
+				return mcpAction(deps, args), nil
+			}
+		}
+		cmds = append(cmds, cmd)
 	}
 	cmds = append(cmds, Command{
 		Name:         "plan",

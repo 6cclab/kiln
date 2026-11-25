@@ -205,6 +205,9 @@ func (l *Lane) drive(ctx context.Context, operationID, tip string) RunResult {
 	// outputLimitRecoveries counts replies continued after stopping at
 	// the output token limit (output_limit.go).
 	outputLimitRecoveries := 0
+	// repetitionRecoveries counts replies cut for repeating themselves
+	// and continued (repetition.go).
+	repetitionRecoveries := 0
 driveLoop:
 	for {
 		if err := ctx.Err(); err != nil {
@@ -340,6 +343,12 @@ driveLoop:
 				}
 			}
 		}
+		// A reply cut for repeating itself is kept, trimmed, and continued
+		// below.
+		var repeated *RepetitionError
+		if errors.As(err, &repeated) && final != nil {
+			err = nil
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				// final is what had streamed when the user interrupted.
@@ -348,6 +357,7 @@ driveLoop:
 			}
 			return l.finishFailed(operationID, tip, err)
 		}
+		l.repairToolCalls(final)
 		l.h.events.Emit(Event{Type: EventMessageEnd, Lane: l.name, OperationID: operationID, EntryID: responseEntryID, Message: final})
 		l.invokeAfterResponse(ctx, final)
 
@@ -400,6 +410,17 @@ driveLoop:
 		tip = responseEntryID
 
 		if len(toolCalls) == 0 {
+			if repeated != nil {
+				if repetitionRecoveries < maxRepetitionRecoveries {
+					repetitionRecoveries++
+					var contErr error
+					if tip, contErr = l.commitStopContinuation(tip, StopVerdict{Message: repetitionContinuation(repeated), Source: repetitionSource}); contErr != nil {
+						return l.finishFailed(operationID, tip, contErr)
+					}
+					continue
+				}
+				l.h.events.Emit(Event{Type: EventFault, Lane: l.name, OperationID: operationID, Err: repetitionExhausted{rep: repeated}})
+			}
 			if final.StopReason == msg.StopPause {
 				// Anthropic's pause_turn: a long server-tool turn (e.g. an
 				// extended web search) was cut for interim delivery, not
@@ -816,9 +837,11 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		reqCtx, cancelReq := context.WithCancelCause(ctx)
 		first, idle := l.h.opts.stallLimits(promptTokens)
 		watch := watchStall(cancelReq, l.h.opts.StallTimer, first, idle, promptTokens)
+		repeats := watchRepetition(cancelReq)
 		events, wait := provider.Stream(reqCtx, p, m, transcript, opts)
 		for ev := range events {
 			watch.saw(ev)
+			repeats.saw(ev)
 			if ev.Type == msg.EventError && ev.Error != nil {
 				interrupted = ev.Error
 			}
@@ -834,6 +857,13 @@ func (l *Lane) requestWithRetry(ctx context.Context, operationID, tip string, tr
 		var stalled *StallError
 		if err != nil && ctx.Err() == nil && errors.As(context.Cause(reqCtx), &stalled) {
 			err = stalled
+		}
+		var repeated *RepetitionError
+		if err != nil && ctx.Err() == nil && errors.As(context.Cause(reqCtx), &repeated) && interrupted != nil {
+			// Cut for repeating itself: hand back the reply up to the
+			// first copy; drive asks the model to go on (repetition.go).
+			cancelReq(nil)
+			return trimRepetition(interrupted, repeated), target, tip, repeated
 		}
 		cancelReq(nil)
 		if err == nil {
@@ -1060,6 +1090,9 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		// very differently to a user watching the transcript.
 		diag.L().Info("tool refused: unknown", "lane", l.name, "tool", call.Name)
 		r := tool.Errorf("There is no tool named %s, so the call did not run.", call.Name)
+		if close := closeToolNames(call.Name, l.callableNames(tools)); len(close) > 0 {
+			r = tool.Errorf("There is no tool named %s, so the call did not run. Did you mean %s?", call.Name, strings.Join(close, ", "))
+		}
 		refusal = &r
 	} else if !l.toolActive(call.Name) {
 		active, _ := l.GetActiveTools()

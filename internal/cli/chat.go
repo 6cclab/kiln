@@ -1643,9 +1643,12 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// The automatic learning review (learning_review.go): interactive
 	// sessions only, and only when the user's settings enable it. It
 	// proposes; /pending applies.
-	reviewNotice := &rebindable[func(string)]{}
+	// transcriptNote posts a note in the TUI's transcript once it binds
+	// (InteractiveDeps.SetTranscriptNote); before that, and in print mode,
+	// nothing.
+	transcriptNote := &rebindable[func(string)]{}
 	if !args.Print {
-		defer attachLearningReview(started, reg, settings, projectMemory, memoryScope(cwd), modelRouter.direct, reviewNotice.get)()
+		defer attachLearningReview(started, reg, settings, projectMemory, memoryScope(cwd), modelRouter.direct, transcriptNote.get)()
 	}
 	// The model router's own classifier (kiln/auto's first-request call on
 	// modelRoles.fast) is built in setupModelRouter, before the harness
@@ -1665,7 +1668,11 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	// adapters and a rebuilt tool_search into the tool set, the posture
 	// index into the prompt, and a re-gate so the active list reflects the
 	// tier's strategy over the real catalog.
+	var applyMu sync.Mutex
 	applyMCP := func() {
+		// Also called from the hub's goroutines (SetOnEvent below).
+		applyMu.Lock()
+		defer applyMu.Unlock()
 		mcpTools := hub.Tools()
 		extras, idx := buildMCPExtras(mcpTools)
 		mcpSess.setTools(mcpTools)
@@ -1677,6 +1684,32 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 		phase("mcp applied", "tools", len(mcpTools))
 	}
 	mcpSess.rebuild = applyMCP
+	// After the first connect, a server's tools can change
+	// (tools/list_changed) or it can drop and come back
+	// (internal/mcp/lifecycle.go): re-register its tools, and tell the
+	// person what happened to it, as Claude Code does.
+	hub.SetOnEvent(func(server string, ev mcpgate.HubEvent) {
+		note := func(text string) {
+			if fn := transcriptNote.get(); fn != nil {
+				fn(text)
+			}
+		}
+		switch ev {
+		case mcpgate.EventToolsChanged:
+			applyMCP()
+		case mcpgate.EventDisconnected:
+			if hub.Remote(server) {
+				note(fmt.Sprintf("MCP server %q disconnected · reconnecting", server))
+			} else {
+				note(fmt.Sprintf("MCP server %q disconnected · /mcp reconnect %s to restart it", server, server))
+			}
+		case mcpgate.EventReconnected:
+			applyMCP()
+			note(fmt.Sprintf("MCP server %q reconnected", server))
+		case mcpgate.EventReconnectFailed:
+			note(fmt.Sprintf("MCP server %q did not reconnect · /mcp reconnect %s to try again", server, server))
+		}
+	})
 	// dispatcher.Parent is read only once a subagent is actually dispatched
 	// (during a turn, from taskTool's Execute), by which point started is
 	// always set — see the dispatcher construction above.
@@ -2371,8 +2404,8 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 			StatusLine:      settings.StatusLine,
 			SetPlanApprover: func(fn tools.PlanApprover) { planApprover.set(fn) },
 			SetHookNotice:   func(fn func(string)) { hookNotice.set(fn) },
-			SetReviewNotice: func(fn func(string)) {
-				reviewNotice.set(fn)
+			SetTranscriptNote: func(fn func(string)) {
+				transcriptNote.set(fn)
 				if n := pendingNotice(review.DefaultQueue()); n != "" {
 					crash.Go(func() { fn(n) })
 				}

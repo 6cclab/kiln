@@ -256,6 +256,7 @@ func BackgroundBashTool(shells ShellManager, env *execenv.Env) *tool.Tool {
 		Description: "Start a long-running command in the background and return immediately with a shell id. " +
 			"Use for dev servers, watch builds, and anything that does not exit on its own. " +
 			"Read its output with bash_output and stop it with kill_shell. " +
+			"When it exits on its own you are told in a task notification, so there is no need to poll for that. " +
 			"For a command that finishes, use bash instead - this one never returns its output directly.",
 		Parameters: backgroundBashParameters,
 		Execute: func(ctx context.Context, args json.RawMessage, _ tool.Update, _ tool.Invocation) (tool.Result, error) {

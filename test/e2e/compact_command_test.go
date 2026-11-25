@@ -13,7 +13,7 @@ import (
 // nothing old enough to summarise.
 func TestCompactCommandReportsSizes(t *testing.T) {
 	// ~12k tokens per reply; four turns outgrow faux-1's 32k retained tail.
-	long := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 1100)
+	long := prose(1100)
 	var script strings.Builder
 	script.WriteString("model: faux-1\nsteps:\n")
 	for i := 0; i < 4; i++ {
