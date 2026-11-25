@@ -2,26 +2,28 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/andrepato/harness/internal/agent"
-	"github.com/andrepato/harness/internal/automode"
 	"github.com/andrepato/harness/internal/claude/paths"
 	claudesettings "github.com/andrepato/harness/internal/claude/settings"
-	slashcommands "github.com/andrepato/harness/internal/commands"
+	claudeskills "github.com/andrepato/harness/internal/claude/skills"
 	"github.com/andrepato/harness/internal/crash"
 	"github.com/andrepato/harness/internal/diag"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/memory"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/plural"
-	"github.com/andrepato/harness/internal/provider"
 	"github.com/andrepato/harness/internal/review"
+	"github.com/andrepato/harness/internal/tool"
+	"github.com/andrepato/harness/internal/tools"
 )
 
 // reviewIdleDelay is how long the session must sit idle after a due run
@@ -46,7 +48,9 @@ func reviewIdleDelay() time.Duration {
 type reviewScheduler struct {
 	everyPrompts, everyToolCalls int
 	idle                         time.Duration
-	run                          func(ctx context.Context) // one review
+	// run is one review; done is false when it could not run (nothing to
+	// continue), so the counts stay and a later run tries again.
+	run func(ctx context.Context) (done bool)
 
 	mu                 sync.Mutex
 	prompts, toolCalls int
@@ -94,9 +98,9 @@ func (s *reviewScheduler) start() {
 	s.cancel, s.timer = cancel, nil
 	s.mu.Unlock()
 	crash.Go(func() {
-		s.run(ctx)
+		done := s.run(ctx)
 		s.mu.Lock()
-		if ctx.Err() == nil {
+		if done && ctx.Err() == nil {
 			s.prompts, s.toolCalls = 0, 0
 		}
 		s.cancel = nil
@@ -113,26 +117,35 @@ func (s *reviewScheduler) close() {
 }
 
 // attachLearningReview starts the automatic review for an interactive
-// session when settings enable it. notify posts a line in the transcript;
-// it is read each time, so the TUI can bind it after start.
-func attachLearningReview(started *agent.Started, reg *provider.Registry, settings claudesettings.Settings, store *memory.Store, scope string, virtualDirect func() (provider.Model, bool), notify func() func(string)) (cleanup func()) {
-	if r := settings.LearningReview; r.Enabled == nil || !*r.Enabled || (settings.LearningEnabled != nil && !*settings.LearningEnabled) {
+// session unless settings turn it off. notify posts a line in the transcript;
+// it is read each time, so the TUI can bind it after start. readAllowed
+// says whether the session may read a path without asking; the review
+// reads kiln's own skills freely and anything else only when allowed.
+//
+// The review continues the session's last request (harness.SideRequest):
+// the same model, system prompt, tools and messages, with its instruction
+// added at the end, so the provider's prompt cache serves the whole
+// conversation and only the instruction is new.
+func attachLearningReview(started *agent.Started, cwd string, settings claudesettings.Settings, store *memory.Store, scope string, readAllowed func(string) bool, notify func() func(string)) (cleanup func()) {
+	if !reviewOn(settings) {
 		return func() {}
 	}
 	queue := review.DefaultQueue()
+	skillsDir := paths.KilnSkillsDir()
 	s := &reviewScheduler{
 		everyPrompts:   claudesettings.PositiveOr(settings.LearningReview.EveryPrompts, claudesettings.DefaultReviewEveryPrompts),
 		everyToolCalls: claudesettings.PositiveOr(settings.LearningReview.EveryToolCalls, claudesettings.DefaultReviewEveryToolCalls),
 		idle:           reviewIdleDelay(),
 	}
-	s.run = func(ctx context.Context) {
-		model := classifierSessionModel(started.Model, virtualDirect)
-		p, ok := reg.Provider(model.Provider)
-		if !ok {
-			diag.L().Warn("learning review", "err", "unknown provider "+model.Provider)
-			return
+	s.run = func(ctx context.Context) bool {
+		side, err := started.Lane.ForkLastRequest()
+		if err != nil {
+			diag.L().Info("learning review skipped", "reason", err.Error())
+			return false
 		}
-		in := review.Input{Messages: automode.BranchMessages(ctx, started.Lane), SkillsDir: paths.KilnSkillsDir(), MemoryScope: scope, Session: started.SessionID}
+		model := side.Model
+		in := review.Input{SkillsDir: skillsDir, MemoryScope: scope, Session: started.SessionID,
+			Usage: review.Activity(skillsDir, review.DefaultUsage().Load())}
 		if store != nil {
 			recent, err := store.Recent(ctx, scope, 50)
 			if err != nil {
@@ -142,24 +155,25 @@ func attachLearningReview(started *agent.Started, reg *provider.Registry, settin
 		}
 		ctx, cancel := context.WithTimeout(ctx, review.DefaultRunTimeout)
 		defer cancel()
-		proposals, err := review.Run(ctx, p, model, in, func(u msg.Usage) {
+		conv := review.Conversation{Streamer: side.Provider, Model: model, Messages: side.Messages, Options: side.Options}
+		proposals, st, err := review.Run(ctx, conv, in, reviewToolRunner(started.Harness.Tools(), cwd, skillsDir, readAllowed), func(u msg.Usage) {
 			if err := started.Harness.RecordSideUsage("learning review · "+model.Provider+"/"+model.ID, u); err != nil {
 				diag.L().Warn("learning review usage", "err", err)
 			}
 		})
-		if err != nil {
-			diag.L().Info("learning review", "model", model.Provider+"/"+model.ID, "err", err.Error(), "kept", len(proposals))
-		}
+		diag.L().Info("learning review", "model", model.Provider+"/"+model.ID, "requests", st.Requests,
+			"tool_calls", st.ToolCalls, "captured", st.Captured, "refused", strings.Join(st.Refused, ","), "repaired", st.Repaired,
+			"cache_read", st.CacheRead, "input_total", st.InputTotal, "kept", len(proposals), "err", fmt.Sprint(err))
 		added, err := queue.Add(proposals)
 		if err != nil {
 			diag.L().Warn("learning review: queue", "err", err)
 		}
-		diag.L().Info("learning review done", "proposed", len(added))
 		if len(added) > 0 {
 			if fn := notify(); fn != nil {
 				fn(fmt.Sprintf("Learning review proposed %s · /pending to review", plural.Count(len(added), "change")))
 			}
 		}
+		return true
 	}
 	events := started.Harness.Events()
 	unsubs := []func(){
@@ -175,6 +189,103 @@ func attachLearningReview(started *agent.Started, reg *provider.Registry, settin
 	}
 }
 
+// reviewOn reports whether the learning review (and the skill curator
+// that comes with it) runs: by default, unless the user's settings turn it
+// or learning off. It only proposes; nothing is written without /pending.
+func reviewOn(settings claudesettings.Settings) bool {
+	r := settings.LearningReview
+	return (r.Enabled == nil || *r.Enabled) && (settings.LearningEnabled == nil || *settings.LearningEnabled)
+}
+
+// reviewToolRunner runs the review's read-only tool calls with the
+// session's own tools: read for a kiln skill file, or any file the
+// session may read without asking; skill to load a skill. The review
+// never prompts the person, so a read that would ask is refused.
+func reviewToolRunner(set *tool.Set, cwd, skillsDir string, readAllowed func(string) bool) review.ToolRunner {
+	return func(ctx context.Context, call msg.ToolCall) (string, bool) {
+		if call.Name == "read" {
+			path, _ := call.Arguments["path"].(string)
+			abs := path
+			if !filepath.IsAbs(abs) {
+				abs = filepath.Join(cwd, abs)
+			}
+			inSkills := strings.HasPrefix(filepath.Clean(abs), skillsDir+string(os.PathSeparator))
+			if !inSkills && (readAllowed == nil || !readAllowed(abs)) {
+				return "Reading " + path + " needs the person's approval, which the learning review cannot ask for.", true
+			}
+		}
+		t, ok := set.Get(call.Name)
+		if !ok {
+			return "No " + call.Name + " tool in this session.", true
+		}
+		raw, err := json.Marshal(call.Arguments)
+		if err != nil {
+			return err.Error(), true
+		}
+		res, err := t.Execute(ctx, raw, nil, tool.Invocation{ToolCallID: call.ID, ToolName: call.Name, Cwd: cwd})
+		if err != nil {
+			return err.Error(), true
+		}
+		return msg.TextOf(res.Content), res.IsError
+	}
+}
+
+// curateSkills queues an archive proposal for each kiln-made skill that
+// has gone unused for review.ArchiveAfter (no model call). It runs at
+// startup with the learning review on.
+func curateSkills(queue review.Queue, h review.History, usage review.Usage, skillsDir string, now time.Time) int {
+	changes, err := h.List()
+	if err != nil {
+		diag.L().Warn("skill curator: history", "err", err)
+		return 0
+	}
+	pending, err := queue.List()
+	if err != nil {
+		return 0
+	}
+	proposals := review.CuratorProposals(review.Activity(skillsDir, usage.Load()), review.Provenance(changes), pending, now)
+	added, err := queue.Add(proposals)
+	if err != nil {
+		diag.L().Warn("skill curator: queue", "err", err)
+	}
+	return len(added)
+}
+
+// countToolSkillUse wraps the skill tool's rewrite to count each use of a
+// kiln skill, which the curator and the review read.
+func countToolSkillUse(usage review.Usage, skillsDir string, next func(context.Context, tools.SkillRecord, string) string) func(context.Context, tools.SkillRecord, string) string {
+	return func(ctx context.Context, r tools.SkillRecord, text string) string {
+		if err := usage.RecordUse(skillsDir, r.Dir); err != nil {
+			diag.L().Warn("skill usage", "err", err)
+		}
+		return next(ctx, r, text)
+	}
+}
+
+// countSlashSkillUse is countToolSkillUse for a skill the person runs
+// from the slash palette.
+func countSlashSkillUse(usage review.Usage, skillsDir string, next func(context.Context, claudeskills.Skill, string) string) func(context.Context, claudeskills.Skill, string) string {
+	return func(ctx context.Context, s claudeskills.Skill, text string) string {
+		if err := usage.RecordUse(skillsDir, s.FilePath); err != nil {
+			diag.L().Warn("skill usage", "err", err)
+		}
+		return next(ctx, s, text)
+	}
+}
+
+// watchSkills logs every change under ~/.kiln/skills in the skill history:
+// after each tool call as the agent's (its write or edit, a bash command,
+// a subagent), and before each run as made outside kiln's tools (by hand,
+// or a background command). It returns the watch, for commands that
+// change the directory themselves to rebase it.
+func watchSkills(started *agent.Started, h review.History, skillsDir string) *review.Watch {
+	w := review.NewWatch(skillsDir, h, started.SessionID)
+	events := started.Harness.Events()
+	events.On(harness.EventToolEnd, func(harness.Event) { w.Sync(review.SourceAgent) })
+	events.On(harness.EventRunStart, func(harness.Event) { w.Sync(review.SourceOutside) })
+	return w
+}
+
 // pendingNotice is the line shown at startup when proposals are waiting,
 // "" when there are none.
 func pendingNotice(queue review.Queue) string {
@@ -183,105 +294,6 @@ func pendingNotice(queue review.Queue) string {
 		return ""
 	}
 	return fmt.Sprintf("%s from earlier learning reviews · /pending to review", plural.Count(len(ps), "proposed change"))
-}
-
-// pendingSource is /pending: list the learning review's proposals, or
-// approve or reject them. Approval is the only way a proposal is written.
-func pendingSource(queue review.Queue, skillsDir string, store *memory.Store) slashcommands.Source {
-	return slashcommands.StaticSource(slashcommands.OriginBuiltin, []slashcommands.Command{{
-		Name:         "pending",
-		Description:  "Review the learning review's proposed skill and memory changes",
-		ArgumentHint: "[approve|reject <id…|all>]",
-		Run: func(ctx context.Context, args string) (slashcommands.Result, error) {
-			return slashcommands.Result{Output: pendingRun(ctx, queue, skillsDir, store, args)}, nil
-		},
-	}})
-}
-
-func pendingRun(ctx context.Context, queue review.Queue, skillsDir string, store *memory.Store, args string) []string {
-	ps, err := queue.List()
-	if err != nil {
-		return []string{"Could not read the proposals: " + err.Error()}
-	}
-	fields := strings.Fields(args)
-	if len(fields) == 0 {
-		return pendingList(ps, skillsDir)
-	}
-	verb := fields[0]
-	if (verb != "approve" && verb != "reject") || len(fields) < 2 {
-		return []string{"Usage: /pending, /pending approve <id…|all>, /pending reject <id…|all>"}
-	}
-	byID := map[int]review.Proposal{}
-	for _, p := range ps {
-		byID[p.ID] = p
-	}
-	var chosen []review.Proposal
-	var out []string
-	if len(fields) == 2 && fields[1] == "all" {
-		chosen = ps
-	} else {
-		for _, f := range fields[1:] {
-			id, err := strconv.Atoi(strings.TrimPrefix(f, "#"))
-			p, ok := byID[id]
-			if err != nil || !ok {
-				out = append(out, "No pending proposal "+f+".")
-				continue
-			}
-			chosen = append(chosen, p)
-		}
-	}
-	for _, p := range chosen {
-		if verb == "approve" {
-			if err := review.Apply(ctx, p, skillsDir, store); err != nil {
-				out = append(out, fmt.Sprintf("#%d not applied: %v", p.ID, err))
-				continue
-			}
-		}
-		if err := queue.Remove(p.ID); err != nil {
-			out = append(out, fmt.Sprintf("#%d: %v", p.ID, err))
-			continue
-		}
-		switch {
-		case verb == "reject":
-			out = append(out, fmt.Sprintf("Rejected #%d %s.", p.ID, p.Target()))
-		case p.Kind == review.KindSkill:
-			out = append(out, fmt.Sprintf("Approved #%d: wrote %s (loads in the next session).", p.ID, tildePath(p.SkillPath(skillsDir))))
-		default:
-			out = append(out, fmt.Sprintf("Approved #%d: saved memory %s.", p.ID, p.Key))
-		}
-	}
-	if len(out) == 0 {
-		out = []string{"No proposals are pending."}
-	}
-	return out
-}
-
-// pendingList renders every proposal with a preview of its change.
-func pendingList(ps []review.Proposal, skillsDir string) []string {
-	if len(ps) == 0 {
-		return []string{"No proposals are pending. With learningReview enabled, kiln proposes skill and memory changes as you work."}
-	}
-	var out []string
-	for _, p := range ps {
-		out = append(out, "")
-		switch p.Kind {
-		case review.KindSkill:
-			verb := "update"
-			current, err := os.ReadFile(p.SkillPath(skillsDir))
-			if p.Base == "" {
-				verb = "new"
-			}
-			out = append(out, fmt.Sprintf("#%d %s skill %s — %s", p.ID, verb, p.Target(), p.Why))
-			if err != nil {
-				current = nil
-			}
-			out = append(out, previewDiff(string(current), p.Content, 12)...)
-		default:
-			out = append(out, fmt.Sprintf("#%d memory %s (%s) — %s", p.ID, p.Key, p.Type, p.Why))
-			out = append(out, "    "+p.Text, "    evidence: "+p.Evidence)
-		}
-	}
-	return append(out, "", "/pending approve <id…|all> · /pending reject <id…|all>")
 }
 
 // previewDiff shows the lines that change between old and new (the common

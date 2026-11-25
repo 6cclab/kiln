@@ -525,8 +525,9 @@ func LoadSettings(cwd string, opts LoadOptions) Settings {
 			if raw.LearningEnabled != nil && *raw.LearningEnabled {
 				raw.LearningEnabled = nil
 			}
-			// Nor turn on the automatic review, or make it run more often
-			// than the user's own settings (each review is a model call).
+			// Nor turn the automatic review back on after the user turned
+			// it off, or make it run more often than the user's settings
+			// (each review is a model call).
 			if raw.LearningReview.Enabled != nil && *raw.LearningReview.Enabled {
 				raw.LearningReview.Enabled = nil
 			}

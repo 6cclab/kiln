@@ -6,8 +6,9 @@ import (
 )
 
 // TestLearningReviewOnlyUserSettingsEnableIt: the automatic review costs a
-// model call, so a repository cannot turn it on or make it run more often;
-// it can turn it off or make it run less often. User settings decide.
+// model call, so a repository cannot turn it back on after the user turned
+// it off, or make it run more often; it can turn it off or make it run
+// less often. User settings decide.
 func TestLearningReviewOnlyUserSettingsEnableIt(t *testing.T) {
 	home, cwd := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -28,6 +29,13 @@ func TestLearningReviewOnlyUserSettingsEnableIt(t *testing.T) {
 		t.Fatalf("got %+v, want enabled by the user, every 5 prompts (project's 3 refused), every 40 tool calls (project's slower cadence kept)", got)
 	}
 
+	put(t, user, `{"learningReview":{"enabled":false}}`)
+	put(t, project, `{"learningReview":{"enabled":true}}`)
+	if got = LoadSettings(cwd, LoadOptions{Headless: true, Trusted: true}).LearningReview; got.Enabled == nil || *got.Enabled {
+		t.Fatalf("project turned the review back on: %+v", got)
+	}
+
+	put(t, user, `{}`)
 	put(t, project, `{"learningReview":{"enabled":false}}`)
 	if got = LoadSettings(cwd, LoadOptions{Headless: true, Trusted: true}).LearningReview; *got.Enabled {
 		t.Fatalf("project could not turn the review off: %+v", got)

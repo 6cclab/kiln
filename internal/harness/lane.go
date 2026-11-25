@@ -55,6 +55,10 @@ type Lane struct {
 	// reuse holds digests for unchanged read-only results (result_reuse.go).
 	reuseMu sync.Mutex
 	reuse   *resultReuse
+
+	// lastReq is the lane's last answered turn-loop request (fork.go),
+	// nil before the first; guarded by mu.
+	lastReq *lastRequest
 }
 
 func (l *Lane) newID() string { return uuid.NewString() }

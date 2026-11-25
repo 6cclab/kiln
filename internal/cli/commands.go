@@ -18,6 +18,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"github.com/andrepato/harness/internal/review"
 	"strings"
 	"time"
 
@@ -27,7 +28,6 @@ import (
 	claudeagents "github.com/andrepato/harness/internal/claude/agents"
 	claudecommands "github.com/andrepato/harness/internal/claude/commands"
 	claudehooks "github.com/andrepato/harness/internal/claude/hooks"
-	"github.com/andrepato/harness/internal/claude/paths"
 	"github.com/andrepato/harness/internal/claude/permission"
 	claudeplugins "github.com/andrepato/harness/internal/claude/plugins"
 	claudeskills "github.com/andrepato/harness/internal/claude/skills"
@@ -37,7 +37,6 @@ import (
 	"github.com/andrepato/harness/internal/memory"
 	"github.com/andrepato/harness/internal/msg"
 	"github.com/andrepato/harness/internal/provider"
-	"github.com/andrepato/harness/internal/review"
 	"github.com/andrepato/harness/internal/session/jsonl"
 )
 
@@ -45,8 +44,11 @@ import (
 // one struct rather than a long parameter list, since most of its fields
 // are handed unchanged to several of internal/commands' Deps structs.
 type registryDeps struct {
-	Cwd     string
-	Started *agent.Started
+	// SkillWatch logs changes to ~/.kiln/skills (learning_review.go);
+	// /pending and /learned rebase it after their own changes.
+	SkillWatch *review.Watch
+	Cwd        string
+	Started    *agent.Started
 	// Interactive enables commands that only make sense in the TUI, such
 	// as /resume switching sessions by relaunching.
 	Interactive bool
@@ -360,7 +362,10 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		Todos: deps.Todos,
 	}))
 
-	registry.Add(pendingSource(review.DefaultQueue(), paths.KilnSkillsDir(), deps.Memory))
+	stores := defaultLearningStores(deps.Memory, started.SessionID)
+	stores.watch = deps.SkillWatch
+	registry.Add(pendingSource(stores))
+	registry.Add(learnedSource(stores))
 
 	for _, s := range slashcommands.ClaudeCommandSources(deps.Cwd) {
 		registry.Add(s)
