@@ -18,56 +18,78 @@ import (
 
 const releaseSkill = "---\nname: release-flow\ndescription: Tag and publish a kiln release.\n---\n# Release flow\n"
 
-// TestAgentSkillWritesAreLoggedAndRevertible: a skill the agent writes
-// with the write tool, then changes with edit, lands in the skill
-// history; /learned lists who made it and its use, /learned history shows
-// both changes, and /learned revert undoes the edit. Writes outside
-// ~/.kiln/skills are not logged.
-func TestAgentSkillWritesAreLoggedAndRevertible(t *testing.T) {
+// TestSkillChangesAreLoggedWhateverMadeThem: the watch logs a skill the
+// agent writes with the write tool, changes with edit, appends to with a
+// bash command and deletes with bash, each with what the file held
+// before, plus a change made by hand between runs. /learned shows who made
+// it, /learned history every change, and /learned revert brings back the
+// deleted file. Files outside ~/.kiln/skills are not logged, and changes
+// /pending makes are not logged twice.
+func TestSkillChangesAreLoggedWhateverMadeThem(t *testing.T) {
 	dir := t.TempDir()
 	ls := testStores(dir, nil)
-	env := execenv.New(dir)
-	env.OnWrite = recordSkillWrite(ls.history, ls.skillsDir, "s1")
-	set := tools.Builtins(env)
+	if err := os.MkdirAll(ls.skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ls.watch = review.NewWatch(ls.skillsDir, ls.history, "s1")
+	set := tools.Builtins(execenv.New(dir))
 	path := filepath.Join(ls.skillsDir, "release-flow", "SKILL.md")
 	run := func(name string, args map[string]any) {
 		t.Helper()
 		raw, _ := json.Marshal(args)
 		tl, _ := set.Get(name)
-		res, err := tl.Execute(context.Background(), raw, nil, tool.Invocation{ToolName: name, Cwd: dir})
+		res, err := tl.Execute(context.Background(), raw, func(tool.Result) {}, tool.Invocation{ToolName: name, Cwd: dir})
 		if err != nil || res.IsError {
 			t.Fatalf("%s: %v %s", name, err, msg.TextOf(res.Content))
 		}
+		ls.watch.Sync(review.SourceAgent) // as after every tool call
 	}
 	run("write", map[string]any{"path": path, "content": releaseSkill})
 	run("edit", map[string]any{"path": path, "edits": []map[string]any{{"oldText": "# Release flow", "newText": "# Release flow\n\nRun make check first."}}})
+	run("bash", map[string]any{"command": "printf 'Push only the new tag.\\n' >> " + path})
 	run("write", map[string]any{"path": filepath.Join(dir, "notes.txt"), "content": "not a skill"})
+	edited, _ := os.ReadFile(path)
+	if err := os.WriteFile(path, append(edited, "By hand.\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ls.watch.Sync(review.SourceOutside) // as before the next run
+	run("bash", map[string]any{"command": "rm " + path})
 
 	if err := ls.usage.RecordUse(ls.skillsDir, filepath.Dir(path)); err != nil {
 		t.Fatal(err)
+	}
+	hist := strings.Join(learnedRun(ls, "history", time.Now()), "\n")
+	for _, want := range []string{
+		"#5 just now · deleted release-flow/SKILL.md · kiln",
+		"#4 just now · updated release-flow/SKILL.md · outside kiln's tools",
+		"#3 just now · updated release-flow/SKILL.md · kiln",
+		"#2 just now · updated release-flow/SKILL.md · kiln",
+		"#1 just now · created release-flow/SKILL.md · kiln",
+	} {
+		if !strings.Contains(hist, want) {
+			t.Errorf("history lacks %q:\n%s", want, hist)
+		}
+	}
+	if strings.Contains(hist, "notes.txt") || strings.Contains(hist, "#6") {
+		t.Errorf("history has a write outside the skills or a duplicate:\n%s", hist)
+	}
+	out := strings.Join(learnedRun(ls, "revert 5", time.Now()), "\n")
+	if !strings.Contains(out, "Reverted #5 (deleted release-flow/SKILL.md) as #6") {
+		t.Errorf("revert output = %q", out)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.HasSuffix(string(data), "Push only the new tag.\nBy hand.\n") {
+		t.Errorf("after revert: %q", data)
+	}
+	if n := ls.watch.Sync(review.SourceOutside); n != 0 {
+		t.Errorf("the revert was logged again (%d)", n)
 	}
 	list := strings.Join(learnedRun(ls, "", time.Now()), "\n")
 	if !strings.Contains(list, "release-flow · kiln (/learn, /refine or asked) · used 1 time, last just now") {
 		t.Errorf("/learned:\n%s", list)
 	}
-	hist := strings.Join(learnedRun(ls, "history", time.Now()), "\n")
-	for _, want := range []string{"#2 just now · updated release-flow/SKILL.md · kiln", "#1 just now · created release-flow/SKILL.md · kiln"} {
-		if !strings.Contains(hist, want) {
-			t.Errorf("history lacks %q:\n%s", want, hist)
-		}
-	}
-	if strings.Contains(hist, "notes.txt") {
-		t.Errorf("a write outside the skills was logged:\n%s", hist)
-	}
-	out := strings.Join(learnedRun(ls, "revert 2", time.Now()), "\n")
-	if !strings.Contains(out, "Reverted #2 (updated release-flow/SKILL.md) as #3") {
-		t.Errorf("revert output = %q", out)
-	}
-	if data, _ := os.ReadFile(path); string(data) != releaseSkill {
-		t.Errorf("after revert: %q", data)
-	}
-	if out := learnedRun(ls, "revert 2", time.Now()); !strings.HasPrefix(out[0], "Not reverted:") {
-		t.Errorf("second revert of #2 = %q, want refused", out)
+	if out := learnedRun(ls, "revert 5", time.Now()); !strings.HasPrefix(out[0], "Not reverted:") {
+		t.Errorf("second revert of #5 = %q, want refused", out)
 	}
 	if out := learnedRun(ls, "bogus", time.Now()); !strings.HasPrefix(out[0], "Usage:") {
 		t.Errorf("bad args = %q", out)
@@ -92,6 +114,7 @@ func TestCuratorArchiveIsApprovedOrKept(t *testing.T) {
 		old := time.Now().Add(-45 * 24 * time.Hour)
 		_ = os.Chtimes(p, old, old)
 	}
+	ls.watch = review.NewWatch(ls.skillsDir, ls.history, "s1")
 	if n := curateSkills(ls.queue, ls.history, ls.usage, ls.skillsDir, time.Now()); n != 2 {
 		t.Fatalf("curator queued %d, want 2", n)
 	}
@@ -109,6 +132,9 @@ func TestCuratorArchiveIsApprovedOrKept(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ls.skillsDir, "old-one")); !os.IsNotExist(err) {
 		t.Error("approved archive left the skill in place")
 	}
+	if n := ls.watch.Sync(review.SourceOutside); n != 0 {
+		t.Errorf("watch logged %d changes the archive already recorded", n)
+	}
 	if n := curateSkills(ls.queue, ls.history, ls.usage, ls.skillsDir, time.Now()); n != 0 {
 		t.Errorf("a kept skill was proposed again (%d)", n)
 	}
@@ -119,6 +145,11 @@ func TestCuratorArchiveIsApprovedOrKept(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ls.skillsDir, "old-one", "SKILL.md")); err != nil {
 		t.Error("revert did not restore the archived skill")
+	}
+	// The archive and the restore are in the history once, not again as
+	// a deletion and a creation.
+	if n := ls.watch.Sync(review.SourceOutside); n != 0 {
+		t.Errorf("watch logged %d changes /pending and /learned already recorded", n)
 	}
 }
 

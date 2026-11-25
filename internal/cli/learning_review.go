@@ -117,7 +117,7 @@ func (s *reviewScheduler) close() {
 }
 
 // attachLearningReview starts the automatic review for an interactive
-// session when settings enable it. notify posts a line in the transcript;
+// session unless settings turn it off. notify posts a line in the transcript;
 // it is read each time, so the TUI can bind it after start. readAllowed
 // says whether the session may read a path without asking; the review
 // reads kiln's own skills freely and anything else only when allowed.
@@ -189,11 +189,12 @@ func attachLearningReview(started *agent.Started, cwd string, settings claudeset
 	}
 }
 
-// reviewOn reports whether settings enable the learning review (and the
-// skill curator that comes with it).
+// reviewOn reports whether the learning review (and the skill curator
+// that comes with it) runs: by default, unless the user's settings turn it
+// or learning off. It only proposes; nothing is written without /pending.
 func reviewOn(settings claudesettings.Settings) bool {
 	r := settings.LearningReview
-	return r.Enabled != nil && *r.Enabled && (settings.LearningEnabled == nil || *settings.LearningEnabled)
+	return (r.Enabled == nil || *r.Enabled) && (settings.LearningEnabled == nil || *settings.LearningEnabled)
 }
 
 // reviewToolRunner runs the review's read-only tool calls with the
@@ -272,15 +273,17 @@ func countSlashSkillUse(usage review.Usage, skillsDir string, next func(context.
 	}
 }
 
-// recordSkillWrite logs a write the agent's edit or write tool made under
-// ~/.kiln/skills in the skill history, so /learned can show who made a
-// skill and revert the change.
-func recordSkillWrite(h review.History, skillsDir, session string) func(path string, before []byte, existed bool, after []byte) {
-	return func(path string, before []byte, existed bool, after []byte) {
-		if err := h.RecordWrite(skillsDir, path, before, existed, after, review.SourceAgent, session, 0); err != nil {
-			diag.L().Warn("skill history", "err", err)
-		}
-	}
+// watchSkills logs every change under ~/.kiln/skills in the skill history:
+// after each tool call as the agent's (its write or edit, a bash command,
+// a subagent), and before each run as made outside kiln's tools (by hand,
+// or a background command). It returns the watch, for commands that
+// change the directory themselves to rebase it.
+func watchSkills(started *agent.Started, h review.History, skillsDir string) *review.Watch {
+	w := review.NewWatch(skillsDir, h, started.SessionID)
+	events := started.Harness.Events()
+	events.On(harness.EventToolEnd, func(harness.Event) { w.Sync(review.SourceAgent) })
+	events.On(harness.EventRunStart, func(harness.Event) { w.Sync(review.SourceOutside) })
+	return w
 }
 
 // pendingNotice is the line shown at startup when proposals are waiting,

@@ -71,10 +71,3 @@ func (e *Env) ChangedSinceSeen(path string, current []byte) bool {
 	info, err := e.Stat(abs)
 	return err != nil || info.Size != st.size || info.MtimeMs != st.mtimeMs
 }
-
-// NoteWrite reports a write the edit or write tool made to OnWrite.
-func (e *Env) NoteWrite(path string, before []byte, existed bool, after []byte) {
-	if e.OnWrite != nil {
-		e.OnWrite(path, before, existed, after)
-	}
-}

@@ -72,8 +72,11 @@ type Stats struct {
 	ToolCalls int
 	// Captured counts write, edit and memory_write calls recorded as
 	// proposals; Refused names the other non-read calls refused.
-	Captured   int
-	Refused    []string
+	Captured int
+	Refused  []string
+	// Duplicates names memory proposals dropped for repeating a skill
+	// proposal or a kept note.
+	Duplicates []string
 	Repaired   bool
 	CacheRead  int // prompt tokens the provider served from its cache
 	InputTotal int // all prompt tokens, cached or not
@@ -151,7 +154,7 @@ func Run(ctx context.Context, conv Conversation, in Input, tools ToolRunner, usa
 				if len(got) == 0 {
 					return nil, st, fmt.Errorf("still calling tools after %d rounds", maxToolRounds)
 				}
-				return got.capped(&st)
+				return got.capped(&st, in)
 			}
 			messages = append(messages, *am)
 			why := whyOf(am)
@@ -175,7 +178,7 @@ func Run(ctx context.Context, conv Conversation, in Input, tools ToolRunner, usa
 		}
 		if am.StopReason != msg.StopStop {
 			if len(got) > 0 {
-				return got.capped(&st)
+				return got.capped(&st, in)
 			}
 			return nil, st, fmt.Errorf("answer did not finish (stop reason %q)", am.StopReason)
 		}
@@ -185,7 +188,7 @@ func Run(ctx context.Context, conv Conversation, in Input, tools ToolRunner, usa
 		if errors.As(err, &notJSON) {
 			if len(got) > 0 || saysNothing(text) {
 				got.explain(text)
-				return got.capped(&st)
+				return got.capped(&st, in)
 			}
 			if !st.Repaired {
 				// Small models claim they saved something without a
@@ -202,7 +205,7 @@ func Run(ctx context.Context, conv Conversation, in Input, tools ToolRunner, usa
 		for _, p := range parsed {
 			got.add(p)
 		}
-		out, st, capErr := got.capped(&st)
+		out, st, capErr := got.capped(&st, in)
 		if err == nil {
 			err = capErr
 		}
@@ -210,8 +213,10 @@ func Run(ctx context.Context, conv Conversation, in Input, tools ToolRunner, usa
 	}
 }
 
-// capped is the proposals, at most maxProposals of them.
-func (ps proposals) capped(st *Stats) ([]Proposal, Stats, error) {
+// capped is the proposals without duplicate notes, at most maxProposals
+// of them.
+func (ps proposals) capped(st *Stats, in Input) ([]Proposal, Stats, error) {
+	st.Duplicates = append(st.Duplicates, ps.dropDuplicateNotes(in)...)
 	if len(ps) > maxProposals {
 		return ps[:maxProposals], *st, fmt.Errorf("dropped %d proposal(s) over the limit of %d", len(ps)-maxProposals, maxProposals)
 	}
@@ -453,6 +458,11 @@ func captureCall(call msg.ToolCall, in Input, seen map[string]bool, got *proposa
 	p, err := validate(raw, in, seen)
 	if err != nil {
 		return reject(err)
+	}
+	if p.Kind == KindMemory {
+		if where := duplicateOf(p, *got, in); where != "" {
+			return reject(fmt.Errorf("this lesson is already in %s; one lesson lives in one place", where))
+		}
 	}
 	got.add(p)
 	return "Recorded as a proposal for the person to approve; nothing was written. Do not repeat it in your reply.", false, true

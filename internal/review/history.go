@@ -156,11 +156,17 @@ func (h History) list() ([]Change, error) {
 }
 
 // Provenance says who made each skill: the source of its first recorded
-// change. A skill missing from the map was made by hand.
+// creation by kiln. A skill missing from the map was made by hand
+// (including while kiln ran: SourceOutside).
 func Provenance(changes []Change) map[string]string {
 	out := map[string]string{}
+	seen := map[string]bool{}
 	for _, c := range changes {
-		if _, ok := out[c.Skill]; !ok && c.Op == OpWrite && c.Before == nil && !c.BeforeTooLarge {
+		if seen[c.Skill] || c.Op != OpWrite || c.Before != nil || c.BeforeTooLarge || c.After == "" {
+			continue
+		}
+		seen[c.Skill] = true
+		if c.Source != SourceOutside {
 			out[c.Skill] = c.Source
 		}
 	}

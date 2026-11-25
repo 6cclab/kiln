@@ -42,6 +42,11 @@ func TestHistoryRevertsWritesAndArchives(t *testing.T) {
 	if p := Provenance(changes); p["release-flow"] != SourceAgent || len(p) != 1 {
 		t.Errorf("provenance = %v, want release-flow made by the agent", p)
 	}
+	// A skill that appeared between runs was made by hand.
+	byHand := append(changes, Change{N: 9, Skill: "notes", File: "SKILL.md", Op: OpWrite, Source: SourceOutside, After: "h"})
+	if p := Provenance(byHand); len(p) != 1 {
+		t.Errorf("provenance = %v, want a skill made outside kiln's tools left out", p)
+	}
 
 	undo, err := h.Revert(skillsDir, 2, "s2")
 	if err != nil || undo.Reverts != 2 || undo.Source != SourceRevert {

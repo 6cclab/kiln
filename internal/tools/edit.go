@@ -141,7 +141,6 @@ func EditTool(env *execenv.Env) *tool.Tool {
 					return tool.Errorf("Could not edit file: %s. Error code: %s.", in.Path, errCode(err)), nil
 				}
 				env.NoteFileContent(absolutePath, []byte(finalContent))
-				env.NoteWrite(absolutePath, raw, true, []byte(finalContent))
 				if ctx.Err() != nil {
 					return tool.Errorf("Operation aborted"), nil
 				}

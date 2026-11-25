@@ -1329,7 +1329,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	sizing.started = started
 	started.OnTierChanged = sizing.onTierChanged
 	phase("session started", "session", started.SessionID, "transcript", started.TranscriptPath)
-	env.OnWrite = recordSkillWrite(skillHistory, paths.KilnSkillsDir(), started.SessionID)
+	skillWatch := watchSkills(started, skillHistory, paths.KilnSkillsDir())
 	diag.L().Info("run log", "session", started.SessionID, "path", logPath)
 	logHarnessEvents(started.Harness)
 
@@ -1991,6 +1991,7 @@ func Run(ctx context.Context, args Args, stdout, stderr io.Writer, stdin io.Read
 	runtimeContext.Permission = string(permissionMode)
 	runtimeContext.AutoMemoryDirectory = autoMemory.Dir
 	registry := buildCommandRegistry(registryDeps{
+		SkillWatch:         skillWatch,
 		Cwd:                cwd,
 		Started:            started,
 		Interactive:        !args.Print,

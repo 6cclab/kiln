@@ -18,6 +18,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"github.com/andrepato/harness/internal/review"
 	"strings"
 	"time"
 
@@ -43,8 +44,11 @@ import (
 // one struct rather than a long parameter list, since most of its fields
 // are handed unchanged to several of internal/commands' Deps structs.
 type registryDeps struct {
-	Cwd     string
-	Started *agent.Started
+	// SkillWatch logs changes to ~/.kiln/skills (learning_review.go);
+	// /pending and /learned rebase it after their own changes.
+	SkillWatch *review.Watch
+	Cwd        string
+	Started    *agent.Started
 	// Interactive enables commands that only make sense in the TUI, such
 	// as /resume switching sessions by relaunching.
 	Interactive bool
@@ -359,6 +363,7 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 	}))
 
 	stores := defaultLearningStores(deps.Memory, started.SessionID)
+	stores.watch = deps.SkillWatch
 	registry.Add(pendingSource(stores))
 	registry.Add(learnedSource(stores))
 

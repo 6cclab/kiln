@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	claudesettings "github.com/andrepato/harness/internal/claude/settings"
 	"github.com/andrepato/harness/internal/harness"
 	"github.com/andrepato/harness/internal/memory"
 	"github.com/andrepato/harness/internal/review"
@@ -209,5 +210,21 @@ func TestPendingNoticeCountsWaitingProposals(t *testing.T) {
 	}
 	if got := pendingNotice(queue); got != "2 proposed changes from earlier learning reviews · /pending to review" {
 		t.Errorf("notice = %q", got)
+	}
+}
+
+// TestReviewIsOnByDefault: the review runs unless the user's settings turn
+// it or learning off.
+func TestReviewIsOnByDefault(t *testing.T) {
+	no, yes := false, true
+	for _, c := range []struct {
+		review, learning *bool
+		want             bool
+	}{{nil, nil, true}, {&yes, nil, true}, {&no, nil, false}, {nil, &no, false}, {&yes, &no, false}} {
+		var s claudesettings.Settings
+		s.LearningReview.Enabled, s.LearningEnabled = c.review, c.learning
+		if got := reviewOn(s); got != c.want {
+			t.Errorf("enabled=%v learning=%v: reviewOn = %v, want %v", c.review, c.learning, got, c.want)
+		}
 	}
 }

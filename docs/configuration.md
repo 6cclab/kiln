@@ -1151,15 +1151,16 @@ are separate from conversational memory and evaluated policy candidates.
 ```json
 {
   "learningReview": {
-    "enabled": false,
+    "enabled": true,
     "everyPrompts": 10,
     "everyToolCalls": 15
   }
 }
 ```
 
-With `enabled` in user settings (`~/.claude/settings.json`, `~/.kiln/settings.json` or
-`--settings`), an interactive session reviews itself in the background: once a run ends
+By default an interactive session reviews itself in the background (turn it off with
+`"enabled": false` in user settings: `~/.claude/settings.json`, `~/.kiln/settings.json` or
+`--settings`): once a run ends
 with `everyPrompts` prompts or `everyToolCalls` tool calls since the last review, and the
 session has then sat idle for 20 seconds, kiln continues the session's last request with
 the review's instruction added at the end. Everything before it (model, system prompt,
@@ -1176,7 +1177,8 @@ proposal, and its result tells the model whether it was recorded or why not (a f
 not read whole, a `SKILL.md` that would not load), so it can fix it. Any other tool call
 is refused without running. A model that cannot call tools may answer with a JSON list of
 proposals instead. A reply that claims to have saved something with no call behind it gets
-one request to make the calls. Typing a new prompt cancels a review that is waiting or running; it is
+one request to make the calls. One lesson lives in one place: a memory note that repeats
+what a skill proposal in the same review adds, or a note already kept, is refused. Typing a new prompt cancels a review that is waiting or running; it is
 tried again after a later run. Its usage counts toward the session's cost, and the run log
 records its requests, tool calls and cached prompt tokens.
 
@@ -1194,13 +1196,15 @@ write outside its skill's directory, a `SKILL.md` that would not load under its
 directory's name, a replacement for an existing file the review neither was shown in full
 nor read whole, or a memory note without evidence is dropped when the review answers.
 Project and local settings can turn the review off or make it less frequent, never turn
-it on or make it more frequent; `learningEnabled: false` turns it off, and
+it back on after you turned it off or make it more frequent; `learningEnabled: false` turns it off, and
 `personalMemoryEnabled: false` stops memory proposals. The review's rules are adapted
 from hermes-agent's background review (`internal/review/prompt.go`).
 
-**Skill history and use.** Every change kiln makes under `~/.kiln/skills` (an approved
-proposal, or the agent's `write` or `edit` tool, as with `/learn` and `/refine`) is logged
-in `~/.kiln/skill-history.jsonl` with the file's previous content. Each use of a kiln skill
+**Skill history and use.** Every change under `~/.kiln/skills` while kiln runs is logged
+in `~/.kiln/skill-history.jsonl` with the file's previous content: an approved proposal,
+and anything the agent does there (`write`, `edit`, a `bash` command, a subagent, an MCP
+tool), found by comparing the directory after each tool call. A change found between runs
+(by hand, or a background command) is logged as made outside kiln's tools. Each use of a kiln skill
 (the `skill` tool or its slash command) is counted in `~/.kiln/skill-usage.json`.
 
 ```text

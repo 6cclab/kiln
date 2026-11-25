@@ -3,7 +3,8 @@ package settings
 // LearningReview controls kiln's automatic learning review
 // (internal/review): after EveryPrompts prompts or EveryToolCalls tool
 // calls, a background request proposes skill and memory changes that wait
-// for approval in /pending. Off unless the user's own settings enable it.
+// for approval in /pending. On by default; the user's own settings can turn
+// it off, a project's can only turn it off or make it run less often.
 type LearningReview struct {
 	Enabled        *bool `json:"enabled,omitempty"`
 	EveryPrompts   *int  `json:"everyPrompts,omitempty"`

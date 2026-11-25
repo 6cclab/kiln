@@ -25,6 +25,15 @@ type learningStores struct {
 	skillsDir string
 	memory    *memory.Store
 	session   string
+	// watch, when set, is rebased after a command changes the skills
+	// itself, since the history already records those changes.
+	watch *review.Watch
+}
+
+func (ls learningStores) rebase() {
+	if ls.watch != nil {
+		ls.watch.Rebase()
+	}
 }
 
 func defaultLearningStores(store *memory.Store, session string) learningStores {
@@ -46,6 +55,7 @@ func pendingSource(ls learningStores) slashcommands.Source {
 }
 
 func pendingRun(ctx context.Context, ls learningStores, args string) []string {
+	defer ls.rebase()
 	ps, err := ls.queue.List()
 	if err != nil {
 		return []string{"Could not read the proposals: " + err.Error()}
@@ -114,7 +124,7 @@ func pendingRun(ctx context.Context, ls learningStores, args string) []string {
 // pendingList renders every proposal with a preview of its change.
 func pendingList(ps []review.Proposal, skillsDir string) []string {
 	if len(ps) == 0 {
-		return []string{"No proposals are pending. With learningReview enabled, kiln proposes skill and memory changes as you work."}
+		return []string{"No proposals are pending. As you work, kiln's learning review proposes skill and memory changes here."}
 	}
 	var out []string
 	for _, p := range ps {
@@ -155,6 +165,7 @@ func learnedSource(ls learningStores) slashcommands.Source {
 }
 
 func learnedRun(ls learningStores, args string, now time.Time) []string {
+	defer ls.rebase()
 	fields := strings.Fields(args)
 	changes, err := ls.history.List()
 	if err != nil {
@@ -188,7 +199,7 @@ func learnedRun(ls learningStores, args string, now time.Time) []string {
 func learnedList(ls learningStores, changes []review.Change, now time.Time) []string {
 	activity := review.Activity(ls.skillsDir, ls.usage.Load())
 	if len(activity) == 0 {
-		return []string{"No learned skills yet. /learn saves one; with learningReview enabled, kiln proposes them as you work."}
+		return []string{"No learned skills yet. /learn saves one, and the learning review proposes them in /pending as you work."}
 	}
 	provenance := review.Provenance(changes)
 	out := []string{"Skills in " + tildePath(ls.skillsDir) + ":"}
@@ -238,7 +249,10 @@ func describe(c review.Change) string {
 		return "restored " + c.Skill
 	}
 	verb := "updated"
-	if c.Before == nil && !c.BeforeTooLarge {
+	switch {
+	case c.After == "":
+		verb = "deleted"
+	case c.Before == nil && !c.BeforeTooLarge:
 		verb = "created"
 	}
 	if c.Reverts > 0 {
@@ -264,6 +278,8 @@ func sourceText(c review.Change) string {
 		return fmt.Sprintf("unused, /pending #%d", c.Proposal)
 	case review.SourceRevert:
 		return "/learned revert"
+	case review.SourceOutside:
+		return "outside kiln's tools"
 	}
 	return "kiln"
 }
