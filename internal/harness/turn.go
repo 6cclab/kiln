@@ -357,6 +357,7 @@ driveLoop:
 			}
 			return l.finishFailed(operationID, tip, err)
 		}
+		l.repairToolCalls(final)
 		l.h.events.Emit(Event{Type: EventMessageEnd, Lane: l.name, OperationID: operationID, EntryID: responseEntryID, Message: final})
 		l.invokeAfterResponse(ctx, final)
 
@@ -1089,6 +1090,9 @@ func (l *Lane) beginTool(ctx context.Context, operationID string, call msg.ToolC
 		// very differently to a user watching the transcript.
 		diag.L().Info("tool refused: unknown", "lane", l.name, "tool", call.Name)
 		r := tool.Errorf("There is no tool named %s, so the call did not run.", call.Name)
+		if close := closeToolNames(call.Name, l.callableNames(tools)); len(close) > 0 {
+			r = tool.Errorf("There is no tool named %s, so the call did not run. Did you mean %s?", call.Name, strings.Join(close, ", "))
+		}
 		refusal = &r
 	} else if !l.toolActive(call.Name) {
 		active, _ := l.GetActiveTools()
