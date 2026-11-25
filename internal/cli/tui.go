@@ -257,6 +257,11 @@ func RunInteractive(ctx context.Context, deps InteractiveDeps, stdout, stderr io
 		deps.Shells.SetOnChange(func() {
 			bridge.SendAsync(tui.MsgShells{Running: deps.Shells.Running()})
 		})
+		// Tell the model when a background shell ends on its own, as
+		// Claude Code does (tui/shellnotice.go).
+		deps.Shells.SetOnExit(func(sh agent.Shell) {
+			bridge.SendAsync(tui.MsgShellExited{ID: sh.ID, Command: sh.Command, Failed: sh.Status == agent.ShellFailed, ExitCode: sh.ExitCode})
+		})
 	}
 
 	historyPath := editor.Path()

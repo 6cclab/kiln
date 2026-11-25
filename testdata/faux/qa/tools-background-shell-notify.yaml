@@ -1,0 +1,14 @@
+# The model starts a build in the background and ends its turn; when the
+# command exits, kiln tells the model (tui/shellnotice.go) and the model
+# answers in a turn nobody typed.
+model: faux-1
+steps:
+  - tool_call: {name: bash_background, args: {command: "sleep 2; echo built"}, id: tc1}
+  - on_tool_result: tc1
+    then:
+      - text: "Started the build in the background."
+        usage: {input: 200, output: 20}
+        end_turn: true
+  - text: "The build finished: built."
+    usage: {input: 260, output: 12}
+    end_turn: true

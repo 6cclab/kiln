@@ -426,3 +426,38 @@ func TestSlideAcrossExecEnvCaptureWindow(t *testing.T) {
 		t.Fatalf("dropped = %d, want at least 2500", snap.Dropped)
 	}
 }
+
+// TestOnExitFiresForShellsThatEndOnTheirOwn: an exiting shell reports its
+// final snapshot with the exit code; a killed one reports nothing, since
+// killing it was deliberate.
+func TestOnExitFiresForShellsThatEndOnTheirOwn(t *testing.T) {
+	env := execenv.New(t.TempDir())
+	shells := NewBackgroundShells()
+	exited := make(chan Shell, 4)
+	shells.SetOnExit(func(s Shell) { exited <- s })
+
+	quick, err := shells.Start(context.Background(), "exit 3", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case s := <-exited:
+		if s.ID != quick.ID || s.Status != ShellExited || s.ExitCode == nil || *s.ExitCode != 3 {
+			t.Errorf("onExit got %+v, want %s exited with code 3", s, quick.ID)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("onExit did not fire for an exiting shell")
+	}
+
+	long, err := shells.Start(context.Background(), "sleep 30", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shells.Kill(long.ID)
+	waitFinished(t, shells, long.ID)
+	select {
+	case s := <-exited:
+		t.Errorf("onExit fired for a killed shell: %+v", s)
+	case <-time.After(300 * time.Millisecond):
+	}
+}

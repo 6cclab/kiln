@@ -1,0 +1,17 @@
+# Like Claude Code, a background command that ends on its own is reported
+# to the model: kiln is idle after the first turn, so the exit starts a
+# turn of its own (tui/shellnotice.go). The transcript shows a note naming
+# the command and its exit code, not a "you" block.
+@faux testdata/faux/qa/tools-background-shell-notify.yaml
+@args --permission-mode bypassPermissions
+
+WAITFOR /describe a task/ 20
+TYPE start the build in the background
+KEY enter
+WAITFOR /Started the build in the background\./ 20
+SHOT started
+WAITFOR /Background command "sleep 2; echo built" completed \(exit code 0\) · bash_1/ 20
+WAITFOR /The build finished: built\./ 20
+SHOT woke
+EXPECT_NOT /you\s*\n\s*<task-notification>/
+EXPECT_NOT /panic|goroutine/
