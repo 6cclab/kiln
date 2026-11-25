@@ -103,7 +103,11 @@ func ReadToolWithCache(env *execenv.Env, cache *ReadCache) *tool.Tool {
 				}
 				return readWholeFileCached(ctx, env, absolutePath, in.Path, cache)
 			}
-			return readFileWindow(env, absolutePath, in.Path, in.Offset, in.Limit)
+			result, err := readFileWindow(env, absolutePath, in.Path, in.Offset, in.Limit)
+			if err == nil && !result.IsError {
+				env.NoteFilePart(absolutePath, info)
+			}
+			return result, err
 		},
 	}
 }
@@ -123,6 +127,7 @@ func readWholeFileCached(ctx context.Context, env *execenv.Env, absolutePath, di
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
 	}
+	env.NoteFileContent(absolutePath, bytes)
 
 	if mimeType := detectSupportedImageMimeType(bytes); mimeType != "" {
 		return tool.Result{Content: msg.Blocks{

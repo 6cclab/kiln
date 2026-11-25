@@ -116,6 +116,9 @@ func EditTool(env *execenv.Env) *tool.Tool {
 				if ctx.Err() != nil {
 					return tool.Errorf("Operation aborted"), nil
 				}
+				if env.ChangedSinceSeen(absolutePath, raw) {
+					return tool.Errorf("%s", execenv.StaleFileMessage), nil
+				}
 
 				bom, content := stripBOM(string(raw))
 				originalEnding := detectLineEnding(content)
@@ -137,6 +140,7 @@ func EditTool(env *execenv.Env) *tool.Tool {
 				if err := env.WriteFile(absolutePath, []byte(finalContent)); err != nil {
 					return tool.Errorf("Could not edit file: %s. Error code: %s.", in.Path, errCode(err)), nil
 				}
+				env.NoteFileContent(absolutePath, []byte(finalContent))
 				if ctx.Err() != nil {
 					return tool.Errorf("Operation aborted"), nil
 				}

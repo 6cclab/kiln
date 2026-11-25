@@ -73,6 +73,9 @@ func WriteTool(env *execenv.Env) *tool.Tool {
 				// overwritten same as any other, just without a diff.
 				existing, readErr := env.ReadFile(absolutePath)
 				newFile := readErr != nil
+				if !newFile && env.ChangedSinceSeen(absolutePath, existing) {
+					return tool.Errorf("%s", execenv.StaleFileMessage), nil
+				}
 				if err := env.WriteFile(absolutePath, []byte(in.Content)); err != nil {
 					errText := err.Error()
 					if hint := env.DidYouMeanHint(absolutePath); hint != "" {
@@ -80,6 +83,7 @@ func WriteTool(env *execenv.Env) *tool.Tool {
 					}
 					return tool.Errorf("%s", errText), nil
 				}
+				env.NoteFileContent(absolutePath, []byte(in.Content))
 				if ctx.Err() != nil {
 					return tool.Errorf("Operation aborted"), nil
 				}
