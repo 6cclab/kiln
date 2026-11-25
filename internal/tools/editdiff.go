@@ -320,7 +320,7 @@ func applyEditsToNormalizedContent(normalizedContent string, edits []editInput, 
 	for i, e := range normalizedEdits {
 		match := fuzzyFindText(replacementBaseContent, e.OldText)
 		if !match.Found {
-			return applyEditsResult{}, notFoundError(path, i, len(normalizedEdits))
+			return applyEditsResult{}, withClosestMatch(notFoundError(path, i, len(normalizedEdits)), path, normalizedContent, e.OldText)
 		}
 		occurrences := countOccurrences(replacementBaseContent, e.OldText)
 		if occurrences > 1 {
