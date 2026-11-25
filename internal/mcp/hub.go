@@ -170,6 +170,15 @@ type Hub struct {
 
 	resultDir string // where oversized results are saved (SetResultDir)
 
+	configs map[string]ServerConfig // by server, for reconnects
+	closed  bool                    // Close ran: no more reconnects
+
+	// OnEvent, if set, hears what happens to a server after its first
+	// connect: its tools changed (tools/list_changed), it disconnected,
+	// it reconnected, or reconnecting gave up. Called from the hub's own
+	// goroutines, never with the hub's lock held. Set before ConnectAll.
+	OnEvent func(server string, ev HubEvent)
+
 	// OnServer, if set before ConnectAll, is called after each server's
 	// connect attempt finishes, so a UI can show progress while the
 	// remaining servers connect. Called from ConnectAll's goroutine.
@@ -209,14 +218,33 @@ type Hub struct {
 
 // NewHub builds an empty, unconnected Hub.
 func NewHub() *Hub {
-	return &Hub{conns: map[string]*serverConn{}, tools: map[string][]McpTool{}, scopes: map[string]string{}, pending: map[string]bool{}}
+	return &Hub{conns: map[string]*serverConn{}, tools: map[string][]McpTool{}, scopes: map[string]string{}, pending: map[string]bool{}, configs: map[string]ServerConfig{}}
 }
 
 // record appends a server's outcome, logs it, and reports it to OnServer.
 func (h *Hub) record(st ServerStatus) {
+	if cb := h.setStatus(st); cb != nil {
+		cb(st)
+	}
+}
+
+// setStatus stores and logs a server's outcome, replacing its row on a
+// reconnect, and returns OnServer for record to call. Lifecycle changes
+// after the first connect (lifecycle.go) store their status without
+// reporting connect progress.
+func (h *Hub) setStatus(st ServerStatus) func(ServerStatus) {
 	h.mu.Lock()
 	st.Scope = h.scopes[st.Name]
-	h.statuses = append(h.statuses, st)
+	replaced := false
+	for i := range h.statuses {
+		if h.statuses[i].Name == st.Name {
+			h.statuses[i], replaced = st, true
+			break
+		}
+	}
+	if !replaced {
+		h.statuses = append(h.statuses, st)
+	}
 	delete(h.pending, st.Name)
 	cb := h.OnServer
 	h.mu.Unlock()
@@ -225,9 +253,7 @@ func (h *Hub) record(st ServerStatus) {
 	} else {
 		diag.L().Warn("mcp failed", "server", st.Name, "reason", st.Error, "detail", st.Detail, "ms", st.Ms)
 	}
-	if cb != nil {
-		cb(st)
-	}
+	return cb
 }
 
 // Tools returns every tool of every server that connected successfully.
@@ -320,6 +346,7 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 		names = append(names, name)
 		h.scopes[name] = cfg.Scope
 		h.pending[name] = true
+		h.configs[name] = cfg
 	}
 	h.mu.Unlock()
 	sort.Strings(names)
@@ -346,15 +373,36 @@ func (h *Hub) ConnectAll(ctx context.Context, configs map[string]ServerConfig) {
 
 // connectOne connects one server, lists its tools and records the outcome.
 func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, timeout time.Duration) {
+	h.record(h.dial(ctx, name, cfg, timeout))
+}
+
+// dial connects one server and lists its tools. On success it installs
+// the connection and tools and starts watching the session; either way it
+// returns the outcome for record.
+func (h *Hub) dial(ctx context.Context, name string, cfg ServerConfig, timeout time.Duration) ServerStatus {
 	started := time.Now()
 
 	transport, cmd, err := buildTransport(cfg)
 	if err != nil {
-		h.record(ServerStatus{Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: err.Error(), Ms: elapsedMs(started)})
-		return
+		return ServerStatus{Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: err.Error(), Ms: elapsedMs(started)}
 	}
 
-	client := sdk.NewClient(&sdk.Implementation{Name: "harness", Version: "0.0.0"}, nil)
+	// A server that announces tools/list_changed gets its tools fetched
+	// again, as Claude Code does (refreshTools).
+	clientOpts := &sdk.ClientOptions{
+		ToolListChangedHandler: func(_ context.Context, req *sdk.ToolListChangedRequest) {
+			session := req.Session
+			crash.Go(func() { h.refreshTools(name, session) })
+		},
+	}
+	if !spawnsProcess(cfg) {
+		// A remote server's HTTP requests re-dial on their own, so a lost
+		// session (the server restarted, or went away) only shows when a
+		// request fails: pings find it, and the closed session is what
+		// watch reconnects (lifecycle.go).
+		clientOpts.KeepAlive, clientOpts.KeepAliveFailureThreshold = keepAliveInterval(), 2
+	}
+	client := sdk.NewClient(&sdk.Implementation{Name: "harness", Version: "0.0.0"}, clientOpts)
 
 	// Advertise the workspace directories so a server that asks roots/list can
 	// scope itself to them. The design studio reads the first root to tie this
@@ -373,8 +421,7 @@ func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, tim
 		if st, ok := transport.(*sdk.StreamableClientTransport); ok {
 			handler, herr := buildOAuthHandler(cfg.URL, cfg.OAuth, h.Headless, h.OAuthNotify)
 			if herr != nil {
-				h.record(ServerStatus{Name: name, OK: false, Error: "oauth: " + herr.Error(), Detail: herr.Error(), Ms: elapsedMs(started)})
-				return
+				return ServerStatus{Name: name, OK: false, Error: "oauth: " + herr.Error(), Detail: herr.Error(), Ms: elapsedMs(started)}
 			}
 			st.OAuthHandler = handler
 			connectTimeout = authorizeTimeout + 30*time.Second
@@ -412,10 +459,9 @@ func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, tim
 		// spawning `node`), which the SDK's Close only ever reaches for
 		// the direct child.
 		killGroup(cmd)
-		h.record(ServerStatus{
+		return ServerStatus{
 			Name: name, OK: false, Error: describeConnectError(cfg, err), Detail: fmt.Sprintf("connect: %s", err), Ms: elapsedMs(started),
-		})
-		return
+		}
 	}
 
 	listCtx, listCancel := context.WithTimeout(ctx, timeout)
@@ -424,29 +470,29 @@ func (h *Hub) connectOne(ctx context.Context, name string, cfg ServerConfig, tim
 	if err != nil {
 		_ = session.Close()
 		killGroup(cmd)
-		h.record(ServerStatus{
+		return ServerStatus{
 			Name: name, OK: false, Error: "connected, but listing its tools failed: " + describeConnectError(cfg, err), Detail: fmt.Sprintf("listTools: %s", err), Ms: elapsedMs(started),
-		})
-		return
+		}
 	}
 
-	var tools []McpTool
-	for _, t := range res.Tools {
-		schema, _ := json.Marshal(t.InputSchema)
-		tools = append(tools, McpTool{
-			Server:        name,
-			Name:          t.Name,
-			QualifiedName: fmt.Sprintf("mcp__%s__%s", name, t.Name),
-			Description:   t.Description,
-			InputSchema:   schema,
-		})
-	}
-
+	conn := &serverConn{session: session, cmd: cmd}
 	h.mu.Lock()
-	h.conns[name] = &serverConn{session: session, cmd: cmd}
-	h.tools[name] = tools
+	if h.closed {
+		h.mu.Unlock()
+		_ = session.Close()
+		killGroup(cmd)
+		return ServerStatus{Name: name, OK: false, Error: "the session is closing", Ms: elapsedMs(started)}
+	}
+	old := h.conns[name]
+	h.conns[name] = conn
+	h.tools[name] = toolsOf(name, res.Tools)
+	n := len(h.tools[name])
 	h.mu.Unlock()
-	h.record(ServerStatus{Name: name, OK: true, ToolCount: len(tools), Ms: elapsedMs(started)})
+	if old != nil {
+		old.close()
+	}
+	crash.Go(func() { h.watch(name, conn) })
+	return ServerStatus{Name: name, OK: true, ToolCount: n, Ms: elapsedMs(started)}
 }
 
 func elapsedMs(started time.Time) int64 { return time.Since(started).Milliseconds() }
@@ -473,7 +519,7 @@ func (h *Hub) Call(ctx context.Context, qualifiedName string, args map[string]an
 		return nil, fmt.Errorf("unknown MCP tool: %s", qualifiedName)
 	}
 	if conn == nil || conn.session == nil {
-		return nil, fmt.Errorf("server not connected: %s", found.Server)
+		return nil, fmt.Errorf("MCP server %q is disconnected, so the call did not run. The user can restart it with /mcp reconnect %s", found.Server, found.Server)
 	}
 	return conn.session.CallTool(ctx, &sdk.CallToolParams{Name: found.Name, Arguments: args})
 }
@@ -484,6 +530,7 @@ func (h *Hub) Call(ctx context.Context, qualifiedName string, args map[string]an
 // outlive the session.
 func (h *Hub) Close(ctx context.Context) {
 	h.mu.Lock()
+	h.closed = true
 	conns := make([]*serverConn, 0, len(h.conns))
 	for _, c := range h.conns {
 		conns = append(conns, c)

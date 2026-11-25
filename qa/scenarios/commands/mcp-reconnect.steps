@@ -1,0 +1,20 @@
+# A stdio MCP server that exits mid-session is reported, as in Claude
+# Code, and not restarted on its own; /mcp reconnect starts it again
+# (internal/mcp/lifecycle.go). The fixture exits once its gate file
+# exists; the scenario removes the gate before reconnecting.
+@faux testdata/faux/hello.yaml
+@setup mkdir -p {PROJ}/../bin && go -C {ROOT} build -o {PROJ}/../bin/mcpfixture ./cmd/mcpfixture && printf '{"mcpServers":{"fixture":{"command":"%s","args":["-exit-gate","%s"]}}}' "{PROJ}/../bin/mcpfixture" "{PROJ}/mcp-exit" > {PROJ}/.mcp.json
+
+WAITFOR /describe a task/ 30
+SUBMIT_UNTIL /fixture\s+\d+ tools/ 60 /mcp
+KEY esc
+WAITGONE /Manage MCP servers/ 20
+RUN touch mcp-exit
+WAITFOR /MCP server "fixture" disconnected · \/mcp reconnect fixture to restart it/ 20
+SHOT disconnected
+RUN rm mcp-exit
+TYPE /mcp reconnect fixture
+KEY enter
+WAITFOR /Reconnected "fixture" \(4 tools\)\./ 30
+SHOT reconnected
+EXPECT_NOT /panic|goroutine/

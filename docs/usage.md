@@ -219,7 +219,7 @@ below).
 | Command | Args | Effect |
 |---|---|---|
 | `/permissions` | — | view and edit permission rules (persists; see §6) |
-| `/mcp` | — | MCP servers and their tools, in a dialog |
+| `/mcp` | `[reconnect <server\|all>]` | MCP servers and their tools, in a dialog; `reconnect` connects a server again (a stdio server that exited is not restarted on its own, as in Claude Code; a remote server reconnects by itself) |
 | `/agents` | — | subagents available for `task` dispatch |
 
 **Account**

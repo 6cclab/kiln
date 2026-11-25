@@ -161,6 +161,21 @@ func mcpToolsOf(hub *mcpgate.Hub) func() []slashcommands.MCPTool {
 	}
 }
 
+// mcpReconnectOf is /mcp reconnect: connect the server again, then
+// re-register the session's MCP tools (its tools may have changed).
+func mcpReconnectOf(hub *mcpgate.Hub, sess *mcpSession) func(context.Context, string) (slashcommands.ServerStatus, error) {
+	return func(ctx context.Context, name string) (slashcommands.ServerStatus, error) {
+		st, err := hub.Reconnect(ctx, name)
+		if err != nil {
+			return slashcommands.ServerStatus{}, err
+		}
+		if st.OK && sess != nil && sess.rebuild != nil {
+			sess.rebuild()
+		}
+		return slashcommands.ServerStatus{Name: st.Name, Scope: st.Scope, OK: st.OK, ToolCount: st.ToolCount, Ms: st.Ms, Error: st.Error, Detail: st.Detail}, nil
+	}
+}
+
 // isUnknownCommandResult reports whether res is registry.Execute's own
 // "not a command"/"no such command" failure text (commands/registry.go's
 // Execute: "Not a valid command: " / "Unknown command: "), as opposed to a
@@ -309,6 +324,8 @@ func buildCommandRegistry(deps registryDeps, hub *mcpgate.Hub) *slashcommands.Re
 		MCPConfigPath:      deps.MCPConfigPath,
 		MCPStatuses:        mcpStatusesOf(hub),
 		MCPTools:           mcpToolsOf(hub),
+		MCPReconnect:       mcpReconnectOf(hub, deps.MCP),
+		MCPServerNames:     hub.ServerNames,
 		Hooks:              deps.Hooks,
 		Agents:             deps.Agents,
 		Cwd:                deps.Cwd,
